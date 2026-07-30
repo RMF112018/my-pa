@@ -12,19 +12,23 @@
 - Obsidian as a rebuildable projection
 - Neutral `my_pa` / `MY_PA_` naming
 
-## Planned architecture documents
+## Architecture documents
 
 | Document | Status |
 |---|---|
-| `system-context.md` | Planned |
-| `module-boundaries.md` | Planned |
-| `data-authority.md` | Planned |
-| `threat-model.md` | Planned |
+| [`system-context.md`](system-context.md) | Present — proposed for repository review |
+| [`module-boundaries.md`](module-boundaries.md) | Present — proposed for repository review |
+| [`data-authority.md`](data-authority.md) | Present — proposed for repository review |
+| [`../security/threat-model.md`](../security/threat-model.md) | Present — proposed for repository review |
+
+## Specification
+
+The read-only Minimum Capable Vertical contract is [`../specs/mcv-read-only-vertical-slice.md`](../specs/mcv-read-only-vertical-slice.md).
 
 ## Decision records
 
-See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md).
+See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md) and the unresolved items in [`../../PHASE-00-OPEN-DECISION-LEDGER.md`](../../PHASE-00-OPEN-DECISION-LEDGER.md).
 
 ## Implementation boundary
 
-This index records architecture direction only. The scaffold contains no executable services or persistence behavior.
+This index records architecture direction only. The repository contains no executable services or persistence behavior. These documents describe intended behavior and do not authorize implementation, database access, source access, deployment, or production activation.

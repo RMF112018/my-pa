@@ -86,14 +86,15 @@ def _coerce(name: str, raw: str) -> object:
             return True
         if lowered in _FALSE:
             return False
-        raise SettingsError(f"{ENV_PREFIX}{name.upper()} must be a boolean, got {raw!r}")
+        # Name the setting and the expected type, never the supplied value.
+        # Settings are non-secret today; echoing input would make this a
+        # disclosure channel the moment one is not.
+        raise SettingsError(f"{ENV_PREFIX}{name.upper()} must be a boolean")
     if annotation is int:
         try:
             return int(raw)
         except ValueError as exc:
-            raise SettingsError(
-                f"{ENV_PREFIX}{name.upper()} must be an integer, got {raw!r}"
-            ) from exc
+            raise SettingsError(f"{ENV_PREFIX}{name.upper()} must be an integer") from exc
     return raw
 
 

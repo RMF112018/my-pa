@@ -27,9 +27,9 @@ __all__ = [
     "ensure_deterministic",
 ]
 
-#: How deeply `ensure_deterministic` will walk before giving up. A structure
-#: nested more deeply than this would raise `RecursionError` out of a validator,
-#: escaping Pydantic's error wrapping.
+#: How deeply `ensure_deterministic` will walk. This is a policy bound, not a
+#: `RecursionError` guard: the interpreter's own limit is far higher. It keeps
+#: payload nesting reviewable and terminates self-referential structures.
 _MAX_DEPTH: Final = 64
 
 
@@ -82,12 +82,18 @@ def ensure_deterministic(
     value: Any,  # noqa: ANN401 - walks arbitrary caller-supplied JSON
     _path: str = "$",
     _depth: int = 0,
-) -> Any:  # noqa: ANN401 - returns its input unchanged when accepted
-    """Return `value` if it encodes deterministically, else raise.
+) -> Any:  # noqa: ANN401 - returns a rebuilt copy of accepted input
+    """Return a deterministic deep copy of `value`, or raise.
 
     This is an allowlist, not a blocklist. Only `None`, `bool`, `int`, finite
     `float`, `str`, and exactly `dict`, `list`, or `tuple` are accepted;
     everything else is rejected by default.
+
+    Containers are rebuilt rather than returned as-is. Pydantic copies only the
+    top-level field, so a caller holding a reference to a nested dict could
+    otherwise mutate it after validation — putting a set back into a supposedly
+    frozen model and changing its serialised bytes. Rebuilding severs that alias.
+    Tuples become lists, which is what they serialise to anyway.
 
     A blocklist was tried first and was wrong. It tested for `set` and walked
     only concrete `dict`/`list`/`tuple`, while Pydantic accepts any mapping or
@@ -115,16 +121,18 @@ def ensure_deterministic(
 
     value_type = type(value)
     if value_type is dict:
+        rebuilt: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
                 raise NondeterministicValueError(f"{_path}: object keys must be strings")
-            ensure_deterministic(item, f"{_path}.{key}", _depth + 1)
-        return value
+            rebuilt[key] = ensure_deterministic(item, f"{_path}.{key}", _depth + 1)
+        return rebuilt
 
     if value_type is list or value_type is tuple:
-        for index, item in enumerate(value):
+        return [
             ensure_deterministic(item, f"{_path}[{index}]", _depth + 1)
-        return value
+            for index, item in enumerate(value)
+        ]
 
     raise NondeterministicValueError(
         f"{_path}: {value_type.__name__} is not an accepted JSON container; use dict, list or tuple"

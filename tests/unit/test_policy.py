@@ -16,6 +16,7 @@ from my_pa.domain.policy.decision import (
     PolicyDecision,
     PolicyRequest,
     evaluate,
+    validate_policy_version,
 )
 
 OPERATOR = Principal(
@@ -217,3 +218,23 @@ def test_decision_cannot_be_allowed_with_a_reason() -> None:
 def test_denial_must_carry_a_reason() -> None:
     with pytest.raises(ValueError, match="must carry a reason"):
         PolicyDecision(allowed=False, policy_version=POLICY_VERSION)
+
+
+def test_decision_validates_its_own_policy_version() -> None:
+    """Pinned independently of AuditEvent.
+
+    AuditEvent revalidates, so it provides defence in depth — which means a
+    refactor could delete this check and every other test would still pass.
+    """
+    for bad in ("postgres://user:pw@host/db", "policy-vX", "v1", "", "policy-v1; DROP TABLE"):
+        with pytest.raises(ValueError, match="policy version"):
+            PolicyDecision(allowed=True, policy_version=bad)
+
+
+def test_decision_rejects_a_non_string_policy_version() -> None:
+    with pytest.raises(ValueError, match="must be a string"):
+        PolicyDecision(allowed=True, policy_version=123)  # type: ignore[arg-type]
+
+
+def test_evaluate_emits_a_well_formed_policy_version() -> None:
+    assert validate_policy_version(evaluate(_request()).policy_version) == POLICY_VERSION

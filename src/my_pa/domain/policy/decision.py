@@ -35,6 +35,10 @@ POLICY_VERSION_PATTERN = re.compile(r"\Apolicy-v[0-9]{1,4}\Z")
 
 def validate_policy_version(value: str) -> str:
     """Return `value` if it is a well-formed policy version, else raise."""
+    if not isinstance(value, str):
+        # Domain models are plain dataclasses with no runtime type enforcement,
+        # matching the guard in validate_identifier.
+        raise ValueError(f"policy version must be a string, got {type(value).__name__}")
     if not POLICY_VERSION_PATTERN.fullmatch(value):
         raise ValueError(f"policy version must match 'policy-vN', got {value!r}")
     return value

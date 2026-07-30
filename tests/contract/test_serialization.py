@@ -143,6 +143,39 @@ def test_contract_version_defaults_to_v1() -> None:
     assert _request().contract_version == CONTRACT_VERSION == "v1"
 
 
+def test_envelope_rejects_a_wrong_contract_version() -> None:
+    # The envelope carries its own check, separate from RequestMetadata's.
+    payload = json.loads(_envelope().to_canonical_json())
+    payload["contract_version"] = "v2"
+    with pytest.raises(ValidationError, match="unsupported contract_version"):
+        ResponseEnvelope.model_validate(payload)
+
+
+def test_nested_result_containers_are_copied_not_aliased() -> None:
+    """A frozen envelope's bytes must not change through a caller's reference.
+
+    Pydantic copies only the top-level field, so without rebuilding, a nested
+    dict the caller still holds could have a set put back into it after
+    validation, changing the serialised output of a supposedly frozen model.
+    """
+    nested = {"tags": ["alpha"]}
+    envelope = ResponseEnvelope(
+        request_id="req-1",
+        correlation_id="corr_abc123def456",
+        completed_at=OBSERVED,
+        result={"inner": nested},
+        disclosure=_disclosure(),
+    )
+    before = envelope.to_canonical_json()
+
+    nested["tags"] = ["omega", "beta"]
+    nested["smuggled"] = ["/Users/someone/tax.pdf"]
+
+    assert envelope.result is not None
+    assert envelope.result["inner"] is not nested
+    assert envelope.to_canonical_json() == before
+
+
 def test_naive_timestamp_is_rejected() -> None:
     payload = json.loads(_request().to_canonical_json())
     payload["requested_at"] = "2026-07-30T20:00:00"

@@ -68,6 +68,17 @@ def test_validate_returns_value_unchanged() -> None:
     assert validate_identifier("kn_abc123def456") == "kn_abc123def456"
 
 
+@pytest.mark.parametrize("value", [123, None, ["src_abc123def456"], b"src_abc123def456"])
+def test_non_string_input_fails_as_a_domain_error(value: object) -> None:
+    """Domain models are plain dataclasses, so a non-string can reach this.
+
+    It must surface as InvalidIdentifierError rather than as an incidental
+    TypeError from len() or partition().
+    """
+    with pytest.raises(InvalidIdentifierError, match="must be a string"):
+        validate_identifier(value)  # type: ignore[arg-type]
+
+
 def test_identifier_does_not_carry_path_or_host_shape() -> None:
     # A leaked path or host would contain these characters; the suffix pattern
     # is alphanumeric precisely so they cannot appear.

@@ -2,7 +2,6 @@
 
 from my_pa.contracts.v1.base import (
     CONTRACT_VERSION,
-    NondeterministicValueError,
     StrictModel,
     UtcDatetime,
     canonical_json,
@@ -43,7 +42,6 @@ __all__ = [
     "ErrorCode",
     "Freshness",
     "FreshnessState",
-    "NondeterministicValueError",
     "ProblemDetail",
     "ReadinessReport",
     "ReadinessState",

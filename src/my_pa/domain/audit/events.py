@@ -9,7 +9,7 @@ at a call site (`docs/specs`, section 11).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
@@ -34,8 +34,10 @@ class AuditOutcome(StrEnum):
 class AuditEvent:
     """One redacted audit record.
 
-    Counts are bounded aggregates. `denial_reason` is a stable category, not a
-    free-text message, so it cannot become a leak channel.
+    Every field is either an opaque identifier, a closed enum, or a bounded
+    count. There is deliberately no free-form string or mapping: a general
+    `metadata` field would be exactly the channel through which a query, path,
+    or snippet reaches the audit log by accident.
     """
 
     audit_id: str
@@ -50,7 +52,6 @@ class AuditEvent:
     item_count: int = 0
     duration_ms: int = 0
     scope_source_id_count: int = 0
-    metadata: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         validate_identifier(self.audit_id, IdKind.AUDIT)
@@ -64,7 +65,6 @@ class AuditEvent:
             if count < 0:
                 raise ValueError("audit counts cannot be negative")
         object.__setattr__(self, "recorded_at", ensure_utc(self.recorded_at))
-        object.__setattr__(self, "metadata", dict(self.metadata))
 
 
 def audit_event_for(

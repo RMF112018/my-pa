@@ -104,6 +104,58 @@ def test_partially_authorized_scope_is_denied() -> None:
     assert decision.reason is DenialReason.SCOPE_NOT_AUTHORIZED
 
 
+def test_enrollment_grants_scope_rather_than_requiring_it() -> None:
+    """Enrollment is the operation that creates authorization.
+
+    Requiring the scope to be held already would mean an operator could only
+    enroll a source they had already enrolled, making the capability unusable.
+    """
+    decision = evaluate(
+        _request(
+            principal=OPERATOR,
+            capability=Capability.SOURCES_ENROLL,
+            purpose=Purpose.BOUNDED_ENROLLMENT,
+            requested_source_ids=frozenset({"src_neverseen0001"}),
+            authorized_source_ids=frozenset(),
+        )
+    )
+    assert decision.allowed
+
+
+def test_enrollment_still_requires_a_named_scope() -> None:
+    decision = evaluate(
+        _request(
+            principal=OPERATOR,
+            capability=Capability.SOURCES_ENROLL,
+            purpose=Purpose.BOUNDED_ENROLLMENT,
+            requested_source_ids=frozenset(),
+            authorized_source_ids=frozenset(),
+        )
+    )
+    assert not decision.allowed
+    assert decision.reason is DenialReason.SCOPE_NOT_AUTHORIZED
+
+
+def test_enrollment_relaxation_does_not_leak_to_read_capabilities() -> None:
+    # The relaxation above must apply to sources.enroll and nothing else.
+    for capability in Capability:
+        if capability in (Capability.SOURCES_ENROLL, Capability.CAPABILITIES_GET):
+            continue
+        principal = OPERATOR if is_operator_only(capability) else GATEWAY
+        for purpose in permitted_purposes(capability):
+            decision = evaluate(
+                _request(
+                    principal=principal,
+                    capability=capability,
+                    purpose=purpose,
+                    requested_source_ids=frozenset({"src_neverseen0001"}),
+                    authorized_source_ids=frozenset(),
+                )
+            )
+            assert not decision.allowed, f"{capability}/{purpose} allowed an unheld scope"
+            assert decision.reason is DenialReason.SCOPE_NOT_AUTHORIZED
+
+
 def test_capabilities_get_carries_no_source_scope() -> None:
     allowed = evaluate(
         _request(

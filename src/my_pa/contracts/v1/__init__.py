@@ -1,6 +1,14 @@
 """Version 1 of the `my-pa-public-capabilities` contract family."""
 
-from my_pa.contracts.v1.base import CONTRACT_VERSION, StrictModel, UtcDatetime, canonical_json
+from my_pa.contracts.v1.base import (
+    CONTRACT_VERSION,
+    JsonValue,
+    NondeterministicValueError,
+    StrictModel,
+    UtcDatetime,
+    canonical_json,
+    ensure_deterministic,
+)
 from my_pa.contracts.v1.capabilities import (
     Availability,
     CapabilityManifest,
@@ -37,6 +45,8 @@ __all__ = [
     "ErrorCode",
     "Freshness",
     "FreshnessState",
+    "JsonValue",
+    "NondeterministicValueError",
     "ProblemDetail",
     "ReadinessReport",
     "ReadinessState",
@@ -50,5 +60,6 @@ __all__ = [
     "Trust",
     "UtcDatetime",
     "canonical_json",
+    "ensure_deterministic",
     "retry_guidance_for",
 ]

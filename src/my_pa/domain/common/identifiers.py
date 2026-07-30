@@ -1,8 +1,13 @@
 """Opaque, server-issued identifiers.
 
-Public identifiers are non-semantic. They never encode filesystem paths, provider
-names, hosts, accounts, or database keys (`INV-PKL-005`). Each identifier is a
-short type prefix joined to an opaque suffix by a single underscore.
+Each identifier is a short type prefix joined to an opaque suffix by a single
+underscore. `INV-PKL-005` requires that public identifiers not encode filesystem
+paths, provider names, hosts, accounts, or database keys.
+
+Validation here enforces *shape* only: the alphanumeric suffix rule rules out
+path separators, dots, colons, and `@`, so a raw path or host cannot appear
+verbatim. It cannot tell that `src_taxreturn2025` is semantic. Keeping suffixes
+non-semantic is the issuer's responsibility, not something this module can check.
 """
 
 from __future__ import annotations
@@ -65,8 +70,6 @@ def validate_identifier(value: str, expected: IdKind | None = None) -> str:
     Fails closed: anything not matching the documented shape is rejected rather
     than normalised or guessed.
     """
-    if not isinstance(value, str):  # pragma: no cover - defensive, mypy-unreachable
-        raise InvalidIdentifierError("identifier must be a string")
     if len(value) > _MAX_LENGTH:
         raise InvalidIdentifierError(f"identifier exceeds {_MAX_LENGTH} characters")
     prefix, separator, suffix = value.partition("_")

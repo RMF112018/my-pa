@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -157,7 +160,106 @@ def test_scope_rejects_wrong_identifier_kind() -> None:
         Scope(source_ids=("obj_abc123def456",))
 
 
-def test_public_payload_carries_no_path_or_host() -> None:
-    rendered = _envelope().to_canonical_json()
-    for token in ("/Users/", "/home/", "postgres://", "ssh", "://", "\\\\"):
-        assert token not in rendered
+def test_identifier_fields_reject_path_and_host_shaped_values() -> None:
+    """The enforceable half of "no leakage": every opaque ID field rejects them.
+
+    Free-prose fields such as `limitations` accept arbitrary strings by design,
+    so asserting that a payload this test itself constructed contains no path
+    would prove nothing. The guarantee that can be tested is that the fields
+    required to be opaque refuse path-, host-, and URL-shaped values.
+    """
+    payload = json.loads(_envelope().to_canonical_json())
+    for bad in ("corr_/Users/someone", "corr_host.example.com", "corr_a@b", "corr_x://y"):
+        payload["correlation_id"] = bad
+        with pytest.raises(ValidationError):
+            ResponseEnvelope.model_validate(payload)
+
+
+def test_result_rejects_a_set_because_its_order_is_unstable() -> None:
+    with pytest.raises(ValidationError, match="no stable order"):
+        ResponseEnvelope(
+            request_id="req-1",
+            correlation_id="corr_abc123def456",
+            completed_at=OBSERVED,
+            result={"tags": {"alpha", "bravo", "charlie"}},
+            disclosure=_disclosure(),
+        )
+
+
+def test_result_rejects_a_nested_set() -> None:
+    with pytest.raises(ValidationError, match="no stable order"):
+        ResponseEnvelope(
+            request_id="req-1",
+            correlation_id="corr_abc123def456",
+            completed_at=OBSERVED,
+            result={"outer": [{"inner": {"a", "b"}}]},
+            disclosure=_disclosure(),
+        )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_result_rejects_non_finite_floats(value: float) -> None:
+    with pytest.raises(ValidationError, match="not representable in JSON"):
+        ResponseEnvelope(
+            request_id="req-1",
+            correlation_id="corr_abc123def456",
+            completed_at=OBSERVED,
+            result={"ratio": value},
+            disclosure=_disclosure(),
+        )
+
+
+def test_result_accepts_ordered_containers() -> None:
+    envelope = ResponseEnvelope(
+        request_id="req-1",
+        correlation_id="corr_abc123def456",
+        completed_at=OBSERVED,
+        result={"tags": ["alpha", "bravo"], "nested": {"count": 2, "ok": True}},
+        disclosure=_disclosure(),
+    )
+    assert json.loads(envelope.to_canonical_json())["result"]["tags"] == ["alpha", "bravo"]
+
+
+def test_serialisation_is_identical_across_processes() -> None:
+    """Stability within one process cannot detect hash-seed-dependent ordering.
+
+    Each subprocess gets a different PYTHONHASHSEED, so a container whose order
+    depended on hashing would produce different bytes here.
+    """
+    program = """
+import sys
+from datetime import UTC, datetime
+from my_pa.contracts.v1 import (
+    Coverage, CoverageState, Disclosure, Freshness, FreshnessState,
+    ResponseEnvelope, Scope, Trust,
+)
+from my_pa.domain.common.provenance import TrustLevel
+
+observed = datetime(2026, 7, 30, 20, 0, 0, tzinfo=UTC)
+disclosure = Disclosure(
+    scope=Scope(source_ids=("src_abc123def456",)),
+    coverage=Coverage(state=CoverageState.PROCESSED, eligible=1, processed=1),
+    freshness=Freshness(observed_at=observed, state=FreshnessState.CURRENT_FOR_OBSERVED_VERSION),
+    trust=Trust(level=TrustLevel.SOURCE_BOUND_DERIVED, basis=("source_version",)),
+)
+envelope = ResponseEnvelope(
+    request_id="req-1",
+    correlation_id="corr_abc123def456",
+    completed_at=observed,
+    result={"zeta": 1, "alpha": [3, 2, 1], "mid": {"b": True, "a": None}},
+    disclosure=disclosure,
+)
+sys.stdout.write(envelope.to_canonical_json())
+"""
+    outputs = set()
+    for seed in ("0", "1", "12345", "99999"):
+        env = {**os.environ, "PYTHONHASHSEED": seed}
+        completed = subprocess.run(  # noqa: S603
+            [sys.executable, "-c", program],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        )
+        outputs.add(completed.stdout)
+    assert len(outputs) == 1, f"serialisation varied across hash seeds: {outputs}"

@@ -13,7 +13,7 @@ from enum import StrEnum
 from pydantic import Field, model_validator
 
 from my_pa.contracts.v1.base import StrictModel, UtcDatetime
-from my_pa.domain.common.classification import Classification
+from my_pa.domain.common.classification import Classification, is_cloud_eligible
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import TrustLevel
 
@@ -162,4 +162,16 @@ class Disclosure(StrictModel):
             raise ValueError(f"coverage state {self.coverage.state} requires partial_result=True")
         if self.truncation.is_truncated and not self.partial_result:
             raise ValueError("a truncated result must set partial_result=True")
+        return self
+
+    @model_validator(mode="after")
+    def _check_cloud_eligibility(self) -> Disclosure:
+        """Reject a disclosure claiming eligibility the classification denies.
+
+        Without this the mandatory envelope could assert that restricted local
+        content may leave the trust boundary, contradicting the domain rule it
+        is supposed to be reporting.
+        """
+        if self.cloud_eligible and not is_cloud_eligible(self.classification):
+            raise ValueError(f"classification {self.classification} is never cloud eligible")
         return self

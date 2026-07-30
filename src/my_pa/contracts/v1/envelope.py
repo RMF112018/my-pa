@@ -8,9 +8,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from my_pa.contracts.v1.base import CONTRACT_VERSION, StrictModel, UtcDatetime
+from my_pa.contracts.v1.base import (
+    CONTRACT_VERSION,
+    JsonValue,
+    StrictModel,
+    UtcDatetime,
+    ensure_deterministic,
+)
 from my_pa.contracts.v1.disclosure import Disclosure, Scope
 from my_pa.contracts.v1.errors import ProblemDetail
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -56,9 +62,20 @@ class ResponseEnvelope(StrictModel):
     request_id: str = Field(min_length=1, max_length=128)
     correlation_id: str
     completed_at: UtcDatetime
-    result: dict[str, Any] | None = None
+    result: dict[str, JsonValue] | None = None
     disclosure: Disclosure | None = None
     error: ProblemDetail | None = None
+
+    @field_validator("result", mode="before")
+    @classmethod
+    def _result_must_encode_deterministically(cls, value: Any) -> Any:  # noqa: ANN401
+        """Reject a payload that would serialise differently across processes.
+
+        `result` is the one field carrying capability-specific content, so it is
+        the one place the envelope's canonical-encoding guarantee could be lost
+        silently. Checking here means it fails at construction instead.
+        """
+        return value if value is None else ensure_deterministic(value)
 
     @model_validator(mode="after")
     def _check(self) -> ResponseEnvelope:

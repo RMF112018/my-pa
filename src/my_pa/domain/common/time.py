@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-__all__ = ["ensure_utc", "format_rfc3339", "utc_now"]
+__all__ = ["NaiveDatetimeError", "ensure_utc", "format_rfc3339", "utc_now"]
 
 
 class NaiveDatetimeError(ValueError):
@@ -32,5 +32,9 @@ def ensure_utc(value: datetime) -> datetime:
 
 
 def format_rfc3339(value: datetime) -> str:
-    """Format `value` as RFC 3339 UTC with a `Z` suffix and microsecond precision."""
+    """Format `value` as RFC 3339 UTC with a `Z` suffix and millisecond precision.
+
+    Sub-millisecond digits are truncated, not rounded, so the formatted value
+    never reports a time later than the one it was given.
+    """
     return ensure_utc(value).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"

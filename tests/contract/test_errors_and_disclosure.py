@@ -22,6 +22,7 @@ from my_pa.contracts.v1 import (
     Trust,
     retry_guidance_for,
 )
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.provenance import TrustLevel
 
 OBSERVED = datetime(2026, 7, 30, 20, 0, 0, tzinfo=UTC)
@@ -145,6 +146,21 @@ def test_disclosure_defaults_to_private_and_not_cloud_eligible() -> None:
     disclosure = _disclosure()
     assert disclosure.classification.value == "private_local"
     assert disclosure.cloud_eligible is False
+
+
+@pytest.mark.parametrize(
+    "classification", [Classification.PRIVATE_LOCAL, Classification.RESTRICTED_LOCAL]
+)
+def test_disclosure_cannot_claim_eligibility_the_classification_denies(
+    classification: Classification,
+) -> None:
+    with pytest.raises(ValidationError, match="never cloud eligible"):
+        _disclosure(classification=classification, cloud_eligible=True)
+
+
+def test_synthetic_test_data_may_declare_cloud_eligibility() -> None:
+    disclosure = _disclosure(classification=Classification.SYNTHETIC_TEST, cloud_eligible=True)
+    assert disclosure.cloud_eligible is True
 
 
 def test_envelope_requires_exactly_one_of_disclosure_or_error() -> None:

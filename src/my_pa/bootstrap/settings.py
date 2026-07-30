@@ -41,7 +41,12 @@ class LogLevel(StrEnum):
 
 
 class SettingsError(ValueError):
-    """Raised when configuration is missing, unknown, or invalid."""
+    """Raised by `load_settings` when configuration is missing, unknown, or invalid.
+
+    Constructing `Settings` directly raises Pydantic's `ValidationError` instead,
+    because Pydantic wraps whatever a validator raises. `load_settings` is the
+    supported entry point and normalises both cases to this type.
+    """
 
 
 class Settings(StrictModel):

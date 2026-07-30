@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import dataclasses
+import enum
+import typing
 from datetime import UTC, datetime
 
 import pytest
@@ -49,17 +51,58 @@ def _event(**overrides: object) -> AuditEvent:
     return AuditEvent(**base)  # type: ignore[arg-type]
 
 
-def test_audit_event_has_no_field_that_could_hold_sensitive_payload() -> None:
+def test_no_field_name_suggests_a_payload_channel() -> None:
     names = {field.name for field in dataclasses.fields(AuditEvent)}
     for name in names:
         for token in FORBIDDEN_FIELD_TOKENS:
             assert token not in name, f"audit field {name!r} could carry sensitive payload"
 
 
+def test_no_field_can_structurally_hold_free_form_content() -> None:
+    """The real guarantee: no field has a type able to carry arbitrary content.
+
+    Name-spelling alone is not enough — a field called `metadata` passes the
+    check above while holding a query string, a path, and a connection string.
+    Every field must therefore be an opaque identifier, a closed enum, a bounded
+    count, or a timestamp.
+    """
+    allowed_scalars = {int, datetime, bool}
+    id_fields = {"audit_id", "correlation_id", "principal_id"}
+    version_fields = {"policy_version"}
+
+    for field in dataclasses.fields(AuditEvent):
+        hint = typing.get_type_hints(AuditEvent)[field.name]
+        origin = typing.get_origin(hint)
+        assert origin not in (dict, list, set, tuple), (
+            f"{field.name!r} is a container and can hold arbitrary payload"
+        )
+        candidates = [a for a in typing.get_args(hint) if a is not type(None)] or [hint]
+        for candidate in candidates:
+            is_enum = isinstance(candidate, type) and issubclass(candidate, enum.Enum)
+            is_scalar = candidate in allowed_scalars
+            is_constrained_str = candidate is str and (
+                field.name in id_fields or field.name in version_fields
+            )
+            assert is_enum or is_scalar or is_constrained_str, (
+                f"{field.name!r}: {candidate!r} is unconstrained and could carry content"
+            )
+
+
+def test_a_payload_bearing_field_cannot_be_supplied() -> None:
+    with pytest.raises(TypeError):
+        _event(metadata={"query": "what is my account number"})
+
+
+def test_identifier_fields_reject_path_and_host_shaped_values() -> None:
+    for bad in ("audit_/Users/someone/tax.pdf", "audit_host.example.com", "audit_a@b"):
+        with pytest.raises(ValueError, match="identifier"):
+            _event(audit_id=bad)
+
+
 def test_audit_event_serialisation_contains_only_safe_values() -> None:
     event = _event(item_count=3, duration_ms=12, scope_source_id_count=1)
     rendered = repr(dataclasses.asdict(event)).lower()
-    for token in ("/users/", "select ", "password", "bearer ", "@", "://"):
+    for token in ("/users/", "select ", "password", "bearer ", "://"):
         assert token not in rendered
 
 

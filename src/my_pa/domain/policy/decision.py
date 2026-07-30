@@ -107,4 +107,12 @@ def _scope_is_authorized(request: PolicyRequest) -> bool:
         return not request.requested_source_ids
     if not request.requested_source_ids:
         return False
+    if request.capability is Capability.SOURCES_ENROLL:
+        # Enrollment is the operation that grants scope, so requiring the scope
+        # to be held already would make the capability permanently unusable.
+        # Authority comes from the operator-only check above. The bound on which
+        # sources may be enrolled is the configured-source registry, which does
+        # not exist until Phase 02; until then an authenticated operator may
+        # enroll any named source.
+        return True
     return request.requested_source_ids <= request.authorized_source_ids

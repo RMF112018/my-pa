@@ -1,0 +1,110 @@
+"""Policy evaluation.
+
+Every path through `evaluate` that is not an explicit allow returns a denial.
+The function has exactly one `allowed=True` construction site, so a new input
+state cannot accidentally become permitted.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import StrEnum
+
+from my_pa.domain.common.classification import Classification, is_cloud_eligible
+from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
+from my_pa.domain.identity.principal import Principal
+from my_pa.domain.identity.purpose import Purpose
+
+__all__ = ["DenialReason", "PolicyDecision", "PolicyRequest", "evaluate"]
+
+#: Version of the rule set below. Audit records bind decisions to this value.
+POLICY_VERSION = "policy-v1"
+
+
+class DenialReason(StrEnum):
+    """Safe, stable denial categories.
+
+    These are disclosure-safe: they describe why authority was insufficient and
+    never reveal whether a denied object exists.
+    """
+
+    PRINCIPAL_NOT_AUTHENTICATED = "principal_not_authenticated"
+    PRINCIPAL_MAY_NOT_HOLD_AUTHORITY = "principal_may_not_hold_authority"
+    OPERATOR_REQUIRED = "operator_required"
+    PURPOSE_NOT_PERMITTED_FOR_CAPABILITY = "purpose_not_permitted_for_capability"
+    SCOPE_NOT_AUTHORIZED = "scope_not_authorized"
+    DESTINATION_NOT_ELIGIBLE = "destination_not_eligible"
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyRequest:
+    """Everything policy is allowed to consider.
+
+    `authorized_source_ids` is the enrollment the principal already holds. An
+    empty requested scope is not a wildcard; it is an unauthorized scope.
+    """
+
+    principal: Principal
+    purpose: Purpose
+    capability: Capability
+    classification: Classification = Classification.PRIVATE_LOCAL
+    requested_source_ids: frozenset[str] = field(default_factory=frozenset)
+    authorized_source_ids: frozenset[str] = field(default_factory=frozenset)
+    to_cloud: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyDecision:
+    """The outcome of one evaluation."""
+
+    allowed: bool
+    policy_version: str
+    reason: DenialReason | None = None
+
+    def __post_init__(self) -> None:
+        if self.allowed and self.reason is not None:
+            raise ValueError("an allowed decision cannot carry a denial reason")
+        if not self.allowed and self.reason is None:
+            raise ValueError("a denial must carry a reason")
+
+
+def _deny(reason: DenialReason) -> PolicyDecision:
+    return PolicyDecision(allowed=False, policy_version=POLICY_VERSION, reason=reason)
+
+
+def evaluate(request: PolicyRequest) -> PolicyDecision:
+    """Return the policy decision for `request`, denying unless every rule allows."""
+    principal = request.principal
+
+    if not principal.authenticated:
+        return _deny(DenialReason.PRINCIPAL_NOT_AUTHENTICATED)
+
+    if not principal.may_hold_authority:
+        return _deny(DenialReason.PRINCIPAL_MAY_NOT_HOLD_AUTHORITY)
+
+    if is_operator_only(request.capability) and not principal.is_operator:
+        return _deny(DenialReason.OPERATOR_REQUIRED)
+
+    if request.purpose not in permitted_purposes(request.capability):
+        return _deny(DenialReason.PURPOSE_NOT_PERMITTED_FOR_CAPABILITY)
+
+    if not _scope_is_authorized(request):
+        return _deny(DenialReason.SCOPE_NOT_AUTHORIZED)
+
+    if request.to_cloud and not is_cloud_eligible(request.classification):
+        return _deny(DenialReason.DESTINATION_NOT_ELIGIBLE)
+
+    return PolicyDecision(allowed=True, policy_version=POLICY_VERSION)
+
+
+def _scope_is_authorized(request: PolicyRequest) -> bool:
+    """Whether the requested scope lies inside the authorized enrollment.
+
+    `capabilities.get` describes the interface itself and carries no source
+    scope. Every other capability must name a scope it already holds.
+    """
+    if request.capability is Capability.CAPABILITIES_GET:
+        return not request.requested_source_ids
+    if not request.requested_source_ids:
+        return False
+    return request.requested_source_ids <= request.authorized_source_ids

@@ -17,7 +17,7 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.policy.decision import DenialReason, PolicyDecision
+from my_pa.domain.policy.decision import DenialReason, PolicyDecision, validate_policy_version
 
 __all__ = ["AuditEvent", "AuditOutcome", "audit_event_for"]
 
@@ -57,6 +57,7 @@ class AuditEvent:
         validate_identifier(self.audit_id, IdKind.AUDIT)
         validate_identifier(self.correlation_id, IdKind.CORRELATION)
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_policy_version(self.policy_version)
         if self.outcome is AuditOutcome.DENIED and self.denial_reason is None:
             raise ValueError("a denied audit event must record a denial reason")
         if self.outcome is not AuditOutcome.DENIED and self.denial_reason is not None:

@@ -123,4 +123,11 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     try:
         return Settings(**values)  # type: ignore[arg-type]
     except ValidationError as exc:
-        raise SettingsError(f"invalid configuration: {exc}") from exc
+        # Report which setting failed and why, but not the offending value.
+        # Settings are non-secret today; echoing inputs would turn this into a
+        # disclosure channel the moment one is not.
+        problems = "; ".join(
+            f"{ENV_PREFIX}{'.'.join(str(part) for part in error['loc']).upper()}: {error['msg']}"
+            for error in exc.errors()
+        )
+        raise SettingsError(f"invalid configuration: {problems}") from exc

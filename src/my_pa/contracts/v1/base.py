@@ -20,7 +20,6 @@ from my_pa.domain.common.time import ensure_utc, format_rfc3339
 
 __all__ = [
     "CONTRACT_VERSION",
-    "JsonValue",
     "NondeterministicValueError",
     "StrictModel",
     "UtcDatetime",
@@ -28,8 +27,10 @@ __all__ = [
     "ensure_deterministic",
 ]
 
-#: A value that survives a JSON roundtrip with its ordering intact.
-type JsonValue = str | int | float | bool | list[JsonValue] | dict[str, JsonValue] | None
+#: How deeply `ensure_deterministic` will walk before giving up. A structure
+#: nested more deeply than this would raise `RecursionError` out of a validator,
+#: escaping Pydantic's error wrapping.
+_MAX_DEPTH: Final = 64
 
 
 class NondeterministicValueError(ValueError):
@@ -77,30 +78,54 @@ def canonical_json(value: Any) -> str:  # noqa: ANN401 - encodes arbitrary JSON-
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def ensure_deterministic(value: Any, _path: str = "$") -> Any:  # noqa: ANN401 - walks arbitrary JSON
+def ensure_deterministic(
+    value: Any,  # noqa: ANN401 - walks arbitrary caller-supplied JSON
+    _path: str = "$",
+    _depth: int = 0,
+) -> Any:  # noqa: ANN401 - returns its input unchanged when accepted
     """Return `value` if it encodes deterministically, else raise.
 
-    Two shapes are rejected because they would make identical inputs produce
-    different bytes across processes:
+    This is an allowlist, not a blocklist. Only `None`, `bool`, `int`, finite
+    `float`, `str`, and exactly `dict`, `list`, or `tuple` are accepted;
+    everything else is rejected by default.
 
-    * a `set` or `frozenset`, whose iteration order depends on hash seeding —
-      Pydantic would silently coerce one to a list, so the nondeterminism would
-      otherwise reach the wire with no error and no warning;
-    * a non-finite float, which `json.dumps` writes as bare `NaN` or `Infinity`,
-      neither of which is valid JSON.
+    A blocklist was tried first and was wrong. It tested for `set` and walked
+    only concrete `dict`/`list`/`tuple`, while Pydantic accepts any mapping or
+    iterable — so a `MappingProxyType`, `deque`, generator, or `dict.keys()`
+    view slipped past unwalked and carried a hash-ordered `set` inside it
+    straight to the wire. `MappingProxyType` is this package's own idiom for
+    read-only mappings, so that bypass sat directly on the path a contributor
+    following local convention would take.
     """
+    if _depth > _MAX_DEPTH:
+        raise NondeterministicValueError(f"{_path}: nested more than {_MAX_DEPTH} levels deep")
+
+    if value is None or isinstance(value, bool | int | str):
+        return value
+
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise NondeterministicValueError(f"{_path}: {value!r} is not representable in JSON")
+        return value
+
     if isinstance(value, set | frozenset):
         raise NondeterministicValueError(
             f"{_path}: a set has no stable order; use a list in the order you mean"
         )
-    if isinstance(value, float) and not math.isfinite(value):
-        raise NondeterministicValueError(f"{_path}: {value!r} is not representable in JSON")
-    if isinstance(value, dict):
+
+    value_type = type(value)
+    if value_type is dict:
         for key, item in value.items():
             if not isinstance(key, str):
                 raise NondeterministicValueError(f"{_path}: object keys must be strings")
-            ensure_deterministic(item, f"{_path}.{key}")
-    elif isinstance(value, list | tuple):
+            ensure_deterministic(item, f"{_path}.{key}", _depth + 1)
+        return value
+
+    if value_type is list or value_type is tuple:
         for index, item in enumerate(value):
-            ensure_deterministic(item, f"{_path}[{index}]")
-    return value
+            ensure_deterministic(item, f"{_path}[{index}]", _depth + 1)
+        return value
+
+    raise NondeterministicValueError(
+        f"{_path}: {value_type.__name__} is not an accepted JSON container; use dict, list or tuple"
+    )

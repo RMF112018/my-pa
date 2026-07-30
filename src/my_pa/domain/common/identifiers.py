@@ -70,6 +70,11 @@ def validate_identifier(value: str, expected: IdKind | None = None) -> str:
     Fails closed: anything not matching the documented shape is rejected rather
     than normalised or guessed.
     """
+    if not isinstance(value, str):
+        # Domain models are plain dataclasses with no runtime type enforcement,
+        # so a non-string reaching here must fail as a domain error rather than
+        # as an incidental TypeError from len() or partition().
+        raise InvalidIdentifierError(f"identifier must be a string, got {type(value).__name__}")
     if len(value) > _MAX_LENGTH:
         raise InvalidIdentifierError(f"identifier exceeds {_MAX_LENGTH} characters")
     prefix, separator, suffix = value.partition("_")

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import subprocess
 import sys
+import types
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -220,11 +222,65 @@ def test_result_accepts_ordered_containers() -> None:
     assert json.loads(envelope.to_canonical_json())["result"]["tags"] == ["alpha", "bravo"]
 
 
-def test_serialisation_is_identical_across_processes() -> None:
-    """Stability within one process cannot detect hash-seed-dependent ordering.
+def _bypass_shapes() -> dict[str, object]:
+    """Containers Pydantic accepts that are not `dict`, `list`, or `tuple`.
 
-    Each subprocess gets a different PYTHONHASHSEED, so a container whose order
-    depended on hashing would produce different bytes here.
+    Each of these once slipped past the guard unwalked, carrying a hash-ordered
+    set to the wire. `MappingProxyType` matters most: it is this package's own
+    idiom for read-only mappings, so it sits on the path a contributor following
+    local convention would take.
+    """
+    return {
+        "mapping_proxy": types.MappingProxyType({"tags": {"a", "b", "c"}}),
+        "deque": collections.deque([{"a", "b"}]),
+        "generator": ({"a", "b"} for _ in range(1)),
+        "dict_keys": {"a": 1, "b": 2}.keys(),
+        "set": {"a", "b"},
+        "frozenset": frozenset({"a", "b"}),
+        "bytes": b"raw",
+        "custom_object": object(),
+    }
+
+
+@pytest.mark.parametrize("shape", list(_bypass_shapes()))
+def test_containers_outside_the_allowlist_are_rejected(shape: str) -> None:
+    """The guard is an allowlist, so an unrecognised container cannot slip past.
+
+    The earlier blocklist version tested for `set` and walked only concrete
+    `dict`/`list`/`tuple`, so every shape here reached serialisation unchecked.
+    """
+    with pytest.raises(ValidationError):
+        ResponseEnvelope(
+            request_id="req-1",
+            correlation_id="corr_abc123def456",
+            completed_at=OBSERVED,
+            result={"payload": _bypass_shapes()[shape]},
+            disclosure=_disclosure(),
+        )
+
+
+def test_excessive_nesting_fails_as_validation_not_recursion_error() -> None:
+    deep: object = "leaf"
+    for _ in range(200):
+        deep = [deep]
+    with pytest.raises(ValidationError, match="levels deep"):
+        ResponseEnvelope(
+            request_id="req-1",
+            correlation_id="corr_abc123def456",
+            completed_at=OBSERVED,
+            result={"deep": deep},
+            disclosure=_disclosure(),
+        )
+
+
+def test_key_order_is_canonical_across_processes() -> None:
+    """Keys are inserted in hash order, so this fails if `sort_keys` is dropped.
+
+    An earlier version of this test used a fixed literal payload. Because
+    `canonical_json` sorts keys and CPython dicts iterate in insertion order,
+    that payload produced identical bytes even with the determinism guard
+    removed entirely — it could not fail. Building the dict by iterating a set
+    makes insertion order genuinely hash-dependent.
     """
     program = """
 import sys
@@ -242,24 +298,35 @@ disclosure = Disclosure(
     freshness=Freshness(observed_at=observed, state=FreshnessState.CURRENT_FOR_OBSERVED_VERSION),
     trust=Trust(level=TrustLevel.SOURCE_BOUND_DERIVED, basis=("source_version",)),
 )
+# Insertion order here follows set iteration, which varies with PYTHONHASHSEED.
+payload = {key: len(key) for key in {"zeta", "alpha", "mid", "kappa", "beta", "omega"}}
 envelope = ResponseEnvelope(
     request_id="req-1",
     correlation_id="corr_abc123def456",
     completed_at=observed,
-    result={"zeta": 1, "alpha": [3, 2, 1], "mid": {"b": True, "a": None}},
+    result=payload,
     disclosure=disclosure,
 )
 sys.stdout.write(envelope.to_canonical_json())
 """
     outputs = set()
+    insertion_orders = set()
     for seed in ("0", "1", "12345", "99999"):
         env = {**os.environ, "PYTHONHASHSEED": seed}
         completed = subprocess.run(  # noqa: S603
-            [sys.executable, "-c", program],
+            [sys.executable, "-c", program], capture_output=True, text=True, check=True, env=env
+        )
+        outputs.add(completed.stdout)
+        probe = subprocess.run(
+            [sys.executable, "-c", 'print(list({"zeta","alpha","mid","kappa","beta","omega"}))'],
             capture_output=True,
             text=True,
             check=True,
             env=env,
         )
-        outputs.add(completed.stdout)
+        insertion_orders.add(probe.stdout)
+
+    # If the seeds did not actually perturb set iteration, this test would be
+    # asserting nothing, so require that they did.
+    assert len(insertion_orders) > 1, "PYTHONHASHSEED did not vary set order; test is vacuous"
     assert len(outputs) == 1, f"serialisation varied across hash seeds: {outputs}"

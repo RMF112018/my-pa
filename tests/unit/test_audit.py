@@ -67,8 +67,11 @@ def test_no_field_can_structurally_hold_free_form_content() -> None:
     count, or a timestamp.
     """
     allowed_scalars = {int, datetime, bool}
-    id_fields = {"audit_id", "correlation_id", "principal_id"}
-    version_fields = {"policy_version"}
+    # Every str-typed field must be validated in __post_init__. Listing a field
+    # here without a matching validator is how the previous version of this test
+    # declared `metadata` safe while it held secrets, so the companion test
+    # below proves each of these actually rejects free text.
+    validated_str_fields = {"audit_id", "correlation_id", "principal_id", "policy_version"}
 
     for field in dataclasses.fields(AuditEvent):
         hint = typing.get_type_hints(AuditEvent)[field.name]
@@ -80,9 +83,7 @@ def test_no_field_can_structurally_hold_free_form_content() -> None:
         for candidate in candidates:
             is_enum = isinstance(candidate, type) and issubclass(candidate, enum.Enum)
             is_scalar = candidate in allowed_scalars
-            is_constrained_str = candidate is str and (
-                field.name in id_fields or field.name in version_fields
-            )
+            is_constrained_str = candidate is str and field.name in validated_str_fields
             assert is_enum or is_scalar or is_constrained_str, (
                 f"{field.name!r}: {candidate!r} is unconstrained and could carry content"
             )
@@ -99,10 +100,33 @@ def test_identifier_fields_reject_path_and_host_shaped_values() -> None:
             _event(audit_id=bad)
 
 
+PAYLOAD_PROBE = "postgres://user:hunter2@db.internal/prod -- /Users/x/tax.pdf"
+
+
+@pytest.mark.parametrize(
+    "field_name", ["audit_id", "correlation_id", "principal_id", "policy_version"]
+)
+def test_every_string_field_rejects_free_text(field_name: str) -> None:
+    """Each field the shape test calls 'constrained' must actually reject payload.
+
+    Without this, the shape test degenerates into an allow-list that asserts
+    safety by naming a field rather than by constraining it.
+    """
+    with pytest.raises(ValueError, match=r"identifier|policy version"):
+        _event(**{field_name: PAYLOAD_PROBE})
+
+
+def test_policy_version_accepts_only_its_documented_shape() -> None:
+    assert _event(policy_version="policy-v2").policy_version == "policy-v2"
+    for bad in ("v1", "policy-vX", "policy-v1; DROP TABLE audit", "", "policy-v99999"):
+        with pytest.raises(ValueError, match="policy version"):
+            _event(policy_version=bad)
+
+
 def test_audit_event_serialisation_contains_only_safe_values() -> None:
     event = _event(item_count=3, duration_ms=12, scope_source_id_count=1)
     rendered = repr(dataclasses.asdict(event)).lower()
-    for token in ("/users/", "select ", "password", "bearer ", "://"):
+    for token in ("/users/", "select ", "password", "bearer ", "://", "@"):
         assert token not in rendered
 
 

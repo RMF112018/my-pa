@@ -7,6 +7,7 @@ state cannot accidentally become permitted.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -15,10 +16,28 @@ from my_pa.domain.identity.operation import Capability, is_operator_only, permit
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 
-__all__ = ["DenialReason", "PolicyDecision", "PolicyRequest", "evaluate"]
+__all__ = [
+    "POLICY_VERSION",
+    "DenialReason",
+    "PolicyDecision",
+    "PolicyRequest",
+    "evaluate",
+    "validate_policy_version",
+]
 
 #: Version of the rule set below. Audit records bind decisions to this value.
 POLICY_VERSION = "policy-v1"
+
+#: Shape a policy version must take. Constrained so the field cannot become a
+#: free-text channel into the audit log.
+POLICY_VERSION_PATTERN = re.compile(r"\Apolicy-v[0-9]{1,4}\Z")
+
+
+def validate_policy_version(value: str) -> str:
+    """Return `value` if it is a well-formed policy version, else raise."""
+    if not POLICY_VERSION_PATTERN.fullmatch(value):
+        raise ValueError(f"policy version must match 'policy-vN', got {value!r}")
+    return value
 
 
 class DenialReason(StrEnum):
@@ -62,6 +81,7 @@ class PolicyDecision:
     reason: DenialReason | None = None
 
     def __post_init__(self) -> None:
+        validate_policy_version(self.policy_version)
         if self.allowed and self.reason is not None:
             raise ValueError("an allowed decision cannot carry a denial reason")
         if not self.allowed and self.reason is None:

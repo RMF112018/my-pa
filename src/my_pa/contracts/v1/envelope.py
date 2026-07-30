@@ -12,7 +12,6 @@ from pydantic import Field, field_validator, model_validator
 
 from my_pa.contracts.v1.base import (
     CONTRACT_VERSION,
-    JsonValue,
     StrictModel,
     UtcDatetime,
     ensure_deterministic,
@@ -62,7 +61,11 @@ class ResponseEnvelope(StrictModel):
     request_id: str = Field(min_length=1, max_length=128)
     correlation_id: str
     completed_at: UtcDatetime
-    result: dict[str, JsonValue] | None = None
+    # Deliberately not a recursive PEP 695 alias: that form is not reliably
+    # supported by the declared Pydantic floor, and CI would never surface the
+    # problem because it resolves to the newest release. The validator below is
+    # the enforcement, so the annotation does not need to carry the shape.
+    result: dict[str, Any] | None = None
     disclosure: Disclosure | None = None
     error: ProblemDetail | None = None
 

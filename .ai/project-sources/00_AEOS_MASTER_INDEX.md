@@ -1,24 +1,13 @@
-# AEOS Repository Router
+# Repository Agent Router
 
-This is the compact machine-oriented entry point for `RMF112018/my-pa`.
+This repository intentionally does not reproduce the wider AEOS document hierarchy.
 
-## Read order
+For repository work, read:
 
-1. `/AGENTS.md`
-2. `/AI_OPERATING_MANUAL.md`
-3. `/docs/00_REPOSITORY_SOURCE_INDEX.md`
-4. the nearest owning README/index
-5. the active goal record under `/.ai/goals/`, when present
+1. [`/AGENTS.md`](../../AGENTS.md);
+2. [`/CONTRIBUTING.md`](../../CONTRIBUTING.md);
+3. [`/SECURITY.md`](../../SECURITY.md);
+4. [`/docs/00_REPOSITORY_SOURCE_INDEX.md`](../../docs/00_REPOSITORY_SOURCE_INDEX.md);
+5. the nearest owning README or accepted ADR.
 
-## Routing
-
-- Architecture: `/docs/architecture/`
-- Decisions: `/docs/decisions/`
-- Specifications: `/docs/specs/`
-- Security: `/docs/security/`
-- Operations: `/docs/operations/`
-- Testing: `/docs/testing/`
-- Reviews/findings: `/docs/reviews/`, `/docs/findings/`
-- Evidence: `/docs/evidence/`, `/evidence/`
-
-Repository and authenticated GitHub state supersede external copies for execution identity.
+Issues, pull requests, CI, tests, accepted ADRs, and Git history are the primary engineering record. Use external Workspace or Drive sources only when the current objective specifically requires them.

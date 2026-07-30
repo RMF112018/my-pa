@@ -1,0 +1,114 @@
+name: repository-checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate repository documents and configuration
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          root = Path.cwd()
+          errors = []
+          link_pattern = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+
+          for path in root.rglob("*.md"):
+              if ".git" in path.parts:
+                  continue
+              text = path.read_text(encoding="utf-8")
+              for target in link_pattern.findall(text):
+                  target = target.strip()
+                  if not target or target.startswith(("http://", "https://", "mailto:", "#")):
+                      continue
+                  clean = target.split("#", 1)[0]
+                  if not clean:
+                      continue
+                  resolved = (root / clean.lstrip("/")) if clean.startswith("/") else (path.parent / clean)
+                  if not resolved.resolve().exists():
+                      errors.append(f"{path}: missing relative link {target}")
+
+          required = [
+              root / "AGENTS.md",
+              root / "CONTRIBUTING.md",
+              root / "SECURITY.md",
+              root / ".github" / "pull_request_template.md",
+              root / ".github" / "ISSUE_TEMPLATE" / "bounded-change.yml",
+          ]
+          for path in required:
+              if not path.exists():
+                  errors.append(f"missing required governance path: {path.relative_to(root)}")
+
+          if errors:
+              print("\n".join(errors))
+              sys.exit(1)
+          PY
+
+          ruby -e 'require "yaml"; ARGV.each { |f| YAML.safe_load(File.read(f), aliases: true); puts "validated #{f}" }' \
+            .github/ISSUE_TEMPLATE/bounded-change.yml \
+            .github/dependabot.yml
+
+      - name: Run Python FAST tier when package configuration exists
+        shell: bash
+        run: |
+          if [[ ! -f pyproject.toml ]]; then
+            echo "No pyproject.toml yet; governance/configuration validation is the applicable gate."
+            exit 0
+          fi
+
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m ruff check .
+          python -m ruff format --check .
+          python -m mypy src
+          python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"
+
+      - name: Package governance candidate
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: governance-candidate-${{ github.sha }}
+          path: |
+            .ai/project-sources/00_AEOS_MASTER_INDEX.md
+            .github/CODEOWNERS
+            .github/ISSUE_TEMPLATE/bounded-change.yml
+            .github/dependabot.yml
+            .github/pull_request_template.md
+            .github/workflows/repository-checks.yml
+            AGENTS.md
+            AI_OPERATING_MANUAL.md
+            CLAUDE.md
+            CONTRIBUTING.md
+            SECURITY.md
+            docs/00_REPOSITORY_SOURCE_INDEX.md
+            docs/governance/GOVERNANCE-AUDIT-MYPA-MCV-20260730.md
+          if-no-files-found: error
+          retention-days: 7
+          include-hidden-files: true

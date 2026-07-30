@@ -1,52 +1,25 @@
 # Repository Source Index
 
-**Repository:** `RMF112018/my-pa`  
-**Architecture basis:** `REQ-PKL-MYPA-REPO-ARCHITECTURE-20260730-001`  
-**Bootstrap goal:** `GOAL-MYPA-PKL-G00-REPOSITORY-BOOTSTRAP`  
-**Status:** `SCAFFOLD_ONLY`
+## Normative governance
 
-## Required entry sequence
+- [`AGENTS.md`](../AGENTS.md) — principal repository and coding-agent policy.
+- [`CONTRIBUTING.md`](../CONTRIBUTING.md) — concise human contribution workflow.
+- [`SECURITY.md`](../SECURITY.md) — security, privacy, and vulnerability policy.
 
-1. [`../AGENTS.md`](../AGENTS.md)
-2. [`../AI_OPERATING_MANUAL.md`](../AI_OPERATING_MANUAL.md)
-3. this index
-4. the nearest owning README or index
+`AI_OPERATING_MANUAL.md`, `CLAUDE.md`, and `.ai/project-sources/00_AEOS_MASTER_INDEX.md` are compatibility routers and contain no independent policy.
 
-## Root controls
+## Product and architecture
 
-| File | Role |
-|---|---|
-| `README.md` | Product and current-state overview |
-| `AGENTS.md` | Repository authority, boundaries, stops, and naming |
-| `AI_OPERATING_MANUAL.md` | Model-assisted delivery workflow |
-| `CLAUDE.md` | Thin agent-harness entry point |
-| `SECURITY.md` | Security and sensitive-data boundary |
-| `CONTRIBUTING.md` | Contribution prerequisites |
+- [`README.md`](../README.md) — product orientation and current repository state.
+- [`docs/architecture/00_ARCHITECTURE_INDEX.md`](architecture/00_ARCHITECTURE_INDEX.md) — architecture routing.
+- [`docs/decisions/00_ADR_INDEX.md`](decisions/00_ADR_INDEX.md) — accepted decision routing.
+- [`docs/decisions/ADR-001-modular-monolith-two-processes.md`](decisions/ADR-001-modular-monolith-two-processes.md) — modular monolith with gateway and worker processes.
+- [`docs/decisions/ADR-002-database-identity-and-compatibility-alias.md`](decisions/ADR-002-database-identity-and-compatibility-alias.md) — logical database identity and deferred physical alias.
 
-## Architecture and decisions
+## Governance review
 
-- [`architecture/00_ARCHITECTURE_INDEX.md`](architecture/00_ARCHITECTURE_INDEX.md)
-- [`decisions/00_ADR_INDEX.md`](decisions/00_ADR_INDEX.md)
+- [`docs/governance/GOVERNANCE-AUDIT-MYPA-MCV-20260730.md`](governance/GOVERNANCE-AUDIT-MYPA-MCV-20260730.md) — evidence basis, GitHub management plan, test policy rationale, and three-day MCV workflow for the current governance candidate.
 
-## Major repository areas
+## Working records
 
-| Path | Responsibility |
-|---|---|
-| `apps/` | Gateway, worker, and CLI process boundaries |
-| `src/my_pa/contracts/` | Versioned contracts |
-| `src/my_pa/domain/` | Provider-independent domain model |
-| `src/my_pa/application/` | Use cases and orchestration |
-| `src/my_pa/infrastructure/` | Concrete adapters |
-| `src/my_pa/bootstrap/` | Composition roots |
-| `migrations/` | PostgreSQL schema evolution |
-| `schemas/` | Machine-readable contracts |
-| `tests/` | Verification suites |
-| `fixtures/` | Synthetic test data |
-| `.ai/` | Machine-oriented governance and goal routing |
-| `ops/` | Inactive operational assets |
-| `scripts/` | Developer/operator automation |
-| `evidence/` | Durable verification summaries |
-
-## Current authorization boundary
-
-Only documentation scaffolding is present. No runtime implementation, database access, migration, source access, managed-document write, connector access, schedule, deployment, or production activation is implied.
+Use GitHub issues for bounded work, pull requests for review and acceptance evidence, Actions for automated checks, and releases for versioned candidate notes. Add repository documentation only when it defines durable behavior, architecture, security, operations, or developer workflow.

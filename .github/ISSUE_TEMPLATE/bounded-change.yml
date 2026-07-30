@@ -1,0 +1,57 @@
+name: Bounded MCV change
+description: Define one reviewable objective with explicit scope and acceptance criteria.
+title: ""
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for one bounded Minimum Viable Candidate change. New features discovered during implementation remain deferred unless essential to this objective.
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: State one outcome in concrete terms.
+      placeholder: Implement one read-only vertical slice that...
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable pass/fail conditions.
+      placeholder: |
+        - Given ... when ... then ...
+        - FAST and PR checks pass.
+    validations:
+      required: true
+  - type: textarea
+    id: in_scope
+    attributes:
+      label: In scope
+      description: Identify behavior and repository paths allowed to change.
+    validations:
+      required: true
+  - type: textarea
+    id: out_scope
+    attributes:
+      label: Out of scope
+      description: State deferred features, infrastructure, data access, and unrelated cleanup.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Required validation
+      description: Identify the FAST, PR, FULL, or SPECIALIZED evidence required.
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Boundaries
+      options:
+        - label: This issue does not authorize credentials, personal-data access, source mutation, deployment, production activation, destructive operations, or risk acceptance.
+          required: true
+        - label: The proposed solution will use the smallest correct implementation and avoid speculative infrastructure or abstractions.
+          required: true

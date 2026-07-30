@@ -1,9 +1,13 @@
-# Scaffold Directory
+# Architecture Documentation
 
-**Status:** `SCAFFOLD_ONLY`
+Architecture routing for `RMF112018/my-pa` lives in [`00_ARCHITECTURE_INDEX.md`](00_ARCHITECTURE_INDEX.md); repository-wide routing is [`docs/00_REPOSITORY_SOURCE_INDEX.md`](/docs/00_REPOSITORY_SOURCE_INDEX.md).
 
-This directory reserves an approved architectural boundary in `RMF112018/my-pa`. Its detailed responsibility is routed through [`docs/00_REPOSITORY_SOURCE_INDEX.md`](/docs/00_REPOSITORY_SOURCE_INDEX.md) and the nearest owning index.
+| Document | Status |
+|---|---|
+| [`system-context.md`](system-context.md) | Present — proposed for repository review |
+| [`module-boundaries.md`](module-boundaries.md) | Present — proposed for repository review |
+| [`data-authority.md`](data-authority.md) | Present — proposed for repository review |
 
-Directory presence does not authorize runtime implementation. Executable code, credentials, source-system access, database changes, background scheduling, deployment, and production activation require a separately approved goal.
+These documents record architecture direction. They do not authorize runtime implementation, credentials, source-system access, database changes, background scheduling, deployment, or production activation; those require a separately approved goal.
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy identities may appear only in explicit compatibility or evidence records.

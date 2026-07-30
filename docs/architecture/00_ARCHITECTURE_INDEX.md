@@ -23,7 +23,7 @@
 
 ## Specification
 
-The read-only Minimum Capable Vertical contract is [`../specs/mcv-read-only-vertical-slice.md`](../specs/mcv-read-only-vertical-slice.md).
+The read-only Minimum Viable Candidate (MCV) contract is [`../specs/mcv-read-only-vertical-slice.md`](../specs/mcv-read-only-vertical-slice.md).
 
 ## Decision records
 

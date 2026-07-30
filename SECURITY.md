@@ -21,6 +21,10 @@ Include the affected commit or version, reproduction steps using synthetic data,
 - Generated content must preserve provenance and must not overwrite authoritative evidence silently.
 - Database access, source mutation, destructive actions, credential changes, deployment, and production activation require separate explicit operator authorization.
 
+## Operator NAS access
+
+Runtime never depends on an SSH alias; processes receive configured roots. Where separately authorized operator NAS access is required, the only approved alias is `ssh bf-nas`. Any earlier employer-derived host alias is deprecated and must not appear in active instructions, runtime identity, tooling, or documentation. Do not inspect or modify SSH configuration as part of ordinary work.
+
 ## Dependency and workflow security
 
 - Add dependencies only for a current need; avoid overlapping libraries.

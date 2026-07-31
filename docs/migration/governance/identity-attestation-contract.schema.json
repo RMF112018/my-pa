@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RMF112018/my-pa/docs/migration/governance/identity-attestation-contract.schema.json",
+  "title": "Migration Identity Attestation Contract",
+  "description": "Documentation-level contract for a migration identity attestation. This is a schema and documentation artifact only. It defines no runtime behaviour and must not be accompanied by a parser, migration runtime, database model, loader, or dependency. A later, separately authorized work item may implement validation against this contract.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "record_type",
+    "goal_id",
+    "work_item_id",
+    "authorization_id",
+    "attested_at_utc",
+    "target_identity",
+    "source_identity",
+    "access_attestation",
+    "invalidation_rule"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "record_type": {
+      "type": "string",
+      "const": "MIGRATION_IDENTITY_ATTESTATION"
+    },
+    "goal_id": {
+      "type": "string",
+      "pattern": "^GOAL-[A-Z0-9-]+$"
+    },
+    "work_item_id": {
+      "type": "string",
+      "pattern": "^WP-P[0-9]{2}-[0-9]{2}$"
+    },
+    "authorization_id": {
+      "type": "string",
+      "pattern": "^AUTH-[A-Z0-9-]+$"
+    },
+    "attested_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "target_identity": {
+      "type": "object",
+      "description": "The canonical target of the migration. The logical database identity is fixed. A physical compatibility alias is out of scope until a separately authorized database-foundation goal supplies and verifies it.",
+      "additionalProperties": false,
+      "required": [
+        "logical_identity",
+        "access_authorized",
+        "connection_attempted"
+      ],
+      "properties": {
+        "logical_identity": {
+          "type": "string",
+          "const": "my_pa"
+        },
+        "access_authorized": {
+          "type": "boolean"
+        },
+        "connection_attempted": {
+          "type": "boolean"
+        },
+        "provisioning_authorized": {
+          "type": "boolean"
+        },
+        "ddl_authorized": {
+          "type": "boolean"
+        },
+        "physical_alias_value": {
+          "type": "string",
+          "description": "Recorded only under a separate authorization that supplies and verifies it. Until then the value is a documented placeholder."
+        },
+        "governing_decision": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "source_identity": {
+      "type": "object",
+      "description": "The historical source. Read-only by default. Recording an identity here confers no access.",
+      "required": [
+        "kind",
+        "historical_filename",
+        "schema_version",
+        "authority"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "SQLITE_DATABASE",
+            "RETAINED_SNAPSHOT",
+            "REPOSITORY"
+          ]
+        },
+        "historical_filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "authority": {
+          "type": "string",
+          "const": "READ_ONLY_HISTORICAL_SOURCE"
+        },
+        "absolute_path_recorded": {
+          "type": "boolean",
+          "const": false,
+          "description": "Absolute host paths are content-bearing operator detail and are not recorded in evidence."
+        }
+      }
+    },
+    "access_attestation": {
+      "type": "object",
+      "description": "Every declared access must be false unless a separate explicit operator authorization permits it and names the exact scope.",
+      "required": [
+        "sqlite_accessed",
+        "snapshot_accessed",
+        "postgresql_accessed",
+        "any_database_accessed",
+        "source_data_processed",
+        "personal_data_processed"
+      ],
+      "properties": {
+        "sqlite_accessed": {
+          "type": "boolean"
+        },
+        "snapshot_accessed": {
+          "type": "boolean"
+        },
+        "postgresql_accessed": {
+          "type": "boolean"
+        },
+        "any_database_accessed": {
+          "type": "boolean"
+        },
+        "source_data_processed": {
+          "type": "boolean"
+        },
+        "personal_data_processed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "invalidation_rule": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "content_safety_rule": {
+      "description": "Content-safe evidence and audit contract. An attestation, evidence record, or audit record conforming to this contract must never contain credentials, tokens, private keys, connection strings, absolute operator host paths, personal data, contact details, message bodies, document contents, raw source payloads, or snapshot content. Evidence records stable identifiers, event types, commands, exit status, and redacted metadata only.",
+      "prohibited_content": [
+        "credentials",
+        "tokens",
+        "private_keys",
+        "connection_strings",
+        "absolute_operator_host_paths",
+        "personal_data",
+        "contact_details",
+        "message_bodies",
+        "document_contents",
+        "raw_source_payloads",
+        "snapshot_content"
+      ],
+      "failure_preservation_rule": "Failed validation output and negative evidence are preserved verbatim. Deleting, overwriting, or concealing a failure to obtain a clean package is prohibited."
+    },
+    "audit_rule": {
+      "description": "Content-safe audit contract. A security-relevant action and every denied destructive attempt produces a proportionate audit event that records the actor role, the action, the exact identity acted upon, and the decision, without storing a sensitive payload.",
+      "required_event_fields": [
+        "actor_role",
+        "action",
+        "exact_identity",
+        "decision",
+        "occurred_at_utc"
+      ],
+      "prohibited_event_fields": [
+        "payload",
+        "credential",
+        "personal_data"
+      ]
+    },
+    "non_runtime_rule": {
+      "description": "This contract is documentation. It must not introduce a Python parser, migration runtime, database model, loader, CI change, or dependency. Implementing validation against it requires a separate explicit authorization."
+    }
+  }
+}

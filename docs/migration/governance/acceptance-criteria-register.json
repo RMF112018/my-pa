@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "record_type": "MIGRATION_ACCEPTANCE_CRITERIA_REGISTER",
+  "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
+  "phase_id": "PHASE-00",
+  "work_item_id": "WP-P00-01",
+  "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
+  "recorded_at_utc": "2026-07-31T20:48:55Z",
+  "criteria": {
+    "P00-AC-01": {
+      "requirement": "Exact identities are authenticated and recorded.",
+      "minimum_evidence": "Exact-identity JSON binds target repo/head/tree, legacy repo/head/tree/schema, snapshot SHA/bytes, plan, review, branch, and worktree.",
+      "evidence_records": [
+        "docs/migration/governance/exact-identity.json",
+        "docs/migration/governance/plan-and-review-bindings.json",
+        "evidence/migration/WP-P00-01/validation/01-entry-identity.txt",
+        "evidence/migration/WP-P00-01/validation/03-ledger-validation.txt"
+      ],
+      "result_recorded_in": "evidence/migration/WP-P00-01/01_IMPLEMENTATION_CHECKPOINT.md"
+    },
+    "P00-AC-02": {
+      "requirement": "The logical PostgreSQL target identity is my_pa.",
+      "minimum_evidence": "Target identity record and semantic validation assert my_pa; no database access occurs.",
+      "evidence_records": [
+        "docs/migration/governance/exact-identity.json",
+        "evidence/migration/WP-P00-01/validation/03-ledger-validation.txt",
+        "evidence/migration/WP-P00-01/validation/04-path-and-name-containment.txt"
+      ],
+      "result_recorded_in": "evidence/migration/WP-P00-01/01_IMPLEMENTATION_CHECKPOINT.md"
+    },
+    "P00-AC-03": {
+      "requirement": "The legacy SQLite source is documented as read-only and its rename or mutation remains unauthorized.",
+      "minimum_evidence": "Source-read-only declaration binds the historical filename and explicitly denies access, rename, and mutation.",
+      "evidence_records": [
+        "docs/migration/governance/source-read-only-identity.json"
+      ],
+      "result_recorded_in": "evidence/migration/WP-P00-01/01_IMPLEMENTATION_CHECKPOINT.md"
+    },
+    "P00-AC-04": {
+      "requirement": "Implementation is not self-authorized and no successor work item is automatically activated.",
+      "minimum_evidence": "Authorization ledger records explicit operator activation; successor remains inactive; implementation response stops for independent review.",
+      "evidence_records": [
+        "docs/migration/governance/authorization-ledger.json",
+        "docs/migration/governance/goal-state.json",
+        "docs/migration/governance/work-item-ledger.json",
+        "evidence/migration/WP-P00-01/DRAFT-INDEPENDENT-IMPLEMENTATION-REVIEW-REQUEST.md"
+      ],
+      "result_recorded_in": "evidence/migration/WP-P00-01/01_IMPLEMENTATION_CHECKPOINT.md"
+    },
+    "P00-AC-05": {
+      "requirement": "The migration goal, phase, and work-item structure is published and internally consistent.",
+      "minimum_evidence": "Goal charter/state, work-item ledger, authorization ledger, acceptance register, evidence index, and semantic checks agree.",
+      "evidence_records": [
+        "docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md",
+        "docs/migration/governance/goal-state.json",
+        "docs/migration/governance/work-item-ledger.json",
+        "docs/migration/governance/authorization-ledger.json",
+        "evidence/migration/WP-P00-01/00_EVIDENCE_INDEX.json",
+        "evidence/migration/WP-P00-01/validation/03-ledger-validation.txt"
+      ],
+      "result_recorded_in": "evidence/migration/WP-P00-01/01_IMPLEMENTATION_CHECKPOINT.md"
+    }
+  },
+  "excluded_criteria": {
+    "P00-AC-06": "Belongs to WP-P00-02. Not authorized, not implemented, not evidenced by this work item.",
+    "P00-AC-07": "Belongs to WP-P00-02. Not authorized, not implemented, not evidenced by this work item.",
+    "P00-AC-08": "Belongs to WP-P00-02. Not authorized, not implemented, not evidenced by this work item."
+  },
+  "acceptance_rule": "A criterion may be marked PASS only with evidence tied to the exact implementation head. An assertion, a draft, or a passing unrelated test is not sufficient. Any later commit invalidates every criterion result and the independent review bound to it.",
+  "self_acceptance_prohibited": "The implementing agent records demonstrated evidence only. Final acceptance is determined by independent review."
+}

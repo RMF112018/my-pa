@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "receipt_type": "COORDINATION_ROUNDTRIP_RECEIPT",
+  "receipt_scope": "IN_REPOSITORY_PRE_COMMIT_RECORD",
+  "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-IMPLEMENTATION-20260731-024",
+  "parent_coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-LOCAL-EXECUTION-20260731-023",
+  "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
+  "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
+  "phase_id": "PHASE-00",
+  "work_item_id": "WP-P00-01",
+  "produced_at_utc": "2026-07-31T20:48:55Z",
+  "disposition": "WP_P00_01_IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "implementation_state": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "receipt_scope_note": "This is the in-repository record of the implementation roundtrip, written before the single authorized commit. The authoritative published roundtrip receipt for this request is produced after the commit and after Drive readback verification, and it carries the post-commit identity and the publication readback results.",
+  "authorization": {
+    "status_before": "ACTIVE_UNCONSUMED",
+    "status_after": "CONSUMED_BY_WP_P00_01_IMPLEMENTATION",
+    "effective_at_utc": "2026-07-31T20:29:00Z",
+    "expires_at_utc": "2026-08-01T20:29:00Z",
+    "verified_utc_before_first_write": "2026-07-31T20:48:55Z",
+    "expiry_check": "NOT_EXPIRED",
+    "implementation_may_begin": true,
+    "implementation_executed": true,
+    "self_authorized": false,
+    "consumption_precondition": "Commit exists and evidence package published and verified."
+  },
+  "exact_identity": {
+    "target": {
+      "repository": "RMF112018/my-pa",
+      "base_branch": "main",
+      "base_sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
+      "base_tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4",
+      "base_verified_local": true,
+      "base_verified_remote": true
+    },
+    "legacy": {
+      "repository": "RMF112018/hb-personal-assistant",
+      "branch": "main",
+      "head": "fc7386fb925bfcb7370f969ac737acee0d32ddd0",
+      "tree": "70c0b5647ffc7119be9ab28ae53f654fe2d463d2",
+      "schema_version": 135,
+      "access_mode": "READ_ONLY_REPOSITORY_METADATA_ONLY",
+      "verified": true
+    },
+    "snapshot": {
+      "sha256": "fa3631f7b75af6f982fa9d9f0d033ff8d488339a9fd00f7b73af04d1eafc52a9",
+      "bytes": 7417266176,
+      "opened": false,
+      "accessed": false
+    },
+    "implementation_branch": "bf/migration-wp-p00-01-governance-identity",
+    "implementation_worktree": "/Users/bobbyfetting/my-pa",
+    "implementation_head": "RECORDED_POST_COMMIT_IN_PUBLISHED_COMMIT_IDENTITY",
+    "implementation_tree": "RECORDED_POST_COMMIT_IN_PUBLISHED_COMMIT_IDENTITY",
+    "identity_drift_detected": false
+  },
+  "entry_gate": {
+    "result": "PASS",
+    "drive_retrieval": "PASS",
+    "controlling_receipt_roundtrip_status": "COMPLETE_AND_VERIFIED",
+    "controlling_receipt_publication_status": "VERIFIED",
+    "controlling_receipt_request_response_binding": "MATCH",
+    "controlling_receipt_index_registration": "REGISTERED_ACTIVE_UNCONSUMED",
+    "controlling_receipt_final_prompt_binding": "MATCH_AFTER_PROMPT_REVISION",
+    "repository_bootstrap": "PASS",
+    "governance_contradiction_detected": false,
+    "worktree_clean_before_first_write": true,
+    "unrelated_local_work_present": false,
+    "branch_collision": false,
+    "goal_id_collision": false,
+    "work_item_id_collision": false,
+    "authorization_id_collision": false,
+    "destructive_action_performed": false
+  },
+  "mutation": {
+    "commit_count": 1,
+    "commit_message": "docs(migration): bind WP-P00-01 governance and identities",
+    "maximum_commits": 1,
+    "authorized_paths": [
+      "docs/migration/**",
+      "evidence/migration/**"
+    ],
+    "changed_path_containment": "CONTAINED",
+    "unauthorized_file_changed": false,
+    "amended": false,
+    "second_commit_created": false
+  },
+  "acceptance_criteria": {
+    "P00-AC-01": "DEMONSTRATED",
+    "P00-AC-02": "DEMONSTRATED",
+    "P00-AC-03": "DEMONSTRATED",
+    "P00-AC-04": "DEMONSTRATED",
+    "P00-AC-05": "DEMONSTRATED"
+  },
+  "acceptance_criteria_excluded": [
+    "P00-AC-06",
+    "P00-AC-07",
+    "P00-AC-08"
+  ],
+  "acceptance_semantics": "DEMONSTRATED means evidence exists at the exact implementation head. It is not PASS, APPROVED, VERIFIED_FIXED, READY_TO_MERGE, MERGED, or COMPLETE. Only independent review may issue an acceptance disposition.",
+  "validation": {
+    "contract": "04_WP-P00-01-TEST-AND-EVIDENCE-CONTRACT.md",
+    "contract_drive_id": "13bWHDUJUYzmYBVaDN9NnEBDIe08OIc607H16kBYwTWQ",
+    "executed_from": "/Users/bobbyfetting/my-pa",
+    "commands_substituted": false,
+    "commands_omitted": false,
+    "environment_note": "The repository .venv was activated so the contract's python invocations resolve. No command text was changed.",
+    "evidence_directory": "evidence/migration/WP-P00-01/validation/",
+    "failed_evidence_preserved": true,
+    "database_connection_used": false,
+    "snapshot_used": false,
+    "network_service_used": false,
+    "personal_or_content_data_used": false
+  },
+  "attestations": {
+    "database_accessed": false,
+    "sqlite_accessed": false,
+    "snapshot_accessed": false,
+    "postgresql_accessed": false,
+    "runtime_code_created": false,
+    "dependency_changed": false,
+    "ci_changed": false,
+    "ddl_executed": false,
+    "etl_executed": false,
+    "push_performed": false,
+    "pull_request_created": false,
+    "merge_performed": false,
+    "deployment_performed": false,
+    "cutover_performed": false,
+    "cleanup_performed": false,
+    "retirement_performed": false,
+    "risk_accepted": false,
+    "successor_activated": false,
+    "self_reviewed": false,
+    "self_approved": false
+  },
+  "publication_control": {
+    "model": "NON_CIRCULAR",
+    "rule": "In-repository records are written before the commit and therefore never contain the commit SHA they live in. Post-commit identity and readback verification are recorded only in the published Drive package."
+  },
+  "invalidation_rule": "Immediate on target or legacy identity drift, snapshot drift, plan package or independent-review drift, branch or worktree collision or drift, scope or acceptance change, mutation-limit change, expiry, or prior consumption. Any later commit invalidates the acceptance results and any review bound to the exact head.",
+  "blocked_actions": [
+    "push",
+    "pull request",
+    "merge",
+    "deployment",
+    "cutover",
+    "cleanup",
+    "retirement",
+    "risk acceptance",
+    "WP-P00-02 activation",
+    "any successor work item"
+  ],
+  "successor_review_request": {
+    "artifact": "evidence/migration/WP-P00-01/DRAFT-INDEPENDENT-IMPLEMENTATION-REVIEW-REQUEST.md",
+    "state": "DRAFTED_NOT_DISPATCHED",
+    "dispatch_authority": "OPERATOR_ONLY"
+  },
+  "operator_only_next_action": "Review the published implementation evidence package and, if satisfied, dispatch the drafted independent implementation-review request to a fresh independent reviewer bound to the exact implementation head."
+}

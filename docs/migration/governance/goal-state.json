@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "record_type": "MIGRATION_GOAL_STATE",
+  "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
+  "goal_title": "Migrate my-pa to the canonical PostgreSQL metadata and knowledge store",
+  "repository": "RMF112018/my-pa",
+  "lifecycle_state": "PHASE_00_IN_PROGRESS",
+  "active_phase_id": "PHASE-00",
+  "active_work_item_id": "WP-P00-01",
+  "maximum_active_work_items": 1,
+  "maximum_active_phases": 1,
+  "state_recorded_at_utc": "2026-07-31T20:48:55Z",
+  "state_bound_to": {
+    "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
+    "base_sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
+    "base_tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4"
+  },
+  "phases": [
+    {
+      "phase_id": "PHASE-00",
+      "title": "Governance, identity, and readiness binding",
+      "state": "IN_PROGRESS",
+      "acceptance_criteria": [
+        "P00-AC-01",
+        "P00-AC-02",
+        "P00-AC-03",
+        "P00-AC-04",
+        "P00-AC-05",
+        "P00-AC-06",
+        "P00-AC-07",
+        "P00-AC-08"
+      ],
+      "criteria_bound_to_active_work_item": [
+        "P00-AC-01",
+        "P00-AC-02",
+        "P00-AC-03",
+        "P00-AC-04",
+        "P00-AC-05"
+      ]
+    }
+  ],
+  "successor_activation": {
+    "next_work_item_id": "WP-P00-02",
+    "state": "NOT_ACTIVATED",
+    "automatic_activation_authorized": false,
+    "activation_authority": "OPERATOR_ONLY",
+    "precondition": "Independent implementation review of WP-P00-01 must complete before any successor authorization is requested."
+  },
+  "self_authorization_prohibited": true,
+  "terminal_state_for_active_work_item": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "invalidation_rule": "Any identity, scope, acceptance, or mutation-limit drift invalidates this state record and the authorization it is bound to."
+}

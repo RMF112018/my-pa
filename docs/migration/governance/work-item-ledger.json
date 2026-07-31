@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "record_type": "MIGRATION_WORK_ITEM_LEDGER",
+  "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
+  "maximum_active_work_items": 1,
+  "recorded_at_utc": "2026-07-31T20:48:55Z",
+  "work_items": [
+    {
+      "work_item_id": "WP-P00-01",
+      "phase_id": "PHASE-00",
+      "title": "Bind migration identities and governance ledger",
+      "reviewed_objective": "Create migration goal ledger and identity-attestation module contracts only",
+      "state": "ACTIVE",
+      "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
+      "authorized_paths": [
+        "docs/migration/**",
+        "evidence/migration/**"
+      ],
+      "acceptance_criteria": [
+        "P00-AC-01",
+        "P00-AC-02",
+        "P00-AC-03",
+        "P00-AC-04",
+        "P00-AC-05"
+      ],
+      "maximum_commits": 1,
+      "implementation_branch": "bf/migration-wp-p00-01-governance-identity",
+      "terminal_state": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+      "independent_review_state": "REQUESTED_AS_DRAFT_NOT_EXECUTED"
+    },
+    {
+      "work_item_id": "WP-P00-02",
+      "phase_id": "PHASE-00",
+      "title": "Successor Phase 00 work item",
+      "state": "NOT_ACTIVATED",
+      "authorization_id": null,
+      "acceptance_criteria": [
+        "P00-AC-06",
+        "P00-AC-07",
+        "P00-AC-08"
+      ],
+      "automatic_activation_authorized": false,
+      "activation_authority": "OPERATOR_ONLY",
+      "note": "Recorded for structural completeness only. No WP-P00-02 work, authorization, or acceptance evidence is produced by WP-P00-01."
+    }
+  ],
+  "ledger_rules": {
+    "at_most_one_active_work_item": true,
+    "self_authorization_prohibited": true,
+    "successor_activation_requires_operator": true,
+    "one_commit_per_authorized_work_item": true
+  }
+}

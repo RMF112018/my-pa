@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "record_type": "MIGRATION_WORK_ITEM_EVIDENCE_INDEX",
+  "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
+  "phase_id": "PHASE-00",
+  "work_item_id": "WP-P00-01",
+  "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
+  "parent_coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-LOCAL-EXECUTION-20260731-023",
+  "implementation_coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-IMPLEMENTATION-20260731-024",
+  "indexed_at_utc": "2026-07-31T20:48:55Z",
+  "bound_identity": {
+    "repository": "RMF112018/my-pa",
+    "base_branch": "main",
+    "base_sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
+    "base_tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4",
+    "implementation_branch": "bf/migration-wp-p00-01-governance-identity",
+    "implementation_worktree": "/Users/bobbyfetting/my-pa",
+    "implementation_head": "RECORDED_POST_COMMIT_IN_PUBLISHED_COMMIT_IDENTITY",
+    "commit_count_above_base": 1
+  },
+  "governance_records": [
+    "docs/migration/00_MIGRATION_INDEX.md",
+    "docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md",
+    "docs/migration/governance/goal-state.json",
+    "docs/migration/governance/work-item-ledger.json",
+    "docs/migration/governance/authorization-ledger.json",
+    "docs/migration/governance/exact-identity.json",
+    "docs/migration/governance/source-read-only-identity.json",
+    "docs/migration/governance/plan-and-review-bindings.json",
+    "docs/migration/governance/acceptance-criteria-register.json",
+    "docs/migration/governance/identity-attestation-contract.schema.json"
+  ],
+  "evidence_records": [
+    "evidence/migration/WP-P00-01/00_EVIDENCE_INDEX.json",
+    "evidence/migration/WP-P00-01/01_IMPLEMENTATION_CHECKPOINT.md",
+    "evidence/migration/WP-P00-01/COORDINATION-RESPONSE-REQ-MYPA-MIGRATION-WP-P00-01-IMPLEMENTATION.md",
+    "evidence/migration/WP-P00-01/COORDINATION-ROUNDTRIP-RECEIPT-REQ-MYPA-MIGRATION-WP-P00-01-IMPLEMENTATION.json",
+    "evidence/migration/WP-P00-01/DRAFT-INDEPENDENT-IMPLEMENTATION-REVIEW-REQUEST.md"
+  ],
+  "validation_records": [
+    {
+      "artifact": "evidence/migration/WP-P00-01/validation/01-entry-identity.txt",
+      "covers": "Worktree toplevel, base ancestry, base tree, and commit-count ceiling."
+    },
+    {
+      "artifact": "evidence/migration/WP-P00-01/validation/02-json-validation.txt",
+      "covers": "JSON syntax of every JSON file under the authorized paths."
+    },
+    {
+      "artifact": "evidence/migration/WP-P00-01/validation/03-ledger-validation.txt",
+      "covers": "Semantic assertions over identity, goal state, work-item ledger, authorization ledger, and acceptance register."
+    },
+    {
+      "artifact": "evidence/migration/WP-P00-01/validation/04-path-and-name-containment.txt",
+      "covers": "Changed-path containment, filename neutrality, target-name neutrality, and whitespace/diff check."
+    },
+    {
+      "artifact": "evidence/migration/WP-P00-01/validation/05-fast-tier.txt",
+      "covers": "Repository FAST tier: ruff lint, ruff format check, mypy over src, and the marker-filtered pytest selection."
+    }
+  ],
+  "acceptance_criteria_bound": [
+    "P00-AC-01",
+    "P00-AC-02",
+    "P00-AC-03",
+    "P00-AC-04",
+    "P00-AC-05"
+  ],
+  "acceptance_criteria_excluded": [
+    "P00-AC-06",
+    "P00-AC-07",
+    "P00-AC-08"
+  ],
+  "access_attestation": {
+    "sqlite_accessed": false,
+    "snapshot_accessed": false,
+    "postgresql_accessed": false,
+    "any_database_accessed": false,
+    "network_service_accessed": false,
+    "source_data_processed": false,
+    "personal_data_processed": false,
+    "credentials_recorded": false,
+    "read_only_repository_metadata_used": true,
+    "read_only_repository_metadata_scope": "GitHub branch and tree metadata plus specific legacy source files consulted solely to authenticate the legacy head, tree, schema version, and historical SQLite filename."
+  },
+  "content_safety": {
+    "credentials": "NONE_RECORDED",
+    "connection_strings": "NONE_RECORDED",
+    "personal_data": "NONE_RECORDED",
+    "message_bodies": "NONE_RECORDED",
+    "document_contents": "NONE_RECORDED",
+    "raw_source_payloads": "NONE_RECORDED",
+    "snapshot_content": "NONE_RECORDED",
+    "absolute_operator_host_paths": "Only the authorized implementation worktree path is recorded, because the authorization names it as an exact identity."
+  },
+  "failure_preservation_rule": "Failed validation output and negative evidence are preserved verbatim. Deleting, overwriting, or concealing a failure to obtain a clean package is prohibited.",
+  "publication_control": {
+    "model": "NON_CIRCULAR",
+    "rule": "In-repository evidence is written before the single authorized commit and therefore cannot contain its own commit SHA. Post-commit identity, post-commit containment re-verification, and the clean-worktree assertion are recorded only in the published Drive evidence package, so that no in-repository record depends on a value that does not yet exist and no second commit is required.",
+    "post_commit_values_published_in": "COMMIT-IDENTITY.json and TEST-AND-VALIDATION-RESULTS.md"
+  },
+  "terminal_state": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW"
+}

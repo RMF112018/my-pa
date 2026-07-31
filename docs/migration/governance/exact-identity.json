@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "record_type": "MIGRATION_EXACT_IDENTITY",
+  "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
+  "phase_id": "PHASE-00",
+  "work_item_id": "WP-P00-01",
+  "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
+  "authenticated_at_utc": "2026-07-31T20:48:55Z",
+  "authentication_method": "Local Git plumbing for the target worktree and read-only GitHub repository metadata for the legacy repository. No database, snapshot, or network data source was opened.",
+  "target_repository": {
+    "repository": "RMF112018/my-pa",
+    "branch": "main",
+    "head": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
+    "tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4"
+  },
+  "legacy_repository": {
+    "repository": "RMF112018/hb-personal-assistant",
+    "branch": "main",
+    "head": "fc7386fb925bfcb7370f969ac737acee0d32ddd0",
+    "tree": "70c0b5647ffc7119be9ab28ae53f654fe2d463d2",
+    "schema_version": 135,
+    "authority": "HISTORICAL_EVIDENCE_ONLY",
+    "access_mode": "READ_ONLY_REPOSITORY_METADATA_ONLY",
+    "mutation_authorized": false,
+    "rename_authorized": false
+  },
+  "legacy_snapshot": {
+    "sha256": "fa3631f7b75af6f982fa9d9f0d033ff8d488339a9fd00f7b73af04d1eafc52a9",
+    "bytes": 7417266176,
+    "accessed": false,
+    "opened": false,
+    "access_authorized": false,
+    "retention": "RETAINED_UNOPENED_EVIDENCE"
+  },
+  "postgresql_target": {
+    "logical_identity": "my_pa",
+    "access_authorized": false,
+    "connection_attempted": false,
+    "provisioning_authorized": false,
+    "ddl_authorized": false,
+    "physical_alias_value": "NOT_BOUND_IN_THIS_WORK_ITEM",
+    "governing_decision": "ADR-002",
+    "note": "The canonical logical identity is my_pa. A physical compatibility alias is deferred to a separately authorized database-foundation goal and is not recorded here."
+  },
+  "implementation_identity": {
+    "implementation_branch": "bf/migration-wp-p00-01-governance-identity",
+    "implementation_worktree": "/Users/bobbyfetting/my-pa",
+    "base_branch": "main",
+    "base_sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
+    "base_tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4",
+    "maximum_implementation_branches": 1,
+    "maximum_implementation_worktrees": 1,
+    "maximum_commits": 1
+  },
+  "plan_binding": {
+    "plan_request_id": "REQ-MYPA-POSTGRESQL-MIGRATION-DETAILED-PLAN-20260731-017",
+    "plan_revision": "R2",
+    "plan_package_manifest_id": "1ruZOUxXtPUHego3_ZhP84sVpux_gTe3v",
+    "plan_package_sha256": "0a2effa291251d8046cf5af3e4e228caadbf53a35c0c36486afcc492982b53b4",
+    "plan_package_hash_scope": "stored_raw_bytes"
+  },
+  "review_binding": {
+    "independent_review_request_id": "REQ-MYPA-POSTGRESQL-MIGRATION-PLAN-INDEPENDENT-REVIEW-R2-20260731-020",
+    "independent_review_receipt_id": "14T27kXWdpoT16vix1MqgFQ9lubyXAXyb",
+    "independent_review_disposition": "INDEPENDENT_MIGRATION_PLAN_R2_REVIEW_PASS"
+  },
+  "gate_binding": {
+    "migration_gate_request_id": "REQ-MYPA-MIGRATION-GATE-FINAL-REVALIDATION-20260731-016",
+    "migration_gate_receipt_id": "1tgWPo4L89Qm0h1QcxqyUzjABoTqGMGRV",
+    "migration_gate_disposition": "MIGRATION_PLANNING_GATE_PASSED"
+  },
+  "invalidation_rule": "Any drift in target head/tree, legacy head/tree/schema, snapshot identity, plan package hash, independent-review disposition, branch or worktree identity, authorized paths, acceptance criteria, or mutation limits invalidates the authorization and every acceptance result bound to it."
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "record_type": "LEGACY_SOURCE_READ_ONLY_IDENTITY",
+  "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
+  "work_item_id": "WP-P00-01",
+  "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
+  "declared_at_utc": "2026-07-31T20:48:55Z",
+  "legacy_source": {
+    "kind": "SQLITE_DATABASE",
+    "historical_filename": "hb-personal-assistant.sqlite",
+    "historical_filename_authority": "Declared by the legacy repository path policy at the authenticated legacy tree; authenticated through read-only repository metadata only.",
+    "declaring_module": "src/hb_assistant/config/path_policy.py",
+    "declaring_symbol": "PathPolicy.get_db_path",
+    "declared_at_legacy_head": "fc7386fb925bfcb7370f969ac737acee0d32ddd0",
+    "declared_at_legacy_tree": "70c0b5647ffc7119be9ab28ae53f654fe2d463d2",
+    "schema_version": 135,
+    "schema_version_authority": "src/hb_assistant/store/migrator.py::LATEST_SCHEMA_VERSION",
+    "absolute_path_recorded": false,
+    "absolute_path_recorded_reason": "The historical file lives under an operator application-support root. The concrete host path is neither required nor authorized for this work item and is deliberately not recorded."
+  },
+  "authority": "READ_ONLY_HISTORICAL_SOURCE",
+  "prohibitions": {
+    "read_access_authorized": false,
+    "write_access_authorized": false,
+    "open_authorized": false,
+    "connection_authorized": false,
+    "query_authorized": false,
+    "copy_authorized": false,
+    "move_authorized": false,
+    "rename_authorized": false,
+    "mutation_authorized": false,
+    "deletion_authorized": false,
+    "retirement_authorized": false,
+    "ddl_authorized": false,
+    "etl_authorized": false
+  },
+  "retained_snapshot": {
+    "sha256": "fa3631f7b75af6f982fa9d9f0d033ff8d488339a9fd00f7b73af04d1eafc52a9",
+    "bytes": 7417266176,
+    "opened": false,
+    "accessed": false,
+    "access_authorized": false
+  },
+  "access_attestation": {
+    "sqlite_accessed": false,
+    "snapshot_accessed": false,
+    "postgresql_accessed": false,
+    "any_database_accessed": false,
+    "source_data_processed": false,
+    "personal_data_processed": false
+  },
+  "future_access_rule": "Any read of the legacy SQLite source or the retained snapshot requires a separate, explicit operator authorization naming the exact source identity, the exact read scope, and the exact evidence contract. This record confers no access.",
+  "naming_rule": "The legacy identity may appear only in compatibility and evidence records such as this one. New repository paths, runtime identities, external API names, and capability names use the neutral my_pa / MY_PA_ namespace."
+}

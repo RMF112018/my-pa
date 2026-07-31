@@ -1,0 +1,29 @@
+All checks passed!
+173 files already formatted
+Success: no issues found in 26 source files
+============================= test session starts ==============================
+platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/bobbyfetting/my-pa
+configfile: pyproject.toml
+testpaths: tests
+collected 378 items
+
+tests/architecture/test_dependency_direction.py ........................ [  6%]
+.................................                                        [ 15%]
+tests/architecture/test_scope_and_hygiene.py ........................... [ 22%]
+.........                                                                [ 24%]
+tests/contract/test_capabilities_and_readiness.py .................      [ 29%]
+tests/contract/test_errors_and_disclosure.py ........................... [ 36%]
+...................                                                      [ 41%]
+tests/contract/test_serialization.py ................................... [ 50%]
+......................                                                   [ 56%]
+tests/unit/test_audit.py ..................                              [ 61%]
+tests/unit/test_identifiers.py ..................................        [ 70%]
+tests/unit/test_policy.py .............................................. [ 82%]
+..........................                                               [ 89%]
+tests/unit/test_provenance_and_classification.py ...........             [ 92%]
+tests/unit/test_settings.py ........................                     [ 98%]
+tests/unit/test_time.py ......                                           [100%]
+
+============================= 378 passed in 0.61s ==============================
+repository FAST tier: PASS

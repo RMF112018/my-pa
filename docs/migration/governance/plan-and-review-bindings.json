@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "record_type": "MIGRATION_PLAN_AND_REVIEW_BINDINGS",
+  "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
+  "work_item_id": "WP-P00-01",
+  "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
+  "recorded_at_utc": "2026-07-31T20:48:55Z",
+  "planning_gate": {
+    "request_id": "REQ-MYPA-MIGRATION-GATE-FINAL-REVALIDATION-20260731-016",
+    "receipt_id": "1tgWPo4L89Qm0h1QcxqyUzjABoTqGMGRV",
+    "disposition": "MIGRATION_PLANNING_GATE_PASSED"
+  },
+  "plan": {
+    "request_id": "REQ-MYPA-POSTGRESQL-MIGRATION-DETAILED-PLAN-20260731-017",
+    "revision": "R2",
+    "package_manifest_id": "1ruZOUxXtPUHego3_ZhP84sVpux_gTe3v",
+    "package_manifest_sha256": "0a2effa291251d8046cf5af3e4e228caadbf53a35c0c36486afcc492982b53b4",
+    "hash_scope": "stored_raw_bytes"
+  },
+  "independent_plan_review": {
+    "request_id": "REQ-MYPA-POSTGRESQL-MIGRATION-PLAN-INDEPENDENT-REVIEW-R2-20260731-020",
+    "receipt_id": "14T27kXWdpoT16vix1MqgFQ9lubyXAXyb",
+    "disposition": "INDEPENDENT_MIGRATION_PLAN_R2_REVIEW_PASS",
+    "reviewer_role": "INDEPENDENT",
+    "self_review": false
+  },
+  "authorization_chain": {
+    "authorization_package_folder_id": "1IIP9BHhjKg7oxpGfU-EXA8mmDT0Q2EQj",
+    "authorization_artifact_id": "1mH7GcRABQZ6DZktDH5bHhRhHJiaHXBmVKUGAvxz_isY",
+    "implementation_prompt_artifact_id": "1HW-rNa-CXi3Zt9THAOSRPjJVNRCFRo4L_M9xIxBeJWk",
+    "operator_activation_record_id": "1ZcM83nXRWAzz1fHiJvSBbKh3Rjq7ZkV4z-DGODQYrjo",
+    "activation_roundtrip_receipt_id": "1SRQvbeFbIrSx5DlXeTBguG84nWMe9Fy5mAGu_64OTXU",
+    "activation_publication_receipt_id": "1ZS6J79z7zEsq8XpNfSJs2GOCJl32UpS4f_HSrjYTKSw",
+    "exact_identity_and_collision_check_id": "16dKhjyiFbSpN8roA38haWBKVRJkAoLGOkNmVcZVG1XU",
+    "test_and_evidence_contract_id": "13bWHDUJUYzmYBVaDN9NnEBDIe08OIc607H16kBYwTWQ",
+    "acceptance_criteria_artifact_id": "1FDk49cbf-ItVASalS-cujxKKGMi0Ta7vMt_TlCuOGgs",
+    "scope_and_path_containment_id": "1h4HyZ2rieVycbTo2Z234b3jLFo9E5LgFj6IU5X9Inrs",
+    "stop_conditions_id": "19R3CmL5idRissQfM-a04Q0G6j0WwNQVN2Bio9aDjxNo"
+  },
+  "controlling_receipt_assertions": {
+    "roundtrip_status": "COMPLETE_AND_VERIFIED",
+    "publication_status": "VERIFIED",
+    "request_response_binding": "MATCH",
+    "index_registration": "REGISTERED_ACTIVE_UNCONSUMED",
+    "final_prompt_binding": "MATCH_AFTER_PROMPT_REVISION"
+  },
+  "dispatch_binding": {
+    "parent_coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-LOCAL-EXECUTION-20260731-023",
+    "implementation_coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-IMPLEMENTATION-20260731-024"
+  },
+  "representation_limitation": "The controlling Drive artifacts are native Google Docs. They have no stable stored raw byte sequence exposed through the publication flow, so hash_scope for those artifacts is not_applicable and authority derives from exact Drive IDs, parent folder, artifact identity, and the operator activation record. The R2 plan package manifest is the one artifact with a stored_raw_bytes hash, recorded above.",
+  "precedence_rule": "Repository governance files govern implementation. Where Drive publications and repository governance conflict materially, the implementation stops and publishes a blocker rather than reinterpreting scope. No such conflict was found for this work item."
+}

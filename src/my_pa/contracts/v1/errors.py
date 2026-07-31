@@ -8,9 +8,11 @@ detail, or credential, and it does not reveal whether a denied object exists
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from enum import StrEnum
 from types import MappingProxyType
+from typing import Final
 
 from pydantic import Field, model_validator
 
@@ -72,19 +74,33 @@ def retry_guidance_for(code: ErrorCode) -> RetryGuidance:
     return _RETRY_GUIDANCE[code]
 
 
+#: Shape a `safe_details` entry must take: a short, pre-categorised token such as
+#: a rejected field name. Bounded so the field cannot become the free-text
+#: channel that `AuditEvent` is structurally denied.
+_SAFE_DETAIL_PATTERN: Final = re.compile(r"\A[a-z][a-z0-9_.]{0,63}\Z")
+
+#: Most rejected fields a single request can usefully report.
+_MAX_SAFE_DETAILS: Final = 16
+
+
 class ProblemDetail(StrictModel):
     """One typed public error.
 
     `message` is a fixed, human-readable summary of the code. It is deliberately
     not a place to interpolate request state; `safe_details` carries only
-    pre-categorised strings a caller may act on, such as a rejected field name.
+    pre-categorised tokens a caller may act on, such as a rejected field name.
+
+    Both fields are bounded in shape as well as length. An unbounded string here
+    would be the same payload channel that was removed from `AuditEvent`: a
+    caller interpolating "rejected value {x}" would leak a query, path, or
+    credential into a public error.
     """
 
     code: ErrorCode
     message: str = Field(min_length=1, max_length=200)
     correlation_id: str
     retry: RetryGuidance
-    safe_details: tuple[str, ...] = ()
+    safe_details: tuple[str, ...] = Field(default=(), max_length=_MAX_SAFE_DETAILS)
 
     @model_validator(mode="after")
     def _check(self) -> ProblemDetail:
@@ -92,4 +108,9 @@ class ProblemDetail(StrictModel):
         expected = retry_guidance_for(self.code)
         if self.retry is not expected:
             raise ValueError(f"{self.code} requires retry guidance {expected}, got {self.retry}")
+        for detail in self.safe_details:
+            if not _SAFE_DETAIL_PATTERN.fullmatch(detail):
+                raise ValueError(
+                    "safe_details entries must be short lowercase tokens such as a field name"
+                )
         return self

@@ -93,6 +93,75 @@ def test_unsupported_is_never_retryable() -> None:
     assert retry_guidance_for(ErrorCode.UNSUPPORTED) is RetryGuidance.NO
 
 
+def test_scope_validates_enrollment_ids_as_well_as_source_ids() -> None:
+    # Asymmetric coverage here once left enrollment_ids as an unguarded
+    # INV-PKL-005 leak channel while source_ids was pinned.
+    assert Scope(enrollment_ids=("enr_abc123def456",))
+    for bad in ("src_abc123def456", "/Users/someone/tax.pdf", "enr_bad"):
+        with pytest.raises(ValidationError):
+            Scope(enrollment_ids=(bad,))
+
+
+def _problem(**overrides: object) -> ProblemDetail:
+    base: dict[str, object] = {
+        "code": ErrorCode.INVALID_REQUEST,
+        "message": "request could not be completed",
+        "correlation_id": "corr_abc123def456",
+        "retry": RetryGuidance.AFTER_CORRECTION,
+    }
+    base.update(overrides)
+    return ProblemDetail(**base)  # type: ignore[arg-type]
+
+
+def test_problem_detail_has_no_field_that_can_carry_free_form_content() -> None:
+    """The public error is the other place a payload could reach a caller.
+
+    `AuditEvent` carries this guarantee structurally; without the same check
+    here, a new unbounded `str` field could be added to the public error
+    contract with the whole suite still passing.
+    """
+    # Every str-typed field must be constrained somewhere, and the companion
+    # tests below prove each constraint actually rejects payload. A new str
+    # field would land here unlisted and fail.
+    constrained = {
+        "message": "Field length bounds",
+        "correlation_id": "validate_identifier in the model validator",
+        "safe_details": "token pattern and arity bound in the model validator",
+    }
+    for name, field in ProblemDetail.model_fields.items():
+        annotation = field.annotation
+        is_string_bearing = annotation is str or annotation is tuple[str, ...]
+        if is_string_bearing:
+            assert name in constrained, f"{name!r} is unbounded free text"
+    assert ProblemDetail.model_fields["message"].metadata, "message lost its length bound"
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "/Users/someone/tax.pdf",
+        "postgres://user:hunter2@db.internal/prod",
+        "SELECT ssn FROM people",
+        "what is my account number",
+        "Field 'x' rejected because value was 4111-1111-1111-1111",
+        "a" * 200,
+        "UPPERCASE",
+    ],
+)
+def test_safe_details_rejects_free_text(detail: str) -> None:
+    with pytest.raises(ValidationError, match="short lowercase tokens"):
+        _problem(safe_details=(detail,))
+
+
+def test_safe_details_accepts_field_name_tokens() -> None:
+    assert _problem(safe_details=("scope.source_ids", "purpose")).safe_details
+
+
+def test_safe_details_arity_is_bounded() -> None:
+    with pytest.raises(ValidationError):
+        _problem(safe_details=tuple(f"field_{i}" for i in range(100)))
+
+
 def test_problem_detail_validates_its_correlation_id() -> None:
     for bad in ("corr_bad", "src_abc123def456", "corr_/Users/x", "corr_host.example.com"):
         with pytest.raises(ValidationError):

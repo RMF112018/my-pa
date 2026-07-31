@@ -219,17 +219,43 @@ def test_non_string_object_keys_are_rejected_by_the_helper() -> None:
 @pytest.mark.parametrize(
     "shape",
     [
-        collections.OrderedDict({"tags": {"a", "b"}}),
-        collections.defaultdict(list, {"tags": {"a", "b"}}),
-        type("DictSub", (dict,), {})({"tags": {"a", "b"}}),
-        type("ListSub", (list,), {})([{"a", "b"}]),
+        collections.OrderedDict({"tags": ["a", "b"]}),
+        collections.defaultdict(list, {"tags": ["a", "b"]}),
+        type("DictSub", (dict,), {})({"tags": ["a", "b"]}),
+        type("ListSub", (list,), {})(["a", "b"]),
     ],
     ids=["ordered_dict", "defaultdict", "dict_subclass", "list_subclass"],
 )
-def test_container_subclasses_are_rejected_by_the_helper(shape: object) -> None:
-    # Exact-type checks, so a subclass carrying a set cannot ride through.
-    with pytest.raises(NondeterministicValueError):
+def test_container_subclasses_are_rejected_by_the_exact_type_check(shape: object) -> None:
+    """Contents are deterministic, so only the exact-type check can reject these.
+
+    Earlier fixtures carried a set inside, which meant the test passed even when
+    the exact-type check was relaxed to `isinstance` — the inner set raised
+    instead. It proved the set guard twice and the type guard never.
+    """
+    with pytest.raises(NondeterministicValueError, match="not an accepted JSON container"):
         ensure_deterministic(shape)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"i": 0, "j": -1, "k": 2**62},
+        {"f": 0.0, "g": -1.5, "h": 1e308},
+        {"s": "", "t": "value", "u": "unicode ✓"},
+        {"b": True, "c": False, "n": None},
+        {"nested": {"list": [1, 2.5, "x", True, None], "tuple_becomes_list": (1, 2)}},
+    ],
+)
+def test_accepted_values_survive_the_rebuild_unchanged(payload: dict[str, object]) -> None:
+    """The rebuild must preserve values, not merely reject bad ones.
+
+    Rejection was thoroughly tested while fidelity was not, so rewriting every
+    int or float to zero during the walk would have gone unnoticed.
+    """
+    rebuilt = ensure_deterministic(payload)
+    expected = json.loads(json.dumps(payload, default=list))
+    assert rebuilt == expected
 
 
 def test_naive_timestamp_is_rejected() -> None:

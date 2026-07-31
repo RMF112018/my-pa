@@ -68,6 +68,16 @@ def test_validate_returns_value_unchanged() -> None:
     assert validate_identifier("kn_abc123def456") == "kn_abc123def456"
 
 
+@pytest.mark.parametrize(
+    "suffix",
+    ["/Users/bob/tax.pdf", "host.example.com", "a@b", "short", "with space", "a" * 100],
+)
+def test_make_identifier_validates_the_suffix_it_is_given(suffix: str) -> None:
+    """`make_identifier` is public, so it must not be a way around validation."""
+    with pytest.raises(InvalidIdentifierError):
+        make_identifier(IdKind.SOURCE, suffix)
+
+
 @pytest.mark.parametrize("value", [123, None, ["src_abc123def456"], b"src_abc123def456"])
 def test_non_string_input_fails_as_a_domain_error(value: object) -> None:
     """Domain models are plain dataclasses, so a non-string can reach this.

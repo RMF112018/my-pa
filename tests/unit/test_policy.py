@@ -186,19 +186,59 @@ def test_synthetic_test_data_may_leave_the_boundary() -> None:
     assert decision.allowed
 
 
-@pytest.mark.parametrize(
-    ("capability", "purpose"),
-    [
-        (capability, purpose)
-        for capability, purpose in itertools.product(Capability, Purpose)
-        if purpose not in permitted_purposes(capability)
-    ],
+#: Capability/purpose pairs the contract permits, written out rather than read
+#: from `permitted_purposes`. Deriving the mismatch set from the function under
+#: test made the suite vacuous under exactly the mutation it existed to catch:
+#: opening every purpose emptied the parameter list and the test still passed.
+PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
+    {
+        (Capability.CAPABILITIES_GET, Purpose.STATUS_OBSERVATION),
+        (Capability.CAPABILITIES_GET, Purpose.SECURITY_VALIDATION),
+        (Capability.SOURCES_LIST, Purpose.SOURCE_INSPECTION),
+        (Capability.SOURCES_METADATA, Purpose.SOURCE_INSPECTION),
+        (Capability.SOURCES_FETCH, Purpose.SOURCE_INSPECTION),
+        (Capability.SOURCES_FETCH, Purpose.CONTENT_EXTRACTION),
+        (Capability.SOURCES_STATUS, Purpose.STATUS_OBSERVATION),
+        (Capability.SOURCES_ENROLL, Purpose.BOUNDED_ENROLLMENT),
+        (Capability.KNOWLEDGE_SEARCH, Purpose.KNOWLEDGE_SEARCH),
+        (Capability.KNOWLEDGE_READ, Purpose.KNOWLEDGE_READ),
+    }
 )
+
+MISMATCHED_PAIRS = sorted(
+    set(itertools.product(Capability, Purpose)) - PERMITTED_PAIRS,
+    key=lambda pair: (pair[0].value, pair[1].value),
+)
+
+
+def test_the_permitted_pair_table_matches_the_implementation() -> None:
+    derived = {
+        (capability, purpose)
+        for capability in Capability
+        for purpose in permitted_purposes(capability)
+    }
+    assert derived == PERMITTED_PAIRS
+
+
+def test_the_mismatch_parametrisation_is_not_empty() -> None:
+    # Pins the parameter count, so widening permitted_purposes cannot silently
+    # empty the table below.
+    assert len(PERMITTED_PAIRS) == 10
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 10 == 46
+
+
+@pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)
 def test_every_mismatched_purpose_is_denied(capability: Capability, purpose: Purpose) -> None:
     principal = OPERATOR if is_operator_only(capability) else GATEWAY
     decision = evaluate(_request(principal=principal, capability=capability, purpose=purpose))
     assert not decision.allowed
     assert decision.reason is DenialReason.PURPOSE_NOT_PERMITTED_FOR_CAPABILITY
+
+
+def test_principal_validates_its_identifier() -> None:
+    for bad in ("/Users/someone", "prn_bad", "src_abc123def456", "prn_host.example.com"):
+        with pytest.raises(ValueError, match="identifier"):
+            Principal(principal_id=bad, kind=PrincipalKind.OPERATOR, authenticated=True)
 
 
 def test_is_operator_requires_authentication() -> None:

@@ -107,9 +107,14 @@ def _carries_a_string(annotation: object) -> bool:
     """Whether `annotation` can hold a str anywhere inside it.
 
     Walks the annotation rather than comparing it, so `tuple[str, ...]`,
-    `str | None`, `list[str]`, and `dict[str, str]` are all detected.
+    `str | None`, `list[str]`, and `dict[str, str]` are all detected — an
+    identity comparison against a parameterised generic never matches, because
+    each subscription builds a new object.
+
+    `object` and `Any` count as string-bearing: they impose no constraint at
+    all, so a field annotated that way is a free-text channel by definition.
     """
-    if annotation is str:
+    if annotation is str or annotation is object or annotation is typing.Any:
         return True
     return any(_carries_a_string(arg) for arg in typing.get_args(annotation))
 

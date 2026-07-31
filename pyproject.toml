@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-pa"
+version = "0.1.0"
+description = "Personal Knowledge Layer contracts, policy, identity, and audit kernel"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "RMF" }]
+keywords = ["knowledge", "contracts", "policy", "audit"]
+classifiers = [
+  "Private :: Do Not Upload",
+  "Programming Language :: Python :: 3.12",
+  "Typing :: Typed",
+]
+dependencies = ["pydantic>=2.7,<3"]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.11", "pytest>=8.2", "ruff>=0.6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+my_pa = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+  "A",   # builtin shadowing
+  "ANN", # missing annotations
+  "B",   # bugbear
+  "C4",  # comprehensions
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "I",   # import sorting
+  "N",   # naming
+  "PTH", # prefer pathlib
+  "RUF", # ruff rules
+  "S",   # bandit
+  "SIM", # simplify
+  "UP",  # pyupgrade
+  "W",   # pycodestyle warnings
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"] # assert is the point of a test
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --strict-config"
+markers = [
+  "slow: excluded from the FAST tier",
+  "database: requires a database; not part of Phase 01",
+  "network: requires network access; not part of Phase 01",
+  "connector: requires a personal-data connector; not part of Phase 01",
+  "evaluation: quality evaluation suite; not part of Phase 01",
+  "e2e: end-to-end suite; not part of Phase 01",
+  "recovery: recovery suite; not part of Phase 01",
+]

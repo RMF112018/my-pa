@@ -27,7 +27,11 @@ from my_pa.contracts.v1 import (
     SourceReference,
     Trust,
 )
-from my_pa.contracts.v1.base import NondeterministicValueError, ensure_deterministic
+from my_pa.contracts.v1.base import (
+    NondeterministicValueError,
+    canonical_json,
+    ensure_deterministic,
+)
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
@@ -254,8 +258,17 @@ def test_accepted_values_survive_the_rebuild_unchanged(payload: dict[str, object
     int or float to zero during the walk would have gone unnoticed.
     """
     rebuilt = ensure_deterministic(payload)
-    expected = json.loads(json.dumps(payload, default=list))
-    assert rebuilt == expected
+    # Compared as canonical JSON, not with ==, because True == 1 in Python:
+    # coercing a bool to int would change the encoding from `true` to `1` while
+    # an equality assertion stayed green.
+    assert canonical_json(rebuilt) == canonical_json(json.loads(json.dumps(payload, default=list)))
+
+
+def test_booleans_are_not_coerced_to_integers() -> None:
+    rebuilt = ensure_deterministic({"flag": True, "count": 1})
+    assert canonical_json(rebuilt) == '{"count":1,"flag":true}'
+    assert isinstance(rebuilt["flag"], bool)
+    assert not isinstance(rebuilt["count"], bool)
 
 
 def test_naive_timestamp_is_rejected() -> None:

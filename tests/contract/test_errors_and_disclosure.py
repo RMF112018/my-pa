@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import typing
 from datetime import UTC, datetime
 
 import pytest
@@ -102,6 +103,17 @@ def test_scope_validates_enrollment_ids_as_well_as_source_ids() -> None:
             Scope(enrollment_ids=(bad,))
 
 
+def _carries_a_string(annotation: object) -> bool:
+    """Whether `annotation` can hold a str anywhere inside it.
+
+    Walks the annotation rather than comparing it, so `tuple[str, ...]`,
+    `str | None`, `list[str]`, and `dict[str, str]` are all detected.
+    """
+    if annotation is str:
+        return True
+    return any(_carries_a_string(arg) for arg in typing.get_args(annotation))
+
+
 def _problem(**overrides: object) -> ProblemDetail:
     base: dict[str, object] = {
         "code": ErrorCode.INVALID_REQUEST,
@@ -120,19 +132,27 @@ def test_problem_detail_has_no_field_that_can_carry_free_form_content() -> None:
     here, a new unbounded `str` field could be added to the public error
     contract with the whole suite still passing.
     """
-    # Every str-typed field must be constrained somewhere, and the companion
-    # tests below prove each constraint actually rejects payload. A new str
-    # field would land here unlisted and fail.
+    # Every field whose annotation can carry a string must be constrained, and
+    # the companion tests below prove each constraint actually rejects payload.
+    # A new one lands here unlisted and fails.
     constrained = {
         "message": "Field length bounds",
         "correlation_id": "validate_identifier in the model validator",
         "safe_details": "token pattern and arity bound in the model validator",
     }
-    for name, field in ProblemDetail.model_fields.items():
-        annotation = field.annotation
-        is_string_bearing = annotation is str or annotation is tuple[str, ...]
-        if is_string_bearing:
-            assert name in constrained, f"{name!r} is unbounded free text"
+    string_bearing = {
+        name
+        for name, field in ProblemDetail.model_fields.items()
+        if _carries_a_string(field.annotation)
+    }
+    # Guards against the check silently matching nothing: an identity comparison
+    # against `tuple[str, ...]` is always False, because each subscription of a
+    # parameterised generic builds a new object. That made this test blind to
+    # every container-of-string field, including safe_details itself.
+    assert "safe_details" in string_bearing, "the string detector matched nothing"
+    assert not string_bearing - set(constrained), (
+        f"unbounded free-text field(s): {sorted(string_bearing - set(constrained))}"
+    )
     assert ProblemDetail.model_fields["message"].metadata, "message lost its length bound"
 
 

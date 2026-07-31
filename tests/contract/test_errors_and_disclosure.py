@@ -18,6 +18,7 @@ from my_pa.contracts.v1 import (
     ResponseEnvelope,
     RetryGuidance,
     Scope,
+    SourceReference,
     Truncation,
     Trust,
     retry_guidance_for,
@@ -90,6 +91,37 @@ def test_denied_is_not_retryable_without_authority_change() -> None:
 
 def test_unsupported_is_never_retryable() -> None:
     assert retry_guidance_for(ErrorCode.UNSUPPORTED) is RetryGuidance.NO
+
+
+def test_problem_detail_validates_its_correlation_id() -> None:
+    for bad in ("corr_bad", "src_abc123def456", "corr_/Users/x", "corr_host.example.com"):
+        with pytest.raises(ValidationError):
+            ProblemDetail(
+                code=ErrorCode.DENIED,
+                message="denied",
+                correlation_id=bad,
+                retry=RetryGuidance.AFTER_AUTHORITY_CHANGE,
+            )
+
+
+def test_source_reference_validates_every_identifier_kind() -> None:
+    """`INV-PKL-005`: these three fields are the leak channel if unvalidated."""
+    good = {
+        "source_id": "src_abc123def456",
+        "source_object_id": "obj_abc123def456",
+        "version_id": "ver_abc123def456",
+    }
+    assert SourceReference(**good)
+    for field, wrong in (
+        ("source_id", "obj_abc123def456"),
+        ("source_object_id", "src_abc123def456"),
+        ("version_id", "kn_abc123def456"),
+    ):
+        with pytest.raises(ValidationError):
+            SourceReference(**{**good, field: wrong})
+    for field in good:
+        with pytest.raises(ValidationError):
+            SourceReference(**{**good, field: "/Users/someone/tax.pdf"})
 
 
 def test_error_message_is_length_bounded() -> None:

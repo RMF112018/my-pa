@@ -201,6 +201,19 @@ def test_every_mismatched_purpose_is_denied(capability: Capability, purpose: Pur
     assert decision.reason is DenialReason.PURPOSE_NOT_PERMITTED_FOR_CAPABILITY
 
 
+def test_is_operator_requires_authentication() -> None:
+    """`evaluate` only survives an unauthenticated operator by short-circuiting.
+
+    Without this, dropping the `authenticated` conjunct from `is_operator` would
+    make an unauthenticated operator report True with no test failing, leaving
+    the property unsafe for any future caller that checks it directly.
+    """
+    unauthenticated = Principal(principal_id="prn_operator0001", kind=PrincipalKind.OPERATOR)
+    assert unauthenticated.is_operator is False
+    assert unauthenticated.may_hold_authority is False
+    assert OPERATOR.is_operator is True
+
+
 def test_every_capability_has_at_least_one_permitted_purpose() -> None:
     for capability in Capability:
         assert permitted_purposes(capability), f"{capability} would be permanently denied"

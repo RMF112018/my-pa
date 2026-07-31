@@ -71,6 +71,28 @@ def test_unparseable_integer_is_rejected(raw: str) -> None:
         load_settings({f"{ENV_PREFIX}MAX_PAGE_SIZE": raw})
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        (f"{ENV_PREFIX}REDACTION_ENABLED", "SUPERSECRETVALUE"),
+        (f"{ENV_PREFIX}CONTRACT_STRICT_MODE", "SUPERSECRETVALUE"),
+        (f"{ENV_PREFIX}MAX_PAGE_SIZE", "SUPERSECRETVALUE"),
+        (f"{ENV_PREFIX}MAX_PAGE_SIZE", "99999"),
+        (f"{ENV_PREFIX}ENVIRONMENT", "SUPERSECRETVALUE"),
+    ],
+)
+def test_error_messages_never_echo_the_supplied_value(key: str, value: str) -> None:
+    """Settings are non-secret today; echoing input would make this a leak later.
+
+    Both the coercion path and the validation path must stay quiet about values,
+    so re-introducing an echo in either fails here.
+    """
+    with pytest.raises(SettingsError) as caught:
+        load_settings({key: value})
+    assert value not in str(caught.value)
+    assert key in str(caught.value)
+
+
 @pytest.mark.parametrize("raw", ["0", "-1", "1001"])
 def test_out_of_range_page_size_is_rejected(raw: str) -> None:
     with pytest.raises(SettingsError, match="invalid configuration"):

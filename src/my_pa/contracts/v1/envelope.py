@@ -77,6 +77,13 @@ class ResponseEnvelope(StrictModel):
         `result` is the one field carrying capability-specific content, so it is
         the one place the envelope's canonical-encoding guarantee could be lost
         silently. Checking here means it fails at construction instead.
+
+        Note that `model_copy(update=...)` and `model_construct` skip validation
+        entirely, which is standard Pydantic behaviour. Since the model is
+        frozen, `model_copy` is the natural way to derive a modified envelope,
+        so a caller taking that route can still place a non-deterministic value
+        in `result`. Build a new envelope rather than copying when the payload
+        changes.
         """
         return value if value is None else ensure_deterministic(value)
 

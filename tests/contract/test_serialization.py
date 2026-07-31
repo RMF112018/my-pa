@@ -27,6 +27,7 @@ from my_pa.contracts.v1 import (
     SourceReference,
     Trust,
 )
+from my_pa.contracts.v1.base import NondeterministicValueError, ensure_deterministic
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
@@ -174,6 +175,61 @@ def test_nested_result_containers_are_copied_not_aliased() -> None:
     assert envelope.result is not None
     assert envelope.result["inner"] is not nested
     assert envelope.to_canonical_json() == before
+
+
+@pytest.mark.parametrize(
+    ("label", "build"),
+    [
+        ("dict_in_dict", lambda held: {"outer": held}),
+        ("dict_in_list", lambda held: {"outer": [held]}),
+        ("dict_in_tuple", lambda held: {"outer": (held,)}),
+        ("dict_in_list_in_list", lambda held: {"outer": [[held]]}),
+        ("dict_in_dict_in_list", lambda held: {"outer": [{"mid": held}]}),
+    ],
+)
+def test_alias_is_severed_through_every_container_path(label: str, build: object) -> None:
+    """The rebuild must cover the list branch too, not only the dict branch.
+
+    Pinning only dict-in-dict left the list branch free to regress: reverting it
+    alone passed the whole suite while the original mutation attack succeeded one
+    container level over.
+    """
+    held: dict[str, object] = {"tags": ["alpha"]}
+    envelope = ResponseEnvelope(
+        request_id="req-1",
+        correlation_id="corr_abc123def456",
+        completed_at=OBSERVED,
+        result=build(held),  # type: ignore[operator]
+        disclosure=_disclosure(),
+    )
+    before = envelope.to_canonical_json()
+
+    held["tags"] = {"omega", "beta", "gamma"}
+    held["smuggled"] = "/Users/someone/tax.pdf"
+
+    assert envelope.to_canonical_json() == before, f"{label}: alias survived the rebuild"
+    assert "smuggled" not in envelope.to_canonical_json()
+
+
+def test_non_string_object_keys_are_rejected_by_the_helper() -> None:
+    with pytest.raises(NondeterministicValueError, match="keys must be strings"):
+        ensure_deterministic({1: "a"})
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        collections.OrderedDict({"tags": {"a", "b"}}),
+        collections.defaultdict(list, {"tags": {"a", "b"}}),
+        type("DictSub", (dict,), {})({"tags": {"a", "b"}}),
+        type("ListSub", (list,), {})([{"a", "b"}]),
+    ],
+    ids=["ordered_dict", "defaultdict", "dict_subclass", "list_subclass"],
+)
+def test_container_subclasses_are_rejected_by_the_helper(shape: object) -> None:
+    # Exact-type checks, so a subclass carrying a set cannot ride through.
+    with pytest.raises(NondeterministicValueError):
+        ensure_deterministic(shape)
 
 
 def test_naive_timestamp_is_rejected() -> None:

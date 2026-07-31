@@ -10,6 +10,7 @@ from my_pa.contracts.v1 import (
     Availability,
     CapabilityManifest,
     CapabilityStatus,
+    EffectiveLimits,
     ReadinessReport,
     ReadinessState,
 )
@@ -132,6 +133,34 @@ def test_limits_are_internally_consistent() -> None:
     limits = build_capability_manifest().limits
     assert limits.default_page_size <= limits.max_page_size
     assert limits.max_enrollment_depth == 0
+
+
+def test_default_page_size_cannot_exceed_the_maximum() -> None:
+    with pytest.raises(ValidationError, match="cannot exceed max_page_size"):
+        EffectiveLimits(
+            max_page_size=10, default_page_size=50, max_fetch_bytes=1024, max_enrollment_depth=0
+        )
+
+
+def test_manifest_rejects_a_wrong_contract_version() -> None:
+    full = build_capability_manifest()
+    with pytest.raises(ValidationError, match="unsupported contract_version"):
+        CapabilityManifest(
+            contract_version="v2",
+            capabilities=full.capabilities,
+            content_types=full.content_types,
+            limits=full.limits,
+        )
+
+
+def test_manifest_rejects_duplicate_content_types() -> None:
+    full = build_capability_manifest()
+    with pytest.raises(ValidationError, match="content type manifest contains duplicates"):
+        CapabilityManifest(
+            capabilities=full.capabilities,
+            content_types=(*full.content_types, full.content_types[0]),
+            limits=full.limits,
+        )
 
 
 def test_manifest_exposes_no_internal_topology() -> None:

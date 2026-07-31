@@ -61,10 +61,12 @@ class ResponseEnvelope(StrictModel):
     request_id: str = Field(min_length=1, max_length=128)
     correlation_id: str
     completed_at: UtcDatetime
-    # Deliberately not a recursive PEP 695 alias: that form is not reliably
-    # supported by the declared Pydantic floor, and CI would never surface the
-    # problem because it resolves to the newest release. The validator below is
-    # the enforcement, so the annotation does not need to carry the shape.
+    # Deliberately not a recursive PEP 695 alias. Verified on Python 3.12 with
+    # the declared floor, pydantic 2.7.4: `type JsonValue = ... | list[JsonValue]`
+    # raises PydanticSchemaGenerationError, "Unable to generate pydantic-core
+    # schema for JsonValue". CI would never surface this, because it resolves to
+    # the newest release. The validator below is the enforcement, so the
+    # annotation does not need to carry the shape.
     result: dict[str, Any] | None = None
     disclosure: Disclosure | None = None
     error: ProblemDetail | None = None

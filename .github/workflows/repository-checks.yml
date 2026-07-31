@@ -120,8 +120,10 @@ jobs:
     # the suite against it, which is the only way the claim stays true.
     #
     # It is not hypothetical: a recursive PEP 695 type alias works on current
-    # Pydantic and raises PydanticSchemaGenerationError at the declared floor.
-    # `src/my_pa/contracts/v1/envelope.py` avoids that form for this reason.
+    # Pydantic and raises PydanticSchemaGenerationError at the declared floor,
+    # where the suite fails during collection while the validate job stays
+    # green. `src/my_pa/contracts/v1/envelope.py` avoids that form for this
+    # reason, and this job is what keeps that reason true.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -148,16 +150,34 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-          # Derive the pins from the declaration rather than restating them, so
-          # this job cannot drift out of step with pyproject.toml.
+          # Derive the pins from the declaration rather than restating them, and
+          # require a floor for every runtime dependency. Parsing with
+          # `packaging` rather than a regex matters: a hand-rolled pattern
+          # silently drops `pkg[extra]>=1.2`, `pkg<3,>=2.7`, and `pkg~=1.2`,
+          # which would leave a dependency untested with the job still green.
           PINS="$(python -c '
-          import re, tomllib
-          data = tomllib.load(open("pyproject.toml", "rb"))
-          pins = []
-          for spec in data["project"]["dependencies"]:
-              match = re.match(r"\s*([A-Za-z0-9_.\-]+)\s*>=\s*([0-9][0-9A-Za-z.\-]*)", spec)
-              if match:
-                  pins.append(f"{match.group(1)}=={match.group(2)}")
+          import sys, tomllib
+          from packaging.requirements import Requirement
+
+          specs = tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]
+          pins, undetermined = [], []
+          for spec in specs:
+              requirement = Requirement(spec)
+              lower = next(
+                  (c.version for c in requirement.specifier if c.operator in (">=", "==", "~=")),
+                  None,
+              )
+              if lower is None:
+                  undetermined.append(spec)
+              else:
+                  pins.append(f"{requirement.name}=={lower}")
+
+          if undetermined:
+              print(
+                  "no lower bound declared for: " + ", ".join(undetermined),
+                  file=sys.stderr,
+              )
+              sys.exit(1)
           print(" ".join(pins))
           ')"
 
@@ -169,6 +189,12 @@ jobs:
           echo "declared floor: $PINS"
           # shellcheck disable=SC2086
           python -m pip install $PINS
+
+          # pip exits 0 after a forced downgrade even when it prints a conflict,
+          # so ask explicitly. Without this a dev dependency that outgrew the
+          # runtime floor would surface as a confusing floor failure.
+          python -m pip check
+
           python -m pip list | grep -Ei '^(pydantic|my-pa) '
           echo "applicable=true" >> "$GITHUB_OUTPUT"
 
@@ -176,6 +202,16 @@ jobs:
         if: steps.floor.outputs.applicable == 'true'
         shell: bash
         run: |
-          python -c "import my_pa; print('import at floor OK, version', my_pa.__version__)"
+          # Import the contracts, not just the package root: `my_pa/__init__.py`
+          # touches no Pydantic model, so importing it alone would succeed even
+          # on a build that cannot construct a schema at the floor.
+          python -c "
+          import my_pa
+          from my_pa.contracts.v1 import ResponseEnvelope
+          from my_pa.bootstrap.settings import load_settings
+          assert ResponseEnvelope.model_fields
+          assert load_settings({}).redaction_enabled
+          print('contracts import and build at floor OK, version', my_pa.__version__)
+          "
           python -m mypy src
           python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"

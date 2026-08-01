@@ -1,8 +1,8 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "record_type": "MIGRATION_WORK_ITEM_LEDGER",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
-  "recorded_at_utc": "2026-08-01T09:18:00Z",
+  "recorded_at_utc": "2026-08-01T10:05:00Z",
   "maximum_active_work_items": 1,
   "active_work_item_count": 0,
   "active_work_item_id": null,
@@ -34,11 +34,14 @@
         "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
         "AUTH-MYPA-MIGRATION-PHASE-00-CI-CORRECTION-20260801-049",
         "AUTH-MYPA-MIGRATION-PHASE-00-CI-FORMAT-CORRECTION-20260801-053",
-        "AUTH-MYPA-MIGRATION-PHASE-00-PR11-MERGE-AND-CLOSEOUT-CANDIDATE-20260801-056"
+        "AUTH-MYPA-MIGRATION-PHASE-00-PR11-MERGE-AND-CLOSEOUT-CANDIDATE-20260801-056",
+        "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-MODE-CORRECTION-20260801-060",
+        "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-PREFLIGHT-BRANCH-RECOVERY-20260801-063",
+        "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-RECORD-CORRECTION-20260801-068"
       ],
       "implementation_branch": "bf/migration-phase-00-completion",
       "reviewed_head": "245ec31005041f6e1cacef19478c070b272e3dcd",
-      "reviewed_tree": "a6cb13ab4c31193ab33f51daff8db965fa5fb5b2",
+      "reviewed_tree_reconstruction": "a6cb13ab4c31193ab33f51daff8db965fa5fb5b2",
       "pull_request": 11,
       "merge_sha": "4adb205e7c70841b95abb52623b159456eb2eafc",
       "post_merge_validation": "PASS_16_OF_16_BLOBS_IDENTICAL",
@@ -52,10 +55,30 @@
         "P00-AC-07": "PASS_EXACT_HEAD_REVIEW",
         "P00-AC-08": "PASS_EXACT_HEAD_REVIEW_WITH_DIRECT_VALIDATOR_EXECUTION_UNAVAILABLE"
       },
+      "closeout_record_correction": {
+        "pull_request": 12,
+        "findings": {
+          "MYPA-PHASE-00-CLOSEOUT-IR-F-005": "CORRECTED_PENDING_EXACT_HEAD_REVIEW",
+          "MYPA-PHASE-00-CLOSEOUT-IR-F-006": "CORRECTED_PENDING_EXACT_HEAD_REVIEW"
+        },
+        "future_pull_request_merge_authorized": false
+      },
       "cleanup": {
         "status": "PENDING_CONNECTOR_CAPABILITY",
-        "branch": "bf/migration-phase-00-completion",
-        "sha": "245ec31005041f6e1cacef19478c070b272e3dcd"
+        "remote_refs": [
+          {
+            "branch": "bf/migration-phase-00-completion",
+            "sha": "245ec31005041f6e1cacef19478c070b272e3dcd",
+            "disposition": "PENDING_CONNECTOR_CAPABILITY"
+          },
+          {
+            "branch": "bf/migration-phase-00-closeout-preflight-marker",
+            "sha": "1d916c4b277ed3d933e40afad358cf08e822ef08",
+            "disposition": "CARRYFORWARD_PENDING_CAPABLE_DELETE_REF_CONTEXT"
+          }
+        ],
+        "deletion_performed": false,
+        "cleanup_closed": false
       }
     }
   ],

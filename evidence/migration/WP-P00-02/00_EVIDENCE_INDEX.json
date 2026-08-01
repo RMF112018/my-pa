@@ -1,15 +1,15 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "record_type": "WORK_ITEM_EVIDENCE_INDEX",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
   "phase_id": "PHASE-00",
   "work_item_id": "WP-P00-02",
   "state": "CLOSED",
-  "recorded_at_utc": "2026-08-01T09:18:00Z",
+  "recorded_at_utc": "2026-08-01T10:05:00Z",
   "implementation": {
     "branch": "bf/migration-phase-00-completion",
     "reviewed_head": "245ec31005041f6e1cacef19478c070b272e3dcd",
-    "reviewed_tree": "a6cb13ab4c31193ab33f51daff8db965fa5fb5b2",
+    "reviewed_tree_reconstruction": "a6cb13ab4c31193ab33f51daff8db965fa5fb5b2",
     "pull_request": 11,
     "merge_sha": "4adb205e7c70841b95abb52623b159456eb2eafc",
     "post_merge_content_equivalence": "PASS_16_OF_16_BLOBS_IDENTICAL"
@@ -19,6 +19,15 @@
     "P00-AC-07": "PASS_EXACT_HEAD_REVIEW",
     "P00-AC-08": "PASS_EXACT_HEAD_REVIEW_WITH_DIRECT_VALIDATOR_EXECUTION_UNAVAILABLE"
   },
+  "authorization_history": [
+    "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
+    "AUTH-MYPA-MIGRATION-PHASE-00-CI-CORRECTION-20260801-049",
+    "AUTH-MYPA-MIGRATION-PHASE-00-CI-FORMAT-CORRECTION-20260801-053",
+    "AUTH-MYPA-MIGRATION-PHASE-00-PR11-MERGE-AND-CLOSEOUT-CANDIDATE-20260801-056",
+    "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-MODE-CORRECTION-20260801-060",
+    "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-PREFLIGHT-BRANCH-RECOVERY-20260801-063",
+    "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-RECORD-CORRECTION-20260801-068"
+  ],
   "closeout_artifacts": [
     "closeout/00_CLOSEOUT_INDEX.json",
     "closeout/01_POST_MERGE_VALIDATION.md",
@@ -28,12 +37,33 @@
   "external_evidence": {
     "post_merge_validation_drive_id": "1IKTs5DX1K_7injqwYcGPywnSagd3w9RUjnWNrsmKCFs",
     "cleanup_blocker_drive_id": "1wX4DcUe5bg_qzNdoOhejO0_HH1tVkw3vypv5LdImnnM",
-    "post_merge_receipt_drive_id": "1yjwINBMpBtt5bN4ecMmIlNlGo57XAr4zxCFvz9d9D9w"
+    "post_merge_receipt_drive_id": "1yjwINBMpBtt5bN4ecMmIlNlGo57XAr4zxCFvz9d9D9w",
+    "closeout_ci_evidence_drive_id": "1oHnY01rGeh0Ta5m2s-dQ5mEnbTHWRr18j24yXUrzdI0",
+    "closeout_review_response_drive_id": "1KQHqbpXUbMPkVATEqEkoD7k_6UTusq4FQiUMXGu0KPk",
+    "record_correction_authorization_drive_id": "1VHD5RH_ZzYg9uqACiFnAlN_jguDdjcVphyhDW-6QQiY",
+    "record_correction_authorization_receipt_drive_id": "1xFkYsWP-vJ6FWNJiMTZ1T_MXatz5ArjUTbRf3dVcpdg"
   },
   "preserved_limitations": [
     "MYPA-PHASE-00-COMPLETION-IR-F-002",
-    "MYPA-PHASE-00-COMPLETION-IR-F-003"
+    "MYPA-PHASE-00-COMPLETION-IR-F-003",
+    "MYPA-PHASE-00-CLOSEOUT-RECOVERY-F-001"
   ],
+  "corrected_findings_pending_re_review": [
+    "MYPA-PHASE-00-CLOSEOUT-IR-F-005",
+    "MYPA-PHASE-00-CLOSEOUT-IR-F-006"
+  ],
+  "cleanup": {
+    "status": "PENDING_CONNECTOR_CAPABILITY",
+    "remote_ref_count": 3,
+    "remote_refs": [
+      "bf/migration-wp-p00-01-nonrecursive-baseline@d54bdb6d23cebf38c11db7194aef59b03d573a16",
+      "bf/migration-phase-00-completion@245ec31005041f6e1cacef19478c070b272e3dcd",
+      "bf/migration-phase-00-closeout-preflight-marker@1d916c4b277ed3d933e40afad358cf08e822ef08"
+    ],
+    "deletion_performed": false,
+    "cleanup_closed": false,
+    "local_worktree_cleanup_claimed": false
+  },
   "access_attestation": {
     "database_accessed": false,
     "sqlite_accessed": false,

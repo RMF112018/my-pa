@@ -1,8 +1,8 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "record_type": "MIGRATION_AUTHORIZATION_LEDGER",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
-  "recorded_at_utc": "2026-08-01T09:18:00Z",
+  "recorded_at_utc": "2026-08-01T10:05:00Z",
   "active_authorization_count": 0,
   "active_authorization": null,
   "historical_authorizations": [
@@ -43,13 +43,37 @@
       "reviewed_head": "245ec31005041f6e1cacef19478c070b272e3dcd",
       "merge_sha": "4adb205e7c70841b95abb52623b159456eb2eafc",
       "future_closeout_pr_merge_authorized": false
+    },
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-MODE-CORRECTION-20260801-060",
+      "status": "INVALIDATED_BY_UNAUTHORIZED_PREFLIGHT_BRANCH_CREATION",
+      "purpose": "CLOSEOUT_VALIDATOR_MODE_CORRECTION",
+      "reusable": false,
+      "future_closeout_pr_merge_authorized": false
+    },
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-PREFLIGHT-BRANCH-RECOVERY-20260801-063",
+      "status": "CONSUMED_BY_MODE_CORRECTION_PR12_CREATION_REVIEW_AND_CI",
+      "purpose": "PREFLIGHT_BRANCH_CARRYFORWARD_MODE_CORRECTION_AND_CLOSEOUT_PR_GATES",
+      "corrected_head": "7ccbe3b19abd10268fefd2bad748833cd21f3e69",
+      "pull_request": 12,
+      "ci_run_id": 30694447993,
+      "future_closeout_pr_merge_authorized": false
+    },
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-RECORD-CORRECTION-20260801-068",
+      "status": "CONSUMED_BY_CLOSEOUT_RECORD_CORRECTION",
+      "purpose": "CLOSEOUT_CLEANUP_AND_AUTHORIZATION_HISTORY_RECORD_CORRECTION",
+      "pull_request": 12,
+      "future_closeout_pr_merge_authorized": false
     }
   ],
   "preserved_limits": {
     "risk_acceptance_authorized": false,
     "phase_01_activation_authorized": false,
     "database_or_source_access_authorized": false,
-    "cleanup_status": "PENDING_CONNECTOR_CAPABILITY"
+    "cleanup_status": "PENDING_CONNECTOR_CAPABILITY",
+    "cleanup_closed": false
   },
-  "invalidation_rule": "No historical authorization is reusable. Any successor implementation, closeout merge, cleanup, database access, or Phase 01 action requires exact current operator authority."
+  "invalidation_rule": "No historical authorization is reusable. Any closeout merge, cleanup, database access, successor implementation, or Phase 01 action requires exact current operator authority."
 }

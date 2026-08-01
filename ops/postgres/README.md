@@ -62,9 +62,13 @@ local-development fallback `my_pa_local_dev` baked into the compose file:
 POSTGRES_PASSWORD: ${MY_PA_DB_PASSWORD:-my_pa_local_dev}
 ```
 
-**No real secret is stored in this repository.** `my_pa_local_dev` is a
-publicly known placeholder for a database that listens only on `localhost`. To
-use a different password, export it before starting:
+**No real secret is stored in this repository.** `my_pa_local_dev` is a publicly
+known placeholder, and it is only acceptable because the container publishes on
+`127.0.0.1:5433` — the loopback interface alone, not `0.0.0.0`. That binding is
+what keeps a committed password harmless, so the two go together: if you ever
+widen the port binding, the password stops being a placeholder and must move to
+`MY_PA_DB_PASSWORD` with a real value. To use a different password, export it
+before starting:
 
 ```sh
 export MY_PA_DB_PASSWORD='...'

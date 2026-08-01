@@ -42,10 +42,15 @@ services:
       POSTGRES_INITDB_ARGS: "--data-checksums --locale=C.UTF-8 --encoding=UTF8"
 
     ports:
-      # 5433 on the host: leaves the conventional 5432 free for any other
-      # local PostgreSQL and makes an accidental connection to the wrong
-      # server less likely.
-      - "5433:5432"
+      # Bound to 127.0.0.1 deliberately. The short form "5433:5432" publishes on
+      # 0.0.0.0, which would expose this database to the whole local network --
+      # with the development password below, which is committed. This store holds
+      # personal email, contacts, and calendar data, so it must not leave the
+      # loopback interface. Remote access is an SSH tunnel's job, not Docker's.
+      #
+      # 5433 rather than 5432 leaves the conventional port free for any other
+      # local PostgreSQL and makes connecting to the wrong server less likely.
+      - "127.0.0.1:5433:5432"
 
     volumes:
       - my_pa_pgdata:/var/lib/postgresql/data

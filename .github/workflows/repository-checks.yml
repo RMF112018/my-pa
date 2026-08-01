@@ -208,9 +208,21 @@ jobs:
           python -c "
           import my_pa
           from my_pa.contracts.v1 import ResponseEnvelope
-          from my_pa.bootstrap.settings import load_settings
+          from my_pa.bootstrap.settings import SettingsError, load_settings
           assert ResponseEnvelope.model_fields
-          assert load_settings({}).redaction_enabled
+          # MY_PA_DATABASE_URL is required and has no default, so the settings
+          # smoke check supplies one. The URL is unreachable on purpose: this
+          # proves the model builds at the floor, and nothing here connects.
+          url = 'postgresql+psycopg://someone@db.invalid:5432/somewhere'
+          assert load_settings({'MY_PA_DATABASE_URL': url}).redaction_enabled
+          # And that the requirement itself survives the floor build, because a
+          # validator that silently stopped raising here would be a fail-open.
+          try:
+              load_settings({})
+          except SettingsError:
+              pass
+          else:
+              raise AssertionError('an absent MY_PA_DATABASE_URL was accepted')
           print('contracts import and build at floor OK, version', my_pa.__version__)
           "
           python -m mypy src

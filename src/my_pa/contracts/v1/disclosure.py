@@ -14,6 +14,7 @@ from pydantic import Field, model_validator
 
 from my_pa.contracts.v1.base import StrictModel, UtcDatetime
 from my_pa.domain.common.classification import Classification, is_cloud_eligible
+from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import TrustLevel
 
@@ -28,21 +29,6 @@ __all__ = [
     "Truncation",
     "Trust",
 ]
-
-
-class CoverageState(StrEnum):
-    """Distinct coverage states; none of them collapses into "empty"."""
-
-    NOT_ENROLLED = "not_enrolled"
-    ELIGIBLE = "eligible"
-    QUEUED = "queued"
-    PROCESSED = "processed"
-    PARTIALLY_PROCESSED = "partially_processed"
-    UNSUPPORTED = "unsupported"
-    QUARANTINED = "quarantined"
-    UNAVAILABLE = "unavailable"
-    STALE = "stale"
-    SUPERSEDED = "superseded"
 
 
 class FreshnessState(StrEnum):

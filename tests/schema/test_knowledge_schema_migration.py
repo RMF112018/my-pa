@@ -158,13 +158,21 @@ def _constraints(engine: Engine, kind: str) -> set[str]:
         )
 
 
-def test_the_revision_chain_ends_at_the_knowledge_revision() -> None:
+def test_the_knowledge_revision_is_in_the_chain_on_the_foundation_head() -> None:
     """Guards the rest of this module: an absent revision would collect nothing.
+
+    This asserted that the knowledge revision *was* the head until WP-3's
+    extraction revision landed on top of it. Being the head was never the
+    property worth guarding — it is true only until the next revision is written,
+    and any later work would have had to edit this line. What matters is that the
+    revision exists, sits on the foundation head, and lies on a single unbranched
+    chain, so the tables below are the ones a migration to head produces.
 
     Needs no database, so it stays in the fast tier.
     """
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [KNOWLEDGE_REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert KNOWLEDGE_REVISION in {entry.revision for entry in script.walk_revisions()}
     revision = script.get_revision(KNOWLEDGE_REVISION)
     assert revision.down_revision == FOUNDATION_HEAD
     assert len(list(script.walk_revisions())) >= 7
@@ -226,11 +234,20 @@ def knowledge_engine(disposable_database: str) -> Iterator[Engine]:
 
 @pytest.mark.database
 def test_upgrade_from_empty_and_downgrade_back_to_empty(disposable_database: str) -> None:
+    """Empty to this revision and back.
+
+    The target is the knowledge revision rather than `head`, because the claim
+    is an equality: these five tables and no others. A later revision adding a
+    table to this schema — WP-3's extraction revision does — would otherwise turn
+    a statement about what this revision creates into a statement about what
+    every revision creates, and the equality would have to be weakened to a
+    subset. Naming the revision keeps the stronger claim.
+    """
     engine = create_database_engine(disposable_database)
     try:
         assert EXPECTED_SCHEMA not in _schemas(engine)
 
-        command.upgrade(_config(), "head")
+        command.upgrade(_config(), KNOWLEDGE_REVISION)
 
         assert EXPECTED_SCHEMA in _schemas(engine)
         assert _tables(engine) == EXPECTED_TABLES
@@ -247,12 +264,16 @@ def test_upgrade_from_empty_and_downgrade_back_to_empty(disposable_database: str
 
 @pytest.mark.database
 def test_upgrade_is_repeatable_after_a_full_round_trip(disposable_database: str) -> None:
-    """A resumed run re-applies head; the revision must not depend on being new."""
+    """A resumed run re-applies the revision; it must not depend on being new.
+
+    Targets the revision rather than `head` for the same reason as the test
+    above.
+    """
     engine = create_database_engine(disposable_database)
     try:
-        command.upgrade(_config(), "head")
+        command.upgrade(_config(), KNOWLEDGE_REVISION)
         command.downgrade(_config(), "base")
-        command.upgrade(_config(), "head")
+        command.upgrade(_config(), KNOWLEDGE_REVISION)
 
         assert _tables(engine) == EXPECTED_TABLES
     finally:

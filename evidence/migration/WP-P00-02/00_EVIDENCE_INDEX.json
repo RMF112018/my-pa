@@ -1,52 +1,69 @@
 {
-  "schema_version": 1,
-  "record_type": "WP_P00_02_EVIDENCE_INDEX",
+  "schema_version": 3,
+  "record_type": "WORK_ITEM_EVIDENCE_INDEX",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
   "phase_id": "PHASE-00",
   "work_item_id": "WP-P00-02",
-  "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
-  "decision_id": "OP-COMPLETE-MYPA-MIGRATION-PHASE-00",
-  "coordination_request_id": "REQ-MYPA-MIGRATION-PHASE-00-COMPLETION-IMPLEMENTATION-20260801-046",
-  "coordination_request_drive_id": "1tk7cdddBmqFpB_uL1w-qLBs-3V7Y3H_o55nIQHdJLFg",
-  "recorded_at_utc": "2026-08-01T07:51:37Z",
-  "base": {
-    "branch": "main",
-    "sha": "9039c587680866bfe4c1568db1992335778c5950",
-    "tree_used_under_evidence_exception": "6326e697cfa673fe1f57c0f4356ffa0025f3047e"
+  "state": "CLOSED",
+  "recorded_at_utc": "2026-08-01T10:05:00Z",
+  "implementation": {
+    "branch": "bf/migration-phase-00-completion",
+    "reviewed_head": "245ec31005041f6e1cacef19478c070b272e3dcd",
+    "reviewed_tree_reconstruction": "a6cb13ab4c31193ab33f51daff8db965fa5fb5b2",
+    "pull_request": 11,
+    "merge_sha": "4adb205e7c70841b95abb52623b159456eb2eafc",
+    "post_merge_content_equivalence": "PASS_16_OF_16_BLOBS_IDENTICAL"
   },
-  "implementation_branch": "bf/migration-phase-00-completion",
-  "implementation_head": "EXTERNAL_POST_COMMIT_EVIDENCE",
-  "implementation_tree": "EXTERNAL_POST_COMMIT_EVIDENCE",
-  "state": "IMPLEMENTED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW",
   "acceptance_criteria": {
-    "P00-AC-06": "DEMONSTRATED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW",
-    "P00-AC-07": "DEMONSTRATED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW",
-    "P00-AC-08": "DEMONSTRATED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW"
+    "P00-AC-06": "PASS_EXACT_HEAD_REVIEW",
+    "P00-AC-07": "PASS_EXACT_HEAD_REVIEW",
+    "P00-AC-08": "PASS_EXACT_HEAD_REVIEW_WITH_DIRECT_VALIDATOR_EXECUTION_UNAVAILABLE"
   },
-  "records": [
-    "evidence/migration/WP-P00-02/00_EVIDENCE_INDEX.json",
-    "evidence/migration/WP-P00-02/01_IMPLEMENTATION_CHECKPOINT.md",
-    "evidence/migration/WP-P00-02/02_DETERMINISTIC_VALIDATION.md",
-    "evidence/migration/WP-P00-02/03_DRAFT_INDEPENDENT_REVIEW_REQUEST.md"
+  "authorization_history": [
+    "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
+    "AUTH-MYPA-MIGRATION-PHASE-00-CI-CORRECTION-20260801-049",
+    "AUTH-MYPA-MIGRATION-PHASE-00-CI-FORMAT-CORRECTION-20260801-053",
+    "AUTH-MYPA-MIGRATION-PHASE-00-PR11-MERGE-AND-CLOSEOUT-CANDIDATE-20260801-056",
+    "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-MODE-CORRECTION-20260801-060",
+    "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-PREFLIGHT-BRANCH-RECOVERY-20260801-063",
+    "AUTH-MYPA-MIGRATION-PHASE-00-CLOSEOUT-RECORD-CORRECTION-20260801-068"
   ],
-  "changed_path_allowlist": [
-    "docs/migration/00_MIGRATION_INDEX.md",
-    "docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md",
-    "docs/migration/governance/goal-state.json",
-    "docs/migration/governance/work-item-ledger.json",
-    "docs/migration/governance/authorization-ledger.json",
-    "docs/migration/governance/acceptance-criteria-register.json",
-    "docs/migration/governance/branch-and-worktree-strategy.md",
-    "docs/migration/governance/logging-and-audit-standard.md",
-    "docs/migration/governance/target-surface-naming-rule.md",
-    "docs/migration/governance/validate_phase00_governance.py",
-    "evidence/migration/WP-P00-01/closeout/00_CLOSEOUT_INDEX.json",
-    "evidence/migration/WP-P00-01/closeout/PHASE-00-COMPLETION-RECONCILIATION.md",
-    "evidence/migration/WP-P00-02/00_EVIDENCE_INDEX.json",
-    "evidence/migration/WP-P00-02/01_IMPLEMENTATION_CHECKPOINT.md",
-    "evidence/migration/WP-P00-02/02_DETERMINISTIC_VALIDATION.md",
-    "evidence/migration/WP-P00-02/03_DRAFT_INDEPENDENT_REVIEW_REQUEST.md"
+  "closeout_artifacts": [
+    "closeout/00_CLOSEOUT_INDEX.json",
+    "closeout/01_POST_MERGE_VALIDATION.md",
+    "closeout/02_FINDINGS_AND_CLEANUP_STATUS.md",
+    "closeout/PHASE-00-FINAL-CLOSEOUT.md"
   ],
+  "external_evidence": {
+    "post_merge_validation_drive_id": "1IKTs5DX1K_7injqwYcGPywnSagd3w9RUjnWNrsmKCFs",
+    "cleanup_blocker_drive_id": "1wX4DcUe5bg_qzNdoOhejO0_HH1tVkw3vypv5LdImnnM",
+    "post_merge_receipt_drive_id": "1yjwINBMpBtt5bN4ecMmIlNlGo57XAr4zxCFvz9d9D9w",
+    "closeout_ci_evidence_drive_id": "1oHnY01rGeh0Ta5m2s-dQ5mEnbTHWRr18j24yXUrzdI0",
+    "closeout_review_response_drive_id": "1KQHqbpXUbMPkVATEqEkoD7k_6UTusq4FQiUMXGu0KPk",
+    "record_correction_authorization_drive_id": "1VHD5RH_ZzYg9uqACiFnAlN_jguDdjcVphyhDW-6QQiY",
+    "record_correction_authorization_receipt_drive_id": "1xFkYsWP-vJ6FWNJiMTZ1T_MXatz5ArjUTbRf3dVcpdg"
+  },
+  "preserved_limitations": [
+    "MYPA-PHASE-00-COMPLETION-IR-F-002",
+    "MYPA-PHASE-00-COMPLETION-IR-F-003",
+    "MYPA-PHASE-00-CLOSEOUT-RECOVERY-F-001"
+  ],
+  "corrected_findings_pending_re_review": [
+    "MYPA-PHASE-00-CLOSEOUT-IR-F-005",
+    "MYPA-PHASE-00-CLOSEOUT-IR-F-006"
+  ],
+  "cleanup": {
+    "status": "PENDING_CONNECTOR_CAPABILITY",
+    "remote_ref_count": 3,
+    "remote_refs": [
+      "bf/migration-wp-p00-01-nonrecursive-baseline@d54bdb6d23cebf38c11db7194aef59b03d573a16",
+      "bf/migration-phase-00-completion@245ec31005041f6e1cacef19478c070b272e3dcd",
+      "bf/migration-phase-00-closeout-preflight-marker@1d916c4b277ed3d933e40afad358cf08e822ef08"
+    ],
+    "deletion_performed": false,
+    "cleanup_closed": false,
+    "local_worktree_cleanup_claimed": false
+  },
   "access_attestation": {
     "database_accessed": false,
     "sqlite_accessed": false,
@@ -58,7 +75,8 @@
     "dependencies_modified": false,
     "ci_workflows_modified": false,
     "deployment_performed": false,
+    "production_activated": false,
     "phase_01_activated": false
   },
-  "review_rule": "The implementing context may not self-PASS. Review binds the exact externally recorded head and tree; later commits invalidate it."
+  "phase_01_activated": false
 }

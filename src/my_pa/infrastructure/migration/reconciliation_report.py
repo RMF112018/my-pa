@@ -974,6 +974,10 @@ def _sequences(report: Reconciliation) -> list[str]:
 
 def _redaction(report: Reconciliation) -> list[str]:
     scan = report.scan
+    #: How many files the pattern scan reached, against the two the closed
+    #: vocabulary covers. Interpolated rather than written down so the scope
+    #: sentence cannot drift from the scan it is scoping.
+    scanned = scan.files_scanned
     lines = [
         "## 12. Redaction scan (OD-004)",
         "",
@@ -1015,10 +1019,16 @@ def _redaction(report: Reconciliation) -> list[str]:
             "cannot make that judgement and claiming otherwise would report a clean scan that",
             "means less than it appears to.",
             "",
-            "### What carries the personal-name claim",
+            f"### What carries the personal-name claim, for 2 of these {scanned} files",
             "",
             "Two checks, in `tests/migration/test_personal_data_containment.py`. Neither is a",
-            "pattern, because a pattern is the thing that cannot do this.",
+            "pattern, because a pattern is the thing that cannot do this. Their scope is",
+            "narrow and belongs before their substance: they cover `reconciliation.json` and",
+            f"this report -- **2 of the {scanned} files the scan above reaches**. The other",
+            f"{scanned - 2} still rest on the patterns plus construction, the weaker position",
+            "this section opened by criticising. They include `disposition_registry.json` and",
+            "`identifier_map.json`, which are themselves derived from the source catalogue, so",
+            "they are exactly the files a reader should not assume the enforcement below covers.",
             "",
             "*The machine-readable evidence is held to a closed vocabulary.* Every string in",
             "`reconciliation.json` must be a member of a vocabulary derived from the disposition",
@@ -1027,9 +1037,9 @@ def _redaction(report: Reconciliation) -> list[str]:
             "sha256 digest, a run UUID, an Alembic revision, an ISO timestamp, a repo-relative",
             "path, or an identity sequence name. A whitelist does not have to recognise a",
             "personal name; a leaked value is simply not in it. A failure names the JSON path",
-            "and the string's shape, never the string, so reporting one is not itself a",
-            "disclosure. This report is rendered from the same record, and re-rendering it from",
-            "that JSON reproduces it byte-for-byte, so the guarantee reaches this file too.",
+            "and the string's shape, never the string. This report is rendered from the same",
+            "record, and re-rendering it from that JSON reproduces it byte-for-byte, so the",
+            "guarantee reaches this file too.",
             "",
             "*The control plane has nowhere to put a value.* Every column of",
             "`migration_control` must be an identifier, a hash, a count, a timestamp, a flag, an",
@@ -1037,6 +1047,16 @@ def _redaction(report: Reconciliation) -> list[str]:
             "refused row by table, column, error code, and a hash of its key, and has no column",
             "for the value at all -- leakage there is structurally impossible rather than",
             "merely avoided.",
+            "",
+            "One caveat on the failure output, stated before the reason it is narrow. The",
+            "vocabulary check reports shape only, but the same module holds a round-trip check",
+            "that this report re-renders from that JSON, and if the two files ever disagree its",
+            "assertion diffs the differing lines **verbatim**. What makes that narrow rather",
+            "than a hole: a value reaching these artefacts through the generator lands in both",
+            "and is regenerated together, so the round trip passes, only the vocabulary check",
+            "fires, and no test output contains the value. The verbatim diff arises only from a",
+            "hand-edited divergence between the two files -- where the value is by definition",
+            "already committed to the file being compared.",
             "",
             "What the two do **not** cover is stated rather than absorbed. The English prose in",
             "this report comes from literals in the renderer's source and is covered by review,",

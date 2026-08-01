@@ -8,6 +8,13 @@ row value into its output". That sentence is true, and it was checked by nobody.
 
 Two mechanisms replace it, and they work in opposite directions.
 
+**The scope is two files.** The redaction scan reaches 94 of them; what is
+enforced here covers `reconciliation.json` and, through the round trip below,
+`RECONCILIATION.md`. The other 92 -- `disposition_registry.json` and
+`identifier_map.json` among them, both derived from the source catalogue -- are
+still held by the patterns plus construction. Nothing in this module should be
+read as covering the evidence tree.
+
 *A closed vocabulary over the machine-readable evidence.* Every string in
 `reconciliation.json` has to be a member of a vocabulary derived from the
 disposition registry, the generated target DDL, the control plane's own
@@ -17,7 +24,16 @@ repo-relative path, identity sequence name). This is a whitelist, and that is
 the point: a blacklist cannot recognise a personal name, but a whitelist does
 not need to, because a leaked value simply will not be in the vocabulary. A
 failure names the JSON path and the offending string's *shape*, never the string
-itself, so the failure does not commit the disclosure it is reporting.
+itself.
+
+That last property is the vocabulary check's, not the module's. The round-trip
+check below asserts two file contents are equal, and pytest diffs unequal
+strings verbatim, so a JSON-versus-markdown divergence prints the differing
+lines in full. It is narrow rather than a hole: a value that reaches these
+artefacts through the generator lands in both and is regenerated together, so
+the round trip passes and only the vocabulary check fires, emitting a shape and
+no value. The verbatim diff needs a hand-edited divergence between the two
+files -- and there the value is already committed to the file being compared.
 
 *A schema-level proof that the control plane cannot hold content.* Every column
 of `migration_control` is classified into identifier, hash, count, timestamp,
@@ -38,6 +54,10 @@ English prose the renderer emits from its own source.
 
 Residual gaps, stated rather than papered over:
 
+- 92 of the 94 scanned files are outside the closed vocabulary entirely, as
+  above. This is the largest of the gaps, which is why it is stated first.
+- The round-trip check's assertion diff prints verbatim on a divergence, as
+  above.
 - The legacy file's *sibling* names are admitted by prefix. They are names on
   the owner's disk, not repository facts, so the rule is "starts with the bound
   source file name, then filename-safe characters". A personal name inside a

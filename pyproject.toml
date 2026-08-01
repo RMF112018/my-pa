@@ -80,8 +80,9 @@ select = [
 
 [tool.mypy]
 # Explicit targets so a bare `mypy` checks the same tree CI does, plus the
-# Alembic environment and revisions, which are executable code outside `src`.
-files = ["src", "migrations"]
+# Alembic environment and revisions and the operator CLI, which are executable
+# code outside `src`.
+files = ["src", "migrations", "apps"]
 python_version = "3.12"
 strict = true
 warn_unreachable = true

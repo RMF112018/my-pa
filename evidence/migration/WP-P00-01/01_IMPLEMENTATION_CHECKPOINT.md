@@ -27,7 +27,7 @@ does not review or accept its own work.
 | Legacy identity | `PASS` | Read-only GitHub metadata: `main` `fc7386fb925bfcb7370f969ac737acee0d32ddd0`, tree `70c0b5647ffc7119be9ab28ae53f654fe2d463d2`, `LATEST_SCHEMA_VERSION = 135`. |
 | Snapshot identity | `PASS` | Declared SHA-256 and byte count recorded. The snapshot was **not** opened or accessed. |
 | Plan / review / gate chain | `PASS` | R2 plan manifest, `INDEPENDENT_MIGRATION_PLAN_R2_REVIEW_PASS`, and `MIGRATION_PLANNING_GATE_PASSED` bound in `plan-and-review-bindings.json`. |
-| Worktree cleanliness | `PASS` | `git status --porcelain` empty at `/Users/bobbyfetting/my-pa`, at the exact base, with one worktree and no unrelated local work. |
+| Worktree cleanliness | `PASS` | `git status --porcelain` empty at `<REPO_ROOT>`, at the exact base, with one worktree and no unrelated local work. |
 | Collision checks | `PASS` | `bf/migration-wp-p00-01-governance-identity` absent locally and on `origin`. No prior occurrence of the goal, work-item, or authorization identifier in the repository. |
 | Branch establishment | `PASS` | Branch created from the exact base SHA. No clean, reset, stash, delete, move, or overwrite was performed. |
 
@@ -47,7 +47,7 @@ disposition; only independent review may issue one.
 ## Validation
 
 The exact commands from `04_WP-P00-01-TEST-AND-EVIDENCE-CONTRACT.md` were executed from
-`/Users/bobbyfetting/my-pa`. Verbatim output is preserved in this package under `validation/`.
+`<REPO_ROOT>`. Verbatim output is preserved in this package under `validation/`.
 The repository virtual environment `.venv` was activated so that the contract's `python`
 invocations resolve; no command was substituted, reordered, or omitted.
 

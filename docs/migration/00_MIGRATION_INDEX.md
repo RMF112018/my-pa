@@ -1,10 +1,60 @@
 # Migration Index
 
-**Status:** `PHASE_00_CLOSED_PHASE_01_ACTIVE`  
-**Goal:** `GOAL-MYPA-POSTGRESQL-MIGRATION-001`  
+**Status:** `MIGRATION_COMPLETE_LEGACY_RETAINED`
+**Goal:** `GOAL-MYPA-POSTGRESQL-MIGRATION-001`
 **Repository:** `RMF112018/my-pa`
 
-This directory owns migration governance and identity records only. It is not itself a database, DDL, ETL, loader, or deployment surface. Phase 01 and later work proceeds under the campaign decision register recorded by the repository owner (decision `OD-005`) and under `AGENTS.md`.
+The legacy SQLite corpus has been migrated into PostgreSQL. `my_pa` is the
+canonical store for this repository; the legacy source is retained indefinitely
+as a read-only archive and is never mutated. Work from Phase 01 onward proceeded
+under the campaign decision register recorded by the repository owner (decision
+`OD-005`) and under `AGENTS.md`.
+
+This directory owns migration governance, identity, and phase records. It is not
+itself a database, DDL, ETL, loader, or deployment surface.
+
+## Result
+
+Read from the live database and `migration_control` on 2026-08-01.
+
+| | |
+| --- | --- |
+| Target | PostgreSQL 17.10, database `my_pa`, container `my-pa-postgres`, `127.0.0.1:5433` |
+| Alembic revision | `3a8e2cb16d59` (head) |
+| Schemas | 9 — 8 domain plus `migration_control` |
+| Base tables | 494 = 484 domain + 9 control plane + `public.alembic_version` |
+| Rows migrated | 3,263,870 |
+| Rows quarantined | 8 (`UNSUPPORTED_TEXT_NUL`) |
+| Foreign keys | 277, 0 left `NOT VALID` |
+| Migration runs | 2, both `COMPLETED` |
+| Legacy source | 4,368,125,952 bytes, sha256 `9b8c8d8b…`, schema 128 — retained read-only, indefinitely |
+
+Of the source's 3,323,450 rows, 3,263,878 were in scope and 59,572 (1.79%) were
+deliberately excluded. The excluded rows exist only in the retained legacy file;
+[`PHASE-12-RETENTION.md`](PHASE-12-RETENTION.md) enumerates them by category.
+
+## Phase records
+
+- [`PHASE-01-FOUNDATION.md`](PHASE-01-FOUNDATION.md) — connection contract,
+  engine, Alembic ownership of all target DDL.
+- [`PHASE-11-CUTOVER.md`](PHASE-11-CUTOVER.md) — what "canonical" means, how a
+  component obtains a session, coexistence with the legacy application, and the
+  target-side rollback runbook.
+- [`PHASE-12-RETENTION.md`](PHASE-12-RETENTION.md) — legacy source identity,
+  retention posture, what the archive uniquely holds, and the backup risk.
+  Retention only: `OP-RETIRE-001` is **DO NOT PROCEED** and nothing is retired.
+
+Phases 02 through 10 are recorded in `migration_control` — `migration_runs`,
+`phase_status`, `table_progress`, `quarantine_records`, `identifier_map`,
+`source_key_map` — rather than in prose here. Query them with
+`apps/cli/migration.py status --run-id <id>`.
+
+## Operations
+
+- [`/ops/runbooks/postgres-operations.md`](/ops/runbooks/postgres-operations.md)
+  — start, stop, health check, connect, back up, restore.
+- [`/ops/postgres/README.md`](/ops/postgres/README.md) — the instance: image,
+  tuning, locale, collation contract, reset procedure.
 
 ## Governing records
 
@@ -32,9 +82,10 @@ This directory owns migration governance and identity records only. It is not it
 | PR #12 closeout squash merge | `2672898530916c3657d6e5fef47b401c219a61da` |
 | Direct Phase 00 validator execution | `PASS` — exit 0, full checkout |
 | Branch cleanup | `COMPLETE` — all three residual remote refs deleted |
-| Phase 01 | `ACTIVE` under decision `OD-005` |
 
-`P00-AC-08` is accepted by exact-head review, overlapping repository evidence, and direct execution of `validate_phase00_governance.py` including its full public-surface scan. No risk is accepted.
+`P00-AC-08` is accepted by exact-head review, overlapping repository evidence,
+and direct execution of `validate_phase00_governance.py` including its full
+public-surface scan. No risk is accepted.
 
 ## Closeout evidence
 

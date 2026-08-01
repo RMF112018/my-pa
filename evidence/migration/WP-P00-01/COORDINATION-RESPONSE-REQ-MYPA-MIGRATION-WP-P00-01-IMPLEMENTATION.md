@@ -20,7 +20,7 @@ base_branch: main
 base_sha: d4fed7ec12f0b25ad5520d806aeb7766e95228d5
 base_tree: faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4
 implementation_branch: bf/migration-wp-p00-01-governance-identity
-implementation_worktree: /Users/bobbyfetting/my-pa
+implementation_worktree: <REPO_ROOT>
 implementation_head: RECORDED_POST_COMMIT_IN_PUBLISHED_COMMIT_IDENTITY
 implementation_tree: RECORDED_POST_COMMIT_IN_PUBLISHED_COMMIT_IDENTITY
 commit_count: 1
@@ -88,7 +88,7 @@ No file outside the authorized prefixes was created, modified, renamed, or delet
 ## Test commands and results
 
 The exact commands from `04_WP-P00-01-TEST-AND-EVIDENCE-CONTRACT.md` were run from
-`/Users/bobbyfetting/my-pa` with the repository `.venv` activated so the contract's `python`
+`<REPO_ROOT>` with the repository `.venv` activated so the contract's `python`
 invocations resolve. Verbatim output is preserved under `validation/` in this package.
 
 | Evidence artifact | Command group |

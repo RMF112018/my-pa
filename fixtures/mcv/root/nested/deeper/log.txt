@@ -1,0 +1,3 @@
+Synthetic fixture content, two levels below the configured root.
+
+A single listing call must never reach this far down.

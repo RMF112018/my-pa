@@ -4,6 +4,11 @@ These guard the boundaries the work is bounded by: no transport, provider, or
 model dependency; one PostgreSQL driver rather than several; neutral naming;
 nothing secret-shaped committed.
 
+A guard here is narrowed only when scope legitimately grows, never to make a
+change pass. Each narrowing states its reason beside the pattern and is paired
+with planted violations, so a relaxed guard cannot silently become a guard that
+matches nothing.
+
 Persistence entered scope with the PostgreSQL foundation, so SQLAlchemy,
 Alembic, and `psycopg` moved from the prohibited list to the declared set below.
 The alternative drivers stay prohibited: two drivers for one database is the
@@ -161,8 +166,91 @@ def test_every_package_directory_is_importable() -> None:
         assert (directory / "__init__.py").exists(), f"{directory} lacks __init__.py"
 
 
+#: Module names that mean speculative machinery rather than a domain noun.
+#:
+#: `registry` was a bare term here until the source registry entered scope.
+#: `docs/plans/mcv-completion-plan.md` section 7 names "source registry, bounded
+#: enrollment with idempotency keys, job lease/retry, opaque ID issuance" as the
+#: WP-2 deliverable, so a registry of sources is a planned product capability
+#: rather than an extension point, and banning the word outright would have
+#: forced a worse name on a required concept. The speculative sense is what the
+#: guard was for, so the compounds carrying that sense stay banned.
+#:
+#: Two tests hold this pattern in place, and it is worth being exact about what
+#: they can and cannot show. The planted violations below prove the pattern is
+#: not vacuous; they cannot prove it is general, because any finite list of
+#: examples is also satisfied by a pattern that matches only those examples.
+#: `test_the_speculative_module_guard_is_exactly_this_pattern` closes that gap
+#: structurally: shrinking the pattern to fit its own fixtures fails there.
+#:
+#: Coverage was genuinely lost, not merely relocated. The old bare term also
+#: caught `tool_registry`, `strategy_registry`, `port_registry`, and
+#: `registry_factory`; those are named below to recover them. It also caught
+#: `source_registry`, which is now deliberately permitted — that name is the
+#: legitimate one for this concept.
+_SPECULATIVE_MODULE_NAMES = re.compile(
+    r"(plugin|factory_factory|abstract_base|extension_point|registry_factory"
+    r"|(?:plugin|service|provider|component|handler|adapter|capability|tool"
+    r"|strategy|port)_registry)",
+    re.I,
+)
+
+#: The pattern above, pinned. An edit to the guard has to be an edit here too.
+_EXPECTED_SPECULATIVE_PATTERN = (
+    r"(plugin|factory_factory|abstract_base|extension_point|registry_factory"
+    r"|(?:plugin|service|provider|component|handler|adapter|capability|tool"
+    r"|strategy|port)_registry)"
+)
+
+
 def test_no_placeholder_or_speculative_module_was_added() -> None:
-    # Phase 01 forbids plugin frameworks, registries, and speculative extension points.
-    banned = re.compile(r"(plugin|registry|factory_factory|abstract_base|extension_point)", re.I)
-    offenders = [p.relative_to(PACKAGE) for p in _modules() if banned.search(p.name)]
+    offenders = [
+        p.relative_to(PACKAGE) for p in _modules() if _SPECULATIVE_MODULE_NAMES.search(p.name)
+    ]
     assert not offenders, f"speculative modules present: {offenders}"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "plugin.py",
+        "plugin_loader.py",
+        "plugin_registry.py",
+        "service_registry.py",
+        "provider_registry.py",
+        "component_registry.py",
+        "handler_registry.py",
+        "adapter_registry.py",
+        "capability_registry.py",
+        "factory_factory.py",
+        "abstract_base.py",
+        "extension_point.py",
+    ],
+)
+def test_the_speculative_module_guard_still_catches_what_it_is_for(name: str) -> None:
+    """Planted violations, so narrowing the pattern cannot quietly gut it.
+
+    Without this, a later edit could relax the pattern to the point where it
+    matches nothing and the guard above would still pass, reporting a boundary
+    it no longer enforces.
+    """
+    assert _SPECULATIVE_MODULE_NAMES.search(name), f"{name} should be rejected"
+
+
+@pytest.mark.parametrize(
+    "name", ["registry.py", "source_registry.py", "sources.py", "enrollment.py", "jobs.py"]
+)
+def test_the_speculative_module_guard_permits_domain_nouns(name: str) -> None:
+    """The narrowing is deliberate and bounded, not incidental."""
+    assert not _SPECULATIVE_MODULE_NAMES.search(name), f"{name} should be permitted"
+
+
+def test_the_speculative_module_guard_is_exactly_this_pattern() -> None:
+    """Pin the pattern, because planted violations alone cannot pin it.
+
+    An anchored alternation of exactly the names listed above would satisfy
+    every planted-violation test while catching nothing else. Comparing the
+    pattern itself means a narrowing has to be written twice, deliberately,
+    rather than arrived at by relaxing a regex until the suite goes green.
+    """
+    assert _SPECULATIVE_MODULE_NAMES.pattern == _EXPECTED_SPECULATIVE_PATTERN

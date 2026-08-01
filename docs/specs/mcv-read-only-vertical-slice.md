@@ -7,13 +7,13 @@ feature_id: FEATURE-PKL-001
 phase_id: PHASE-00
 repository: RMF112018/my-pa
 repository_branch: main
-authenticated_head_sha: 3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae
-authenticated_tree_sha: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
+authenticated_head_sha: e773e6f2285da9e453a8ca7e11bdac23619aaf22
+authenticated_tree_sha: 0c726df770c5be7581a7106bf1e399e1f0ea1e98
 planning_basis_sha: b8563870afcf87b63e4cde6e0a48bfc59f0bd5b7
 contract_family: my-pa-public-capabilities
 contract_version: v1
 classification: INTERNAL_PROJECT_SPECIFICATION
-supersession_state: NEW_CANDIDATE_NOT_IN_REPOSITORY
+supersession_state: INTEGRATED_IN_REPOSITORY
 ---
 
 
@@ -23,10 +23,10 @@ supersession_state: NEW_CANDIDATE_NOT_IN_REPOSITORY
 ## 1. Status, purpose, and authority
 
 
-This document defines the proposed minimum credible version (MCV) contract for the Personal Knowledge Layer in `RMF112018/my-pa`. It is repository-ready documentation, not executable implementation, repository authority, risk acceptance, or activation approval.
+This document defines the proposed minimum credible version (MCV) contract for the Personal Knowledge Layer in `RMF112018/my-pa`. It is repository documentation, not executable implementation, repository authority, risk acceptance, or activation approval.
 
 
-The authenticated repository basis for authoring is `main@3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae`. The current tree SHA and operator-local worktree state were not exposed by the authenticated connector and remain unavailable. The Phase 00 planning basis was `b8563870afcf87b63e4cde6e0a48bfc59f0bd5b7`; authenticated comparison shows four later commits and only dependency-pin changes in `.github/workflows/repository-checks.yml`. Any repository integration must revalidate the exact current head, tree, branch, worktree, and dirty/untracked state.
+This document was authored against `main@3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae` from a Phase 00 planning basis of `b8563870afcf87b63e4cde6e0a48bfc59f0bd5b7`, and was integrated into the repository afterwards. The front matter now records the reconciled basis, `main@e773e6f2285da9e453a8ca7e11bdac23619aaf22`, tree `0c726df770c5be7581a7106bf1e399e1f0ea1e98`, verified locally on 2026-08-01. Only this section and the front matter were reconciled; the rest of the document is unchanged from the integrated text. Any later change to this document must revalidate the exact current head, tree, branch, worktree, and dirty/untracked state.
 
 
 Repository-local governance, accepted ADRs, and authenticated repository state govern over this document. This candidate is invalidated by a material change to the product objective, architecture boundaries, accepted ADRs, public capability set, authority model, disclosure policy, or repository basis.

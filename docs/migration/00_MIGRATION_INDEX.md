@@ -41,13 +41,21 @@ implementation head. See [`evidence/migration/WP-P00-01/00_EVIDENCE_INDEX.json`]
 | Active work item | **none** |
 | Last closed work item | `WP-P00-01` — bind migration identities and governance ledger |
 | `WP-P00-01` state | **`CLOSED`** |
-| Current merged baseline | `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` |
+| Repository identity | **`RUNTIME_GIT_REQUIRED`** — branch `main`; committed exact-current SHA intentionally not stored |
 | Successor `WP-P00-02` | `NOT_ACTIVATED` — operator-only, never automatic |
 | Remaining Phase 00 criteria | `P00-AC-06` … `P00-AC-08` (belong to `WP-P00-02`) |
 
-Any future work-package authorization must bind the current merged baseline
-`3e5aad7b2526b09b1e46c817bd00c401e569f5a4`. The earlier base
-`d4fed7ec12f0b25ad5520d806aeb7766e95228d5` is superseded.
+Every future authorization must authenticate local and remote `main` at dispatch time and
+bind the resulting exact SHA and tree in the external authorization and evidence package.
+No committed predecessor SHA is current authority.
+
+Historical merge identities (not current authority):
+
+| Role | Identity |
+|---|---|
+| `ORIGINAL_AUTHORIZATION_BASE` | `d4fed7ec12f0b25ad5520d806aeb7766e95228d5` |
+| `MERGE_SHA` — WP-P00-01 implementation (PR #8) | `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` |
+| `MERGE_SHA` / `RECORD_BASE` — closeout correction (PR #9) | `178a7e243cbc6100c6937144ff10a7987206c04a` |
 
 ## Work-item history
 
@@ -61,9 +69,13 @@ Any future work-package authorization must bind the current merged baseline
 | Merge | squash, `3e5aad7b2526b09b1e46c817bd00c401e569f5a4`, tree unchanged at `9956fe7b…` |
 | Post-merge validation | `PASS` — tree and all 20 file blobs byte-identical |
 | Cleanup | complete — both branch refs deleted |
+| Closeout correction | squash merge `178a7e243cbc6100c6937144ff10a7987206c04a`, tree `25131169…`; branch cleanup complete |
+| Final closeout | **BLOCKED** by `MYPA-WP-P00-01-FINAL-CLOSEOUT-F-001` until the non-recursive baseline correction is independently reviewed |
 
 Historical implementation evidence is preserved under
 [`evidence/migration/WP-P00-01/`](../../evidence/migration/WP-P00-01/00_EVIDENCE_INDEX.json);
 closeout evidence is under
-[`evidence/migration/WP-P00-01/closeout/`](../../evidence/migration/WP-P00-01/closeout/00_CLOSEOUT_INDEX.json).
+[`evidence/migration/WP-P00-01/closeout/`](../../evidence/migration/WP-P00-01/closeout/00_CLOSEOUT_INDEX.json);
+non-recursive baseline correction evidence is under
+[`evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/`](../../evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/00_INDEX.json).
 Durable coordination packages for every stage are published to the governed Drive evidence area.

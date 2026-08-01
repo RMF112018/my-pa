@@ -1,0 +1,13 @@
+CHANGED_PATHS:
+  docs/migration/00_MIGRATION_INDEX.md
+  docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md
+  docs/migration/governance/authorization-ledger.json
+  docs/migration/governance/goal-state.json
+  evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/
+UNAUTHORIZED: none
+DIFF_VS_BASE:
+  docs/migration/00_MIGRATION_INDEX.md
+  docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md
+  docs/migration/governance/authorization-ledger.json
+  docs/migration/governance/goal-state.json
+RESULT PASS

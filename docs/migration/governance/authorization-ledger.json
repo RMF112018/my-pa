@@ -2,9 +2,10 @@
   "schema_version": 2,
   "record_type": "MIGRATION_AUTHORIZATION_LEDGER",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
-  "recorded_at_utc": "2026-08-01T04:24:49Z",
-  "schema_version_note": "Raised from 1 to 2. Version 1 recorded a single authorization at the top level; version 2 records an ordered list, which the goal now requires because more than one authorization exists.",
-  "active_authorization_count_after_this_correction": 0,
+  "recorded_at_utc": "2026-08-01T05:35:09Z",
+  "schema_version_note": "Version 2 records an ordered authorization list. This write adds the non-recursive baseline correction authorization and replaces the top-level live invalidation rule that was tied to stale main SHA 3e5aad7b….",
+  "active_authorization_count_after_this_correction": 1,
+  "active_authorization_note": "The non-recursive baseline correction authorization is ACTIVE_UNCONSUMED at the time of this record write. Consumption is recorded only in external post-commit evidence after the single authorized commit exists. This file does not claim to know that commit's SHA.",
   "authorizations": [
     {
       "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
@@ -42,6 +43,12 @@
         "docs/migration/**",
         "evidence/migration/**"
       ],
+      "base": {
+        "branch": "main",
+        "sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
+        "tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4",
+        "role": "ORIGINAL_AUTHORIZATION_BASE"
+      },
       "consumption": {
         "consumed": true,
         "consumed_by_commit": "d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f",
@@ -58,6 +65,7 @@
       "authorization_class": "CORRECTION_ONLY_NOT_WP_P00_02",
       "decision_id": "OP-CLOSEOUT-WP-P00-01",
       "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-CORRECTION-20260801-031",
+      "status": "CONSUMED",
       "status_before_commit": "ACTIVE_UNCONSUMED",
       "activation": {
         "activation_basis": "EXPLICIT_OPERATOR_APPROVAL",
@@ -69,7 +77,8 @@
       "base": {
         "branch": "main",
         "sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
-        "tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d"
+        "tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
+        "role": "HISTORICAL_PREDECESSOR"
       },
       "implementation_branch": "bf/migration-wp-p00-01-closeout-correction",
       "limits": {
@@ -88,7 +97,7 @@
         "deployment": false,
         "risk_acceptance": false
       },
-      "not_authorized_semantics": "Every key under not_authorized is false, meaning the action is NOT authorized and was NOT performed.",
+      "not_authorized_semantics": "Every key under not_authorized is false, meaning the action is NOT authorized and was NOT performed under this historical authorization record as written.",
       "authorized_paths": [
         "docs/migration/governance/work-item-ledger.json",
         "docs/migration/governance/goal-state.json",
@@ -99,12 +108,73 @@
         "evidence/migration/WP-P00-01/**"
       ],
       "consumption": {
-        "consumption_rule": "Recorded as consumed only after the single authorized commit exists and the closeout evidence package is published and verified.",
+        "consumed": true,
+        "consumption_recorded_in": "External merge and cleanup evidence for REQ-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-CORRECTION-20260801-031 through -035.",
+        "merge_sha": "178a7e243cbc6100c6937144ff10a7987206c04a",
+        "merge_tree": "25131169d7bbe7846569c2a3cb5afa2712bd3c96",
+        "role_of_merge_sha": "MERGE_SHA",
+        "reusable": false
+      },
+      "historical_note": "Consumed by the closeout-correction squash merge. Retained for provenance. Exact base values remain attached to this historical record only."
+    },
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-NONRECURSIVE-BASELINE-20260801-001",
+      "work_item_id": "WP-P00-01",
+      "phase_id": "PHASE-00",
+      "purpose": "NONRECURSIVE_BASELINE_RECORD_CORRECTION",
+      "authorization_class": "CORRECTION_ONLY_NOT_WP_P00_02",
+      "decision_id": "OP-CORRECT-NONRECURSIVE-BASELINE-WP-P00-01",
+      "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-NONRECURSIVE-BASELINE-CORRECTION-20260801-036",
+      "blocking_finding": "MYPA-WP-P00-01-FINAL-CLOSEOUT-F-001",
+      "status_at_time_of_record_write": "ACTIVE_UNCONSUMED",
+      "activation": {
+        "activation_basis": "EXPLICIT_OPERATOR_APPROVAL",
+        "self_authorized": false,
+        "activated_at_utc": "2026-08-01T05:35:09Z",
+        "expires_at_utc": "2026-08-02T05:35:09Z",
+        "expiry_basis": "24 hours after activation unless consumed or invalidated earlier."
+      },
+      "base": {
+        "branch": "main",
+        "sha": "178a7e243cbc6100c6937144ff10a7987206c04a",
+        "tree": "25131169d7bbe7846569c2a3cb5afa2712bd3c96",
+        "role": "RECORD_BASE"
+      },
+      "implementation_branch": "bf/migration-wp-p00-01-nonrecursive-baseline",
+      "limits": {
+        "maximum_branches": 1,
+        "maximum_worktrees": 1,
+        "maximum_commits": 1,
+        "maximum_pull_requests": 0,
+        "maximum_active_subagents": 5
+      },
+      "successor_activation_authorized": false,
+      "not_authorized": {
+        "push": false,
+        "pull_request": false,
+        "merge": false,
+        "branch_cleanup": false,
+        "final_closeout": false,
+        "wp_p00_02": false,
+        "database_access": false,
+        "deployment": false,
+        "risk_acceptance": false
+      },
+      "not_authorized_semantics": "Every key under not_authorized is false, meaning the action is NOT authorized.",
+      "authorized_paths": [
+        "docs/migration/governance/goal-state.json",
+        "docs/migration/governance/authorization-ledger.json",
+        "docs/migration/00_MIGRATION_INDEX.md",
+        "docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md",
+        "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/**"
+      ],
+      "consumption": {
+        "consumption_rule": "Recorded as consumed only after the single authorized commit exists and the correction evidence package is published and verified.",
         "consumption_state_in_this_record": "UNCONSUMED_AT_TIME_OF_WRITE",
-        "consumption_recorded_in": "The published closeout-correction roundtrip receipt for REQ-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-CORRECTION-20260801-031.",
+        "consumption_identity_location": "EXTERNAL_POST_COMMIT_EVIDENCE",
         "non_recursive_evidence_convention": "This file is written before the commit that contains it. It therefore cannot state its own final commit SHA, and does not claim to. Post-commit identity is published outside the commit."
       },
-      "terminal_state": "WP_P00_01_CLOSEOUT_CORRECTION_IMPLEMENTED_PENDING_INDEPENDENT_REVIEW"
+      "terminal_state": "WP_P00_01_NONRECURSIVE_BASELINE_CORRECTION_IMPLEMENTED_PENDING_INDEPENDENT_REVIEW"
     }
   ],
   "prohibited_terminal_states": [
@@ -116,9 +186,11 @@
     "COMPLETE"
   ],
   "invariants_asserted": {
+    "self_authorization_prohibited": true,
     "no_successor_authorization_exists": true,
     "wp_p00_02_authorization_id": null,
-    "self_authorization_prohibited": true
+    "exact_current_identity_resolution": "RUNTIME_GIT",
+    "post_commit_identity_location": "EXTERNAL_EVIDENCE"
   },
-  "invalidation_rule": "Immediate on identity drift, scope or acceptance change, mutation-limit change, expiry, or prior consumption. The closeout authorization is invalidated by any movement of main from 3e5aad7b2526b09b1e46c817bd00c401e569f5a4."
+  "invalidation_rule": "An authorization is invalidated when runtime Git differs from the exact identity bound in that authorization's external activation package, or when scope, acceptance criteria, mutation limits, expiry, or prior consumption conflict. Exact current repository identity is always resolved from runtime Git. No committed authorization record claims to know the SHA of the commit containing itself. Historical authorization bases remain attached only to their historical records and are not live current-authority rules."
 }

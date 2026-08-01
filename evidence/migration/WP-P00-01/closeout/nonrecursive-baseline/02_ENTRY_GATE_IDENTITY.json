@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "record_type": "ENTRY_GATE_IDENTITY",
+  "verified_at_utc": "2026-08-01T05:35:09Z",
+  "local_main_sha": "178a7e243cbc6100c6937144ff10a7987206c04a",
+  "remote_main_sha": "178a7e243cbc6100c6937144ff10a7987206c04a",
+  "main_tree": "25131169d7bbe7846569c2a3cb5afa2712bd3c96",
+  "current_branch_at_gate": "main",
+  "worktree_clean": true,
+  "untracked_files": 0,
+  "unrelated_work_present": false,
+  "implementation_branch_local_exists_before_create": false,
+  "implementation_branch_remote_exists": false,
+  "existing_pull_request": false,
+  "old_closeout_correction_branch_local_exists": false,
+  "old_closeout_correction_branch_remote_exists": false,
+  "active_work_item_count": 0,
+  "WP_P00_01_ledger_state": "CLOSED",
+  "WP_P00_02_state": "NOT_ACTIVATED",
+  "WP_P00_02_authorization_id": null,
+  "collisions": {
+    "OP-CORRECT-NONRECURSIVE-BASELINE-WP-P00-01": false,
+    "AUTH-MYPA-MIGRATION-WP-P00-01-NONRECURSIVE-BASELINE-20260801-001": false,
+    "REQ-MYPA-MIGRATION-WP-P00-01-NONRECURSIVE-BASELINE-CORRECTION-20260801-036": false,
+    "bf/migration-wp-p00-01-nonrecursive-baseline": false
+  },
+  "cleanup_evidence": {
+    "folder_id": "1oR-pm2KXArt6z7gpmrTi0KaKoW2_OlOC",
+    "disposition": "WP_P00_01_CLEANUP_COMPLETE_FINAL_CLOSEOUT_BLOCKED_BY_BASELINE_RECORD_DEFECT",
+    "roundtrip_receipt_drive_id": "1ZAIOim5rZLkN3YP7OlrGUEMfZxlARRNA",
+    "blocking_finding_drive_id": "1edwtpwnFsGMAvNjVD6yUcmYhQLGhtKXq"
+  }
+}

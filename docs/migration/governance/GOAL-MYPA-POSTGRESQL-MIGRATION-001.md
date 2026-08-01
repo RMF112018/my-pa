@@ -5,6 +5,7 @@
 **Active phase:** `PHASE-00` — `IN_PROGRESS`
 **Charter first recorded at:** `2026-07-31T20:48:55Z`
 **Charter reconciled at:** `2026-08-01T04:24:49Z`
+**Charter non-recursive baseline correction recorded at:** `2026-08-01T05:35:09Z`
 
 ### Current state
 
@@ -14,18 +15,36 @@
 | Current active work item | **none** |
 | Last closed work item | `WP-P00-01` |
 | Next eligible work item | `WP-P00-02` — `NOT_ACTIVATED` |
-| Current merged baseline | `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` / tree `9956fe7bed3b2d92e7243b1881f5b31c2d28da1d` |
+| Exact current repository identity authority | **runtime Git** (`main`) |
+| Committed exact-current SHA/tree | **intentionally not stored** |
+
+Exact current SHA and tree are resolved at authorization time from local and remote Git.
+Committed records describe lifecycle state and historical provenance only. Post-commit identity
+belongs in external evidence.
+
+### Non-recursion rule
+
+A governed repository record must not claim that an exact SHA embedded within that record is
+the continuously current identity of the commit containing the record. Current identity is
+resolved from runtime Git; committed exact identities are historical or input bindings only.
+
+An embedded predecessor SHA must never be treated as the live current repository identity.
 
 ### Historical record
 
 This charter was first written under `WP-P00-01`, whose authorization
 `AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001` bound base
-`d4fed7ec12f0b25ad5520d806aeb7766e95228d5` / tree `faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4`.
-That authorization is **consumed** and that base is **superseded**. Both are retained here as
-provenance, not as current authority.
+`d4fed7ec12f0b25ad5520d806aeb7766e95228d5` / tree `faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4`
+(`ORIGINAL_AUTHORIZATION_BASE`). That authorization is **consumed** and that base is
+**historical**. Both are retained here as provenance, not as current authority.
 
 The identity bindings in this charter remain accurate as the record of what `WP-P00-01`
 authenticated. They are not restated as though they had always described the post-merge state.
+
+Closeout correction squash merge (`MERGE_SHA`, PR #9):
+`178a7e243cbc6100c6937144ff10a7987206c04a` / tree `25131169d7bbe7846569c2a3cb5afa2712bd3c96`.
+That identity is also the `RECORD_BASE` of the non-recursive baseline correction; it is not
+continuously current authority after later commits.
 
 This charter is a governed record. It is not an authorization and it grants no access.
 
@@ -59,9 +78,12 @@ runtime code.
 
 `WP-P00-01` bound migration identities and the governance ledger against acceptance criteria
 `P00-AC-01` through `P00-AC-05`. It is **closed**: implemented at
-`d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f`, independently reviewed `PASS` at that head, squash
-merged as `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` with byte-identical content, post-merge
-validated, and cleaned up.
+`d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f` (`IMPLEMENTATION_HEAD`), independently reviewed
+`PASS` at that head, squash merged as `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` (`MERGE_SHA`,
+PR #8) with byte-identical content, post-merge validated, and cleaned up. A later closeout
+correction squash-merged as `178a7e243cbc6100c6937144ff10a7987206c04a` (`MERGE_SHA`, PR #9).
+Final closeout remains blocked by `MYPA-WP-P00-01-FINAL-CLOSEOUT-F-001` until the
+non-recursive baseline correction is independently reviewed.
 
 `P00-AC-06`, `P00-AC-07`, and `P00-AC-08` belong to `WP-P00-02`. `WP-P00-02` is not activated, not
 authorized, and not implemented. No successor activates automatically. Phase 00 therefore remains
@@ -69,26 +91,27 @@ authorized, and not implemented. No successor activates automatically. Phase 00 
 
 ## Identity bindings
 
-**Historical.** This table records the identities `WP-P00-01` authenticated at **its** base. The
-target rows are therefore the *superseded* base, not the current baseline. `main` has since
-advanced to `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` / tree
-`9956fe7bed3b2d92e7243b1881f5b31c2d28da1d`, which is the identity any future authorization must
-bind. The legacy, snapshot, and logical-target rows are unchanged and remain current.
+**Historical.** This table records identities with explicit roles. Exact current repository
+identity is **not** listed here; resolve it from runtime Git at authorization time.
 
-| Identity | Value | Authority |
+| Identity | Value | Role / Authority |
 |---|---|---|
-| Target repository — *historical, superseded* | `RMF112018/my-pa` `main` @ `d4fed7ec12f0b25ad5520d806aeb7766e95228d5` | Local Git plumbing and read-only GitHub metadata |
-| Target tree — *historical, superseded* | `faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4` | Local Git plumbing |
-| Target repository — **current baseline** | `RMF112018/my-pa` `main` @ `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` | Merge of pull request #8, post-merge validated |
-| Target tree — **current baseline** | `9956fe7bed3b2d92e7243b1881f5b31c2d28da1d` | Byte-identical to the independently reviewed tree |
+| Target repository — historical WP-P00-01 base | `RMF112018/my-pa` `main` @ `d4fed7ec12f0b25ad5520d806aeb7766e95228d5` | `ORIGINAL_AUTHORIZATION_BASE` |
+| Target tree — historical WP-P00-01 base | `faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4` | `ORIGINAL_AUTHORIZATION_BASE` |
+| WP-P00-01 implementation squash merge | `RMF112018/my-pa` `main` @ `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` | `MERGE_SHA` (PR #8); historical |
+| WP-P00-01 implementation merge tree | `9956fe7bed3b2d92e7243b1881f5b31c2d28da1d` | `MERGE_SHA` tree; historical |
+| Closeout correction squash merge | `RMF112018/my-pa` `main` @ `178a7e243cbc6100c6937144ff10a7987206c04a` | `MERGE_SHA` (PR #9) / `RECORD_BASE` for non-recursive correction; historical after later commits |
+| Closeout correction merge tree | `25131169d7bbe7846569c2a3cb5afa2712bd3c96` | `MERGE_SHA` / `RECORD_BASE` tree |
 | Legacy repository | `RMF112018/hb-personal-assistant` `main` @ `fc7386fb925bfcb7370f969ac737acee0d32ddd0` | Read-only GitHub repository metadata only |
 | Legacy tree | `70c0b5647ffc7119be9ab28ae53f654fe2d463d2` | Read-only GitHub repository metadata only |
 | Legacy schema version | `135` | Legacy `LATEST_SCHEMA_VERSION` at the authenticated legacy tree |
 | Retained snapshot | SHA-256 `fa3631f7…f52a9`, `7417266176` bytes, not opened | Declared identity; the artifact was not accessed |
 | Logical target identity | `my_pa` | `AGENTS.md` §4 and `ADR-002` |
 
-Full values are recorded in `exact-identity.json` and `source-read-only-identity.json` beside
-this charter. Those JSON records are authoritative for exact strings; this table is a reading aid.
+Full values for the original WP-P00-01 identity attestation are recorded in
+`exact-identity.json` and `source-read-only-identity.json` beside this charter. Those JSON
+records are historical WP-P00-01 evidence and must not be rewritten as current repository
+identity. This table is a reading aid.
 
 ## Source authority
 
@@ -155,7 +178,8 @@ against the merged baseline instead.
 
 ## Invalidation
 
-Any drift in target head or tree, legacy head, tree, or schema version, snapshot identity, plan
+Any drift between runtime Git and the exact identity bound in an authorization's external
+activation package, or drift in legacy head, tree, or schema version, snapshot identity, plan
 package hash, independent-review disposition, branch or worktree identity, authorized paths,
 acceptance criteria, or mutation limits invalidates the governing authorization and every
-acceptance result bound to it.
+acceptance result bound to it. Committed records do not store continuously current SHA/tree.

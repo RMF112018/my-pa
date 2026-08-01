@@ -1,0 +1,5 @@
+PASS docs/migration/governance/goal-state.json
+PASS docs/migration/governance/authorization-ledger.json
+PASS evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/00_INDEX.json
+PASS evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/02_ENTRY_GATE_IDENTITY.json
+RESULT PASS

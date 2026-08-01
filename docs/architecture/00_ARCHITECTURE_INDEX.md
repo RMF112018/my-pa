@@ -6,7 +6,7 @@
 - Separate gateway and worker processes
 - Operator CLI as a third entry surface
 - Inward dependency direction: apps/bootstrap → infrastructure/application → domain/contracts
-- PostgreSQL as planned canonical metadata and knowledge store
+- PostgreSQL as the canonical metadata and knowledge store
 - Source providers separated from managed-document stores
 - Progressive, reference-driven indexing
 - Obsidian as a rebuildable projection
@@ -31,4 +31,4 @@ See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md) and the unres
 
 ## Implementation boundary
 
-This index records architecture direction only. The repository contains no executable services or persistence behavior. These documents describe intended behavior and do not authorize implementation, database access, source access, deployment, or production activation.
+This index records architecture direction only. Persistence behavior now exists: the `my_pa` package, six Alembic revisions, and the migrated PostgreSQL corpus. No service runs — there is no gateway, worker, provider, or transport. These documents describe intended behavior and do not authorize implementation, database access, source access, deployment, or production activation.

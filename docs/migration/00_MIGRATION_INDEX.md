@@ -20,7 +20,7 @@ Read from the live database and `migration_control` on 2026-08-01.
 | | |
 | --- | --- |
 | Target | PostgreSQL 17.10, database `my_pa`, container `my-pa-postgres`, `127.0.0.1:5433` |
-| Alembic revision | `3a8e2cb16d59` (head) |
+| Alembic revision | `6c4d3ea82f10` (head) |
 | Schemas | 9 — 8 domain plus `migration_control` |
 | Base tables | 494 = 484 domain + 9 control plane + `public.alembic_version` |
 | Rows migrated | 3,263,870 |

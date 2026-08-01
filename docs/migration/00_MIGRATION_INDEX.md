@@ -1,10 +1,10 @@
 # Migration Index
 
-**Status:** `PHASE_00_COMPLETE_AWAITING_PHASE_01_OPERATOR_DECISION`  
+**Status:** `PHASE_00_CLOSED_PHASE_01_ACTIVE`  
 **Goal:** `GOAL-MYPA-POSTGRESQL-MIGRATION-001`  
 **Repository:** `RMF112018/my-pa`
 
-This directory owns migration governance and identity records only. It authorizes no database access, DDL, ETL, loader, runtime migration implementation, dependency change, CI change, deployment, production activation, or Phase 01 activation.
+This directory owns migration governance and identity records only. It is not itself a database, DDL, ETL, loader, or deployment surface. Phase 01 and later work proceeds under the campaign decision register recorded by the repository owner (decision `OD-005`) and under `AGENTS.md`.
 
 ## Governing records
 
@@ -29,11 +29,12 @@ This directory owns migration governance and identity records only. It authorize
 | PR #11 reviewed head | `245ec31005041f6e1cacef19478c070b272e3dcd` |
 | PR #11 squash merge | `4adb205e7c70841b95abb52623b159456eb2eafc` |
 | Reviewed-content equivalence | `PASS` — 16/16 blobs identical |
-| Direct Phase 00 validator execution | `UNAVAILABLE` — preserved limitation |
-| Branch cleanup | `PENDING_CONNECTOR_CAPABILITY` |
-| Phase 01 | `NOT_ACTIVATED` |
+| PR #12 closeout squash merge | `2672898530916c3657d6e5fef47b401c219a61da` |
+| Direct Phase 00 validator execution | `PASS` — exit 0, full checkout |
+| Branch cleanup | `COMPLETE` — all three residual remote refs deleted |
+| Phase 01 | `ACTIVE` under decision `OD-005` |
 
-`P00-AC-08` is accepted by exact-head review and overlapping repository evidence. The dedicated full-checkout invocation of `validate_phase00_governance.py` remains unavailable and is not described as technical PASS or risk acceptance.
+`P00-AC-08` is accepted by exact-head review, overlapping repository evidence, and direct execution of `validate_phase00_governance.py` including its full public-surface scan. No risk is accepted.
 
 ## Closeout evidence
 
@@ -42,5 +43,4 @@ This directory owns migration governance and identity records only. It authorize
 - `../../evidence/migration/WP-P00-02/closeout/01_POST_MERGE_VALIDATION.md`
 - `../../evidence/migration/WP-P00-02/closeout/02_FINDINGS_AND_CLEANUP_STATUS.md`
 - `../../evidence/migration/WP-P00-02/closeout/PHASE-00-FINAL-CLOSEOUT.md`
-
-Phase 01 requires a separate exact operator authorization. No successor work item or phase activates automatically.
+- `../../evidence/migration/phase-00-final/CLOSEOUT.md`

@@ -1,33 +1,39 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "record_type": "MIGRATION_ACCEPTANCE_CRITERIA_REGISTER",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
   "phase_id": "PHASE-00",
-  "recorded_at_utc": "2026-08-01T09:18:00Z",
+  "recorded_at_utc": "2026-08-01T13:55:00Z",
   "criteria": {
     "P00-AC-01": {
       "owner_work_item": "WP-P00-01",
+      "accepted": true,
       "status": "PASS_HISTORICAL"
     },
     "P00-AC-02": {
       "owner_work_item": "WP-P00-01",
+      "accepted": true,
       "status": "PASS_HISTORICAL"
     },
     "P00-AC-03": {
       "owner_work_item": "WP-P00-01",
+      "accepted": true,
       "status": "PASS_HISTORICAL"
     },
     "P00-AC-04": {
       "owner_work_item": "WP-P00-01",
+      "accepted": true,
       "status": "PASS_HISTORICAL"
     },
     "P00-AC-05": {
       "owner_work_item": "WP-P00-01",
+      "accepted": true,
       "status": "PASS_HISTORICAL"
     },
     "P00-AC-06": {
       "requirement": "A practical branch and worktree strategy is defined and usable for later implementation.",
       "owner_work_item": "WP-P00-02",
+      "accepted": true,
       "status": "PASS_EXACT_HEAD_REVIEW",
       "evidence": [
         "docs/migration/governance/branch-and-worktree-strategy.md",
@@ -37,6 +43,7 @@
     "P00-AC-07": {
       "requirement": "Logging and audit rules exclude content-bearing and sensitive values.",
       "owner_work_item": "WP-P00-02",
+      "accepted": true,
       "status": "PASS_EXACT_HEAD_REVIEW",
       "evidence": [
         "docs/migration/governance/logging-and-audit-standard.md",
@@ -46,26 +53,36 @@
     "P00-AC-08": {
       "requirement": "Public target surfaces use neutral my_pa naming and former-employer names remain only in explicit historical, compatibility, or evidence contexts.",
       "owner_work_item": "WP-P00-02",
-      "status": "PASS_EXACT_HEAD_REVIEW_WITH_DIRECT_VALIDATOR_EXECUTION_UNAVAILABLE",
-      "technical_pass_for_unavailable_validator_claimed": false,
+      "accepted": true,
+      "status": "PASS_EXACT_HEAD_REVIEW_AND_VALIDATOR_EXECUTED",
+      "prior_status": "PASS_EXACT_HEAD_REVIEW_WITH_DIRECT_VALIDATOR_EXECUTION_UNAVAILABLE",
+      "validator_execution": {
+        "script": "docs/migration/governance/validate_phase00_governance.py",
+        "scope": "FULL_CHECKOUT_INCLUDING_PUBLIC_SURFACE_SCAN",
+        "result": "PASS",
+        "exit_code": 0
+      },
       "risk_accepted": false,
       "evidence": [
         "docs/migration/governance/target-surface-naming-rule.md",
         "evidence/migration/WP-P00-02/closeout/01_POST_MERGE_VALIDATION.md",
-        "evidence/migration/WP-P00-02/closeout/PHASE-00-FINAL-CLOSEOUT.md"
+        "evidence/migration/WP-P00-02/closeout/PHASE-00-FINAL-CLOSEOUT.md",
+        "evidence/migration/phase-00-final/CLOSEOUT.md"
       ]
     }
   },
   "summary": {
     "accepted_count": 8,
     "remaining_unimplemented_count": 0,
-    "phase_closeout_status": "COMPLETE_AWAITING_PHASE_01_OPERATOR_DECISION"
+    "phase_closeout_status": "COMPLETE_MERGED"
   },
   "review_binding": {
     "reviewed_head": "245ec31005041f6e1cacef19478c070b272e3dcd",
     "reviewed_tree": "a6cb13ab4c31193ab33f51daff8db965fa5fb5b2",
-    "merge_sha": "4adb205e7c70841b95abb52623b159456eb2eafc"
+    "implementation_merge_sha": "4adb205e7c70841b95abb52623b159456eb2eafc",
+    "closeout_merge_sha": "2672898530916c3657d6e5fef47b401c219a61da"
   },
   "self_acceptance_prohibited": true,
-  "phase_01_activated": false
+  "phase_01_activated": true,
+  "phase_01_activation_basis": "CAMPAIGN_DECISION_REGISTER_OD-005"
 }

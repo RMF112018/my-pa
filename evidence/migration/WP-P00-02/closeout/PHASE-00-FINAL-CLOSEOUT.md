@@ -1,5 +1,7 @@
 # Phase 00 Final Closeout Candidate
 
+**Historical record, as of PR #12.** This was the closeout *candidate*. PR #12 merged as `2672898530916c3657d6e5fef47b401c219a61da`, so the conditions stated below are discharged and the limitations carried forward below are resolved. Current state is in [`../../phase-00-final/CLOSEOUT.md`](../../phase-00-final/CLOSEOUT.md).
+
 ## Proposed disposition
 
 `PHASE_00_COMPLETE_AWAITING_PHASE_01_OPERATOR_DECISION`

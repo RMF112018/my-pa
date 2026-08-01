@@ -1,5 +1,7 @@
 # WP-P00-02 Findings and Cleanup Status
 
+**Historical record, as of PR #12.** The cleanup and finding dispositions below were superseded when the three remote refs were deleted and the Phase 00 validator was made runnable. Current state is in [`../../phase-00-final/CLOSEOUT.md`](../../phase-00-final/CLOSEOUT.md).
+
 ## Findings
 
 ### MYPA-PHASE-00-COMPLETION-IR-F-004

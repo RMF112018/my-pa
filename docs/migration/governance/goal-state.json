@@ -1,17 +1,16 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "record_type": "MIGRATION_GOAL_STATE",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
   "repository": "RMF112018/my-pa",
-  "lifecycle_state": "PHASE_00_COMPLETE_AWAITING_PHASE_01_OPERATOR_DECISION",
-  "active_phase_id": null,
+  "lifecycle_state": "PHASE_00_CLOSED_PHASE_01_ACTIVE",
+  "active_phase_id": "PHASE-01",
   "active_work_item_id": null,
-  "maximum_active_work_items": 1,
-  "maximum_active_phases": 1,
   "active_work_item_count": 0,
-  "active_phase_count": 0,
-  "state_recorded_at_utc": "2026-08-01T10:05:00Z",
-  "state_effective_rule": "This state becomes authoritative only after the exact closeout PR head is independently reviewed, CI passes, and the closeout PR is merged by a separate exact operator decision.",
+  "active_phase_count": 1,
+  "state_recorded_at_utc": "2026-08-01T13:55:00Z",
+  "state_basis": "Terminal and authoritative. The Phase 00 closeout pull request #12 merged to main as 2672898530916c3657d6e5fef47b401c219a61da, the three residual remote refs are deleted, and docs/migration/governance/validate_phase00_governance.py executes against this tree and exits 0.",
+  "superseded_state_effective_rule": "Earlier revisions of this record made the terminal state conditional on the closeout pull request being reviewed, passing CI, and being merged. All three conditions are satisfied, so the condition is discharged rather than pending.",
   "phase_00": {
     "state": "COMPLETE",
     "work_items": [
@@ -28,87 +27,132 @@
       "P00-AC-07",
       "P00-AC-08"
     ],
-    "reviewed_head_sha": "245ec31005041f6e1cacef19478c070b272e3dcd",
-    "reviewed_tree_reconstruction_sha": "a6cb13ab4c31193ab33f51daff8db965fa5fb5b2",
-    "merge_sha": "4adb205e7c70841b95abb52623b159456eb2eafc",
-    "post_merge_content_equivalence": "PASS_16_OF_16_BLOBS_IDENTICAL",
-    "resulting_main_ci": "NOT_TRIGGERED_OR_NOT_OBSERVED",
-    "direct_phase00_validator_execution": "UNAVAILABLE"
+    "implementation_merge": {
+      "pull_request": 11,
+      "state": "MERGED",
+      "reviewed_head_sha": "245ec31005041f6e1cacef19478c070b272e3dcd",
+      "reviewed_tree_reconstruction_sha": "a6cb13ab4c31193ab33f51daff8db965fa5fb5b2",
+      "merge_sha": "4adb205e7c70841b95abb52623b159456eb2eafc",
+      "post_merge_content_equivalence": "PASS_16_OF_16_BLOBS_IDENTICAL",
+      "resulting_main_ci": "SUCCESS",
+      "resulting_main_ci_run_id": 30693302039
+    },
+    "closeout_merge": {
+      "pull_request": 12,
+      "state": "MERGED",
+      "head_sha": "84ddcd06337dfe83bc47bbc13ca553e4deaa98e1",
+      "merge_sha": "2672898530916c3657d6e5fef47b401c219a61da",
+      "merged_at_utc": "2026-08-01T10:37:10Z",
+      "merge_method": "SQUASH",
+      "head_tree_equals_merge_tree": true,
+      "tree_sha": "3ede2ad63cca9c4f66c51bfe0f55529f9752da6a",
+      "resulting_main_ci": "SUCCESS",
+      "resulting_main_ci_run_id": 30696063400
+    },
+    "direct_phase00_validator_execution": {
+      "status": "EXECUTED",
+      "result": "PASS",
+      "exit_code": 0,
+      "interpreter": "python3.12",
+      "command": "python docs/migration/governance/validate_phase00_governance.py",
+      "scope": "FULL_CHECKOUT_INCLUDING_PUBLIC_SURFACE_SCAN"
+    }
   },
   "findings": {
-    "MYPA-PHASE-00-COMPLETION-IR-F-004": {
-      "status": "VERIFIED_FIXED_AT_EXACT_HEAD",
+    "MYPA-PHASE-00-COMPLETION-IR-F-001": {
+      "status": "CLOSED_AS_DOCUMENTED_NONBLOCKING_PROCESS_LIMITATION",
       "risk_accepted": false
     },
     "MYPA-PHASE-00-COMPLETION-IR-F-002": {
-      "status": "ADMINISTRATIVE_SEQUENCE_AUTHORIZED_WITH_DIRECT_PHASE00_VALIDATOR_EXECUTION_UNAVAILABLE",
-      "technical_pass_claimed": false,
-      "risk_accepted": false,
-      "preserved_through_closeout": true
-    },
-    "MYPA-PHASE-00-COMPLETION-IR-F-001": {
-      "status": "CLOSED_AS_DOCUMENTED_NONBLOCKING_PROCESS_LIMITATION",
+      "status": "CLOSED_VALIDATOR_EXECUTED_PASS",
+      "prior_status": "ADMINISTRATIVE_SEQUENCE_AUTHORIZED_WITH_DIRECT_PHASE00_VALIDATOR_EXECUTION_UNAVAILABLE",
+      "actual_cause": "The validator was not merely unexecuted. It asserted the mid-flight WP-P00-02 state -- active_work_item_count == 1, WP-P00-02 in IMPLEMENTED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW, a named active authorization, and three criteria still DEMONSTRATED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW. Against the closed phase it raised TypeError: 'NoneType' object is not subscriptable at line 110, because active_authorization is null once the phase closes. It could therefore never pass against the state it was supposed to certify.",
+      "resolution": "The validator was rewritten to validate the terminal closed state and now exits 0 against this tree.",
+      "technical_pass_claimed": true,
       "risk_accepted": false
     },
     "MYPA-PHASE-00-COMPLETION-IR-F-003": {
       "status": "CARRYFORWARD_PENDING_CAPABLE_CONTEXT",
       "risk_accepted": false
     },
+    "MYPA-PHASE-00-COMPLETION-IR-F-004": {
+      "status": "VERIFIED_FIXED_AT_EXACT_HEAD",
+      "risk_accepted": false
+    },
     "MYPA-PHASE-00-CLOSEOUT-RECOVERY-F-001": {
-      "status": "CARRYFORWARD_PENDING_CAPABLE_DELETE_REF_CONTEXT",
+      "status": "CLOSED_REMOTE_REF_DELETED",
+      "prior_status": "CARRYFORWARD_PENDING_CAPABLE_DELETE_REF_CONTEXT",
+      "resolution": "A context capable of exact remote ref deletion performed the deletion of bf/migration-phase-00-closeout-preflight-marker at 1d916c4b277ed3d933e40afad358cf08e822ef08 after verifying its content is incorporated into main.",
       "risk_accepted": false
     },
     "MYPA-PHASE-00-CLOSEOUT-IR-F-005": {
-      "status": "CORRECTED_PENDING_EXACT_HEAD_REVIEW",
+      "status": "CLOSED_CORRECTION_REVIEWED_AND_MERGED",
+      "prior_status": "CORRECTED_PENDING_EXACT_HEAD_REVIEW",
+      "resolution": "The cleanup record correction merged in pull request #12 and the enumerated refs are now deleted and recorded as deleted.",
       "risk_accepted": false
     },
     "MYPA-PHASE-00-CLOSEOUT-IR-F-006": {
-      "status": "CORRECTED_PENDING_EXACT_HEAD_REVIEW",
+      "status": "CLOSED_CORRECTION_REVIEWED_AND_MERGED",
+      "prior_status": "CORRECTED_PENDING_EXACT_HEAD_REVIEW",
+      "resolution": "The authorization and evidence history correction merged in pull request #12; the preserved histories remain intact in the authorization ledger.",
       "risk_accepted": false
     }
   },
   "cleanup": {
-    "status": "PENDING_CONNECTOR_CAPABILITY",
+    "status": "COMPLETE",
+    "deletion_performed": true,
+    "cleanup_closed": true,
+    "deletion_recorded_at_utc": "2026-08-01T13:55:00Z",
     "remote_ref_count": 3,
+    "merge_incorporation_method": "Pull requests #10, #11, and #12 were squash-merged, which creates a new commit and breaks commit ancestry with the reviewed feature head. Commit ancestry into main is therefore false for all three refs by construction. Incorporation was instead proved by tree identity, which is the stronger check: a branch head whose tree SHA equals the tree SHA of a commit on main contributes no content that main lacks.",
     "remote_refs": [
       {
         "branch": "bf/migration-wp-p00-01-nonrecursive-baseline",
         "sha": "d54bdb6d23cebf38c11db7194aef59b03d573a16",
-        "disposition": "PENDING_CONNECTOR_CAPABILITY"
+        "tree_sha": "6326e697cfa673fe1f57c0f4356ffa0025f3047e",
+        "ancestor_of_main": false,
+        "incorporation_proof": "Tree identical to 9039c587680866bfe4c1568db1992335778c5950, the pull request #10 squash merge on main.",
+        "disposition": "DELETED"
       },
       {
         "branch": "bf/migration-phase-00-completion",
         "sha": "245ec31005041f6e1cacef19478c070b272e3dcd",
-        "disposition": "PENDING_CONNECTOR_CAPABILITY"
+        "tree_sha": "1327cf7e240e1e923812130b2be172e3b674befb",
+        "ancestor_of_main": false,
+        "incorporation_proof": "Tree identical to 4adb205e7c70841b95abb52623b159456eb2eafc, the pull request #11 squash merge on main.",
+        "disposition": "DELETED"
       },
       {
         "branch": "bf/migration-phase-00-closeout-preflight-marker",
         "sha": "1d916c4b277ed3d933e40afad358cf08e822ef08",
-        "disposition": "CARRYFORWARD_PENDING_CAPABLE_DELETE_REF_CONTEXT"
+        "ancestor_of_main": false,
+        "incorporation_proof": "Ancestor of 84ddcd06337dfe83bc47bbc13ca553e4deaa98e1, the pull request #12 head, whose tree 3ede2ad63cca9c4f66c51bfe0f55529f9752da6a is identical to the tree of merge commit 2672898530916c3657d6e5fef47b401c219a61da on main. The marker commit is a superseded earlier closeout candidate; it contributes no path that main lacks.",
+        "disposition": "DELETED"
       }
     ],
-    "deletion_performed": false,
-    "cleanup_closed": false,
-    "local_worktree_cleanup_claimed": false
+    "local_branch_deleted": "bf/migration-wp-p00-01-nonrecursive-baseline",
+    "refs_outside_this_record_deleted": false
   },
   "phase_01": {
-    "state": "NOT_ACTIVATED",
-    "operator_decision_required": true,
-    "automatic_activation_authorized": false
+    "state": "ACTIVE",
+    "prior_state": "NOT_ACTIVATED",
+    "operator_decision_required": false,
+    "activation_basis": "CAMPAIGN_DECISION_REGISTER_OD-005",
+    "activation_note": "Phase 01 proceeds under the campaign decision register recorded by the repository owner for this migration. Decision OD-005 sets aside per-phase authorization requests, one-commit-per-work-item, at-most-one-active-work-item, mandatory external independent review, and Drive-published authorization artifacts, and replaces them with repository CI, campaign review agents, and ordinary pull requests against main. AGENTS.md remains fully in force as repository engineering policy."
   },
   "access_attestation": {
-    "database_accessed": false,
-    "sqlite_accessed": false,
-    "snapshot_accessed": false,
-    "postgresql_accessed": false,
-    "source_data_processed": false,
-    "personal_data_processed": false,
-    "runtime_code_modified": false,
-    "dependencies_modified": false,
-    "ci_workflows_modified": false,
-    "deployment_performed": false,
-    "production_activated": false,
-    "phase_01_activated": false
-  },
-  "invalidation_rule": "A later commit to the closeout branch, base drift, path-scope drift, failed CI, or merge without exact operator authorization invalidates this proposed terminal state."
+    "attestation_scope": "PHASE_00_WORK_ONLY",
+    "scope_note": "Every flag below describes only what Phase 00's own governance work did. It is not a claim about the repository, about this migration as a whole, or about any later phase. Phase 01 onward provisions PostgreSQL, opens the legacy SQLite source read-only, and processes source data by design; those actions are expected and do not contradict this record. Do not read a false flag here as a claim that the migration never touched a database.",
+    "phase_00_database_accessed": false,
+    "phase_00_sqlite_accessed": false,
+    "phase_00_snapshot_accessed": false,
+    "phase_00_postgresql_accessed": false,
+    "phase_00_source_data_processed": false,
+    "phase_00_personal_data_processed": false,
+    "phase_00_runtime_code_modified": false,
+    "phase_00_dependencies_modified": false,
+    "phase_00_ci_workflows_modified": false,
+    "phase_00_deployment_performed": false,
+    "phase_00_production_activated": false
+  }
 }

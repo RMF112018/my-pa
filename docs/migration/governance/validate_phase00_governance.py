@@ -43,10 +43,12 @@ FORBIDDEN_PUBLIC_PATTERNS = (
     "hb-personal-assistant",
 )
 
+
 def load_json(path: str) -> dict[str, Any]:
     return json.loads((ROOT / path).read_text(encoding="utf-8"))
 
-def walk_keys(value: Any) -> list[str]:
+
+def walk_keys(value: object) -> list[str]:
     keys: list[str] = []
     if isinstance(value, dict):
         for key, child in value.items():
@@ -56,6 +58,7 @@ def walk_keys(value: Any) -> list[str]:
         for child in value:
             keys.extend(walk_keys(child))
     return keys
+
 
 def scan_public_surfaces() -> tuple[list[str], int]:
     hits: list[str] = []
@@ -75,6 +78,7 @@ def scan_public_surfaces() -> tuple[list[str], int]:
                 if pattern in text:
                     hits.append(f"{file.relative_to(ROOT)}:{pattern}")
     return hits, roots_seen
+
 
 def main() -> int:
     failures: list[str] = []
@@ -102,7 +106,10 @@ def main() -> int:
         failures.append("stale-required-base-field")
     if goal["active_work_item_id"] != "WP-P00-02":
         failures.append("goal-active-work-item")
-    if auth["active_authorization"]["authorization_id"] != "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001":
+    if (
+        auth["active_authorization"]["authorization_id"]
+        != "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001"
+    ):
         failures.append("authorization-id")
     if auth["active_authorization_count"] != 1:
         failures.append("authorization-count")
@@ -112,7 +119,9 @@ def main() -> int:
         if status != "DEMONSTRATED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW":
             failures.append(f"criterion:{criterion}:{status}")
 
-    logging = (ROOT / "docs/migration/governance/logging-and-audit-standard.md").read_text(encoding="utf-8")
+    logging = (
+        ROOT / "docs/migration/governance/logging-and-audit-standard.md"
+    ).read_text(encoding="utf-8")
     for phrase in (
         "message bodies",
         "document contents",
@@ -127,7 +136,9 @@ def main() -> int:
         if phrase not in logging:
             failures.append(f"logging-contract:{phrase}")
 
-    branch = (ROOT / "docs/migration/governance/branch-and-worktree-strategy.md").read_text(encoding="utf-8")
+    branch = (
+        ROOT / "docs/migration/governance/branch-and-worktree-strategy.md"
+    ).read_text(encoding="utf-8")
     for phrase in (
         "one-work-item / one-branch",
         "Later commit invalidates",
@@ -138,8 +149,16 @@ def main() -> int:
         if phrase.lower() not in branch.lower():
             failures.append(f"branch-contract:{phrase}")
 
-    naming = (ROOT / "docs/migration/governance/target-surface-naming-rule.md").read_text(encoding="utf-8")
-    for phrase in ("public APIs", "MCP server", "environment variables", "new repository paths", "HISTORICAL_EVIDENCE"):
+    naming = (
+        ROOT / "docs/migration/governance/target-surface-naming-rule.md"
+    ).read_text(encoding="utf-8")
+    for phrase in (
+        "public APIs",
+        "MCP server",
+        "environment variables",
+        "new repository paths",
+        "HISTORICAL_EVIDENCE",
+    ):
         if phrase not in naming:
             failures.append(f"naming-contract:{phrase}")
 
@@ -171,6 +190,7 @@ def main() -> int:
         print("SKIP P00-AC-08-public-surface-scan partial-checkout; require repository scan")
     print("PASS access-attestation")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

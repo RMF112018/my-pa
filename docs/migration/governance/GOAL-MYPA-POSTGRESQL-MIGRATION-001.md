@@ -2,10 +2,30 @@
 
 **Goal ID:** `GOAL-MYPA-POSTGRESQL-MIGRATION-001`
 **Repository:** `RMF112018/my-pa`
-**Active phase:** `PHASE-00`
-**Active work item:** `WP-P00-01`
-**Charter recorded at:** `2026-07-31T20:48:55Z`
-**Bound base:** `d4fed7ec12f0b25ad5520d806aeb7766e95228d5` / tree `faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4`
+**Active phase:** `PHASE-00` — `IN_PROGRESS`
+**Charter first recorded at:** `2026-07-31T20:48:55Z`
+**Charter reconciled at:** `2026-08-01T04:24:49Z`
+
+### Current state
+
+| | |
+|---|---|
+| Initial governed work item | `WP-P00-01` |
+| Current active work item | **none** |
+| Last closed work item | `WP-P00-01` |
+| Next eligible work item | `WP-P00-02` — `NOT_ACTIVATED` |
+| Current merged baseline | `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` / tree `9956fe7bed3b2d92e7243b1881f5b31c2d28da1d` |
+
+### Historical record
+
+This charter was first written under `WP-P00-01`, whose authorization
+`AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001` bound base
+`d4fed7ec12f0b25ad5520d806aeb7766e95228d5` / tree `faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4`.
+That authorization is **consumed** and that base is **superseded**. Both are retained here as
+provenance, not as current authority.
+
+The identity bindings in this charter remain accurate as the record of what `WP-P00-01`
+authenticated. They are not restated as though they had always described the post-merge state.
 
 This charter is a governed record. It is not an authorization and it grants no access.
 
@@ -37,18 +57,30 @@ Workspace publications, then conversations and legacy repositories as claims.
 Phase 00 binds governance and identity. It produces no data movement, no schema, and no
 runtime code.
 
-`WP-P00-01` — the only currently authorized work item — binds migration identities and the
-governance ledger against acceptance criteria `P00-AC-01` through `P00-AC-05`.
+`WP-P00-01` bound migration identities and the governance ledger against acceptance criteria
+`P00-AC-01` through `P00-AC-05`. It is **closed**: implemented at
+`d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f`, independently reviewed `PASS` at that head, squash
+merged as `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` with byte-identical content, post-merge
+validated, and cleaned up.
 
-`P00-AC-06`, `P00-AC-07`, and `P00-AC-08` belong to `WP-P00-02`. `WP-P00-02` is not
-activated, not authorized, and not implemented. No successor activates automatically.
+`P00-AC-06`, `P00-AC-07`, and `P00-AC-08` belong to `WP-P00-02`. `WP-P00-02` is not activated, not
+authorized, and not implemented. No successor activates automatically. Phase 00 therefore remains
+`IN_PROGRESS` with no active work item.
 
 ## Identity bindings
 
+**Historical.** This table records the identities `WP-P00-01` authenticated at **its** base. The
+target rows are therefore the *superseded* base, not the current baseline. `main` has since
+advanced to `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` / tree
+`9956fe7bed3b2d92e7243b1881f5b31c2d28da1d`, which is the identity any future authorization must
+bind. The legacy, snapshot, and logical-target rows are unchanged and remain current.
+
 | Identity | Value | Authority |
 |---|---|---|
-| Target repository | `RMF112018/my-pa` `main` @ `d4fed7ec12f0b25ad5520d806aeb7766e95228d5` | Local Git plumbing and read-only GitHub metadata |
-| Target tree | `faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4` | Local Git plumbing |
+| Target repository — *historical, superseded* | `RMF112018/my-pa` `main` @ `d4fed7ec12f0b25ad5520d806aeb7766e95228d5` | Local Git plumbing and read-only GitHub metadata |
+| Target tree — *historical, superseded* | `faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4` | Local Git plumbing |
+| Target repository — **current baseline** | `RMF112018/my-pa` `main` @ `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` | Merge of pull request #8, post-merge validated |
+| Target tree — **current baseline** | `9956fe7bed3b2d92e7243b1881f5b31c2d28da1d` | Byte-identical to the independently reviewed tree |
 | Legacy repository | `RMF112018/hb-personal-assistant` `main` @ `fc7386fb925bfcb7370f969ac737acee0d32ddd0` | Read-only GitHub repository metadata only |
 | Legacy tree | `70c0b5647ffc7119be9ab28ae53f654fe2d463d2` | Read-only GitHub repository metadata only |
 | Legacy schema version | `135` | Legacy `LATEST_SCHEMA_VERSION` at the authenticated legacy tree |
@@ -94,6 +126,32 @@ An implementing agent may record demonstrated evidence but may never mark its ow
 `APPROVED`, `VERIFIED_FIXED`, `READY_TO_MERGE`, `MERGED`, or `COMPLETE`. Acceptance is
 determined by independent review against the exact head. Any later commit invalidates prior
 criterion results and the review bound to them.
+
+## Branch cleanup after a squash merge
+
+A program-wide rule, established from `WP-P00-01` and reusable by every later work item.
+
+After a squash merge, failure of `git branch -d` due solely to non-ancestry **does not** establish
+unique branch content. Squashing creates a new commit whose history excludes the source, so the
+feature head is permanently non-ancestral and the check fails deterministically regardless of
+content. The check is a conservative proxy for content loss, and in this situation it returns a
+false positive.
+
+Forced local deletion with `git branch -D` is permitted **only** when all of the following exist:
+
+1. exact operator authorization naming one branch and one SHA;
+2. merged `main` and the feature head have identical trees;
+3. the branch-to-`main` diff is empty;
+4. all contributed blobs are present in `main`;
+5. no branch-only paths exist;
+6. the worktree is clean and not attached to the branch;
+7. remote deletion occurs only after successful local deletion;
+8. a verified cleanup receipt is published.
+
+This rule authorizes nothing by itself. **Every destructive cleanup still requires an exact
+operator decision.** Deleting both refs leaves the reviewed commit object unreferenced and
+eventually collectible; its SHA must remain recorded in published evidence, and reviewers verify
+against the merged baseline instead.
 
 ## Invalidation
 

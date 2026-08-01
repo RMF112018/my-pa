@@ -1,0 +1,16 @@
+Scanning records that present themselves as CURRENT lifecycle authorities.
+Historical strings are permitted when clearly labelled as historical.
+
+HISTORICAL-OK          docs/migration/governance/work-item-ledger.json:50  [IMPLEMENTED_PENDING_INDEPENDENT_REVIEW as current state]
+HISTORICAL-OK          docs/migration/governance/work-item-ledger.json:34  [d4fed7ec as current baseline]
+HISTORICAL-OK          docs/migration/governance/work-item-ledger.json:77  [d4fed7ec as current baseline]
+HISTORICAL-OK          docs/migration/governance/goal-state.json:79  [d4fed7ec as current baseline]
+HISTORICAL-OK          docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md:23  [d4fed7ec as current baseline]
+HISTORICAL-OK          docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md:80  [d4fed7ec as current baseline]
+HISTORICAL-OK          docs/migration/00_MIGRATION_INDEX.md:50  [d4fed7ec as current baseline]
+
+current-state records scanned: 6
+unlabelled stale current-state claims: 0
+note: the closeout correction's own terminal state WP_P00_01_CLOSEOUT_CORRECTION_IMPLEMENTED_PENDING_INDEPENDENT_REVIEW
+      is the value mandated by the authorization and is excluded by negative lookbehind, not by exception.
+stale-state search: PASS

@@ -1,72 +1,112 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "record_type": "MIGRATION_AUTHORIZATION_LEDGER",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
-  "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
-  "authorization_status": "ACTIVATED_BY_OPERATOR",
-  "work_item_id": "WP-P00-01",
-  "phase_id": "PHASE-00",
-  "recorded_at_utc": "2026-07-31T20:48:55Z",
-  "activation": {
-    "activation_basis": "EXPLICIT_OPERATOR_APPROVAL",
-    "operator_approval": "EXPLICIT",
-    "self_authorized": false,
-    "self_review_prohibited": true,
-    "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-AUTHORIZATION-ACTIVATION-20260731-022",
-    "operator_activation_record_id": "1ZcM83nXRWAzz1fHiJvSBbKh3Rjq7ZkV4z-DGODQYrjo",
-    "activation_publication_receipt_id": "1ZS6J79z7zEsq8XpNfSJs2GOCJl32UpS4f_HSrjYTKSw",
-    "activation_roundtrip_receipt_id": "1SRQvbeFbIrSx5DlXeTBguG84nWMe9Fy5mAGu_64OTXU",
-    "authorization_artifact_id": "1mH7GcRABQZ6DZktDH5bHhRhHJiaHXBmVKUGAvxz_isY",
-    "implementation_prompt_artifact_id": "1HW-rNa-CXi3Zt9THAOSRPjJVNRCFRo4L_M9xIxBeJWk",
-    "authorization_package_folder_id": "1IIP9BHhjKg7oxpGfU-EXA8mmDT0Q2EQj",
-    "index_registration": "REGISTERED_ACTIVE_UNCONSUMED"
-  },
-  "validity": {
-    "effective_at_utc": "2026-07-31T20:29:00Z",
-    "expires_at_utc": "2026-08-01T20:29:00Z",
-    "verified_current_utc_before_first_write": "2026-07-31T20:48:55Z",
-    "expiry_check": "NOT_EXPIRED",
-    "status_at_entry": "ACTIVE_UNCONSUMED"
-  },
-  "limits": {
-    "maximum_active_work_items": 1,
-    "maximum_implementation_branches": 1,
-    "maximum_implementation_worktrees": 1,
-    "maximum_commits": 1,
-    "maximum_pull_requests": 0
-  },
-  "authorized_paths": [
-    "docs/migration/**",
-    "evidence/migration/**"
+  "recorded_at_utc": "2026-08-01T04:24:49Z",
+  "schema_version_note": "Raised from 1 to 2. Version 1 recorded a single authorization at the top level; version 2 records an ordered list, which the goal now requires because more than one authorization exists.",
+  "active_authorization_count_after_this_correction": 0,
+  "authorizations": [
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
+      "work_item_id": "WP-P00-01",
+      "phase_id": "PHASE-00",
+      "purpose": "WP_P00_01_IMPLEMENTATION",
+      "status": "CONSUMED",
+      "activation": {
+        "activation_basis": "EXPLICIT_OPERATOR_APPROVAL",
+        "operator_approval": "EXPLICIT",
+        "self_authorized": false,
+        "self_review_prohibited": true,
+        "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-AUTHORIZATION-ACTIVATION-20260731-022",
+        "operator_activation_record_id": "1ZcM83nXRWAzz1fHiJvSBbKh3Rjq7ZkV4z-DGODQYrjo",
+        "activation_publication_receipt_id": "1ZS6J79z7zEsq8XpNfSJs2GOCJl32UpS4f_HSrjYTKSw",
+        "activation_roundtrip_receipt_id": "1SRQvbeFbIrSx5DlXeTBguG84nWMe9Fy5mAGu_64OTXU",
+        "authorization_artifact_id": "1mH7GcRABQZ6DZktDH5bHhRhHJiaHXBmVKUGAvxz_isY",
+        "implementation_prompt_artifact_id": "1HW-rNa-CXi3Zt9THAOSRPjJVNRCFRo4L_M9xIxBeJWk",
+        "authorization_package_folder_id": "1IIP9BHhjKg7oxpGfU-EXA8mmDT0Q2EQj"
+      },
+      "validity": {
+        "effective_at_utc": "2026-07-31T20:29:00Z",
+        "expires_at_utc": "2026-08-01T20:29:00Z",
+        "verified_current_utc_before_first_write": "2026-07-31T20:48:55Z",
+        "expiry_check_at_use": "NOT_EXPIRED"
+      },
+      "limits": {
+        "maximum_active_work_items": 1,
+        "maximum_implementation_branches": 1,
+        "maximum_implementation_worktrees": 1,
+        "maximum_commits": 1,
+        "maximum_pull_requests": 0
+      },
+      "authorized_paths": [
+        "docs/migration/**",
+        "evidence/migration/**"
+      ],
+      "consumption": {
+        "consumed": true,
+        "consumed_by_commit": "d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f",
+        "consumed_at_utc": "2026-07-31T20:48:55Z",
+        "reusable": false
+      },
+      "historical_note": "This authorization is consumed and grants nothing. It is retained for provenance and is NOT the current state authority. Downstream integration, merge, and cleanup were each authorized separately."
+    },
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-20260801-001",
+      "work_item_id": "WP-P00-01",
+      "phase_id": "PHASE-00",
+      "purpose": "WP_P00_01_CLOSEOUT_CORRECTION",
+      "authorization_class": "CORRECTION_ONLY_NOT_WP_P00_02",
+      "decision_id": "OP-CLOSEOUT-WP-P00-01",
+      "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-CORRECTION-20260801-031",
+      "status_before_commit": "ACTIVE_UNCONSUMED",
+      "activation": {
+        "activation_basis": "EXPLICIT_OPERATOR_APPROVAL",
+        "self_authorized": false,
+        "activated_at_utc": "2026-08-01T04:24:49Z",
+        "expires_at_utc": "2026-08-02T04:24:49Z",
+        "expiry_basis": "24 hours after the recorded activation time unless consumed or invalidated earlier."
+      },
+      "base": {
+        "branch": "main",
+        "sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
+        "tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d"
+      },
+      "implementation_branch": "bf/migration-wp-p00-01-closeout-correction",
+      "limits": {
+        "maximum_branches": 1,
+        "maximum_worktrees": 1,
+        "maximum_commits": 1,
+        "maximum_pull_requests": 0
+      },
+      "not_authorized": {
+        "push": false,
+        "pull_request": false,
+        "merge": false,
+        "branch_cleanup": false,
+        "wp_p00_02": false,
+        "database_access": false,
+        "deployment": false,
+        "risk_acceptance": false
+      },
+      "not_authorized_semantics": "Every key under not_authorized is false, meaning the action is NOT authorized and was NOT performed.",
+      "authorized_paths": [
+        "docs/migration/governance/work-item-ledger.json",
+        "docs/migration/governance/goal-state.json",
+        "docs/migration/governance/authorization-ledger.json",
+        "docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md",
+        "docs/migration/00_MIGRATION_INDEX.md",
+        "docs/00_REPOSITORY_SOURCE_INDEX.md",
+        "evidence/migration/WP-P00-01/**"
+      ],
+      "consumption": {
+        "consumption_rule": "Recorded as consumed only after the single authorized commit exists and the closeout evidence package is published and verified.",
+        "consumption_state_in_this_record": "UNCONSUMED_AT_TIME_OF_WRITE",
+        "consumption_recorded_in": "The published closeout-correction roundtrip receipt for REQ-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-CORRECTION-20260801-031.",
+        "non_recursive_evidence_convention": "This file is written before the commit that contains it. It therefore cannot state its own final commit SHA, and does not claim to. Post-commit identity is published outside the commit."
+      },
+      "terminal_state": "WP_P00_01_CLOSEOUT_CORRECTION_IMPLEMENTED_PENDING_INDEPENDENT_REVIEW"
+    }
   ],
-  "not_authorized": {
-    "push": false,
-    "pull_request": false,
-    "merge": false,
-    "deployment": false,
-    "database_access": false,
-    "sqlite_access": false,
-    "snapshot_access": false,
-    "postgresql_access": false,
-    "runtime_source_code": false,
-    "dependency_changes": false,
-    "ci_changes": false,
-    "ddl": false,
-    "etl": false,
-    "cutover": false,
-    "cleanup": false,
-    "retirement": false,
-    "risk_acceptance": false,
-    "successor_activation": false
-  },
-  "not_authorized_semantics": "Every key under not_authorized is false, meaning the action is NOT authorized and was NOT performed.",
-  "consumption": {
-    "consumption_state_at_entry": "UNCONSUMED",
-    "consumption_rule": "The authorization is recorded as consumed only after the single authorized commit exists and the implementation evidence package is published and verified.",
-    "consumption_recorded_in": "Published implementation roundtrip receipt for the implementation coordination request; this in-repository ledger is written before the commit exists and therefore records the entry state.",
-    "consumption_state_in_this_record": "UNCONSUMED_AT_TIME_OF_WRITE"
-  },
-  "terminal_state": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
   "prohibited_terminal_states": [
     "PASS",
     "APPROVED",
@@ -75,5 +115,10 @@
     "MERGED",
     "COMPLETE"
   ],
-  "invalidation_rule": "Immediate on target or legacy identity drift, snapshot drift, plan package or independent-review drift, branch or worktree collision or drift, scope or acceptance change, mutation-limit change, expiry, or prior consumption."
+  "invariants_asserted": {
+    "no_successor_authorization_exists": true,
+    "wp_p00_02_authorization_id": null,
+    "self_authorization_prohibited": true
+  },
+  "invalidation_rule": "Immediate on identity drift, scope or acceptance change, mutation-limit change, expiry, or prior consumption. The closeout authorization is invalidated by any movement of main from 3e5aad7b2526b09b1e46c817bd00c401e569f5a4."
 }

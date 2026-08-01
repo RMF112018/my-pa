@@ -6,14 +6,33 @@
   "repository": "RMF112018/my-pa",
   "lifecycle_state": "PHASE_00_IN_PROGRESS",
   "active_phase_id": "PHASE-00",
-  "active_work_item_id": "WP-P00-01",
+  "active_work_item_id": null,
   "maximum_active_work_items": 1,
   "maximum_active_phases": 1,
-  "state_recorded_at_utc": "2026-07-31T20:48:55Z",
-  "state_bound_to": {
-    "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
-    "base_sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
-    "base_tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4"
+  "state_recorded_at_utc": "2026-08-01T04:24:49Z",
+  "current_baseline": {
+    "branch": "main",
+    "sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
+    "tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
+    "note": "The merged baseline. Any future work-package authorization must bind this SHA."
+  },
+  "reconciled_by": {
+    "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-20260801-001",
+    "decision_id": "OP-CLOSEOUT-WP-P00-01",
+    "reason": "The prior record named WP-P00-01 as the active work item and bound goal state to the consumed WP-P00-01 implementation authorization and the superseded base d4fed7ec. Both became stale on merge. This record reconciles goal state with the merged and cleaned-up reality."
+  },
+  "last_closed_work_item": {
+    "work_item_id": "WP-P00-01",
+    "merge_sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
+    "merge_tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
+    "closed_at_utc": "2026-08-01T04:24:49Z"
+  },
+  "next_work_item": {
+    "work_item_id": "WP-P00-02",
+    "state": "NOT_ACTIVATED",
+    "successor_activation_authority": "OPERATOR_ONLY",
+    "automatic_activation_authorized": false,
+    "required_base_for_future_authorization": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4"
   },
   "phases": [
     {
@@ -30,13 +49,19 @@
         "P00-AC-07",
         "P00-AC-08"
       ],
-      "criteria_bound_to_active_work_item": [
+      "criteria_satisfied_by_closed_work_items": [
         "P00-AC-01",
         "P00-AC-02",
         "P00-AC-03",
         "P00-AC-04",
         "P00-AC-05"
-      ]
+      ],
+      "criteria_remaining": [
+        "P00-AC-06",
+        "P00-AC-07",
+        "P00-AC-08"
+      ],
+      "criteria_bound_to_active_work_item": []
     }
   ],
   "successor_activation": {
@@ -44,9 +69,18 @@
     "state": "NOT_ACTIVATED",
     "automatic_activation_authorized": false,
     "activation_authority": "OPERATOR_ONLY",
-    "precondition": "Independent implementation review of WP-P00-01 must complete before any successor authorization is requested."
+    "precondition": "WP-P00-01 closeout must be independently reviewed and merged before any successor authorization is requested."
   },
+  "historical_authorizations": [
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
+      "work_item_id": "WP-P00-01",
+      "status": "CONSUMED",
+      "base_sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
+      "base_tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4",
+      "note": "Historical. Superseded as current state authority; retained for provenance. This authorization is consumed and grants nothing."
+    }
+  ],
   "self_authorization_prohibited": true,
-  "terminal_state_for_active_work_item": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
-  "invalidation_rule": "Any identity, scope, acceptance, or mutation-limit drift invalidates this state record and the authorization it is bound to."
+  "invalidation_rule": "Any identity, scope, acceptance, or mutation-limit drift invalidates this state record. Any movement of main from 3e5aad7b2526b09b1e46c817bd00c401e569f5a4 requires this record to be re-derived before a successor authorization binds to it."
 }

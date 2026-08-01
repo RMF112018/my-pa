@@ -1,0 +1,2 @@
+no broken relative links; all required governance paths present
+Markdown link + governance-path validation: PASS (0 errors)

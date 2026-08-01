@@ -1,0 +1,6 @@
+zero active work items: PASS
+WP-P00-01 CLOSED and bound to merge SHA: PASS
+WP-P00-02 NOT_ACTIVATED, no authorization: PASS
+no successor authorization exists: PASS
+merged SHA/tree consistent across modified records: PASS
+semantic validation: PASS

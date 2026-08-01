@@ -1,0 +1,19 @@
+--- staged files ---
+docs/00_REPOSITORY_SOURCE_INDEX.md
+docs/migration/00_MIGRATION_INDEX.md
+docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md
+docs/migration/governance/authorization-ledger.json
+docs/migration/governance/goal-state.json
+docs/migration/governance/work-item-ledger.json
+evidence/migration/WP-P00-01/closeout/00_CLOSEOUT_INDEX.json
+evidence/migration/WP-P00-01/closeout/01_AUTHORIZATION_AND_ENTRY_GATES.md
+evidence/migration/WP-P00-01/closeout/02_DRAFT_INDEPENDENT_REVIEW_REQUEST.md
+evidence/migration/WP-P00-01/closeout/validation/01-json-validation.txt
+evidence/migration/WP-P00-01/closeout/validation/02-semantic-validation.txt
+evidence/migration/WP-P00-01/closeout/validation/03-markdown-link-validation.txt
+evidence/migration/WP-P00-01/closeout/validation/05-stale-state-search.txt
+evidence/migration/WP-P00-01/closeout/validation/06-fast-tier.txt
+--- unauthorized staged paths ---
+none — all staged paths authorized
+--- anything unstaged/untracked left? ---
+?? evidence/migration/WP-P00-01/closeout/validation/04-staged-path-containment.txt

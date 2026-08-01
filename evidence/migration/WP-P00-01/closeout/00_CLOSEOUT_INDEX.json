@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "record_type": "WP_P00_01_CLOSEOUT_EVIDENCE_INDEX",
+  "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
+  "phase_id": "PHASE-00",
+  "work_item_id": "WP-P00-01",
+  "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-20260801-001",
+  "decision_id": "OP-CLOSEOUT-WP-P00-01",
+  "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-CORRECTION-20260801-031",
+  "indexed_at_utc": "2026-08-01T04:24:49Z",
+  "purpose": "Reconcile the in-repository governance records with the merged and cleaned-up reality of WP-P00-01. Correction only; implements no migration functionality and activates no successor.",
+  "does_not_overwrite_historical_evidence": true,
+  "historical_evidence_location": "evidence/migration/WP-P00-01/ (implementation records, unchanged)",
+  "bound_identity": {
+    "base_branch": "main",
+    "base_sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
+    "base_tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
+    "implementation_branch": "bf/migration-wp-p00-01-closeout-correction",
+    "implementation_worktree": "/Users/bobbyfetting/my-pa",
+    "implementation_head": "RECORDED_POST_COMMIT_IN_PUBLISHED_COMMIT_IDENTITY",
+    "commit_count_above_base": 1
+  },
+  "merged_and_cleanup_identities": {
+    "reviewed_head": "d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f",
+    "reviewed_tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
+    "independent_review": "INDEPENDENT_WP_P00_01_IMPLEMENTATION_REVIEW_PASS",
+    "pull_request": 8,
+    "merge_method": "SQUASH",
+    "merge_sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
+    "merge_tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
+    "post_merge_validation": "PASS",
+    "cleanup_status": "COMPLETE",
+    "local_feature_branch_exists": false,
+    "remote_feature_branch_exists": false,
+    "unreferenced_commit": "d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f"
+  },
+  "final_lifecycle_status": {
+    "work_item_id": "WP-P00-01",
+    "state": "CLOSED",
+    "implementation_status": "IMPLEMENTED",
+    "independent_review_status": "PASS_AT_PREMERGE_HEAD",
+    "merge_status": "MERGED",
+    "post_merge_validation": "PASS",
+    "cleanup_status": "COMPLETE",
+    "closeout_status": "CLOSED",
+    "closeout_correction_state": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+    "final_closure_requires_independent_review_of_this_correction": true
+  },
+  "successor_status": {
+    "work_item_id": "WP-P00-02",
+    "state": "NOT_ACTIVATED",
+    "authorization_id": null,
+    "authorization_drafted": false,
+    "automatic_activation_authorized": false,
+    "activation_authority": "OPERATOR_ONLY",
+    "required_base_for_future_authorization": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4"
+  },
+  "records": [
+    "evidence/migration/WP-P00-01/closeout/00_CLOSEOUT_INDEX.json",
+    "evidence/migration/WP-P00-01/closeout/01_AUTHORIZATION_AND_ENTRY_GATES.md",
+    "evidence/migration/WP-P00-01/closeout/02_DRAFT_INDEPENDENT_REVIEW_REQUEST.md",
+    "evidence/migration/WP-P00-01/closeout/validation/01-json-validation.txt",
+    "evidence/migration/WP-P00-01/closeout/validation/02-semantic-validation.txt",
+    "evidence/migration/WP-P00-01/closeout/validation/03-markdown-link-validation.txt",
+    "evidence/migration/WP-P00-01/closeout/validation/04-staged-path-containment.txt",
+    "evidence/migration/WP-P00-01/closeout/validation/05-stale-state-search.txt",
+    "evidence/migration/WP-P00-01/closeout/validation/06-fast-tier.txt"
+  ],
+  "changed_repository_paths": [
+    "docs/migration/governance/work-item-ledger.json",
+    "docs/migration/governance/goal-state.json",
+    "docs/migration/governance/authorization-ledger.json",
+    "docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md",
+    "docs/migration/00_MIGRATION_INDEX.md",
+    "docs/00_REPOSITORY_SOURCE_INDEX.md",
+    "evidence/migration/WP-P00-01/closeout/**"
+  ],
+  "access_attestation": {
+    "sqlite_accessed": false,
+    "snapshot_opened": false,
+    "postgresql_accessed": false,
+    "any_database_accessed": false,
+    "source_data_processed": false,
+    "personal_data_processed": false,
+    "runtime_code_modified": false,
+    "dependencies_modified": false,
+    "ci_workflows_modified": false
+  },
+  "publication_control": {
+    "model": "NON_CIRCULAR",
+    "rule": "In-repository closeout evidence is written before the single authorized commit and therefore cannot contain that commit's SHA. Post-commit identity is recorded only in the published Drive package, so no in-repository record depends on a value that does not yet exist and no second commit is required.",
+    "post_commit_values_published_in": "09_COMMIT-IDENTITY.json"
+  },
+  "terminal_state": "WP_P00_01_CLOSEOUT_CORRECTION_IMPLEMENTED_PENDING_INDEPENDENT_REVIEW"
+}

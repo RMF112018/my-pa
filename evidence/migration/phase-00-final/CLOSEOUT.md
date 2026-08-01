@@ -143,7 +143,7 @@ Run from the repository root with the project interpreter `.venv/bin/python` (Py
 | `pytest -q` | pass, 378 passed |
 | JSON re-parse of all five edited records | pass |
 
-`pytest` was run with `PYTHONPATH` pointed at this worktree's `src`. The shared checkout's editable install resolves `my_pa` to `/Users/bobbyfetting/my-pa/src`, which concurrent Phase 01 work is editing; without the override, `tests/unit/test_settings.py::test_settings_hold_no_secret_shaped_field` fails on a `Settings.database_url` field that does not exist on this branch. That failure belongs to the other working tree, not to this change.
+`pytest` was run with `PYTHONPATH` pointed at this worktree's `src`. The shared checkout's editable install resolves `my_pa` to that checkout's own `src/`, which concurrent Phase 01 work is editing; without the override, `tests/unit/test_settings.py::test_settings_hold_no_secret_shaped_field` fails on a `Settings.database_url` field that does not exist on this branch. That failure belongs to the other working tree, not to this change.
 
 ## Data handling
 

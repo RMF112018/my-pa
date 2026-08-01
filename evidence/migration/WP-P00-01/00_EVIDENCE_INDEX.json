@@ -14,7 +14,7 @@
     "base_sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
     "base_tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4",
     "implementation_branch": "bf/migration-wp-p00-01-governance-identity",
-    "implementation_worktree": "/Users/bobbyfetting/my-pa",
+    "implementation_worktree": "<REPO_ROOT>",
     "implementation_head": "RECORDED_POST_COMMIT_IN_PUBLISHED_COMMIT_IDENTITY",
     "commit_count_above_base": 1
   },

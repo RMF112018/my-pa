@@ -49,7 +49,7 @@
       "accessed": false
     },
     "implementation_branch": "bf/migration-wp-p00-01-governance-identity",
-    "implementation_worktree": "/Users/bobbyfetting/my-pa",
+    "implementation_worktree": "<REPO_ROOT>",
     "implementation_head": "RECORDED_POST_COMMIT_IN_PUBLISHED_COMMIT_IDENTITY",
     "implementation_tree": "RECORDED_POST_COMMIT_IN_PUBLISHED_COMMIT_IDENTITY",
     "identity_drift_detected": false
@@ -101,7 +101,7 @@
   "validation": {
     "contract": "04_WP-P00-01-TEST-AND-EVIDENCE-CONTRACT.md",
     "contract_drive_id": "13bWHDUJUYzmYBVaDN9NnEBDIe08OIc607H16kBYwTWQ",
-    "executed_from": "/Users/bobbyfetting/my-pa",
+    "executed_from": "<REPO_ROOT>",
     "commands_substituted": false,
     "commands_omitted": false,
     "environment_note": "The repository .venv was activated so the contract's python invocations resolve. No command text was changed.",

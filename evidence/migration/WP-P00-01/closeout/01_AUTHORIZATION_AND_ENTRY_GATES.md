@@ -21,7 +21,7 @@ base_branch: main
 base_sha: 3e5aad7b2526b09b1e46c817bd00c401e569f5a4
 base_tree: 9956fe7bed3b2d92e7243b1881f5b31c2d28da1d
 implementation_branch: bf/migration-wp-p00-01-closeout-correction
-implementation_worktree: /Users/bobbyfetting/my-pa
+implementation_worktree: <REPO_ROOT>
 maximum_branches: 1
 maximum_worktrees: 1
 maximum_commits: 1

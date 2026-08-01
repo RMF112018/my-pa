@@ -3,7 +3,7 @@ All checks passed!
 Success: no issues found in 26 source files
 ============================= test session starts ==============================
 platform darwin -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0
-rootdir: /Users/bobbyfetting/my-pa
+rootdir: <REPO_ROOT>
 configfile: pyproject.toml
 testpaths: tests
 collected 378 items

@@ -109,6 +109,38 @@ NOT_CREATED_REASONS: Mapping[str, str] = {
     "NOT_CREATED_PRIVACY_GATED": "withheld by the privacy gate (OD-025, OP-PROD-001)",
 }
 
+#: OD-008's disposition table: what the plan said would happen to each planning
+#: class. Written down so a departure from it is *computed* from the load rather
+#: than remembered by whoever writes the report. Two of the four departures below
+#: went undisclosed for exactly that reason.
+OD_008_TREATMENT: Mapping[str, str] = {
+    "MIGRATE_DATA": "schema and data",
+    "MIGRATE_SCHEMA_EMPTY": "schema only; asserted zero rows",
+    "MIGRATE_PROVENANCE_ONLY": "provenance rows only, no payload",
+    "REBUILD_AND_VALIDATE": "schema created, left deliberately unpopulated",
+    "REINITIALIZE_OPERATIONAL_STATE": "schema only, empty by design",
+    "ARCHIVE_LEGACY_SOURCE_ONLY": "not created in the target",
+    "DO_NOT_MIGRATE_EMPTY_OR_OBSOLETE": "not created in the target",
+    "REPLACED_BY_NEWER_AUTHORITATIVE_TABLE": "not created in the target",
+    "DEFER_PENDING_PRODUCT_OR_PRIVACY_DECISION": "not created in the target",
+}
+
+#: The planning classes OD-008 expected to carry rows. A class outside this set
+#: that loaded any table is a departure and must be declared.
+OD_008_LOADS_DATA = frozenset({"MIGRATE_DATA", "MIGRATE_PROVENANCE_ONLY"})
+
+#: The decision that reversed each class OD-008 would have left unloaded.
+DEPARTURE_DECISION: Mapping[str, str] = {
+    "REBUILD_AND_VALIDATE": "OD-025",
+    "ARCHIVE_LEGACY_SOURCE_ONLY": "OD-025",
+    "DEFER_PENDING_PRODUCT_OR_PRIVACY_DECISION": "OD-025",
+    "REINITIALIZE_OPERATIONAL_STATE": "OD-028",
+}
+
+#: Above this, a departure's withheld members are counted rather than named; the
+#: report points at the sections that list them in full instead.
+NAMED_WITHHELD_LIMIT = 12
+
 #: Treatments that create a table and require it to hold no rows.
 ASSERTED_EMPTY_TREATMENTS: Mapping[str, str] = {
     "SCHEMA_ONLY_EMPTY_BY_DESIGN": "operational state, empty by design (OD-025)",
@@ -299,6 +331,7 @@ class EmptyAssertion:
     """A table required to hold no rows, and what it actually holds."""
 
     legacy_table: str
+    planning_disposition: str
     treatment: str
     reason: str
     target_schema: str
@@ -405,6 +438,26 @@ class SequenceState:
     @property
     def correct(self) -> bool:
         return self.next_value == self.expected_next_value
+
+
+@dataclass(frozen=True)
+class PlanDeparture:
+    """A planning class whose load departs from what OD-008 said would happen.
+
+    Both counts matter. A class reported only by what loaded reads as though the
+    whole class loaded, which is how `DEFER_PENDING_PRODUCT_OR_PRIVACY_DECISION`
+    -- 14 loaded, 2 withheld -- could be mistaken for a category that was
+    withheld entirely, or for one that was loaded entirely.
+    """
+
+    planning_disposition: str
+    plan_said: str
+    decision: str
+    tables_loaded: int
+    rows_loaded: int
+    tables_withheld: int
+    rows_withheld: int
+    withheld_tables: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -526,6 +579,7 @@ class Reconciliation:
     provenance: ProvenanceReport
     sequences: tuple[SequenceState, ...]
     views: tuple[ViewCheck, ...]
+    departures: tuple[PlanDeparture, ...]
     accounting: RowAccounting
     retention: RetentionRisk
     scan: redaction.ScanResult
@@ -546,6 +600,22 @@ class Reconciliation:
     @property
     def excluded_rows(self) -> int:
         return sum(item.source_rows for item in self.exclusions)
+
+    @property
+    def doubly_counted(self) -> int:
+        """Tables that are both loaded and asserted empty.
+
+        A `PROVENANCE_ONLY` table is loaded like any other and required to hold
+        no rows, so it is a member of both sets. Naming the overlap is what keeps
+        "398 loaded" and "90 asserted empty" from looking like they contradict
+        the 484 tables that exist.
+        """
+        loaded = {table.legacy_table for table in self.parity}
+        return sum(1 for item in self.empty_assertions if item.legacy_table in loaded)
+
+    @property
+    def created_tables(self) -> int:
+        return len(self.parity) + len(self.empty_assertions) - self.doubly_counted
 
     @property
     def verdict(self) -> str:
@@ -901,6 +971,7 @@ def check_empty_assertions(
         assertions.append(
             EmptyAssertion(
                 legacy_table=disposition.legacy_object,
+                planning_disposition=disposition.planning_disposition,
                 treatment=disposition.target_treatment,
                 reason=reason,
                 target_schema=disposition.target_schema,
@@ -1168,6 +1239,62 @@ def account_rows(
     )
 
 
+def check_departures(
+    parity: Sequence[TableParity],
+    exclusions: Sequence[Exclusion],
+    empty: Sequence[EmptyAssertion],
+) -> tuple[PlanDeparture, ...]:
+    """Find every planning class that loaded data OD-008 said would not be loaded.
+
+    Derived from the load itself rather than from a remembered list, because a
+    remembered list is what produced the omission this check exists to prevent.
+    """
+    loaded: dict[str, list[int]] = {}
+    for table in parity:
+        totals = loaded.setdefault(table.planning_disposition, [0, 0])
+        totals[0] += 1
+        totals[1] += table.source_rows
+
+    withheld: dict[str, list[int]] = {}
+    withheld_names: dict[str, list[str]] = {}
+    for item in exclusions:
+        if item.object_type != "table":
+            continue
+        totals = withheld.setdefault(item.planning_disposition, [0, 0])
+        totals[0] += 1
+        totals[1] += item.source_rows
+        withheld_names.setdefault(item.planning_disposition, []).append(item.legacy_object)
+    for assertion in empty:
+        # A `PROVENANCE_ONLY` table is loaded and asserted empty at once; it is
+        # counted on the loaded side, so it is not withheld.
+        if any(table.legacy_table == assertion.legacy_table for table in parity):
+            continue
+        totals = withheld.setdefault(assertion.planning_disposition, [0, 0])
+        totals[0] += 1
+        totals[1] += assertion.source_rows
+        withheld_names.setdefault(assertion.planning_disposition, []).append(assertion.legacy_table)
+
+    departures = []
+    for disposition, totals in sorted(loaded.items()):
+        if disposition in OD_008_LOADS_DATA or not totals[0]:
+            continue
+        held = withheld.get(disposition, [0, 0])
+        names = sorted(withheld_names.get(disposition, ()))
+        departures.append(
+            PlanDeparture(
+                planning_disposition=disposition,
+                plan_said=OD_008_TREATMENT.get(disposition, "unstated"),
+                decision=DEPARTURE_DECISION.get(disposition, "undeclared"),
+                tables_loaded=totals[0],
+                rows_loaded=totals[1],
+                tables_withheld=held[0],
+                rows_withheld=held[1],
+                withheld_tables=tuple(names) if len(names) <= NAMED_WITHHELD_LIMIT else (),
+            )
+        )
+    return tuple(departures)
+
+
 def check_retention(
     source_path: Path,
     integrity: SourceIntegrity,
@@ -1237,6 +1364,7 @@ def evaluate(report: Reconciliation) -> tuple[Criterion, ...]:
     unequal = [item for item in report.keyless if not item.multisets_equal]
     wrong_sequences = [item for item in report.sequences if not item.correct]
     unreconciled_views = [view for view in report.views if not view.reconciled]
+    undeclared = [item for item in report.departures if item.decision == "undeclared"]
 
     return (
         Criterion(
@@ -1351,6 +1479,15 @@ def evaluate(report: Reconciliation) -> tuple[Criterion, ...]:
             (FAILED if unreconciled_views else (PASSED if report.views else UNEVALUATED)),
             f"{len(report.views)} source views; {len(unreconciled_views)} unreconciled",
         ),
+        Criterion(
+            "P10-17",
+            "every departure from the plan's dispositions is declared with its decision",
+            PASSED if not undeclared else FAILED,
+            (
+                f"{len(report.departures)} departures; "
+                f"{len(undeclared)} without a governing decision"
+            ),
+        ),
     )
 
 
@@ -1377,6 +1514,7 @@ def reconcile(
         provenance = check_provenance(connection, parity)
         sequences = check_sequences(connection, ALL_SCHEMAS)
         views = check_views(connection, source, registry)
+        departures = check_departures(parity, exclusions, empty)
         accounting = account_rows(source, registry, parity, exclusions, empty)
         retention = check_retention(
             source_path, integrity, accounting, sum(group.rows for group in quarantine)
@@ -1401,6 +1539,7 @@ def reconcile(
         provenance=provenance,
         sequences=sequences,
         views=views,
+        departures=departures,
         accounting=accounting,
         retention=retention,
         scan=scan,

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-01T15:47:35+00:00",
+  "generated_at": "2026-08-01T16:05:34+00:00",
   "source_schema_version": 128,
   "target_alembic_revision": "6c4d3ea82f10",
   "source": {
@@ -6878,6 +6878,7 @@
   "empty_assertions": [
     {
       "legacy_table": "ai_job_queue",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6887,6 +6888,7 @@
     },
     {
       "legacy_table": "ai_job_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6896,6 +6898,7 @@
     },
     {
       "legacy_table": "assistant_action_stage_citations",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6905,6 +6908,7 @@
     },
     {
       "legacy_table": "assistant_action_stage_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6914,6 +6918,7 @@
     },
     {
       "legacy_table": "assistant_action_stage_items",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6923,6 +6928,7 @@
     },
     {
       "legacy_table": "assistant_action_stage_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6932,6 +6938,7 @@
     },
     {
       "legacy_table": "assistant_action_stages",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6941,6 +6948,7 @@
     },
     {
       "legacy_table": "assistant_claim_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6950,6 +6958,7 @@
     },
     {
       "legacy_table": "assistant_decision_memory_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6959,6 +6968,7 @@
     },
     {
       "legacy_table": "assistant_enrichment_jobs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6968,6 +6978,7 @@
     },
     {
       "legacy_table": "assistant_enrichment_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6977,6 +6988,7 @@
     },
     {
       "legacy_table": "assistant_feedback_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6986,6 +6998,7 @@
     },
     {
       "legacy_table": "assistant_feedback_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -6995,6 +7008,7 @@
     },
     {
       "legacy_table": "assistant_memory_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7004,6 +7018,7 @@
     },
     {
       "legacy_table": "assistant_output_file_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7013,6 +7028,7 @@
     },
     {
       "legacy_table": "assistant_quality_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7022,6 +7038,7 @@
     },
     {
       "legacy_table": "assistant_quality_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7031,6 +7048,7 @@
     },
     {
       "legacy_table": "assistant_quality_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7040,6 +7058,7 @@
     },
     {
       "legacy_table": "assistant_review_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7049,6 +7068,7 @@
     },
     {
       "legacy_table": "calendar_crawl_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "calendar",
@@ -7058,6 +7078,7 @@
     },
     {
       "legacy_table": "calendar_raw_event_recurrence_structured",
+      "planning_disposition": "MIGRATE_SCHEMA_EMPTY",
       "treatment": "SCHEMA_ONLY_ASSERT_EMPTY",
       "reason": "schema-empty in the source (OD-008)",
       "target_schema": "calendar",
@@ -7067,6 +7088,7 @@
     },
     {
       "legacy_table": "calendar_sync_state",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "calendar",
@@ -7076,6 +7098,7 @@
     },
     {
       "legacy_table": "candidate_lifecycle_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7085,6 +7108,7 @@
     },
     {
       "legacy_table": "candidate_review_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7094,6 +7118,7 @@
     },
     {
       "legacy_table": "candidate_similarity_edges",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7103,6 +7128,7 @@
     },
     {
       "legacy_table": "candidate_suppression_rules",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7112,6 +7138,7 @@
     },
     {
       "legacy_table": "construction_crawl_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7121,6 +7148,7 @@
     },
     {
       "legacy_table": "construction_data_quality_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7130,6 +7158,7 @@
     },
     {
       "legacy_table": "construction_delta_tokens",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7139,6 +7168,7 @@
     },
     {
       "legacy_table": "construction_file_ingestion_decisions",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7148,6 +7178,7 @@
     },
     {
       "legacy_table": "construction_graph_download_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7157,6 +7188,7 @@
     },
     {
       "legacy_table": "construction_graph_link_resolution",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7166,6 +7198,7 @@
     },
     {
       "legacy_table": "construction_model_decisions",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7175,6 +7208,7 @@
     },
     {
       "legacy_table": "construction_processing_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7184,6 +7218,7 @@
     },
     {
       "legacy_table": "construction_project_keyword_registry",
+      "planning_disposition": "MIGRATE_PROVENANCE_ONLY",
       "treatment": "PROVENANCE_ONLY",
       "reason": "provenance without payload; empty at schema 128 (OD-026)",
       "target_schema": "construction",
@@ -7193,6 +7228,7 @@
     },
     {
       "legacy_table": "construction_project_source_matches",
+      "planning_disposition": "MIGRATE_PROVENANCE_ONLY",
       "treatment": "PROVENANCE_ONLY",
       "reason": "provenance without payload; empty at schema 128 (OD-026)",
       "target_schema": "construction",
@@ -7202,6 +7238,7 @@
     },
     {
       "legacy_table": "construction_review_queue",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7211,6 +7248,7 @@
     },
     {
       "legacy_table": "construction_source_crawl_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7220,6 +7258,7 @@
     },
     {
       "legacy_table": "construction_source_resolutions",
+      "planning_disposition": "MIGRATE_PROVENANCE_ONLY",
       "treatment": "PROVENANCE_ONLY",
       "reason": "provenance without payload; empty at schema 128 (OD-026)",
       "target_schema": "construction",
@@ -7229,6 +7268,7 @@
     },
     {
       "legacy_table": "construction_source_sync_state",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7238,6 +7278,7 @@
     },
     {
       "legacy_table": "construction_sync_errors",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7247,6 +7288,7 @@
     },
     {
       "legacy_table": "construction_table_lifecycle_registry",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "construction",
@@ -7256,6 +7298,7 @@
     },
     {
       "legacy_table": "email_calendar_projection_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "email",
@@ -7265,6 +7308,7 @@
     },
     {
       "legacy_table": "email_calendar_raw_ingestion_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "email",
@@ -7274,6 +7318,7 @@
     },
     {
       "legacy_table": "email_crawl_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "email",
@@ -7283,6 +7328,7 @@
     },
     {
       "legacy_table": "email_processing_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "email",
@@ -7292,6 +7338,7 @@
     },
     {
       "legacy_table": "email_review_queue",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "email",
@@ -7301,6 +7348,7 @@
     },
     {
       "legacy_table": "email_sync_state",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "email",
@@ -7310,6 +7358,7 @@
     },
     {
       "legacy_table": "email_thread_summary_materialization_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "email",
@@ -7319,6 +7368,7 @@
     },
     {
       "legacy_table": "forecast_generation_requests",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "financial",
@@ -7328,6 +7378,7 @@
     },
     {
       "legacy_table": "forecast_run_model_versions",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "financial",
@@ -7337,6 +7388,7 @@
     },
     {
       "legacy_table": "forecast_source_ingestions",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "financial",
@@ -7346,6 +7398,7 @@
     },
     {
       "legacy_table": "forecast_validation_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "financial",
@@ -7355,6 +7408,7 @@
     },
     {
       "legacy_table": "interactive_chat_message_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7364,6 +7418,7 @@
     },
     {
       "legacy_table": "interactive_chat_sessions",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7373,6 +7428,7 @@
     },
     {
       "legacy_table": "launchd_schedule_previews",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7382,6 +7438,7 @@
     },
     {
       "legacy_table": "local_model_profiles",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7391,6 +7448,7 @@
     },
     {
       "legacy_table": "local_model_run_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7400,6 +7458,7 @@
     },
     {
       "legacy_table": "local_model_status_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7409,6 +7468,7 @@
     },
     {
       "legacy_table": "model_profile_eval_results",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7418,6 +7478,7 @@
     },
     {
       "legacy_table": "pa_artifact_validation_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7427,6 +7488,7 @@
     },
     {
       "legacy_table": "pa_promotion_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7436,6 +7498,7 @@
     },
     {
       "legacy_table": "procore_endpoint_capture_errors",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "procore",
@@ -7445,6 +7508,7 @@
     },
     {
       "legacy_table": "procore_endpoint_capture_pages",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "procore",
@@ -7454,6 +7518,7 @@
     },
     {
       "legacy_table": "procore_endpoint_capture_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "procore",
@@ -7463,6 +7528,7 @@
     },
     {
       "legacy_table": "procore_live_sync_watermarks",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "procore",
@@ -7472,6 +7538,7 @@
     },
     {
       "legacy_table": "procore_sync_errors",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "procore",
@@ -7481,6 +7548,7 @@
     },
     {
       "legacy_table": "procore_sync_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "procore",
@@ -7490,6 +7558,7 @@
     },
     {
       "legacy_table": "procore_sync_watermarks",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "procore",
@@ -7499,6 +7568,7 @@
     },
     {
       "legacy_table": "project_schedule_named_baseline_review_item_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "schedule",
@@ -7508,6 +7578,7 @@
     },
     {
       "legacy_table": "project_schedule_named_baseline_review_items",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "schedule",
@@ -7517,6 +7588,7 @@
     },
     {
       "legacy_table": "project_schedule_review_item_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "schedule",
@@ -7526,6 +7598,7 @@
     },
     {
       "legacy_table": "project_schedule_review_items",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "schedule",
@@ -7535,6 +7608,7 @@
     },
     {
       "legacy_table": "query_tool_receipts",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7544,6 +7618,7 @@
     },
     {
       "legacy_table": "raw_content_policy_state",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7553,6 +7628,7 @@
     },
     {
       "legacy_table": "raw_content_source_quality_snapshots",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7562,6 +7638,7 @@
     },
     {
       "legacy_table": "relationship_resolution_queue",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7571,6 +7648,7 @@
     },
     {
       "legacy_table": "schedule_cpm_import_observability",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "schedule",
@@ -7580,6 +7658,7 @@
     },
     {
       "legacy_table": "schedule_version_diffs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "schedule",
@@ -7589,6 +7668,7 @@
     },
     {
       "legacy_table": "second_brain_financial_fact_normalization_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "financial",
@@ -7598,6 +7678,7 @@
     },
     {
       "legacy_table": "second_brain_financial_forecast_readiness_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "financial",
@@ -7607,6 +7688,7 @@
     },
     {
       "legacy_table": "second_brain_financial_readiness_agent_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "financial",
@@ -7616,6 +7698,7 @@
     },
     {
       "legacy_table": "source_index_bootstrap_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7625,6 +7708,7 @@
     },
     {
       "legacy_table": "source_index_bootstrap_state",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7634,6 +7718,7 @@
     },
     {
       "legacy_table": "source_index_reconciliation_runs",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7643,6 +7728,7 @@
     },
     {
       "legacy_table": "source_index_scan_generations",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7652,6 +7738,7 @@
     },
     {
       "legacy_table": "source_index_scan_quarantine",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7661,6 +7748,7 @@
     },
     {
       "legacy_table": "source_intelligence_events",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7670,6 +7758,7 @@
     },
     {
       "legacy_table": "source_intelligence_state",
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
       "treatment": "SCHEMA_ONLY_EMPTY_BY_DESIGN",
       "reason": "operational state, empty by design (OD-025)",
       "target_schema": "core",
@@ -7679,6 +7768,7 @@
     },
     {
       "legacy_table": "source_records",
+      "planning_disposition": "MIGRATE_PROVENANCE_ONLY",
       "treatment": "PROVENANCE_ONLY",
       "reason": "provenance without payload; empty at schema 128 (OD-026)",
       "target_schema": "core",
@@ -9290,6 +9380,64 @@
       "target_rows": 20788
     }
   ],
+  "departures": [
+    {
+      "planning_disposition": "ARCHIVE_LEGACY_SOURCE_ONLY",
+      "plan_said": "not created in the target",
+      "decision": "OD-025",
+      "tables_loaded": 46,
+      "rows_loaded": 221536,
+      "tables_withheld": 0,
+      "rows_withheld": 0,
+      "withheld_tables": []
+    },
+    {
+      "planning_disposition": "DEFER_PENDING_PRODUCT_OR_PRIVACY_DECISION",
+      "plan_said": "not created in the target",
+      "decision": "OD-025",
+      "tables_loaded": 14,
+      "rows_loaded": 3558,
+      "tables_withheld": 2,
+      "rows_withheld": 4,
+      "withheld_tables": [
+        "construction_email_intelligence_deferred_state",
+        "raw_content_model_context_packets"
+      ]
+    },
+    {
+      "planning_disposition": "REBUILD_AND_VALIDATE",
+      "plan_said": "schema created, left deliberately unpopulated",
+      "decision": "OD-025",
+      "tables_loaded": 132,
+      "rows_loaded": 1330813,
+      "tables_withheld": 12,
+      "rows_withheld": 32203,
+      "withheld_tables": [
+        "obsidian_note_fts",
+        "obsidian_note_fts_config",
+        "obsidian_note_fts_content",
+        "obsidian_note_fts_data",
+        "obsidian_note_fts_docsize",
+        "obsidian_note_fts_idx",
+        "source_intelligence_fts",
+        "source_intelligence_fts_config",
+        "source_intelligence_fts_content",
+        "source_intelligence_fts_data",
+        "source_intelligence_fts_docsize",
+        "source_intelligence_fts_idx"
+      ]
+    },
+    {
+      "planning_disposition": "REINITIALIZE_OPERATIONAL_STATE",
+      "plan_said": "schema only, empty by design",
+      "decision": "OD-028",
+      "tables_loaded": 5,
+      "rows_loaded": 5388,
+      "tables_withheld": 85,
+      "rows_withheld": 7828,
+      "withheld_tables": []
+    }
+  ],
   "accounting": {
     "source_tables": 593,
     "source_rows": 3323450,
@@ -9352,9 +9500,14 @@
   "scan": {
     "roots": [
       "evidence",
-      "docs/migration"
+      "docs/migration",
+      "migrations/data",
+      "migrations/sql",
+      "migrations/versions",
+      "apps",
+      "scripts"
     ],
-    "files_scanned": 68,
+    "files_scanned": 94,
     "files_skipped": 0,
     "findings": [],
     "patterns": [
@@ -9460,7 +9613,7 @@
       "identifier": "P10-14",
       "statement": "the evidence tree passes the personal-data redaction scan (OD-004)",
       "status": "PASS",
-      "detail": "0 findings over 68 files",
+      "detail": "0 findings over 94 files",
       "waiver": null
     },
     {
@@ -9475,6 +9628,13 @@
       "statement": "each SQLite read model is ported as a target view whose row count equals the source view's (OD-018)",
       "status": "PASS",
       "detail": "2 source views; 0 unreconciled",
+      "waiver": null
+    },
+    {
+      "identifier": "P10-17",
+      "statement": "every departure from the plan's dispositions is declared with its decision",
+      "status": "PASS",
+      "detail": "4 departures; 0 without a governing decision",
       "waiver": null
     }
   ],

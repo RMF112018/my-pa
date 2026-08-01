@@ -148,6 +148,7 @@ def _headline(report: Reconciliation) -> list[str]:
                     f"{report.accounting.withheld_rows:,} ({report.accounting.withheld_share:.2%})",
                 ),
                 ("tables asserted empty", f"{len(report.empty_assertions):,}"),
+                ("tables created in the target", f"{report.created_tables:,}"),
                 ("plan objects absent from the source", f"{len(report.absence.observed):,}"),
                 (
                     "foreign keys validated",
@@ -157,6 +158,12 @@ def _headline(report: Reconciliation) -> list[str]:
                 ("identity sequences checked", f"{len(report.sequences):,}"),
             ),
         ),
+        "",
+        f"The first two rows overlap by {report.doubly_counted:,}: a `PROVENANCE_ONLY` table",
+        "is loaded *and* asserted empty, so it appears in both. That is why",
+        f"{len(report.parity):,} + {len(report.empty_assertions):,} exceeds the",
+        f"{report.created_tables:,} tables actually created. Both figures are correct and no",
+        "total below double-counts a row; the arithmetic just needs the note.",
         "",
     ]
 
@@ -184,6 +191,79 @@ def _criteria(report: Reconciliation) -> list[str]:
         ),
         "",
     ]
+
+
+def _departures(report: Reconciliation) -> list[str]:
+    lines = [
+        "## 0a. Departures from the plan's dispositions",
+        "",
+        "OD-008 assigned every legacy table a treatment. Four planning classes did **not**",
+        "get the treatment the plan named: each was reversed by a later decision, and each",
+        "reversal loaded data the plan would have left out of the target. They are listed",
+        "here together so the fact is discoverable without cross-tabulating the appendix.",
+        "",
+        "Nothing here is a defect. All four reversals are governed, and the point of this",
+        "section is disclosure, not correction.",
+        "",
+    ]
+    if not report.departures:
+        lines.extend(["No planning class departed from its OD-008 treatment.", ""])
+        return lines
+    lines.extend(
+        [
+            *_table(
+                (
+                    "planning class",
+                    "OD-008 said",
+                    "decision",
+                    "tables loaded",
+                    "rows loaded",
+                    "tables withheld",
+                    "rows withheld",
+                ),
+                (
+                    (
+                        f"`{item.planning_disposition}`",
+                        item.plan_said,
+                        item.decision,
+                        f"{item.tables_loaded:,}",
+                        f"{item.rows_loaded:,}",
+                        f"{item.tables_withheld:,}",
+                        f"{item.rows_withheld:,}",
+                    )
+                    for item in report.departures
+                ),
+            ),
+            "",
+            "A class with a non-zero figure in both loaded and withheld was **split**, not",
+            "reversed wholesale. Reading either column alone misstates what happened to it.",
+            "",
+        ]
+    )
+    for item in report.departures:
+        if item.withheld_tables:
+            lines.append(
+                f"`{item.planning_disposition}` withheld: "
+                + ", ".join(f"`{name}`" for name in item.withheld_tables)
+                + "."
+            )
+        elif item.tables_withheld:
+            lines.append(
+                f"`{item.planning_disposition}` withheld {item.tables_withheld} tables; "
+                "they are listed in sections 6 and 7."
+            )
+    lines.append("")
+    undeclared = [item for item in report.departures if item.decision == "undeclared"]
+    if undeclared:
+        lines.extend(
+            [
+                "Departures with no governing decision recorded: "
+                + ", ".join(f"`{item.planning_disposition}`" for item in undeclared)
+                + ". A departure nobody decided is a defect, not a disclosure.",
+                "",
+            ]
+        )
+    return lines
 
 
 def _accounting(report: Reconciliation) -> list[str]:
@@ -652,6 +732,40 @@ def _exclusions(report: Reconciliation) -> list[str]:
         )
     else:
         lines.extend(["None of them exists in the target database.", ""])
+    privacy = [
+        item
+        for item in report.exclusions
+        if item.planning_disposition == "DEFER_PENDING_PRODUCT_OR_PRIVACY_DECISION"
+    ]
+    deferred_loaded = [
+        table
+        for table in report.parity
+        if table.planning_disposition == "DEFER_PENDING_PRODUCT_OR_PRIVACY_DECISION"
+    ]
+    if privacy or deferred_loaded:
+        total = len(privacy) + len(deferred_loaded)
+        lines.extend(
+            [
+                "### The deferred class was split, not withheld",
+                "",
+                f"`DEFER_PENDING_PRODUCT_OR_PRIVACY_DECISION` has {total} tables in the source.",
+                f"**{len(deferred_loaded)} were loaded** "
+                f"({sum(table.source_rows for table in deferred_loaded):,} rows) and "
+                f"**{len(privacy)} were withheld** "
+                f"({sum(item.source_rows for item in privacy):,} rows). The "
+                f"`NOT_CREATED_PRIVACY_GATED` count of {len(privacy)} in the table above is the",
+                "withheld part only and must not be read as the whole class.",
+                "",
+                "Withheld, and the only two the privacy gate meant (OD-025): "
+                + ", ".join(f"`{item.legacy_object}`" for item in privacy)
+                + ".",
+                "",
+                "The rest are `NONSENSITIVE_OR_OPERATIONAL_METADATA` and were loaded as",
+                "ordinary owner-owned data. Migrating data is not activating a product",
+                "feature -- the distinction OP-PROD-001 drew and OD-025 applied here.",
+                "",
+            ]
+        )
     lines.extend(
         [
             "### Every excluded object",
@@ -868,6 +982,10 @@ def _redaction(report: Reconciliation) -> list[str]:
         "it matched -- printing the match would put the disclosure in the artefact that is",
         "supposed to be clean.",
         "",
+        "`src` and `tests` are deliberately outside that scope -- they are ordinary source",
+        "code, covered by review and the repository's own checks -- so this scan does not",
+        "claim coverage of them.",
+        "",
         f"Files scanned: {scan.files_scanned}. Non-text files skipped: {scan.files_skipped}.",
         f"Patterns: {', '.join(scan.patterns)}.",
         "",
@@ -963,14 +1081,25 @@ def _appendix(report: Reconciliation) -> list[str]:
     return [
         "## Appendix — per-table row-count parity",
         "",
-        "Every loaded table, both counts, in name order.",
+        "Every loaded table, both counts, in name order. `planning class` is what OD-008",
+        "assigned and `treatment` is what the table actually got; where they disagree, the",
+        "governing decision is in section 0a.",
         "",
         *_table(
-            ("legacy table", "schema", "treatment", "source", "target", "quarantined"),
+            (
+                "legacy table",
+                "schema",
+                "planning class",
+                "treatment",
+                "source",
+                "target",
+                "quarantined",
+            ),
             (
                 (
                     f"`{table.legacy_table}`",
                     table.target_schema,
+                    table.planning_disposition,
                     table.treatment,
                     f"{table.source_rows:,}",
                     f"{table.target_rows:,}",
@@ -997,6 +1126,7 @@ def render(report: Reconciliation) -> str:
         *_identity(report),
         *_headline(report),
         *_criteria(report),
+        *_departures(report),
         *_accounting(report),
         *_parity(report),
         *_quarantine(report),

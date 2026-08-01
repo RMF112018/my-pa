@@ -163,6 +163,7 @@ def _report(**overrides: object) -> reconciliation.Reconciliation:
                 target_rows=3,
             ),
         ),
+        "departures": (),
         "accounting": reconciliation.RowAccounting(
             source_tables=1,
             source_rows=10,
@@ -376,6 +377,100 @@ def test_a_source_with_no_verified_copy_reports_the_risk_unmitigated(tmp_path: P
     risk = reconciliation.check_retention(source, integrity, accounting, quarantined_rows=0)
     assert risk.verified_copies == 0
     assert not risk.mitigated
+
+
+def test_a_class_the_plan_would_not_have_loaded_is_reported_as_a_departure() -> None:
+    departures = reconciliation.check_departures(
+        parity=(
+            _parity(
+                legacy_table="archived_one",
+                planning_disposition="ARCHIVE_LEGACY_SOURCE_ONLY",
+                source_rows=5,
+                target_rows=5,
+            ),
+        ),
+        exclusions=(),
+        empty=(),
+    )
+    assert len(departures) == 1
+    assert departures[0].planning_disposition == "ARCHIVE_LEGACY_SOURCE_ONLY"
+    assert departures[0].plan_said == "not created in the target"
+    assert departures[0].decision == "OD-025"
+    assert departures[0].tables_loaded == 1
+    assert departures[0].rows_loaded == 5
+
+
+def test_a_class_the_plan_expected_to_load_is_not_a_departure() -> None:
+    assert reconciliation.check_departures(parity=(_parity(),), exclusions=(), empty=()) == ()
+
+
+def test_a_split_class_reports_both_sides_and_names_the_withheld() -> None:
+    (departure,) = reconciliation.check_departures(
+        parity=(
+            _parity(
+                legacy_table="deferred_loaded",
+                planning_disposition="DEFER_PENDING_PRODUCT_OR_PRIVACY_DECISION",
+                source_rows=3,
+                target_rows=3,
+            ),
+        ),
+        exclusions=(
+            reconciliation.Exclusion(
+                legacy_object="deferred_withheld",
+                object_type="table",
+                planning_disposition="DEFER_PENDING_PRODUCT_OR_PRIVACY_DECISION",
+                treatment="NOT_CREATED_PRIVACY_GATED",
+                reason="withheld by the privacy gate",
+                source_rows=4,
+                present_in_target=False,
+            ),
+        ),
+        empty=(),
+    )
+    assert departure.tables_loaded == 1
+    assert departure.tables_withheld == 1
+    assert departure.rows_withheld == 4
+    assert departure.withheld_tables == ("deferred_withheld",)
+
+
+def test_a_departure_with_no_governing_decision_fails_the_phase() -> None:
+    report = _report(
+        departures=(
+            reconciliation.PlanDeparture(
+                planning_disposition="INVENTED_CLASS",
+                plan_said="unstated",
+                decision="undeclared",
+                tables_loaded=1,
+                rows_loaded=1,
+                tables_withheld=0,
+                rows_withheld=0,
+                withheld_tables=(),
+            ),
+        )
+    )
+    assert _status(report, "P10-17").status == reconciliation.FAILED
+    assert "INVENTED_CLASS" in render(report)
+
+
+def test_the_provenance_only_overlap_is_counted_once_and_named() -> None:
+    report = _report(
+        parity=(_parity(legacy_table="provenance_table", source_rows=0, target_rows=0),),
+        empty_assertions=(
+            reconciliation.EmptyAssertion(
+                legacy_table="provenance_table",
+                planning_disposition="MIGRATE_PROVENANCE_ONLY",
+                treatment="PROVENANCE_ONLY",
+                reason="provenance without payload",
+                target_schema=TARGET_SCHEMA,
+                target_table="provenance_table",
+                source_rows=0,
+                target_rows=0,
+            ),
+        ),
+    )
+    assert report.doubly_counted == 1
+    assert report.created_tables == 1
+    assert "overlap by 1" in render(report)
 
 
 def test_the_recorded_retention_risk_does_not_gate_the_verdict() -> None:
@@ -612,6 +707,15 @@ class TestAgainstALoadedDatabase:
         assert accounting.objects_in_no_bucket == ()
         assert accounting.bucketed_rows == accounting.source_rows
         assert accounting.balanced
+
+    def test_the_appendix_shows_the_planning_class_beside_the_treatment(
+        self, reconciled: reconciliation.Reconciliation
+    ) -> None:
+        rendered = render(reconciled)
+        assert "planning class" in rendered
+        # An auditor must be able to see the plan's class per table, not only the
+        # treatment it resolved to.
+        assert "| MIGRATE_DATA | SCHEMA_AND_DATA |" in rendered
 
     def test_each_source_view_is_reconciled_by_existence_and_row_count(
         self, reconciled: reconciliation.Reconciliation

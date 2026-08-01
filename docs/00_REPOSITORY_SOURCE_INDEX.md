@@ -27,6 +27,10 @@
 
 - [`docs/security/threat-model.md`](security/threat-model.md) — entry points, abuse cases, controls, and residual risk.
 
+## Migration
+
+- [`docs/migration/00_MIGRATION_INDEX.md`](migration/00_MIGRATION_INDEX.md) — owning index for `GOAL-MYPA-POSTGRESQL-MIGRATION-001` governance and identity records. Governance and identity only; it authorizes no runtime migration implementation, and database access remains separately operator-gated.
+
 ## Open decisions
 
 - [`PHASE-00-OPEN-DECISION-LEDGER.md`](../PHASE-00-OPEN-DECISION-LEDGER.md) — unresolved Phase 00 decisions and their defaults.

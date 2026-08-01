@@ -37,16 +37,33 @@ implementation head. See [`evidence/migration/WP-P00-01/00_EVIDENCE_INDEX.json`]
 | Item | Value |
 |---|---|
 | Goal | `GOAL-MYPA-POSTGRESQL-MIGRATION-001` |
-| Phase | `PHASE-00` |
-| Active work item | `WP-P00-01` — bind migration identities and governance ledger |
-| Authorization | `AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001` |
-| Bound acceptance criteria | `P00-AC-01` … `P00-AC-05` |
+| Phase | `PHASE-00` — `IN_PROGRESS` |
+| Active work item | **none** |
+| Last closed work item | `WP-P00-01` — bind migration identities and governance ledger |
+| `WP-P00-01` state | **`CLOSED`** |
+| Current merged baseline | `3e5aad7b2526b09b1e46c817bd00c401e569f5a4` |
 | Successor `WP-P00-02` | `NOT_ACTIVATED` — operator-only, never automatic |
-| Terminal state | `IMPLEMENTED_PENDING_INDEPENDENT_REVIEW` |
+| Remaining Phase 00 criteria | `P00-AC-06` … `P00-AC-08` (belong to `WP-P00-02`) |
 
-## Registration limitation
+Any future work-package authorization must bind the current merged baseline
+`3e5aad7b2526b09b1e46c817bd00c401e569f5a4`. The earlier base
+`d4fed7ec12f0b25ad5520d806aeb7766e95228d5` is superseded.
 
-[`docs/00_REPOSITORY_SOURCE_INDEX.md`](../00_REPOSITORY_SOURCE_INDEX.md) does not yet route to
-this index, because that file is outside the authorized paths for `WP-P00-01`
-(`docs/migration/**` and `evidence/migration/**`). Adding the route requires a separate
-authorization. This is disclosed for independent review rather than resolved by widening scope.
+## Work-item history
+
+`WP-P00-01` — closed. Acceptance criteria `P00-AC-01` … `P00-AC-05` satisfied.
+
+| Stage | Identity |
+|---|---|
+| Implementation | `d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f`, tree `9956fe7bed3b2d92e7243b1881f5b31c2d28da1d` |
+| Independent review | `INDEPENDENT_WP_P00_01_IMPLEMENTATION_REVIEW_PASS` at the pre-merge head, 0 blocking findings |
+| Integration | pull request #8 |
+| Merge | squash, `3e5aad7b2526b09b1e46c817bd00c401e569f5a4`, tree unchanged at `9956fe7b…` |
+| Post-merge validation | `PASS` — tree and all 20 file blobs byte-identical |
+| Cleanup | complete — both branch refs deleted |
+
+Historical implementation evidence is preserved under
+[`evidence/migration/WP-P00-01/`](../../evidence/migration/WP-P00-01/00_EVIDENCE_INDEX.json);
+closeout evidence is under
+[`evidence/migration/WP-P00-01/closeout/`](../../evidence/migration/WP-P00-01/closeout/00_CLOSEOUT_INDEX.json).
+Durable coordination packages for every stage are published to the governed Drive evidence area.

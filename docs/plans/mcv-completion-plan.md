@@ -221,6 +221,7 @@ claim left visible.
 | D-02 | tmux channel replaced by subagent delegation | `tmux` is not installed on this machine and no `claude-code` session exists. The dispatched plan assumed a separate orchestrator driving this session through tmux; this session is itself the implementation agent. Plan §3 and §9.2 independently require fresh subagents for implementation and exact-head review, which is the substituted mechanism. | Departure, disclosed |
 | D-03 | Workstreams E, F, I deferred | Outside the single read-only vertical slice `AGENTS.md` §1 and §3 define, and named as excluded by `docs/specs/mcv-read-only-vertical-slice.md` §5.2. The specification is `PROPOSED_FOR_REPOSITORY_REVIEW`, so `AGENTS.md` carries the argument and the specification corroborates it. | Deferred |
 | D-04 | Workstreams G, H deferred | Dependency-blocked on B/C/D, which do not exist. The specification is silent on both, so nothing excludes them; they are sequenced, not ruled out. Plan §7-H forbids fabricating backend behavior; `P00-OD-009` gates G's source root to the operator. | Deferred |
+| D-09 | Workstream H additionally held by operator instruction | The operator directed on 2026-08-01 that no frontend implementation is in scope until they say otherwise. This is a stronger and more durable hold than D-04's dependency argument, which would lapse once B/C/D exist. Recorded separately so that satisfying the dependency does not read as authorisation to start. | Operator-directed |
 | D-05 | Corpus claim accepted | Recomputed from the live database, not restated. Exact match. | Verified |
 | D-06 | PDF remains `unsupported` | `P00-OD-003` is `OPEN_OPERATOR`. Reporting `unsupported` is the specified behavior; silently skipping is forbidden. | Accepted |
 | D-07 | Corrected in place: this document first said "five revisions" | The count came from a truncated directory listing. Recounted from `migrations/versions/*.py`: six, chained `5d75f23847c9 → 1e6c0a94f3b7 → 4b9f0d27ac31 → 2f7d1ba05c48 → 3a8e2cb16d59 → 6c4d3ea82f10`, the last creating target views, and the head matching `alembic_version` in the live database. The mechanism, not just the number, is fixed: the count is now stated with the head revision beside it, so a future drift between the files and the database is visible rather than latent. | Corrected |
@@ -228,9 +229,11 @@ claim left visible.
 
 ## 10. Operator decisions this plan does not make
 
-- Whether to promote E, F, G, H, or I into current scope. That takes an explicit
+- Whether to promote E, F, G, or I into current scope. That takes an explicit
   reprioritisation of the objective under `AGENTS.md` §3, not an implementation
   choice, and not a specification amendment alone.
+- H is held by direct operator instruction (D-09) and resumes only when the
+  operator lifts it, independently of whether its backend dependencies exist.
 - Note that the `AGENTS.md` basis is strongest for E and F, which a read-only
   slice excludes directly, and weakest for I, where the deferral leans on §3's
   preference for one slice over partial systems and on the proposed

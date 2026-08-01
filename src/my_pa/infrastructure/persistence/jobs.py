@@ -5,19 +5,37 @@ leases one resource per migration run and is written by the loader; conflating
 the two would make an enrollment retry and a migration retry the same row, and
 would put application code on the write path of migration governance state.
 
-Four operations, because four is what a worker needs:
+Five operations, because five is what a worker needs:
 
 * `enqueue_job` records that an enrollment has work outstanding.
 * `claim_job` takes the oldest claimable job under a bounded lease.
 * `complete_job` and `release_job` end an attempt.
+* `reap_abandoned_jobs` makes an abandoned final attempt terminal.
 
 Claiming is idempotent in the sense that matters: `FOR UPDATE SKIP LOCKED`
 means two workers running the same query take two different jobs rather than
 one job twice, and the claim increments `attempt_count` in the same statement
 that sets the lease, so an attempt is counted even by a worker that then dies
-without reporting anything. A crashed worker's lease expires by the clock and
-its job becomes claimable again with no sweeper process, no heartbeat table, and
-nothing to restart.
+without reporting anything.
+
+A crashed worker therefore releases its work by doing nothing, and there are two
+cases rather than one. While attempts remain, the expired lease makes the job
+claimable again. On the *final* attempt there is no next claim to recover it, so
+without the reap the row would sit at `running` with an expired lease and an
+exhausted attempt count — unclaimable, non-terminal, and reported as live work
+that nothing is doing. Section 9.5 distinguishes `running` from `failed` and
+`INV-PKL-007` forbids unavailable state that looks live, so that row is
+`failed`; it just has not been written down yet.
+
+`_ABANDONED` is that condition, declared once and used twice. `claim_job` reaps
+before it claims, so the stored state converges on the next claim by any worker;
+`job_state` derives the same answer from the same predicate, so a status read is
+honest in the window before that happens. Deriving rather than writing on the
+read path keeps a status query from needing a writable transaction, and using
+one predicate for both is what stops the reported state and the stored state
+from meaning different things. No sweeper process, no heartbeat table, and
+nothing to restart — the recovery is a `WHERE` clause on the path that was
+already going to run.
 
 `complete_job` and `release_job` require the owner and match on it. A worker
 whose lease expired while it was still running must not be able to report on
@@ -53,8 +71,20 @@ __all__ = [
     "complete_job",
     "enqueue_job",
     "job_state",
+    "reap_abandoned_jobs",
     "release_job",
 ]
+
+#: A job whose worker will never come back and which has no attempts left. The
+#: lease is expired, so nobody holds it; the attempts are spent, so nobody may
+#: take it. Declared once because `claim_job` writes this state and `job_state`
+#: reports it, and the two answering differently would be worse than either
+#: being wrong.
+_ABANDONED: Final = and_(
+    jobs.c.state == JobState.RUNNING.value,
+    jobs.c.lease_expires_at <= func.now(),
+    jobs.c.attempt_count >= jobs.c.max_attempts,
+)
 
 #: A worker names itself with a bounded token. The pattern excludes `.`, `:`,
 #: `/`, and `@`, so a hostname, a URL, or an account cannot be stored as an
@@ -111,17 +141,50 @@ def enqueue_job(
     return operation_id
 
 
+def reap_abandoned_jobs(connection: Connection) -> int:
+    """Fail every job whose worker abandoned its final attempt. Returns the count.
+
+    A job is abandoned when its lease has expired and its attempts are spent:
+    nobody holds it and nobody may take it, so `running` is no longer true of
+    it. Idempotent — a second call finds nothing, because the first made the
+    rows terminal.
+
+    `unavailable` is the recorded code because it is what is actually known: the
+    worker stopped being available before it reported anything. Claiming to know
+    more than that would be a guess written into the record.
+    """
+    statement = (
+        jobs.update()
+        .where(_ABANDONED)
+        .values(
+            state=JobState.FAILED.value,
+            lease_owner=None,
+            lease_expires_at=None,
+            last_error_code=ErrorCode.UNAVAILABLE.value,
+            updated_at=func.now(),
+        )
+    )
+    return int(connection.execute(statement).rowcount)
+
+
 def claim_job(connection: Connection, *, owner: str, lease_seconds: int) -> LeasedJob | None:
     """Claim the oldest claimable job for `owner`, or return `None`.
 
     Claimable means queued, or running with an expired lease — that second case
-    is the entire recovery path for a crashed worker. A job that has used every
-    permitted attempt is not claimable, so the bound holds even if nobody ever
-    calls `release_job`.
+    is the recovery path for a crashed worker that still has attempts left. A
+    job that has used every permitted attempt is not claimable, so the bound
+    holds even if nobody ever calls `release_job`.
+
+    Reaps first. Doing it here rather than in a separate process is what makes
+    an abandoned final attempt reach a terminal state without introducing one:
+    the only actor that exists is a worker looking for work, so that is where
+    the convergence has to happen.
     """
     _validate_owner(owner)
     if not 1 <= lease_seconds <= MAX_LEASE_SECONDS:
         raise ValueError(f"lease_seconds must be between 1 and {MAX_LEASE_SECONDS}")
+
+    reap_abandoned_jobs(connection)
 
     claimable = (
         select(jobs.c.operation_id)
@@ -232,9 +295,18 @@ def release_job(
 
 
 def job_state(connection: Connection, operation_id: str) -> JobState | None:
-    """Return the state of `operation_id`, or `None` when there is no such job."""
+    """Return the state of `operation_id`, or `None` when there is no such job.
+
+    Reports an abandoned final attempt as `failed` from the moment its lease
+    expires, rather than from the moment some later claim happens to write that
+    down. The derivation uses the same `_ABANDONED` predicate `reap_abandoned_jobs`
+    writes, so the answer here and the value that eventually lands in the column
+    cannot disagree. It stays a read: a status query does not need a writable
+    transaction to tell the truth.
+    """
     validate_identifier(operation_id, IdKind.OPERATION)
+    reported = case((_ABANDONED, JobState.FAILED.value), else_=jobs.c.state)
     state = connection.execute(
-        select(jobs.c.state).where(jobs.c.operation_id == operation_id)
+        select(reported).where(jobs.c.operation_id == operation_id)
     ).scalar_one_or_none()
     return None if state is None else JobState(state)

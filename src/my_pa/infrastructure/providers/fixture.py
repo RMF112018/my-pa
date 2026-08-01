@@ -15,12 +15,39 @@ an `O_RDONLY` open.
 **Containment.** Every path that leaves this module for the filesystem passes
 `resolve_within`, which resolves both the root and the candidate and then
 requires the resolved candidate to lie inside the resolved root. Resolution is
-what makes it total: a `..` segment, an absolute path, a symlink to an absolute
-or relative location outside, and a directory symlink all collapse to the
-location that would actually be opened, and are then compared as paths rather
-than as strings. Containment is proved again immediately before `fetch` opens
-the object, on the same path the open then uses -- see `fetch` for why the gap
-between minting an identifier and opening a descriptor is the whole problem.
+what makes it general: a `..` segment, an absolute path, a symlink to an
+absolute or relative location outside, and a directory symlink all collapse to
+the location that would actually be opened, and are then compared as paths
+rather than as strings. Containment is proved again immediately before `fetch`
+opens the object, on the same path the open then uses -- see `fetch` for why the
+gap between minting an identifier and opening a descriptor is the whole problem.
+
+Resolution is *not* total, and an overclaim here is the sentence that would ship
+a hole. What a resolved path cannot see, and what is done about each:
+
+- **A hard link.** A second name for an inode is not a link `realpath` can
+  follow; a hard link inside the root to a file outside it resolves to a path
+  inside the root and is admitted by every check above. It is refused instead by
+  its link count, on the open descriptor, in `fetch`, and by name in `_observe`.
+  This refuses *legitimate* hard links too, including two names inside the root
+  for one file. That is the correct trade at a read-only boundary: the check
+  cannot tell which of an inode's names are inside the root without walking the
+  whole volume, so it refuses the ambiguity rather than resolving it in the
+  caller's favour, and a source that needs hard links can be de-duplicated
+  before it is enrolled.
+- **A bind mount, or any filesystem mounted inside the root.** It exposes an
+  outside subtree at a path that genuinely is inside the root, and no amount of
+  resolution reveals it. This is **not** handled here, for two reasons worth
+  separating. Mounting requires privileges that already defeat this boundary by
+  other means, so it sits outside the threat model the rest of this module is
+  built for -- an adversary who can write *inside* the root, which is what the
+  symlink and hard-link cases assume. And the obvious defence, refusing objects
+  whose device differs from the root's, would also refuse a legitimate share
+  mounted below an approved root, which is exactly the shape a future live
+  source takes. `P00-OD-009` gates live roots to the operator and is open; the
+  roots this provider is pointed at today are `fixtures/mcv/root` and
+  `tmp_path`. Stated so the decision to leave it is visible rather than absent.
+- **The instant after resolution.** See step 2 of `fetch`.
 
 **Denial does not discriminate.** Absent, outside the root, never issued, not a
 regular file: every one of them raises `TraversalDeniedError` carrying the same
@@ -64,6 +91,7 @@ from typing import Final
 from my_pa.domain.common.identifiers import IdKind, make_identifier, validate_identifier
 from my_pa.domain.source.provider import (
     ObjectKind,
+    ProviderError,
     SourceObject,
     SourceObjectContent,
     SourceProvider,
@@ -94,6 +122,20 @@ MEDIA_TYPES: Final[dict[str, str]] = {
 #: Bytes per `os.read`. A ceiling on one syscall's buffer, not on the read.
 _CHUNK_BYTES: Final = 1 << 20
 
+#: How `fetch` opens an object, and why each flag is there.
+#:
+#: `O_RDONLY`   the whole boundary in one flag: there is no write path.
+#: `O_NOFOLLOW` refuse a final component that became a symlink after the path
+#:              was resolved. Final component only -- see `fetch` step 2.
+#: `O_NONBLOCK` **an availability guarantee, not a performance one.** Opening a
+#:              FIFO for reading blocks until a writer arrives, and the guard
+#:              that refuses a non-regular file runs *after* the open, so it
+#:              never gets to run: a FIFO swapped in for a file hangs the
+#:              caller indefinitely. With this flag the open returns at once and
+#:              the guard fires. It is a no-op for regular files, which is what
+#:              makes it free.
+_OPEN_FLAGS: Final = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+
 #: What identifies one observation of one object.
 _Fingerprint = tuple[int, int, int, int, int]
 
@@ -114,11 +156,19 @@ def resolve_within(root: Path, candidate: Path, object_id: str) -> Path:
     resolved: Path | None
     try:
         resolved = candidate.resolve()
-    except OSError:
-        # A resolution that fails (a symlink cycle, for instance) is a
-        # containment that cannot be proved, which is a denial. Recorded here
-        # and raised below, outside the handler, so that the `OSError` -- which
-        # names the file -- is not left behind in `__context__`.
+    except (OSError, RuntimeError):
+        # A resolution that fails is a containment that cannot be proved, which
+        # is a denial. Recorded here and raised below, outside the handler, so
+        # that the original -- which names the file -- is not left behind in
+        # `__context__`.
+        #
+        # `RuntimeError` is not a mistake and not defensive breadth. On a
+        # symlink loop, CPython's `Path.resolve` catches the `ELOOP` `OSError`
+        # and re-raises `RuntimeError("Symlink loop from %r" % e.filename)`:
+        # a non-`OSError`, not a `ProviderError` a caller could classify, and
+        # carrying an absolute path in its message. Catching `OSError` alone
+        # let one looping symlink anywhere under the root abort an entire
+        # listing and disclose a path while doing it.
         resolved = None
     if resolved is None or not resolved.is_relative_to(root):
         raise TraversalDeniedError(f"{object_id} {_DENIAL}")
@@ -145,6 +195,18 @@ def _fingerprint(status: os.stat_result) -> _Fingerprint:
     inode, is not visible here. What closes the gap for a read is not this
     function but `fetch`, which compares the fingerprint of the descriptor it
     actually read from, before and after the read.
+
+    A second honest note, because a mutation of this function survived the
+    suite once and the finding belongs next to the code. On a filesystem with
+    nanosecond timestamps, `st_ctime_ns` moves for every change that device and
+    inode would have caught, so no test driven through real files can show
+    identity doing any work. It is kept because that equivalence is a property
+    of the *filesystem*, not of this function: change time has one-second
+    granularity on HFS+, ext3, and some NFS servers, where a
+    rename-over-the-top inside one second collides on size, modification time,
+    and change time alike. `tests/provider_conformance` states that invariant
+    against constructed `stat` results, which is the only level at which this
+    machine can state it.
     """
     return (
         status.st_dev,
@@ -188,8 +250,17 @@ class FixtureSourceProvider(SourceProvider):
 
     def __init__(self, root: Path, source_id: str) -> None:
         validate_identifier(source_id, IdKind.SOURCE)
-        resolved = Path(root).resolve()
-        if not resolved.is_dir():
+        configured: Path | None
+        try:
+            configured = Path(root).resolve()
+        except (OSError, RuntimeError):
+            # Including a looping root, which `Path.resolve` reports as a
+            # `RuntimeError` naming the path. The operator's own configuration
+            # is not a secret from the operator, but a message that carries a
+            # path is a habit, and this one has no reason to.
+            configured = None
+        resolved = configured
+        if resolved is None or not resolved.is_dir():
             # A misconfigured root is an operator error, not a denial: failing
             # it as a denial would hide it behind the message that must stay
             # uninformative.
@@ -291,15 +362,32 @@ class FixtureSourceProvider(SourceProvider):
             raise TraversalDeniedError(f"{source_object_id} {_DENIAL}")
 
         descriptor: int | None
+        timed_out = False
         try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            descriptor = os.open(path, _OPEN_FLAGS)
+        except TimeoutError:
+            # `TimeoutError` is an `OSError`, so the handler below would have
+            # turned a deadline into a denial. They are different rows of the
+            # section 10 table: `unavailable` is conditionally retryable and
+            # `denied` is not, and `INV-PKL-007` says unavailable evidence is
+            # never converted into something else. Reported as the base
+            # `ProviderError` -- the port defines no narrower class, and
+            # inventing one is not this work package's to do.
+            descriptor = None
+            timed_out = True
         except OSError:
             descriptor = None
+        if timed_out:
+            raise ProviderError(f"{source_object_id} could not be read in time")
         if descriptor is None:
             raise TraversalDeniedError(f"{source_object_id} {_DENIAL}")
         try:
             opened = os.fstat(descriptor)
-            if not S_ISREG(opened.st_mode):
+            if not S_ISREG(opened.st_mode) or opened.st_nlink > 1:
+                # The link count is the hard-link refusal, asked of the
+                # descriptor rather than the name for the same reason as
+                # everything else here. See the module docstring for why a
+                # legitimate hard link is refused along with an escaping one.
                 raise TraversalDeniedError(f"{source_object_id} {_DENIAL}")
             observed = _fingerprint(opened)
             if observed != expected:
@@ -381,10 +469,15 @@ class FixtureSourceProvider(SourceProvider):
 
         if S_ISDIR(status.st_mode):
             kind, size, media_type = ObjectKind.CONTAINER, None, None
-        elif S_ISREG(status.st_mode):
+        elif S_ISREG(status.st_mode) and status.st_nlink == 1:
             kind, size, media_type = ObjectKind.FILE, status.st_size, _media_type(path)
         else:
-            # A socket, device, or fifo is not a logical object this source has.
+            # A socket, device, or fifo is not a logical object this source has,
+            # and a file with a second name may have that name outside the root.
+            # `fetch` refuses both again on the open descriptor; refusing here
+            # too is what keeps a listing from advertising an object that could
+            # never be read, and a directory's link count is not consulted --
+            # `.` and its children make it two or more by construction.
             raise TraversalDeniedError(f"{object_id} {_DENIAL}")
 
         fingerprint = _fingerprint(status)

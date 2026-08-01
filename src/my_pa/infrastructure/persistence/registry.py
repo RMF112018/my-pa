@@ -37,6 +37,7 @@ from my_pa.domain.source.registry import (
     issue_identifier,
     validate_source_label,
 )
+from my_pa.infrastructure.persistence import conflicting_row
 from my_pa.infrastructure.persistence.tables import (
     source_object_versions,
     source_objects,
@@ -113,13 +114,18 @@ def register_source(
     if inserted is not None:
         return _to_source(inserted)
 
+    # The insert conflicted, so the row exists and was committed by someone
+    # else. Reading it here depends on READ COMMITTED taking a fresh snapshot
+    # per statement; the package docstring records what a higher isolation level
+    # does instead. `conflicting_row` keeps the remaining case — the row deleted
+    # between the two statements — from looking like an absent row.
     existing = connection.execute(
         select(*_SOURCE_COLUMNS).where(
             sources.c.provider_kind == provider_kind.value,
             sources.c.native_root == native_root,
         )
-    ).one()
-    return _to_source(existing)
+    ).one_or_none()
+    return _to_source(conflicting_row(existing, "knowledge.sources"))
 
 
 def get_source(connection: Connection, source_id: str) -> ConfiguredSource:
@@ -172,13 +178,15 @@ def _object_id_for(
     issued = connection.execute(statement).scalar_one_or_none()
     if issued is not None:
         return str(issued)
+    # Insert-then-select fallback: requires READ COMMITTED. See the package
+    # docstring and `register_source`.
     existing = connection.execute(
         select(source_objects.c.source_object_id).where(
             source_objects.c.source_id == source_id,
             source_objects.c.native_locator == native_locator,
         )
-    ).scalar_one()
-    return str(existing)
+    ).scalar_one_or_none()
+    return str(conflicting_row(existing, "knowledge.source_objects"))
 
 
 def observe_object(
@@ -227,12 +235,15 @@ def observe_object(
     )
     version_id = connection.execute(statement).scalar_one_or_none()
     if version_id is None:
-        version_id = connection.execute(
+        # Insert-then-select fallback: requires READ COMMITTED. See the package
+        # docstring and `register_source`.
+        found = connection.execute(
             select(source_object_versions.c.version_id).where(
                 source_object_versions.c.source_object_id == source_object_id,
                 source_object_versions.c.fingerprint == fingerprint,
             )
-        ).scalar_one()
+        ).scalar_one_or_none()
+        version_id = conflicting_row(found, "knowledge.source_object_versions")
 
     return SourceObject(
         source_id=source_id,

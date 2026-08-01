@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
+import stat
 from pathlib import Path
 
 import pytest
@@ -30,10 +31,12 @@ from my_pa.domain.common.identifiers import (
 )
 from my_pa.domain.source.provider import (
     ObjectKind,
+    ProviderError,
     SourceObject,
     TraversalDeniedError,
     VersionChangedError,
 )
+from my_pa.infrastructure.providers import fixture as fixture_module
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -457,6 +460,180 @@ def test_a_deleted_object_is_denied(sandbox: Path) -> None:
         source.metadata(observed.source_object_id)
     with pytest.raises(TraversalDeniedError):
         source.fetch(observed.source_object_id, max_bytes=16)
+
+
+def test_a_fifo_is_not_a_logical_object_and_is_not_listed(sandbox: Path) -> None:
+    """`INV-PKL-007`: a listing carries what the source has, and a pipe is not it.
+
+    A FIFO described as a `file` would be an object whose `size_bytes` means
+    nothing and whose read blocks. It is omitted, and the regular file beside
+    it is what proves the listing ran at all.
+    """
+    (sandbox / "regular.txt").write_bytes(b"a real file")
+    os.mkfifo(sandbox / "pipe")
+    assert stat.S_ISFIFO((sandbox / "pipe").stat().st_mode)
+
+    listed = list(provider(sandbox).list_children())
+    assert len(listed) == 1, "a non-regular entry reached the listing"
+    assert listed[0].size_bytes == len(b"a real file")
+
+
+def test_an_identifier_with_no_observation_is_denied_rather_than_called_a_conflict(
+    sandbox: Path,
+) -> None:
+    """The fail-closed guard in `fetch`, and why its wording matters.
+
+    Every public path that issues an identifier also records an observation, so
+    the state this guard exists for cannot be reached from outside -- it is
+    constructed here by hand, which is the only way to check that the guard
+    does what it says. Without it the comparison runs against `None` and the
+    caller is told `conflict`: refresh and retry. There is nothing to refresh,
+    so that advice is a loop. `denied` is the truthful answer.
+    """
+    (sandbox / "note.txt").write_bytes(b"observed once")
+    source = provider(sandbox)
+    entry = next(iter(source.list_children()))
+    source._observations.pop(entry.source_object_id)
+
+    with pytest.raises(TraversalDeniedError):
+        source.fetch(entry.source_object_id, max_bytes=64)
+
+
+def test_a_change_during_the_read_is_a_conflict(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Step 4 of `fetch`: the fingerprint is compared again *after* the read.
+
+    A writer that lands between the pre-read `fstat` and the post-read one
+    cannot be produced on schedule from a single thread, so the write is
+    injected into the read itself. The bytes returned would be half of one
+    version and half of another; the object is re-fingerprinted rather than
+    trusted, so the caller gets `conflict` instead.
+    """
+    target = sandbox / "note.txt"
+    target.write_bytes(b"a" * 64)
+    source = provider(sandbox)
+    entry = next(iter(source.list_children()))
+
+    read_bounded = fixture_module._read_bounded
+
+    def racing(descriptor: int, max_bytes: int) -> bytes:
+        content = read_bounded(descriptor, max_bytes)
+        _rewrite(target, b"b" * 64)
+        return content
+
+    monkeypatch.setattr(fixture_module, "_read_bounded", racing)
+    with pytest.raises(VersionChangedError):
+        source.fetch(entry.source_object_id, max_bytes=64)
+
+
+def test_a_rewrite_that_restores_the_modification_time_is_still_detected(
+    sandbox: Path,
+) -> None:
+    """The case only the change time sees, which is why it is in the fingerprint.
+
+    A tool that preserves timestamps -- `rsync --times`, an editor that writes
+    through, a restore from backup -- rewrites the bytes and puts the old mtime
+    back. Size, mtime, device, and inode are then all identical to the
+    observation. `st_ctime_ns` is not, because the kernel moves it on every
+    inode write including the `utime` itself, and the assertions below check
+    that this is the *only* field that differs before relying on it.
+    """
+    target = sandbox / "note.txt"
+    target.write_bytes(b"aaaa")
+    before = target.stat()
+    source = provider(sandbox)
+    entry = next(iter(source.list_children()))
+
+    target.write_bytes(b"bbbb")
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = target.stat()
+
+    assert after.st_size == before.st_size
+    assert after.st_mtime_ns == before.st_mtime_ns
+    assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
+    assert after.st_ctime_ns != before.st_ctime_ns, "only the change time can catch this"
+
+    with pytest.raises(VersionChangedError):
+        source.fetch(entry.source_object_id, max_bytes=64)
+    assert target.read_bytes() == b"bbbb"
+
+
+@pytest.mark.parametrize(("field", "index"), [("st_ino", 1), ("st_dev", 2)])
+def test_two_distinct_objects_never_share_a_fingerprint(
+    sandbox: Path, field: str, index: int
+) -> None:
+    """Device and inode, asserted where this filesystem allows it to be asserted.
+
+    Every other version test drives the provider through real files, and on a
+    filesystem with nanosecond timestamps that is enough: any replacement moves
+    `st_ctime_ns`, so a test cannot tell whether device and inode are doing any
+    work. They are not redundant everywhere. Change time has one-second
+    granularity on HFS+, ext3, and some NFS servers, and there a
+    rename-over-the-top inside a single second collides on size, on
+    modification time, *and* on change time -- the inode is the only field
+    left. That volume cannot be mounted here, so the invariant is stated at the
+    level of the function instead of the filesystem: two `stat` results that
+    differ only in identity must not fingerprint alike.
+
+    Userspace cannot set `st_ctime`, which is why the twin is constructed
+    rather than created.
+    """
+    target = sandbox / "note.txt"
+    target.write_bytes(b"identical in every respect but identity")
+    real = target.stat()
+
+    values = list(real)
+    values[index] += 1
+    twin = os.stat_result(
+        values,
+        {
+            "st_atime_ns": real.st_atime_ns,
+            "st_mtime_ns": real.st_mtime_ns,
+            "st_ctime_ns": real.st_ctime_ns,
+        },
+    )
+    assert getattr(twin, field) != getattr(real, field)
+    assert (twin.st_size, twin.st_mtime_ns, twin.st_ctime_ns) == (
+        real.st_size,
+        real.st_mtime_ns,
+        real.st_ctime_ns,
+    ), "the twin differs in more than identity, so this proves nothing"
+
+    assert fixture_module._fingerprint(twin) != fixture_module._fingerprint(real)
+
+
+def test_a_timeout_is_reported_as_unavailable_and_not_as_a_denial(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`TimeoutError` is an `OSError`, and the two mean opposite things.
+
+    Section 10 separates `unavailable` from `denied`: one is conditionally
+    retryable, the other is not, and `INV-PKL-007` forbids converting
+    unavailable evidence into something else. A blanket `except OSError` around
+    the open would relabel a deadline -- or an `ETIMEDOUT` from a network
+    filesystem -- as a refusal, and a caller would stop retrying something that
+    was only slow. The message still carries no path, because the `OSError`
+    that caused it does.
+    """
+    (sandbox / "note.txt").write_bytes(b"present but slow")
+    source = provider(sandbox)
+    entry = next(iter(source.list_children()))
+
+    def timing_out(*arguments: object, **keywords: object) -> int:
+        raise TimeoutError(60, "Operation timed out", str(sandbox / "note.txt"))
+
+    monkeypatch.setattr(os, "open", timing_out)
+    with pytest.raises(ProviderError) as raised:
+        source.fetch(entry.source_object_id, max_bytes=64)
+
+    assert not isinstance(raised.value, TraversalDeniedError)
+    assert not isinstance(raised.value, VersionChangedError)
+    rendered = f"{raised.value!r} {raised.value.args}"
+    for fragment in (str(sandbox), "note.txt", "Operation timed out", os.sep):
+        assert fragment not in rendered
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
 
 
 def template(exception: BaseException, object_id: str) -> str:

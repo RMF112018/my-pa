@@ -37,6 +37,7 @@ from my_pa.domain.source.enrollment import (
     EnrollmentScope,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence import conflicting_row
 from my_pa.infrastructure.persistence.tables import enrollments
 
 __all__ = ["AcceptedEnrollment", "accept_enrollment"]
@@ -127,6 +128,13 @@ def accept_enrollment(connection: Connection, request: EnrollmentRequest) -> Acc
     if inserted is not None:
         return AcceptedEnrollment(_to_enrollment(inserted), True)
 
+    # The insert conflicted, so the key is in use and the row that holds it was
+    # committed by another transaction. Reading it here depends on READ
+    # COMMITTED taking a fresh snapshot per statement; the package docstring
+    # records what a higher isolation level does instead, which was measured
+    # rather than assumed. `conflicting_row` is what stops the remaining case —
+    # the row deleted between the two statements — from surfacing as a
+    # `NoResultFound` that reads like a missing enrollment.
     existing = connection.execute(
         select(*_COLUMNS).where(
             enrollments.c.principal_id == request.principal_id,
@@ -135,8 +143,8 @@ def accept_enrollment(connection: Connection, request: EnrollmentRequest) -> Acc
             enrollments.c.policy_version == request.policy_version,
             enrollments.c.idempotency_key == request.idempotency_key,
         )
-    ).one()
-    enrollment = _to_enrollment(existing)
+    ).one_or_none()
+    enrollment = _to_enrollment(conflicting_row(existing, "knowledge.enrollments"))
     if enrollment.request_fingerprint != fingerprint:
         raise EnrollmentConflictError(enrollment.enrollment_id)
     return AcceptedEnrollment(enrollment, False)

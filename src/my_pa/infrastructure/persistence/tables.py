@@ -209,6 +209,14 @@ enrollments = Table(
         f"max_items BETWEEN 1 AND {MAX_ENROLLMENT_ITEMS}",
         name="enrollment_items_are_bounded",
     ),
+    # An enrollment that names more objects than it permits has written two
+    # bounds that contradict; neither the scope nor the ceiling can see the
+    # other on its own, so the relation between them is stated here as well as
+    # in the request type.
+    CheckConstraint(
+        "cardinality(object_ids) <= max_items",
+        name="enrollment_names_no_more_objects_than_it_allows",
+    ),
     CheckConstraint(
         f"max_bytes BETWEEN 1 AND {MAX_ENROLLMENT_BYTES}",
         name="enrollment_bytes_are_bounded",

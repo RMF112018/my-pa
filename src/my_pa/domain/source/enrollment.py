@@ -204,6 +204,17 @@ class EnrollmentRequest:
         object.__setattr__(self, "media_types", _normalized_media_types(self.media_types))
         _check_ceiling("max_items", self.max_items, MAX_ENROLLMENT_ITEMS)
         _check_ceiling("max_bytes", self.max_bytes, MAX_ENROLLMENT_BYTES)
+        # The scope caps its own list and `max_items` caps itself, but neither
+        # can see the other: only the request holds both. An operator who writes
+        # `max_items=1` and then names fifty objects has written two bounds that
+        # contradict, and section 10 puts a contradictory request under
+        # `invalid_request` rather than letting one bound quietly win. Counts,
+        # not identifiers, appear in the message.
+        named = len(self.scope.object_ids)
+        if named > self.max_items:
+            raise EnrollmentBoundsError(
+                f"max_items is {self.max_items} but the selector names {named} objects"
+            )
         if not _POLICY_VERSION_PATTERN.fullmatch(self.policy_version):
             raise EnrollmentBoundsError(
                 "policy_version must be 1-32 characters of letters, digits, dots, "

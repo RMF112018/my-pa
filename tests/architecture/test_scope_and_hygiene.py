@@ -168,19 +168,38 @@ def test_every_package_directory_is_importable() -> None:
 
 #: Module names that mean speculative machinery rather than a domain noun.
 #:
-#: `registry` was a bare term here until the source registry entered scope. The
-#: MCV specification section 9.6 requires registering and enrolling configured
-#: sources, so a registry of sources is a product capability, not an extension
-#: point, and banning the word outright would have forced a worse name on a
-#: required concept. The speculative sense is what the guard was for, so the
-#: compounds that carry that sense stay banned and the bare noun no longer is.
+#: `registry` was a bare term here until the source registry entered scope.
+#: `docs/plans/mcv-completion-plan.md` section 7 names "source registry, bounded
+#: enrollment with idempotency keys, job lease/retry, opaque ID issuance" as the
+#: WP-2 deliverable, so a registry of sources is a planned product capability
+#: rather than an extension point, and banning the word outright would have
+#: forced a worse name on a required concept. The speculative sense is what the
+#: guard was for, so the compounds carrying that sense stay banned.
 #:
-#: Narrowing a guard is only safe if the guard still bites, which
-#: `test_the_speculative_module_guard_still_catches_what_it_is_for` proves.
+#: Two tests hold this pattern in place, and it is worth being exact about what
+#: they can and cannot show. The planted violations below prove the pattern is
+#: not vacuous; they cannot prove it is general, because any finite list of
+#: examples is also satisfied by a pattern that matches only those examples.
+#: `test_the_speculative_module_guard_is_exactly_this_pattern` closes that gap
+#: structurally: shrinking the pattern to fit its own fixtures fails there.
+#:
+#: Coverage was genuinely lost, not merely relocated. The old bare term also
+#: caught `tool_registry`, `strategy_registry`, `port_registry`, and
+#: `registry_factory`; those are named below to recover them. It also caught
+#: `source_registry`, which is now deliberately permitted — that name is the
+#: legitimate one for this concept.
 _SPECULATIVE_MODULE_NAMES = re.compile(
-    r"(plugin|factory_factory|abstract_base|extension_point"
-    r"|(?:plugin|service|provider|component|handler|adapter|capability)_registry)",
+    r"(plugin|factory_factory|abstract_base|extension_point|registry_factory"
+    r"|(?:plugin|service|provider|component|handler|adapter|capability|tool"
+    r"|strategy|port)_registry)",
     re.I,
+)
+
+#: The pattern above, pinned. An edit to the guard has to be an edit here too.
+_EXPECTED_SPECULATIVE_PATTERN = (
+    r"(plugin|factory_factory|abstract_base|extension_point|registry_factory"
+    r"|(?:plugin|service|provider|component|handler|adapter|capability|tool"
+    r"|strategy|port)_registry)"
 )
 
 
@@ -218,7 +237,20 @@ def test_the_speculative_module_guard_still_catches_what_it_is_for(name: str) ->
     assert _SPECULATIVE_MODULE_NAMES.search(name), f"{name} should be rejected"
 
 
-@pytest.mark.parametrize("name", ["registry.py", "sources.py", "enrollment.py", "jobs.py"])
+@pytest.mark.parametrize(
+    "name", ["registry.py", "source_registry.py", "sources.py", "enrollment.py", "jobs.py"]
+)
 def test_the_speculative_module_guard_permits_domain_nouns(name: str) -> None:
     """The narrowing is deliberate and bounded, not incidental."""
     assert not _SPECULATIVE_MODULE_NAMES.search(name), f"{name} should be permitted"
+
+
+def test_the_speculative_module_guard_is_exactly_this_pattern() -> None:
+    """Pin the pattern, because planted violations alone cannot pin it.
+
+    An anchored alternation of exactly the names listed above would satisfy
+    every planted-violation test while catching nothing else. Comparing the
+    pattern itself means a narrowing has to be written twice, deliberately,
+    rather than arrived at by relaxing a regex until the suite goes green.
+    """
+    assert _SPECULATIVE_MODULE_NAMES.pattern == _EXPECTED_SPECULATIVE_PATTERN

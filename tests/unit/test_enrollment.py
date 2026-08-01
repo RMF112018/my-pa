@@ -132,6 +132,35 @@ def test_item_and_byte_ceilings_are_enforced(field: str, value: int) -> None:
         _request(**{field: value})
 
 
+def test_an_enrollment_cannot_name_more_objects_than_it_permits() -> None:
+    """Two bounds that contradict are `invalid_request`, not a race between them.
+
+    An operator who writes `max_items=1` has said the grant covers one object.
+    Neither `EnrollmentScope` nor the `max_items` ceiling can see the other, so
+    only the request can refuse this, and it must.
+    """
+    fifty = tuple(issue_identifier(IdKind.SOURCE_OBJECT) for _ in range(50))
+    with pytest.raises(EnrollmentBoundsError, match="max_items is 1 but the selector names 50"):
+        _request(max_items=1, scope=EnrollmentScope(object_ids=fifty))
+
+
+def test_naming_exactly_as_many_objects_as_permitted_is_allowed() -> None:
+    two = tuple(issue_identifier(IdKind.SOURCE_OBJECT) for _ in range(2))
+    assert _request(max_items=2, scope=EnrollmentScope(object_ids=two)).max_items == 2
+
+
+def test_the_object_count_is_compared_after_deduplication() -> None:
+    """A list that repeats one object names one object, so it fits `max_items=1`."""
+    request = _request(max_items=1, scope=EnrollmentScope(object_ids=(OBJECT_A, OBJECT_A)))
+    assert request.scope.object_ids == (OBJECT_A,)
+
+
+def test_a_root_selector_is_not_constrained_by_the_object_count() -> None:
+    # A root enrollment names no objects; `max_items` bounds what traversal may
+    # yield, which is not knowable at construction.
+    assert _request(max_items=1, scope=EnrollmentScope(root_object_id=ROOT)).max_items == 1
+
+
 @pytest.mark.parametrize("media_types", [(), ("text/plain; charset=utf-8",), ("text",), ("*/*",)])
 def test_the_content_type_allowlist_is_required_and_parameter_free(
     media_types: tuple[str, ...],

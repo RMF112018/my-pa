@@ -24,13 +24,18 @@ from __future__ import annotations
 
 import os
 import secrets
-from collections.abc import Callable
+import signal
+import stat
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.source.provider import ObjectKind, TraversalDeniedError
+from my_pa.infrastructure.providers import fixture as fixture_module
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider, resolve_within
 
 #: What lives outside the root. Any appearance of this in a result or a message
@@ -295,6 +300,191 @@ def test_a_denial_never_names_the_path_the_marker_or_the_root(root: Path) -> Non
             assert fragment not in rendered, f"{name} disclosed {fragment!r}"
         assert failure.__cause__ is None
         assert failure.__context__ is None
+
+
+def test_a_symlink_loop_is_denied_and_does_not_disclose_the_path(root: Path) -> None:
+    """`Path.resolve` reports a symlink loop as `RuntimeError`, not `OSError`.
+
+    CPython catches the `ELOOP` `OSError` and re-raises
+    `RuntimeError("Symlink loop from %r" % e.filename)`. Three things follow,
+    and the first half of this test proves the hazard is real before the second
+    half proves it is handled: the message carries an absolute path, the class
+    is not a `ProviderError` a caller could classify, and a handler that catches
+    only `OSError` lets it through.
+    """
+    (root / "loop-a").symlink_to(root / "loop-b")
+    (root / "loop-b").symlink_to(root / "loop-a")
+
+    with pytest.raises(RuntimeError) as leaked:
+        (root / "loop-a").resolve()
+    assert not isinstance(leaked.value, OSError), "the hazard this test guards has changed"
+    assert "loop-a" in str(leaked.value), "resolve no longer discloses the path"
+
+    object_id = anonymous()
+    with pytest.raises(TraversalDeniedError) as raised:
+        resolve_within(root.resolve(), root / "loop-a", object_id)
+    assert str(raised.value) == f"{object_id} cannot be served from the configured source"
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    rendered = f"{raised.value!r} {raised.value.args}"
+    for fragment in (str(root), "loop", os.sep):
+        assert fragment not in rendered
+
+
+def test_one_looping_symlink_does_not_abort_the_whole_listing(root: Path) -> None:
+    """A listing skips what it cannot resolve, exactly as it skips what escapes.
+
+    Before the `RuntimeError` was caught, a single loop anywhere under the root
+    aborted `list_children` with a path in the message -- a denial of the entire
+    source, and a disclosure, from one entry.
+    """
+    (root / "loop-a").symlink_to(root / "loop-b")
+    (root / "loop-b").symlink_to(root / "loop-a")
+    listed = list(provider(root).list_children())
+    assert len(listed) == 1
+    assert listed[0].size_bytes == len(b"inside the root, and allowed")
+
+
+def test_a_hard_link_to_a_file_outside_the_root_is_refused(root: Path) -> None:
+    """Resolution cannot see a second name for an inode.
+
+    This is the case the resolved-path comparison admits: the link *is* inside
+    the root by every path test there is, and reading it returns bytes from
+    outside. The guard is the link count, not the path -- which is why the
+    non-vacuity assertions below check the containment logic *approves* it.
+    """
+    link = root / "innocuous.txt"
+    os.link(root.parent / "outside" / "secret.txt", link)
+
+    assert link.resolve().is_relative_to(root.resolve()), "resolution rejects it for other reasons"
+    assert not link.is_symlink(), "a hard link is not a symlink; that is the whole difficulty"
+    assert link.read_bytes() == MARKER, "the link is inert; the refusal would be vacuous"
+    assert link.stat().st_nlink == 2
+    assert resolve_within(root.resolve(), link, anonymous()) == root.resolve() / "innocuous.txt"
+
+    source = provider(root)
+    listed = list(source.list_children())
+    assert len(listed) == 1, "the hard link reached the listing"
+    for entry in listed:
+        assert source.fetch(entry.source_object_id, max_bytes=4096).content != MARKER
+
+
+def test_a_file_replaced_by_a_hard_link_after_issue_is_refused_on_the_descriptor(
+    root: Path,
+) -> None:
+    """The link count is checked on the open descriptor, before the version is.
+
+    Order matters here. If the fingerprint comparison ran first, this would come
+    back as `conflict` -- which tells a caller to refresh and try again, and a
+    refreshed observation of a hard link would then be served.
+    """
+    target = root / "contained.txt"
+    source = provider(root)
+    observed = next(iter(source.list_children()))
+    assert source.fetch(observed.source_object_id, max_bytes=64).content != MARKER
+
+    target.unlink()
+    os.link(root.parent / "outside" / "secret.txt", target)
+    assert target.read_bytes() == MARKER, "the swap did not take"
+
+    with pytest.raises(TraversalDeniedError):
+        source.metadata(observed.source_object_id)
+    with pytest.raises(TraversalDeniedError):
+        source.fetch(observed.source_object_id, max_bytes=4096)
+
+
+class DeadlineError(Exception):
+    """Raised from a signal handler when a call outlasts its budget."""
+
+
+@contextmanager
+def deadline(seconds: float) -> Iterator[None]:
+    """Fail a blocking call instead of hanging the suite on it.
+
+    A test for "this must not block forever" cannot be written with an
+    assertion alone: without a timer the failure mode is a suite that never
+    finishes, which reads as a hung machine rather than as a red test. The
+    handler raises something that is deliberately *not* an `OSError`, so the
+    provider's own `except OSError` cannot absorb the deadline and disguise it
+    as a denial.
+    """
+
+    def fire(signal_number: int, frame: object) -> None:
+        raise DeadlineError
+
+    previous = signal.signal(signal.SIGALRM, fire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def test_a_fifo_swapped_in_for_a_file_cannot_block_the_read(root: Path) -> None:
+    """Opening a FIFO for reading waits for a writer that may never come.
+
+    The guard that refuses a non-regular object runs on the descriptor, so it
+    runs *after* the open -- it never gets its turn. `O_NONBLOCK` is what makes
+    the open return so the guard can fire. Without it this call waits forever
+    and the deadline below converts the hang into a failure.
+    """
+    target = root / "contained.txt"
+    source = provider(root)
+    observed = next(iter(source.list_children()))
+
+    target.unlink()
+    os.mkfifo(target)
+    assert stat.S_ISFIFO(target.stat().st_mode), "the swap did not take"
+
+    started = time.monotonic()
+    with deadline(3.0), pytest.raises(TraversalDeniedError):
+        source.fetch(observed.source_object_id, max_bytes=16)
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.0, f"the open blocked for {elapsed:.3f}s"
+
+
+def test_a_fifo_swapped_in_for_a_file_is_denied_by_metadata(root: Path) -> None:
+    target = root / "contained.txt"
+    source = provider(root)
+    observed = next(iter(source.list_children()))
+    target.unlink()
+    os.mkfifo(target)
+    with pytest.raises(TraversalDeniedError):
+        source.metadata(observed.source_object_id)
+
+
+def test_the_open_refuses_a_final_component_that_became_a_symlink(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second layer, tested on the assumption that the first was defeated.
+
+    `O_NOFOLLOW` exists for the instant between resolving a path and opening
+    it. That race cannot be run deterministically, so it is *staged*:
+    containment is replaced by a version that checks the path lexically and
+    skips resolution, which is precisely the state the race produces -- a path
+    that passed containment and whose final component is a symlink by the time
+    the open runs. Every other test in this file exercises the real resolver.
+
+    The symlink here points *inside* the root, so containment is genuinely
+    satisfied and only the open flag can refuse it. That is what keeps the test
+    honest: it fails if `O_NOFOLLOW` is dropped, and it cannot pass by accident
+    on a containment check that is doing the work instead.
+    """
+    (root / "alias.txt").symlink_to(Path("contained.txt"))
+
+    def unresolved(configured: Path, candidate: Path, object_id: str) -> Path:
+        if not candidate.absolute().is_relative_to(configured):
+            raise TraversalDeniedError(f"{object_id} cannot be served from the configured source")
+        return candidate.absolute()
+
+    monkeypatch.setattr(fixture_module, "resolve_within", unresolved)
+
+    source = provider(root)
+    aliased = next(iter(source.list_children()))
+    assert source._paths[aliased.source_object_id].is_symlink(), "the staged path is not a symlink"
+    with pytest.raises(TraversalDeniedError):
+        source.fetch(aliased.source_object_id, max_bytes=64)
 
 
 def test_the_denials_are_indistinguishable_from_one_another(root: Path) -> None:

@@ -30,7 +30,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.v1.errors import ErrorCode
@@ -45,6 +45,7 @@ from my_pa.domain.source.enrollment import (
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind, issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence import IsolationLevelError, conflicting_row
 from my_pa.infrastructure.persistence.enrollment import accept_enrollment
 from my_pa.infrastructure.persistence.jobs import (
     JobState,
@@ -52,6 +53,7 @@ from my_pa.infrastructure.persistence.jobs import (
     complete_job,
     enqueue_job,
     job_state,
+    reap_abandoned_jobs,
     release_job,
 )
 from my_pa.infrastructure.persistence.registry import (
@@ -297,7 +299,15 @@ def _insert_enrollment(
     idempotency_key: str,
     fingerprint: str,
     depth: int = 0,
+    object_ids: tuple[str, ...] = (),
+    max_items: int = 100,
 ) -> str:
+    """Insert one enrollment by hand.
+
+    Raw SQL rather than the writer, because these tests are about what the table
+    refuses. A constraint that only holds when the writer is used is not a
+    constraint.
+    """
     enrollment_id = issue_identifier(IdKind.ENROLLMENT)
     connection.execute(
         text(
@@ -306,8 +316,8 @@ def _insert_enrollment(
             " idempotency_key, request_fingerprint, root_object_id, object_ids, depth, "
             " media_types, max_items, max_bytes) "
             "VALUES (:enrollment_id, :source_id, :principal_id, :purpose, 'mcv-1', "
-            " :idempotency_key, :fingerprint, :root_object_id, '{}', :depth, "
-            " ARRAY['text/plain'], 100, 1024)"
+            " :idempotency_key, :fingerprint, :root_object_id, :object_ids, :depth, "
+            " ARRAY['text/plain'], :max_items, 1024)"
         ),
         {
             "enrollment_id": enrollment_id,
@@ -316,8 +326,11 @@ def _insert_enrollment(
             "purpose": Purpose.BOUNDED_ENROLLMENT.value,
             "idempotency_key": idempotency_key,
             "fingerprint": fingerprint,
-            "root_object_id": issue_identifier(IdKind.SOURCE_OBJECT),
+            # Exactly one selector, so naming objects means naming no root.
+            "root_object_id": None if object_ids else issue_identifier(IdKind.SOURCE_OBJECT),
+            "object_ids": list(object_ids),
             "depth": depth,
+            "max_items": max_items,
         },
     )
     return enrollment_id
@@ -366,6 +379,45 @@ def test_the_schema_refuses_an_enrollment_deeper_than_the_bound(
             fingerprint="c" * 64,
             depth=9,
         )
+
+
+@pytest.mark.database
+def test_the_schema_refuses_an_enrollment_naming_more_objects_than_it_allows(
+    knowledge_engine: Engine,
+) -> None:
+    """The request type is not the only guard; the table relates the two bounds too."""
+    named = tuple(issue_identifier(IdKind.SOURCE_OBJECT) for _ in range(5))
+    with pytest.raises(IntegrityError), knowledge_engine.begin() as connection:
+        source_id = _insert_source(connection)
+        _insert_enrollment(
+            connection,
+            source_id=source_id,
+            principal_id=issue_identifier(IdKind.PRINCIPAL),
+            idempotency_key="enroll-0000000004",
+            fingerprint="d" * 64,
+            object_ids=named,
+            max_items=1,
+        )
+
+
+@pytest.mark.database
+def test_the_schema_accepts_an_object_list_that_fits_its_ceiling(
+    knowledge_engine: Engine,
+) -> None:
+    """The paired negative: the constraint must not refuse a legitimate grant."""
+    named = tuple(issue_identifier(IdKind.SOURCE_OBJECT) for _ in range(5))
+    with knowledge_engine.begin() as connection:
+        source_id = _insert_source(connection)
+        enrollment_id = _insert_enrollment(
+            connection,
+            source_id=source_id,
+            principal_id=issue_identifier(IdKind.PRINCIPAL),
+            idempotency_key="enroll-0000000005",
+            fingerprint="e" * 64,
+            object_ids=named,
+            max_items=5,
+        )
+    assert enrollment_id
 
 
 @pytest.mark.database
@@ -507,6 +559,110 @@ def test_reusing_a_key_with_a_different_request_is_a_conflict(
     assert raised.value.enrollment_id == accepted.enrollment.enrollment_id
 
 
+def _enqueued(connection: Connection, *, max_attempts: int = 3) -> str:
+    """A source, an enrollment, and one queued job. Returns the operation id."""
+    source = register_source(
+        connection,
+        provider_kind=SourceProviderKind.FIXTURE,
+        label="Fixture corpus",
+        classification=Classification.SYNTHETIC_TEST,
+        native_root=NATIVE_ROOT,
+    )
+    accepted = accept_enrollment(
+        connection, _request(source.source_id, issue_identifier(IdKind.PRINCIPAL))
+    )
+    return enqueue_job(connection, accepted.enrollment.enrollment_id, max_attempts=max_attempts)
+
+
+def _expire_lease(connection: Connection, operation_id: str) -> None:
+    """Age a lease past its expiry the way a crashed worker would: by the clock."""
+    connection.execute(
+        text(
+            "UPDATE knowledge.jobs SET lease_expires_at = now() - interval '1 second' "
+            "WHERE operation_id = :operation_id"
+        ),
+        {"operation_id": operation_id},
+    )
+
+
+def _stored_row(connection: Connection, operation_id: str) -> tuple[str, str | None, str | None]:
+    """The columns as written, bypassing any derivation `job_state` performs."""
+    row = connection.execute(
+        text(
+            "SELECT state, lease_owner, last_error_code FROM knowledge.jobs "
+            "WHERE operation_id = :operation_id"
+        ),
+        {"operation_id": operation_id},
+    ).one()
+    return (str(row[0]), row[1], row[2])
+
+
+@pytest.mark.database
+def test_a_worker_that_crashes_on_its_final_attempt_reaches_a_terminal_state(
+    knowledge_engine: Engine,
+) -> None:
+    """The case an expiring lease alone does not recover.
+
+    With attempts left, an expired lease makes the job claimable again. On the
+    final attempt there is no next claim to recover it, so without the reap the
+    row sits at `running` — unclaimable and non-terminal — and `job_state`
+    reports live work that nothing is doing, forever.
+    """
+    with knowledge_engine.begin() as connection:
+        operation_id = _enqueued(connection, max_attempts=1)
+        claimed = claim_job(connection, owner="worker-one", lease_seconds=60)
+        assert claimed is not None
+        assert claimed.attempt == 1
+
+        # The worker vanishes: it neither completes nor releases.
+        _expire_lease(connection, operation_id)
+
+        assert claim_job(connection, owner="worker-two", lease_seconds=60) is None
+        assert job_state(connection, operation_id) is JobState.FAILED
+        # Terminal in the column, not only in the answer.
+        assert _stored_row(connection, operation_id) == ("failed", None, "unavailable")
+
+
+@pytest.mark.database
+def test_an_abandoned_final_attempt_reads_as_failed_before_anything_reclaims_it(
+    knowledge_engine: Engine,
+) -> None:
+    """`job_state` derives the terminal answer; the reap writes it down.
+
+    The two use one predicate, so the answer given before convergence and the
+    value stored after it are the same answer.
+    """
+    with knowledge_engine.begin() as connection:
+        operation_id = _enqueued(connection, max_attempts=1)
+        assert claim_job(connection, owner="worker-one", lease_seconds=60) is not None
+        _expire_lease(connection, operation_id)
+
+        # Reported terminal immediately, without a write.
+        assert job_state(connection, operation_id) is JobState.FAILED
+        assert _stored_row(connection, operation_id)[0] == "running"
+
+        assert reap_abandoned_jobs(connection) == 1
+        assert _stored_row(connection, operation_id) == ("failed", None, "unavailable")
+        # Idempotent: the first call left nothing for the second.
+        assert reap_abandoned_jobs(connection) == 0
+        assert job_state(connection, operation_id) is JobState.FAILED
+
+
+@pytest.mark.database
+def test_a_live_lease_is_not_reaped_however_many_attempts_it_has_used(
+    knowledge_engine: Engine,
+) -> None:
+    """The paired negative: work in progress on its last attempt is still running."""
+    with knowledge_engine.begin() as connection:
+        operation_id = _enqueued(connection, max_attempts=1)
+        assert claim_job(connection, owner="worker-one", lease_seconds=600) is not None
+
+        assert reap_abandoned_jobs(connection) == 0
+        assert job_state(connection, operation_id) is JobState.RUNNING
+        assert _stored_row(connection, operation_id)[0] == "running"
+        assert complete_job(connection, operation_id, owner="worker-one") is True
+
+
 @pytest.mark.database
 def test_a_job_is_claimed_once_and_an_expired_lease_is_reclaimed(
     knowledge_engine: Engine,
@@ -597,3 +753,174 @@ def test_attempts_are_bounded_and_end_in_a_terminal_state(knowledge_engine: Engi
         # Exhausted work is not handed out again.
         assert claim_job(connection, owner="worker-one", lease_seconds=60) is None
         assert job_state(connection, operation_id) is JobState.FAILED
+
+
+#: Long enough that a healthy claim never trips it, short enough that a claim
+#: which blocks fails the test instead of hanging the suite. Without
+#: `SKIP LOCKED` the second claim below waits on the first worker's row lock,
+#: and waiting forever is not a test result.
+CONTENDED_CLAIM_TIMEOUT_MS = 5000
+
+
+@pytest.mark.database
+def test_two_simultaneous_workers_do_not_take_the_same_job(knowledge_engine: Engine) -> None:
+    """Two real connections, two open transactions — the contended path.
+
+    A single-transaction test cannot reach this code: the second claim there is
+    filtered out by the lease predicate before `SKIP LOCKED` is consulted, so it
+    proves nothing about locking. Here the first worker's row lock is genuinely
+    held by another transaction when the second worker scans.
+    """
+    with knowledge_engine.begin() as setup:
+        _enqueued(setup)
+        _enqueued(setup)
+
+    with knowledge_engine.connect() as alpha, knowledge_engine.connect() as beta:
+        beta.execute(text(f"SET LOCAL statement_timeout = '{CONTENDED_CLAIM_TIMEOUT_MS}ms'"))
+
+        first = claim_job(alpha, owner="worker-one", lease_seconds=60)
+        second = claim_job(beta, owner="worker-two", lease_seconds=60)
+
+        assert first is not None
+        assert second is not None
+        assert first.operation_id != second.operation_id
+        assert first.attempt == second.attempt == 1
+
+
+@pytest.mark.database
+def test_a_contended_claim_yields_rather_than_waiting(knowledge_engine: Engine) -> None:
+    """With one job and two claimers, the loser gets `None` instead of blocking.
+
+    This is what `SKIP LOCKED` buys. Without it the second claim waits on the
+    first transaction's row lock and the statement timeout fires, so the
+    assertion below is reached only when the lock is genuinely skipped.
+    """
+    with knowledge_engine.begin() as setup:
+        operation_id = _enqueued(setup)
+
+    with knowledge_engine.connect() as alpha, knowledge_engine.connect() as beta:
+        beta.execute(text(f"SET LOCAL statement_timeout = '{CONTENDED_CLAIM_TIMEOUT_MS}ms'"))
+
+        first = claim_job(alpha, owner="worker-one", lease_seconds=60)
+        assert first is not None
+        assert first.operation_id == operation_id
+
+        assert claim_job(beta, owner="worker-two", lease_seconds=60) is None
+
+
+@pytest.mark.database
+def test_a_retry_on_a_new_connection_finds_the_committed_enrollment(
+    knowledge_engine: Engine,
+) -> None:
+    """The insert-then-select fallback, across a commit boundary.
+
+    Deliberately not the simultaneous-insert race: the second `INSERT` blocks on
+    the unique index until the first transaction commits, so interleaving the
+    two needs a second thread and this test does not attempt it. What it proves
+    is the half that needs no thread — that a retry arriving on a fresh
+    connection, with a fresh snapshot, takes the `ON CONFLICT` path, finds the
+    committed row, and returns it rather than raising or inserting a second.
+    """
+    with knowledge_engine.begin() as connection:
+        source = register_source(
+            connection,
+            provider_kind=SourceProviderKind.FIXTURE,
+            label="Fixture corpus",
+            classification=Classification.SYNTHETIC_TEST,
+            native_root=NATIVE_ROOT,
+        )
+        request = _request(source.source_id, issue_identifier(IdKind.PRINCIPAL))
+        first = accept_enrollment(connection, request)
+    assert first.created is True
+
+    with knowledge_engine.begin() as connection:
+        second = accept_enrollment(connection, request)
+    assert second.created is False
+    assert second.enrollment == first.enrollment
+
+    with knowledge_engine.connect() as connection:
+        rows = connection.execute(
+            text("SELECT count(*) FROM knowledge.enrollments WHERE source_id = :source_id"),
+            {"source_id": source.source_id},
+        ).scalar_one()
+    assert rows == 1
+
+
+def test_the_conflict_fallback_names_its_isolation_dependency() -> None:
+    """`conflicting_row` is the guard, and it says what it is guarding.
+
+    A pure function, so it needs no server. Reaching it means an insert
+    conflicted and the row it conflicted with was not readable a statement
+    later, which under READ COMMITTED means the row was deleted in between.
+    Letting `.one()` raise `NoResultFound` there would report that as an absent
+    enrollment, which is the one thing it is not.
+    """
+    assert conflicting_row("enr_present", "knowledge.enrollments") == "enr_present"
+    with pytest.raises(IsolationLevelError, match="READ COMMITTED"):
+        conflicting_row(None, "knowledge.enrollments")
+
+
+@pytest.mark.database
+def test_raising_the_isolation_level_breaks_the_retry_rather_than_corrupting_it(
+    knowledge_engine: Engine,
+) -> None:
+    """Measured, not assumed: what a higher isolation level actually does here.
+
+    The insert-then-select fallback is correct under READ COMMITTED, which is
+    PostgreSQL's default and which `create_database_engine` does not override —
+    so it is correct by configuration rather than by anything the writer does.
+    Raising the level does not silently corrupt the result: when the conflicting
+    row was committed after this transaction's snapshot, PostgreSQL refuses the
+    `ON CONFLICT DO NOTHING` itself with a serialization failure, before the
+    select is reached. That is a retryable error rather than a wrong answer, but
+    it is still a broken retry path, and it is why the dependency is written
+    down at each call site.
+    """
+    with knowledge_engine.begin() as connection:
+        source = register_source(
+            connection,
+            provider_kind=SourceProviderKind.FIXTURE,
+            label="Fixture corpus",
+            classification=Classification.SYNTHETIC_TEST,
+            native_root=NATIVE_ROOT,
+        )
+        request = _request(source.source_id, issue_identifier(IdKind.PRINCIPAL))
+
+    with knowledge_engine.connect().execution_options(isolation_level="REPEATABLE READ") as stale:
+        # Fix the snapshot before the enrollment exists.
+        stale.execute(text("SELECT 1"))
+
+        with knowledge_engine.begin() as connection:
+            accept_enrollment(connection, request)
+
+        with pytest.raises(OperationalError, match="could not serialize access"):
+            accept_enrollment(stale, request)
+
+
+@pytest.mark.database
+def test_repeatable_read_is_only_a_problem_when_the_row_arrives_after_the_snapshot(
+    knowledge_engine: Engine,
+) -> None:
+    """The boundary of the finding above, so the docstrings do not overstate it.
+
+    When the conflicting row was already committed when the transaction began,
+    the insert conflicts against a row the snapshot can see, nothing serializes,
+    and the fallback select returns it. The dependency is on snapshot age, not
+    on the isolation level alone.
+    """
+    with knowledge_engine.begin() as connection:
+        source = register_source(
+            connection,
+            provider_kind=SourceProviderKind.FIXTURE,
+            label="Fixture corpus",
+            classification=Classification.SYNTHETIC_TEST,
+            native_root=NATIVE_ROOT,
+        )
+        request = _request(source.source_id, issue_identifier(IdKind.PRINCIPAL))
+        first = accept_enrollment(connection, request)
+
+    with knowledge_engine.connect().execution_options(isolation_level="REPEATABLE READ") as later:
+        retried = accept_enrollment(later, request)
+
+    assert retried.created is False
+    assert retried.enrollment == first.enrollment

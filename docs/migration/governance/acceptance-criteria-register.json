@@ -1,71 +1,72 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "record_type": "MIGRATION_ACCEPTANCE_CRITERIA_REGISTER",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
   "phase_id": "PHASE-00",
-  "work_item_id": "WP-P00-01",
-  "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
-  "recorded_at_utc": "2026-07-31T20:48:55Z",
+  "recorded_at_utc": "2026-08-01T07:51:37Z",
   "criteria": {
     "P00-AC-01": {
       "requirement": "Exact identities are authenticated and recorded.",
-      "minimum_evidence": "Exact-identity JSON binds target repo/head/tree, legacy repo/head/tree/schema, snapshot SHA/bytes, plan, review, branch, and worktree.",
-      "evidence_records": [
-        "docs/migration/governance/exact-identity.json",
-        "docs/migration/governance/plan-and-review-bindings.json",
-        "evidence/migration/WP-P00-01/validation/01-entry-identity.txt",
-        "evidence/migration/WP-P00-01/validation/03-ledger-validation.txt"
-      ],
-      "result_recorded_in": "evidence/migration/WP-P00-01/01_IMPLEMENTATION_CHECKPOINT.md"
+      "owner_work_item": "WP-P00-01",
+      "status": "PASS_HISTORICAL"
     },
     "P00-AC-02": {
       "requirement": "The logical PostgreSQL target identity is my_pa.",
-      "minimum_evidence": "Target identity record and semantic validation assert my_pa; no database access occurs.",
-      "evidence_records": [
-        "docs/migration/governance/exact-identity.json",
-        "evidence/migration/WP-P00-01/validation/03-ledger-validation.txt",
-        "evidence/migration/WP-P00-01/validation/04-path-and-name-containment.txt"
-      ],
-      "result_recorded_in": "evidence/migration/WP-P00-01/01_IMPLEMENTATION_CHECKPOINT.md"
+      "owner_work_item": "WP-P00-01",
+      "status": "PASS_HISTORICAL"
     },
     "P00-AC-03": {
-      "requirement": "The legacy SQLite source is documented as read-only and its rename or mutation remains unauthorized.",
-      "minimum_evidence": "Source-read-only declaration binds the historical filename and explicitly denies access, rename, and mutation.",
-      "evidence_records": [
-        "docs/migration/governance/source-read-only-identity.json"
-      ],
-      "result_recorded_in": "evidence/migration/WP-P00-01/01_IMPLEMENTATION_CHECKPOINT.md"
+      "requirement": "The legacy SQLite source is documented as read-only and rename or mutation remains unauthorized.",
+      "owner_work_item": "WP-P00-01",
+      "status": "PASS_HISTORICAL"
     },
     "P00-AC-04": {
-      "requirement": "Implementation is not self-authorized and no successor work item is automatically activated.",
-      "minimum_evidence": "Authorization ledger records explicit operator activation; successor remains inactive; implementation response stops for independent review.",
-      "evidence_records": [
-        "docs/migration/governance/authorization-ledger.json",
-        "docs/migration/governance/goal-state.json",
-        "docs/migration/governance/work-item-ledger.json",
-        "evidence/migration/WP-P00-01/DRAFT-INDEPENDENT-IMPLEMENTATION-REVIEW-REQUEST.md"
-      ],
-      "result_recorded_in": "evidence/migration/WP-P00-01/01_IMPLEMENTATION_CHECKPOINT.md"
+      "requirement": "Implementation is not self-authorized and no successor activates automatically.",
+      "owner_work_item": "WP-P00-01",
+      "status": "PASS_HISTORICAL"
     },
     "P00-AC-05": {
       "requirement": "The migration goal, phase, and work-item structure is published and internally consistent.",
-      "minimum_evidence": "Goal charter/state, work-item ledger, authorization ledger, acceptance register, evidence index, and semantic checks agree.",
-      "evidence_records": [
-        "docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md",
-        "docs/migration/governance/goal-state.json",
-        "docs/migration/governance/work-item-ledger.json",
-        "docs/migration/governance/authorization-ledger.json",
-        "evidence/migration/WP-P00-01/00_EVIDENCE_INDEX.json",
-        "evidence/migration/WP-P00-01/validation/03-ledger-validation.txt"
-      ],
-      "result_recorded_in": "evidence/migration/WP-P00-01/01_IMPLEMENTATION_CHECKPOINT.md"
+      "owner_work_item": "WP-P00-01",
+      "status": "PASS_HISTORICAL"
+    },
+    "P00-AC-06": {
+      "requirement": "A practical branch and worktree strategy is defined and usable for later implementation.",
+      "owner_work_item": "WP-P00-02",
+      "status": "DEMONSTRATED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW",
+      "evidence": [
+        "docs/migration/governance/branch-and-worktree-strategy.md",
+        "docs/migration/governance/validate_phase00_governance.py",
+        "evidence/migration/WP-P00-02/02_DETERMINISTIC_VALIDATION.md"
+      ]
+    },
+    "P00-AC-07": {
+      "requirement": "Logging and audit rules exclude content-bearing and sensitive values.",
+      "owner_work_item": "WP-P00-02",
+      "status": "DEMONSTRATED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW",
+      "evidence": [
+        "docs/migration/governance/logging-and-audit-standard.md",
+        "docs/migration/governance/validate_phase00_governance.py",
+        "evidence/migration/WP-P00-02/02_DETERMINISTIC_VALIDATION.md"
+      ]
+    },
+    "P00-AC-08": {
+      "requirement": "Public target surfaces use neutral my_pa naming and former-employer names remain only in explicit historical, compatibility, or evidence contexts.",
+      "owner_work_item": "WP-P00-02",
+      "status": "DEMONSTRATED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW",
+      "evidence": [
+        "docs/migration/governance/target-surface-naming-rule.md",
+        "docs/migration/governance/validate_phase00_governance.py",
+        "evidence/migration/WP-P00-02/02_DETERMINISTIC_VALIDATION.md"
+      ]
     }
   },
-  "excluded_criteria": {
-    "P00-AC-06": "Belongs to WP-P00-02. Not authorized, not implemented, not evidenced by this work item.",
-    "P00-AC-07": "Belongs to WP-P00-02. Not authorized, not implemented, not evidenced by this work item.",
-    "P00-AC-08": "Belongs to WP-P00-02. Not authorized, not implemented, not evidenced by this work item."
+  "candidate_summary": {
+    "historical_pass_count": 5,
+    "demonstrated_pending_review_count": 3,
+    "remaining_unimplemented_count": 0,
+    "phase_closeout_status": "PENDING_EXACT_HEAD_REVIEW_INTEGRATION_AND_OPERATOR_CLOSEOUT"
   },
-  "acceptance_rule": "A criterion may be marked PASS only with evidence tied to the exact implementation head. An assertion, a draft, or a passing unrelated test is not sufficient. Any later commit invalidates every criterion result and the independent review bound to it.",
-  "self_acceptance_prohibited": "The implementing agent records demonstrated evidence only. Final acceptance is determined by independent review."
+  "acceptance_rule": "The implementing context may record DEMONSTRATED only. PASS for P00-AC-06 through P00-AC-08 requires a role-separated exact-head review. Later commits invalidate the review.",
+  "self_acceptance_prohibited": true
 }

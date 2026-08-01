@@ -1,92 +1,125 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "record_type": "MIGRATION_WORK_ITEM_LEDGER",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
   "maximum_active_work_items": 1,
-  "active_work_item_count": 0,
-  "recorded_at_utc": "2026-08-01T04:24:49Z",
+  "active_work_item_count": 1,
+  "recorded_at_utc": "2026-08-01T07:51:37Z",
   "reconciled_by": {
-    "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-20260801-001",
-    "decision_id": "OP-CLOSEOUT-WP-P00-01",
-    "reason": "The prior record described WP-P00-01 as ACTIVE. That was accurate when written, before the implementation commit existed, and became stale once the work item was merged. This record reconciles the ledger with the merged and cleaned-up reality."
+    "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
+    "decision_id": "OP-COMPLETE-MYPA-MIGRATION-PHASE-00",
+    "coordination_request_id": "REQ-MYPA-MIGRATION-PHASE-00-COMPLETION-IMPLEMENTATION-20260801-046"
+  },
+  "repository_identity_rule": {
+    "authority": "RUNTIME_GIT",
+    "branch": "main",
+    "exact_identity_must_be_bound_in_external_authorization": true,
+    "committed_predecessor_sha_is_not_current_authority": true
   },
   "work_items": [
     {
       "work_item_id": "WP-P00-01",
       "phase_id": "PHASE-00",
       "title": "Bind migration identities and governance ledger",
-      "reviewed_objective": "Create migration goal ledger and identity-attestation module contracts only",
       "state": "CLOSED",
-      "implementation_status": "IMPLEMENTED",
-      "independent_review_status": "PASS_AT_PREMERGE_HEAD",
-      "reviewed_head": "d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f",
-      "reviewed_tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
+      "implementation_head": "d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f",
+      "implementation_tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
       "pull_request": 8,
-      "merge_method": "SQUASH",
       "merge_sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
-      "merge_tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
       "post_merge_validation": "PASS",
-      "cleanup_status": "COMPLETE",
-      "closeout_status": "CLOSED",
-      "original_identity": {
-        "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
-        "authorization_status": "CONSUMED",
-        "base_sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
-        "base_tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4",
-        "implementation_branch": "bf/migration-wp-p00-01-governance-identity",
-        "branch_state": "DELETED_AFTER_MERGE",
-        "authorized_paths": [
-          "docs/migration/**",
-          "evidence/migration/**"
-        ],
-        "acceptance_criteria": [
-          "P00-AC-01",
-          "P00-AC-02",
-          "P00-AC-03",
-          "P00-AC-04",
-          "P00-AC-05"
-        ],
-        "maximum_commits": 1,
-        "terminal_state_at_implementation": "IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
-        "historical_note": "These are the original implementation identities, retained as history. They are NOT the identities of the closeout correction, and this work item was never authorized under the closeout authorization."
+      "initial_cleanup_status": "COMPLETE",
+      "closeout_correction_pull_request": 9,
+      "nonrecursive_baseline_pull_request": 10,
+      "nonrecursive_baseline_reviewed_head": "d54bdb6d23cebf38c11db7194aef59b03d573a16",
+      "nonrecursive_baseline_reviewed_tree": "6326e697cfa673fe1f57c0f4356ffa0025f3047e",
+      "nonrecursive_baseline_merge_sha": "9039c587680866bfe4c1568db1992335778c5950",
+      "nonrecursive_post_merge_validation": "BLOCKED_BY_UNAVAILABLE_GITHUB_EVIDENCE",
+      "operator_evidence_exception": "ACCEPTED_FOR_PHASE_00_SEQUENCE_NOT_TECHNICAL_PASS",
+      "residual_branch_cleanup": {
+        "branch": "bf/migration-wp-p00-01-nonrecursive-baseline",
+        "sha": "d54bdb6d23cebf38c11db7194aef59b03d573a16",
+        "status": "PENDING_CONNECTOR_CAPABILITY",
+        "authorized_exact_ref_only": true
       },
-      "lifecycle_history": [
-        {"stage": "AUTHORIZED", "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-AUTHORIZATION-ACTIVATION-20260731-022"},
-        {"stage": "IMPLEMENTED", "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-IMPLEMENTATION-20260731-024", "head": "d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f"},
-        {"stage": "INDEPENDENTLY_REVIEWED", "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-INDEPENDENT-IMPLEMENTATION-REVIEW-20260731-025", "disposition": "INDEPENDENT_WP_P00_01_IMPLEMENTATION_REVIEW_PASS"},
-        {"stage": "INTEGRATED", "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-INTEGRATION-20260731-027", "pull_request": 8},
-        {"stage": "MERGED", "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-MERGE-20260731-028", "merge_sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4"},
-        {"stage": "CLEANED_UP", "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-CLEANUP-RESOLUTION-20260731-030", "branches_deleted": 2},
-        {"stage": "CLOSEOUT_RECONCILED", "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-CORRECTION-20260801-031"}
+      "findings": [
+        {
+          "finding_id": "MYPA-WP-P00-01-FINAL-CLOSEOUT-F-001",
+          "status": "CLOSED_BY_OPERATOR_EVIDENCE_EXCEPTION_WITH_LIMITATION"
+        },
+        {
+          "finding_id": "MYPA-WP-P00-01-NRB-IR-F-003",
+          "status": "CORRECTED_IN_PHASE_00_COMPLETION_CANDIDATE",
+          "correction": "Removed stale required_base_for_future_authorization semantics; runtime Git resolution is required."
+        }
+      ],
+      "acceptance_criteria": [
+        "P00-AC-01",
+        "P00-AC-02",
+        "P00-AC-03",
+        "P00-AC-04",
+        "P00-AC-05"
       ]
     },
     {
       "work_item_id": "WP-P00-02",
       "phase_id": "PHASE-00",
-      "title": "Successor Phase 00 work item",
-      "state": "NOT_ACTIVATED",
-      "authorization_id": null,
+      "title": "Complete Phase 00 governance, branch, logging, and neutral-naming controls",
+      "state": "IMPLEMENTED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW",
+      "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
+      "decision_id": "OP-COMPLETE-MYPA-MIGRATION-PHASE-00",
+      "base": {
+        "branch": "main",
+        "sha": "9039c587680866bfe4c1568db1992335778c5950",
+        "identity_resolution": "GITHUB_RUNTIME_AT_DISPATCH"
+      },
+      "implementation_branch": "bf/migration-phase-00-completion",
+      "implementation_commit": "EXTERNAL_POST_COMMIT_EVIDENCE",
+      "maximum_commits": 1,
       "acceptance_criteria": [
         "P00-AC-06",
         "P00-AC-07",
         "P00-AC-08"
       ],
-      "automatic_activation_authorized": false,
-      "activation_authority": "OPERATOR_ONLY",
-      "required_base_for_future_authorization": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
-      "note": "Recorded for structural completeness only. Not activated, not authorized, not implemented. Any future authorization must bind the current merged baseline, not the superseded d4fed7ec12f0b25ad5520d806aeb7766e95228d5."
+      "criteria_status": {
+        "P00-AC-06": "DEMONSTRATED_PENDING_ROLE_SEPARATED_REVIEW",
+        "P00-AC-07": "DEMONSTRATED_PENDING_ROLE_SEPARATED_REVIEW",
+        "P00-AC-08": "DEMONSTRATED_PENDING_ROLE_SEPARATED_REVIEW"
+      },
+      "authorized_paths": [
+        "docs/migration/00_MIGRATION_INDEX.md",
+        "docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md",
+        "docs/migration/governance/goal-state.json",
+        "docs/migration/governance/work-item-ledger.json",
+        "docs/migration/governance/authorization-ledger.json",
+        "docs/migration/governance/acceptance-criteria-register.json",
+        "docs/migration/governance/branch-and-worktree-strategy.md",
+        "docs/migration/governance/logging-and-audit-standard.md",
+        "docs/migration/governance/target-surface-naming-rule.md",
+        "docs/migration/governance/validate_phase00_governance.py",
+        "evidence/migration/WP-P00-01/closeout/00_CLOSEOUT_INDEX.json",
+        "evidence/migration/WP-P00-01/closeout/PHASE-00-COMPLETION-RECONCILIATION.md",
+        "evidence/migration/WP-P00-02/00_EVIDENCE_INDEX.json",
+        "evidence/migration/WP-P00-02/01_IMPLEMENTATION_CHECKPOINT.md",
+        "evidence/migration/WP-P00-02/02_DETERMINISTIC_VALIDATION.md",
+        "evidence/migration/WP-P00-02/03_DRAFT_INDEPENDENT_REVIEW_REQUEST.md"
+      ],
+      "automatic_successor_activation_authorized": false,
+      "phase_01_activation_authorized": false
     }
   ],
   "ledger_rules": {
     "at_most_one_active_work_item": true,
     "self_authorization_prohibited": true,
-    "successor_activation_requires_operator": true,
-    "one_commit_per_authorized_work_item": true
+    "one_work_item_one_branch": true,
+    "one_commit_for_this_authorization": true,
+    "review_binds_exact_head": true,
+    "later_commit_invalidates_review": true,
+    "destructive_cleanup_requires_exact_operator_authority": true
   },
   "invariants_asserted": {
-    "zero_active_work_items": true,
+    "one_active_work_item": true,
     "wp_p00_01_closed": true,
-    "wp_p00_02_not_activated": true,
-    "no_successor_authorization_exists": true
+    "wp_p00_02_pending_review": true,
+    "stale_required_base_field_absent": true
   }
 }

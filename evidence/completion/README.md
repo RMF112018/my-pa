@@ -34,7 +34,14 @@ path was replaced with a marker rather than committed.
 
 The redaction is named here rather than performed silently, and only that one
 value was touched. The export hash above lets the operator reproduce the
-original from Drive and confirm that nothing else changed.
+original from Drive and confirm that nothing else changed — and that
+reproduction is the only way to confirm it, because a reviewer working from this
+repository alone has the committed file but not the export.
+
+One other sensitive-looking string survives deliberately. Line 328 names the
+`ssh bf-nas` alias, which is not a new disclosure: it is already committed at
+base in eight files, including `SECURITY.md`, which designates it the approved
+alias. The redaction above removed the only personal filesystem path.
 
 ### The dispatch's own hash does not match, and could not
 

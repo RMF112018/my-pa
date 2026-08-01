@@ -137,8 +137,10 @@ deferred."
 So the conflict resolves inside the plan's own rules rather than against them.
 Workstreams E, F, and I are classified **deferred — outside the vertical slice
 `AGENTS.md` defines, and named as excluded by the proposed specification**. They
-are not silently dropped; they are named here, and they
-remain available scope the operator can promote by amending the specification.
+are not silently dropped; they are named here, and they remain available scope.
+Promoting them takes an explicit operator reprioritisation of the objective
+under `AGENTS.md` §3; amending the proposed specification alone would not do it,
+because `AGENTS.md` is what currently carries the deferral.
 
 Workstreams G and H are not excluded by the specification — they are absent from
 it, arriving from Drive feature packages. They are classified **deferred —
@@ -226,9 +228,14 @@ claim left visible.
 
 ## 10. Operator decisions this plan does not make
 
-- Whether to promote E, F, G, H, or I into current scope by amending
-  `docs/specs/mcv-read-only-vertical-slice.md`. That is a specification change,
-  not an implementation choice.
+- Whether to promote E, F, G, H, or I into current scope. That takes an explicit
+  reprioritisation of the objective under `AGENTS.md` §3, not an implementation
+  choice, and not a specification amendment alone.
+- Note that the `AGENTS.md` basis is strongest for E and F, which a read-only
+  slice excludes directly, and weakest for I, where the deferral leans on §3's
+  preference for one slice over partial systems and on the proposed
+  specification. An operator weighing I should know it rests on thinner ground
+  than E or F.
 - `P00-OD-003` — selecting a reviewed PDF extractor.
 - `P00-OD-009` — authorizing a live NAS or GoodNotes source root by exact path.
 - Production deployment, risk acceptance, and credential mutation, all of which

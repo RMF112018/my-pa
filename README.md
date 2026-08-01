@@ -15,8 +15,8 @@ Implemented, and covered by the FAST tier unless noted:
 - `infrastructure/database/engine` — the connection contract for the canonical database. Covered by the database tier only.
 - `application/capabilities` — derives the capability manifest and readiness report from the contract rather than restating them.
 - `infrastructure/migration` — legacy extract and load, the migration control plane, and redaction.
-- Six Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, and views; head `6c4d3ea82f10`.
-- `.github/workflows/repository-checks.yml` — document and configuration validation, the FAST tier, a declared-dependency-floor tier, and a database tier run against a disposable PostgreSQL service.
+- Six Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, and views; head `6c4d3ea82f10`. Applied and rolled back in the database tier; only SQL generation is checked by FAST.
+- `.github/workflows/repository-checks.yml` — document and configuration validation, the FAST tier, a declared-dependency-floor tier, and a database tier run against a disposable PostgreSQL service. The workflow itself carries no test coverage.
 
 The migrated corpus holds 3,263,870 rows across 484 domain tables; 286 of those tables contain rows and 198 are empty. Those figures were recomputed from the live database on 2026-08-01. [`docs/migration/00_MIGRATION_INDEX.md`](docs/migration/00_MIGRATION_INDEX.md) owns the result record and the deliberate exclusions. The legacy SQLite source is retained read-only and is never mutated.
 

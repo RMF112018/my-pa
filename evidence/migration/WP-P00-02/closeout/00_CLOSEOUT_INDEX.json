@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "record_type": "WORK_ITEM_CLOSEOUT_INDEX",
+  "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
+  "phase_id": "PHASE-00",
+  "work_item_id": "WP-P00-02",
+  "state": "CLOSEOUT_CANDIDATE_PENDING_EXACT_HEAD_REVIEW_CI_AND_OPERATOR_MERGE",
+  "base_main_sha": "4adb205e7c70841b95abb52623b159456eb2eafc",
+  "files": [
+    "01_POST_MERGE_VALIDATION.md",
+    "02_FINDINGS_AND_CLEANUP_STATUS.md",
+    "PHASE-00-FINAL-CLOSEOUT.md"
+  ],
+  "required_before_authoritative_closeout": [
+    "exact-head role-separated review",
+    "successful applicable CI",
+    "separate exact operator merge authorization",
+    "closeout PR merge"
+  ],
+  "cleanup_status": "PENDING_CONNECTOR_CAPABILITY",
+  "phase_01_activated": false
+}

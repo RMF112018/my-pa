@@ -1,132 +1,55 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "record_type": "MIGRATION_AUTHORIZATION_LEDGER",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
-  "recorded_at_utc": "2026-08-01T07:51:37Z",
-  "active_authorization_count": 1,
+  "recorded_at_utc": "2026-08-01T09:18:00Z",
+  "active_authorization_count": 0,
+  "active_authorization": null,
   "historical_authorizations": [
     {
       "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
       "status": "CONSUMED",
-      "purpose": "WP_P00_01_IMPLEMENTATION",
-      "base_sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
-      "implementation_head": "d60c25f51964fd2ae05211d0f3e9fef8d8f7f03f",
-      "merge_sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
-      "detail_preserved_in": "evidence/migration/WP-P00-01/"
+      "purpose": "WP_P00_01_IMPLEMENTATION"
     },
     {
       "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-20260801-001",
       "status": "CONSUMED",
-      "purpose": "WP_P00_01_CLOSEOUT_CORRECTION",
-      "merge_sha": "178a7e243cbc6100c6937144ff10a7987206c04a",
-      "detail_preserved_in": "evidence/migration/WP-P00-01/closeout/"
+      "purpose": "WP_P00_01_CLOSEOUT_CORRECTION"
     },
     {
       "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-NONRECURSIVE-BASELINE-20260801-001",
       "status": "CONSUMED_BY_PR_10_MERGE",
-      "purpose": "NONRECURSIVE_BASELINE_RECORD_CORRECTION",
-      "reviewed_head": "d54bdb6d23cebf38c11db7194aef59b03d573a16",
-      "reviewed_tree": "6326e697cfa673fe1f57c0f4356ffa0025f3047e",
-      "merge_sha": "9039c587680866bfe4c1568db1992335778c5950",
-      "post_merge_validation": "BLOCKED_BY_UNAVAILABLE_GITHUB_EVIDENCE",
-      "detail_preserved_in": "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/"
+      "purpose": "NONRECURSIVE_BASELINE_RECORD_CORRECTION"
+    },
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
+      "status": "CONSUMED_BY_PR_11_SEQUENCE",
+      "purpose": "PHASE_00_COMPLETION_IMPLEMENTATION"
+    },
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-CI-CORRECTION-20260801-049",
+      "status": "CONSUMED",
+      "purpose": "VALIDATOR_LINT_CORRECTION"
+    },
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-CI-FORMAT-CORRECTION-20260801-053",
+      "status": "CONSUMED",
+      "purpose": "VALIDATOR_FORMAT_CORRECTION"
+    },
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-PR11-MERGE-AND-CLOSEOUT-CANDIDATE-20260801-056",
+      "status": "CONSUMED_BY_PR_11_MERGE_AND_CLOSEOUT_CANDIDATE",
+      "purpose": "PR_11_SQUASH_MERGE_POST_MERGE_VALIDATION_AND_CLOSEOUT_CANDIDATE",
+      "reviewed_head": "245ec31005041f6e1cacef19478c070b272e3dcd",
+      "merge_sha": "4adb205e7c70841b95abb52623b159456eb2eafc",
+      "future_closeout_pr_merge_authorized": false
     }
   ],
-  "active_authorization": {
-    "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
-    "decision_id": "OP-COMPLETE-MYPA-MIGRATION-PHASE-00",
-    "authorization_status": "ACTIVE_SINGLE_USE",
-    "activation_basis": "EXPLICIT_OPERATOR_APPROVAL",
-    "self_authorized": false,
-    "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
-    "phase_id": "PHASE-00",
-    "work_item_id": "WP-P00-02",
-    "campaign_scope": [
-      "WP-P00-01 residual finding and branch-cleanup reconciliation",
-      "WP-P00-02 activation and implementation",
-      "P00-AC-06 through P00-AC-08",
-      "Phase 00 governance reconciliation",
-      "exact-head role-separated review",
-      "one PR and CI after review",
-      "one consolidated exact operator decision",
-      "post-decision merge, cleanup, findings, and Phase 00 closeout"
-    ],
-    "base": {
-      "branch": "main",
-      "sha": "9039c587680866bfe4c1568db1992335778c5950",
-      "tree_used_under_evidence_exception": "6326e697cfa673fe1f57c0f4356ffa0025f3047e",
-      "runtime_source": "GITHUB_CONNECTOR"
-    },
-    "implementation_branch": "bf/migration-phase-00-completion",
-    "limits": {
-      "maximum_orchestrator_sessions": 1,
-      "maximum_active_work_items": 1,
-      "maximum_implementation_branches": 1,
-      "maximum_implementation_worktrees": 1,
-      "maximum_implementation_commits": 1,
-      "maximum_pull_requests": 1
-    },
-    "authorized_paths": [
-      "docs/migration/00_MIGRATION_INDEX.md",
-      "docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md",
-      "docs/migration/governance/goal-state.json",
-      "docs/migration/governance/work-item-ledger.json",
-      "docs/migration/governance/authorization-ledger.json",
-      "docs/migration/governance/acceptance-criteria-register.json",
-      "docs/migration/governance/branch-and-worktree-strategy.md",
-      "docs/migration/governance/logging-and-audit-standard.md",
-      "docs/migration/governance/target-surface-naming-rule.md",
-      "docs/migration/governance/validate_phase00_governance.py",
-      "evidence/migration/WP-P00-01/closeout/00_CLOSEOUT_INDEX.json",
-      "evidence/migration/WP-P00-01/closeout/PHASE-00-COMPLETION-RECONCILIATION.md",
-      "evidence/migration/WP-P00-02/00_EVIDENCE_INDEX.json",
-      "evidence/migration/WP-P00-02/01_IMPLEMENTATION_CHECKPOINT.md",
-      "evidence/migration/WP-P00-02/02_DETERMINISTIC_VALIDATION.md",
-      "evidence/migration/WP-P00-02/03_DRAFT_INDEPENDENT_REVIEW_REQUEST.md"
-    ],
-    "implementation_authorized": true,
-    "push_authorized_after_exact_head_review_pass": true,
-    "pull_request_authorized_after_exact_head_review_pass": true,
-    "operator_gated_future_actions": [
-      "merge of exact Phase 00 completion PR head",
-      "destructive cleanup of exact completion branch",
-      "final Phase 00 closure"
-    ],
-    "exact_residual_branch_cleanup_authority": {
-      "branch": "bf/migration-wp-p00-01-nonrecursive-baseline",
-      "sha": "d54bdb6d23cebf38c11db7194aef59b03d573a16",
-      "authorized": true,
-      "no_other_ref_authorized": true,
-      "status": "PENDING_CONNECTOR_CAPABILITY"
-    },
-    "not_authorized": [
-      "SQLite access",
-      "retained snapshot access",
-      "PostgreSQL access",
-      "any database access",
-      "DDL",
-      "ETL",
-      "migration runtime code",
-      "dependencies",
-      "CI workflow modification",
-      "deployment",
-      "production activation",
-      "legacy retirement",
-      "Phase 01 activation",
-      "risk acceptance"
-    ],
-    "consumption": {
-      "state_in_this_record": "UNCONSUMED_AT_TIME_OF_WRITE",
-      "single_commit_identity_location": "EXTERNAL_POST_COMMIT_EVIDENCE",
-      "reusable": false
-    }
+  "preserved_limits": {
+    "risk_acceptance_authorized": false,
+    "phase_01_activation_authorized": false,
+    "database_or_source_access_authorized": false,
+    "cleanup_status": "PENDING_CONNECTOR_CAPABILITY"
   },
-  "invariants_asserted": {
-    "self_authorization_prohibited": true,
-    "self_review_prohibited": true,
-    "one_active_authorization": true,
-    "exact_current_identity_resolution": "RUNTIME_GIT",
-    "failed_and_unavailable_evidence_preserved": true
-  },
-  "invalidation_rule": "Any base, branch, path, scope, acceptance, mutation-limit, exact-head, authorization, or expiry drift invalidates reliance."
+  "invalidation_rule": "No historical authorization is reusable. Any successor implementation, closeout merge, cleanup, database access, or Phase 01 action requires exact current operator authority."
 }

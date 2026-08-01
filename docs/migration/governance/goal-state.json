@@ -1,95 +1,78 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "record_type": "MIGRATION_GOAL_STATE",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
   "repository": "RMF112018/my-pa",
-  "lifecycle_state": "PHASE_00_COMPLETION_IMPLEMENTED_PENDING_EXACT_HEAD_REVIEW",
-  "active_phase_id": "PHASE-00",
-  "active_work_item_id": "WP-P00-02",
+  "lifecycle_state": "PHASE_00_COMPLETE_AWAITING_PHASE_01_OPERATOR_DECISION",
+  "active_phase_id": null,
+  "active_work_item_id": null,
   "maximum_active_work_items": 1,
   "maximum_active_phases": 1,
-  "state_recorded_at_utc": "2026-08-01T07:51:37Z",
-  "runtime_repository_binding": {
-    "branch": "main",
-    "sha": "9039c587680866bfe4c1568db1992335778c5950",
-    "tree_used_for_git_object_construction": "6326e697cfa673fe1f57c0f4356ffa0025f3047e",
-    "tree_evidence_status": "OPERATOR_EVIDENCE_EXCEPTION_ACCEPTED_FOR_PHASE_00_SEQUENCE",
-    "note": "GitHub confirms main SHA and PR #10 merge. The tree is the exact reviewed PR #10 tree and is used under the preserved connector-evidence limitation; this is not a technical post-merge PASS."
-  },
-  "current_authorization": {
-    "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
-    "decision_id": "OP-COMPLETE-MYPA-MIGRATION-PHASE-00",
-    "status_at_record_write": "ACTIVE_SINGLE_USE_IMPLEMENTATION_IN_PROGRESS",
-    "implementation_branch": "bf/migration-phase-00-completion",
-    "coordination_request_id": "REQ-MYPA-MIGRATION-PHASE-00-COMPLETION-IMPLEMENTATION-20260801-046",
-    "coordination_request_drive_id": "1tk7cdddBmqFpB_uL1w-qLBs-3V7Y3H_o55nIQHdJLFg",
-    "post_commit_identity_location": "EXTERNAL_POST_COMMIT_EVIDENCE"
-  },
-  "wp_p00_01_residual_reconciliation": {
-    "work_item_state": "CLOSED",
-    "pr_10": {
-      "state": "MERGED",
-      "reviewed_head": "d54bdb6d23cebf38c11db7194aef59b03d573a16",
-      "reviewed_tree": "6326e697cfa673fe1f57c0f4356ffa0025f3047e",
-      "merge_sha": "9039c587680866bfe4c1568db1992335778c5950"
-    },
-    "post_merge_validation_disposition": "WP_P00_01_NRB_POST_MERGE_VALIDATION_BLOCKED_BY_UNAVAILABLE_GITHUB_EVIDENCE",
-    "operator_exception_status": "OPERATOR_EVIDENCE_EXCEPTION_ACCEPTED_FOR_PHASE_00_SEQUENCE",
-    "technical_pass_claimed": false,
-    "program_finding": {
-      "finding_id": "MYPA-WP-P00-01-FINAL-CLOSEOUT-F-001",
-      "status": "CLOSED_BY_OPERATOR_EVIDENCE_EXCEPTION_WITH_LIMITATION",
-      "closure_basis": "PR #10 exact-head review and merge are authenticated; unavailable tree/parent/blob-equivalence evidence remains preserved and is not recast as PASS."
-    },
-    "review_finding": {
-      "finding_id": "MYPA-WP-P00-01-NRB-IR-F-003",
-      "status": "CORRECTED_IN_PHASE_00_COMPLETION_CANDIDATE",
-      "correction": "work-item-ledger uses runtime Git identity resolution and contains no required_base_for_future_authorization field."
-    },
-    "residual_feature_branch": {
-      "name": "bf/migration-wp-p00-01-nonrecursive-baseline",
-      "sha": "d54bdb6d23cebf38c11db7194aef59b03d573a16",
-      "github_state": "EXISTS",
-      "cleanup_authority": "AUTHORIZED_FOR_THIS_EXACT_REF_ONLY",
-      "cleanup_status": "PENDING_CONNECTOR_CAPABILITY",
-      "no_other_branch_cleanup_authorized": true
-    }
-  },
-  "phases": [
-    {
-      "phase_id": "PHASE-00",
-      "state": "IN_PROGRESS_PENDING_REVIEW_AND_INTEGRATION",
-      "criteria_historically_accepted": [
-        "P00-AC-01",
-        "P00-AC-02",
-        "P00-AC-03",
-        "P00-AC-04",
-        "P00-AC-05"
-      ],
-      "criteria_demonstrated_in_candidate": [
-        "P00-AC-06",
-        "P00-AC-07",
-        "P00-AC-08"
-      ],
-      "criteria_pending_independent_acceptance": [
-        "P00-AC-06",
-        "P00-AC-07",
-        "P00-AC-08"
-      ],
-      "terminal_state_after_exact_review_merge_and_closeout": "PHASE_00_COMPLETE_AWAITING_PHASE_01_OPERATOR_DECISION"
-    }
-  ],
-  "work_item": {
-    "work_item_id": "WP-P00-02",
-    "state": "IMPLEMENTED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW",
-    "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
-    "implementation_branch": "bf/migration-phase-00-completion",
-    "implementation_commit": "RECORDED_IN_EXTERNAL_POST_COMMIT_EVIDENCE",
+  "active_work_item_count": 0,
+  "active_phase_count": 0,
+  "state_recorded_at_utc": "2026-08-01T09:18:00Z",
+  "state_effective_rule": "This state becomes authoritative only after the exact closeout PR head is independently reviewed, CI passes, and the closeout PR is merged by a separate exact operator decision.",
+  "phase_00": {
+    "state": "COMPLETE",
+    "work_items": [
+      "WP-P00-01",
+      "WP-P00-02"
+    ],
     "acceptance_criteria": [
+      "P00-AC-01",
+      "P00-AC-02",
+      "P00-AC-03",
+      "P00-AC-04",
+      "P00-AC-05",
       "P00-AC-06",
       "P00-AC-07",
       "P00-AC-08"
-    ]
+    ],
+    "reviewed_head_sha": "245ec31005041f6e1cacef19478c070b272e3dcd",
+    "reviewed_tree_sha": "a6cb13ab4c31193ab33f51daff8db965fa5fb5b2",
+    "merge_sha": "4adb205e7c70841b95abb52623b159456eb2eafc",
+    "post_merge_content_equivalence": "PASS_16_OF_16_BLOBS_IDENTICAL",
+    "resulting_main_ci": "NOT_TRIGGERED_OR_NOT_OBSERVED",
+    "direct_phase00_validator_execution": "UNAVAILABLE"
+  },
+  "findings": {
+    "MYPA-PHASE-00-COMPLETION-IR-F-004": {
+      "status": "VERIFIED_FIXED_AT_EXACT_HEAD",
+      "risk_accepted": false
+    },
+    "MYPA-PHASE-00-COMPLETION-IR-F-002": {
+      "status": "ADMINISTRATIVE_SEQUENCE_AUTHORIZED_WITH_DIRECT_PHASE00_VALIDATOR_EXECUTION_UNAVAILABLE",
+      "technical_pass_claimed": false,
+      "risk_accepted": false,
+      "preserved_through_closeout": true
+    },
+    "MYPA-PHASE-00-COMPLETION-IR-F-001": {
+      "status": "CLOSED_AS_DOCUMENTED_NONBLOCKING_PROCESS_LIMITATION",
+      "risk_accepted": false
+    },
+    "MYPA-PHASE-00-COMPLETION-IR-F-003": {
+      "status": "CARRYFORWARD_PENDING_CAPABLE_CONTEXT",
+      "risk_accepted": false
+    }
+  },
+  "cleanup": {
+    "status": "PENDING_CONNECTOR_CAPABILITY",
+    "remote_refs": [
+      {
+        "branch": "bf/migration-wp-p00-01-nonrecursive-baseline",
+        "sha": "d54bdb6d23cebf38c11db7194aef59b03d573a16"
+      },
+      {
+        "branch": "bf/migration-phase-00-completion",
+        "sha": "245ec31005041f6e1cacef19478c070b272e3dcd"
+      }
+    ],
+    "local_worktree_cleanup_claimed": false
+  },
+  "phase_01": {
+    "state": "NOT_ACTIVATED",
+    "operator_decision_required": true,
+    "automatic_activation_authorized": false
   },
   "access_attestation": {
     "database_accessed": false,
@@ -102,16 +85,8 @@
     "dependencies_modified": false,
     "ci_workflows_modified": false,
     "deployment_performed": false,
+    "production_activated": false,
     "phase_01_activated": false
   },
-  "review_and_integration": {
-    "self_acceptance_prohibited": true,
-    "exact_head_review_required": true,
-    "later_commit_invalidates_review": true,
-    "pull_request_before_review_authorized": false,
-    "merge_operator_gated": true,
-    "completion_branch_cleanup_operator_gated": true,
-    "final_phase_closeout_operator_gated": true
-  },
-  "invalidation_rule": "Identity, scope, path, acceptance, mutation-limit, or exact-head drift invalidates this candidate and its review basis."
+  "invalidation_rule": "A later commit to the closeout branch, base drift, path-scope drift, failed CI, or merge without exact operator authorization invalidates this proposed terminal state."
 }

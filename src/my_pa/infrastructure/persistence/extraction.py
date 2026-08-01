@@ -18,12 +18,23 @@ The two together are why "quarantine stores IDs and safe reason codes, not
 payloads" is a property of the code rather than a promise about how it is called.
 
 **Coverage is read for a stated enrollment and snapshot.** `coverage_for` counts
-what this schema stores and requires the caller to supply what it does not: the
+what this schema stores and requires the caller to state what it does not: the
 eligible total, and any queued or unavailable counts. That asymmetry is
 deliberate. Only the layer that enumerated the scope knows how many objects were
 eligible, and deriving the denominator from the rows that happen to exist would
 report complete coverage of a scope nobody measured — exactly the global
 inference section 12 forbids.
+
+A caller that never enumerated the scope says so, with `eligible=None`, and the
+total is then derived from what was accounted for. That is the same arithmetic
+the paragraph above rejects, and it is admissible only because it is *stated*:
+`None` is a caller declaring the denominator unmeasured, where an integer is a
+caller asserting one. What the two must not share is a coverage *state*, and
+`None` is the fact a caller needs to hold the state below any that would claim
+the whole scope reached an outcome. The alternative — making a caller invent a
+plausible integer and then repair the counts afterwards — is what produced two
+defects here already: an invented ceiling can disagree with the stored rows and
+crash the read, and a repaired total leaves no record that it was repaired.
 """
 
 from __future__ import annotations
@@ -236,7 +247,7 @@ def coverage_for(
     enrollment_id: str,
     *,
     observed_at: datetime,
-    eligible: int,
+    eligible: int | None,
     queued: int = 0,
     unavailable: int = 0,
     snapshot: SnapshotState = SnapshotState.CURRENT,
@@ -279,10 +290,20 @@ def coverage_for(
     this can afford; the reverse would be a false claim that the object is
     covered.
 
+    `eligible` is the enumerated total, or `None` from a caller that has no
+    enumeration to quote. `None` is not a default and not a convenience: it is
+    the caller stating that the denominator was never measured, and the total is
+    then the objects this schema can account for — the outcomes counted here plus
+    whatever queued and unavailable work the caller declared. A caller passing
+    `None` gets a total it must not present as a measured scope; the whole-scope
+    coverage states are the claim it has to withhold, because a denominator taken
+    from the numerator divides out to all of it whichever outcome dominates.
+
     Raises `ValueError` — through `CoverageCounts` — when the counts do not fit
-    inside `eligible`. That is the right failure: a scope smaller than what was
-    processed within it means the caller's denominator is wrong, and reporting
-    coverage from it would be a number that cannot be true.
+    inside an `eligible` the caller supplied. That is the right failure: a scope
+    smaller than what was processed within it means the caller's denominator is
+    wrong, and reporting coverage from it would be a number that cannot be true.
+    It cannot arise from `None`, which is derived to fit exactly.
     """
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     moment = ensure_utc(observed_at)
@@ -327,6 +348,15 @@ def coverage_for(
             )
         )
     )
+
+    if eligible is None:
+        # The caller has no enumeration, so the total is what is accounted for
+        # and nothing is invented on top of it. `queued` and `unavailable` are
+        # included because they are objects the caller already knows about:
+        # leaving them out would build a total smaller than the counts beside it
+        # and raise from `CoverageCounts`, which is the crash this branch exists
+        # to remove rather than relocate.
+        eligible = int(processed) + int(quarantined) + int(unsupported) + unavailable + queued
 
     return CoverageCounts(
         observed_at=moment,

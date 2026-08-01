@@ -73,9 +73,13 @@ from my_pa.infrastructure.persistence.extraction import (
 )
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
 from my_pa.infrastructure.persistence.search import (
+    INDEXED_CONFIGURATIONS,
     SEARCH_CONFIG,
+    SearchInternalError,
     SearchPage,
     UnknownEnrollmentError,
+    _claims_the_whole_scope,
+    _configuration,
     match_statement,
     search_extractions,
 )
@@ -271,18 +275,29 @@ def enrol(
 
 
 def enrol_under_a_root(
-    engine: Engine, *, key: str, documents: dict[str, tuple[str, bytes]]
+    engine: Engine,
+    *,
+    key: str,
+    documents: dict[str, tuple[str, bytes]],
+    extract: frozenset[str] | None = None,
+    max_items: int = 100,
 ) -> Corpus:
     """One enrollment that names a root and a depth, with `documents` extracted.
 
     The difference from `enrol` is the scope and nothing else. An enrollment that
     names its objects carries its own eligible total; one that names a root has
     an eligible total only enumeration knows and nothing persists, which is the
-    condition the two tests using this exercise. `documents` may be empty, so
-    both "no outcomes at all" and "outcomes, all of them successes" are
-    reachable — the second is where a coverage claim could be made and must not
-    be.
+    condition every test using this exercises. `documents` may be empty, so both
+    "no outcomes at all" and "outcomes, all of them successes" are reachable —
+    the second is where a coverage claim could be made and must not be.
+
+    `extract` names the subset that reaches an outcome, so an object can be
+    enrolled and then quarantined with no extraction anywhere near it: that is
+    the shape in which a derived denominator says "all of it was quarantined".
+    `max_items` is settable because it is the number search used to invent a
+    denominator from, and the case that broke was outcomes outnumbering it.
     """
+    chosen = frozenset(documents) if extract is None else extract
     with engine.begin() as connection:
         source = register_source(
             connection,
@@ -322,11 +337,11 @@ def enrol_under_a_root(
                 media_types=("text/markdown", "text/plain"),
                 policy_version="mcv-1",
                 idempotency_key=f"search-{key}-{secrets.token_hex(4)}",
-                max_items=100,
+                max_items=max_items,
                 max_bytes=1_000_000,
             ),
         )
-        for name in sorted(documents):
+        for name in sorted(chosen):
             media_type, body = documents[name]
             record_outcome(
                 connection,
@@ -731,6 +746,155 @@ def test_a_root_selector_enrollment_with_outcomes_still_cannot_report_processed(
 
 
 @pytest.mark.database
+def test_a_root_selector_enrollment_with_only_quarantines_cannot_report_quarantined(
+    engine: Engine,
+) -> None:
+    """The same false claim as the test above, in its more dangerous form.
+
+    Nothing was extracted and one object was quarantined, so the derived total is
+    that one object and `quarantined == eligible` — "every eligible object in
+    this scope was quarantined", about a scope nobody enumerated. It is the
+    identical divide-the-numerator-by-itself construction as `processed`, and a
+    clamp that covered only `processed` let this one through. It is worse than
+    the `processed` case rather than milder: a caller acting on "all of it was
+    quarantined" is likelier to act destructively.
+    """
+    rooted = enrol_under_a_root(
+        engine,
+        key="rooted-quarantined",
+        documents={"charter": CORPUS["charter"]},
+        extract=frozenset(),
+    )
+    with rooted.engine.begin() as connection:
+        quarantine_object(
+            connection,
+            enrollment_id=rooted.enrollment_id,
+            source_object_id=rooted.object_ids["charter"],
+            version_id=None,
+            reason=QuarantineReason.CONTAINMENT_UNPROVEN,
+        )
+    page = search(rooted, "quarterly")
+
+    assert page.disclosure.coverage.quarantined == 1
+    assert page.disclosure.coverage.eligible == 1
+    assert page.disclosure.coverage.state is not CoverageState.QUARANTINED
+    assert page.disclosure.coverage.state is CoverageState.PARTIALLY_PROCESSED
+    assert "eligible_total_not_persisted" in page.disclosure.limitations
+    assert page.disclosure.partial_result is True
+
+
+@pytest.mark.database
+def test_a_root_selector_enrollment_with_only_unsupported_media_cannot_report_unsupported(
+    engine: Engine,
+) -> None:
+    """The third reachable form of the same claim.
+
+    One object, its media type not text this system reads, so the derived total
+    is one and `unsupported == eligible`. "Nothing in this scope could be
+    extracted" is a statement about a whole scope, and the scope was never
+    enumerated.
+    """
+    rooted = enrol_under_a_root(
+        engine,
+        key="rooted-unsupported",
+        documents={"handbook": ("application/pdf", b"%PDF-1.7\nnot extracted here\n%%EOF\n")},
+    )
+    page = search(rooted, "revenue")
+
+    assert page.matches == ()
+    assert page.disclosure.coverage.unsupported == 1
+    assert page.disclosure.coverage.eligible == 1
+    assert page.disclosure.coverage.state is not CoverageState.UNSUPPORTED
+    assert page.disclosure.coverage.state is CoverageState.PARTIALLY_PROCESSED
+    assert "eligible_total_not_persisted" in page.disclosure.limitations
+    assert page.disclosure.partial_result is True
+
+
+@pytest.mark.database
+def test_more_outcomes_than_the_enrollment_ceiling_is_still_a_searchable_scope(
+    engine: Engine,
+) -> None:
+    """Search must not borrow `max_items` as a denominator, and this is why.
+
+    `max_items` bounds what one pass over the tree is authorized to do. Outcomes
+    are counted for the whole enrollment and are deliberately not time-filtered,
+    so successive passes over a changing tree accumulate more of them than any
+    single pass was allowed — three here against a ceiling of two, which is a
+    lawful enrollment and not a corrupted one. Validating the counts against that
+    ceiling raised `ValueError` out of the coverage guard, uncaught and untyped,
+    and search stayed dead for the enrollment for as long as the rows existed.
+
+    With the total stated as unmeasured there is no ceiling to violate. The
+    scope is still one nobody enumerated, so everything the tests above require
+    still holds.
+    """
+    rooted = enrol_under_a_root(
+        engine,
+        key="rooted-past-ceiling",
+        documents={name: CORPUS[name] for name in ("ledger", "minutes", "charter")},
+        max_items=2,
+    )
+    page = search(rooted, "archive")
+
+    assert len(page.matches) == 3
+    assert page.disclosure.coverage.processed == 3
+    assert page.disclosure.coverage.eligible == 3
+    assert page.disclosure.coverage.state is CoverageState.PARTIALLY_PROCESSED
+    assert "eligible_total_not_persisted" in page.disclosure.limitations
+    assert page.disclosure.partial_result is True
+
+
+@pytest.mark.database
+def test_an_out_of_scope_quarantine_is_a_typed_error_and_not_a_bare_one(engine: Engine) -> None:
+    """The other route to counts that do not fit, and the floor under it.
+
+    `quarantine_object` validates identifier syntax and nothing else: no
+    constraint ties a quarantine's object to the `object_ids` its enrollment
+    named. One quarantine for an object outside the authorized scope, beside four
+    extractions inside it, is five outcomes in a scope of four — and here the
+    denominator is real, so the disagreement is a genuine inconsistency between
+    the authorized scope and the stored rows rather than an artefact of an
+    invented total. It must be reported.
+
+    What it must not be is a bare `ValueError`: outside section 10's taxonomy,
+    with no envelope, reaching the caller as an unclassified crash. It is
+    `SearchInternalError` — this system's fault, not retryable — and it carries
+    the same empty message as every other error this module raises. The
+    assertions on `__cause__` and `__context__` are the module's own rule that a
+    typed error is raised outside the handler, because a traceback rendered
+    through the original is how redacted detail comes back.
+    """
+    scoped = enrol(engine, key="out-of-scope", documents=CORPUS)
+    neighbour = enrol(engine, key="out-of-scope-neighbour", documents={"ledger": CORPUS["ledger"]})
+    with engine.begin() as connection:
+        quarantine_object(
+            connection,
+            enrollment_id=scoped.enrollment_id,
+            source_object_id=neighbour.object_ids["ledger"],
+            version_id=None,
+            reason=QuarantineReason.CONTAINMENT_UNPROVEN,
+        )
+
+    with pytest.raises(SearchInternalError) as raised:
+        search(scoped, "revenue")
+
+    message = str(raised.value)
+    assert message == "the search could not be completed"
+    assert not any(character.isdigit() for character in message), "a count reached the message"
+    for secret in (
+        scoped.enrollment_id,
+        neighbour.enrollment_id,
+        NATIVE_ROOT,
+        "revenue",
+        *scoped.object_ids.values(),
+        *neighbour.object_ids.values(),
+    ):
+        assert secret not in message
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+
+
+@pytest.mark.database
 def test_a_search_names_the_scope_it_ran_in(corpus: Corpus) -> None:
     page = search(corpus, "revenue")
     assert page.disclosure.scope.enrollment_ids == (corpus.enrollment_id,)
@@ -894,6 +1058,63 @@ def test_a_result_label_is_the_media_type_and_says_so(corpus: Corpus) -> None:
         assert "ledger" not in match.label
 
 
+def test_every_coverage_state_that_claims_a_whole_scope_is_classified_as_one() -> None:
+    """The clamp's membership, stated over every state rather than the reachable ones.
+
+    Not a database test, and that is the point of having it: `unavailable` cannot
+    be produced through `search_extractions` today, because search passes no
+    `unavailable` count. "Currently unreachable" is how the first clamp came to
+    cover `processed` alone while `quarantined` and `unsupported` walked past it,
+    so the state is classified here and will be clamped the moment a caller can
+    reach it.
+
+    The exhaustiveness assertion is a second lock on the same door. The partition
+    in `search` is written with `assert_never`, so an eleventh `CoverageState`
+    that nobody classified is a `mypy` error rather than a state that silently
+    escapes the clamp; this asserts the same thing at runtime, where a suite that
+    does not type-check its tests can still see it.
+    """
+    whole_scope = {
+        CoverageState.PROCESSED,
+        CoverageState.QUARANTINED,
+        CoverageState.UNSUPPORTED,
+        CoverageState.UNAVAILABLE,
+    }
+    partial = {
+        CoverageState.NOT_ENROLLED,
+        CoverageState.ELIGIBLE,
+        CoverageState.QUEUED,
+        CoverageState.PARTIALLY_PROCESSED,
+        CoverageState.STALE,
+        CoverageState.SUPERSEDED,
+    }
+    assert whole_scope | partial == set(CoverageState), "a coverage state is classified nowhere"
+    assert not whole_scope & partial
+    for state in whole_scope:
+        assert _claims_the_whole_scope(state) is True
+    for state in partial:
+        assert _claims_the_whole_scope(state) is False
+
+
+def test_only_an_indexed_text_search_configuration_can_be_written_into_the_sql() -> None:
+    """The configuration is interpolated, so what may be interpolated is a closed set.
+
+    `SEARCH_CONFIG` is written into the statement text rather than bound, for the
+    index-matching reason the module records, and the safety of that has to be a
+    property of the construction rather than of the value that happens to be
+    there today. A name outside the set is refused before it can reach an
+    f-string — including one that is a real PostgreSQL configuration, because an
+    unindexed configuration is the silent sequential scan rather than a syntax
+    error, and including one that is not a name at all.
+    """
+    assert SEARCH_CONFIG in INDEXED_CONFIGURATIONS
+    assert str(_configuration(SEARCH_CONFIG).compile()) == f"'{SEARCH_CONFIG}'"
+
+    for refused in ("french", "simple", "english' || (SELECT current_user) || '", "'; SELECT 1--"):
+        with pytest.raises(ValueError, match="unsupported text-search configuration"):
+            _configuration(refused)
+
+
 def test_the_configuration_is_a_literal_and_only_the_query_is_a_parameter() -> None:
     """Which half of the predicate is planned as a constant, and which is data.
 
@@ -956,10 +1177,13 @@ def test_the_search_predicate_uses_the_functional_index_and_not_a_sequential_sca
     """The index and the predicate must agree as expressions, not merely in intent.
 
     A functional GIN index is matched by expression tree. If the index says
-    `to_tsvector('english', text)` and the predicate says anything else — a
-    different text-search configuration, a cast, a coalesce — PostgreSQL silently
-    plans a sequential scan. The rows come back correct either way, so no
-    result-comparing test can tell the difference. Only the plan can.
+    `to_tsvector('english', text)` and the predicate builds a different tree — a
+    different text-search configuration, a `coalesce`, a cast the parser cannot
+    erase such as `varchar(64)` — PostgreSQL silently plans a sequential scan.
+    The rows come back correct either way, so no result-comparing test can tell
+    the difference. Only the plan can. A cast that *is* erasable, `text` to
+    `text` or to unbounded `varchar`, is folded away and keeps the index, which
+    is why the rule is "the same expression" and not "no cast".
 
     Asserting the plan rather than a duration also keeps this deterministic:
     a timing threshold on a six-row fixture would be noise.

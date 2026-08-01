@@ -52,13 +52,25 @@ builds, created beside the table by revision `8b3f5c17d904`:
 
 PostgreSQL matches a functional index by expression tree, so that index and the
 predicate below are one decision recorded in two files, and they must remain
-character-identical. The configuration is named explicitly on both sides — which
-is also what makes the expression `IMMUTABLE` and therefore indexable at all,
-since the one-argument form is only `STABLE` — and it is written as a SQL
-literal rather than a bound parameter, for the reason given at `_CONFIG`. Any
-divergence at all, a different configuration or a cast or a `coalesce`, silently
-plans a sequential scan that still returns correct rows, so no result-comparing
-test can see it.
+equal *as expressions*. Not as text: the index is written over `text` and the
+predicate compiles to `to_tsvector('english', knowledge.extractions.text)`, which
+is a different string for the same tree and matches. The configuration is named
+explicitly on both sides — which is also what makes the expression `IMMUTABLE`
+and therefore indexable at all, since the one-argument form is only `STABLE` —
+and it is written as a SQL literal rather than a bound parameter, for the reason
+given at `_CONFIG`.
+
+What breaks the match is anything that changes the tree, and it breaks silently:
+the plan drops to a sequential scan and still returns correct rows, so no
+result-comparing test can see it. A different text-search configuration does it,
+and so does wrapping the column in a `coalesce`. A cast is the case worth stating
+precisely, because it was measured against a twenty-thousand-row table and the
+obvious reading is wrong: a cast the parser can erase is erased before planning
+and the index is still used — `cast(text AS text)` and `cast(text AS varchar)`
+both keep the `Bitmap Index Scan` — while `cast(text AS varchar(64))`, which
+carries a length check the parser cannot drop, leaves a different tree and falls
+to a sequential scan. So "no cast" is not the rule and never was; "nothing that
+changes the expression" is.
 
 That the expressions do agree was measured rather than assumed. Against a table
 of twenty thousand synthetic rows the predicate built below produces
@@ -84,31 +96,47 @@ no benchmark to weigh it against the first, and `AGENTS.md` section 2 rules out
 machinery with no current caller. It stays available.
 
 **Coverage is read, not inferred, and the denominator is the hard part.**
-`coverage_for` requires the eligible total from whoever enumerated the scope,
+`coverage_for` takes the eligible total from whoever enumerated the scope,
 because deriving it from the rows that exist would report complete coverage of a
 scope nobody measured. Search runs long after that enumeration and in another
 process, so it can supply the total in exactly one case: an enrollment that named
 its objects explicitly, where the count of `object_ids` *is* the authorized
 scope. An enrollment selecting a root plus a depth has an eligible total that
-only enumeration knows and that nothing persists, so search says so — the result
-is partial, it carries `eligible_total_not_persisted`, and the coverage *state*
-it reports is held below `processed`, because a state is machine-readable and
-"the whole eligible scope was processed" is exactly the claim an unmeasured
-denominator cannot support. A search cannot claim complete coverage it cannot
-prove, and section 9.7 would rather have a partial disclosure than a confident
-wrong one.
+only enumeration knows and that nothing persists, so search passes `eligible=None`
+— which is `coverage_for`'s way of being told the denominator was never measured
+— rather than quoting a number it would have had to invent. It invented one
+before: `max_items`, the enrollment's own ceiling, which bounds what a single
+pass may do and not how many outcomes accumulate across passes over a changing
+tree, so a long-lived enrollment eventually exceeded it and the read raised
+`ValueError` out of the coverage guard. A denominator nothing measured has no
+valid stand-in, and the fix is to stop supplying one.
+
+What search reports for that enrollment is a partial result carrying
+`eligible_total_not_persisted`, and a coverage *state* held at
+`partially_processed`. The clamp covers every state that asserts the whole scope
+reached an outcome — `processed`, `quarantined`, `unsupported`, `unavailable` —
+and not the states that assert nothing of the kind. All four are reachable the
+same way and all four are the same false claim: with the total derived from the
+outcomes, whichever outcome the enrollment happens to hold divides out to the
+whole of it, so "every eligible object here was quarantined" is as available and
+as unfounded as "every eligible object here was processed", and it is the more
+dangerous of the two because a caller is likelier to act destructively on it. A
+search cannot claim whole-scope coverage it cannot prove, and section 9.7 would
+rather have a partial disclosure than a confident wrong one.
 
 What that leaves, stated here rather than discovered later: for a root-selector
-enrollment the reported counts and the reported state disagree. `eligible` is
-set to what was accounted for, so `processed == eligible`, while the state is
-held at `partially_processed`. A consumer that recomputes the state from the
-counts therefore gets `processed` and contradicts the state beside it. That is
-not an oversight in the clamp — it is the whole problem surfacing in the only
-place the contract still allows it. `eligible` is a required integer in the v1
-disclosure and no integer is true here: the enumerated total is the one number
-that would be, and nothing persists it. The three signals that do not lie —
-`eligible_total_not_persisted`, `partial_result`, and the state — are what a
-consumer should read, and a consumer reading the counts alone will be wrong.
+enrollment the reported counts and the reported state disagree, and the clamp is
+what makes them disagree. `eligible == accounted` there — the sum of `processed`,
+`quarantined` and `unsupported`, not `processed` alone — so a consumer that
+recomputes the state from the counts gets whichever whole-scope state the
+outcomes happen to form, or `partially_processed` where they are mixed, and the
+first case contradicts the state reported beside it. The clamp stops this module
+from making the claim; it cannot stop a consumer from deriving it, because
+`eligible` is a required integer in the v1 disclosure and no integer is true
+here. The enumerated total is the one number that would be, and nothing persists
+it. The three signals that do not lie — `eligible_total_not_persisted`,
+`partial_result`, and the state — are what a consumer should read, and a consumer
+reading the counts alone will be wrong.
 
 Fixing it properly means either persisting the eligible total at enrollment or
 letting `eligible` be absent in the contract, and the second is a v1 change
@@ -116,9 +144,9 @@ gated by `P00-OD-004`. Both are out of scope here and are carried into WP-4."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, assert_never
 
 from sqlalchemy import (
     ColumnElement,
@@ -154,7 +182,11 @@ from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.common.time import ensure_utc, utc_now
-from my_pa.domain.extraction.coverage import AggregateLimitation, LimitationReason
+from my_pa.domain.extraction.coverage import (
+    AggregateLimitation,
+    CoverageCounts,
+    LimitationReason,
+)
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.search.query import (
     EmptySearchQueryError,
@@ -174,6 +206,7 @@ from my_pa.infrastructure.persistence.tables import (
 )
 
 __all__ = [
+    "INDEXED_CONFIGURATIONS",
     "RANK_NORMALIZATION",
     "SEARCH_CONFIG",
     "SearchInternalError",
@@ -197,21 +230,49 @@ __all__ = [
 #: than a search one.
 SEARCH_CONFIG: Final = "english"
 
-#: The same configuration as it is written into the SQL: a literal, not a bound
-#: parameter. The distinction is the difference between using the functional
-#: index and not using it, and it was measured. Bound, the predicate compiles to
-#: `to_tsvector($1, text)`, and matching it against an index on
-#: `to_tsvector('english', text)` then depends on the server folding the
-#: parameter to a constant while planning: it does under a custom plan and it
-#: does not under `plan_cache_mode = force_generic_plan`, where the measured
-#: plan is a sequential scan even with `enable_seqscan = off`. A literal makes
-#: index matching a property of the expression rather than of which plan the
-#: server chose.
-#:
-#: Safe here for one reason and no other: `SEARCH_CONFIG` is a module constant
-#: that nothing outside this file can set. The caller's query text is never
-#: treated this way — it is a `bindparam` in `_tsquery` and stays one.
-_CONFIG: Final = literal_column(f"'{SEARCH_CONFIG}'", REGCONFIG)
+#: Every text-search configuration this module may compile into a statement.
+#: Closed, and checked rather than trusted: `_configuration` interpolates the
+#: name into SQL text, so the set of names that can reach that interpolation has
+#: to be a set rather than whatever the module attribute happens to hold. A
+#: configuration is in it only once `knowledge.extractions` carries a functional
+#: index over that configuration — an unindexed one is not a syntax problem, it
+#: is the silent sequential scan the module docstring describes.
+INDEXED_CONFIGURATIONS: Final = frozenset({SEARCH_CONFIG})
+
+
+def _configuration(name: str) -> ColumnElement[Any]:
+    """The named text-search configuration as a SQL literal, if it is an indexed one.
+
+    A literal and not a bound parameter, and the distinction is the difference
+    between using the functional index and not using it. It was measured. Bound,
+    the predicate compiles to `to_tsvector($1, text)`, and matching it against an
+    index on `to_tsvector('english', text)` then depends on the server folding
+    the parameter to a constant while planning: it does under a custom plan and
+    it does not under `plan_cache_mode = force_generic_plan`, where the measured
+    plan is a sequential scan even with `enable_seqscan = off`. A literal makes
+    index matching a property of the expression rather than of which plan the
+    server chose.
+
+    Which is why this is a function with a guard rather than an f-string. Writing
+    a name into SQL is safe here because the name came out of a closed set, not
+    because of what `SEARCH_CONFIG` currently is: the comment above it already
+    anticipates a corpus in another language wanting a different configuration,
+    and the next person to write one should not have to notice that the value is
+    also concatenated into a statement. The caller's query text is never treated
+    this way at all — it is a `bindparam` in `_tsquery` and stays one.
+    """
+    if name not in INDEXED_CONFIGURATIONS:
+        raise ValueError("unsupported text-search configuration")
+    return literal_column(f"'{name}'", REGCONFIG)
+
+
+#: The configuration as it is written into the SQL, resolved once at import.
+#: That is the property that makes it safe, and it is a stronger one than "a
+#: module constant nothing outside this file can set" — which is false, since
+#: any importer can rebind `SEARCH_CONFIG`. Rebinding it after import changes
+#: nothing: the literal below was built from the value that passed the closed-set
+#: check at import time, and every statement in this module uses that object.
+_CONFIG: Final = _configuration(SEARCH_CONFIG)
 
 #: `ts_rank_cd` normalization 32: `rank / (rank + 1)`, which bounds the score to
 #: [0, 1). Bounded matters because the score is bucketed into a category, and a
@@ -317,9 +378,10 @@ def _tsquery(request: SearchRequest) -> ColumnElement[Any]:
 def _document_vector() -> ColumnElement[Any]:
     """The indexed side of the match.
 
-    Character-identical to the expression `extractions_full_text` is built over.
-    See the module docstring for what a divergence here costs and why nothing
-    that compares rows would notice it.
+    The same expression `extractions_full_text` is built over — the same tree,
+    which is what PostgreSQL matches a functional index by, and not the same
+    characters, which it does not. See the module docstring for what a divergence
+    here costs and why nothing that compares rows would notice it.
     """
     return func.to_tsvector(_CONFIG, extractions.c.text)
 
@@ -331,6 +393,11 @@ def context_statement(request: SearchRequest) -> Select[Any]:
     knowable, and how many lexemes the query produced. The last is not an
     aggregate and the rest are plain columns, so they compose; asking for the
     lexeme count separately would be a second round trip for one integer.
+
+    `max_items` is deliberately not among them. It was, as the denominator for a
+    root-selector enrollment, and it was the wrong number: it bounds one pass's
+    authorization rather than the outcomes an enrollment accumulates, so reading
+    it here was reading a limit as if it were a measurement.
 
     Public, and the reason is a test rather than a caller. Building a statement
     and running it are separate acts, and separating them lets
@@ -344,7 +411,6 @@ def context_statement(request: SearchRequest) -> Select[Any]:
             sources.c.classification,
             enrollments.c.root_object_id,
             func.cardinality(enrollments.c.object_ids).label("named_objects"),
-            enrollments.c.max_items,
             func.numnode(_tsquery(request)).label("lexemes"),
         )
         .select_from(enrollments.join(sources, sources.c.source_id == enrollments.c.source_id))
@@ -457,6 +523,80 @@ def _matches(
     return list(_execute(connection, match_statement(request, position)).all())
 
 
+def _claims_the_whole_scope(state: CoverageState) -> bool:
+    """Whether `state` asserts that every eligible object reached an outcome.
+
+    The partition is written out member by member, and exhaustively, because the
+    question it answers is which states a search may not report when it has no
+    measured denominator — and a state that escaped the classification would
+    escape that rule silently, which is precisely how the `processed`-only clamp
+    this replaces came to be wrong. `assert_never` makes a newly added
+    `CoverageState` a type error here rather than a state nobody classified.
+
+    The four in the first case all say "the whole scope ended this way", so all
+    four are unsayable without a denominator someone measured. `unavailable` is
+    among them although no call in this module can currently produce it: search
+    passes no `unavailable` count today, and "currently unreachable" is exactly
+    the reasoning that left `quarantined` and `unsupported` out of the first
+    clamp.
+
+    None of the six in the second case asserts anything of the kind, so an
+    unmeasured total cannot make any of them false. `partially_processed` is the
+    honest reading this function exists to fall back to; `eligible` and `queued`
+    say work has not finished; `not_enrolled` says there is no scope; `stale` and
+    `superseded` are about the snapshot rather than the counts and outrank them.
+    """
+    match state:
+        case (
+            CoverageState.PROCESSED
+            | CoverageState.QUARANTINED
+            | CoverageState.UNSUPPORTED
+            | CoverageState.UNAVAILABLE
+        ):
+            return True
+        case (
+            CoverageState.NOT_ENROLLED
+            | CoverageState.ELIGIBLE
+            | CoverageState.QUEUED
+            | CoverageState.PARTIALLY_PROCESSED
+            | CoverageState.STALE
+            | CoverageState.SUPERSEDED
+        ):
+            return False
+    assert_never(state)
+
+
+def _coverage(
+    connection: Connection, enrollment_id: str, *, moment: datetime, eligible: int | None
+) -> CoverageCounts:
+    """Read coverage, or fail as this module's own error rather than a bare one.
+
+    `coverage_for` raises `ValueError` when the counts do not fit inside a
+    denominator the caller supplied, which for search means the enrollment's
+    named `object_ids` and the stored outcomes disagree about what is in scope.
+    That is a real inconsistency and it must be reported, but as a typed error:
+    an uncaught `ValueError` is outside section 10's taxonomy, carries no
+    envelope, and reaches whoever is above this layer as an unclassified crash
+    that leaves search dead for that enrollment with nothing to act on.
+
+    Reached, today, when something recorded a quarantine for an object the
+    enrollment never named — `quarantine_object` checks identifier syntax and
+    not membership of the authorized scope. Classified as internal rather than
+    unavailable because retrying reads the same rows and fails the same way.
+
+    The `raise` is outside the `except` block for the same reason it is in
+    `_execute`: leaving the handler first is what keeps the original off
+    `__context__`, and while this particular `ValueError` carries no identifier,
+    a traceback rendered through it exposes the frames and locals of a coverage
+    read. The message says nothing but that the search did not complete.
+    """
+    try:
+        return coverage_for(connection, enrollment_id, observed_at=moment, eligible=eligible)
+    except ValueError:
+        pass
+    raise SearchInternalError("the search could not be completed")
+
+
 def search_extractions(
     connection: Connection, request: SearchRequest, *, now: datetime | None = None
 ) -> SearchPage:
@@ -477,7 +617,7 @@ def search_extractions(
     position = request.position(moment)
 
     context = _context(connection, request)
-    source_id, classification, root_object_id, named_objects, ceiling, lexemes = context
+    source_id, classification, root_object_id, named_objects, lexemes = context
     validate_identifier(str(source_id), IdKind.SOURCE)
     if int(lexemes) == 0:
         # No terms, so nothing was searched. Reporting zero matches here would
@@ -508,31 +648,29 @@ def search_extractions(
 
     # The denominator, and the whole difficulty of this function. An enrollment
     # that named its objects has one that is stored and authoritative. One that
-    # named a root has none, so `max_items` -- the ceiling the enrollment itself
-    # authorizes, and therefore an upper bound `coverage_for` will accept -- is
-    # used to obtain the counts, and the eligible total is then replaced by what
-    # was actually accounted for. That replacement is not a measured scope, and
-    # three things keep it from being presented as one: `_ELIGIBLE_UNKNOWN` is
-    # disclosed, the result is partial whatever the counts say, and the reported
-    # state is held below `PROCESSED` immediately below.
-    counts = coverage_for(
+    # named a root has none, and `None` is how that is said: `coverage_for`
+    # derives the total from what it accounted for, which is honest arithmetic
+    # only because the caller stated it was unmeasured rather than quoting a
+    # number. Three things keep the derived total from being read as a measured
+    # scope: `_ELIGIBLE_UNKNOWN` is disclosed, the result is partial whatever the
+    # counts say, and the reported state is clamped immediately below.
+    counts = _coverage(
         connection,
         request.enrollment_id,
-        observed_at=moment,
-        eligible=int(named_objects) if eligible_is_known else int(ceiling),
+        moment=moment,
+        eligible=int(named_objects) if eligible_is_known else None,
     )
-    if not eligible_is_known:
-        counts = replace(counts, eligible=counts.accounted)
     state = counts.state()
-    if not eligible_is_known and state is CoverageState.PROCESSED:
-        # A denominator taken from the numerator can only ever divide out to all
-        # of it, so `PROCESSED` here would be the machine-readable claim that the
-        # whole eligible scope was covered — over a total nobody measured, which
-        # is the one claim this branch exists to avoid. `PARTIALLY_PROCESSED` is
-        # the honest reading: objects were processed, and how many more there are
-        # is not known. The counts themselves are left alone; inventing a larger
-        # denominator to force the state would be a second invention on top of
-        # the first.
+    if not eligible_is_known and _claims_the_whole_scope(state):
+        # A denominator taken from the numerator divides out to all of it, so
+        # every whole-scope state is available here and none of them is earned.
+        # Whichever it is — the scope was processed, quarantined, unsupported,
+        # unavailable — it is the machine-readable claim that a total nobody
+        # measured was fully accounted for. `PARTIALLY_PROCESSED` is the honest
+        # reading: objects reached outcomes, and how many more there are is not
+        # known. The counts themselves are left alone; inventing a larger
+        # denominator to force the state would be the invention this branch just
+        # removed, put back one line lower.
         state = CoverageState.PARTIALLY_PROCESSED
 
     limitations = [

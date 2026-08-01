@@ -35,11 +35,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, text
+from sqlalchemy import ColumnElement, Engine, Select, select, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import make_url
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
@@ -71,10 +73,13 @@ from my_pa.infrastructure.persistence.extraction import (
 )
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
 from my_pa.infrastructure.persistence.search import (
+    SEARCH_CONFIG,
     SearchPage,
     UnknownEnrollmentError,
+    match_statement,
     search_extractions,
 )
+from my_pa.infrastructure.persistence.tables import extractions
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -243,6 +248,85 @@ def enrol(
             ),
         )
         for name in sorted(chosen):
+            media_type, body = documents[name]
+            record_outcome(
+                connection,
+                enrollment_id=accepted.enrollment.enrollment_id,
+                outcome=extract_text(
+                    source_id=source.source_id,
+                    source_object_id=observed[name].source_object_id,
+                    observed_version_id=observed[name].version_id,
+                    content_version_id=observed[name].version_id,
+                    media_type=media_type,
+                    content=body,
+                    observed_at=WHEN,
+                ),
+            )
+    return Corpus(
+        engine=engine,
+        source_id=source.source_id,
+        enrollment_id=accepted.enrollment.enrollment_id,
+        object_ids={name: entry.source_object_id for name, entry in observed.items()},
+    )
+
+
+def enrol_under_a_root(
+    engine: Engine, *, key: str, documents: dict[str, tuple[str, bytes]]
+) -> Corpus:
+    """One enrollment that names a root and a depth, with `documents` extracted.
+
+    The difference from `enrol` is the scope and nothing else. An enrollment that
+    names its objects carries its own eligible total; one that names a root has
+    an eligible total only enumeration knows and nothing persists, which is the
+    condition the two tests using this exercise. `documents` may be empty, so
+    both "no outcomes at all" and "outcomes, all of them successes" are
+    reachable — the second is where a coverage claim could be made and must not
+    be.
+    """
+    with engine.begin() as connection:
+        source = register_source(
+            connection,
+            provider_kind=SourceProviderKind.FIXTURE,
+            label="Rooted corpus",
+            classification=Classification.SYNTHETIC_TEST,
+            native_root=f"{NATIVE_ROOT}/{key}",
+        )
+        root = observe_object(
+            connection,
+            source_id=source.source_id,
+            native_locator=f"{NATIVE_ROOT}/{key}",
+            kind=ObjectKind.CONTAINER,
+            fingerprint=f"fingerprint-{key}",
+            modified_at=WHEN,
+        )
+        observed = {
+            name: observe_object(
+                connection,
+                source_id=source.source_id,
+                native_locator=f"{NATIVE_ROOT}/{key}/{name}",
+                kind=ObjectKind.FILE,
+                fingerprint=f"fingerprint-{key}-{name}",
+                modified_at=WHEN,
+                media_type=media_type,
+                size_bytes=len(body),
+            )
+            for name, (media_type, body) in documents.items()
+        }
+        accepted = accept_enrollment(
+            connection,
+            EnrollmentRequest(
+                source_id=source.source_id,
+                principal_id=issue_identifier(IdKind.PRINCIPAL),
+                purpose=Purpose.BOUNDED_ENROLLMENT,
+                scope=EnrollmentScope(root_object_id=root.source_object_id, depth=1),
+                media_types=("text/markdown", "text/plain"),
+                policy_version="mcv-1",
+                idempotency_key=f"search-{key}-{secrets.token_hex(4)}",
+                max_items=100,
+                max_bytes=1_000_000,
+            ),
+        )
+        for name in sorted(documents):
             media_type, body = documents[name]
             record_outcome(
                 connection,
@@ -474,6 +558,99 @@ def test_a_quarantined_object_is_counted_and_its_content_never_appears(engine: E
 
 
 @pytest.mark.database
+def test_an_object_that_was_both_extracted_and_quarantined_is_counted_once(engine: Engine) -> None:
+    """The state two ledgers can be in at once, and it must not crash the read.
+
+    An extraction is recorded per observed version and a quarantine is an
+    append-only event, so one object can hold both: quarantined at one version
+    and extracted at another, in either order. Nothing prevents it and nothing
+    should — a containment failure after a successful pass is exactly the
+    sequence `INV-PKL-007` cares about.
+
+    Counted per row, that object is two outcomes in a scope of four objects, and
+    `CoverageCounts` refuses counts that exceed their denominator: the whole read
+    path raised `ValueError` and the caller got no disclosure at all. Counted per
+    object, with quarantine taking precedence, it is one quarantined object and
+    three processed ones. Quarantine wins deliberately: the opposite precedence
+    would let a later success hide a quarantine, which is the one direction that
+    turns a stopped object into a covered one.
+    """
+    both = enrol(engine, key="both", documents=CORPUS)
+    with both.engine.begin() as connection:
+        quarantine_object(
+            connection,
+            enrollment_id=both.enrollment_id,
+            source_object_id=both.object_ids["ledger"],
+            version_id=None,
+            reason=QuarantineReason.CONTAINMENT_UNPROVEN,
+        )
+    page = search(both, "revenue")
+
+    coverage = page.disclosure.coverage
+    assert coverage.eligible == len(CORPUS)
+    assert coverage.quarantined == 1
+    assert coverage.processed == len(CORPUS) - 1
+    assert coverage.processed + coverage.quarantined + coverage.unsupported <= coverage.eligible
+    assert coverage.state is CoverageState.PARTIALLY_PROCESSED
+    assert "scope_not_fully_extracted" in page.disclosure.limitations
+    assert page.disclosure.partial_result is True
+
+
+@pytest.mark.database
+def test_an_object_extracted_at_one_version_and_unsupported_at_another_is_counted_once(
+    engine: Engine,
+) -> None:
+    """The same double count without a quarantine anywhere near it.
+
+    `extractions` holds one row per observed version, so an object whose media
+    type changed between two passes has two rows with two different statuses. Per
+    row that is two outcomes in a scope of one object, which `CoverageCounts`
+    refuses in the same way. Per object it is one outcome, and it is the
+    unsupported one for the same reason quarantine outranks extraction: the
+    object's current bytes are not text this system can read, and reporting it as
+    processed because an older version was would claim coverage the corpus no
+    longer has.
+    """
+    reclassified = enrol(engine, key="reclassified", documents={"ledger": CORPUS["ledger"]})
+    with engine.begin() as connection:
+        changed = observe_object(
+            connection,
+            source_id=reclassified.source_id,
+            native_locator=f"{NATIVE_ROOT}/reclassified/ledger",
+            kind=ObjectKind.FILE,
+            fingerprint="fingerprint-reclassified-ledger-as-pdf",
+            modified_at=WHEN,
+            media_type="application/pdf",
+            size_bytes=32,
+        )
+        # The same object, a new version: object identity is the locator and
+        # version identity is the fingerprint, so this is one object with two
+        # versions and not two objects.
+        assert changed.source_object_id == reclassified.object_ids["ledger"]
+        record_outcome(
+            connection,
+            enrollment_id=reclassified.enrollment_id,
+            outcome=extract_text(
+                source_id=reclassified.source_id,
+                source_object_id=changed.source_object_id,
+                observed_version_id=changed.version_id,
+                content_version_id=changed.version_id,
+                media_type="application/pdf",
+                content=b"%PDF-1.7\nnot extracted here\n%%EOF\n",
+                observed_at=WHEN,
+            ),
+        )
+    page = search(reclassified, "revenue")
+
+    coverage = page.disclosure.coverage
+    assert coverage.eligible == 1
+    assert coverage.unsupported == 1
+    assert coverage.processed == 0
+    assert coverage.state is CoverageState.UNSUPPORTED
+    assert page.disclosure.partial_result is True
+
+
+@pytest.mark.database
 def test_an_aggregate_limitation_reaches_the_disclosure_as_a_count(engine: Engine) -> None:
     """The plumbing `docs/plans/mcv-completion-plan.md` section 10 asked for.
 
@@ -508,45 +685,47 @@ def test_a_root_selector_enrollment_cannot_claim_complete_coverage(engine: Engin
     An enrollment that named a root has an eligible total only enumeration
     knows. Search says so instead of dividing by the rows that happen to exist,
     which would report complete coverage of a scope nobody measured.
+
+    Nothing is extracted here, so the counts are all zero and the branch that
+    replaces the eligible total is reached with nothing in it. The test below
+    covers the case that has outcomes in it, which is where the claim could
+    actually have been made.
     """
-    with engine.begin() as connection:
-        source = register_source(
-            connection,
-            provider_kind=SourceProviderKind.FIXTURE,
-            label="Rooted corpus",
-            classification=Classification.SYNTHETIC_TEST,
-            native_root=f"{NATIVE_ROOT}/rooted",
-        )
-        root = observe_object(
-            connection,
-            source_id=source.source_id,
-            native_locator=f"{NATIVE_ROOT}/rooted",
-            kind=ObjectKind.CONTAINER,
-            fingerprint="fingerprint-rooted",
-            modified_at=WHEN,
-        )
-        accepted = accept_enrollment(
-            connection,
-            EnrollmentRequest(
-                source_id=source.source_id,
-                principal_id=issue_identifier(IdKind.PRINCIPAL),
-                purpose=Purpose.BOUNDED_ENROLLMENT,
-                scope=EnrollmentScope(root_object_id=root.source_object_id, depth=1),
-                media_types=("text/markdown",),
-                policy_version="mcv-1",
-                idempotency_key=f"search-rooted-{secrets.token_hex(4)}",
-                max_items=100,
-                max_bytes=1_000_000,
-            ),
-        )
-    rooted = Corpus(
-        engine=engine,
-        source_id=source.source_id,
-        enrollment_id=accepted.enrollment.enrollment_id,
-        object_ids={},
+    rooted = enrol_under_a_root(engine, key="rooted", documents={})
+    page = search(rooted, "revenue")
+
+    assert "eligible_total_not_persisted" in page.disclosure.limitations
+    assert page.disclosure.partial_result is True
+
+
+@pytest.mark.database
+def test_a_root_selector_enrollment_with_outcomes_still_cannot_report_processed(
+    engine: Engine,
+) -> None:
+    """The same rule where it is actually reachable: every outcome a success.
+
+    With an unknown eligible total the reported total is what was accounted for,
+    so a scope whose every outcome is an extraction divides out to all of it and
+    `state` was `processed` — the machine-readable claim that the whole eligible
+    scope was covered, over a denominator taken from the numerator and never
+    measured. A caller reading the state rather than the limitation token was
+    told something false.
+
+    `partially_processed` is the honest reading and is what must be reported:
+    objects were processed, and how many more there are is not known. The counts
+    are deliberately left alone; the fix is to stop making the claim, not to
+    invent a bigger denominator to hide it behind.
+    """
+    rooted = enrol_under_a_root(
+        engine, key="rooted-extracted", documents={"ledger": CORPUS["ledger"]}
     )
     page = search(rooted, "revenue")
 
+    assert len(page.matches) == 1
+    assert page.disclosure.coverage.processed == 1
+    assert page.disclosure.coverage.eligible == 1
+    assert page.disclosure.coverage.state is not CoverageState.PROCESSED
+    assert page.disclosure.coverage.state is CoverageState.PARTIALLY_PROCESSED
     assert "eligible_total_not_persisted" in page.disclosure.limitations
     assert page.disclosure.partial_result is True
 
@@ -715,6 +894,61 @@ def test_a_result_label_is_the_media_type_and_says_so(corpus: Corpus) -> None:
         assert "ledger" not in match.label
 
 
+def test_the_configuration_is_a_literal_and_only_the_query_is_a_parameter() -> None:
+    """Which half of the predicate is planned as a constant, and which is data.
+
+    Not a database test: it compiles the statement and reads the SQL, which is
+    where this is decidable.
+
+    A bound configuration compiles to `to_tsvector($1, text)`, and whether that
+    matches an index on `to_tsvector('english', text)` then depends on the server
+    folding the parameter into a constant while planning. Measured: it does under
+    a custom plan and it does not under `plan_cache_mode = force_generic_plan`,
+    where the plan drops to a sequential scan while returning the same rows. So
+    the configuration has to be in the SQL text, and this asserts it is.
+
+    The paired negative is the more important half. `SEARCH_CONFIG` is a module
+    constant and may be written into the statement; the caller's query never may,
+    and the assertions below say both — the configuration is not among the
+    parameters, and the query text is nothing but a parameter.
+    """
+    request = SearchRequest(
+        enrollment_id=issue_identifier(IdKind.ENROLLMENT), query=SearchQuery("revenue")
+    )
+    compiled = match_statement(request, None).compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+
+    assert f"to_tsvector('{SEARCH_CONFIG}', knowledge.extractions.text)" in sql
+    assert SEARCH_CONFIG not in compiled.params.values(), "the configuration is a bound parameter"
+    assert "%(search_text)s" in sql, "the query text left the parameters"
+    assert compiled.params["search_text"] == "revenue"
+    assert "revenue" not in sql
+
+
+def full_text_predicate(statement: Select[Any]) -> ColumnElement[Any]:
+    """The `@@` clause of a statement `search` built, taken out of its own tree.
+
+    Not rebuilt, and that is the entire point of this function. A test that
+    writes the predicate out by hand tests the string it wrote: the previous
+    version of the test below did exactly that, and planting
+    `coalesce(text, '')` inside `_document_vector` — which really does drop the
+    plan to a sequential scan — left the whole database tier green.
+
+    The guard is part of the extraction. If the statement ever stops carrying
+    exactly one `@@` predicate this fails loudly instead of quietly explaining
+    something else.
+    """
+    where = statement.whereclause
+    clauses = getattr(where, "clauses", (where,))
+    found = [
+        clause
+        for clause in clauses
+        if getattr(getattr(clause, "operator", None), "opstring", None) == "@@"
+    ]
+    assert len(found) == 1, f"expected one `@@` predicate in the statement, found {len(found)}"
+    return found[0]
+
+
 @pytest.mark.database
 def test_the_search_predicate_uses_the_functional_index_and_not_a_sequential_scan(
     engine: Engine, corpus: Corpus
@@ -730,6 +964,17 @@ def test_the_search_predicate_uses_the_functional_index_and_not_a_sequential_sca
     Asserting the plan rather than a duration also keeps this deterministic:
     a timing threshold on a six-row fixture would be noise.
 
+    The predicate comes out of `match_statement`, so what is explained is the
+    expression the module sends and not one the test composed. What is explained
+    is only that predicate, and the reason is measured rather than preferred: the
+    full statement also filters on `enrollment_id` and `status`, which at fixture
+    scale is far more selective than any term, so the planner chooses
+    `extractions_by_enrollment` and applies the match as a filter. That plan is
+    correct and says nothing either way about whether the two `to_tsvector`
+    expressions agree. Isolating the predicate is what makes the plan answer that
+    question, and a corpus large enough to make the whole statement prefer the
+    GIN index would be a performance fixture, not this one.
+
     `enable_seqscan=off` is required and does not weaken the test. On a fixture
     this small the planner will not choose any index, so without it the test
     fails whether or not the expressions agree. It is also not a way to force a
@@ -737,20 +982,24 @@ def test_the_search_predicate_uses_the_functional_index_and_not_a_sequential_sca
     against a predicate using `simple` still plans a sequential scan, because a
     functional index that does not match the expression cannot be used at any
     cost. The setting removes the size effect, not the correctness check.
+
+    `paramstyle="named"` is what lets the compiled predicate be wrapped in
+    `EXPLAIN` by `text()`: the placeholders stay placeholders and the values
+    still travel as parameters, so nothing here interpolates a query.
     """
+    request = SearchRequest(enrollment_id=corpus.enrollment_id, query=SearchQuery("revenue"))
+    probe = select(extractions.c.extraction_id).where(
+        full_text_predicate(match_statement(request, None))
+    )
+    compiled = probe.compile(
+        dialect=postgresql.dialect(paramstyle="named"),
+        compile_kwargs={"render_postcompile": True},
+    )
     with engine.begin() as connection:
         connection.execute(text("ANALYZE knowledge.extractions"))
         connection.execute(text("SET LOCAL enable_seqscan = off"))
         plan = "\n".join(
-            row[0]
-            for row in connection.execute(
-                text(
-                    "EXPLAIN SELECT extraction_id FROM knowledge.extractions "
-                    "WHERE to_tsvector('english', text) "
-                    "@@ websearch_to_tsquery('english', :q)"
-                ),
-                {"q": "revenue"},
-            )
+            row[0] for row in connection.execute(text(f"EXPLAIN {compiled}"), dict(compiled.params))
         )
 
     assert "extractions_full_text" in plan, f"the functional index was not chosen:\n{plan}"

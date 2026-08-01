@@ -257,9 +257,27 @@ def coverage_for(
     state, that is what `SnapshotState.STALE` is for, and the caller states it
     because only the caller can compare the source against the snapshot.
 
-    Quarantines are counted by distinct object. The table is an append-only
-    ledger of events, so an object quarantined twice is two rows and one
-    uncovered object.
+    Every outcome is counted by distinct object, and the three sets are
+    disjoint. Both tables record events rather than states — the quarantine
+    ledger is append-only, and `extractions` holds one row per observed version —
+    so an object quarantined twice is two rows and one uncovered object, and an
+    object with a quarantine on one version and an extraction on another is two
+    rows and one object with one outcome. Counting rows would report more
+    outcomes than there are objects, and `eligible` is a count of objects, so
+    every count beside it has to be one too.
+
+    The precedence is quarantine, then unsupported, then extracted, and it runs
+    in that direction because it is the one that cannot overclaim. An object
+    with any quarantine row is quarantined and is *not* processed: a later
+    success must never hide a quarantine behind it, which is what `INV-PKL-007`
+    and threat-model `ABUSE-PKL-008` forbid. For the same reason an object with
+    an unsupported row is unsupported even where another version of it was
+    extracted. The cost is disclosed rather than hidden: an object quarantined at
+    one version and successfully extracted at a later one keeps reporting as
+    quarantined, because nothing in these counts orders versions or reads the
+    quarantine's review state. That understates coverage, which is the direction
+    this can afford; the reverse would be a false claim that the object is
+    covered.
 
     Raises `ValueError` — through `CoverageCounts` — when the counts do not fit
     inside `eligible`. That is the right failure: a scope smaller than what was
@@ -269,17 +287,35 @@ def coverage_for(
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     moment = ensure_utc(observed_at)
 
-    by_status = {
-        str(row[0]): int(row[1])
-        for row in connection.execute(
-            select(extractions.c.status, func.count())
-            .where(extractions.c.enrollment_id == enrollment_id)
-            .group_by(extractions.c.status)
-        )
-    }
+    # The two subqueries are the precedence, written once and subtracted from
+    # the counts that rank below them. Neither is executed on its own; each
+    # becomes an `IN (SELECT …)` inside the count that has to exclude it.
+    quarantined_objects = select(quarantine_records.c.source_object_id).where(
+        quarantine_records.c.enrollment_id == enrollment_id
+    )
+    unsupported_objects = select(extractions.c.source_object_id).where(
+        extractions.c.enrollment_id == enrollment_id,
+        extractions.c.status == ExtractionStatus.UNSUPPORTED.value,
+    )
+
     quarantined = connection.execute(
         select(func.count(func.distinct(quarantine_records.c.source_object_id))).where(
             quarantine_records.c.enrollment_id == enrollment_id,
+        )
+    ).scalar_one()
+    unsupported = connection.execute(
+        select(func.count(func.distinct(extractions.c.source_object_id))).where(
+            extractions.c.enrollment_id == enrollment_id,
+            extractions.c.status == ExtractionStatus.UNSUPPORTED.value,
+            extractions.c.source_object_id.not_in(quarantined_objects),
+        )
+    ).scalar_one()
+    processed = connection.execute(
+        select(func.count(func.distinct(extractions.c.source_object_id))).where(
+            extractions.c.enrollment_id == enrollment_id,
+            extractions.c.status == ExtractionStatus.EXTRACTED.value,
+            extractions.c.source_object_id.not_in(quarantined_objects),
+            extractions.c.source_object_id.not_in(unsupported_objects),
         )
     ).scalar_one()
     limitations = tuple(
@@ -297,9 +333,9 @@ def coverage_for(
         enrollment_id=enrollment_id,
         eligible=eligible,
         queued=queued,
-        processed=by_status.get(ExtractionStatus.EXTRACTED.value, 0),
+        processed=int(processed),
         quarantined=int(quarantined),
-        unsupported=by_status.get(ExtractionStatus.UNSUPPORTED.value, 0),
+        unsupported=int(unsupported),
         unavailable=unavailable,
         limitations=limitations,
         snapshot=snapshot,

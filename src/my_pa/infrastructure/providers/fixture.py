@@ -388,6 +388,16 @@ class FixtureSourceProvider(SourceProvider):
                 # descriptor rather than the name for the same reason as
                 # everything else here. See the module docstring for why a
                 # legitimate hard link is refused along with an escaping one.
+                #
+                # This precedes the fingerprint comparison because a security
+                # refusal outranks a staleness report: `denied` and `conflict`
+                # are different rows of the section 10 table and mean different
+                # things to a caller. It is *not* ordered this way to stop a
+                # hard link being served after a refresh -- linking moves
+                # `st_ctime`, so the fingerprint differs anyway, and `_observe`
+                # independently requires `st_nlink == 1`, so the refresh path is
+                # closed twice over. An earlier revision of this comment claimed
+                # otherwise; the ordering is right, that reason was not.
                 raise TraversalDeniedError(f"{source_object_id} {_DENIAL}")
             observed = _fingerprint(opened)
             if observed != expected:

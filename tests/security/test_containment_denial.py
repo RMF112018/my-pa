@@ -512,3 +512,32 @@ def test_the_denials_are_indistinguishable_from_one_another(root: Path) -> None:
     record(anonymous())
 
     assert len(messages) == 1
+
+
+def test_a_looping_root_is_refused_as_configuration_without_naming_a_path(
+    tmp_path: Path,
+) -> None:
+    """The second half of the ELOOP fix, which nothing else covers.
+
+    `resolve_within` handles a loop encountered while resolving a candidate.
+    This is the other site: a root that is itself a symlink cycle. Reverting
+    `__init__` to catch only `OSError` passes every other test in the suite,
+    so without this the fix is half-guarded.
+
+    A misconfigured root is an operator error rather than a denial, so the
+    type is `ValueError` -- but the message still must not carry the path,
+    because a message that names a path is a habit and this one has no reason
+    to acquire it.
+    """
+    root = tmp_path / "loop"
+    (tmp_path / "a").symlink_to(tmp_path / "b")
+    (tmp_path / "b").symlink_to(tmp_path / "a")
+    root.symlink_to(tmp_path / "a")
+
+    with pytest.raises(ValueError) as caught:
+        FixtureSourceProvider(root, make_identifier(IdKind.SOURCE, secrets.token_hex(8)))
+
+    message = str(caught.value)
+    assert "loop" not in message
+    assert str(tmp_path) not in message
+    assert caught.value.__context__ is None

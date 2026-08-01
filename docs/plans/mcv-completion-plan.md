@@ -227,7 +227,26 @@ claim left visible.
 | D-07 | Corrected in place: this document first said "five revisions" | The count came from a truncated directory listing. Recounted from `migrations/versions/*.py`: six, chained `5d75f23847c9 → 1e6c0a94f3b7 → 4b9f0d27ac31 → 2f7d1ba05c48 → 3a8e2cb16d59 → 6c4d3ea82f10`, the last creating target views, and the head matching `alembic_version` in the live database. The mechanism, not just the number, is fixed: the count is now stated with the head revision beside it, so a future drift between the files and the database is visible rather than latent. | Corrected |
 | D-08 | Terminal disposition cannot be reached in this scope | Plan §11 requires GoodNotes, frontend, and relationship acceptance criteria that D-03 and D-04 defer. The honest terminal state is MCV-complete with the deferred set named, not `MYPA_CURRENT_PRODUCT_SCOPE_COMPLETE`. | Disclosed to operator |
 
-## 10. Operator decisions this plan does not make
+## 10. Carried into WP-3
+
+Findings from WP-2's review that were deliberately not fixed there, recorded so
+they are scheduled rather than forgotten.
+
+- **Not every unavailability is a denial.** `fetch` now reports a read timeout
+  as `unavailable` rather than `denied`, but `EMFILE`, `ENFILE`, `ENOMEM`,
+  `EIO`, and `ESTALE` still fall into the blanket `except OSError` and become a
+  non-retryable refusal. Proven with `RLIMIT_NOFILE` clamped: descriptor
+  exhaustion tells the caller to stop retrying something that is merely
+  unavailable, which `INV-PKL-007` forbids. WP-2 established the principle on
+  one errno; WP-3 should finish applying it.
+- **A refused hard link vanishes from listings with no signal.** A root holding
+  two names for one legitimate in-root file lists neither. That converts present
+  evidence into "not there". Spec section 9.2 permits the remedy — "safe
+  aggregate limitations may be disclosed" — but this layer has no coverage
+  plumbing until WP-3 builds it. Hard links are not exotic on a backup-derived
+  NAS root, so this matters before `P00-OD-009` is answered.
+
+## 11. Operator decisions this plan does not make
 
 - Whether to promote E, F, G, or I into current scope. That takes an explicit
   reprioritisation of the objective under `AGENTS.md` §3, not an implementation

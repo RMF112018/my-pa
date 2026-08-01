@@ -5,8 +5,14 @@ Audit basis: `main@e773e6f2285da9e453a8ca7e11bdac23619aaf22`, audited 2026-08-01
 
 This document is the current-state gap audit and the integrated work-package plan
 required before implementation resumes. It records what the repository actually
-contains, what the accepted specifications actually require, and where the
-dispatched plan and the accepted specifications disagree.
+contains, what repository policy and specification require, and where the
+dispatched plan and repository policy disagree.
+
+The dispatched plan is mirrored at `evidence/completion/PLAN-MYPA-APPLICATION-COMPLETION-20260801-078.md`
+so that every section cited below can be checked against a file in this
+repository rather than a link a reviewer cannot open. That mirror is evidence of
+what was dispatched, not repository authority; `CONTRIBUTING.md` governs, and
+Drive mirrors are review surfaces rather than a competing ledger.
 
 ## 1. Authenticated identities
 
@@ -38,11 +44,13 @@ tables_with_rows 286
 ```
 
 Per-schema table counts: `core` 161, `procore` 150, `financial` 67,
-`schedule` 43, `construction` 26, `email` 26, `calendar` 11. Plus
-`migration_control` 9 and `public` 1, which are not domain tables.
+`schedule` 43, `construction` 26, `email` 26, `calendar` 11. An eighth domain
+schema, `contacts`, exists and holds zero base tables, so it changes no count.
+Plus `migration_control` 9 and `public` 1, which are not domain tables.
 
-The claim is **exact**. 198 of the 484 tables are empty, which the migration
-disposition register already accounts for; an empty table is not a defect.
+The claim is **exact**. 198 of the 484 tables are empty, which
+`migrations/data/disposition_registry.json` already accounts for; an empty table
+is not a defect.
 
 ## 3. What is implemented
 
@@ -83,9 +91,10 @@ absent, with no code beyond a README:
   GoodNotes ingestion, Obsidian projection, and any frontend. There is no
   JavaScript toolchain in the repository at all — no `package.json` exists.
 
-`README.md` still says "This branch contains a documentation-only repository
-scaffold... does not implement runtime behavior." That is false and is corrected
-by WP-1.
+At the audit basis `e773e6f`, `README.md` said "This branch contains a
+documentation-only repository scaffold... does not implement runtime behavior."
+That was false, and WP-1 corrects it in the same change that publishes this
+document.
 
 ## 5. Specification conflict, and how it resolves
 
@@ -93,10 +102,20 @@ The dispatched plan requires ten workstreams, A through J, including a full
 frontend MVP (H), a PaddleOCR/TrOCR handwriting pipeline (G), relationship
 intelligence (F), managed documents (E), and an Obsidian projection (I).
 
-The accepted repository specification says the opposite, in terms that are not
-ambiguous.
+Repository policy says the opposite, in terms that are not ambiguous.
 
-`docs/specs/mcv-read-only-vertical-slice.md` §2:
+`AGENTS.md` is the load-bearing authority here, because it is unambiguously
+accepted policy — `AGENTS.md` §1 places "accepted repository specifications,
+ADRs, and this policy" above "indexed Workspace publications" in its own
+precedence list, and `AGENTS.md` is itself that policy. §1: "The objective is one
+complete, read-only vertical slice—not a broad platform." §3 defers
+implementation "merely because a scaffold path exists" and directs "one
+end-to-end vertical slice over multiple partial systems."
+
+`docs/specs/mcv-read-only-vertical-slice.md` agrees and is more specific, but it
+carries `status: PROPOSED_FOR_REPOSITORY_REVIEW` and describes itself as a
+candidate. It is therefore corroborating detail, not the authority the deferral
+rests on. Accepting it is an operator act that has not happened. §2:
 
 > The MCV therefore proves one complete, bounded, read-only vertical slice. It
 > does not attempt to build a broad personal-assistant platform.
@@ -105,11 +124,6 @@ The same specification, §5.2, lists as **explicitly excluded**: personal email,
 calendar, contact, and relationship connectors; managed-document writes and
 version/recovery workflows; and "vector search, graph infrastructure,
 relationship intelligence, and projection implementation."
-
-`AGENTS.md` §1: "The objective is one complete, read-only vertical slice—not a
-broad platform." §3 defers implementation "merely because a scaffold path
-exists" and directs "one end-to-end vertical slice over multiple partial
-systems."
 
 The dispatched plan does not override this, and does not claim to. Its §5.1 says
 "Repository governance and runtime truth control implementation over older Drive
@@ -121,8 +135,9 @@ requirement to be classified, including as "superseded" or "deliberately
 deferred."
 
 So the conflict resolves inside the plan's own rules rather than against them.
-Workstreams E, F, and I are classified **deferred — excluded by accepted
-specification**. They are not silently dropped; they are named here, and they
+Workstreams E, F, and I are classified **deferred — outside the vertical slice
+`AGENTS.md` defines, and named as excluded by the proposed specification**. They
+are not silently dropped; they are named here, and they
 remain available scope the operator can promote by amending the specification.
 
 Workstreams G and H are not excluded by the specification — they are absent from
@@ -140,11 +155,11 @@ make a screen look complete," §7-H), and G's live source root is gated by
 | B — registry, jobs, canonical services | Partially implemented (contracts and audit exist; persistence and services do not) | WP-2, WP-3 |
 | C — read-only source provider, indexing, search | Missing and required | WP-2, WP-3 |
 | D — gateway, MCP parity, operator CLI | Partially implemented (contracts exist; transport does not) | WP-4 |
-| E — managed documents, recovery | Superseded — excluded by spec §5.2 | Deferred, disclosed |
-| F — personal-data domains, relationship intelligence | Superseded — excluded by spec §5.2 | Deferred, disclosed |
+| E — managed documents, recovery | Deferred — outside the `AGENTS.md` slice; named as excluded by spec §5.2 | Deferred, disclosed |
+| F — personal-data domains, relationship intelligence | Deferred — outside the `AGENTS.md` slice; named as excluded by spec §5.2 | Deferred, disclosed |
 | G — GoodNotes handwriting MVP | Deferred — dependency-blocked and `P00-OD-009` operator-gated | Deferred, disclosed |
 | H — interactive frontend MVP | Deferred — dependency-blocked on B/C/D | Deferred, disclosed |
-| I — Obsidian projection | Superseded — excluded by spec §5.2 ("projection implementation") | Deferred, disclosed |
+| I — Obsidian projection | Deferred — outside the `AGENTS.md` slice; named as excluded by spec §5.2 ("projection implementation") | Deferred, disclosed |
 | J — operations, packaging, local activation | Missing and required | WP-5 |
 
 The migrated PostgreSQL corpus is retained and verified but is **not** exposed
@@ -180,8 +195,13 @@ agent that did not author it.
   read-only, and containment is revalidated immediately before read.
 - No live personal data in tests, fixtures, logs, or evidence. Fixtures are
   synthetic.
-- No connection to an unverified physical database. `my_pa` identity is checked
-  before mutation; the legacy SQLite source is never written.
+- No connection to an unverified physical database. Today the only guard is
+  configuration-level: settings reject an unknown `MY_PA_` name, an unparseable
+  value, or a URL that is not `postgresql+psycopg` naming a host and a database.
+  There is no runtime `current_database()` check, and an absent
+  `MY_PA_DATABASE_URL` silently defaults rather than refusing to start — see
+  `P00-OD-008`. Adding an identity assertion before mutation is WP-2 work, not a
+  property that exists now. The legacy SQLite source is never written.
 - Services bind to loopback. No internet exposure, no multi-user claim.
 - PDF stays `unsupported` rather than silently skipped, until `P00-OD-003` is
   resolved by the operator.
@@ -197,8 +217,8 @@ claim left visible.
 |---|---|---|---|
 | D-01 | Plan accepted on identity, not on byte-exact hash | The dispatch declared both `representation: native_google_doc` and a source SHA-256 of the pre-conversion Markdown. A native Google Doc does not preserve source bytes, so the two are not jointly satisfiable. File ID, title, parent, owner, and native type all verified; every export format was hashed and none matched, as expected. | Departure, disclosed |
 | D-02 | tmux channel replaced by subagent delegation | `tmux` is not installed on this machine and no `claude-code` session exists. The dispatched plan assumed a separate orchestrator driving this session through tmux; this session is itself the implementation agent. Plan §3 and §9.2 independently require fresh subagents for implementation and exact-head review, which is the substituted mechanism. | Departure, disclosed |
-| D-03 | Workstreams E, F, I deferred | Explicitly excluded by `docs/specs/mcv-read-only-vertical-slice.md` §5.2, which outranks Drive planning inputs under plan §5.1 and §5.6. | Accepted |
-| D-04 | Workstreams G, H deferred | Dependency-blocked on B/C/D, which do not exist. Plan §7-H forbids fabricating backend behavior; `P00-OD-009` gates G's source root to the operator. | Accepted |
+| D-03 | Workstreams E, F, I deferred | Outside the single read-only vertical slice `AGENTS.md` §1 and §3 define, and named as excluded by `docs/specs/mcv-read-only-vertical-slice.md` §5.2. The specification is `PROPOSED_FOR_REPOSITORY_REVIEW`, so `AGENTS.md` carries the argument and the specification corroborates it. | Deferred |
+| D-04 | Workstreams G, H deferred | Dependency-blocked on B/C/D, which do not exist. The specification is silent on both, so nothing excludes them; they are sequenced, not ruled out. Plan §7-H forbids fabricating backend behavior; `P00-OD-009` gates G's source root to the operator. | Deferred |
 | D-05 | Corpus claim accepted | Recomputed from the live database, not restated. Exact match. | Verified |
 | D-06 | PDF remains `unsupported` | `P00-OD-003` is `OPEN_OPERATOR`. Reporting `unsupported` is the specified behavior; silently skipping is forbidden. | Accepted |
 | D-07 | Corrected in place: this document first said "five revisions" | The count came from a truncated directory listing. Recounted from `migrations/versions/*.py`: six, chained `5d75f23847c9 → 1e6c0a94f3b7 → 4b9f0d27ac31 → 2f7d1ba05c48 → 3a8e2cb16d59 → 6c4d3ea82f10`, the last creating target views, and the head matching `alembic_version` in the live database. The mechanism, not just the number, is fixed: the count is now stated with the head revision beside it, so a future drift between the files and the database is visible rather than latent. | Corrected |

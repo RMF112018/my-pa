@@ -6,13 +6,14 @@
 
 The repository contains the Python package `my_pa` under `src/`, the Alembic schema history for the canonical database, and a migrated PostgreSQL corpus in that database. It is a local development candidate: no product workflow runs end to end, and nothing here is deployable.
 
-Implemented and tested:
+Implemented, and covered by the FAST tier unless noted:
 
 - `contracts/v1` — the public request and response envelope, disclosure, error, and capability shapes.
 - `domain/identity` — capability, purpose, principal, and operation binding, including all eight capability names and their operator-only flags.
 - `domain/common`, `domain/policy`, `domain/audit` — identifiers, provenance, classification, time, policy decisions, and audit events.
 - `bootstrap/settings` — strict `MY_PA_` configuration that fails closed on unknown or invalid values.
-- `infrastructure/database/engine` — the connection contract for the canonical database.
+- `infrastructure/database/engine` — the connection contract for the canonical database. Covered by the database tier only.
+- `application/capabilities` — derives the capability manifest and readiness report from the contract rather than restating them.
 - `infrastructure/migration` — legacy extract and load, the migration control plane, and redaction.
 - Six Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, and views; head `6c4d3ea82f10`.
 - `.github/workflows/repository-checks.yml` — document and configuration validation, the FAST tier, a declared-dependency-floor tier, and a database tier run against a disposable PostgreSQL service.

@@ -1,6 +1,6 @@
 # Database
 
-PostgreSQL access for the canonical `my_pa` database: `engine.py` holds the engine factory, the transactional `session_scope`, and `healthcheck`.
+PostgreSQL access for the canonical `my_pa` database: `engine.py` holds the engine factory and `healthcheck`.
 
 Nothing here reads process settings. The caller passes a URL, which keeps configuration in `bootstrap` and makes a disposable test database an ordinary argument rather than a special case.
 

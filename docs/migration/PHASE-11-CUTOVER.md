@@ -120,7 +120,7 @@ scheme and name a host and a database, or startup fails. The default is
 `postgresql+psycopg://my_pa@localhost:5433/my_pa` and carries **no password**;
 supply it out of band with `PGPASSWORD` or `~/.pgpass`.
 
-`src/my_pa/infrastructure/database/` exports exactly four names — there is no
+`src/my_pa/infrastructure/database/` exports exactly three names — there is no
 other supported way in:
 
 ```python
@@ -129,12 +129,11 @@ from my_pa.infrastructure.database import (
     DatabaseHealth,
     create_database_engine,
     healthcheck,
-    session_scope,
 )
 
 engine = create_database_engine(load_settings().database_url)
 try:
-    with session_scope(engine) as session:
+    with engine.begin() as connection:
         ...  # one transaction: commits on a clean exit, rolls back on any error
 finally:
     engine.dispose()

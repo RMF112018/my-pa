@@ -1,4 +1,4 @@
-"""Engine, session, and health check for the canonical `my_pa` database.
+"""Engine and health check for the canonical `my_pa` database.
 
 Synchronous by design. The workload this serves is a batch load and its
 verification queries: it is bounded by PostgreSQL's write path, not by waiting
@@ -12,15 +12,12 @@ argument rather than a special case.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Final
 
 from sqlalchemy import Engine, create_engine, text
-from sqlalchemy.orm import Session
 
-__all__ = ["DatabaseHealth", "create_database_engine", "healthcheck", "session_scope"]
+__all__ = ["DatabaseHealth", "create_database_engine", "healthcheck"]
 
 #: A single-user local bulk load runs a handful of long-lived connections, so
 #: the pool is small and hard-bounded: overflow is disabled so that a leak
@@ -54,17 +51,6 @@ def create_database_engine(url: str) -> Engine:
         pool_timeout=_POOL_TIMEOUT_SECONDS,
         pool_pre_ping=_POOL_PRE_PING,
     )
-
-
-@contextmanager
-def session_scope(engine: Engine) -> Iterator[Session]:
-    """One transaction per block: commit on a clean exit, roll back on any error.
-
-    A partially applied batch is worse than a failed one, because it makes the
-    resume point a guess.
-    """
-    with Session(engine) as session, session.begin():
-        yield session
 
 
 def healthcheck(engine: Engine) -> DatabaseHealth:

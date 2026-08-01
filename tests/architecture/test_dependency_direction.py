@@ -29,6 +29,16 @@ def _layer_of(path: Path) -> str | None:
 
 
 def _imported_modules(path: Path) -> set[str]:
+    """Every dotted import target in `path`, wherever in the file it appears.
+
+    `ast.walk` rather than a scan of the module body, so an import buried in a
+    function or a `TYPE_CHECKING` block counts; a comment or a string that
+    happens to name a layer does not.
+
+    `from X import Y` contributes `X.Y` as well as `X`, because
+    `from my_pa import infrastructure` is the same crossing as
+    `import my_pa.infrastructure` and would otherwise read as a plain `my_pa`.
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -39,6 +49,7 @@ def _imported_modules(path: Path) -> set[str]:
                 pytest.fail(f"{path}: relative import; use absolute my_pa imports")
             if node.module:
                 names.add(node.module)
+                names.update(f"{node.module}.{alias.name}" for alias in node.names)
     return names
 
 
@@ -110,3 +121,92 @@ def test_pydantic_is_confined_to_contracts_and_settings() -> None:
         and path.name != "settings.py"
     ]
     assert not offenders, f"Pydantic used outside contracts and settings: {offenders}"
+
+
+# `infrastructure` is deliberately absent from `LAYER_ORDER`: it is not a rung on
+# a single ladder but a sibling of `application` that implements domain ports, so
+# ordering it against `bootstrap` would assert something AGENTS.md does not say.
+# The consequence is that `test_no_module_imports_an_outer_layer` skips every
+# `my_pa.infrastructure` import, and the two rules below are what state the
+# section 4 boundary for it directly rather than leaving it to a side effect of
+# the dependency list.
+
+#: Third-party roots that carry a persistence or transport concern. A domain
+#: model that imports one has a provider detail in it, which section 4 forbids.
+#: Enumerated rather than inferred so the failure names the specific mistake;
+#: `test_domain_uses_only_the_standard_library` is the broader net behind it.
+DATABASE_AND_FRAMEWORK_ROOTS = frozenset(
+    {
+        "alembic",
+        "asyncpg",
+        "django",
+        "fastapi",
+        "flask",
+        "psycopg",
+        "psycopg2",
+        "sqlalchemy",
+        "sqlmodel",
+        "starlette",
+        "tortoise",
+        "uvicorn",
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "domain"], ids=lambda p: str(p.name)
+)
+def test_domain_imports_neither_application_nor_infrastructure(path: Path) -> None:
+    """AGENTS.md section 4: `domain` depends on neither application nor infrastructure."""
+    offending = sorted(
+        imported
+        for imported in _imported_modules(path)
+        if imported == "my_pa.application"
+        or imported == "my_pa.infrastructure"
+        or imported.startswith(("my_pa.application.", "my_pa.infrastructure."))
+    )
+    assert not offending, (
+        f"{path.relative_to(PACKAGE)} is domain code and imports {offending}; "
+        "domain depends on neither application nor infrastructure"
+    )
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "domain"], ids=lambda p: str(p.name)
+)
+def test_domain_imports_no_database_or_framework_package(path: Path) -> None:
+    offending = sorted(
+        {i.split(".")[0] for i in _imported_modules(path)} & DATABASE_AND_FRAMEWORK_ROOTS
+    )
+    assert not offending, (
+        f"{path.relative_to(PACKAGE)} is domain code and imports {offending}; "
+        "persistence and transport details do not belong in a domain model"
+    )
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "application"], ids=lambda p: str(p.name)
+)
+def test_application_does_not_import_infrastructure(path: Path) -> None:
+    """AGENTS.md section 4: application depends inward; infrastructure implements ports.
+
+    Composition is bootstrap's job, so an `application` module that names a
+    concrete adapter has taken it.
+    """
+    offending = sorted(
+        imported
+        for imported in _imported_modules(path)
+        if imported == "my_pa.infrastructure" or imported.startswith("my_pa.infrastructure.")
+    )
+    assert not offending, (
+        f"{path.relative_to(PACKAGE)} is application code and imports {offending}; "
+        "infrastructure is wired in at bootstrap, not imported by application code"
+    )
+
+
+def test_the_guarded_layers_have_modules_to_guard() -> None:
+    # Parametrizing over an empty list collects nothing and reports success, so
+    # the three rules above would pass on a tree where `domain` had been deleted.
+    for layer in ("domain", "application"):
+        assert [p for p in _modules() if _layer_of(p) == layer], f"no module in '{layer}'"
+    assert (PACKAGE / "infrastructure").is_dir()

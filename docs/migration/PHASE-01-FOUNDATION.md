@@ -9,7 +9,7 @@ the domain tables arrive in Phase 02 and later.
 | Path | What it is |
 |---|---|
 | `src/my_pa/bootstrap/settings.py` | `database_url`, validated and fail-closed |
-| `src/my_pa/infrastructure/database/engine.py` | engine factory, `session_scope`, `healthcheck` |
+| `src/my_pa/infrastructure/database/engine.py` | engine factory, `healthcheck` |
 | `alembic.ini` | Alembic configuration; deliberately holds no URL |
 | `migrations/env.py` | offline and online environments, URL from settings |
 | `migrations/versions/` | revision home; one revision so far |

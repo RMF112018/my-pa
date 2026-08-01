@@ -1,9 +1,11 @@
-# Scaffold Directory
+# Database
 
-**Status:** `SCAFFOLD_ONLY`
+PostgreSQL access for the canonical `my_pa` database: `engine.py` holds the engine factory, the transactional `session_scope`, and `healthcheck`.
 
-This directory reserves an approved architectural boundary in `RMF112018/my-pa`. Its detailed responsibility is routed through [`docs/00_REPOSITORY_SOURCE_INDEX.md`](/docs/00_REPOSITORY_SOURCE_INDEX.md) and the nearest owning index.
+Nothing here reads process settings. The caller passes a URL, which keeps configuration in `bootstrap` and makes a disposable test database an ordinary argument rather than a special case.
 
-Directory presence does not authorize runtime implementation. Executable code, credentials, source-system access, database changes, background scheduling, deployment, and production activation require a separately approved goal.
+Schema changes belong to Alembic in `migrations/`, not to this package. The connection contract is documented in [`docs/migration/PHASE-01-FOUNDATION.md`](/docs/migration/PHASE-01-FOUNDATION.md).
+
+The `models/`, `repositories/`, and `search/` subdirectories remain scaffold: none has an implementation yet.
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy identities may appear only in explicit compatibility or evidence records.

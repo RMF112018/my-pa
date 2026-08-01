@@ -4,8 +4,10 @@ Settings fail closed. An unknown `MY_PA_` variable, an unparseable value, or an
 out-of-range value raises rather than falling back to a default, so a typo in a
 security-relevant name cannot silently leave the safe setting in place.
 
-No setting here holds a secret. Credentials, connection strings, and source roots
-are not part of Phase 01 and must never be added to the committed example.
+No secret is committed. `database_url` is the one setting whose value may carry a
+credential, and only when the environment supplies one: the default below names a
+host, port, and database and no password at all. Error messages never echo a
+setting's value, so a URL with a password in it cannot leak through a failure.
 """
 
 from __future__ import annotations
@@ -14,14 +16,35 @@ import os
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Final
+from urllib.parse import urlsplit
 
 from pydantic import Field, ValidationError, model_validator
 
 from my_pa.contracts.v1.base import StrictModel
 
-__all__ = ["ENV_PREFIX", "Environment", "LogLevel", "Settings", "SettingsError", "load_settings"]
+__all__ = [
+    "DATABASE_URL_SCHEME",
+    "DEFAULT_DATABASE_URL",
+    "ENV_PREFIX",
+    "Environment",
+    "LogLevel",
+    "Settings",
+    "SettingsError",
+    "load_settings",
+]
 
 ENV_PREFIX: Final = "MY_PA_"
+
+#: The only accepted driver. Pinning the scheme rather than accepting bare
+#: `postgresql://` keeps a stray `psycopg2` or `asyncpg` install from silently
+#: changing which driver the process talks to.
+DATABASE_URL_SCHEME: Final = "postgresql+psycopg"
+
+#: Local development default: the `my-pa-postgres` container published on host
+#: port 5433. It carries no password on purpose. Supply the password out of band
+#: — `PGPASSWORD`, `~/.pgpass`, or a full `MY_PA_DATABASE_URL` — so no credential
+#: is ever committed.
+DEFAULT_DATABASE_URL: Final = f"{DATABASE_URL_SCHEME}://my_pa@localhost:5433/my_pa"
 
 
 class Environment(StrEnum):
@@ -49,17 +72,33 @@ class SettingsError(ValueError):
     """
 
 
+def _validate_database_url(url: str) -> None:
+    """Reject a URL the engine could not use, before anything tries to connect.
+
+    Names the defect, never the URL: a supplied URL may embed a password.
+    """
+    parsed = urlsplit(url)
+    if parsed.scheme != DATABASE_URL_SCHEME:
+        raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must use the {DATABASE_URL_SCHEME} scheme")
+    if not parsed.hostname:
+        raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must name a host")
+    if not parsed.path.lstrip("/"):
+        raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must name a database")
+
+
 class Settings(StrictModel):
-    """Validated, non-secret process settings."""
+    """Validated process settings."""
 
     environment: Environment = Environment.LOCAL
     log_level: LogLevel = LogLevel.INFO
     redaction_enabled: bool = True
     contract_strict_mode: bool = True
     max_page_size: int = Field(default=200, gt=0, le=1000)
+    database_url: str = DEFAULT_DATABASE_URL
 
     @model_validator(mode="after")
     def _check(self) -> Settings:
+        _validate_database_url(self.database_url)
         if not self.redaction_enabled:
             raise SettingsError(
                 "redaction cannot be disabled; debug mode does not bypass redaction"
@@ -87,8 +126,8 @@ def _coerce(name: str, raw: str) -> object:
         if lowered in _FALSE:
             return False
         # Name the setting and the expected type, never the supplied value.
-        # Settings are non-secret today; echoing input would make this a
-        # disclosure channel the moment one is not.
+        # `database_url` can carry a password, so echoing input here would be a
+        # disclosure channel.
         raise SettingsError(f"{ENV_PREFIX}{name.upper()} must be a boolean")
     if annotation is int:
         try:
@@ -125,8 +164,8 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
         return Settings(**values)  # type: ignore[arg-type]
     except ValidationError as exc:
         # Report which setting failed and why, but not the offending value.
-        # Settings are non-secret today; echoing inputs would turn this into a
-        # disclosure channel the moment one is not.
+        # `database_url` can carry a password, so echoing inputs here would turn
+        # this into a disclosure channel.
         problems = "; ".join(
             f"{ENV_PREFIX}{'.'.join(str(part) for part in error['loc']).upper()}: {error['msg']}"
             for error in exc.errors()

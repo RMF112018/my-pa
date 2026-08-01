@@ -1,9 +1,9 @@
-# Scaffold Directory
+# Revisions
 
-**Status:** `SCAFFOLD_ONLY`
+One file per Alembic revision, generated with `.venv/bin/alembic revision -m "..."`.
 
-This directory reserves an approved architectural boundary in `RMF112018/my-pa`. Its detailed responsibility is routed through [`docs/00_REPOSITORY_SOURCE_INDEX.md`](/docs/00_REPOSITORY_SOURCE_INDEX.md) and the nearest owning index.
+Every revision must be reversible and must survive the empty-to-head-to-empty round trip that `AGENTS.md` section 6 requires; `tests/schema/` enforces it. Downgrades drop with `RESTRICT` so a downgrade cannot silently delete objects a later revision left behind.
 
-Directory presence does not authorize runtime implementation. Executable code, credentials, source-system access, database changes, background scheduling, deployment, and production activation require a separately approved goal.
+See [`docs/migration/PHASE-01-FOUNDATION.md`](/docs/migration/PHASE-01-FOUNDATION.md).
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy identities may appear only in explicit compatibility or evidence records.

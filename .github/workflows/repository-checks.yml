@@ -215,3 +215,68 @@ jobs:
           "
           python -m mypy src
           python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"
+
+  database-tier:
+    # The `validate` and `dependency-floor` jobs both deselect `-m database`,
+    # and until now nothing supplied a server, so the tests covering the engine,
+    # the Alembic chain from empty to head, the control plane, and the loader
+    # had never run in CI at all. AGENTS.md section 7 puts focused
+    # isolated-database integration tests in the PR gate when a change affects
+    # persistence, and persistence is now most of the package.
+    #
+    # The service below is a throwaway cluster that lives and dies with the job.
+    # It is not a route to the canonical local `my_pa` and must never become
+    # one: the URL names `my_pa_ci`, and every test creates and drops its own
+    # `my_pa_*_test` database off the `postgres` maintenance database, so even
+    # the configured database is never written to.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: my_pa
+          # A throwaway credential for a container destroyed with the job, so it
+          # is not a secret and does not belong in the secret store. It is
+          # deliberately *not* the local development password: a workflow file
+          # is readable by anyone who can read the repository, and a value that
+          # also opened a developer's machine would be one.
+          POSTGRES_PASSWORD: ci_throwaway_not_a_secret
+          POSTGRES_DB: my_pa_ci
+        ports:
+          - 5432:5432
+        # Steps start only once the server answers, so a test does not race the
+        # container's own initialisation and fail as a connection error.
+        options: >-
+          --health-cmd "pg_isready --username my_pa --dbname my_pa_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the package
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run the database tier against the disposable service
+        shell: bash
+        env:
+          # The URL carries no password, matching the settings contract and
+          # `.env.example`: credentials stay out of connection strings and libpq
+          # reads this one from PGPASSWORD.
+          MY_PA_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
+          PGPASSWORD: ci_throwaway_not_a_secret
+        run: python -m pytest -m database

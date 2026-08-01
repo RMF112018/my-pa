@@ -6,7 +6,6 @@ import pytest
 
 from my_pa.bootstrap.settings import (
     DATABASE_URL_SCHEME,
-    DEFAULT_DATABASE_URL,
     ENV_PREFIX,
     Environment,
     LogLevel,
@@ -17,9 +16,14 @@ from my_pa.bootstrap.settings import (
 
 DATABASE_URL = f"{ENV_PREFIX}DATABASE_URL"
 
+#: A syntactically valid URL for tests that are not about the URL itself.
+#: Deliberately unreachable: no test should connect by accident, and a host that
+#: cannot resolve makes that structural rather than a convention.
+_A_URL = f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere"
+
 
 def test_defaults_are_safe() -> None:
-    settings = load_settings({})
+    settings = load_settings({DATABASE_URL: _A_URL})
     assert settings.environment is Environment.LOCAL
     assert settings.log_level is LogLevel.INFO
     assert settings.redaction_enabled is True
@@ -27,7 +31,8 @@ def test_defaults_are_safe() -> None:
 
 
 def test_unrelated_environment_variables_are_ignored() -> None:
-    assert load_settings({"PATH": "/usr/bin", "HOME": "/root"}) == Settings()
+    environment = {"PATH": "/usr/bin", "HOME": "/root", DATABASE_URL: _A_URL}
+    assert load_settings(environment) == Settings(database_url=_A_URL)
 
 
 def test_known_values_are_parsed() -> None:
@@ -36,6 +41,7 @@ def test_known_values_are_parsed() -> None:
             f"{ENV_PREFIX}ENVIRONMENT": "test",
             f"{ENV_PREFIX}LOG_LEVEL": "debug",
             f"{ENV_PREFIX}MAX_PAGE_SIZE": "10",
+            DATABASE_URL: _A_URL,
         }
     )
     assert settings.environment is Environment.TEST
@@ -51,16 +57,19 @@ def test_unknown_prefixed_variable_fails_closed() -> None:
 
 def test_redaction_cannot_be_disabled() -> None:
     with pytest.raises(SettingsError, match="redaction cannot be disabled"):
-        load_settings({f"{ENV_PREFIX}REDACTION_ENABLED": "false"})
+        load_settings({f"{ENV_PREFIX}REDACTION_ENABLED": "false", DATABASE_URL: _A_URL})
 
 
 def test_strict_contract_parsing_cannot_be_disabled() -> None:
     with pytest.raises(SettingsError, match="strict contract parsing"):
-        load_settings({f"{ENV_PREFIX}CONTRACT_STRICT_MODE": "0"})
+        load_settings({f"{ENV_PREFIX}CONTRACT_STRICT_MODE": "0", DATABASE_URL: _A_URL})
 
 
 def test_debug_log_level_does_not_disable_redaction() -> None:
-    assert load_settings({f"{ENV_PREFIX}LOG_LEVEL": "debug"}).redaction_enabled is True
+    assert (
+        load_settings({f"{ENV_PREFIX}LOG_LEVEL": "debug", DATABASE_URL: _A_URL}).redaction_enabled
+        is True
+    )
 
 
 @pytest.mark.parametrize("raw", ["maybe", "", "2", "yes please"])
@@ -124,17 +133,36 @@ def test_only_the_database_url_may_be_credential_bearing() -> None:
             assert token not in name, f"settings field {name!r} looks secret-bearing"
 
 
-def test_the_default_database_url_carries_no_credential() -> None:
-    # The committed default must be usable without being a secret. The password
-    # comes from PGPASSWORD or ~/.pgpass, never from the repository.
-    assert "@" in DEFAULT_DATABASE_URL  # a user is named
-    authority = DEFAULT_DATABASE_URL.split("://", 1)[1].split("@", 1)[0]
-    assert ":" not in authority, "the default database URL embeds a password"
-    assert ":5433/" in DEFAULT_DATABASE_URL
+def test_an_absent_database_url_is_refused_rather_than_defaulted() -> None:
+    """The whole point of `P00-OD-008`: absence must not pick a target.
+
+    A default here aimed every unconfigured process at the canonical `my_pa`
+    database, including `apps/cli/migration.py`, which can run destructive
+    migration operations. Failing closed is what that decision asked for.
+    """
+    with pytest.raises(SettingsError) as caught:
+        load_settings({})
+    assert f"{ENV_PREFIX}DATABASE_URL has no default" in str(caught.value)
 
 
-def test_the_database_url_defaults_to_the_local_instance() -> None:
-    assert load_settings({}).database_url == DEFAULT_DATABASE_URL
+def test_no_module_constant_supplies_a_database_url() -> None:
+    """No default may creep back in under another name.
+
+    Asserting the absence of a value rather than the behaviour of one, because
+    a reintroduced constant would be wired up before anyone noticed the
+    behaviour changed.
+    """
+    import my_pa.bootstrap.settings as settings_module
+
+    offenders = [
+        name
+        for name in dir(settings_module)
+        if name.isupper()
+        and isinstance(getattr(settings_module, name), str)
+        and "://" in getattr(settings_module, name)
+    ]
+    assert not offenders, f"a database URL constant is back: {offenders}"
+    assert Settings.model_fields["database_url"].is_required()
 
 
 def test_a_supplied_database_url_is_used() -> None:

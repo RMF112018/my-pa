@@ -1,129 +1,117 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "record_type": "MIGRATION_GOAL_STATE",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
-  "goal_title": "Migrate my-pa to the canonical PostgreSQL metadata and knowledge store",
   "repository": "RMF112018/my-pa",
-  "lifecycle_state": "PHASE_00_IN_PROGRESS",
+  "lifecycle_state": "PHASE_00_COMPLETION_IMPLEMENTED_PENDING_EXACT_HEAD_REVIEW",
   "active_phase_id": "PHASE-00",
-  "active_work_item_id": null,
+  "active_work_item_id": "WP-P00-02",
   "maximum_active_work_items": 1,
   "maximum_active_phases": 1,
-  "state_recorded_at_utc": "2026-08-01T05:35:09Z",
-  "schema_version_note": "Raised from 1 to 2. Version 1 stored an exact current_baseline SHA/tree inside the committed record. Version 2 records runtime Git as the authority for exact current identity and stores only a historical record_base for this change.",
-  "repository_identity_resolution": {
-    "authority": "RUNTIME_GIT",
+  "state_recorded_at_utc": "2026-08-01T07:51:37Z",
+  "runtime_repository_binding": {
     "branch": "main",
-    "exact_current_sha_persisted": false,
-    "exact_current_tree_persisted": false,
-    "required_resolution": [
-      "git rev-parse main",
-      "git rev-parse main^{tree}",
-      "git ls-remote --heads origin main"
-    ],
-    "external_evidence_required": true,
-    "rule": "Every future authorization must resolve and bind the current repository identity at authorization time. No committed predecessor SHA is current authority."
+    "sha": "9039c587680866bfe4c1568db1992335778c5950",
+    "tree_used_for_git_object_construction": "6326e697cfa673fe1f57c0f4356ffa0025f3047e",
+    "tree_evidence_status": "OPERATOR_EVIDENCE_EXCEPTION_ACCEPTED_FOR_PHASE_00_SEQUENCE",
+    "note": "GitHub confirms main SHA and PR #10 merge. The tree is the exact reviewed PR #10 tree and is used under the preserved connector-evidence limitation; this is not a technical post-merge PASS."
   },
-  "record_base": {
-    "sha": "178a7e243cbc6100c6937144ff10a7987206c04a",
-    "tree": "25131169d7bbe7846569c2a3cb5afa2712bd3c96",
-    "role": "RECORD_BASE",
-    "semantics": "HISTORICAL_BASE_ON_WHICH_THIS_RECORD_CHANGE_WAS_AUTHORED_NOT_CURRENT_AUTHORITY"
+  "current_authorization": {
+    "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
+    "decision_id": "OP-COMPLETE-MYPA-MIGRATION-PHASE-00",
+    "status_at_record_write": "ACTIVE_SINGLE_USE_IMPLEMENTATION_IN_PROGRESS",
+    "implementation_branch": "bf/migration-phase-00-completion",
+    "coordination_request_id": "REQ-MYPA-MIGRATION-PHASE-00-COMPLETION-IMPLEMENTATION-20260801-046",
+    "coordination_request_drive_id": "1tk7cdddBmqFpB_uL1w-qLBs-3V7Y3H_o55nIQHdJLFg",
+    "post_commit_identity_location": "EXTERNAL_POST_COMMIT_EVIDENCE"
   },
-  "reconciled_by": {
-    "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-NONRECURSIVE-BASELINE-20260801-001",
-    "decision_id": "OP-CORRECT-NONRECURSIVE-BASELINE-WP-P00-01",
-    "blocking_finding": "MYPA-WP-P00-01-FINAL-CLOSEOUT-F-001",
-    "reason": "The prior closeout-correction record embedded 3e5aad7b… as continuously current baseline. After the closeout correction squash-merged as 178a7e24…, that embedded SHA became stale and would become stale again if simply replaced. This record removes exact-current-commit semantics from committed goal state."
-  },
-  "last_closed_work_item": {
-    "work_item_id": "WP-P00-01",
-    "merge_sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
-    "merge_tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
-    "role": "MERGE_SHA",
-    "closed_at_utc": "2026-08-01T04:24:49Z",
-    "note": "Historical merge identity of the original WP-P00-01 squash merge (PR #8). Not current repository authority."
-  },
-  "historical_merge_identities": [
-    {
-      "role": "MERGE_SHA",
-      "label": "WP-P00-01_IMPLEMENTATION_SQUASH_MERGE",
-      "sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
-      "tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
-      "pull_request": 8
+  "wp_p00_01_residual_reconciliation": {
+    "work_item_state": "CLOSED",
+    "pr_10": {
+      "state": "MERGED",
+      "reviewed_head": "d54bdb6d23cebf38c11db7194aef59b03d573a16",
+      "reviewed_tree": "6326e697cfa673fe1f57c0f4356ffa0025f3047e",
+      "merge_sha": "9039c587680866bfe4c1568db1992335778c5950"
     },
-    {
-      "role": "MERGE_SHA",
-      "label": "WP-P00-01_CLOSEOUT_CORRECTION_SQUASH_MERGE",
-      "sha": "178a7e243cbc6100c6937144ff10a7987206c04a",
-      "tree": "25131169d7bbe7846569c2a3cb5afa2712bd3c96",
-      "pull_request": 9
+    "post_merge_validation_disposition": "WP_P00_01_NRB_POST_MERGE_VALIDATION_BLOCKED_BY_UNAVAILABLE_GITHUB_EVIDENCE",
+    "operator_exception_status": "OPERATOR_EVIDENCE_EXCEPTION_ACCEPTED_FOR_PHASE_00_SEQUENCE",
+    "technical_pass_claimed": false,
+    "program_finding": {
+      "finding_id": "MYPA-WP-P00-01-FINAL-CLOSEOUT-F-001",
+      "status": "CLOSED_BY_OPERATOR_EVIDENCE_EXCEPTION_WITH_LIMITATION",
+      "closure_basis": "PR #10 exact-head review and merge are authenticated; unavailable tree/parent/blob-equivalence evidence remains preserved and is not recast as PASS."
+    },
+    "review_finding": {
+      "finding_id": "MYPA-WP-P00-01-NRB-IR-F-003",
+      "status": "CORRECTED_IN_PHASE_00_COMPLETION_CANDIDATE",
+      "correction": "work-item-ledger uses runtime Git identity resolution and contains no required_base_for_future_authorization field."
+    },
+    "residual_feature_branch": {
+      "name": "bf/migration-wp-p00-01-nonrecursive-baseline",
+      "sha": "d54bdb6d23cebf38c11db7194aef59b03d573a16",
+      "github_state": "EXISTS",
+      "cleanup_authority": "AUTHORIZED_FOR_THIS_EXACT_REF_ONLY",
+      "cleanup_status": "PENDING_CONNECTOR_CAPABILITY",
+      "no_other_branch_cleanup_authorized": true
     }
-  ],
-  "next_work_item": {
-    "work_item_id": "WP-P00-02",
-    "state": "NOT_ACTIVATED",
-    "successor_activation_authority": "OPERATOR_ONLY",
-    "automatic_activation_authorized": false,
-    "required_identity_resolution_for_future_authorization": "RUNTIME_GIT"
   },
   "phases": [
     {
       "phase_id": "PHASE-00",
-      "title": "Governance, identity, and readiness binding",
-      "state": "IN_PROGRESS",
-      "acceptance_criteria": [
-        "P00-AC-01",
-        "P00-AC-02",
-        "P00-AC-03",
-        "P00-AC-04",
-        "P00-AC-05",
-        "P00-AC-06",
-        "P00-AC-07",
-        "P00-AC-08"
-      ],
-      "criteria_satisfied_by_closed_work_items": [
+      "state": "IN_PROGRESS_PENDING_REVIEW_AND_INTEGRATION",
+      "criteria_historically_accepted": [
         "P00-AC-01",
         "P00-AC-02",
         "P00-AC-03",
         "P00-AC-04",
         "P00-AC-05"
       ],
-      "criteria_remaining": [
+      "criteria_demonstrated_in_candidate": [
         "P00-AC-06",
         "P00-AC-07",
         "P00-AC-08"
       ],
-      "criteria_bound_to_active_work_item": []
+      "criteria_pending_independent_acceptance": [
+        "P00-AC-06",
+        "P00-AC-07",
+        "P00-AC-08"
+      ],
+      "terminal_state_after_exact_review_merge_and_closeout": "PHASE_00_COMPLETE_AWAITING_PHASE_01_OPERATOR_DECISION"
     }
   ],
-  "successor_activation": {
-    "next_work_item_id": "WP-P00-02",
-    "state": "NOT_ACTIVATED",
-    "automatic_activation_authorized": false,
-    "activation_authority": "OPERATOR_ONLY",
-    "precondition": "Final WP-P00-01 closeout remains blocked until MYPA-WP-P00-01-FINAL-CLOSEOUT-F-001 is independently reviewed as resolved. No successor authorization is requested or activated by this correction."
+  "work_item": {
+    "work_item_id": "WP-P00-02",
+    "state": "IMPLEMENTED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW",
+    "authorization_id": "AUTH-MYPA-MIGRATION-PHASE-00-COMPLETION-20260801-001",
+    "implementation_branch": "bf/migration-phase-00-completion",
+    "implementation_commit": "RECORDED_IN_EXTERNAL_POST_COMMIT_EVIDENCE",
+    "acceptance_criteria": [
+      "P00-AC-06",
+      "P00-AC-07",
+      "P00-AC-08"
+    ]
   },
-  "historical_authorizations": [
-    {
-      "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-20260731-001",
-      "work_item_id": "WP-P00-01",
-      "status": "CONSUMED",
-      "base_sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
-      "base_tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4",
-      "role": "ORIGINAL_AUTHORIZATION_BASE",
-      "note": "Historical. Superseded as current state authority; retained for provenance. This authorization is consumed and grants nothing."
-    },
-    {
-      "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-20260801-001",
-      "work_item_id": "WP-P00-01",
-      "status": "CONSUMED",
-      "base_sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
-      "base_tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
-      "role": "HISTORICAL_PREDECESSOR",
-      "note": "Historical closeout-correction authorization. Consumed by the squash merge at 178a7e24…. Retained for provenance; grants nothing."
-    }
-  ],
-  "self_authorization_prohibited": true,
-  "invalidation_rule": "Any identity, scope, acceptance, or mutation-limit drift invalidates a bound authorization when runtime Git differs from the exact identity recorded in that authorization's external activation package. Committed goal-state records do not store continuously current SHA/tree and therefore do not become stale merely because main advances."
+  "access_attestation": {
+    "database_accessed": false,
+    "sqlite_accessed": false,
+    "snapshot_accessed": false,
+    "postgresql_accessed": false,
+    "source_data_processed": false,
+    "personal_data_processed": false,
+    "runtime_code_modified": false,
+    "dependencies_modified": false,
+    "ci_workflows_modified": false,
+    "deployment_performed": false,
+    "phase_01_activated": false
+  },
+  "review_and_integration": {
+    "self_acceptance_prohibited": true,
+    "exact_head_review_required": true,
+    "later_commit_invalidates_review": true,
+    "pull_request_before_review_authorized": false,
+    "merge_operator_gated": true,
+    "completion_branch_cleanup_operator_gated": true,
+    "final_phase_closeout_operator_gated": true
+  },
+  "invalidation_rule": "Identity, scope, path, acceptance, mutation-limit, or exact-head drift invalidates this candidate and its review basis."
 }

@@ -485,10 +485,54 @@ The patterns are mechanical: mail addresses, telephone numbers, absolute
 home-directory paths, and the local account name discovered at runtime. Free-text
 personal names are **not** detected by pattern, because a regular expression
 cannot make that judgement and claiming otherwise would report a clean scan that
-means less than it appears to. What supports the personal-name claim instead is
-construction: every artefact this phase writes is built from table names, column
-names, type names, error codes, counts, and digests, and no query in the harness
-reads a row value into its output.
+means less than it appears to.
+
+### What carries the personal-name claim, for 2 of these 94 files
+
+Two checks, in `tests/migration/test_personal_data_containment.py`. Neither is a
+pattern, because a pattern is the thing that cannot do this. Their scope is
+narrow and belongs before their substance: they cover `reconciliation.json` and
+this report -- **2 of the 94 files the scan above reaches**. The other
+92 still rest on the patterns plus construction, the weaker position
+this section opened by criticising. They include `disposition_registry.json` and
+`identifier_map.json`, which are themselves derived from the source catalogue, so
+they are exactly the files a reader should not assume the enforcement below covers.
+
+*The machine-readable evidence is held to a closed vocabulary.* Every string in
+`reconciliation.json` must be a member of a vocabulary derived from the disposition
+registry, the generated target DDL, the control plane's own declaration, and the
+string literals in this harness's source -- or match one of a few fixed shapes: a
+sha256 digest, a run UUID, an Alembic revision, an ISO timestamp, a repo-relative
+path, or an identity sequence name. A whitelist does not have to recognise a
+personal name; a leaked value is simply not in it. A failure names the JSON path
+and the string's shape, never the string. This report is rendered from the same
+record, and re-rendering it from that JSON reproduces it byte-for-byte, so the
+guarantee reaches this file too.
+
+*The control plane has nowhere to put a value.* Every column of
+`migration_control` must be an identifier, a hash, a count, a timestamp, a flag, an
+enum-like code, or the name of a schema object. `quarantine_records` names a
+refused row by table, column, error code, and a hash of its key, and has no column
+for the value at all -- leakage there is structurally impossible rather than
+merely avoided.
+
+One caveat on the failure output, stated before the reason it is narrow. The
+vocabulary check reports shape only, but the same module holds a round-trip check
+that this report re-renders from that JSON, and if the two files ever disagree its
+assertion diffs the differing lines **verbatim**. What makes that narrow rather
+than a hole: a value reaching these artefacts through the generator lands in both
+and is regenerated together, so the round trip passes, only the vocabulary check
+fires, and no test output contains the value. The verbatim diff arises only from a
+hand-edited divergence between the two files -- where the value is by definition
+already committed to the file being compared.
+
+What the two do **not** cover is stated rather than absorbed. The English prose in
+this report comes from literals in the renderer's source and is covered by review,
+not by the vocabulary. The legacy file's sibling names in section 14 are admitted
+by prefix, so a personal name inside a backup file name would pass. The vocabulary
+contains thousands of legacy column names, so a value equal to one of them would
+be admitted. And the column check is about a column's role: it catches a new column
+that could hold content, not a future misuse of an existing one.
 
 ## 13. The two SQLite read models (OD-018)
 

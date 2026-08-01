@@ -5,9 +5,17 @@ out-of-range value raises rather than falling back to a default, so a typo in a
 security-relevant name cannot silently leave the safe setting in place.
 
 No secret is committed. `database_url` is the one setting whose value may carry a
-credential, and only when the environment supplies one: the default below names a
-host, port, and database and no password at all. Error messages never echo a
-setting's value, so a URL with a password in it cannot leak through a failure.
+credential, and it has no default at all. Error messages never echo a setting's
+value, so a URL with a password in it cannot leak through a failure.
+
+`MY_PA_DATABASE_URL` is required rather than defaulted, which resolves
+`P00-OD-008`. That decision's stated default was to fail closed when the URL is
+absent; a default silently aimed every unconfigured process at the canonical
+`my_pa` database. The convenience was illusory, because the canonical database
+needs a password supplied out of band anyway — so an unset URL either failed to
+connect, or, in the one configuration where it worked, pointed a destructive
+operation at the migrated corpus. `apps/cli/migration.py` is that path, and it
+now refuses to start rather than choosing a target.
 """
 
 from __future__ import annotations
@@ -24,7 +32,6 @@ from my_pa.contracts.v1.base import StrictModel
 
 __all__ = [
     "DATABASE_URL_SCHEME",
-    "DEFAULT_DATABASE_URL",
     "ENV_PREFIX",
     "Environment",
     "LogLevel",
@@ -39,12 +46,6 @@ ENV_PREFIX: Final = "MY_PA_"
 #: `postgresql://` keeps a stray `psycopg2` or `asyncpg` install from silently
 #: changing which driver the process talks to.
 DATABASE_URL_SCHEME: Final = "postgresql+psycopg"
-
-#: Local development default: the `my-pa-postgres` container published on host
-#: port 5433. It carries no password on purpose. Supply the password out of band
-#: — `PGPASSWORD`, `~/.pgpass`, or a full `MY_PA_DATABASE_URL` — so no credential
-#: is ever committed.
-DEFAULT_DATABASE_URL: Final = f"{DATABASE_URL_SCHEME}://my_pa@localhost:5433/my_pa"
 
 
 class Environment(StrEnum):
@@ -94,7 +95,7 @@ class Settings(StrictModel):
     redaction_enabled: bool = True
     contract_strict_mode: bool = True
     max_page_size: int = Field(default=200, gt=0, le=1000)
-    database_url: str = DEFAULT_DATABASE_URL
+    database_url: str
 
     @model_validator(mode="after")
     def _check(self) -> Settings:
@@ -170,4 +171,20 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
             f"{ENV_PREFIX}{'.'.join(str(part) for part in error['loc']).upper()}: {error['msg']}"
             for error in exc.errors()
         )
-        raise SettingsError(f"invalid configuration: {problems}") from exc
+        message = f"invalid configuration: {problems}"
+        if any(
+            error["type"] == "missing" and error["loc"] == ("database_url",)
+            for error in exc.errors()
+        ):
+            # Appended rather than raised early, so a run that is missing the URL
+            # *and* has another bad value reports both. "Field required" alone
+            # does not tell an operator what to do, and this is the one they meet
+            # at startup. It has no default on purpose; see the module docstring
+            # and `P00-OD-008`.
+            message += (
+                f". {ENV_PREFIX}DATABASE_URL has no default: set it to a "
+                f"{DATABASE_URL_SCHEME} URL naming a host and a database, and "
+                "supply the password out of band through PGPASSWORD or "
+                "~/.pgpass rather than committing one"
+            )
+        raise SettingsError(message) from exc

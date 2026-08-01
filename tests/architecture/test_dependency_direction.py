@@ -18,6 +18,9 @@ PACKAGE = SRC / "my_pa"
 #: Layers, inner first. A layer may import itself and anything to its left.
 LAYER_ORDER: tuple[str, ...] = ("domain", "contracts", "application", "bootstrap")
 
+#: Deliberately not a member of `LAYER_ORDER`; see the note further down.
+INFRASTRUCTURE = "infrastructure"
+
 
 def _modules() -> list[Path]:
     return sorted(PACKAGE.rglob("*.py"))
@@ -127,9 +130,20 @@ def test_pydantic_is_confined_to_contracts_and_settings() -> None:
 # a single ladder but a sibling of `application` that implements domain ports, so
 # ordering it against `bootstrap` would assert something AGENTS.md does not say.
 # The consequence is that `test_no_module_imports_an_outer_layer` skips every
-# `my_pa.infrastructure` import, and the two rules below are what state the
-# section 4 boundary for it directly rather than leaving it to a side effect of
-# the dependency list.
+# `my_pa.infrastructure` import *and* every import made by an infrastructure
+# module, so the rules below are what state the section 4 boundary for it
+# directly rather than leaving it to a side effect of the dependency list.
+
+
+def _infrastructure_modules() -> list[Path]:
+    """Every module under `my_pa.infrastructure`.
+
+    `_layer_of` answers `None` for all of them, because `infrastructure` is not
+    in `LAYER_ORDER`. Selecting them by prefix here is what keeps the rules that
+    follow from parametrising over an empty list.
+    """
+    return [p for p in _modules() if p.relative_to(PACKAGE).parts[:1] == (INFRASTRUCTURE,)]
+
 
 #: Third-party roots that carry a persistence or transport concern. A domain
 #: model that imports one has a provider detail in it, which section 4 forbids.
@@ -204,9 +218,51 @@ def test_application_does_not_import_infrastructure(path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("path", _infrastructure_modules(), ids=lambda p: str(p.name))
+def test_infrastructure_does_not_import_application(path: Path) -> None:
+    """AGENTS.md section 4: `infrastructure` implements ports defined inward.
+
+    An adapter that reaches back into `application` has inverted the dependency
+    the ports exist to create, and the boundary then holds only in one
+    direction. `src/my_pa/infrastructure/database/engine.py` states an invariant
+    of exactly this kind in its docstring -- "nothing here reads process
+    settings" -- and a docstring is not a check.
+    """
+    offending = sorted(
+        imported
+        for imported in _imported_modules(path)
+        if imported == "my_pa.application" or imported.startswith("my_pa.application.")
+    )
+    assert not offending, (
+        f"{path.relative_to(PACKAGE)} is infrastructure code and imports {offending}; "
+        "infrastructure implements ports defined inward and does not call application code"
+    )
+
+
+@pytest.mark.parametrize("path", _infrastructure_modules(), ids=lambda p: str(p.name))
+def test_infrastructure_does_not_import_bootstrap(path: Path) -> None:
+    """AGENTS.md section 4: composition belongs in bootstrap, not in an adapter.
+
+    `my_pa.bootstrap` is where settings and wiring live. An adapter that imports
+    it reads process configuration for itself instead of being handed what it
+    needs, which is how a component acquires a hidden dependency on the
+    environment. An operator script may compose the two -- that is what an entry
+    point is for -- but it lives outside the package.
+    """
+    offending = sorted(
+        imported
+        for imported in _imported_modules(path)
+        if imported == "my_pa.bootstrap" or imported.startswith("my_pa.bootstrap.")
+    )
+    assert not offending, (
+        f"{path.relative_to(PACKAGE)} is infrastructure code and imports {offending}; "
+        "settings and wiring are supplied by bootstrap or an entry point, not read here"
+    )
+
+
 def test_the_guarded_layers_have_modules_to_guard() -> None:
     # Parametrizing over an empty list collects nothing and reports success, so
-    # the three rules above would pass on a tree where `domain` had been deleted.
+    # the rules above would pass on a tree where `domain` had been deleted.
     for layer in ("domain", "application"):
         assert [p for p in _modules() if _layer_of(p) == layer], f"no module in '{layer}'"
-    assert (PACKAGE / "infrastructure").is_dir()
+    assert _infrastructure_modules(), f"no module in '{INFRASTRUCTURE}'"

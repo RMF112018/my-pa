@@ -119,9 +119,9 @@ def main() -> int:
         if status != "DEMONSTRATED_PENDING_ROLE_SEPARATED_EXACT_HEAD_REVIEW":
             failures.append(f"criterion:{criterion}:{status}")
 
-    logging = (
-        ROOT / "docs/migration/governance/logging-and-audit-standard.md"
-    ).read_text(encoding="utf-8")
+    logging = (ROOT / "docs/migration/governance/logging-and-audit-standard.md").read_text(
+        encoding="utf-8"
+    )
     for phrase in (
         "message bodies",
         "document contents",
@@ -136,9 +136,9 @@ def main() -> int:
         if phrase not in logging:
             failures.append(f"logging-contract:{phrase}")
 
-    branch = (
-        ROOT / "docs/migration/governance/branch-and-worktree-strategy.md"
-    ).read_text(encoding="utf-8")
+    branch = (ROOT / "docs/migration/governance/branch-and-worktree-strategy.md").read_text(
+        encoding="utf-8"
+    )
     for phrase in (
         "one-work-item / one-branch",
         "Later commit invalidates",
@@ -149,9 +149,9 @@ def main() -> int:
         if phrase.lower() not in branch.lower():
             failures.append(f"branch-contract:{phrase}")
 
-    naming = (
-        ROOT / "docs/migration/governance/target-surface-naming-rule.md"
-    ).read_text(encoding="utf-8")
+    naming = (ROOT / "docs/migration/governance/target-surface-naming-rule.md").read_text(
+        encoding="utf-8"
+    )
     for phrase in (
         "public APIs",
         "MCP server",

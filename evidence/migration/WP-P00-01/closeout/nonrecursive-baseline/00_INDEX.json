@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "record_type": "WP_P00_01_NONRECURSIVE_BASELINE_EVIDENCE_INDEX",
+  "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
+  "phase_id": "PHASE-00",
+  "subject_work_item": "WP-P00-01",
+  "blocking_finding": "MYPA-WP-P00-01-FINAL-CLOSEOUT-F-001",
+  "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-NONRECURSIVE-BASELINE-20260801-001",
+  "decision_id": "OP-CORRECT-NONRECURSIVE-BASELINE-WP-P00-01",
+  "coordination_request_id": "REQ-MYPA-MIGRATION-WP-P00-01-NONRECURSIVE-BASELINE-CORRECTION-20260801-036",
+  "indexed_at_utc": "2026-08-01T05:35:09Z",
+  "purpose": "Eliminate self-invalidating exact-current-commit semantics from committed migration-governance records. Correction only; no WP-P00-02 activation; no final closeout.",
+  "does_not_overwrite_prior_evidence": true,
+  "prior_closeout_evidence": "evidence/migration/WP-P00-01/closeout/",
+  "bound_identity": {
+    "base_branch": "main",
+    "base_sha": "178a7e243cbc6100c6937144ff10a7987206c04a",
+    "base_tree": "25131169d7bbe7846569c2a3cb5afa2712bd3c96",
+    "implementation_branch": "bf/migration-wp-p00-01-nonrecursive-baseline",
+    "implementation_head": "RECORDED_POST_COMMIT_IN_EXTERNAL_EVIDENCE",
+    "commit_count_above_base": 1
+  },
+  "publication_control": {
+    "model": "NON_CIRCULAR",
+    "rule": "In-repository evidence is written before the single authorized commit and therefore cannot contain that commit's SHA. Post-commit identity is recorded only in the published Drive package."
+  },
+  "terminal_state": "WP_P00_01_NONRECURSIVE_BASELINE_CORRECTION_IMPLEMENTED_PENDING_INDEPENDENT_REVIEW",
+  "records": [
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/00_INDEX.json",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/01_OPERATOR_AUTHORIZATION.md",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/02_ENTRY_GATE_IDENTITY.json",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/03_AFFECTED_RECORD_INVENTORY.md",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/04_BEFORE_AFTER_SEMANTIC_COMPARISON.md",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/05_RUNTIME_GIT_RESOLUTION_PROOF.md",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/06_HISTORICAL_IDENTITY_PRESERVATION.md",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/07_PATH_CONTAINMENT.md",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/08_ACCEPTANCE_CRITERIA.md",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/09_DRAFT_INDEPENDENT_REVIEW_REQUEST.md",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/01-json-validation.txt",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/02-semantic-validation.txt",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/03-markdown-link-validation.txt",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/04-stale-baseline-search.txt",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/05-wp-p00-02-inactive.txt",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/06-unauthorized-path-search.txt",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/07-fast-tier.txt",
+    "evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/08-staged-path-containment.txt"
+  ]
+}

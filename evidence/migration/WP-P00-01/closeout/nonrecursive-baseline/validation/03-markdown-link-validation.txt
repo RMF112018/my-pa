@@ -1,0 +1,16 @@
+PASS docs/migration/00_MIGRATION_INDEX.md -> ../../AGENTS.md
+PASS docs/migration/00_MIGRATION_INDEX.md -> ../decisions/ADR-002-database-identity-and-compatibility-alias.md
+PASS docs/migration/00_MIGRATION_INDEX.md -> governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md
+PASS docs/migration/00_MIGRATION_INDEX.md -> governance/goal-state.json
+PASS docs/migration/00_MIGRATION_INDEX.md -> governance/work-item-ledger.json
+PASS docs/migration/00_MIGRATION_INDEX.md -> governance/authorization-ledger.json
+PASS docs/migration/00_MIGRATION_INDEX.md -> governance/exact-identity.json
+PASS docs/migration/00_MIGRATION_INDEX.md -> governance/source-read-only-identity.json
+PASS docs/migration/00_MIGRATION_INDEX.md -> governance/plan-and-review-bindings.json
+PASS docs/migration/00_MIGRATION_INDEX.md -> governance/acceptance-criteria-register.json
+PASS docs/migration/00_MIGRATION_INDEX.md -> governance/identity-attestation-contract.schema.json
+PASS docs/migration/00_MIGRATION_INDEX.md -> ../../evidence/migration/WP-P00-01/00_EVIDENCE_INDEX.json
+PASS docs/migration/00_MIGRATION_INDEX.md -> ../../evidence/migration/WP-P00-01/00_EVIDENCE_INDEX.json
+PASS docs/migration/00_MIGRATION_INDEX.md -> ../../evidence/migration/WP-P00-01/closeout/00_CLOSEOUT_INDEX.json
+PASS docs/migration/00_MIGRATION_INDEX.md -> ../../evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/00_INDEX.json
+RESULT PASS

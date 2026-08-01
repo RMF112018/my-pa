@@ -1,0 +1,9 @@
+PASS gs_next_state
+PASS gs_successor
+PASS gs_active_null
+PASS al_wp2_null
+PASS al_no_successor
+PASS wl_wp2
+PASS auth_successor_false
+PASS no_wp2_auth_object
+RESULT PASS

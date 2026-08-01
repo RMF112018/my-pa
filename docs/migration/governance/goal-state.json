@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "record_type": "MIGRATION_GOAL_STATE",
   "goal_id": "GOAL-MYPA-POSTGRESQL-MIGRATION-001",
   "goal_title": "Migrate my-pa to the canonical PostgreSQL metadata and knowledge store",
@@ -9,30 +9,63 @@
   "active_work_item_id": null,
   "maximum_active_work_items": 1,
   "maximum_active_phases": 1,
-  "state_recorded_at_utc": "2026-08-01T04:24:49Z",
-  "current_baseline": {
+  "state_recorded_at_utc": "2026-08-01T05:35:09Z",
+  "schema_version_note": "Raised from 1 to 2. Version 1 stored an exact current_baseline SHA/tree inside the committed record. Version 2 records runtime Git as the authority for exact current identity and stores only a historical record_base for this change.",
+  "repository_identity_resolution": {
+    "authority": "RUNTIME_GIT",
     "branch": "main",
-    "sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
-    "tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
-    "note": "The merged baseline. Any future work-package authorization must bind this SHA."
+    "exact_current_sha_persisted": false,
+    "exact_current_tree_persisted": false,
+    "required_resolution": [
+      "git rev-parse main",
+      "git rev-parse main^{tree}",
+      "git ls-remote --heads origin main"
+    ],
+    "external_evidence_required": true,
+    "rule": "Every future authorization must resolve and bind the current repository identity at authorization time. No committed predecessor SHA is current authority."
+  },
+  "record_base": {
+    "sha": "178a7e243cbc6100c6937144ff10a7987206c04a",
+    "tree": "25131169d7bbe7846569c2a3cb5afa2712bd3c96",
+    "role": "RECORD_BASE",
+    "semantics": "HISTORICAL_BASE_ON_WHICH_THIS_RECORD_CHANGE_WAS_AUTHORED_NOT_CURRENT_AUTHORITY"
   },
   "reconciled_by": {
-    "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-20260801-001",
-    "decision_id": "OP-CLOSEOUT-WP-P00-01",
-    "reason": "The prior record named WP-P00-01 as the active work item and bound goal state to the consumed WP-P00-01 implementation authorization and the superseded base d4fed7ec. Both became stale on merge. This record reconciles goal state with the merged and cleaned-up reality."
+    "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-NONRECURSIVE-BASELINE-20260801-001",
+    "decision_id": "OP-CORRECT-NONRECURSIVE-BASELINE-WP-P00-01",
+    "blocking_finding": "MYPA-WP-P00-01-FINAL-CLOSEOUT-F-001",
+    "reason": "The prior closeout-correction record embedded 3e5aad7b… as continuously current baseline. After the closeout correction squash-merged as 178a7e24…, that embedded SHA became stale and would become stale again if simply replaced. This record removes exact-current-commit semantics from committed goal state."
   },
   "last_closed_work_item": {
     "work_item_id": "WP-P00-01",
     "merge_sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
     "merge_tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
-    "closed_at_utc": "2026-08-01T04:24:49Z"
+    "role": "MERGE_SHA",
+    "closed_at_utc": "2026-08-01T04:24:49Z",
+    "note": "Historical merge identity of the original WP-P00-01 squash merge (PR #8). Not current repository authority."
   },
+  "historical_merge_identities": [
+    {
+      "role": "MERGE_SHA",
+      "label": "WP-P00-01_IMPLEMENTATION_SQUASH_MERGE",
+      "sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
+      "tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
+      "pull_request": 8
+    },
+    {
+      "role": "MERGE_SHA",
+      "label": "WP-P00-01_CLOSEOUT_CORRECTION_SQUASH_MERGE",
+      "sha": "178a7e243cbc6100c6937144ff10a7987206c04a",
+      "tree": "25131169d7bbe7846569c2a3cb5afa2712bd3c96",
+      "pull_request": 9
+    }
+  ],
   "next_work_item": {
     "work_item_id": "WP-P00-02",
     "state": "NOT_ACTIVATED",
     "successor_activation_authority": "OPERATOR_ONLY",
     "automatic_activation_authorized": false,
-    "required_base_for_future_authorization": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4"
+    "required_identity_resolution_for_future_authorization": "RUNTIME_GIT"
   },
   "phases": [
     {
@@ -69,7 +102,7 @@
     "state": "NOT_ACTIVATED",
     "automatic_activation_authorized": false,
     "activation_authority": "OPERATOR_ONLY",
-    "precondition": "WP-P00-01 closeout must be independently reviewed and merged before any successor authorization is requested."
+    "precondition": "Final WP-P00-01 closeout remains blocked until MYPA-WP-P00-01-FINAL-CLOSEOUT-F-001 is independently reviewed as resolved. No successor authorization is requested or activated by this correction."
   },
   "historical_authorizations": [
     {
@@ -78,9 +111,19 @@
       "status": "CONSUMED",
       "base_sha": "d4fed7ec12f0b25ad5520d806aeb7766e95228d5",
       "base_tree": "faf44a32ba54b13fb6ce75c25e4bf4cd4e2fa1c4",
+      "role": "ORIGINAL_AUTHORIZATION_BASE",
       "note": "Historical. Superseded as current state authority; retained for provenance. This authorization is consumed and grants nothing."
+    },
+    {
+      "authorization_id": "AUTH-MYPA-MIGRATION-WP-P00-01-CLOSEOUT-20260801-001",
+      "work_item_id": "WP-P00-01",
+      "status": "CONSUMED",
+      "base_sha": "3e5aad7b2526b09b1e46c817bd00c401e569f5a4",
+      "base_tree": "9956fe7bed3b2d92e7243b1881f5b31c2d28da1d",
+      "role": "HISTORICAL_PREDECESSOR",
+      "note": "Historical closeout-correction authorization. Consumed by the squash merge at 178a7e24…. Retained for provenance; grants nothing."
     }
   ],
   "self_authorization_prohibited": true,
-  "invalidation_rule": "Any identity, scope, acceptance, or mutation-limit drift invalidates this state record. Any movement of main from 3e5aad7b2526b09b1e46c817bd00c401e569f5a4 requires this record to be re-derived before a successor authorization binds to it."
+  "invalidation_rule": "Any identity, scope, acceptance, or mutation-limit drift invalidates a bound authorization when runtime Git differs from the exact identity recorded in that authorization's external activation package. Committed goal-state records do not store continuously current SHA/tree and therefore do not become stale merely because main advances."
 }

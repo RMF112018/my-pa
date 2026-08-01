@@ -1,0 +1,27 @@
+STAGED_PATHS:
+docs/migration/00_MIGRATION_INDEX.md
+docs/migration/governance/GOAL-MYPA-POSTGRESQL-MIGRATION-001.md
+docs/migration/governance/authorization-ledger.json
+docs/migration/governance/goal-state.json
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/00_INDEX.json
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/01_OPERATOR_AUTHORIZATION.md
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/02_ENTRY_GATE_IDENTITY.json
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/03_AFFECTED_RECORD_INVENTORY.md
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/04_BEFORE_AFTER_SEMANTIC_COMPARISON.md
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/05_RUNTIME_GIT_RESOLUTION_PROOF.md
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/06_HISTORICAL_IDENTITY_PRESERVATION.md
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/07_PATH_CONTAINMENT.md
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/08_ACCEPTANCE_CRITERIA.md
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/09_DRAFT_INDEPENDENT_REVIEW_REQUEST.md
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/01-json-validation.txt
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/02-semantic-validation.txt
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/03-markdown-link-validation.txt
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/04-stale-baseline-search.txt
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/05-wp-p00-02-inactive.txt
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/06-unauthorized-path-search.txt
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/07-fast-tier.txt
+evidence/migration/WP-P00-01/closeout/nonrecursive-baseline/validation/08-staged-path-containment.txt
+---
+COUNT 22
+UNAUTHORIZED none
+RESULT PASS

@@ -1,8 +1,14 @@
-"""Phase 01 scope, neutral naming, and secret hygiene.
+"""Scope, neutral naming, and secret hygiene.
 
-These guard the boundaries the phase is explicitly bounded by: no transport,
-persistence, provider, or model dependency; neutral naming; nothing
-secret-shaped committed.
+These guard the boundaries the work is bounded by: no transport, provider, or
+model dependency; one PostgreSQL driver rather than several; neutral naming;
+nothing secret-shaped committed.
+
+Persistence entered scope with the PostgreSQL foundation, so SQLAlchemy,
+Alembic, and `psycopg` moved from the prohibited list to the declared set below.
+The alternative drivers stay prohibited: two drivers for one database is the
+duplicate-library case AGENTS.md section 2 rules out, and it would make the
+connection URL's scheme ambiguous.
 """
 
 from __future__ import annotations
@@ -24,9 +30,6 @@ PROHIBITED_IMPORT_ROOTS = frozenset(
         "fastapi",
         "starlette",
         "uvicorn",
-        "sqlalchemy",
-        "alembic",
-        "psycopg",
         "psycopg2",
         "asyncpg",
         "redis",
@@ -75,11 +78,25 @@ def test_no_prohibited_dependency_is_imported(path: Path) -> None:
     assert not offending, f"{path.relative_to(PACKAGE)} imports out-of-scope {sorted(offending)}"
 
 
-def test_declared_runtime_dependency_is_pydantic_only() -> None:
+def test_declared_runtime_dependencies_are_the_agreed_set() -> None:
+    """Runtime dependencies are enumerated, not open-ended.
+
+    Adding one has to be a deliberate edit here as well as in `pyproject.toml`,
+    which is what keeps "a library for that" from arriving unremarked.
+    """
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     runtime = data["project"]["dependencies"]
-    assert len(runtime) == 1
-    assert runtime[0].startswith("pydantic")
+    roots = {re.split(r"[><=!~\[]", item)[0].strip().lower() for item in runtime}
+    assert roots == {"pydantic", "sqlalchemy", "psycopg", "alembic"}
+
+
+def test_every_runtime_dependency_declares_a_range() -> None:
+    # A floor without a ceiling lets a major release land untested; a pin
+    # without a floor makes the `dependency-floor` CI job meaningless.
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    for item in data["project"]["dependencies"]:
+        assert ">=" in item, f"{item} declares no lower bound"
+        assert "<" in item.split(">=", 1)[1], f"{item} declares no upper bound"
 
 
 def test_declared_dev_dependencies_are_the_agreed_set() -> None:

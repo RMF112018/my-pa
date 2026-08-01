@@ -1,0 +1,109 @@
+# Canonical `my_pa` PostgreSQL instance for local development and the
+# legacy-SQLite -> PostgreSQL migration.
+#
+# Start:  docker compose -f ops/compose/postgres.yml up -d
+# Stop:   docker compose -f ops/compose/postgres.yml down
+# See ops/postgres/README.md for the full runbook.
+#
+# No secret is committed here. The password is read from the environment and
+# falls back to a well-known local-development value that must never be used
+# outside a personal machine.
+
+name: my-pa
+
+services:
+  postgres:
+    # Pinned to the exact minor actually pulled and verified, so a rebuild of
+    # this machine reproduces the same server.
+    image: postgres:17.10
+    container_name: my-pa-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: my_pa
+      POSTGRES_USER: my_pa
+      # Local-development default. Override by exporting MY_PA_DB_PASSWORD.
+      POSTGRES_PASSWORD: ${MY_PA_DB_PASSWORD:-my_pa_local_dev}
+      # Applied by initdb at cluster creation ONLY. Changing any of these later
+      # requires destroying the volume and reloading every row.
+      #
+      #   --data-checksums  detects silent page corruption. This is a personal
+      #                     knowledge store meant to outlive the migration, so
+      #                     the few-percent write cost is worth catching bit rot
+      #                     that would otherwise surface as wrong answers.
+      #   --locale=C.UTF-8  version-stable byte ordering. The alternative,
+      #                     en_US.utf8 via libc, pins every text index to the
+      #                     container's glibc version, so a base-image bump can
+      #                     silently invalidate them. C.UTF-8 is immune, sorts
+      #                     identically to SQLite (making reconciliation
+      #                     directly comparable), and builds indexes faster.
+      #                     Present text to a person with an explicit
+      #                     ORDER BY col COLLATE "en_US.utf8" at the query site.
+      POSTGRES_INITDB_ARGS: "--data-checksums --locale=C.UTF-8 --encoding=UTF8"
+
+    ports:
+      # 5433 on the host: leaves the conventional 5432 free for any other
+      # local PostgreSQL and makes an accidental connection to the wrong
+      # server less likely.
+      - "5433:5432"
+
+    volumes:
+      - my_pa_pgdata:/var/lib/postgresql/data
+
+    # Parallel workers exchange tuples through shared memory. Docker's 64 MB
+    # default for /dev/shm is too small for the parallel scans and hash joins
+    # a bulk load and its verification queries produce.
+    shm_size: 1gb
+
+    # PostgreSQL needs an unhurried shutdown to avoid crash recovery on the
+    # next start. The 10s Compose default can expire mid-checkpoint while a
+    # load is running.
+    stop_grace_period: 60s
+
+    # Tuning targets this machine: a 14-CPU / 8 GB Docker VM running a
+    # single-user bulk load, not a shared server. Every value below is sized
+    # against that 8 GB ceiling.
+    command:
+      - postgres
+      # ~12% of the VM's 8 GB. Deliberately below the usual 25% rule: the load
+      # is write-heavy and sequential, so extra cache buys little, and leaving
+      # headroom keeps index builds and the page cache from competing.
+      - -c
+      - shared_buffers=1GB
+      # Advertises the memory the OS page cache can plausibly hold. Planner
+      # hint only, allocates nothing; keeps the planner from over-preferring
+      # sequential scans during reconciliation queries.
+      - -c
+      - effective_cache_size=3GB
+      # Per sort/hash node, not per connection. 32 MB keeps large reconciliation
+      # joins in memory while bounding worst-case usage at a handful of
+      # concurrent migration workers.
+      - -c
+      - work_mem=32MB
+      # Used by CREATE INDEX, ALTER TABLE, and VACUUM. The migration builds
+      # indexes over multi-million-row tables after loading, which is where
+      # this dominates total runtime. One or two of these run at a time.
+      - -c
+      - maintenance_work_mem=512MB
+      # Default 1 GB forces a checkpoint every few seconds under bulk COPY,
+      # which stalls the load with full-page writes. 4 GB trades disk space
+      # (287 GB free) for far fewer checkpoints.
+      - -c
+      - max_wal_size=4GB
+      # Keeps recycled WAL segments around between checkpoints instead of
+      # deleting and re-creating them each cycle.
+      - -c
+      - min_wal_size=1GB
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U my_pa -d my_pa"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  my_pa_pgdata:
+    # Explicit name so the volume is `my_pa_pgdata`, not a project-prefixed
+    # variant, and survives `docker compose down`.
+    name: my_pa_pgdata

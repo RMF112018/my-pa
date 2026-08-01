@@ -16,7 +16,32 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Typing :: Typed",
 ]
-dependencies = ["pydantic>=2.7,<3"]
+# Every runtime dependency is pinned to a compatible range: a floor at the
+# oldest release whose behaviour this code relies on, and a ceiling at the next
+# major, because each of these projects reserves breaking changes for majors.
+# The `dependency-floor` CI job installs the declared floor and runs the suite
+# against it, so the lower bound is a checked claim rather than a wish.
+#
+#   pydantic          contract and settings validation.
+#   SQLAlchemy        Core engine, connection pool, and dialect. 2.0 is the
+#                     floor because this code uses the 2.x `Session` context
+#                     manager and typed Core API. Removal path: raw psycopg.
+#   psycopg[binary]   the PostgreSQL driver SQLAlchemy's `postgresql+psycopg`
+#                     dialect requires. 3.2 is the floor for the current
+#                     `psycopg.rows`/pipeline behaviour. `[binary]` ships a
+#                     wheel with libpq bundled, so no local PostgreSQL client
+#                     build is needed. Security surface: it speaks the wire
+#                     protocol to a local container only.
+#   alembic           schema migrations, required by AGENTS.md section 6.
+#                     1.13 is the floor for the current `op`/`context` API.
+#                     Removal path: hand-run SQL files, which would lose the
+#                     empty-to-head and head-to-empty guarantee.
+dependencies = [
+  "pydantic>=2.7,<3",
+  "SQLAlchemy>=2.0,<3",
+  "psycopg[binary]>=3.2,<4",
+  "alembic>=1.13,<2",
+]
 
 [project.optional-dependencies]
 dev = ["mypy>=1.11", "pytest>=8.2", "ruff>=0.6"]
@@ -54,6 +79,9 @@ select = [
 "tests/**" = ["S101"] # assert is the point of a test
 
 [tool.mypy]
+# Explicit targets so a bare `mypy` checks the same tree CI does, plus the
+# Alembic environment and revisions, which are executable code outside `src`.
+files = ["src", "migrations"]
 python_version = "3.12"
 strict = true
 warn_unreachable = true
@@ -64,7 +92,7 @@ testpaths = ["tests"]
 addopts = "--strict-markers --strict-config"
 markers = [
   "slow: excluded from the FAST tier",
-  "database: requires a database; not part of Phase 01",
+  "database: requires a reachable PostgreSQL server",
   "network: requires network access; not part of Phase 01",
   "connector: requires a personal-data connector; not part of Phase 01",
   "evaluation: quality evaluation suite; not part of Phase 01",

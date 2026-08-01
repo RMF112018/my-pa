@@ -18,3 +18,7 @@ venv/
 .env
 .env.*
 !.env.example
+
+# Agent tooling: machine-local permissions and scratch worktrees, never shared.
+.claude/settings.local.json
+.claude/worktrees/

@@ -4,6 +4,11 @@ These guard the boundaries the work is bounded by: no transport, provider, or
 model dependency; one PostgreSQL driver rather than several; neutral naming;
 nothing secret-shaped committed.
 
+A guard here is narrowed only when scope legitimately grows, never to make a
+change pass. Each narrowing states its reason beside the pattern and is paired
+with planted violations, so a relaxed guard cannot silently become a guard that
+matches nothing.
+
 Persistence entered scope with the PostgreSQL foundation, so SQLAlchemy,
 Alembic, and `psycopg` moved from the prohibited list to the declared set below.
 The alternative drivers stay prohibited: two drivers for one database is the
@@ -161,8 +166,59 @@ def test_every_package_directory_is_importable() -> None:
         assert (directory / "__init__.py").exists(), f"{directory} lacks __init__.py"
 
 
+#: Module names that mean speculative machinery rather than a domain noun.
+#:
+#: `registry` was a bare term here until the source registry entered scope. The
+#: MCV specification section 9.6 requires registering and enrolling configured
+#: sources, so a registry of sources is a product capability, not an extension
+#: point, and banning the word outright would have forced a worse name on a
+#: required concept. The speculative sense is what the guard was for, so the
+#: compounds that carry that sense stay banned and the bare noun no longer is.
+#:
+#: Narrowing a guard is only safe if the guard still bites, which
+#: `test_the_speculative_module_guard_still_catches_what_it_is_for` proves.
+_SPECULATIVE_MODULE_NAMES = re.compile(
+    r"(plugin|factory_factory|abstract_base|extension_point"
+    r"|(?:plugin|service|provider|component|handler|adapter|capability)_registry)",
+    re.I,
+)
+
+
 def test_no_placeholder_or_speculative_module_was_added() -> None:
-    # Phase 01 forbids plugin frameworks, registries, and speculative extension points.
-    banned = re.compile(r"(plugin|registry|factory_factory|abstract_base|extension_point)", re.I)
-    offenders = [p.relative_to(PACKAGE) for p in _modules() if banned.search(p.name)]
+    offenders = [
+        p.relative_to(PACKAGE) for p in _modules() if _SPECULATIVE_MODULE_NAMES.search(p.name)
+    ]
     assert not offenders, f"speculative modules present: {offenders}"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "plugin.py",
+        "plugin_loader.py",
+        "plugin_registry.py",
+        "service_registry.py",
+        "provider_registry.py",
+        "component_registry.py",
+        "handler_registry.py",
+        "adapter_registry.py",
+        "capability_registry.py",
+        "factory_factory.py",
+        "abstract_base.py",
+        "extension_point.py",
+    ],
+)
+def test_the_speculative_module_guard_still_catches_what_it_is_for(name: str) -> None:
+    """Planted violations, so narrowing the pattern cannot quietly gut it.
+
+    Without this, a later edit could relax the pattern to the point where it
+    matches nothing and the guard above would still pass, reporting a boundary
+    it no longer enforces.
+    """
+    assert _SPECULATIVE_MODULE_NAMES.search(name), f"{name} should be rejected"
+
+
+@pytest.mark.parametrize("name", ["registry.py", "sources.py", "enrollment.py", "jobs.py"])
+def test_the_speculative_module_guard_permits_domain_nouns(name: str) -> None:
+    """The narrowing is deliberate and bounded, not incidental."""
+    assert not _SPECULATIVE_MODULE_NAMES.search(name), f"{name} should be permitted"

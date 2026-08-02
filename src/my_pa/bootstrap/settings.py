@@ -29,6 +29,8 @@ from urllib.parse import urlsplit
 from pydantic import Field, ValidationError, model_validator
 
 from my_pa.contracts.v1.base import StrictModel
+from my_pa.contracts.v1.capabilities import EffectiveLimits
+from my_pa.domain.source.enrollment import MAX_ENROLLMENT_DEPTH
 
 __all__ = [
     "DATABASE_URL_SCHEME",
@@ -88,13 +90,24 @@ def _validate_database_url(url: str) -> None:
 
 
 class Settings(StrictModel):
-    """Validated process settings."""
+    """Validated process settings.
+
+    The four limit fields resolve `P00-OD-011` as `D-24` decided it: the values
+    Phase 01 published as a module constant become configuration defaults, so an
+    operator can change a limit without a code change, and the number published
+    by `capabilities.get` is the one the enforcing path reads. They are ordinary
+    integers with ordinary bounds; the interesting property is not their range
+    but that there is exactly one of each.
+    """
 
     environment: Environment = Environment.LOCAL
     log_level: LogLevel = LogLevel.INFO
     redaction_enabled: bool = True
     contract_strict_mode: bool = True
     max_page_size: int = Field(default=200, gt=0, le=1000)
+    default_page_size: int = Field(default=50, gt=0, le=1000)
+    max_fetch_bytes: int = Field(default=8 * 1024 * 1024, gt=0, le=1 << 30)
+    max_enrollment_depth: int = Field(default=0, ge=0, le=MAX_ENROLLMENT_DEPTH)
     database_url: str
 
     @model_validator(mode="after")
@@ -106,7 +119,33 @@ class Settings(StrictModel):
             )
         if not self.contract_strict_mode:
             raise SettingsError("strict contract parsing cannot be disabled")
+        # Built rather than checked field by field: `EffectiveLimits` already
+        # holds the one cross-field rule these have, and constructing it here
+        # means a configuration that cannot produce a publishable manifest fails
+        # at startup instead of at the first `capabilities.get`.
+        self.effective_limits()
         return self
+
+    def effective_limits(self) -> EffectiveLimits:
+        """The configured limits, as the shape `capabilities.get` publishes.
+
+        One object, built from validated configuration and handed to the
+        application, which enforces it and publishes it. There is no second copy
+        for the published number to drift from (`D-24`).
+        """
+        try:
+            return EffectiveLimits(
+                max_page_size=self.max_page_size,
+                default_page_size=self.default_page_size,
+                max_fetch_bytes=self.max_fetch_bytes,
+                max_enrollment_depth=self.max_enrollment_depth,
+            )
+        except ValidationError as exc:
+            # Names the rule, never the values: the message Pydantic produces for
+            # this model states only which invariant failed.
+            raise SettingsError(
+                f"invalid configuration: {'; '.join(error['msg'] for error in exc.errors())}"
+            ) from exc
 
 
 _FIELD_NAMES: Final = frozenset(Settings.model_fields)

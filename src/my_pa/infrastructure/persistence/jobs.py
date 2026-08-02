@@ -66,10 +66,12 @@ from my_pa.infrastructure.persistence.tables import (
 )
 
 __all__ = [
+    "JobRecord",
     "LeasedJob",
     "claim_job",
     "complete_job",
     "enqueue_job",
+    "job_for",
     "job_state",
     "reap_abandoned_jobs",
     "release_job",
@@ -91,6 +93,14 @@ _ABANDONED: Final = and_(
 #: owner — this column is read by operators and appears in operational queries,
 #: and `AGENTS.md` section 5 keeps hosts out of both.
 _OWNER_PATTERN: Final = re.compile(r"\A[A-Za-z0-9_-]{4,64}\Z")
+
+
+class JobRecord(NamedTuple):
+    """One job as a status read sees it: which grant, and where it has got to."""
+
+    operation_id: str
+    enrollment_id: str
+    state: JobState
 
 
 class LeasedJob(NamedTuple):
@@ -294,8 +304,8 @@ def release_job(
     return None if state is None else JobState(state)
 
 
-def job_state(connection: Connection, operation_id: str) -> JobState | None:
-    """Return the state of `operation_id`, or `None` when there is no such job.
+def job_for(connection: Connection, operation_id: str) -> JobRecord | None:
+    """Return the grant a job belongs to and the state it is in, or `None`.
 
     Reports an abandoned final attempt as `failed` from the moment its lease
     expires, rather than from the moment some later claim happens to write that
@@ -303,10 +313,27 @@ def job_state(connection: Connection, operation_id: str) -> JobState | None:
     writes, so the answer here and the value that eventually lands in the column
     cannot disagree. It stays a read: a status query does not need a writable
     transaction to tell the truth.
+
+    The enrollment travels with the state because a caller that has only an
+    `op_…` has to be able to authorize the question it is asking, and the scope
+    it runs in is the enrollment's. Two reads could return a state and a grant
+    from two different statement snapshots; one cannot.
     """
     validate_identifier(operation_id, IdKind.OPERATION)
     reported = case((_ABANDONED, JobState.FAILED.value), else_=jobs.c.state)
-    state = connection.execute(
-        select(reported).where(jobs.c.operation_id == operation_id)
-    ).scalar_one_or_none()
-    return None if state is None else JobState(state)
+    row: Row[tuple[str, str]] | None = connection.execute(
+        select(jobs.c.enrollment_id, reported).where(jobs.c.operation_id == operation_id)
+    ).one_or_none()
+    if row is None:
+        return None
+    return JobRecord(operation_id=operation_id, enrollment_id=str(row[0]), state=JobState(row[1]))
+
+
+def job_state(connection: Connection, operation_id: str) -> JobState | None:
+    """Return the state of `operation_id`, or `None` when there is no such job.
+
+    Derived from `job_for` rather than from a second statement, so the two
+    cannot answer differently about the same row.
+    """
+    found = job_for(connection, operation_id)
+    return None if found is None else found.state

@@ -41,12 +41,59 @@ def test_known_values_are_parsed() -> None:
             f"{ENV_PREFIX}ENVIRONMENT": "test",
             f"{ENV_PREFIX}LOG_LEVEL": "debug",
             f"{ENV_PREFIX}MAX_PAGE_SIZE": "10",
+            f"{ENV_PREFIX}DEFAULT_PAGE_SIZE": "5",
             DATABASE_URL: _A_URL,
         }
     )
     assert settings.environment is Environment.TEST
     assert settings.log_level is LogLevel.DEBUG
     assert settings.max_page_size == 10
+    assert settings.default_page_size == 5
+
+
+def test_the_phase_01_limits_are_the_configuration_defaults() -> None:
+    """`D-24`: the values that were a module constant are now the defaults."""
+    limits = load_settings({DATABASE_URL: _A_URL}).effective_limits()
+    assert limits.max_page_size == 200
+    assert limits.default_page_size == 50
+    assert limits.max_fetch_bytes == 8 * 1024 * 1024
+    assert limits.max_enrollment_depth == 0
+
+
+def test_every_limit_is_configurable() -> None:
+    limits = load_settings(
+        {
+            f"{ENV_PREFIX}MAX_PAGE_SIZE": "40",
+            f"{ENV_PREFIX}DEFAULT_PAGE_SIZE": "7",
+            f"{ENV_PREFIX}MAX_FETCH_BYTES": "4096",
+            f"{ENV_PREFIX}MAX_ENROLLMENT_DEPTH": "3",
+            DATABASE_URL: _A_URL,
+        }
+    ).effective_limits()
+    assert (
+        limits.max_page_size,
+        limits.default_page_size,
+        limits.max_fetch_bytes,
+        limits.max_enrollment_depth,
+    ) == (40, 7, 4096, 3)
+
+
+def test_a_contradictory_pair_of_page_limits_fails_at_startup() -> None:
+    """Fail closed rather than clamping: a limit nobody meant is not a default."""
+    with pytest.raises(SettingsError, match="default_page_size cannot exceed max_page_size"):
+        load_settings(
+            {
+                f"{ENV_PREFIX}MAX_PAGE_SIZE": "10",
+                f"{ENV_PREFIX}DEFAULT_PAGE_SIZE": "50",
+                DATABASE_URL: _A_URL,
+            }
+        )
+
+
+def test_an_enrollment_depth_beyond_the_domain_ceiling_is_refused() -> None:
+    """Configuration may lower a domain bound and may not raise one."""
+    with pytest.raises(SettingsError, match="invalid configuration"):
+        load_settings({f"{ENV_PREFIX}MAX_ENROLLMENT_DEPTH": "99", DATABASE_URL: _A_URL})
 
 
 def test_unknown_prefixed_variable_fails_closed() -> None:

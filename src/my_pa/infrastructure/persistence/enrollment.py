@@ -28,7 +28,7 @@ from typing import NamedTuple
 from sqlalchemy import Connection, Row, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.source.enrollment import (
     Enrollment,
@@ -40,7 +40,7 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import conflicting_row
 from my_pa.infrastructure.persistence.tables import enrollments
 
-__all__ = ["AcceptedEnrollment", "accept_enrollment"]
+__all__ = ["AcceptedEnrollment", "accept_enrollment", "enrollments_for_principal"]
 
 _COLUMNS = (
     enrollments.c.enrollment_id,
@@ -92,6 +92,27 @@ def _to_enrollment(row: Row[tuple[object, ...]]) -> Enrollment:
         max_bytes=int(mapping["max_bytes"]),
         accepted_at=accepted_at,
     )
+
+
+def enrollments_for_principal(connection: Connection, principal_id: str) -> tuple[Enrollment, ...]:
+    """Every grant `principal_id` holds, oldest first.
+
+    This is what an authorization decision is evaluated against, so it is a
+    stored fact read at decision time rather than something a caller supplies
+    beside its request. The order is by acceptance and then identifier, so "the
+    enrollment over this source" means the same row on two calls.
+
+    Returns the empty tuple for a principal with no grants, which is the honest
+    answer and the one that authorizes nothing: `domain.policy.decision` treats
+    an empty authorized set as covering no requested scope at all.
+    """
+    validate_identifier(principal_id, IdKind.PRINCIPAL)
+    rows = connection.execute(
+        select(*_COLUMNS)
+        .where(enrollments.c.principal_id == principal_id)
+        .order_by(enrollments.c.accepted_at, enrollments.c.enrollment_id)
+    ).all()
+    return tuple(_to_enrollment(row) for row in rows)
 
 
 def accept_enrollment(connection: Connection, request: EnrollmentRequest) -> AcceptedEnrollment:

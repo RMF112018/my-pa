@@ -260,6 +260,175 @@ def test_infrastructure_does_not_import_bootstrap(path: Path) -> None:
     )
 
 
+# `MB-AC-002`: domain and application are isolated from transport, ORM, provider,
+# parser, host, and database details. The domain half is above; the application
+# half is below, and it is stated as three separate rules rather than one because
+# the three fail for different reasons and a reader has to be told which.
+
+
+#: Third-party roots a transport would bring. Kept separate from
+#: `DATABASE_AND_FRAMEWORK_ROOTS` because `MB-AC-002` names transport and ORM as
+#: distinct concerns, and because a failure naming the specific mistake is worth
+#: more than one naming a merged list. `mcp` and `anyio` are here ahead of the
+#: adapters that will use them: `D-25` through `D-27` put them at the transport
+#: edge in WP-4B, and this is the rule that keeps them there.
+TRANSPORT_ROOTS = frozenset(
+    {
+        "aiohttp",
+        "anyio",
+        "asyncio",
+        "fastapi",
+        "flask",
+        "httpx",
+        "mcp",
+        "requests",
+        "starlette",
+        "uvicorn",
+    }
+)
+
+#: Modules whose names mean "a concrete implementation of a port". An application
+#: module that imports one has taken the composition root's decision.
+PROVIDER_AND_PARSER_ROOTS = frozenset(
+    {"boto3", "fitz", "paramiko", "pdfminer", "pypdf", "smbclient"}
+)
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "application"], ids=lambda p: str(p.name)
+)
+def test_application_imports_no_transport_module(path: Path) -> None:
+    """`MB-AC-002`: the application does not parse HTTP or MCP, and does not await.
+
+    `D-27` keeps async at the transport edge, so an `asyncio` or `anyio` import
+    inside `application` is the boundary moving rather than a convenience.
+    """
+    offending = sorted({i.split(".")[0] for i in _imported_modules(path)} & TRANSPORT_ROOTS)
+    assert not offending, (
+        f"{path.relative_to(PACKAGE)} is application code and imports {offending}; "
+        "transport parsing and its concurrency belong to an adapter"
+    )
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "application"], ids=lambda p: str(p.name)
+)
+def test_application_imports_no_orm_sql_or_driver_module(path: Path) -> None:
+    """`MB-AC-002`: the application executes no SQL and holds no connection.
+
+    The unit of work is a port; the statements behind it are `infrastructure`'s.
+    An application module that imports SQLAlchemy has the transaction *and* the
+    schema, which is the coupling the port exists to remove.
+    """
+    offending = sorted(
+        {i.split(".")[0] for i in _imported_modules(path)} & DATABASE_AND_FRAMEWORK_ROOTS
+    )
+    assert not offending, (
+        f"{path.relative_to(PACKAGE)} is application code and imports {offending}; "
+        "SQL, migrations, and drivers live behind the persistence ports"
+    )
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "application"], ids=lambda p: str(p.name)
+)
+def test_application_imports_no_provider_or_parser_module(path: Path) -> None:
+    """`MB-AC-002`: only a composition root chooses a concrete implementation."""
+    offending = sorted(
+        {i.split(".")[0] for i in _imported_modules(path)} & PROVIDER_AND_PARSER_ROOTS
+    )
+    assert not offending, (
+        f"{path.relative_to(PACKAGE)} is application code and imports {offending}; "
+        "a provider or parser is chosen by a composition root, not by a use case"
+    )
+
+
+#: Names that instantiate a concrete implementation of a port. An application
+#: module that mentions one has composed something.
+CONCRETE_IMPLEMENTATIONS = frozenset(
+    {"FixtureSourceProvider", "SqlAlchemyUnitOfWork", "create_database_engine", "create_engine"}
+)
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "application"], ids=lambda p: str(p.name)
+)
+def test_only_a_composition_root_instantiates_a_concrete_implementation(path: Path) -> None:
+    """`MB-AC-002`, second half: composition is not a use case's decision.
+
+    The import rules above catch the module-level crossing. This catches the name
+    itself, wherever it appears — including inside a function, which is where an
+    import guard is easiest to slip past.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    named = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id in CONCRETE_IMPLEMENTATIONS
+    } | {
+        node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr in CONCRETE_IMPLEMENTATIONS
+    }
+    assert not named, (
+        f"{path.relative_to(PACKAGE)} is application code and names {sorted(named)}; "
+        "only a composition root instantiates a concrete implementation"
+    )
+
+
+#: One planted import per guard set, so a set narrowed to nothing cannot keep
+#: reporting success. Each of the three rules above is a set intersection, and an
+#: intersection with an empty set is empty for every module in the tree.
+PLANTED_IMPORTS = [
+    ("import starlette", "TRANSPORT_ROOTS"),
+    ("import anyio", "TRANSPORT_ROOTS"),
+    ("import asyncio", "TRANSPORT_ROOTS"),
+    ("from mcp.server import Server", "TRANSPORT_ROOTS"),
+    ("import sqlalchemy", "DATABASE_AND_FRAMEWORK_ROOTS"),
+    ("from psycopg import connect", "DATABASE_AND_FRAMEWORK_ROOTS"),
+    ("import alembic", "DATABASE_AND_FRAMEWORK_ROOTS"),
+    ("import pypdf", "PROVIDER_AND_PARSER_ROOTS"),
+    ("import paramiko", "PROVIDER_AND_PARSER_ROOTS"),
+]
+
+GUARD_SETS = {
+    "TRANSPORT_ROOTS": TRANSPORT_ROOTS,
+    "DATABASE_AND_FRAMEWORK_ROOTS": DATABASE_AND_FRAMEWORK_ROOTS,
+    "PROVIDER_AND_PARSER_ROOTS": PROVIDER_AND_PARSER_ROOTS,
+}
+
+
+@pytest.mark.parametrize(("statement", "guard"), PLANTED_IMPORTS, ids=lambda v: str(v))
+def test_the_application_import_guards_catch_a_planted_import(
+    tmp_path: Path, statement: str, guard: str
+) -> None:
+    """The rules are read the way they read a real module, against a planted one."""
+    planted = tmp_path / "planted.py"
+    planted.write_text(f"{statement}\n", encoding="utf-8")
+    roots = {imported.split(".")[0] for imported in _imported_modules(planted)}
+    assert roots & GUARD_SETS[guard], f"{statement!r} escaped {guard}"
+
+
+def test_the_composition_guard_catches_a_planted_instantiation(tmp_path: Path) -> None:
+    """And it catches one hidden inside a function, which is the easy way past an import."""
+    planted = tmp_path / "planted.py"
+    planted.write_text(
+        "def wire(engine: object) -> object:\n"
+        "    from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork\n"
+        "\n"
+        "    return SqlAlchemyUnitOfWork(engine)\n",
+        encoding="utf-8",
+    )
+    tree = ast.parse(planted.read_text(encoding="utf-8"), filename=str(planted))
+    named = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id in CONCRETE_IMPLEMENTATIONS
+    }
+    assert named == {"SqlAlchemyUnitOfWork"}
+    assert {i.split(".")[0] for i in _imported_modules(planted)} == {"my_pa"}
+
+
 def test_the_guarded_layers_have_modules_to_guard() -> None:
     # Parametrizing over an empty list collects nothing and reports success, so
     # the rules above would pass on a tree where `domain` had been deleted.

@@ -398,13 +398,15 @@ def extracted_text_in_scope(enrollment_id: str) -> tuple[ColumnElement[bool], ..
     """Which rows of `extractions` hold text that `enrollment_id`'s grant covers.
 
     One list, used by `coverage_for`'s `processed` count and by
-    `persistence.search`'s `match_statement`. The two are the same set of rows
-    because they are built from this call and not because two predicate lists
-    were compared and found to agree — which is what was written here for six
-    review rounds and was false for two of the six conditions. A page of text
-    beside a coverage report that says the scope holds none of it is the exact
-    contradiction section 9.7 makes this system's reason for existing, and it is
-    reachable whenever the two lists differ by anything.
+    `persistence.search`'s `match_statement`. When evaluated against one
+    statement snapshot, the two apply the same predicate set because they are
+    built from this call and not because two predicate lists were compared and
+    found to agree. That comparison stood here for six review rounds and was
+    false for two of the six conditions. A page of text beside a coverage report
+    that says the scope
+    holds none of it is the exact contradiction section 9.7 makes this system's
+    reason for existing; differing predicates are one way to reach it, and the
+    separate-snapshot window described below is another.
 
     The six, and what each decides:
 
@@ -763,8 +765,9 @@ def coverage_for(
 
     `processed` carries the content dimension as well, and only `processed`
     does — it is `extracted_text_in_scope`, which is also what a search matches
-    within, so the two describe one set of rows. It is the count of objects whose
-    *text* was read and stored, so an extracted row of a media type the
+    within. When evaluated against one statement snapshot, the two describe one
+    set of rows. It is the count of objects whose *text* was read and stored, so
+    an extracted row of a media type the
     enrollment's allowlist does not hold is not coverage of that enrollment
     either, and it is not counted — it stays uncounted rather than moving to
     another count, which leaves the result partial in the same safe direction.

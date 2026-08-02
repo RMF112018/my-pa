@@ -126,11 +126,12 @@ in the redaction and it is carried into WP-4 rather than described as closed.
 **What a search may match is one shared definition, not a list written twice.**
 `match_statement`'s scope is `extraction.extracted_text_in_scope`, and so is
 `coverage_for`'s `processed` count: one call, two uses. That is deliberately
-structural. This module filtered on `enrollment_id` alone until recently, then
-grew a list of conditions beside the coverage side's and asserted the two were
-equal — and they were not, in two of six conditions, so a search could return a
-document's text under an envelope reporting that the scope held none. A shared
-definition is the only form of that claim nothing has to re-check.
+structural: it shares predicates, not a transaction snapshot. This module
+filtered on `enrollment_id` alone until recently, then grew a list of conditions
+beside the coverage side's and asserted the two were equal — and they were not,
+in two of six conditions, so a search could return a document's text under an
+envelope reporting that the scope held none. A shared definition is the only
+form of the predicate claim nothing has to re-check.
 
 An enrollment whose allowlist names no type this extractor can read matches
 nothing and reports `processed = 0`, which is the honest answer rather than a
@@ -590,8 +591,9 @@ def match_statement(request: SearchRequest, position: SearchCursor | None) -> Se
 
     The one thing the two do not share is arithmetic. `coverage_for` counts
     distinct objects and this returns rows, so an object with two authorized
-    extracted versions is one processed object and two matches; the sets agree,
-    the totals need not, and nothing here claims otherwise.
+    extracted versions is one processed object and two matches; within one
+    statement snapshot the predicate sets agree, the totals need not, and
+    nothing here claims otherwise.
 
     **The source comes from the object.** `source_objects.source_id` is joined
     and selected rather than taken from the enrollment row, because those are two

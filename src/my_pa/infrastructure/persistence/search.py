@@ -84,9 +84,11 @@ holds that continuously: it takes the `@@` predicate out of the statement
 the same test previously came to prove nothing — and asserts the plan.
 
 What is not claimed: that every search uses the index. A search also filters on
-`enrollment_id` and `status`, and where that is the more selective pair the
-planner will use `extractions_by_enrollment` and apply the match as a filter —
-which is the right plan and is what it does at test-fixture scale. This module
+`enrollment_id`, and where that is the more selective condition the planner will
+use `extractions_by_enrollment` — whose leading column it is — and apply the
+match as a filter, which is the right plan and is what it does at test-fixture
+scale. That index's second column is `status`, which `match_statement` no longer
+filters on and `coverage_for` does; `match_statement` says why. This module
 also sets no statement timeout. The index removes the sequential scan as the
 only possibility; it does not bound what a query can cost.
 
@@ -119,6 +121,16 @@ so a `ProgrammingError` raised there escapes as a `SQLAlchemyError` whose messag
 carries the statement and its bound `enrollment_id`. That is a schema fault
 rather than a query fault and no caller's text reaches it, but it is a real hole
 in the redaction and it is carried into WP-4 rather than described as closed.
+
+**What a search returns is bounded by the enrollment's content-type allowlist.**
+An enrollment is a selector and an allowlist, and this module read neither until
+recently: it filtered on `enrollment_id`, which is what a row was written
+against rather than what the grant covers. `match_statement` now applies both
+halves — `authorized_object` and `authorized_media_type` — and they are the same
+two predicates `coverage_for`'s `processed` count applies, so the page and the
+coverage beside it cannot disagree about what is in scope. An enrollment whose
+allowlist names no type this extractor can read matches nothing and reports
+`processed = 0`, which is the honest answer rather than a case to special-case.
 
 **`pg_trgm` is installed and deliberately unused.** `AGENTS.md` section 4 names
 it alongside full-text search as an initial mechanism, and it answers a different
@@ -225,7 +237,6 @@ from my_pa.domain.extraction.coverage import (
     CoverageCounts,
     LimitationReason,
 )
-from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.search.query import (
     EmptySearchQueryError,
     SearchCursor,
@@ -235,7 +246,11 @@ from my_pa.domain.search.query import (
     label_for_media_type,
     rank_category,
 )
-from my_pa.infrastructure.persistence.extraction import authorized_object, coverage_for
+from my_pa.infrastructure.persistence.extraction import (
+    authorized_media_type,
+    authorized_object,
+    coverage_for,
+)
 from my_pa.infrastructure.persistence.tables import (
     coverage_limitations,
     enrollments,
@@ -456,6 +471,12 @@ def context_statement(request: SearchRequest) -> Select[Any]:
             func.cardinality(enrollments.c.object_ids).label("named_objects"),
             func.numnode(_tsquery(request)).label("lexemes"),
         )
+        # An inner join, and nothing can tell: `enrollments.source_id` is `NOT
+        # NULL` with a foreign key to `sources`, so no enrollment row exists
+        # whose source is missing and an outer join would return the same rows
+        # with the same values. It is written as an inner join because that is
+        # the truthful shape of the relation, and it is recorded here rather
+        # than pinned, because no arrangement of rows could pin it.
         .select_from(enrollments.join(sources, sources.c.source_id == enrollments.c.source_id))
         .where(enrollments.c.enrollment_id == request.enrollment_id)
     )
@@ -513,13 +534,40 @@ def match_statement(request: SearchRequest, position: SearchCursor | None) -> Se
     size leaves "is there more" unanswerable without a second query, and section
     8.5 forbids a limit that produces an unmarked complete-looking response.
 
-    **`enrollment_id` is not the authorization.** It says which enrollment a row
-    was written against, and nothing ties that to the objects the enrollment
-    authorizes; a row stored for any object at all was matched, and its extracted
-    text returned, because it carried the right `enrollment_id`. The boundary is
-    `authorized_object`, which is the same predicate `coverage_for` counts by, so
-    what a search returns and what it claims coverage of cannot disagree about
-    what is in scope.
+    **`enrollment_id` is not the authorization, and it is not removable either.**
+    It says which enrollment a row was written against, and nothing ties that to
+    what the enrollment authorizes; a row stored for any object at all was
+    matched, and its extracted text returned, because it carried the right
+    `enrollment_id`. So the boundary is `authorized_object` and
+    `authorized_media_type`, the same two predicates `coverage_for`'s `processed`
+    count applies, which is what keeps what a search returns and what it claims
+    coverage of from disagreeing about what is in scope. The `enrollment_id`
+    filter stays beside them because neither replaces it: two enrollments over
+    one source can authorize the same object, and without this filter a search
+    under one would return rows the other wrote, for an object both authorize.
+    `test_a_search_returns_only_the_rows_its_own_enrollment_wrote` holds all of
+    that constant except the enrollment.
+
+    **The content dimension is the enrollment's allowlist, applied to the row
+    being returned.** `extractions.media_type` is what the text was read as, and
+    `enrollments.media_types` is what the operator authorized reading. A row
+    outside it is not returned, for the same reason its text is not counted as
+    coverage: the grant did not cover it. `record_outcome` refuses to write one,
+    so the rows this excludes are the ones written by hand or written before the
+    check — the same two halves, for the same reason, as the object dimension.
+
+    **No `status` filter, and that is the rule rather than an omission.** This
+    selected only `extracted` rows until the condition was measured and found
+    undecidable: `text_exists_exactly_when_something_was_extracted` makes `text`
+    null for every row that is not `extracted`, `to_tsvector` of null is null,
+    and `null @@ query` is null — so the `@@` predicate below already excludes
+    every such row and no arrangement of rows can make the status test change an
+    answer. `persistence.extraction` states the rule that removes it. The
+    equivalent filter in `coverage_for`'s `processed` count is *not* removed,
+    because there it does decide: a row filed in `extractions` with status
+    `quarantined` carries no text, so nothing excludes it from a count, and
+    `test_a_row_filed_in_extractions_as_quarantined_is_not_counted_as_processed`
+    is what fails if it goes.
 
     **The source comes from the object.** `source_objects.source_id` is joined
     and selected rather than taken from the enrollment row, because those are two
@@ -567,8 +615,8 @@ def match_statement(request: SearchRequest, position: SearchCursor | None) -> Se
         )
         .where(
             extractions.c.enrollment_id == request.enrollment_id,
-            extractions.c.status == ExtractionStatus.EXTRACTED.value,
             authorized_object(extractions.c.source_object_id, enrollment_id=request.enrollment_id),
+            authorized_media_type(extractions.c.media_type, enrollment_id=request.enrollment_id),
             _document_vector().bool_op("@@")(query),
         )
         .order_by(rank.desc(), extractions.c.extraction_id.desc())
@@ -777,7 +825,13 @@ def search_extractions(
     if snippet_truncated:
         limitations.append(_SNIPPET_TRUNCATED)
 
-    complete = eligible_is_known and counts.eligible > 0 and counts.processed == counts.eligible
+    # No `eligible > 0` guard. `eligible_is_known` means the enrollment named its
+    # objects, `enrollment_names_exactly_one_selector` makes that array non-empty
+    # whenever `root_object_id` is null, and the denominator is
+    # `cardinality(object_ids)` — so no arrangement of rows reaches this line with
+    # a zero. A condition nothing can exercise is a claim nothing checks, which is
+    # the rule `persistence.extraction` states once and this applies.
+    complete = eligible_is_known and counts.processed == counts.eligible
     next_cursor = (
         SearchCursor(
             binding=request.binding,

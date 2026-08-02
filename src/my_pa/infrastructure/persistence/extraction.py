@@ -17,15 +17,56 @@ be passed in, and the table it writes has no column content could be stored in.
 The two together are why "quarantine stores IDs and safe reason codes, not
 payloads" is a property of the code rather than a promise about how it is called.
 
-**An enrollment's authorized object set is enforced, on both sides.** Filtering
-by `enrollment_id` alone is not an authorization boundary: nothing in the schema
-ties an outcome's `source_object_id` to the objects its enrollment named, so a
-row written for any object at all would be counted and returned as if it were in
-scope. `authorized_object` is the one definition of what an enrollment
-authorizes — an object of the enrollment's own source, and, where the enrollment
-named its objects, one of those — and it is applied by every count in
+**An enrollment authorizes in two dimensions, and both are enforced.** Section
+9.6 makes an enrollment request a selector *and* a content-type allowlist, so
+"what this enrollment authorizes" is two stored facts and not one:
+`enrollments.object_ids` with `enrollments.source_id`, and
+`enrollments.media_types`. `authorized_object` is the whole of the first and
+`authorized_media_type` is the whole of the second. Neither is a definition of
+the other, and this module said for five review rounds that the first was the
+only one, which is how the second went unenforced everywhere.
+
+**The object dimension.** Filtering by `enrollment_id` alone is not an
+authorization boundary: nothing in the schema ties an outcome's
+`source_object_id` to the objects its enrollment named, so a row written for any
+object at all would be counted and returned as if it were in scope.
+`authorized_object` is an object of the enrollment's own source, and, where the
+enrollment named its objects, one of those. It is applied by every count in
 `coverage_for` and by the search predicate that reads the same rows. The write
 path refuses the same objects through `UnauthorizedObjectError`.
+
+**The content dimension, and exactly how far it reaches.** The allowlist governs
+*extracted text*: which content types this enrollment authorizes being read out
+of an object and stored. So `authorized_media_type` restricts the `processed`
+count and `persistence.search`'s match predicate, and `record_outcome` refuses an
+extracted outcome whose media type the enrollment did not allow.
+
+It deliberately does not restrict the `unsupported` count, the `quarantined`
+count, or `quarantine_object`, and each of those is a decision with a reason
+rather than a place it was forgotten:
+
+* An `unsupported` row stores no text — the check constraint tying `text` to
+  `status` makes that a property of the table — and it is precisely the
+  section 12 report that an object's media type is one this extractor does not
+  read. Through `extract_text` such a row's media type is always outside
+  `SUPPORTED_MEDIA_TYPES`, so gating this count by the allowlist would erase the
+  report for exactly the objects it exists to report, and would leave an
+  operator having to allowlist `application/pdf` — authorizing its content — in
+  order to be told that PDFs are there.
+* A quarantine stores no media type at all: `quarantine_records` has no such
+  column and `quarantine_object` has no such parameter, so there is nothing to
+  compare. Supplying one from the outcome would be worse than having none. The
+  case where a media type is most relevant to a quarantine is
+  `MEDIA_TYPE_CONFLICTS_WITH_SIGNATURE`, where the declared type is the fact in
+  dispute, and gating on it would let a mislabelled object suppress the record
+  that it was mislabelled.
+
+What that costs, stated rather than left to be found: `unsupported` and
+`quarantined` can count an object whose content type the enrollment never
+allowed. Neither count discloses content, both are counts of objects section
+9.2 permits, and a caller whose enumeration filtered by the allowlist while its
+writer did not can hand `coverage_for` a denominator its rows no longer fit
+inside — which raises, in the direction that fails rather than overclaims.
 
 For an enrollment that named its objects that makes the inconsistent state
 impossible to create rather than merely unreported: the set is stored, so both
@@ -40,6 +81,34 @@ it in the envelope rather than leaving a caller to infer it.
 The two halves are not redundant. The read side has to hold against rows already
 stored, written by hand, or written before the write side existed; the write side
 is what stops new ones. Neither would be enough alone.
+
+**Two rules about conditions, stated once and applied to every condition in this
+module and in `persistence.search`.** The branch has been blocked repeatedly for
+applying a principle at one site and not at its neighbours, so both rules are
+written here rather than argued at each occurrence.
+
+*A condition that restricts rows or branches on derived state, and that no
+arrangement of rows can make decide anything, is removed.* It is not defence in
+depth; it is a claim nothing checks, and this package has now been wrong in that
+direction more than once. The rule is why the boundary is absent from the two
+precedence subqueries in `coverage_for`, why `persistence.search` no longer tests
+`eligible > 0` before claiming complete coverage, and why `match_statement` no
+longer filters on `status`. The single exception is a condition the type checker
+requires in order to narrow a value: `record_outcome`'s missing-reason check is
+one, and it is written as the narrowing it is and says so where it stands.
+
+*Every identifier crossing a public boundary of this module is validated at that
+boundary, before anything else, whether or not a callee would reject it too.*
+Two of those calls are behaviourally undecidable, and they are the two that
+`authorized_object` reaches: it validates the enrollment identifier that
+`record_outcome` and `quarantine_object` have already validated, so deleting
+either raises the identical error from a few lines further in. They are kept
+anyway, because the rule above is about conditions that decide *rows* and this
+one is about a function's precondition. Removing the duplicates would make each
+function's precondition a property of which callee it happens to reach, which
+is the opposite of a checkable claim; keeping them uniformly means a reader never
+has to trace one. Which of the two rules a condition falls under is decided by
+what the condition is for, not by whether a test happens to reach it.
 
 **Coverage is read for a stated enrollment and snapshot.** `coverage_for` counts
 what this schema stores and requires the caller to state what it does not: the
@@ -95,6 +164,7 @@ from my_pa.infrastructure.persistence.tables import (
 
 __all__ = [
     "UnauthorizedObjectError",
+    "authorized_media_type",
     "authorized_object",
     "coverage_for",
     "quarantine_object",
@@ -123,6 +193,13 @@ class UnauthorizedObjectError(Exception):
     the only thing that makes the refusal actionable: a caller persisting a batch
     of outcomes has to know which one was refused, and an error naming neither
     would leave it re-deriving that from the batch.
+
+    The message says which of the two dimensions refused — the object, or its
+    content type — and never the media type itself. Which dimension is as
+    actionable as which outcome: a caller told only "unauthorized" would not know
+    whether to fix the scope it enumerated or the types it extracted. The *value*
+    is a different thing and stays out, so the message says no more about the
+    enrollment's allowlist than that the type offered was not in it.
 
     That is the opposite decision from `persistence.search`'s errors, which carry
     nothing at all, and the difference is who receives them. Those cross back to
@@ -211,6 +288,55 @@ def authorized_object(
     )
 
 
+def authorized_media_type(
+    media_type: ColumnElement[Any], *, enrollment_id: str
+) -> ColumnElement[bool]:
+    """Whether `enrollment_id` allows extracted text of the type `media_type` names.
+
+    The whole of the content dimension, written once and used by the one count
+    and the one statement that read stored text. `enrollments.media_types` *is*
+    that allowlist: it is `NOT NULL`, `enrollment_allows_some_content_type`
+    keeps it non-empty, and `domain.source.enrollment` normalizes every entry to
+    a bare lower-case `type/subtype` before it is stored, so the comparison is a
+    set membership and not a parse.
+
+    Fails closed in both of the ways it can be asked something it has no answer
+    to. A `NULL` media type is not a member of any array — `NULL = ANY(…)` is
+    `NULL`, the subquery returns no row, and the predicate is false — so an
+    outcome whose type nothing identified is not authorized rather than
+    generously admitted. An allowlist naming a type this extractor cannot read
+    authorizes no extracted text at all: an extracted row's media type is
+    confined to `SUPPORTED_MEDIA_TYPES` by
+    `only_a_supported_media_type_is_extracted`, so an enrollment allowing only
+    `application/pdf` matches nothing here, and that is the honest answer while
+    `P00-OD-003` is open rather than a case to special-case.
+
+    **No `correlate_except`, and that is measured rather than an oversight.**
+    `authorized_object` needs one and says why at length: it names two tables, so
+    an enclosing statement that selects from either can capture it and the
+    predicate stops answering about its argument. This names one. SQLAlchemy will
+    not correlate away a subquery's only `FROM` element — it would leave the
+    subquery with nothing to select from — so `enrollments` is resolved here
+    whatever encloses this, and adding the call changes not one character of the
+    compiled SQL. It was compiled both ways against an enclosing statement over
+    `enrollments`, which is the case that could distinguish them, and the two are
+    byte-identical;
+    `test_the_content_type_predicate_resolves_its_own_table_whatever_encloses_it`
+    asserts the property the call would have bought. Writing the call anyway
+    would be a claim nothing checks, which is the rule this module states once.
+    A second table in this predicate would change that, and would need it.
+    """
+    validate_identifier(enrollment_id, IdKind.ENROLLMENT)
+    return (
+        select(literal(1))
+        .where(
+            enrollments.c.enrollment_id == enrollment_id,
+            media_type == any_(enrollments.c.media_types),
+        )
+        .exists()
+    )
+
+
 def _refuse_an_unauthorized_object(
     connection: Connection, *, enrollment_id: str, source_object_id: str
 ) -> None:
@@ -228,6 +354,30 @@ def _refuse_an_unauthorized_object(
     if not authorized:
         raise UnauthorizedObjectError(
             f"enrollment {enrollment_id} does not authorize object {source_object_id}"
+        )
+
+
+def _refuse_an_unauthorized_media_type(
+    connection: Connection, *, enrollment_id: str, source_object_id: str, media_type: str | None
+) -> None:
+    """Raise unless `enrollment_id` allows extracted text of type `media_type`.
+
+    A second round trip rather than a second column on the first, so that the
+    two dimensions stay two statements a reader can delete one of and watch fail
+    separately. The object is checked first because it is the wider refusal: a
+    caller told its content type was wrong for an object it was never entitled
+    to touch would fix the wrong thing.
+
+    Called only where an outcome would store extracted text. The module
+    docstring says why an unsupported row and a quarantine are not its business.
+    """
+    authorized = connection.execute(
+        select(authorized_media_type(literal(media_type, Text), enrollment_id=enrollment_id))
+    ).scalar_one()
+    if not authorized:
+        raise UnauthorizedObjectError(
+            f"enrollment {enrollment_id} does not authorize the content type of "
+            f"object {source_object_id}"
         )
 
 
@@ -254,6 +404,12 @@ def record_outcome(
     authorize, before anything is written. The check is `authorized_object`'s,
     so an enrollment that named its objects admits only those; one that named a
     root has no stored object set and is restricted by its source alone.
+
+    Raises it again, naming the content type rather than the object, for an
+    *extracted* outcome whose media type the enrollment's allowlist does not
+    hold. Only for an extracted one: that is the outcome that stores text, which
+    is what the allowlist governs, and the module docstring gives the reasons the
+    unsupported and quarantined paths are not gated by it.
     """
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     provenance = outcome.provenance
@@ -261,9 +417,14 @@ def record_outcome(
     if outcome.status is ExtractionStatus.QUARANTINED:
         reason = outcome.quarantine_reason
         if reason is None:
-            # `ExtractionOutcome` refuses to exist in this state. Checked rather
-            # than asserted because a quarantine written without its reason
-            # would be a record that cannot be reviewed.
+            # The narrowing `quarantine_object`'s signature requires, and the one
+            # exception to this module's rule about unreachable conditions:
+            # `ExtractionOutcome` refuses to exist in this state, so no arrangement
+            # of arguments reaches the raise, but `quarantine_reason` is
+            # `QuarantineReason | None` and the call below takes `QuarantineReason`.
+            # A `raise` rather than an `assert` because a quarantine written without
+            # its reason would be a record that cannot be reviewed, and because
+            # `assert` is not a check under `-O`.
             raise ValueError("a quarantined outcome carries a reason")
         return quarantine_object(
             connection,
@@ -281,6 +442,13 @@ def record_outcome(
         enrollment_id=enrollment_id,
         source_object_id=provenance.source_object_id,
     )
+    if outcome.status is ExtractionStatus.EXTRACTED:
+        _refuse_an_unauthorized_media_type(
+            connection,
+            enrollment_id=enrollment_id,
+            source_object_id=provenance.source_object_id,
+            media_type=outcome.media_type,
+        )
 
     statement = (
         pg_insert(extractions)
@@ -304,6 +472,10 @@ def record_outcome(
     )
     inserted = connection.execute(statement).scalar_one_or_none()
     if inserted is not None:
+        # A round trip saved, not a check, and it is worth saying which: the read
+        # below would find this transaction's own row and return the same
+        # identifier, so deleting these two lines changes nothing but the cost.
+        # Nothing pins it and nothing should — there is no wrong answer to catch.
         return str(inserted)
 
     # The insert conflicted, so the row exists and was committed by someone
@@ -345,6 +517,16 @@ def quarantine_object(
     and the row it left was counted as coverage of that enrollment's scope. For
     an enrollment that named a root there is no stored object set to check
     against, so only its source is checked; `authorized_object` records why.
+
+    The object is the only dimension checked here, and that is stated rather than
+    left implied. A quarantine carries no media type — this function has no such
+    parameter and `quarantine_records` has no such column — so there is nothing
+    for `authorized_media_type` to compare. Taking one from the caller instead
+    would be worse than having none: the quarantine whose media type is most
+    load-bearing is `MEDIA_TYPE_CONFLICTS_WITH_SIGNATURE`, where the declared
+    type is exactly the fact under dispute, and refusing the record on the
+    strength of it would let a mislabelled object suppress the record that it was
+    mislabelled.
     """
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     validate_identifier(source_object_id, IdKind.SOURCE_OBJECT)
@@ -454,6 +636,18 @@ def coverage_for(
     is what leaves the result partial, and that is the direction this must fail
     in.
 
+    `processed` carries the content dimension as well, and only `processed`
+    does. It is the count of objects whose *text* was read and stored, so an
+    extracted row of a media type the enrollment's allowlist does not hold is not
+    coverage of that enrollment either, and it is not counted — it stays
+    uncounted rather than moving to another count, which leaves the result
+    partial in the same safe direction. `unsupported` and `quarantined` count
+    objects whose content was never stored and are deliberately not restricted
+    this way; the module docstring gives the reason for each, and
+    `test_an_unsupported_object_is_counted_and_not_searchable` and
+    `test_an_object_quarantined_and_recorded_unsupported_is_counted_once` are
+    what would fail if either acquired the restriction.
+
     Counted for the whole enrollment rather than for one pass, because that is
     the scope the grant defines and an outcome does not stop being true when the
     next pass starts. Limitations are matched to the snapshot exactly: a
@@ -517,6 +711,10 @@ def coverage_for(
     extraction_is_authorized = authorized_object(
         extractions.c.source_object_id, enrollment_id=enrollment_id
     )
+    # The content dimension, applied to the one count that counts stored text.
+    text_is_authorized = authorized_media_type(
+        extractions.c.media_type, enrollment_id=enrollment_id
+    )
 
     # The two subqueries are the precedence, written once and subtracted from
     # the counts that rank below them. Neither is executed on its own; each
@@ -562,6 +760,7 @@ def coverage_for(
             extractions.c.enrollment_id == enrollment_id,
             extractions.c.status == ExtractionStatus.EXTRACTED.value,
             extraction_is_authorized,
+            text_is_authorized,
             extractions.c.source_object_id.not_in(quarantined_objects),
             extractions.c.source_object_id.not_in(unsupported_objects),
         )

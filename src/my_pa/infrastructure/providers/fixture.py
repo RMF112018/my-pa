@@ -62,6 +62,25 @@ raised *outside* the `except` block that observed the failure, which is what
 actually leaves `__context__` empty. A test asserts it, because the difference
 between the two spellings is invisible on inspection.
 
+**Unavailable is not denied, and neither leaks the other's information.** A
+refusal and a resource shortage are different rows of the section 10 table:
+`denied` is retryable only when authority changes, `unavailable` is
+conditionally retryable, and `INV-PKL-007` forbids converting one into the
+other. `fetch` therefore classifies the failure of its `open` by errno rather
+than folding every `OSError` into a refusal -- see `_is_unavailable` for the
+list and for why the *default* is denial.
+
+Widening a class that a caller can distinguish is where an existence oracle
+would come from, so it is worth stating exactly why this one is not. Three
+things hold it closed. The classification runs only in `fetch`, and `fetch` is
+reached only for an identifier this instance issued *and* observed: containment,
+issuance, and prior observation are all proved before the `open` is attempted,
+so a caller who reaches this code already knows the object existed. Every
+unavailable errno produces one sentence, exactly as every denial does, so the
+class cannot be subdivided by reading the message. And the classification is an
+allowlist -- an errno nobody enumerated is a denial -- so a future errno cannot
+join the retryable class by accident.
+
 **Identifier lifetime.** `obj_` and `ver_` suffixes are `secrets.token_hex`
 output. They are not derived from the path, from a hash of the path, or from any
 stat field, because a suffix that encoded one would defeat `INV-PKL-005` while
@@ -80,6 +99,7 @@ single call can walk a volume (`docs/specs` section 9.2).
 
 from __future__ import annotations
 
+import errno
 import os
 import secrets
 from collections.abc import Iterator
@@ -105,6 +125,57 @@ __all__ = ["MEDIA_TYPES", "FixtureSourceProvider", "resolve_within"]
 #: and refused have to be indistinguishable, and the cheapest way to keep them
 #: so is to give them nothing to differ in.
 _DENIAL: Final = "cannot be served from the configured source"
+
+#: The one sentence every unavailability uses, for the same reason `_DENIAL` is
+#: one sentence: a caller that could tell a descriptor shortage from a device
+#: error could tell them apart in the message even when it could not in the
+#: type, and the difference is of no use to a caller and of some use to a prober.
+_UNAVAILABLE: Final = "is temporarily unavailable from the configured source"
+
+#: Errnos that mean "the object may well be fine; the machine or the transport
+#: is not". Each is a resource shortage or a transient I/O condition, and every
+#: one of them is a state the *same call* can succeed in a moment later, which
+#: is precisely what `unavailable`'s conditional retry guidance is for.
+#:
+#:  `EMFILE`     this process is out of descriptors.
+#:  `ENFILE`     the machine is out of descriptors.
+#:  `EBADF`      also this process out of descriptors -- see below.
+#:  `ENOMEM`     the kernel could not allocate for the open.
+#:  `EIO`        a low-level I/O failure reaching the object.
+#:  `ESTALE`     a network filesystem's handle went stale underneath us.
+#:  `ETIMEDOUT`  a deadline, which is also what `TimeoutError` carries.
+#:
+#: `EBADF` is here on measured evidence and it is the entry most likely to look
+#: wrong, so the measurement is written down. POSIX specifies `EMFILE` for a
+#: process at its descriptor limit, and Linux returns it. On the Darwin build
+#: this work was done against, exhausting `RLIMIT_NOFILE` makes `open`, `dup`,
+#: `pipe`, and `socket` alike report `EBADF`, at the libc layer as well as
+#: through CPython -- so an `EMFILE`-only classification leaves the exact
+#: reproduction the finding was raised from still answering `denied`. What makes
+#: it safe rather than merely necessary is the call it is classifying:
+#: `os.open(path, flags)` is given no descriptor, so `EBADF` cannot mean "the
+#: descriptor you passed was bad", and there is no other condition it names
+#: here. This classification is therefore specific to that one call site, and
+#: reusing this set for a call that does take a descriptor -- `os.fstat`,
+#: `os.read`, an `openat` with a `dir_fd` -- would be wrong.
+#:
+#: Not a general "transient" list. `EAGAIN`, `EBUSY`, `EINTR`, and the socket
+#: errnos a network filesystem can also surface are deliberately absent:
+#: `EINTR` is retried by CPython before it reaches here (PEP 475), and the rest
+#: have no demonstrated occurrence at this boundary. Adding one is a deliberate
+#: edit with a case behind it, which is the only way an allowlist stays an
+#: allowlist.
+_UNAVAILABLE_ERRNOS: Final[frozenset[int]] = frozenset(
+    {
+        errno.EBADF,
+        errno.EIO,
+        errno.EMFILE,
+        errno.ENFILE,
+        errno.ENOMEM,
+        errno.ESTALE,
+        errno.ETIMEDOUT,
+    }
+)
 
 #: Media types this provider recognises by file extension. `text/plain` and
 #: `text/markdown` are the supported baseline; `application/pdf` is *reported*
@@ -240,6 +311,31 @@ def _media_type(path: Path) -> str | None:
     return MEDIA_TYPES.get(path.suffix.lower())
 
 
+def _is_unavailable(error: OSError) -> bool:
+    """Report whether `error` is a shortage rather than a refusal.
+
+    An allowlist, and the direction matters more than the membership. Anything
+    not enumerated -- including an errno that does not exist yet, and an
+    `OSError` carrying no errno at all -- is a denial, so the failure mode of
+    this function is to refuse something retryable rather than to tell a caller
+    to keep retrying something it will never be allowed to have. That is also
+    what keeps the class from becoming an existence oracle: a new errno cannot
+    join it by resembling the ones already in it.
+
+    `TimeoutError` is checked by type as well as by errno because the two do not
+    agree across platforms. `ETIMEDOUT` is 60 on Darwin and 110 on Linux, and
+    CPython raises `TimeoutError` for `ETIMEDOUT` on both; a test that
+    constructs one with a fixed errno would otherwise pass on one platform and
+    fail on the other, and this is the boundary where that must not depend on
+    where the suite ran.
+
+    It takes the exception rather than reading it in place at the call site, so
+    that the classification happens where it can be tested directly and the
+    caller's `except` block stays free of anything but recording the answer.
+    """
+    return isinstance(error, TimeoutError) or error.errno in _UNAVAILABLE_ERRNOS
+
+
 class FixtureSourceProvider(SourceProvider):
     """Read-only access to the fixture tree under one configured root.
 
@@ -350,6 +446,20 @@ class FixtureSourceProvider(SourceProvider):
         A `VersionChangedError` does not silently re-observe the object. The
         caller has to call `metadata` again and decide what a changed object
         means to it, which is what "retry after refresh" requires.
+
+        A failed `open` is classified by errno rather than refused wholesale;
+        `_is_unavailable` holds the list and the reasoning. The boundary of that
+        fix is worth writing down rather than leaving to be discovered. It
+        covers the `open` and nothing else, so an `EIO` from `os.read` still
+        leaves this method as an unclassified `OSError`, and an `ENOMEM` from
+        `_observe`'s `stat` is still a denial. Neither is free to change here:
+        the read sits inside the `finally` that owns the descriptor, and
+        `_observe` is called per entry from `list_children` under an
+        `except TraversalDeniedError: continue`, so a shortage raised from there
+        would abort a whole listing over one unreadable entry -- the regression
+        `test_one_looping_symlink_does_not_abort_the_whole_listing` exists to
+        prevent. Both want coverage plumbing that does not exist yet, which is
+        the same thing the hard-link finding in the completion plan wants.
         """
         if max_bytes < 0:
             raise ValueError("max_bytes cannot be negative")
@@ -361,25 +471,29 @@ class FixtureSourceProvider(SourceProvider):
             # against, so there is nothing safe to return.
             raise TraversalDeniedError(f"{source_object_id} {_DENIAL}")
 
-        descriptor: int | None
-        timed_out = False
+        descriptor: int | None = None
+        unavailable = False
         try:
             descriptor = os.open(path, _OPEN_FLAGS)
-        except TimeoutError:
-            # `TimeoutError` is an `OSError`, so the handler below would have
-            # turned a deadline into a denial. They are different rows of the
-            # section 10 table: `unavailable` is conditionally retryable and
-            # `denied` is not, and `INV-PKL-007` says unavailable evidence is
-            # never converted into something else. Reported as the base
-            # `ProviderError` -- the port defines no narrower class, and
-            # inventing one is not this work package's to do.
-            descriptor = None
-            timed_out = True
-        except OSError:
-            descriptor = None
-        if timed_out:
-            raise ProviderError(f"{source_object_id} could not be read in time")
+        except OSError as error:
+            # Classified, not swallowed. A blanket handler here reported a
+            # descriptor shortage, a device error, and a stale network handle as
+            # refusals, telling the caller to stop retrying something that was
+            # only unavailable -- which `INV-PKL-007` forbids and which a
+            # reviewer demonstrated with `RLIMIT_NOFILE` clamped.
+            #
+            # Only the answer is recorded here. Both raises are outside the
+            # handler, so neither exception inherits this `OSError` through
+            # `__context__`; an `OSError` renders with the path it failed on, so
+            # the two spellings differ by a disclosure.
+            unavailable = _is_unavailable(error)
         if descriptor is None:
+            if unavailable:
+                # The base `ProviderError`: the port defines no narrower class,
+                # and inventing one is not this work package's to do. What the
+                # caller needs is the distinction from `TraversalDeniedError`,
+                # which it has.
+                raise ProviderError(f"{source_object_id} {_UNAVAILABLE}")
             raise TraversalDeniedError(f"{source_object_id} {_DENIAL}")
         try:
             opened = os.fstat(descriptor)

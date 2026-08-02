@@ -1,4 +1,4 @@
-"""The `knowledge` schema: configured sources, observed objects, enrollment, jobs.
+"""The `knowledge` schema: sources, objects, enrollment, jobs, and extraction.
 
 This is the application's own schema and it is deliberately not any of the ones
 that already exist. The eight domain schemas hold the migrated legacy corpus and
@@ -8,20 +8,31 @@ retry in the same tables, and would put application code on the write path of
 migration governance state. Two planes with different lifetimes, different
 writers, and different authority do not share a schema.
 
-Four concerns, five tables, and nothing else. There is no outbox, no scheduler,
+Seven concerns, eight tables, and nothing else. There is no outbox, no scheduler,
 no priority column, no soft-delete flag, and no audit mirror: each of those
 would be a mechanism with no caller, and `AGENTS.md` section 2 rules them out
 until one exists.
 
-Nothing here stores content. `native_root` and `native_locator` are the only
-provider-native values in the schema, they exist because an opaque identifier
-has to resolve back to something, and no domain type carries either of them.
-Everything else is an opaque identifier, an enumerated code, a bounded token, or
-a count.
+Exactly one column in the schema holds content: `extractions.text`, which is
+derived text bound to the version it was extracted from. It is personal data by
+default and it is confined to that one place on purpose, so the question "where
+could a document body be" has one answer. `quarantine_records` in particular has
+no column a payload could go in, which is the structural half of the section 12
+rule that a quarantine stores identifiers and codes and not the thing that
+failed.
 
-The tables are declared once here and used by both the Alembic revision that
-creates them and the modules that write to them, so the schema applied and the
-schema assumed cannot drift apart.
+`native_root` and `native_locator` are the only provider-native values in the
+schema, they exist because an opaque identifier has to resolve back to something,
+and no domain type carries either of them. Everything else is an opaque
+identifier, an enumerated code, a bounded token, a timestamp, or a count.
+
+The tables are declared once here and used by both the Alembic revisions that
+create them and the modules that write to them, so the schema applied and the
+schema assumed cannot drift apart. Each revision names the tables it creates
+explicitly: this `MetaData` is shared, so a revision that created "everything
+declared here" would change meaning every time a table was added to this module.
+`tests/schema/test_extraction_schema_migration.py` asserts that correspondence
+per revision.
 """
 
 from __future__ import annotations
@@ -32,6 +43,7 @@ from typing import Final
 from sqlalchemy import (
     ARRAY,
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -43,10 +55,15 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.classification import Classification
+from my_pa.domain.common.provenance import TrustLevel
+from my_pa.domain.extraction.coverage import LimitationReason
+from my_pa.domain.extraction.quarantine import QuarantineReason, QuarantineReviewState
+from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
     MAX_ENROLLMENT_DEPTH,
@@ -87,9 +104,22 @@ class JobState(StrEnum):
     FAILED = "failed"
 
 
-def _one_of(column: str, values: type[StrEnum]) -> CheckConstraint:
-    literals = ", ".join(f"'{member.value}'" for member in values)
-    return CheckConstraint(f"{column} IN ({literals})", name=f"{column}_is_known")
+def _literals(values: type[StrEnum] | frozenset[str]) -> str:
+    members = values if isinstance(values, frozenset) else [member.value for member in values]
+    return ", ".join(f"'{value}'" for value in sorted(members))
+
+
+def _one_of(
+    column: str, values: type[StrEnum] | frozenset[str], *, name: str | None = None
+) -> CheckConstraint:
+    """Constrain `column` to a closed set, naming the constraint after it.
+
+    `name` overrides the default where two tables constrain a column of the same
+    name against different sets; PostgreSQL would accept both, but a reader
+    seeing two `reason_is_known` constraints in one schema cannot tell which is
+    which.
+    """
+    return CheckConstraint(f"{column} IN ({_literals(values)})", name=name or f"{column}_is_known")
 
 
 #: One row per configured source. `native_root` is the provider's own name for
@@ -284,4 +314,196 @@ jobs = Table(
         name="attempts_are_bounded",
     ),
     Index("jobs_by_state", "state", "created_at"),
+)
+
+#: One row per object that reached an extraction outcome, under one enrollment.
+#:
+#: A quarantined object is *not* a row here. It is a row in `quarantine_records`,
+#: because the two carry different facts and because one of them must never
+#: carry text: a single table with a nullable `text` column would put the
+#: quarantine path one forgotten `WHERE` clause away from storing the payload
+#: that caused it.
+#:
+#: `status` is what makes `unsupported` explicit rather than absent. Section 12
+#: requires unsupported media to be reported and never silently skipped, and a
+#: skipped object leaves no row at all, so the difference between "we looked and
+#: it is a PDF" and "we never looked" has to be a stored value. `text IS NULL`
+#: for such a row, and the check constraint ties the two together so neither can
+#: be written without the other.
+#:
+#: `media_type` is nullable because "not identified" is a real answer for an
+#: object whose type the provider could not name, and it is not the same answer
+#: as `text/plain`. An extracted row must name a supported type: the constraint
+#: is what stops a future writer from filing a PDF's bytes as text while
+#: `P00-OD-003` is open.
+#:
+#: `trust_level` is a column with one permitted value. That is deliberate rather
+#: than redundant: `INV-PKL-003` says derived text never carries source
+#: authority, and a column that can only be `source_bound_derived` means no
+#: writer, hand-run statement, or later revision can file derived text as
+#: original.
+extractions = Table(
+    "extractions",
+    METADATA,
+    Column("extraction_id", Text, primary_key=True),
+    Column(
+        "enrollment_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.enrollments.enrollment_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "source_object_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.source_objects.source_object_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.source_object_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("status", Text, nullable=False),
+    Column("media_type", Text),
+    Column("extractor", Text, nullable=False),
+    Column("extractor_version", Text, nullable=False),
+    Column(
+        "trust_level", Text, nullable=False, server_default=TrustLevel.SOURCE_BOUND_DERIVED.value
+    ),
+    Column("text", Text),
+    Column("is_truncated", Boolean, nullable=False, server_default="false"),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("processed_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _one_of("status", ExtractionStatus, name="extraction_status_is_known"),
+    CheckConstraint(
+        f"trust_level = '{TrustLevel.SOURCE_BOUND_DERIVED.value}'",
+        name="derived_text_is_never_source_original",
+    ),
+    CheckConstraint(
+        f"(status = '{ExtractionStatus.EXTRACTED.value}') = (text IS NOT NULL)",
+        name="text_exists_exactly_when_something_was_extracted",
+    ),
+    CheckConstraint(
+        f"status <> '{ExtractionStatus.EXTRACTED.value}' "
+        f"OR media_type IN ({_literals(SUPPORTED_MEDIA_TYPES)})",
+        name="only_a_supported_media_type_is_extracted",
+    ),
+    CheckConstraint("processed_at >= observed_at", name="extraction_follows_its_observation"),
+    # One outcome per observed version per enrollment. Re-running extraction over
+    # an unchanged object is a retry and must not accumulate rows; a changed
+    # object has a new `ver_…` and therefore a new row, which is what keeps the
+    # text attributable to the bytes it came from.
+    UniqueConstraint(
+        "enrollment_id", "version_id", name="one_extraction_per_version_per_enrollment"
+    ),
+    Index("extractions_by_enrollment", "enrollment_id", "status"),
+    # A functional GIN index over the same expression the search predicate uses.
+    # There is no stored `tsvector` column and no trigger to maintain one, so the
+    # expression here and the one in `persistence.search` must stay equal *as
+    # expressions*: PostgreSQL matches a functional index by the expression tree,
+    # not by the text, so the two need not read the same and in fact do not — the
+    # index is written over `text` and the predicate compiles to
+    # `to_tsvector('english', knowledge.extractions.text)`, which is a different
+    # string for the same tree and matches. What breaks the match is anything
+    # that changes the tree, such as a different text-search configuration, and
+    # it breaks silently: the query drops back to a sequential scan that still
+    # returns correct rows.
+    # `test_the_search_predicate_uses_the_functional_index_and_not_a_sequential_scan`
+    # proves the plan, not just the result.
+    Index(
+        "extractions_full_text",
+        text("to_tsvector('english', text)"),
+        postgresql_using="gin",
+    ),
+)
+
+#: One row per object whose processing was stopped, and why.
+#:
+#: Append-only. Section 12 requires reprocessing to be "explicit bounded recovery
+#: and new operation/audit", so a second quarantine of the same object is a
+#: second event rather than an update of the first, and there is no unique
+#: constraint pretending otherwise.
+#:
+#: There is no column here that a payload fits in: identifiers, two enumerated
+#: codes, and a timestamp. That is the point of the table's shape, not an
+#: accident of its current fields.
+#:
+#: `version_id` is nullable because a containment failure can occur before any
+#: version was observed. Recording a version that was never proven would
+#: attribute the quarantine to bytes nobody saw.
+quarantine_records = Table(
+    "quarantine_records",
+    METADATA,
+    Column("quarantine_id", Text, primary_key=True),
+    Column(
+        "enrollment_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.enrollments.enrollment_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "source_object_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.source_objects.source_object_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.source_object_versions.version_id", ondelete="CASCADE"),
+    ),
+    Column("reason", Text, nullable=False),
+    Column(
+        "review_state",
+        Text,
+        nullable=False,
+        server_default=QuarantineReviewState.PENDING_REVIEW.value,
+    ),
+    Column("quarantined_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _one_of("reason", QuarantineReason, name="quarantine_reason_is_known"),
+    _one_of("review_state", QuarantineReviewState, name="quarantine_review_state_is_known"),
+    Index("quarantine_records_by_enrollment", "enrollment_id"),
+)
+
+#: One row per (enrollment, snapshot, reason): how many objects a result does not
+#: account for, and why, with nothing that says which.
+#:
+#: This is the plumbing `docs/plans/mcv-completion-plan.md` section 10 says is
+#: missing. An object the provider refuses is omitted from a listing with no
+#: signal, which converts present evidence into "not there"; section 9.2 permits
+#: "safe aggregate limitations may be disclosed" and this is where the layer
+#: above the provider puts one.
+#:
+#: The table has no `source_object_id` column and no locator column, and it never
+#: will have one — with either, the aggregate would become a per-object existence
+#: disclosure, which is the side channel section 9.2 forbids in the same
+#: sentence that permits the aggregate. `affected_count` is the entire detail.
+#:
+#: The unique key includes `observed_at` because coverage is stated for a
+#: snapshot. One listing pass uses one snapshot timestamp for all of its pages,
+#: so the count accumulates across pages of that pass and a later pass records
+#: its own row rather than editing history.
+coverage_limitations = Table(
+    "coverage_limitations",
+    METADATA,
+    Column("limitation_id", Text, primary_key=True),
+    Column(
+        "enrollment_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.enrollments.enrollment_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("affected_count", Integer, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _one_of("reason", LimitationReason, name="limitation_reason_is_known"),
+    CheckConstraint("affected_count >= 1", name="a_limitation_affects_at_least_one_object"),
+    UniqueConstraint(
+        "enrollment_id",
+        "observed_at",
+        "reason",
+        name="one_limitation_per_reason_per_snapshot",
+    ),
 )

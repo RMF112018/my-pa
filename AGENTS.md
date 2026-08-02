@@ -155,9 +155,24 @@ A normal MCV change uses:
 3. a focused pull request using the repository template;
 4. proportionate automated checks;
 5. review against the exact head;
-6. squash merge and branch cleanup by the operator.
+6. squash merge and branch cleanup by the operator, or by a delegated orchestration agent under section 8.1.
 
-Do not push directly to protected `main`. Do not self-approve, self-merge, accept risk, deploy, or activate production. Later commits invalidate prior exact-head review.
+Do not push directly to protected `main`. Do not self-approve, accept risk, deploy, or activate production. Merge only under section 8.1 or explicit operator instruction. Later commits invalidate prior exact-head review.
+
+### 8.1 Delegated merge authority
+
+The operator may delegate squash merge and branch cleanup to one orchestration agent. The delegation is bounded by the conditions that make it safe and confers nothing else. The current designation is recorded in the pull request that establishes it.
+
+A delegated merge is permitted only when all of the following hold:
+
+- the exact head has passed an independent review by a context that did not author the change, that had authority to block, and that was not instructed toward an outcome;
+- that review is against the current head, since a later commit invalidates it and this permission with it;
+- the applicable test tier passes, and its result is stated rather than assumed;
+- the change carries no operator-only action.
+
+The delegated agent may not approve its own change, act as its own reviewer, or widen this delegation. Risk acceptance, deployment, production activation, credential mutation, destructive data operations, live personal-data access, and amendment of this policy remain operator-only.
+
+The operator may withdraw the delegation at any time, and it does not survive a change of objective. A merge performed under it names the reviewing context and the reviewed head, so the authority a merge rested on stays legible afterwards.
 
 Use ADRs only for durable, cross-cutting, difficult-to-reverse decisions. Ordinary implementation choices belong in code, tests, issues, and pull requests. Update documentation only when behavior, contracts, architecture, operations, or developer workflow materially changes.
 

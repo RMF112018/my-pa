@@ -56,7 +56,7 @@ direct instruction, mirrored at [`docs/specs/canonical-product-definition/`](doc
 It settles what the product means; it grants no implementation authority, does
 not outrank repository policy, and did not change the plan — its own roadmap
 puts finishing WP-4 and WP-5 first, which is what this plan already sequenced.
-The thirty operator decisions it carries remain open. Section 15 records the
+The thirty-nine operator decisions it carries remain open. Section 15 records the
 reconciliation and the instrument it rests on.
 
 ## Approved architectural decisions

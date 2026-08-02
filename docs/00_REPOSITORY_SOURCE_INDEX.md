@@ -24,7 +24,7 @@
 
 - [`docs/specs/README.md`](specs/README.md) — owning index for specifications, and the provenance and verification strength of every mirrored package below.
 - [`docs/specs/mcv-read-only-vertical-slice.md`](specs/mcv-read-only-vertical-slice.md) — read-only Minimum Viable Candidate (MCV) capability, error, and disclosure contract.
-- [`docs/specs/canonical-product-definition/`](specs/canonical-product-definition/00_README.md) — mirror of the **ratified** canonical whole-product definition (`MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, Drive folder `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`). Ratified 2026-08-02; supersedes `my-pa vNext` for current whole-product definition. Grants no implementation authority.
+- [`docs/specs/canonical-product-definition/`](specs/canonical-product-definition/00_README.md) — mirror of the canonical whole-product definition (`MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, Drive folder `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`). **Ratified 2026-08-02 by direct operator instruction**, which is the instrument — the package's own `CURRENT_CANONICAL_PRODUCT_DEFINITION` is a self-declared status and is not ratification. See [`docs/plans/mcv-completion-plan.md`](plans/mcv-completion-plan.md) `D-19` and section 15, and [`docs/specs/README.md`](specs/README.md) for provenance. Supersedes `my-pa vNext` for current whole-product definition. Grants no implementation authority.
 - [`docs/specs/relationship-intelligence-v0.2.md`](specs/relationship-intelligence-v0.2.md) — mirror of the Relationship Intelligence product specification, promoted into scope 2026-08-01.
 - [`docs/specs/quick-capture/`](specs/quick-capture/00_README.md) — mirror of the Quick Capture feature package, promoted into scope 2026-08-01 and admitted by ADR-003.
 

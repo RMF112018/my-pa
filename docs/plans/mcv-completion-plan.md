@@ -884,8 +884,9 @@ managed-document write and grants the source-provider port nothing.
 **`D-36`'s citation shipped ahead of its row, and that is recorded rather than
 quietly closed.** WP-4B2b added the section 6 sentence attributing the second
 split of WP-4B to `D-36`, but added no `D-36` row. Recomputed at `77ed807`, the
-identifier appeared exactly once in this file — in that citation — so for three
-merges the register cited a decision it did not carry. WP-0R2 found it, declined
+identifier appeared exactly once in this file — in that citation — and in no
+commit before it, so the gap opened at `77ed807` (PR #29) itself and the register
+cited a decision it did not carry from that merge until WP-0R2 closed it. WP-0R2 found it, declined
 to invent the row, and the orchestrator supplied the authoritative text, which is
 the row above. This is the `D-16` defect class: a claim routed to a source that
 does not hold it. The campaign records the sequence because a register that

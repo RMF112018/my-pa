@@ -28,11 +28,30 @@ What it does NOT do, and the distinction matters more than the check:
   never as "the mirror is up to date".
 - **It does not judge content.** Byte equality says nothing about whether the
   package is right, complete, or correctly cited. Neighbouring modules do that.
+- **It does not check the control artifacts, and that includes the receipts it
+  reads.** An artifact is bound here only if some `READBACK-VERIFICATION-*.json`
+  names it, and between them the two mirrored receipts name the 21 numbered
+  artifacts and nothing else. The other **10 of the 31 mirrored members are
+  compared to nothing** — the three canonical-artifact dispositions, the three
+  publication receipts, the two coordination-roundtrip receipts, and the two
+  readback verifications this module reads its own expectations out of. An edit
+  inside any of them — of any length — leaves every assertion below green. Two
+  independent reviewers demonstrated it on two different files, flipping
+  `NOT_GRANTED` to `GRANTED____` in a publication receipt and to `GRANTED` in a
+  disposition; both plants were reproduced here and the architecture tier stayed
+  at 847 passed each time. What holds those ten up
+  instead is recorded in `docs/specs/README.md`, and it is uneven: five carry a
+  published in-package SHA-256 that this module simply does not read, and five
+  carry no hash anywhere in the package and rest on a Drive-reported byte count.
+  **Do not close the gap by checking those byte counts here.** A same-length edit
+  passes a byte count, so that buys the appearance of coverage and none of the
+  substance. For the five with no hash the remedy is upstream and only the
+  publisher can supply it — a published hash for the control artifacts.
 
 Two constraints shape the implementation, both learned the hard way:
 
 - The package was revised in place twice on 2026-08-02 — RQC at ~11:49Z and
-  Native Reminders at ~15:01Z. The first left `version: 2.1` stale in the front
+  Native Reminders at ~15:04Z. The first left `version: 2.1` stale in the front
   matter, so a version comparison could not see the revision and only a hash
   could. The consequence for this test is that older receipts legitimately bind
   superseded bytes: checking every artifact against every receipt naming it

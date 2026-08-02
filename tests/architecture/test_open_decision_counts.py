@@ -15,10 +15,15 @@ since an ID counted twice would inflate the total while every individual row
 still looked correct.
 
 Scope note: `D-nn` plan-register IDs, the canonical package's `OP-nn` and
-`CR-D-nnn`, and the connector's `MCP-OP-nnn` are deliberately excluded. Section
-14 tracks three ledgers — Phase 00, Quick Capture, and Relationship Intelligence
-— and folding another package's internal decisions into its totals would
-misstate what the plan is accountable for.
+`CR-D-nnn`, the connector's `MCP-OP-nnn`, and Native Apple Reminders'
+`NAR-OP-nnn` are deliberately excluded. Section 14 tracks three ledgers — Phase
+00, Quick Capture, and Relationship Intelligence — and folding another package's
+internal decisions into its totals would misstate what the plan is accountable
+for. The exclusion is mechanical rather than maintained: `LEDGER_ID` cannot match
+any of those families, so a new one arriving in the plan's prose cannot silently
+join the counts. `NAR-OP-nnn` is named here because section 14 now asserts it is
+excluded "on the same grounds", and a claim the plan makes about this test's
+scope should be readable in this test's scope note.
 """
 
 from __future__ import annotations

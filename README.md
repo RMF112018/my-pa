@@ -21,7 +21,7 @@ Implemented, and covered by the FAST tier unless noted:
 - `infrastructure/database/engine` — the connection contract for the canonical database. Covered by the database tier only.
 - `infrastructure/persistence` — source registry, enrollment, job lease and retry, extraction and quarantine, and lexical search over `knowledge.extractions`. Covered by the database tier.
 - `infrastructure/providers/fixture.py` — a read-only fixture source provider that proves root containment, revalidates before read, and normalizes provider errors by errno.
-- `application/capabilities` — derives the capability manifest and readiness report from the contract rather than restating them.
+- `application` — the eight capability use cases behind one entry point, one shared authorization and disclosure path, and the capability manifest and readiness report derived from that wiring rather than restated. It reaches persistence and providers only through the ports in `contracts/ports`.
 - `infrastructure/migration` — legacy extract and load, the migration control plane, and redaction.
 - Eight Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, views, the `knowledge` schema, and the extraction tables; head `8b3f5c17d904`. Applied and rolled back in the database tier; only SQL generation is checked by FAST.
 - `.github/workflows/repository-checks.yml` — document and configuration validation, the FAST tier, a declared-dependency-floor tier, and a database tier run against a disposable PostgreSQL service. The workflow itself carries no test coverage.
@@ -34,16 +34,19 @@ retained read-only and is never mutated.
 
 Not implemented. None of the following exists beyond a scaffold README:
 
-- application services binding the eight capabilities to the persistence and provider behavior that exists;
 - HTTP transport and MCP adapter — `apps/gateway` is a README;
 - the worker process — `apps/worker` is a README;
 - an operator CLI beyond `apps/cli/migration.py`;
 - user-authored capture, relationship identity and profiles, managed documents, GoodNotes ingestion, and Obsidian projection;
 - any frontend. The repository contains no JavaScript toolchain and no `package.json`.
 
-Accordingly, every capability still reports `not_implemented`, PDF reports
-`decision_gated` pending `P00-OD-003`, and readiness reports `contracts_only` —
-the pieces exist but nothing composes them into a running capability yet.
+Accordingly, `capabilities.get` reports every capability `available` and
+readiness `ready`, while PDF still reports `decision_gated` pending
+`P00-OD-003`. Both figures are derived from the application's own wiring rather
+than from a constant, and `ready` is a statement about the application and not
+about a deployment: no process serves it, so nothing here runs end to end yet.
+`tests/architecture/test_readme_state_claims.py` holds this paragraph to the
+values the build actually produces.
 
 The current gap audit and implementation plan is [`docs/plans/mcv-completion-plan.md`](docs/plans/mcv-completion-plan.md).
 On 2026-08-01 the operator reprioritized the objective to admit two features,

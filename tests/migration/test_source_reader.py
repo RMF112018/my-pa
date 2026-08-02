@@ -14,8 +14,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from conftest import SCHEMA_VERSION, build_source
 
+from conftest import SCHEMA_VERSION, build_source
 from my_pa.infrastructure.migration.binding import DriftError, RunBinding, file_digest
 from my_pa.infrastructure.migration.reader import (
     SourceError,

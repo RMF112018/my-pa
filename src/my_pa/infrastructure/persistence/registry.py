@@ -50,6 +50,7 @@ __all__ = [
     "observe_object",
     "register_source",
     "resolve_native_locator",
+    "source_of_object",
 ]
 
 
@@ -137,6 +138,28 @@ def get_source(connection: Connection, source_id: str) -> ConfiguredSource:
     if row is None:
         raise UnknownSourceError(f"no configured source {source_id}")
     return _to_source(row)
+
+
+def source_of_object(connection: Connection, source_object_id: str) -> str | None:
+    """Return the `src_…` an object belongs to, or `None` when it names no row.
+
+    Deliberately the *opaque* source identity and never the locator beside it in
+    the same table. A status request may name an object, and the scope such a
+    request has to be authorized against is the object's source; nothing about
+    where the object physically is takes part in that decision, so nothing about
+    it leaves this function.
+
+    `None` rather than `UnknownSourceError`, because the caller's next act is to
+    report `not_found`, and an exception here would tempt a caller into
+    distinguishing "no such object" from "not yours" — which section 10 forbids.
+    """
+    validate_identifier(source_object_id, IdKind.SOURCE_OBJECT)
+    source_id = connection.execute(
+        select(source_objects.c.source_id).where(
+            source_objects.c.source_object_id == source_object_id
+        )
+    ).scalar_one_or_none()
+    return None if source_id is None else str(source_id)
 
 
 def resolve_native_locator(connection: Connection, source_object_id: str) -> str:

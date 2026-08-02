@@ -13,6 +13,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from sqlalchemy import Engine, text
+
 from conftest import (
     PHASE_ONE,
     PHASE_TWO,
@@ -21,8 +23,6 @@ from conftest import (
     prepare_target,
     synthetic_registry,
 )
-from sqlalchemy import Engine, text
-
 from my_pa.infrastructure.migration import binding, loader, runs
 from my_pa.infrastructure.migration.control_plane import (
     QuarantineCode,

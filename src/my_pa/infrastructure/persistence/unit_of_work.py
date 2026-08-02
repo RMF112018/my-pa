@@ -1,0 +1,353 @@
+"""The unit of work, and the adapters that put the free functions behind ports.
+
+Everything else in this package is statements: a function taking a `Connection`,
+with the caller owning the transaction. This is the caller. `SqlAlchemyUnitOfWork`
+opens one transaction on `__enter__`, hands out repositories bound to its
+connection, and commits or rolls back on `__exit__` — so an application use case
+gets a transaction without ever seeing a connection, which is what
+`docs/architecture/module-boundaries.md` section 5.3 asks for.
+
+The adapters are thin on purpose. Each method is one call to the function that
+already implements it, plus two translations:
+
+**Errors become the port's vocabulary.** An application use case may not import
+`infrastructure`, so it cannot catch a `SQLAlchemyError`, an
+`IsolationLevelError`, or `persistence.search`'s private classes; and this
+package may not import `application`, so it cannot raise the public error. The
+translation therefore happens here, into `contracts.ports`, which both sides can
+see. `_read` classifies by retryability and nothing else: an unreachable server
+is `EvidenceUnavailableError` and conditionally retryable, a missing column is
+`RepositoryFailureError` and is not, and neither carries the statement, the
+parameters, or the driver's message — a caller told to retry a schema fault
+would be given a lie with a retry budget attached, and a caller shown the
+statement would be shown the bound query text with it.
+
+**Absence becomes `None`.** `get_source` raises for an identifier that names no
+row; the port answers `None`, because the caller's next act is `not_found` and
+section 10 requires that answer to be indistinguishable from a refusal.
+
+**The audit sink is held, not built.** It is passed in, because there is no
+audit table in the `knowledge` schema for this package to write to and inventing
+a store here would be a schema decision made in an adapter. It is exposed
+through the unit of work rather than beside it so that an operator-only
+command's audit commits with the command or not at all
+(`module-boundaries.md` section 10).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from datetime import datetime
+from types import TracebackType
+from typing import assert_never
+
+from sqlalchemy import Connection, Engine
+from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
+
+from my_pa.contracts.ports import (
+    Acceptance,
+    AuditSink,
+    EnrollmentRepository,
+    EvidenceUnavailableError,
+    KnowledgeRecord,
+    KnowledgeRepository,
+    Operation,
+    OperationQueue,
+    RepositoryFailureError,
+    SearchOutcome,
+    SourceRepository,
+    UnitOfWork,
+    UnknownScopeError,
+)
+from my_pa.contracts.v1.status import SourceStatusState
+from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
+from my_pa.domain.extraction.text import ExtractionStatus
+from my_pa.domain.search.query import SearchRequest
+from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
+from my_pa.domain.source.registry import ConfiguredSource
+from my_pa.infrastructure.persistence import IsolationLevelError
+from my_pa.infrastructure.persistence.enrollment import accept_enrollment, enrollments_for_principal
+from my_pa.infrastructure.persistence.extraction import coverage_for
+from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
+from my_pa.infrastructure.persistence.knowledge import (
+    latest_limitations,
+    outcome_for_object,
+    read_extraction,
+)
+from my_pa.infrastructure.persistence.registry import (
+    UnknownSourceError,
+    get_source,
+    source_of_object,
+)
+from my_pa.infrastructure.persistence.search import (
+    SearchInternalError,
+    SearchUnavailableError,
+    UnknownEnrollmentError,
+    search_extractions,
+)
+from my_pa.infrastructure.persistence.tables import JobState
+
+__all__ = ["SqlAlchemyUnitOfWork"]
+
+
+def _read[T](statement: Callable[[], T]) -> T:
+    """Run `statement`, converting a store failure into the port's vocabulary.
+
+    The `raise` is outside the handlers, as everywhere else in this package:
+    `raise … from None` clears `__cause__` and leaves the original in
+    `__context__`, where a rendered traceback shows a `DBAPIError` whose message
+    can carry the statement and its bound parameters. Leaving the handler first
+    is what actually empties it.
+    """
+    try:
+        return statement()
+    except (OperationalError, InterfaceError):
+        # The server is unreachable, the connection died, or a statement timeout
+        # fired. Conditionally retryable.
+        failure: Exception = EvidenceUnavailableError("the store could not be read")
+    except (SQLAlchemyError, IsolationLevelError):
+        # A missing column, a type error, a row that vanished between two
+        # statements. Retrying reads the same rows and fails the same way.
+        failure = RepositoryFailureError("the request could not be completed")
+    raise failure
+
+
+def _public_state(state: JobState) -> SourceStatusState:
+    """The public status one job state is.
+
+    Written out exhaustively so a new job state cannot be reported as something
+    it is not. `succeeded` becomes `complete_for_scope`, which is a claim about
+    the bounded enrollment the job carried and never about the physical source.
+    """
+    match state:
+        case JobState.QUEUED:
+            return SourceStatusState.QUEUED
+        case JobState.RUNNING:
+            return SourceStatusState.RUNNING
+        case JobState.SUCCEEDED:
+            return SourceStatusState.COMPLETE_FOR_SCOPE
+        case JobState.FAILED:
+            return SourceStatusState.FAILED
+    assert_never(state)
+
+
+class _Sources(SourceRepository):
+    """Configured sources, over `persistence.registry`."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def source(self, source_id: str) -> ConfiguredSource | None:
+        def statement() -> ConfiguredSource | None:
+            try:
+                return get_source(self._connection, source_id)
+            except UnknownSourceError:
+                return None
+
+        return _read(statement)
+
+    def source_of_object(self, source_object_id: str) -> str | None:
+        return _read(lambda: source_of_object(self._connection, source_object_id))
+
+
+class _Enrollments(EnrollmentRepository):
+    """Enrollments, over `persistence.enrollment`."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def for_principal(self, principal_id: str) -> tuple[Enrollment, ...]:
+        return _read(lambda: enrollments_for_principal(self._connection, principal_id))
+
+    def accept(self, request: EnrollmentRequest) -> Acceptance:
+        def statement() -> Acceptance:
+            # `EnrollmentConflictError` deliberately passes through untranslated.
+            # It is an answer about the caller's own idempotency key rather than
+            # a failure of the store, and the application already imports the
+            # domain type that carries it.
+            accepted = accept_enrollment(self._connection, request)
+            return Acceptance(enrollment=accepted.enrollment, created=accepted.created)
+
+        return _read(statement)
+
+
+class _Operations(OperationQueue):
+    """The job plane, over `persistence.jobs`."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def enqueue(self, enrollment_id: str) -> str:
+        return _read(lambda: enqueue_job(self._connection, enrollment_id))
+
+    def operation(self, operation_id: str) -> Operation | None:
+        def statement() -> Operation | None:
+            found = job_for(self._connection, operation_id)
+            if found is None:
+                return None
+            return Operation(
+                operation_id=found.operation_id,
+                enrollment_id=found.enrollment_id,
+                state=_public_state(found.state),
+            )
+
+        return _read(statement)
+
+
+class _Knowledge(KnowledgeRepository):
+    """Coverage, outcomes, search, and the one record read."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def coverage(
+        self,
+        enrollment_id: str,
+        *,
+        observed_at: datetime,
+        eligible: int | None,
+        queued: int = 0,
+    ) -> CoverageCounts:
+        def statement() -> CoverageCounts:
+            return coverage_for(
+                self._connection,
+                enrollment_id,
+                observed_at=observed_at,
+                eligible=eligible,
+                queued=queued,
+            )
+
+        try:
+            return _read(statement)
+        except ValueError:
+            # `coverage_for` raises through `CoverageCounts` when the stated
+            # denominator and the stored rows disagree about what is in scope.
+            # That is a real inconsistency and this system's fault: retrying
+            # reads the same rows and fails the same way. Classified rather than
+            # left as an untyped crash, and raised outside the handler so a
+            # traceback does not render the frames of a coverage read.
+            failure = RepositoryFailureError("the coverage read could not be completed")
+        raise failure
+
+    def limitations(self, enrollment_id: str) -> tuple[AggregateLimitation, ...]:
+        return _read(lambda: latest_limitations(self._connection, enrollment_id))
+
+    def outcome_for_object(
+        self, *, enrollment_id: str, source_object_id: str
+    ) -> ExtractionStatus | None:
+        return _read(
+            lambda: outcome_for_object(
+                self._connection,
+                enrollment_id=enrollment_id,
+                source_object_id=source_object_id,
+            )
+        )
+
+    def search(self, request: SearchRequest, *, now: datetime) -> SearchOutcome:
+        """Search, translating this module's private failures into the port's.
+
+        `SearchCursorError` and `EmptySearchQueryError` are deliberately not
+        translated: they are answers about the caller's request rather than
+        failures of the store, they are domain types the application already
+        imports, and collapsing them into a repository failure would turn "your
+        cursor does not belong to this request" into "try again later".
+
+        **The call runs inside `_read` as well, and that is not belt and braces.**
+        `search_extractions` does not classify every failure it can raise:
+        `persistence.search._coverage` catches `ValueError` and nothing else, so a
+        `SQLAlchemyError` raised by `coverage_for` inside it passes straight
+        through — carrying the statement and its bound `enrollment_id`.
+        `persistence.search` names that hole in its own module docstring and
+        carries it to WP-4, and this is where it is closed: `_read` is the
+        translation every other method here already runs through, and this method
+        was the one that skipped it. The three `except` clauses sit outside
+        `_read` because those types are not `SQLAlchemyError` and pass through it
+        untouched.
+        """
+
+        def statement() -> SearchOutcome:
+            page = search_extractions(self._connection, request, now=now)
+            return SearchOutcome(matches=page.matches, disclosure=page.disclosure)
+
+        try:
+            return _read(statement)
+        except UnknownEnrollmentError:
+            failure: Exception = UnknownScopeError("the scope names no enrollment")
+        except SearchUnavailableError:
+            failure = EvidenceUnavailableError("the lexical index could not be read")
+        except SearchInternalError:
+            failure = RepositoryFailureError("the search could not be completed")
+        raise failure
+
+    def read(self, knowledge_id: str, *, enrollment_id: str) -> KnowledgeRecord | None:
+        return _read(
+            lambda: read_extraction(self._connection, knowledge_id, enrollment_id=enrollment_id)
+        )
+
+
+class SqlAlchemyUnitOfWork(UnitOfWork):
+    """One PostgreSQL transaction, and the repositories that run inside it.
+
+    Not reusable while open and not reentrant: `__enter__` opens one transaction
+    and `__exit__` ends it, and asking for a repository outside that window
+    raises rather than quietly running an autocommitting statement. A
+    composition root hands the application a factory, so each invocation gets
+    its own.
+    """
+
+    def __init__(self, engine: Engine, *, audit: AuditSink) -> None:
+        self._engine = engine
+        self._audit = audit
+        self._context: AbstractContextManager[Connection] | None = None
+        self._connection: Connection | None = None
+
+    def __enter__(self) -> UnitOfWork:
+        if self._context is not None:
+            raise RuntimeError("this unit of work is already inside a transaction")
+        context = self._engine.begin()
+        self._connection = context.__enter__()
+        self._context = context
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        context = self._context
+        self._context = None
+        self._connection = None
+        if context is not None:
+            # Commits when the block succeeded and rolls back when it did not.
+            # The return value is discarded deliberately: a unit of work that
+            # swallowed its caller's exception would commit a failed operation.
+            context.__exit__(exc_type, exc, traceback)
+
+    @property
+    def _open(self) -> Connection:
+        connection = self._connection
+        if connection is None:
+            raise RuntimeError("this unit of work is not inside a transaction")
+        return connection
+
+    @property
+    def sources(self) -> SourceRepository:
+        return _Sources(self._open)
+
+    @property
+    def enrollments(self) -> EnrollmentRepository:
+        return _Enrollments(self._open)
+
+    @property
+    def operations(self) -> OperationQueue:
+        return _Operations(self._open)
+
+    @property
+    def knowledge(self) -> KnowledgeRepository:
+        return _Knowledge(self._open)
+
+    @property
+    def audit(self) -> AuditSink:
+        return self._audit

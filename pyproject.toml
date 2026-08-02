@@ -95,6 +95,12 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The repository root, so `from tests.conftest import ...` resolves whichever way
+# pytest was started. `python -m pytest` puts the working directory on `sys.path`
+# and the `pytest` console script does not, so without this the two invocations
+# disagree: one collects and one fails. `docs/migration/PHASE-01-FOUNDATION.md`
+# documents the console-script form.
+pythonpath = ["."]
 addopts = "--strict-markers --strict-config"
 markers = [
   "slow: excluded from the FAST tier",

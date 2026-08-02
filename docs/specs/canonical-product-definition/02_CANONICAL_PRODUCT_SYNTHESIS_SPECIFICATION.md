@@ -3,21 +3,21 @@ title: my-pa — Canonical Product Synthesis Specification
 artifact_id: SPEC-MYPA-CANONICAL-PRODUCT-002
 artifact_type: Canonical product specification
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
+version: 2.2
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
 date: 2026-08-02
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.1
+feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
+feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
 ---
 
 # my-pa — Canonical Product Synthesis Specification
@@ -508,4 +508,36 @@ A single capture may create a general note plus multiple typed proposals. Name-o
 ### MCV acceptance additions
 
 The MCV must prove: authenticated Shortcut submission; durable acknowledgment before enrichment; exact-content retrieval and hash match; idempotent replay; safe failure without false “saved” claims; asynchronous processing; unresolved-identity preservation; cross-domain proposal routing; no content in normal logs; cloud-ineligible default; and no external action authority.
+## Native Apple Reminders Integration MCV requirements
 
+### Product placement and authority
+
+Native Apple Reminders Integration is a **Native Productivity Integration** and **External Execution Projection**. `Task` remains canonical in my-pa. An Apple reminder is a provider projection linked to one accepted Task occurrence. Accepting a Task and authorizing its external projection are separate transitions with separate policy decisions, audit events, and receipts.
+
+### Selected architecture
+
+A signed Swift macOS bridge runs in the logged-in user session, starts through `SMAppService`, authenticates to the local my-pa gateway, and uses EventKit for the configured dedicated iCloud reminder list. The bridge is a thin provider adapter: it owns EventKit access, permission observations, list binding, readback, and local bounded spooling; it owns no Task, Review, policy, identity, or promotion logic and never writes PostgreSQL directly.
+
+### Creation policy
+
+Automatic creation is permitted only for an accepted, active, user-owned Task when a reminders-specific standing grant, exact destination list, supported field set, reversibility, and risk policy all permit the action. Simple dated Tasks and explicit concrete reminder intents may project automatically. Consequential dates, financial/legal/personnel/medical matters, ambiguous ownership or time, shared-list destinations, recurrence series, conflicting projections, and destructive withdrawal require Review. Confidence alone never authorizes projection.
+
+### Synchronization
+
+Synchronization is hybrid and field-level. my-pa pushes title, sanitized notes, URL, due/start components, priority, completion, and one-time occurrence state. Apple completion may complete the mapped Task when uncontested. Apple title, due-date, priority, uncompletion, list move, recurrence, or deletion observations are applied only under explicit low-risk policy or routed to Review. No last-write-wins rule is permitted. Different-field edits may merge; same-field concurrent edits conflict.
+
+### Completion boundary
+
+Apple completion is evidence of a user completion action on the execution surface. It may complete the mapped Task and update derived Today, Pulse, Trace, project, and relationship views. It does not automatically fulfill a Commitment, establish project milestone achievement, prove delivery to another person, close a Risk or Issue, or mutate another source system.
+
+### Mapping and limitations
+
+The MCV projects only the public EventKit field subset needed for execution. Full source text, source spans, private relationship observations, unresolved identities, attachments, subtasks, and tags remain in my-pa. Existing reminders outside the configured list are ignored; unmanaged reminders in that list are preserved and are not adopted automatically. Native EventKit recurrence is deferred; my-pa projects individual occurrences.
+
+### Reliability and security
+
+Commands are durable, idempotent, at-least-once, readback-verified, and reconciled after bridge/backend/iCloud outages. EventKit store-change notifications trigger refetch and comparison; periodic reconciliation remains authoritative because notifications are coarse. The bridge uses a scoped revocable credential in Keychain, no Apple Account credentials, no direct Reminders database access, no Apple Events, no Accessibility or Full Disk Access, no routine payload logging, and fail-closed permission/list behavior.
+
+### MCV acceptance additions
+
+The MCV must prove: permission onboarding and revocation; dedicated list binding; idempotent create/update; exact mapping of supported fields; iPhone/Apple Watch completion roundtrip; Task completion without automatic Commitment fulfillment; same-field conflict detection; different-field merge; deletion without Task deletion; identifier recovery; startup and periodic reconciliation; offline command/observation preservation; sanitized reminder content; no unrelated-list access in normal operation; durable audit and action receipts; and no false claim that EventKit acceptance proves propagation to every Apple device.

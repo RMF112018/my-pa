@@ -3,21 +3,21 @@ title: my-pa — Open Operator Decisions
 artifact_id: OPEN-DECISIONS-MYPA-CANONICAL-002
 artifact_type: Open operator decisions
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
+version: 2.2
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
 date: 2026-08-02
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.1
+feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
+feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
 ---
 
 # Open Operator Decisions
@@ -72,4 +72,20 @@ Operator-only: change objective; lift frontend hold; authorize implementation/li
 | MCP-OP-009 | Production activation and residual-risk acceptance | No activation until independent review, client conformance, recovery, runbooks, and explicit operator decision | Production |
 
 Routine tool names, schema details, pagination limits, implementation library choices, and test structure are not returned as operator decisions when repository evidence can resolve them during planning.
+## Native Apple Reminders operator decisions
 
+The operator has admitted the feature to the canonical MCV. The following activation and implementation-bound decisions remain open:
+
+| ID | Decision | Default/recommendation | Blocks |
+|---|---|---|---|
+| NAR-OP-001 | Exact reminders-only credential and grant issuance | Capture-independent, revocable, destination- and field-bounded grant | Bridge activation |
+| NAR-OP-002 | Exact dedicated iCloud list name/account | `my-pa` in the operator's primary iCloud Reminders account | Live list binding |
+| NAR-OP-003 | Automatic undated reminder policy | Only explicit reminder intent or concrete personal/household action | Undated auto-projection |
+| NAR-OP-004 | External title/due/priority edit policy | Auto-apply only uncontested low-risk changes; otherwise Review | Two-way edit activation |
+| NAR-OP-005 | Task cancellation withdrawal behavior | Review before deleting an active Apple reminder | Automatic withdrawal |
+| NAR-OP-006 | Minimum supported macOS and hardware | macOS 13+ subject to target-Mac EventKit proof | Packaging target |
+| NAR-OP-007 | Code-signing/notarization identity and distribution | Signed/notarized local installation; no unsigned production bridge | Installation |
+| NAR-OP-008 | EventKit permission grant and live reminder access | Grant only after synthetic feasibility and privacy proof | Live access |
+| NAR-OP-009 | Production activation and residual-risk acceptance | No activation before independent exact-head review and recovery canary | Production |
+
+Routine Swift types, EventKit wrapper structure, polling/debounce values, SQL schema details, and tests are implementation decisions unless evidence elevates them to operator risk.

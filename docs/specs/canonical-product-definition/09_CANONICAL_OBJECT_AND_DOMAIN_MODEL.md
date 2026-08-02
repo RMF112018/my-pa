@@ -3,21 +3,21 @@ title: my-pa — Canonical Object and Domain Model
 artifact_id: MODEL-MYPA-CANONICAL-002
 artifact_type: Logical domain model
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
+version: 2.2
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
 date: 2026-08-02
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.1
+feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
+feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
 ---
 
 # Canonical Object and Domain Model
@@ -148,4 +148,26 @@ The MCV Capture model includes transport-neutral admission objects in addition t
 - `CaptureCorrection`: source-text successor version, derived-value correction, identity correction, or routing correction, each with immutable lineage.
 
 No transport-specific note store, SMS memory, PRIE memory database, second knowledge store, or model-specific memory is permitted.
+## Native execution projection records
 
+The canonical model adds provider-neutral execution projection records and one Apple-specific binding:
+
+- `NativeIntegrationProfile`: principal, provider, bridge client/device, permission state, enabled/safe-mode state, policy, credential reference, health, last seen, and revocation.
+- `ExternalActionGrant`: bounded principal/client/capability/destination/field/risk authorization, validity, revocation, and policy version.
+- `ExecutionProjection`: stable projection identity linking one exact Task version or occurrence to one provider destination, managed field mask, lifecycle, policy, receipt, and supersession.
+- `ExecutionProjectionCommand`: create/update/complete/reopen/withdraw command, expected versions, requested fields, idempotency, lease/attempts, safe errors, and result.
+- `ExecutionProjectionObservation`: provider item identity, controlled-field snapshot and fingerprint, observed/received times, origin classification, and optional causal command.
+- `ExecutionProjectionConflict`: conflicting fields, my-pa baseline/current values, provider baseline/current values, consequences, ReviewCase, disposition, and receipt.
+- `NativeSyncCheckpoint`, `NativePermissionObservation`, `NativeBridgeRegistration`, and `ActionReceipt`: durable synchronization, permission, bridge, and execution evidence.
+- `AppleReminderBinding`: reminder calendar identifier and fingerprint, calendar source/type/title, local item identifier, external identifier, opaque URL marker, creation/modification/completion observations, synchronized fingerprint, and identifier-recovery state.
+
+Invariants:
+
+1. A projection never replaces its Task.
+2. Task acceptance never implies external-action authorization.
+3. External deletion never deletes the Task.
+4. Apple completion may complete a Task but never silently fulfills a Commitment.
+5. No mapping depends on one Apple identifier alone.
+6. No last-write-wins conflict resolution is permitted.
+7. Provider observations are append-oriented evidence; reconciliation changes canonical state only through application policy.
+8. Recurring Tasks project one occurrence at a time in the MCV.

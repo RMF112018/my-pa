@@ -1,0 +1,67 @@
+{
+  "coordination_request_id": "REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z",
+  "package_id": "MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006",
+  "prior_version": "2.1",
+  "new_version": "2.2",
+  "canonical_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+  "control_folder_id": "1hTG7suj25XIfz6b2XoZvjee56ZpYIs16",
+  "feature_package_id": "MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001",
+  "feature_package_folder_id": "1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq",
+  "repository": "RMF112018/my-pa",
+  "repository_head_basis": "f18e7e3ded45f82456fbfa722443b23a004de0b3",
+  "artifacts": {
+    "request": {
+      "drive_id": "1WwbhbNilyI6XU883YZI39iG5CWSqdM3H",
+      "bytes": 1013,
+      "sha256": "bba9bd652e68ddf2ac2eda80394965048a0ca16ca7dac2dcd30a4728e972d79e",
+      "hash_scope": "stored_raw_bytes"
+    },
+    "response": {
+      "drive_id": "1gb2FBVLargApIsLtFb3idq_DGrwkVaoI",
+      "bytes": 1209,
+      "sha256": "35ca114990ff83c87e3e0fbe266ebabbc7effd61d206750432e81c518299d1f9",
+      "hash_scope": "stored_raw_bytes"
+    },
+    "readback": {
+      "drive_id": "1hANiCvBfJNDu0_5jaJexspVOE1DWSgF5",
+      "bytes": 4110,
+      "sha256": "e2120863f0dd6421517f5fe46b11bbb945801a14e0ea4c71a40fd39363cb508f",
+      "hash_scope": "stored_raw_bytes"
+    },
+    "disposition": {
+      "drive_id": "1avLp21hjT5TokLhYuYPdEuBMCd-fPW_0",
+      "bytes": 4477,
+      "sha256": "20ef4a9469dba5520751846bfc9cc7aa862386b6989eba2336a85c3601aa283a",
+      "hash_scope": "stored_raw_bytes"
+    },
+    "publication_receipt": {
+      "drive_id": "17PD66WJDA6P3en3BoqVtU-mVPgFrvsL_",
+      "bytes": 4330,
+      "sha256": "e172d5dbcb8e7b296295a0b8f81e625a3d76a776213d9237505b61930e6e602c",
+      "hash_scope": "stored_raw_bytes"
+    }
+  },
+  "canonical_source_manifest": {
+    "drive_id": "1xxQG_fsUlTxX7VRXOCm8SSCjYF2xPV1j",
+    "bytes": 20280,
+    "sha256": "fbe590c977b79174c7ecb595d067436c0c98c737a75c4284aeba54637443c303",
+    "readback": "MATCH"
+  },
+  "canonical_revised_members": "10/10 MATCH",
+  "drive_id_continuity": "VERIFIED",
+  "parent_continuity": "VERIFIED",
+  "representation": "stored_raw_bytes",
+  "disposition": "CANONICAL_MYPA_PACKAGE_NATIVE_REMINDERS_INTEGRATION_COMPLETE",
+  "publication_status": "COMPLETE",
+  "blocked_actions": [
+    "repository implementation",
+    "repository package mirror refresh",
+    "EventKit permission grant",
+    "credential issuance",
+    "code signing and notarization",
+    "deployment",
+    "production activation",
+    "risk acceptance"
+  ],
+  "invalidation_rule": "Revalidate after material canonical product, repository architecture, Task/Review/external-action policy, Apple EventKit/TCC/background execution, target macOS, or feature-package change."
+}

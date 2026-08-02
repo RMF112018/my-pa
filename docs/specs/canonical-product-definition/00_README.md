@@ -3,21 +3,21 @@ title: my-pa — Canonical Product Definition Package README
 artifact_id: README-MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
 artifact_type: Package README
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
+version: 2.2
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
 date: 2026-08-02
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.1
+feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
+feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
 ---
 
 # my-pa Canonical Product Definition
@@ -92,4 +92,10 @@ The connector is canonical product scope but not silently inserted into the acti
 Remote Quick Capture is incorporated into the current my-pa Minimum Viable Candidate product scope as the lowest-friction remote extension of Quick Capture. The selected first transport is an iOS Shortcut submitting one unrestricted text field over authenticated HTTPS to the transport-neutral `capture.create` application service. The first-party PWA remains the canonical cross-platform capture, history, correction, Review, and offline-recovery surface. Literal SMS, hosted messaging providers, new cellular service, and iMessage relay dependencies are excluded from the MCV baseline.
 
 The governing feature package is `MYPA-REMOTE-QUICK-CAPTURE-FEATURE-PACKAGE-20260802-001`, Drive folder `1lDSkTldgSkaRfJ3v9h-U10lCe-Lmwzsv`. This amendment records product scope only. Repository implementation, credentials, ingress activation, deployment, production activation, and risk acceptance remain separately governed.
+## 2026-08-02 Native Apple Reminders MCV amendment
 
+Native Apple Reminders Integration is incorporated into the current my-pa Minimum Complete Version as an opt-in external execution projection for accepted my-pa Tasks. my-pa remains authoritative; Apple Reminders is a synchronized execution surface, never the system of record.
+
+The selected architecture is a signed Swift macOS bridge running in the logged-in user session, registered at login through `SMAppService`, calling the transport-neutral my-pa application service over authenticated loopback HTTP and using EventKit against one dedicated iCloud Reminders list. The initial synchronization model is hybrid and field-level: my-pa owns Task identity and meaning; Apple completion is accepted as user execution evidence for the mapped Task; external edits are imported only under policy or routed to Review; deletion never deletes the canonical Task; recurrence is projected one occurrence at a time.
+
+The governing feature package is `MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001`, Drive folder `1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq`. This amendment admits product scope and canonical design only. Repository implementation, EventKit permissions, credentials, signing, deployment, production activation, and risk acceptance remain separately governed.

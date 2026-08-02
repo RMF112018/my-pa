@@ -3,21 +3,21 @@ title: my-pa — Roadmap and Dependency Sequence
 artifact_id: ROADMAP-MYPA-CANONICAL-002
 artifact_type: Product roadmap
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
+version: 2.2
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
 date: 2026-08-02
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.1
+feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
+feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
 ---
 
 # Roadmap and Dependency Sequence
@@ -109,4 +109,18 @@ Remote Quick Capture is moved into the MCV delivery sequence rather than treated
 8. Seek separate operator activation decisions for credentials, ingress, deployment, and production.
 
 Rich attachments, native App Intents, browser extension, Android share target, desktop helpers, voice/audio, SMS/iMessage relay experiments, and other self-hosted messaging protocols remain later stages.
+## Native Apple Reminders implementation sequence
 
+Native Reminders is sequenced after the accepted Task and Review lifecycle and after the local gateway/worker candidate. It must not be used to invent Task semantics ahead of those dependencies. Recommended package sequence:
+
+1. **NAR-00 — canonical policy amendment:** external-action separation, reminders-specific grant, Task completion semantics.
+2. **NAR-01 — target-Mac EventKit feasibility proof:** permission/revocation, dedicated list, create/update/readback, phone completion, store-change observation, identifier recovery, login registration, sleep/offline behavior.
+3. **NAR-02 — provider-neutral domain and contracts:** integration profile, projection, command, observation, conflict, receipts.
+4. **NAR-03 — backend application services:** bridge health, command lease/result, observation submit, projection read, conflict disposition.
+5. **NAR-04 — signed native bridge:** EventKit adapter, Keychain credential, `SMAppService`, permission/list onboarding, health and safe mode.
+6. **NAR-05 — one-way creation and updates:** supported fields, idempotency, readback, receipts.
+7. **NAR-06 — completion roundtrip:** Apple completion to Task and my-pa completion to reminder, with Commitment boundary.
+8. **NAR-07 — conflicts and recovery:** concurrent edits, deletion, list loss, identifier recovery, offline spool, loop suppression.
+9. **NAR-08 — security and operational proof:** revocation, background disablement, privacy, recovery, runbook, independent exact-head review.
+
+In the repository work-package sequence this is a later MCV package, recommended as `WP-11`, after the PWA capture/Review path. Product inclusion grants no implementation, signing, permission, credential, deployment, or production authority.

@@ -3,21 +3,21 @@ title: my-pa — Integrated MVP Definition
 artifact_id: MVP-MYPA-CANONICAL-002
 artifact_type: MVP definition
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
+version: 2.2
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
 date: 2026-08-02
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.1
+feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
+feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
 ---
 
 # Integrated MVP Definition
@@ -120,4 +120,19 @@ The MCV includes the complete minimal remote text-capture slice:
 8. Relationship Intelligence, project, task, commitment, decision, conversation, general-note, personal, and household routing where the corresponding domain contract is available; otherwise the proposal remains retained and unresolved.
 
 The MCV excludes rich attachments beyond inert shared text/URL references, native iOS/Android applications, literal SMS, iMessage relays, hosted messaging providers, autonomous external actions, cloud model disclosure absent separate approval, and production activation.
+## Native Apple Reminders addition to the MCV
 
+The MCV includes an opt-in Native Apple Reminders execution projection after the Task, Review, transport, and local operational substrate is complete. It includes:
+
+1. one dedicated writable iCloud Reminders list;
+2. a signed Swift macOS bridge using EventKit and `SMAppService`;
+3. reminders-specific client authentication and standing external-action policy;
+4. accepted-Task eligibility and Review routing;
+5. title, sanitized notes, opaque URL, due/start, priority, and completion mapping;
+6. durable command, observation, conflict, audit, and receipt records;
+7. idempotent create/update/complete/reopen behavior with readback;
+8. iPhone/iPad/Apple Watch completion reconciliation;
+9. identifier recovery and periodic reconciliation;
+10. fail-closed permission, list-loss, bridge-offline, backend-offline, and iCloud-delay behavior.
+
+The MCV excludes blanket import, intentional shared-list use, native recurrence-series synchronization, tags, attachments, subtasks, full-fidelity Reminders mirroring, direct Reminders database access, AppleScript mutation, automatic external deletion, automatic Commitment fulfillment, and any Calendar/Contacts/Notes/Mail/Messages mutation.

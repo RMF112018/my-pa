@@ -170,8 +170,10 @@ updated, in the same way and for the same reason as the lists in sections 4 and
 **D by WP-4A, WP-4B1, WP-4B2a and WP-4B2b**, so "transport does not [exist]" is
 no longer true of any of the three: HTTP, MCP and the operator CLI all exist and
 `SPEC-AC-001` parity is proven over them. The **Disposition** column stays
-correct, which is what this table is for; the split of WP-4 into WP-4A and WP-4B,
-and of WP-4B again, is recorded by `D-28` and `D-36` in the register. This table
+correct, which is what this table is for; the split of WP-4 into WP-4A and WP-4B
+is recorded by `D-28` in the register, and the split of WP-4B again by `D-36` —
+which had no row until WP-0R2 added one; see the note under the register in
+section 13. This table
 had carried no marker until WP-4B2b added one, which is why row A has read
 "Missing and required" since the day WP-1 merged.*
 
@@ -232,11 +234,19 @@ agent that did not author it.
 11. **WP-9 — relationship identity and read-only profiles.**
 12. **WP-10 — PWA capture surface and offline recovery.** Conditional on `D-32`,
     sequenced last, and the only frontend package here.
+13. **WP-11 — Native Apple Reminders execution projection.** Internal sequence
+    `NAR-00` canonical policy amendment, `NAR-01` target-Mac EventKit
+    feasibility proof, `NAR-02` provider-neutral domain and contracts, `NAR-03`
+    backend application services, `NAR-04` signed native bridge, `NAR-05`
+    one-way creation and updates, `NAR-06` completion roundtrip, `NAR-07`
+    conflicts and recovery, `NAR-08` security and operational proof.
+    Conditional on `D-39`, sequenced after WP-10, and nothing in it is built.
 
-Items 4 through 12 restate section 12's sequence table, which is the authoritative
-one; `D-28` split WP-4 and the Remote Quick Capture revision added WP-0R and
-WP-10. Section 7 originally stopped at WP-5, and listing only half the merge
-order was how a reader ended up consulting two tables that disagreed.
+Items 4 through 13 restate section 12's sequence table, which is the authoritative
+one; `D-28` split WP-4, the Remote Quick Capture revision added WP-0R and
+WP-10, and the Native Apple Reminders revision added WP-11. Section 7 originally
+stopped at WP-5, and listing only half the merge order was how a reader ended up
+consulting two tables that disagreed.
 
 ## 8. Boundaries held throughout
 
@@ -430,9 +440,10 @@ the slice first. The operator may reorder; see `D-12`.
 ### Sequence
 
 **This table was superseded on 2026-08-02 and is kept for the shape it records.**
-`D-28` split WP-4 into two pull requests, and the Remote Quick Capture revision
-added WP-0R and a conditional WP-10. The sequence the campaign is executing is
-below; the original rows above are what section 15's divergence 2 corrected.
+`D-28` split WP-4 into two pull requests, the Remote Quick Capture revision
+added WP-0R and a conditional WP-10, and the Native Apple Reminders revision
+added a conditional WP-11. The sequence the campaign is executing is below; the
+original rows above are what section 15's divergence 2 corrected.
 
 | WP | Objective | Depends on | Frontend? |
 |---|---|---|---|
@@ -445,6 +456,7 @@ below; the original rows above are what section 15's divergence 2 corrected.
 | WP-8 | Review cases, promotion, conversation events, corrections | WP-7 | No |
 | WP-9 | Relationship identity and read-only profiles | WP-4B, WP-8 | No |
 | WP-10 | PWA capture surface and offline recovery — **conditional on `D-32`** | WP-8 | **Yes** |
+| WP-11 | Native Apple Reminders execution projection, internal sequence `NAR-00` policy amendment, `NAR-01` EventKit feasibility proof, `NAR-02` domain and contracts, `NAR-03` application services, `NAR-04` signed native bridge, `NAR-05` creation and updates, `NAR-06` completion roundtrip, `NAR-07` conflicts and recovery, `NAR-08` security and operational proof — **conditional on `D-39`** | WP-10 | No |
 
 Two things about that table are worth stating rather than leaving to be inferred.
 
@@ -469,7 +481,11 @@ package that already carries them.
 WP-0R through WP-9 are frontend-free and may proceed under `D-09`. **WP-10 is
 not**, and it is the one row here that rests on an assumption rather than on an
 instruction — see `D-32`, which admits it to scope, sequences it last, and states
-the reading it depends on so the operator can overturn it cheaply. The remaining
+the reading it depends on so the operator can overturn it cheaply. WP-11 is
+frontend-free — its surface is a signed macOS bridge, not a web surface, so
+`D-09` does not reach it — but it is held by something stronger: nine open
+operator decisions `NAR-OP-001` through `NAR-OP-009`, one of which is the
+EventKit permission grant and another the code-signing identity. See `D-39`. The remaining
 frontend stages — Quick Capture `QC-05` through `QC-08`, and every responsive
 surface in the Relationship Intelligence specification — are not planned here
 and remain held.
@@ -858,6 +874,23 @@ managed-document write and grants the source-provider port nothing.
 | D-31 | The iOS Shortcut client is not built | It is roadmap step 4 and MCV item 5, and it is a client that must reach the endpoint across a network — which `D-30` does not open. Building it would produce something that cannot be exercised end to end without the operator act `D-30` withholds, and testing it "against a non-production endpoint" as the roadmap suggests still requires the endpoint to be reachable off the loopback interface. It is named here rather than left silent so it is not rediscovered as a surprise when WP-6 lands and the MCV is not remotely capturable. | Deferred, disclosed |
 | D-32 | The PWA capture surface is admitted to scope, sequenced last, and this reading is an assumption stated as one | `D-09` records a direct operator instruction of 2026-08-01 that no frontend implementation is in scope "until they say otherwise". The revised package puts the PWA capture surface and the offline-recovery path inside the MCV (item 6) and inside the delivery sequence (roadmap step 5), and `D-29` binds the objective to that documentation — which is the condition `D-09` set for its own lifting. **The reading is not certain.** The package also carries `implementation_authority: NOT_GRANTED`, and under `AGENTS.md` section 1 a rank-4 indexed Workspace publication cannot on its own lift a direct operator instruction; the instruction that would lift `D-09` is the objective's reference to the folder, which is a thinner instrument than the 2026-08-01 words it would be overriding. So it is recorded as an assumption rather than a finding, the package is sequenced after every backend package as WP-10, and nothing else depends on it. If the operator overturns it, one package is dropped and none of the others is wasted — which is the whole reason for sequencing it last rather than for treating the question as settled. `O-04` and `RI-OD-003` already ask the operator when to lift the hold. | Assumption, disclosed, sequenced last |
 | D-33 | The revised canonical package carries three disclosed defects | Stale front matter: all eight revised artifacts still carry `version: 2.1`, `prior_version: 2.0`, a `coordination_request_id` naming the earlier MCP-integration roundtrip, and `repository_head: 9096fa4…`, one commit behind `main` at `ef08ddd`. Unpublished readback evidence: the `revised-artifact-readbacks/`, `publication-controls/`, and `noop/` subfolders of the RQC control folder are empty while the publication receipt asserts `canonical_specification_readback_observed: true`. And no readback-verification artifact was published at all, unlike the MCP-integration set. Section 16 records each as verified here rather than inherited, and records which check therefore carries the mirror's integrity claim. They are disclosed rather than averaged into a general statement of confidence, because the first of them is the reason a version-field check would have reported no change at all. | Disclosed, not smoothed |
+| D-34 | WP-4B adds the durable audit store and closes the audit asymmetry | An Alembic revision creates an audit table in the `knowledge` schema — `migrations/versions/20260802_9c6b4a18ed72_create_the_audit_events_table.py`, adding `knowledge.audit_events` — and WP-4B's composition roots supply the production `AuditSink`. WP-4A defined the port and called it on every authorization decision but had no migration authority, so the only implementations were test doubles; a process that authorizes without a durable audit trail violates `AGENTS.md` section 5. The sharper half of this is an **asymmetry, not a gap**: an *allowed* request whose handler then failed rolled its audit event back with the work transaction, so a failed security-relevant action left no trace while a denial committed. WP-4B closed it by giving the audit a separate transaction, which `src/my_pa/application/service.py` states in its own module docstring. | Implemented by WP-4B1, PR #27 |
+| D-35 | Provider reads may happen inside the database transaction, while the provider is local | [`../architecture/module-boundaries.md`](../architecture/module-boundaries.md) section 10 discourages holding source fetches inside database transactions, but it carries `status: PROPOSED_FOR_REPOSITORY_REVIEW` and is a candidate rather than accepted policy, and `AGENTS.md` section 4 is silent on the interleaving. The read is bounded by `max_fetch_bytes` against a local filesystem adapter, and one consistent read means the disclosed coverage and the returned bytes come from the same instant. **Invalidated by a source provider that is not local.** `src/my_pa/application/service.py` carries the sentence that says so, and it is the first thing to change if a remote provider is ever admitted. | Accepted, bounded by locality, invalidation named |
+| D-36 | WP-4B splits again, into WP-4B1 and WP-4B2 | WP-4B1 is the durable audit store (`D-34`), the `apps/worker.py` composition root, and the worker lease loop — no transports and no new dependencies. WP-4B2 is the HTTP gateway, the MCP adapter, the operator CLI, `apps/gateway.py`, the parity and negative-evidence matrices, and [`../architecture/module-boundaries.md`](../architecture/module-boundaries.md)'s reconciliation. WP-4B as scoped was a migration, a durable store, two composition roots, a lease loop, three transports, and two conformance matrices; WP-4A was already at the edge of what one review can hold at this standard and took four review rounds, and this was larger. The split is natural rather than arbitrary — the audit store and the worker need no transport, and the transports need the audit store to exist before a gateway can run authorized requests. It is a packaging decision and changes no scope. | **Implemented as three pull requests, not two.** WP-4B2 split once more on the same reasoning, so the outcome is WP-4B1 (PR #27, `93cb98e`), WP-4B2a (PR #28, `7390879`), and WP-4B2b (PR #29, `77ed807`) — mapping recomputed from `git log main`, not restated. The two-way split is what was decided; the three-way split is what happened |
+| D-37 | The vertical slice has a hole in the middle, and closing it is WP-4B3 | Two identifier spaces do not meet. `sources.enroll` stores `obj_…` identifiers with no foreign key, while `persistence.extraction` records outcomes only against `source_objects` rows that `observe_object` issued from a native locator. WP-4B3 builds the production write path to `knowledge.sources`, persists the enumerated object set at enrollment through `observe_object`, and builds the worker's extraction executor. **Corrected in place, and the correction is the point.** The original wording said `sources.enroll` stores identifiers "a provider instance minted". Recomputation against the code at `77ed807` shows `sources.enroll` never consults a provider at all: `EnrollSource.__post_init__` (`src/my_pa/application/commands.py:208`, validation block lines 229-242) stores whatever `obj_…` strings the caller supplied, shape-validated only, against no referential check. The original citation of `commands.py:230-238` is also narrower than the block it names — 230-238 covers the source, media-type, idempotency-key, and selector checks, and the per-object shape check is at 239-240. Both corrections are recorded rather than quietly applied, because the campaign does not conceal decision errors. | Corrected in place; open, WP-4B3 |
+| D-38 | The canonical package was revised again on 2026-08-02T15:01Z to v2.2, and the re-mirror is its own work package | `REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z` took the package from v2.1 to v2.2 and admitted Native Apple Reminders to the MCV. A documentation re-mirror is not folded into a behavioural package, for the reason WP-0R was separated from WP-4: the two need different reviewers and have different failure modes. Ten mirrored artifacts differed, detected by SHA-256 against the WP-0R mirror. Nine are a front-matter edit plus an appended section; one, `18_PACKAGE_SOURCE_MANIFEST.json`, is a structural in-place rewrite. **Two corrections to what was expected.** First, the nine are *not* a pure byte-suffix append: recomputed at `77ed807`, each new body equals the old body **minus its final newline**, plus the appended section, and each front matter changed six fields in place — so the whole-file prefix-append property that carried the v2.1 mirror's integrity claim does **not** hold here and is not claimed. Second, the `version:` field **did** bump, 2.1 → 2.2, unlike the RQC revision that `D-33` records. That is a fact about this revision only and is not evidence the stale-front-matter hazard is gone; a hash check remains the only reliable detector, and it is what found this one. | Re-mirrored by WP-0R2 |
+| D-39 | Native Apple Reminders is in MCV scope as `WP-11`, sequenced last, and **nothing in it is built** | The reading is the one `D-32` states: the operator's objective binds the MCV to Drive folder `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`, so a revision to that folder's MVP definition is a revision to the objective. `12_MVP_DEFINITION.md` now includes an opt-in Native Apple Reminders execution projection, and `13_ROADMAP_AND_DEPENDENCY_SEQUENCE.md` recommends it as `WP-11` "after the PWA capture/Review path" — which is why it is sequenced after WP-10 rather than negotiated. The mitigation is the same as `D-32`'s: sequence it last, so overturning it costs one package and wastes none of the others. **Every activation is gated.** `NAR-OP-001` through `NAR-OP-009` are all open, and `implementation_authority: NOT_GRANTED` holds across the package. No code-signing identity, no credential issuance, no EventKit permission grant, no live Reminders access, and no external action on any Apple application. The operator must resolve `NAR-OP-001`–`NAR-OP-009` before `WP-11` can start. | Admitted to scope, sequenced last, **not built** |
+
+**`D-36`'s citation shipped ahead of its row, and that is recorded rather than
+quietly closed.** WP-4B2b added the section 6 sentence attributing the second
+split of WP-4B to `D-36`, but added no `D-36` row. Recomputed at `77ed807`, the
+identifier appeared exactly once in this file — in that citation — so for three
+merges the register cited a decision it did not carry. WP-0R2 found it, declined
+to invent the row, and the orchestrator supplied the authoritative text, which is
+the row above. This is the `D-16` defect class: a claim routed to a source that
+does not hold it. The campaign records the sequence because a register that
+silently backfills a missing row teaches a reader nothing about how the gap
+opened.
 
 ## 14. Consolidated open decisions returned to the operator
 
@@ -1007,9 +1040,11 @@ resolved teaches a reader nothing about how it was resolved.
    whole-product definition and preserves it as source history. The instrument is
    the instruction, not the package's own self-declared status — `D-19` records
    why that distinction matters, and section 15 records the reconciliation in
-   full. Only this item is answered; the thirty-nine operator decisions inside
-   the package — `OP-01` through `OP-30` and `MCP-OP-001` through `MCP-OP-009` —
-   remain open and are not tracked here.
+   full. Only this item is answered; the forty-eight operator decisions inside
+   the package — `OP-01` through `OP-30`, `MCP-OP-001` through `MCP-OP-009`, and
+   `NAR-OP-001` through `NAR-OP-009` — remain open and are not tracked here. The
+   figure was thirty-nine until the 2026-08-02 Native Apple Reminders revision
+   added the last nine; see the subsection below the five questions.
 
    The part worth keeping is why the fear did not materialise. The concern was
    that ratification would make a broad vision's acceptance criteria binding and
@@ -1074,6 +1109,37 @@ resolved teaches a reader nothing about how it was resolved.
    whether the connector is sequenced after the MCV, as its own package
    recommends, or reprioritised ahead of it. Nothing needs deciding today.
 
+### Nine more package decisions arrived with the v2.2 revision
+
+The 2026-08-02 Native Apple Reminders revision added `NAR-OP-001` through
+`NAR-OP-009` to the package's own
+[`15_OPEN_OPERATOR_DECISIONS.md`](../specs/canonical-product-definition/15_OPEN_OPERATOR_DECISIONS.md),
+which is where they are tracked. They are named here and not tabulated here, for
+the same reason `MCP-OP-001` through `MCP-OP-009` are: they belong to the
+package, the package tracks them, and reproducing the table in this plan would
+create a second copy that drifts. They are excluded from the counts above on the
+same grounds — those counts cover the three ledgers this plan is accountable
+for, and `tests/architecture/test_open_decision_counts.py` reads only
+`P00-OD-*`, `RI-OD-*`, and `O-nn`.
+
+What the operator should know without opening the file: all nine are open, and
+between them they gate every path into `WP-11`. `NAR-OP-007` is the
+code-signing and notarization identity, `NAR-OP-008` is the EventKit permission
+grant and live reminder access, `NAR-OP-001` is the reminders-only credential
+and grant issuance, and `NAR-OP-009` is production activation and residual-risk
+acceptance — four operator-only acts under `AGENTS.md` section 5. The other
+five, `NAR-OP-002` list binding, `NAR-OP-003` undated reminder policy,
+`NAR-OP-004` external edit policy, `NAR-OP-005` cancellation withdrawal, and
+`NAR-OP-006` minimum macOS and hardware, are scope and behaviour questions that
+`WP-11`'s own `NAR-00` policy amendment would otherwise have to assume. `D-39`
+records that none of them is answered and that nothing in `WP-11` is built.
+
+Unlike the RQC revision, which `D-33` records as having created operator
+questions while revising no decisions artifact — the gap this plan carries as
+`O-21` and `O-22` — the v2.2 revision **did** revise
+`15_OPEN_OPERATOR_DECISIONS.md`. So this plan opens no row of its own for
+Native Apple Reminders: the package that created the questions tracks them.
+
 ## 15. Reconciliation against the ratified canonical product definition
 
 On 2026-08-02 the operator ratified `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`.
@@ -1101,11 +1167,13 @@ exactly the evidence `D-17` refused for the predecessor, and treating it as
 sufficient here would have quietly lowered the standard this register set one
 pull request earlier.
 
-Two consequences follow. First, the thirty-nine operator decisions inside the
-package remain open — `OP-01` through `OP-30`, plus the connector's `MCP-OP-001`
-through `MCP-OP-009`. Ratifying the definition did not answer any of them, and
+Two consequences follow. First, the forty-eight operator decisions inside the
+package remain open — `OP-01` through `OP-30`, the connector's `MCP-OP-001`
+through `MCP-OP-009`, and Native Apple Reminders' `NAR-OP-001` through
+`NAR-OP-009`, which the 2026-08-02 v2.2 revision added after this section was
+first written. Ratifying the definition did not answer any of them, and
 `OP-05` in particular still carries only a recommended default. Section 14's
-counts exclude all thirty-nine, for the reason given in item 5: they belong to
+counts exclude all forty-eight, for the reason given in item 5: they belong to
 the package, not to the three ledgers this plan is accountable for.
 Second, the only question section 14 marks answered is its own item 3, the
 ratification question itself. Nothing else was removed from the operator's queue.

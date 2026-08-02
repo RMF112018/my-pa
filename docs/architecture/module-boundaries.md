@@ -99,10 +99,10 @@ src/my_pa/
   contracts/              # stable public/domain schemas and ports
   application/            # use cases, orchestration, policy/disclosure decisions
   adapters/               # driving adapters: protocol mapping only
-    normalization.py      # the one request-normalisation path both transports use
+    normalization.py      # the one request-normalisation path all three transports use
     http/                 # HTTP transport mapping only
-    mcp/                  # MCP transport mapping only (not yet built)
-    cli/                  # CLI presentation/input mapping only (not yet built)
+    mcp/                  # MCP transport mapping only, stdio
+    cli/                  # CLI presentation/input mapping only
   infrastructure/         # driven adapters: implementations of declared ports
     database/             # engine and connection contract
     persistence/          # PostgreSQL repositories, UoW, audit sink, search
@@ -112,9 +112,9 @@ src/my_pa/
     ...                   # further reserved directories hold a README only
   bootstrap/              # configuration, dependency composition, process setup
 apps/                     # repository root, a sibling of `src/`
-  gateway.py              # my-pa-gateway composition root
+  gateway.py              # my-pa-gateway composition root: HTTP and MCP surfaces
   worker.py               # my-pa-worker composition root
-  cli/                    # operator commands
+  cli/                    # operator commands: invoke.py and migration.py
 ```
 
 
@@ -128,8 +128,12 @@ access.
 
 
 A directory is not implementation authority. Only modules needed by the accepted
-vertical slice should be created; `adapters/mcp` and `adapters/cli` are named
-above because `D-23` places them, and neither exists.
+vertical slice should be created. `adapters/mcp` and `adapters/cli` were named
+above by `D-23` before either existed; WP-4B2b built both, and the amendment
+here is that sentence catching up rather than a change of shape. `apps/cli/`
+now holds two programs — `migration.py` and `invoke.py` — and `apps/gateway.py`
+serves both surfaces section 5.10 gives it, HTTP under `run` and MCP under
+`mcp`. Every other reserved directory still holds a README and nothing else.
 
 
 ## 4. Dependency rule

@@ -1,9 +1,20 @@
-"""What the gateway process is made of, and why it has two connection pools.
+"""What a transport process is made of, and why it has two connection pools.
 
 Composition, in the one place allowed to choose an implementation
 (`module-boundaries.md` section 5.10). Nothing here parses a protocol and
 nothing here decides a request; it builds the objects the transport is handed
 and hands back the handles the process has to dispose.
+
+**All three transports compose from here**, and the name stays `gateway` because
+that is what this composition is — the gateway process serving HTTP under
+`apps/gateway.py run` and MCP under `apps/gateway.py mcp`, and `apps/cli/invoke.py`
+running one request through the same objects. A CLI that composed its own
+`ApplicationService` could differ from the served one in a limit, a clock, or a
+principal kind, and the difference would be invisible until it mattered; sharing
+this function is what makes "the CLI is not a privileged bypass"
+(`module-boundaries.md` section 5.7) a fact about the wiring rather than a
+sentence in a review. The pool arithmetic below is derived for the concurrent
+case and is simply generous for the CLI, which makes one request and exits.
 
 ## The pool
 

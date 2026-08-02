@@ -32,6 +32,18 @@ too.
 and that closed set is what keeps a rejected value out of a public error. A
 command's own refusal carries its own token, so the details a caller does get
 are the ones the application already vouches for.
+
+**The one bound that lives here, and why it is not in a transport.**
+`MAX_REQUEST_BYTES` is derived from the largest request the *contract* can
+express, not from anything a protocol does, so it is a property of the request
+and belongs beside the function that builds one. It was written in
+`adapters/http/app.py` when HTTP was the only transport, and WP-4B2b moved it:
+three transports importing a ceiling from one transport's module would say that
+deleting HTTP breaks MCP, which is false, and a structural claim that is false
+misleads the next reader more than a duplicated constant would. Enforcing it is
+still each transport's own act — HTTP refuses on the declared `content-length`
+before reading, and the other two measure a document the protocol has already
+delivered — but the number they enforce is one number.
 """
 
 from __future__ import annotations
@@ -55,8 +67,9 @@ from my_pa.application.commands import (
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 
-__all__ = ["PAYLOAD_KEY", "normalize"]
+__all__ = ["MAX_REQUEST_BYTES", "PAYLOAD_KEY", "normalize"]
 
 #: Where a request's capability-specific fields live, separated from the common
 #: metadata beside them. Separate rather than flat because the two are validated
@@ -64,6 +77,37 @@ __all__ = ["PAYLOAD_KEY", "normalize"]
 #: command — and a flat document would make "which owner rejected this" a
 #: question about field names.
 PAYLOAD_KEY: Final = "payload"
+
+#: An identifier in a JSON array: at most 72 characters, which is the bound
+#: `domain.common.identifiers` enforces, plus the two quotes and the comma that
+#: carry it. Restated rather than imported because that bound is private to the
+#: module that enforces it — and checked rather than trusted, by
+#: `test_the_request_ceiling_admits_the_largest_request_the_contract_allows`,
+#: which builds identifiers at the real maximum and measures the result.
+_IDENTIFIER_JSON_BYTES: Final = 75
+
+#: Everything a request carries that is not `sources.enroll`'s object list. An
+#: enrollment may name 32 media types and neither the domain nor the contract
+#: bounds one's length, so this is where a media type is bounded, at 128 bytes
+#: each. The rest is small and enumerable: a request id and an idempotency key
+#: at 128 characters each, a search query and a cursor at 512 characters and at
+#: most four UTF-8 bytes per character, and a dozen short scalars. Eight
+#: kibibytes covers all of it several times over.
+_ENVELOPE_BYTES: Final = 32 * 128 + 8 * 1024
+
+#: Most bytes one request may carry, derived from the largest request the
+#: contract can express rather than chosen as a round number. `sources.enroll`
+#: at its domain ceiling is that request: `MAX_ENROLLMENT_ITEMS` object
+#: identifiers, and everything else beside them.
+#:
+#: A caller can exceed this — `RequestMetadata.scope` takes identifier lists the
+#: contract does not bound — and exceeding it is refused rather than truncated.
+#: The declared scope is correlation input that authorization does not read, so
+#: nothing is lost by bounding it here.
+#:
+#: It lives beside `normalize` rather than in a transport because it is derived
+#: from the contract; see the module docstring.
+MAX_REQUEST_BYTES: Final = MAX_ENROLLMENT_ITEMS * _IDENTIFIER_JSON_BYTES + _ENVELOPE_BYTES
 
 
 def _strings(value: object, detail: SafeDetail) -> tuple[str, ...]:

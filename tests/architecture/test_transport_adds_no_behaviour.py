@@ -166,11 +166,28 @@ SQL = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|CREATE TABLE|DROP TABLE)\b")
 
 
 def test_there_are_adapters_to_guard() -> None:
-    """Every rule below parametrises over this list; an empty one passes them all."""
+    """Every rule below parametrises over this list; an empty one passes them all.
+
+    Named module by module rather than counted, because a count is satisfied by
+    three files in one transport. Each of the three transports has to be here:
+    the rules are about what a transport may contain, and a transport the scan
+    never opened is a transport no rule below applies to.
+    """
     modules = _adapter_modules()
     assert len(modules) >= 3, f"only {len(modules)} adapter modules were found"
-    assert (ADAPTERS / "normalization.py") in modules
-    assert (ADAPTERS / "http" / "app.py") in modules
+    for expected in (
+        ADAPTERS / "normalization.py",
+        ADAPTERS / "http" / "app.py",
+        ADAPTERS / "mcp" / "server.py",
+        ADAPTERS / "mcp" / "tools.py",
+        ADAPTERS / "cli" / "app.py",
+    ):
+        assert expected in modules, f"{expected.relative_to(ADAPTERS)} is not being scanned"
+    # And every package `__init__` too, which is where the same hole was found
+    # twice this campaign: one import in a package initialiser evaded 624
+    # architecture tests because nothing enumerated the file it was in.
+    for subtree in ("http", "mcp", "cli"):
+        assert (ADAPTERS / subtree / "__init__.py") in modules
 
 
 @pytest.mark.parametrize("path", _adapter_modules(), ids=lambda p: str(p.name))

@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from my_pa.adapters.http.app import MAX_REQUEST_BYTES, PATH_TEMPLATE, create_http_app
+from my_pa.adapters.http.app import PATH_TEMPLATE, create_http_app
 
-__all__ = ["MAX_REQUEST_BYTES", "PATH_TEMPLATE", "create_http_app"]
+__all__ = ["PATH_TEMPLATE", "create_http_app"]

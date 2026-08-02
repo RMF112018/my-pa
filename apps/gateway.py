@@ -2,12 +2,20 @@
 
     .venv/bin/python apps/gateway.py run
     .venv/bin/python apps/gateway.py run --port 9000
+    .venv/bin/python apps/gateway.py mcp
 
 This is the only place in the gateway that chooses an implementation
 (`module-boundaries.md` section 5.10). It loads validated configuration, asks
 `bootstrap.gateway` for the runtime — the application, the local principal, and
 the two connection pools that keep the audit sink from starving the work it
-records — builds the ASGI application over them, and runs it.
+records — builds a transport over them, and runs it.
+
+**Two surfaces, one root.** Section 5.10 gives `apps.gateway` the HTTP *and*
+MCP surfaces, and they are one program because they are one composition: the
+same settings, the same application, the same principal, the same pools. `run`
+serves HTTP on a loopback socket; `mcp` serves the Model Context Protocol on
+standard input and output (`D-26`) and opens nothing. A third file would have
+been a third place for the composition to drift.
 
 **Loopback, and nothing else** (`D-30`). The host is a constant rather than a
 flag. There is no option to bind elsewhere, because a flag that can be set wrong
@@ -57,6 +65,8 @@ from typing import Final
 import uvicorn
 
 from my_pa.adapters.http import create_http_app
+from my_pa.adapters.mcp import serve_stdio
+from my_pa.adapters.mcp.server import SERVER_NAME
 from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.settings import load_settings
 
@@ -120,12 +130,42 @@ def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mcp(args: argparse.Namespace) -> int:
+    """Serve the same capabilities over MCP, on standard input and output.
+
+    **Standard output is the wire**, so the notice below goes to standard error
+    and nothing else is printed at all. A startup line on the wrong stream is
+    not a cosmetic problem here: it is a JSON-RPC parse failure on the client's
+    first read, before `initialize` has been answered.
+
+    No signal handler and no shutdown bound, because there is nothing to bind.
+    The connection ends when the client closes the read side or when the process
+    is signalled, and either way there is no socket to drain and no in-flight
+    request the operating system will not end with the process. Uvicorn's
+    graceful shutdown exists because a listening server outlives its clients;
+    this one is the client's child.
+    """
+    settings = load_settings()
+    runtime = build_gateway_runtime(settings)
+    print(f"serving     mcp on stdio as {SERVER_NAME}", file=sys.stderr)
+    print(_NO_PROVIDER_NOTICE, file=sys.stderr, flush=True)
+    try:
+        serve_stdio(runtime.service, principal=runtime.principal)
+    finally:
+        runtime.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the my-pa HTTP gateway on loopback.")
+    parser = argparse.ArgumentParser(
+        description="Run the my-pa gateway on loopback HTTP or on MCP over stdio."
+    )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     run = subcommands.add_parser("run", help="serve the eight capabilities over HTTP")
     run.add_argument("--port", type=int, default=DEFAULT_PORT)
+
+    subcommands.add_parser("mcp", help="serve the eight capabilities over MCP on stdio")
     return parser
 
 
@@ -140,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
     match args.command:
         case "run":
             return _run(args)
+        case "mcp":
+            return _mcp(args)
         case unknown:  # pragma: no cover - argparse rejects an unknown command first
             raise SystemExit(f"unhandled command {unknown!r}")
 

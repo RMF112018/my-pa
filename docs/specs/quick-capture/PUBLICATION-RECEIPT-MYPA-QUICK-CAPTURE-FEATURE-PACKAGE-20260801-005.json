@@ -1,0 +1,330 @@
+{
+  "receipt_id": "PUBLICATION-RECEIPT-MYPA-QUICK-CAPTURE-FEATURE-PACKAGE-20260801-005",
+  "date": "2026-08-01",
+  "package_id": "MYPA-QUICK-CAPTURE-FEATURE-PACKAGE-20260801-005",
+  "coordination_request_id": "REQ-MYPA-QUICK-CAPTURE-FEATURE-DEFINITION-20260801-081",
+  "classification": "INTERNAL_PRODUCT_DEFINITION_PUBLICATION_RECEIPT",
+  "disposition": "PUBLICATION_COMPLETE",
+  "destination_parent_folder_id": "1MDaLiEjNN3Fdondxs4NJpK5SfwdXjzl0",
+  "package_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+  "repository": "RMF112018/my-pa",
+  "authenticated_head_sha": "40391b784ba7df2aa37f99fed86b0d4ac4723034",
+  "representation": "stored_raw_bytes",
+  "hash_scope": "stored_raw_bytes; SHA-256 over exact local source bytes; critical artifacts and aggregate content archive verified by raw Drive readback",
+  "index": {
+    "owning_index_id": "1i9r6pDI8jZQnD526_o_aFl8WWUliWX0h1ANLh_gtelE",
+    "status": "REGISTERED_AND_READ_BACK",
+    "revision_id_after_final_update": "AIroW35El92gGcDdMQrFaeAS6goOhGFkBxYanD5dD_bDsr0RLKxnUSR8wVGACJR1XwIC5zthOVs4SEWIt2ZIZOCdcaQThbxcRqI85Ibx"
+  },
+  "artifacts": [
+    {
+      "name": "00_README.md",
+      "drive_id": "1wrjAiPATe84vvG3NoAEVHeMm2yPr3Jxy",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 6052,
+      "source_sha256": "ffeefbe9dccd98639f87c45b2e425916753e96f46610c5ce563dc901e75b9a4d",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "01_EXECUTIVE_FEATURE_DESCRIPTION.md",
+      "drive_id": "1yeDfjVm3lKDIpbmFs26_45ULnRXkRrJ7",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 7904,
+      "source_sha256": "4b3db63188104177626f0584906467717f1c433649bc49aabb1ff25a5f5ec78f",
+      "verification": "DRIVE_RAW_READBACK_SHA256_MATCH"
+    },
+    {
+      "name": "02_COMPREHENSIVE_IMPLEMENTATION_SPECIFICATION.md",
+      "drive_id": "12LzcTjYLJl7T9gqJ2abBag0rn94pRCQq",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 17489,
+      "source_sha256": "f32cb50e10827287420105c62ff50c61a5e976f3b8af5e9a18ec4c3b032c1384",
+      "verification": "DRIVE_RAW_READBACK_SHA256_MATCH"
+    },
+    {
+      "name": "03_PRODUCT_PHILOSOPHY_AND_USER_VALUE.md",
+      "drive_id": "1o1JkUl1tRyyLlE7bQj8rWt5X5EUsDoC7",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 3738,
+      "source_sha256": "a8a91aab16d6124c5af08c87ad51e4d1966ec06c78d52d6640e4b31cc43c7af1",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "04_TERMINOLOGY_AND_CAPTURE_TAXONOMY.md",
+      "drive_id": "1Tr8LRo1SPvtGzyqPdbV7Uyb_0-7cfrw1",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 3991,
+      "source_sha256": "ba9a5bb698292c334d8c5f2fca5f52486e76bc9f69b8203251c691e1d9b7b58e",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "05_END_TO_END_WORKFLOW_INVENTORY.md",
+      "drive_id": "1ZCZWuqNVdW1UeQjFHvuDwFWhg7aJabF5",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 6604,
+      "source_sha256": "094dcd13aa6b36ff1ef2366ba9d231ed8a3367507772f23d9e29f5a41ce828ef",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "06_UX_AND_INTERACTION_SPECIFICATION.md",
+      "drive_id": "1qqbeVQNYG3vq8GpOAFWzO8H2GHlb0tIE",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 5319,
+      "source_sha256": "93af7d02acc25f040790538f0850f832621bdc09df250ee6179399ee692ecf87",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "07_DEVICE_AND_PLATFORM_EXPERIENCE_MATRIX.md",
+      "drive_id": "119LExYDoiWBEOu8Brhzhq2zhp6vKG0Q7",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 6333,
+      "source_sha256": "73cebd41f342ad089dfa40e7b8ec46ff9a9b6e63e781054cc0c524068cdccbc9",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "08_INFORMATION_ARCHITECTURE_UPDATE.md",
+      "drive_id": "1SdEiFWEP3IM6EyhAfJRSq_RkmlKL1Feu",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 4525,
+      "source_sha256": "005d96395e121e8cf07a3062ed97bd50348dfced2b3de293c1e464d9cbc920d1",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "09_LOGICAL_DATA_MODEL.md",
+      "drive_id": "15lZvdqm0jozTxmJDx53LFVhncOp2FD-I",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 10225,
+      "source_sha256": "d213d8828c16d6948367cbf07a3e1eaa9411d94534ad96cfb8def07c7fd21888",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md",
+      "drive_id": "1-h7UqMXE8Rrvw_5tTvaYVxWzNlD1ba1p",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 5412,
+      "source_sha256": "3699ee560ed460e41d316cabe2500fb75b343109f92be2b82c8ad96ff794816a",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "11_EXTRACTION_AND_PROPOSAL_PIPELINE.md",
+      "drive_id": "1wv2eYSCDa10dq59Mepc7BAHHy0jc43Ph",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 6953,
+      "source_sha256": "bbfd286f2cd3c5eb165ec166a6aced08f937db5982ae22de3af71b53ca60afcd",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "12_REVIEW_AND_PROMOTION_POLICY.md",
+      "drive_id": "1LMqIR42lkYfqt6SuRDgjvPdNbp5DUaba",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 5133,
+      "source_sha256": "ce9483c41c5b0ef46c34eaf6792e1b4c32a3dcea88a358e687cd68521ba9c748",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "13_OFFLINE_AND_SYNCHRONIZATION_SPECIFICATION.md",
+      "drive_id": "13KdIkygxEIk85gLo7FwcAwJO48PSku7v",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 6222,
+      "source_sha256": "12426b88973d89a37fe069c9c4f53c3fbe58c82bb46d468da9d475d125cc55ab",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "14_PRIVACY_SECURITY_AND_AUDIO_BOUNDARY.md",
+      "drive_id": "119JvHJqpfkHhKdEAh16XwebabIAgE23d",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 5923,
+      "source_sha256": "6a7418abf0c74aa9dfa37911f2b7d1698ab495679e430cde8d5f12ebfefb5638",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "15_SEARCH_DISPLAY_AND_NOTIFICATION_INTEGRATION.md",
+      "drive_id": "1rP_DsgHMckNYIVAVz-htg0RyEguIpvnJ",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 5063,
+      "source_sha256": "2910039c90d6f17b36424ef881fbe74d4196e39b40460455c24b76f92df4a9b0",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "16_AI_STRATEGY.md",
+      "drive_id": "1aHvTrflMQXOi6q5GAhQRsBbPdqrB4szO",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 5182,
+      "source_sha256": "3921980caf4b064aab2692f401446c334f32246b4ef0b46ea26d713a3629b371",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "17_TECHNICAL_ARCHITECTURE_RECOMMENDATION.md",
+      "drive_id": "1YIa5Uhlo6YgG9PNOjErG76W4-iz9uCZ9",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 6140,
+      "source_sha256": "b5da729da8443f111533305b7fede92f278ea61ed5306f9b4a3e67fc04ba3732",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "18_PROPOSED_API_AND_CONTRACT_PACKAGE.md",
+      "drive_id": "1NJvKUHBZjdaHXJhx7U-isLZHy-hHjgry",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 8381,
+      "source_sha256": "227b73fdee33d63bd464fd30b3cb62800d39290921a69455b0954c5821ecca2e",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "19_MVP_DEFERRED_CAPABILITIES_AND_ROADMAP.md",
+      "drive_id": "1s1XGbZnOLbTto5o-2fL0E5aOeIodlnt3",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 6236,
+      "source_sha256": "dcee792742d20eaf924eca82110e1698b43d1aa83241fe0d0bb6a2e8a562494b",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "20_TESTING_EVALUATION_AND_ACCEPTANCE.md",
+      "drive_id": "103_zu9G9pnaeIrEWkk6QSfElsHCgC30R",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 8403,
+      "source_sha256": "a3e1dce1aeab8e828b8b60f8891a5951c8b0f390f15a1891b52b2864556c57a9",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "21_RISKS_MITIGATIONS_AND_OPEN_OPERATOR_DECISIONS.md",
+      "drive_id": "1_bKIRVbPBxqqls-J9ilJnY84jgzZTXsx",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 7109,
+      "source_sha256": "c25c3fda194d08bd858675214572213a81b0e92fa9f82f6c7abf928d719485d6",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "22_DECISION_LOG.md",
+      "drive_id": "1XoAGVkGSPxarwgFOzw_B_gAY-z1yqqx6",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 3864,
+      "source_sha256": "07ad969d1e59561e4183456541570172973e0d7ef0a607d25082c2802b9ed37d",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "23_STRUCTURED_WIREFRAMES.md",
+      "drive_id": "1EkOZPCLTrsTrlyVu5Mktdw7NbgItzZ11",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 16051,
+      "source_sha256": "57023b935e6d35b5432d383f86073481b515205e627eb4b323e78cd8db0bd950",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "24_SOURCE_MANIFEST.json",
+      "drive_id": "12n36mQgDE740UwM6qUUgidrYDUAkFuiw",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "application/json",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 9331,
+      "source_sha256": "18b660cae389ed8e3f49f5d140f0e8755a3768e3825d794a977421b0b6f949f3",
+      "verification": "UPLOAD_ACCEPTED_WITH_EXACT_REPORTED_SIZE; CONTENT_INCLUDED_IN_READBACK_VERIFIED_ARCHIVE"
+    },
+    {
+      "name": "COORDINATION-REQUEST-REQ-MYPA-QUICK-CAPTURE-FEATURE-DEFINITION-20260801-081.md",
+      "drive_id": "1toP1M_IQKlGr_4-5kgMRbJQdbKhh7zaP",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 34050,
+      "source_sha256": "3685672d825a7f5e283e22fe658be65c3d0f411a62fa0717591589df4ac9137d",
+      "verification": "DRIVE_RAW_READBACK_SHA256_MATCH"
+    },
+    {
+      "name": "COORDINATION-RESPONSE-REQ-MYPA-QUICK-CAPTURE-FEATURE-DEFINITION-20260801-081.md",
+      "drive_id": "1v5frToYRZgfMMYLW9wEhPai9-f-uaEGa",
+      "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+      "mime_type": "text/markdown",
+      "representation": "stored_raw_bytes",
+      "source_bytes": 29645,
+      "source_sha256": "567960698283e4f2acbe871c0f16b88e9748d325f08a92814018aeba204ac9fd",
+      "verification": "DRIVE_RAW_READBACK_SHA256_MATCH"
+    }
+  ],
+  "content_archive": {
+    "name": "MYPA-QUICK-CAPTURE-FEATURE-PACKAGE-20260801-005.zip",
+    "drive_id": "1qRYCRhl0c6neHenm7lswzVySSi_Xo4Gv",
+    "parent_folder_id": "1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN",
+    "representation": "stored_raw_bytes",
+    "source_bytes": 104100,
+    "source_sha256": "b9ca21a27edf0aea65e3f746f470c94ac73535b776def91a0c8c8aa1fc0c3143",
+    "file_count": 27,
+    "scope": "00_README through 24_SOURCE_MANIFEST plus complete coordination request and final coordination response; receipts excluded to avoid circular binding",
+    "verification": "DRIVE_RAW_READBACK_SHA256_MATCH"
+  },
+  "roundtrip_receipt_drive_id": "1Rp-jdh2ClwKwTIDx-4tH16BZ3e68_T_W",
+  "verification": {
+    "destination_parent_identity": "VERIFIED",
+    "package_folder_identity_and_parent": "VERIFIED",
+    "folder_inventory": "VERIFIED_30_UNIQUE_ITEMS",
+    "individual_uploads": "ACCEPTED_WITH_EXPECTED_NAMES_AND_REPORTED_SIZES",
+    "executive_feature_description_readback": "SHA256_MATCH",
+    "implementation_specification_readback": "SHA256_MATCH",
+    "coordination_request_readback": "SHA256_MATCH",
+    "coordination_response_readback": "SHA256_MATCH",
+    "content_archive_readback": "SHA256_MATCH",
+    "owning_index_registration": "REGISTERED_AND_READ_BACK",
+    "roundtrip_binding": "BOUND_BY_FINAL_ROUNDTRIP_RECEIPT"
+  },
+  "implementation_authority": "NOT_GRANTED",
+  "blocked_actions": [
+    "implementation",
+    "repository mutation",
+    "active objective change",
+    "live source access",
+    "cloud disclosure",
+    "recording",
+    "external actions",
+    "deployment",
+    "risk acceptance"
+  ],
+  "publication_status": "COMPLETE",
+  "invalidation_rule": "Any change to repository basis, package parent, artifact bytes/IDs, coordination request or response, content archive, owning-index registration, or receipt bindings invalidates this publication receipt."
+}

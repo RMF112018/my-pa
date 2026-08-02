@@ -20,6 +20,7 @@
 | [`module-boundaries.md`](module-boundaries.md) | Present — proposed for repository review |
 | [`data-authority.md`](data-authority.md) | Present — proposed for repository review |
 | [`../security/threat-model.md`](../security/threat-model.md) | Present — proposed for repository review |
+| [`../decisions/ADR-003-product-owned-user-authored-source-records.md`](../decisions/ADR-003-product-owned-user-authored-source-records.md) | Accepted — the third authority class |
 
 ## Specification
 
@@ -31,4 +32,4 @@ See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md) and the unres
 
 ## Implementation boundary
 
-This index records architecture direction only. Persistence behavior now exists: the `my_pa` package, six Alembic revisions, and the migrated PostgreSQL corpus. No service runs — there is no gateway, worker, provider, or transport. These documents describe intended behavior and do not authorize implementation, database access, source access, deployment, or production activation.
+This index records architecture direction only. Behavior now exists: the `my_pa` package, eight Alembic revisions at head `8b3f5c17d904`, the migrated PostgreSQL corpus, a read-only fixture source provider, and PostgreSQL persistence for the source registry, enrollment, jobs, extraction, quarantine, coverage, and lexical search. No service runs — there is no gateway, worker, or transport, and nothing composes a capability end to end. These documents describe intended behavior and do not authorize implementation, database access, source access, deployment, or production activation.

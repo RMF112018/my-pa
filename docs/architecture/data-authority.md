@@ -59,6 +59,7 @@ Authenticated basis: `main@3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae`; tree SHA a
 | Source normalized metadata | `observed` | PostgreSQL record | Application observation transaction | source/object/version, observed time, adapter version | Active |
 | Protected identity mapping | `canonical` inside `my-pa` | PostgreSQL | Application identity service | opaque IDs, provider identity, policy scope | Active |
 | Enrollment specification | `canonical` authorization record | PostgreSQL | Operator-authorized application command | principal, purpose, scope, limits, policy, idempotency | Active |
+| Product-owned user-authored record | `source_authoritative` for the committed text | PostgreSQL | Owning principal through an application command; append-only successor versions only | principal, capture and version identity, monotonic version number, exact text, text hash, server receipt time, classification, processing policy, idempotency key, correlation and audit reference | Active under ADR-003 |
 | Extracted text | `derived` | PostgreSQL | Worker/application | source version/fingerprint, extractor/version, limitations | Active |
 | Coverage/freshness | `derived/observed` | PostgreSQL | Worker/application state machine | enrollment/snapshot, counts, timestamps | Active |
 | FTS index | `derived/cached` | PostgreSQL | Persistence implementation | knowledge/source-version record | Active |
@@ -68,9 +69,9 @@ Authenticated basis: `main@3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae`; tree SHA a
 | Obsidian projection | `projected` | Projection filesystem | Projection builder only | canonical record/version + projection version | Excluded |
 | Audit event | `canonical` evidence | PostgreSQL/audit store | Application append; linked corrections | correlation, actor, purpose, policy, result | Active |
 | Job/operation state | `canonical` execution record | PostgreSQL | Application/worker state machine | work ID, lease, attempts, request/idempotency | Active |
-| Connector observation | `observed` | Future PostgreSQL record | Connector ingestion | provider/account/container/item/version | Excluded |
-| Person/entity record | `canonical` only after governed resolution | PostgreSQL | Future identity workflow | source observations, merge/split lineage, review | Excluded |
-| Relationship insight | `proposed/inferred` | Future PostgreSQL record | Future analysis/review | sources, method/model, confidence, restrictions | Excluded |
+| Connector observation | `observed` | Future PostgreSQL record | Connector ingestion | provider/account/container/item/version | Fixture only; live personal-source access excluded |
+| Person/entity record | `canonical` only after governed resolution | PostgreSQL | Governed identity workflow | source observations, merge/split lineage, review | Active; merge and split are review-required and reversible |
+| Relationship insight | `proposed/inferred` | Future PostgreSQL record | Future analysis/review | sources, method/model, confidence, restrictions | Read-only profiles active; synthesis, scoring, and inference excluded |
 | Runtime configuration | Process authority | Validated config + nonsecret defaults | Operator/deployment authority | version, source, validation | Docs only |
 | Secrets/credentials | External secret authority | Runtime secret mechanism | Operator only | never in product records/logs | Excluded |
 | Physical DB identity | `unavailable/deferred` | Operator configuration | Operator only | ADR-002 mapping | Unresolved |
@@ -95,6 +96,20 @@ PostgreSQL is the planned canonical store for product-owned identity mappings, e
 
 
 Migrations first run against a disposable isolated database from empty schema to head. No migration, introspection, alias guess, or mutation may target an unknown physical database.
+
+
+### User-authored records
+
+
+A record the user creates inside `my-pa` has no external source system to defer
+to, so neither the original-source rule nor the managed-document rule describes
+it. ADR-003 gives it its own class, and the rules that follow from it are:
+
+
+- Stored text is immutable. An edit appends a successor and supersedes its predecessor, which stays retrievable. There is no update path and no application delete path, so no test has to prove one is unreachable.
+- It is `source_authoritative` for what the user wrote and for nothing else. It does not make the user's statements true, and anything derived from it stays `derived`, `proposed`, or `inferred` under the rules above.
+- It is not a managed-document write. No separate store, no filesystem root, no restore workflow, and no reuse of a source-provider handle.
+- The read-only source-provider port gains nothing. A user-authored record never travels through it.
 
 
 ### Derived records
@@ -182,7 +197,7 @@ stateDiagram-v2
 ```
 
 
-MCV stops at source observations, derived text, source-bound knowledge/search, coverage, operations, and audit. Reviewed assertions, entity resolution, relationships, managed documents, and projections are later.
+The read-only slice stops at source observations, derived text, source-bound knowledge and search, coverage, operations, and audit. The scope promoted on 2026-08-01 adds user-authored records, span-bound proposals, reviewed assertions, and governed entity resolution, and admits read-only relationship profiles over fixture observations. Managed documents, projections, relationship synthesis, and model-generated proposals remain later.
 
 
 Promotion requires verified identity/version; allowed classification/purpose/policy; complete provenance; represented conflicts/unavailable evidence; explicit promoter authority; and auditable/reversible transition where applicable.
@@ -249,6 +264,8 @@ Requires separate root/store, policy command, expected-version check, immutable 
 - `DA-INV-008`: Restoration/rebuild recreates derived/projection state without altering source authority.
 - `DA-INV-009`: Physical DB configuration fails closed when absent, ambiguous, or inconsistent.
 - `DA-INV-010`: No migration targets an unknown physical database.
+- `DA-INV-011`: A user-authored record version is append-only. No application path updates or deletes stored text.
+- `DA-INV-012`: A derived record over user-authored text cites at least one evidence span into an exact immutable version, and a span whose quoted-text hash no longer matches quarantines the derived record rather than presenting it against changed text.
 
 
 ## 12. Phase acceptance implications

@@ -1,14 +1,14 @@
 ---
 artifact_id: SPEC-PKL-MCV-RO-001
 artifact_type: Product and public-contract specification
-version: 0.1.0
+version: 0.2.0
 status: PROPOSED_FOR_REPOSITORY_REVIEW
 feature_id: FEATURE-PKL-001
 phase_id: PHASE-00
 repository: RMF112018/my-pa
 repository_branch: main
-authenticated_head_sha: e773e6f2285da9e453a8ca7e11bdac23619aaf22
-authenticated_tree_sha: 0c726df770c5be7581a7106bf1e399e1f0ea1e98
+authenticated_head_sha: 8274d88a6211c417c43d2d937edfe2c8ccc369be
+authenticated_tree_sha: 89d2d298bb9fed459360e025fb94a4696b41b24b
 planning_basis_sha: b8563870afcf87b63e4cde6e0a48bfc59f0bd5b7
 contract_family: my-pa-public-capabilities
 contract_version: v1
@@ -26,7 +26,11 @@ supersession_state: INTEGRATED_IN_REPOSITORY
 This document defines the proposed minimum credible version (MCV) contract for the Personal Knowledge Layer in `RMF112018/my-pa`. It is repository documentation, not executable implementation, repository authority, risk acceptance, or activation approval.
 
 
-This document was authored against `main@3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae` from a Phase 00 planning basis of `b8563870afcf87b63e4cde6e0a48bfc59f0bd5b7`, and was integrated into the repository afterwards. The front matter now records the reconciled basis, `main@e773e6f2285da9e453a8ca7e11bdac23619aaf22`, tree `0c726df770c5be7581a7106bf1e399e1f0ea1e98`, verified locally on 2026-08-01. Only this section and the front matter were reconciled; the rest of the document is unchanged from the integrated text. Any later change to this document must revalidate the exact current head, tree, branch, worktree, and dirty/untracked state.
+This document was authored against `main@3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae` from a Phase 00 planning basis of `b8563870afcf87b63e4cde6e0a48bfc59f0bd5b7`, and was integrated into the repository afterwards. The front matter now records the reconciled basis, `main@e773e6f2285da9e453a8ca7e11bdac23619aaf22`, tree `0c726df770c5be7581a7106bf1e399e1f0ea1e98`, verified locally on 2026-08-01. That reconciliation touched only this section and the front matter; the rest of the document was unchanged from the integrated text.
+
+**That is no longer true, and this paragraph is the record of when it stopped being true.** On 2026-08-02 the normative sections were amended for the first time, against `main@8274d88a6211c417c43d2d937edfe2c8ccc369be`, tree `89d2d298bb9fed459360e025fb94a4696b41b24b`. Sections 5, 6, 16, and 18 changed; the version moved to 0.2.0. The amendment follows an operator reprioritization of the objective on 2026-08-01 admitting Relationship Intelligence and Quick Capture, and [ADR-003](../decisions/ADR-003-product-owned-user-authored-source-records.md), which is what permits the second of those to cross section 4 of `AGENTS.md`. Nothing was removed to make room: every exclusion that still holds is still stated, and the two that narrowed say what they narrowed to.
+
+Any later change to this document must revalidate the exact current head, tree, branch, worktree, and dirty/untracked state.
 
 
 Repository-local governance, accepted ADRs, and authenticated repository state govern over this document. This candidate is invalidated by a material change to the product objective, architecture boundaries, accepted ADRs, public capability set, authority model, disclosure policy, or repository basis.
@@ -102,16 +106,20 @@ Purposes are explicit and narrow: `source_inspection`, `bounded_enrollment`, `co
 - PostgreSQL full-text search; `pg_trgm` may support lexical matching when justified.
 - HTTP/MCP adapters with equivalent semantics.
 - Synthetic tests and disposable PostgreSQL only in later authorized implementation.
+- User-authored capture as a product-owned source class under ADR-003: one unrestricted text field, immutable versions, and derived records that cite exact spans into the version they came from.
+- Relationship identity, unresolved mentions, duplicate review, and read-only person and organization profiles, assembled from observations supplied by a fixture personal-source provider.
+
+The last two entered scope on 2026-08-01 by operator reprioritization. They are bounded by section 5.2 as amended, not by their own feature specifications: a specification admitted to scope is not thereby accepted in full.
 
 
 ### 5.2 Explicitly excluded
 
 
 - Live NAS access, NAS crawling, full-volume indexing, or recursive discovery of unreferenced content.
-- Personal email, calendar, contact, relationship, or public-research connectors.
+- Live personal email, calendar, and contact connector access, and public-research connectors of any kind. Relationship read models over synthetic fixture observations are in scope; reading a real account requires separate operator authorization naming the exact connector, account, and scope, which does not exist.
 - Source mutation, rename, move, delete, upload, overwrite, permission change, or metadata mutation.
-- Managed-document writes or version/recovery workflows.
-- Vector search, graph infrastructure, relationship intelligence, and projection implementation.
+- Managed-document writes or version/recovery workflows. A user-authored capture is not one: it is the third authority class ADR-003 defines, held in PostgreSQL, append-only, and routed through no managed write port.
+- Vector search, graph infrastructure, and projection implementation. Relationship intelligence left this list on 2026-08-01; relationship *synthesis*, scoring, and public research did not, and are excluded by the entry above and by `INV-PKL-012`.
 - Autonomous action, tool execution based on retrieved instructions, consequential decision support, deployment, or production activation.
 - Cloud-model disclosure of raw/private source content.
 
@@ -127,6 +135,11 @@ Purposes are explicit and narrow: `source_inspection`, `bounded_enrollment`, `co
 - `INV-PKL-006`: Runtime configuration receives approved roots. Future operator NAS access, separately authorized, uses `ssh bf-nas`; runtime never depends on an SSH alias.
 - `INV-PKL-007`: Unavailable, stale, partial, quarantined, or unsupported evidence is explicit and never converted to empty/complete.
 - `INV-PKL-008`: Retrieved content is data, not trusted instruction. It cannot authorize tools, source actions, disclosure, or policy changes.
+- `INV-PKL-009`: A user-authored record version is immutable. An edit appends a successor and supersedes its predecessor; stored text is never rewritten and never deleted by the application. Withdrawal is an archive state.
+- `INV-PKL-010`: The user-authored class grants the read-only source-provider port no write method, and is never routed through a managed-document write. It is authoritative for what the user wrote and for nothing further.
+- `INV-PKL-011`: A derived record over user-authored text cites at least one evidence span into an exact immutable version, re-validated before the record is shown. A span that no longer matches quarantines the record rather than presenting it against text that has changed.
+- `INV-PKL-012`: No composite relationship score exists — moral, reputational, compatibility, loyalty, trustworthiness, or relationship-health — and no protected- or sensitive-trait inference exists at all. Separate transparent indicators are permitted and each states its calculation basis and time window.
+- `INV-PKL-013`: A canonical person is established only through governed identity resolution. A source observation never becomes a person by itself, and merge and split are reversible and review-required.
 
 
 ## 7. User-visible workflow and sequence
@@ -552,6 +565,21 @@ Sensitive values are never labels/default logs. Debug mode cannot bypass redacti
 - `P05-SPEC-AC-002`: Negative tests prove traversal, mutation, authorization, unknown scope, prompt/tool injection, disclosure denial.
 
 
+### Promoted-scope implications
+
+
+These follow the 2026-08-01 reprioritization and bind the work packages in
+`../plans/mcv-completion-plan.md` section 12.
+
+
+- `P06-SPEC-AC-001`: A user-authored capture persists durably, immutably, and idempotently, and the save transaction commits no derived record. An induced audit or receipt failure fails the whole save closed and leaves nothing behind.
+- `P06-SPEC-AC-002`: Editing appends a successor version; the predecessor stays retrievable and the supersession chain is unbroken. Device, server, occurred, processed, and accepted times remain distinct fields.
+- `P07-SPEC-AC-001`: Every derived record over capture text carries at least one span validated against its exact version, and a span that no longer matches quarantines rather than displays.
+- `P07-SPEC-AC-002`: Consequential proposals — commitments, decisions, amounts, critical dates, identity merges, sensitive relationship conclusions — cannot reach canonical without an explicit review disposition. Proven by attempting each promotion directly and requiring denial.
+- `P08-SPEC-AC-001`: Relationship identity, unresolved mentions, and profiles are demonstrated over synthetic fixtures with coverage disclosure, and no live personal-source read occurs.
+- `P08-SPEC-AC-002`: No composite relationship score and no protected-trait field exists in any schema or contract, enforced statically rather than by review attention.
+
+
 ## 17. Open decisions and defaults
 
 
@@ -571,6 +599,9 @@ See `../../PHASE-00-OPEN-DECISION-LEDGER.md`.
 
 
 Invalidated by material changes to governance, ADR-001/002, capability names, MCV scope, data authority, source/managed-write boundary, physical DB decision, provider/root authority, security policy, or acceptance criteria; integration against a different identity without revalidation; implementation evidence showing impossibility/unsafe design; or independent-review conflict.
+
+
+This amendment is itself such a material change — to MCV scope and to the source/managed-write boundary — and was made against a revalidated exact head with the basis recorded in section 1 and the front matter, under an operator reprioritization and ADR-003. A later reader should treat the 0.1.0 text as superseded where the two differ, not as a parallel reading.
 
 
 Next gate: separately authorized document-only repository change based on fresh exact `main` head/tree and clean worktree. Place intended files, update indexes, run documentation/link/security checks, and obtain independent exact-head review. Drive publication does not complete Phase 00 or authorize Phase 01.

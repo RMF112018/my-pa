@@ -43,7 +43,8 @@ This document refines the accepted foundation in ADR-001 and ADR-002. It does no
 | `CTX-PKL-010` | Cloud model provider | External processing boundary | Excluded by default | Raw/private data disclosure prohibited absent separate approval |
 | `CTX-PKL-011` | Managed-document store | Separate write-authority capability | Excluded from MCV | Writes require separate operator authorization and transactions |
 | `CTX-PKL-012` | Obsidian projection | Rebuildable human-facing view | Later phase | Derived projection, never canonical authority |
-| `CTX-PKL-013` | Email/calendar/contact providers | Personal-data observations | Excluded from MCV | Separate authorization, privacy, and provider contracts required |
+| `CTX-PKL-013` | Email/calendar/contact providers | Personal-data observations | Fixture provider in scope; live access excluded | Separate authorization, privacy, and provider contracts required |
+| `CTX-PKL-015` | Local operator as author | Creates user-authored records through the capture contract | Active under ADR-003 | Authors evidence the product owns; authoring is neither source mutation nor a managed write |
 | `CTX-PKL-014` | Public research providers | External evidence collection | Excluded | No public research or automated profiling in MCV |
 
 
@@ -53,7 +54,7 @@ This document refines the accepted foundation in ADR-001 and ADR-002. It does no
 ### 3.1 Authenticated current repository state
 
 
-The current repository is a documentation-only scaffold. It defines a modular monolith, gateway and worker processes, operator CLI, inward dependencies, source/managed-store separation, planned PostgreSQL authority, progressive indexing, neutral naming, and accepted ADRs. It does not implement services, persistence, source access, or runtime behavior.
+The current repository is no longer a documentation-only scaffold; that sentence was true when this document was authored and is not true now. The `my_pa` package implements the public `v1` contracts, the domain identity, policy, audit, source, extraction, and search models, PostgreSQL persistence for the source registry, bounded enrollment, jobs, extraction, quarantine, coverage, and lexical search, and a read-only fixture source provider. Alembic owns the schema history at eight revisions, head `8b3f5c17d904`. What still does not exist is composition: no application service binds a capability to that behavior, and no gateway, worker, or transport process runs. [`../../README.md`](../../README.md) holds the current inventory and is the file to correct when this drifts again.
 
 
 ### 3.2 MCV target context
@@ -221,6 +222,7 @@ Authorized retrieval result → policy/classification/purpose filter → field-l
 | Enrollment/policy | Operator request plus policy | Application transaction | Operator-only; request flag is insufficient |
 | Extracted text/search index | Authorized scope | Worker/application only | Derived and source-version-bound |
 | Audit records | Authorized reviewers/operators | Append-only application behavior | Security-relevant audit failure is fail-closed |
+| User-authored records | Owning principal within policy | Owning principal, append-only, through an application command | Immutable versions; no update or delete path; not a managed write |
 | Managed documents | Excluded | Excluded | Separate later capability and authorization |
 | Projection | Later read | Rebuild only | Never canonical |
 | Model output | Later proposal/inference read | Proposal store only after separate lifecycle exists | Cannot mutate source/facts/policy |
@@ -301,6 +303,9 @@ Source providers expose only list, metadata, bounded fetch, status, and version/
 - `SC-INV-009`: Model output is nonauthoritative and policy-constrained.
 - `SC-INV-010`: Unknown/unavailable/partial state is preserved truthfully.
 - `SC-INV-011`: Runtime roots are configured; future operator NAS access uses `ssh bf-nas`, never the deprecated alias.
+- `SC-INV-012`: User-authored records are product-owned and append-only, and are neither source mutation nor managed-document writes.
+- `SC-INV-013`: No composite relationship score exists, and no protected- or sensitive-trait inference exists at all. Transparent single-basis indicators are permitted and each states its calculation basis and time window.
+- `SC-INV-014`: A canonical person is established only through governed identity resolution; merge and split are reversible and review-required.
 
 
 ## 13. Context acceptance criteria

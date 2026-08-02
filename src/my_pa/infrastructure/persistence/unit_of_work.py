@@ -312,10 +312,28 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._connection: Connection | None = None
 
     def __enter__(self) -> UnitOfWork:
+        """Open the transaction, translating a failure to open it.
+
+        Through `_read` like every statement below, and for the same reason.
+        Opening is where the connection is actually made, so a server that is
+        down fails *here* and not in a repository method — and until WP-4B2a
+        this line was the one path out of this class that skipped the
+        translation. A `psycopg.OperationalError` escaped as itself, and
+        `ApplicationService.invoke`'s terminal catch turned an unreachable
+        database into `internal_error`: a caller told the product is broken when
+        the truth is that PostgreSQL is not running, which are different things
+        to do about it. Nothing leaked either way; the code was wrong, not the
+        redaction.
+
+        `Engine.begin()` is a generator-based context manager, so nothing is
+        open until `__enter__` runs and a failure inside it leaves nothing to
+        close. Neither attribute is assigned when it raises, so a failed open
+        leaves this object in the state it started in.
+        """
         if self._context is not None:
             raise RuntimeError("this unit of work is already inside a transaction")
         context = self._engine.begin()
-        self._connection = context.__enter__()
+        self._connection = _read(context.__enter__)
         self._context = context
         return self
 

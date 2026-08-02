@@ -16,7 +16,13 @@ SRC = Path(__file__).resolve().parents[2] / "src"
 PACKAGE = SRC / "my_pa"
 
 #: Layers, inner first. A layer may import itself and anything to its left.
-LAYER_ORDER: tuple[str, ...] = ("domain", "contracts", "application", "bootstrap")
+#:
+#: `adapters` joined the list with the HTTP transport (`D-23`), between
+#: `application` and `bootstrap`, and its position is the whole of the rule: a
+#: driving adapter may reach the application, a composition root may reach an
+#: adapter, and an application module that imports one has inverted the
+#: direction a transport exists to establish.
+LAYER_ORDER: tuple[str, ...] = ("domain", "contracts", "application", "adapters", "bootstrap")
 
 #: Deliberately not a member of `LAYER_ORDER`; see the note further down.
 INFRASTRUCTURE = "infrastructure"
@@ -439,8 +445,33 @@ def _internal_imports(path: Path, index: dict[str, Path]) -> set[str]:
     return found
 
 
+def _packages_of(name: str) -> list[str]:
+    """Every package that importing `name` also executes.
+
+    `import my_pa.contracts.v1.envelope` runs `my_pa/__init__.py`,
+    `my_pa/contracts/__init__.py` and `my_pa/contracts/v1/__init__.py` before it
+    runs the module itself. A walk that followed only the module's own imports
+    therefore under-reported what a module can reach by exactly the amount those
+    files import — which was not nothing: `contracts/v1/__init__.py` re-exports
+    the whole v1 surface.
+    """
+    parts = name.split(".")
+    return [".".join(parts[:count]) for count in range(1, len(parts))]
+
+
 def _reachable(start: Path, index: dict[str, Path]) -> set[str]:
-    """Every `my_pa` module reachable from `start`, including `start` itself."""
+    """Every `my_pa` module reachable from `start`, including `start` itself.
+
+    **Parent packages count, and leaving them out was a hole.** An independent
+    review appended an infrastructure import to `src/my_pa/contracts/v1/__init__.py`
+    and every architecture test passed, while importing `my_pa.adapters.http.app`
+    demonstrably loaded SQLAlchemy: the closure held
+    `my_pa.contracts.v1.envelope` but not `my_pa.contracts.v1`, so nothing ever
+    read the file the violation was in. This is the same shape of hole WP-4A
+    found in the one-hop rules and replaced this walk to close, one level up.
+    `_packages_of` is the fix, and it strengthens every rule built on this walk
+    rather than only the one that caught it.
+    """
     seen: set[str] = set()
     queue = [_module_name(start)]
     while queue:
@@ -448,6 +479,7 @@ def _reachable(start: Path, index: dict[str, Path]) -> set[str]:
         if name in seen:
             continue
         seen.add(name)
+        queue.extend(_packages_of(name))
         path = index.get(name)
         if path is not None:
             queue.extend(_internal_imports(path, index))
@@ -501,6 +533,101 @@ def test_application_reaches_no_forbidden_module_by_any_path(path: Path) -> None
         f"{offences}; MB-AC-002 is about what a use case can reach, not about "
         "what it names directly"
     )
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "application"], ids=lambda p: str(p.name)
+)
+def test_application_reaches_no_transport_adapter_by_any_path(path: Path) -> None:
+    """`MB-AC-002` against the transport that now exists, not only its libraries.
+
+    The third-party rule above catches an application module that reaches
+    Starlette. It does not catch one that reaches `my_pa.adapters.normalization`,
+    which imports nothing third-party at all and is still a transport concern —
+    and a transport the application can call is a transport the application
+    depends on. This walks the same closure the rule above walks, so a future
+    adapter is covered by having been added rather than by being named.
+    """
+    index = _module_index()
+    offences = sorted(
+        name
+        for name in _reachable(path, index)
+        if name == "my_pa.adapters" or name.startswith("my_pa.adapters.")
+    )
+    assert not offences, (
+        f"{path.relative_to(PACKAGE)} is application code and reaches {offences}; "
+        "a transport calls the application, never the other way round"
+    )
+
+
+def test_the_transport_reachability_rule_has_a_transport_to_find() -> None:
+    """Guard the rule above: with no adapter in the tree it proves nothing.
+
+    It is a rule about the *absence* of a name, so it passes on a tree where the
+    name could not appear. This requires the adapters to exist, and requires
+    something outside `application` to actually reach them — the composition
+    root — so that "nothing reaches the adapters" is never trivially true.
+    """
+    index = _module_index()
+    adapters = sorted(name for name in index if name.startswith("my_pa.adapters"))
+    assert len(adapters) >= 3, f"only {adapters} were found"
+    composition = index["my_pa.bootstrap.gateway"]
+    reached = _reachable(composition, index)
+    assert "my_pa.application.service" in reached, "the composition root reaches no application"
+
+
+#: Everything a *driving adapter* may not reach, by any path. `starlette` is
+#: subtracted from the framework list and nothing else is: it is this
+#: transport's own library, and `test_scope_and_hygiene.py` is what confines it
+#: to `adapters/http`. What remains is every store, driver, ORM, parser,
+#: provider SDK — and every *other* framework, including `fastapi`, which `D-25`
+#: excluded on the grounds that a second validation layer is what makes parity
+#: unprovable, and `uvicorn`, which belongs to the composition root.
+FORBIDDEN_FOR_ADAPTERS = (DATABASE_AND_FRAMEWORK_ROOTS | PROVIDER_AND_PARSER_ROOTS) - {"starlette"}
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "adapters"], ids=lambda p: str(p.name)
+)
+def test_adapters_reach_no_forbidden_module_by_any_path(path: Path) -> None:
+    """`module-boundaries.md` section 5.7, as a property of the import graph.
+
+    `test_transport_adds_no_behaviour.py` states the same rule one hop out, and
+    one hop is not the rule: a transport that reaches a store through two
+    modules has reached a store. An independent review proved the difference by
+    putting the violation in a package `__init__`, where no one-hop rule looks
+    and where the walk did not look either until `_packages_of` above.
+    """
+    index = _module_index()
+    offences: list[str] = []
+    for name in sorted(_reachable(path, index)):
+        reached = index.get(name)
+        if reached is None:
+            continue
+        offending = sorted(
+            {i.split(".")[0] for i in _imported_modules(reached)} & FORBIDDEN_FOR_ADAPTERS
+        )
+        if offending:
+            offences.append(f"{name} imports {offending}")
+    assert not offences, (
+        f"{path.relative_to(PACKAGE)} is transport code and reaches {offences}; "
+        "a transport reaches the application and nothing behind it"
+    )
+
+
+def test_the_adapter_walk_resolves_a_package_init(tmp_path: Path) -> None:
+    """Guard the fix itself: the closure must contain the files it once skipped.
+
+    Named rather than counted, because the hole was precisely that two real
+    modules — a package and its parent — were absent from a closure that
+    contained their children.
+    """
+    index = _module_index()
+    reached = _reachable(PACKAGE / "adapters" / "http" / "app.py", index)
+    assert "my_pa.contracts.v1" in reached, "the walk still skips the package __init__"
+    assert "my_pa.contracts" in reached
+    assert "my_pa.application" in reached
+    assert "my_pa.adapters.http" in reached
 
 
 def test_the_reachability_walk_actually_walks(tmp_path: Path) -> None:

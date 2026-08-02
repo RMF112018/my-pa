@@ -41,11 +41,52 @@ classifiers = [
 #                     1.13 is the floor for the current `op`/`context` API.
 #                     Removal path: hand-run SQL files, which would lose the
 #                     empty-to-head and head-to-empty guarantee.
+#   starlette         routing, the request and response objects, and the
+#                     `HTTPException` handler — nothing else (`D-25`; not
+#                     FastAPI, which would add a second validation layer that
+#                     the MCP adapter has no counterpart for). Used only by
+#                     `adapters/http`, which `tests/architecture` confines.
+#                     The floor is **not** derived from behaviour, and saying so
+#                     is the honest form: the suite was run against 0.36, 0.35,
+#                     0.32, 0.28, 0.26.1, 0.22 and 0.20 and passed on every one,
+#                     because `Route`, `Request`, `Response`, `ClientDisconnect`
+#                     and class-keyed exception handlers have been stable for
+#                     years. So the floor is derived from the *interpreter*
+#                     instead: `requires-python` here is 3.12, and 0.31.0 is the
+#                     first Starlette whose metadata declares Python 3.12 —
+#                     0.30.0 declares 3.8 through 3.11. Below it the project
+#                     would be running on an interpreter Starlette never tested
+#                     against, which is a floor with a reason rather than a
+#                     round number. Maintenance cost: a small ASGI toolkit with
+#                     one transitive dependency (`anyio`) and no framework
+#                     behind it. Security surface: it parses a request line and
+#                     headers on a loopback-only socket; it handles no
+#                     credential, no TLS, and no multipart, since this transport
+#                     reads `application/json` and nothing else. Removal path: a
+#                     hand-written ASGI application, which would mean owning
+#                     header parsing and response encoding for no gain.
+#   uvicorn           the ASGI server that runs it. Imported only by
+#                     `apps/gateway.py`, never by the package — running a server
+#                     is a composition root's act, and the architecture tests
+#                     keep it out of `src/`. The floor is 0.29, not 0.30 and not
+#                     0.27, and it is behavioural: `Server.capture_signals`
+#                     re-raises the signal it captured once it has shut down
+#                     gracefully, so a gateway stopped by `SIGTERM` exits *by*
+#                     `SIGTERM`. At 0.27.0 and 0.28.0 it returns and the process
+#                     exits `0`, which reports a signalled stop as a normal one.
+#                     Bisected against the 0.27.0/0.28.0/0.29.0 wheels; the
+#                     assertion that found it is in
+#                     `tests/contract/test_http_gateway_process.py`. Security
+#                     surface: it binds one loopback socket. Removal path: any
+#                     other ASGI server, since nothing in the transport depends
+#                     on this one.
 dependencies = [
   "pydantic>=2.7,<3",
   "SQLAlchemy>=2.0.20,<3",
   "psycopg[binary]>=3.2,<4",
   "alembic>=1.13,<2",
+  "starlette>=0.31,<1",
+  "uvicorn>=0.29,<1",
 ]
 
 [project.optional-dependencies]

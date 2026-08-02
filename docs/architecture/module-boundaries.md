@@ -35,10 +35,62 @@ The MCV needs synchronous read/query access, asynchronous extraction/index work,
 Premature microservices, plugin systems, service layers, generalized agent frameworks, Redis/Celery, graph/vector stores, and provider registries are rejected until a current measured need exists.
 
 
-## 3. Proposed package shape
+## 3. Package shape
 
 
-The exact path structure may be refined by a separately authorized implementation plan, but responsibilities must remain equivalent and minimal:
+This section opened as a proposal and permitted refinement by a separately
+authorized implementation plan, provided responsibilities stayed equivalent and
+minimal. WP-4B2a performed that refinement under decision `D-23`, and the shape
+below is now the repository's, not a candidate.
+
+
+**Which way it was reconciled, and why that way.** The tree and the earlier
+drawing disagreed: the drawing put every adapter under `adapters/` and the
+composition roots under `src/my_pa/apps/`, while the implementation had put the
+source, extraction, migration, and persistence adapters under `infrastructure/`
+and the composition roots at repository-root `apps/`. **The document was
+reconciled toward the tree**, not the tree toward the document, and the rule
+that reconciles it is the driving/driven split rather than a list of exceptions:
+
+
+- an adapter that **drives** the application — a protocol a request arrives on —
+  lives in `src/my_pa/adapters/{http,mcp,cli}/`;
+- an adapter the application **drives** — a store, a provider, a parser, the
+  migration plane — lives in `src/my_pa/infrastructure/`;
+- composition roots are executable scripts at repository-root `apps/`, a sibling
+  of `src/`, because they are programs rather than importable library modules.
+
+
+Reconciling this way moved no module, and three sections need their current
+addresses said plainly rather than left to be worked out.
+
+- **5.8, `adapters.sources`,** is `infrastructure/providers/`. A rename would
+  have been churn in exchange for agreeing with a drawing.
+- **5.9, `adapters.extraction`,** is in two halves and only one of them exists.
+  The text and Markdown half is `domain/extraction/text.py`: a bounded decode
+  over bytes, using nothing but the standard library, which is why it can live
+  in `domain` at all. The **parser** half — 5.9's "bounded parser calls", the
+  decision-gated PDF path — has no home yet and could not have one there:
+  section 5.1 forbids `domain` importing a parser library, so when a parser
+  arrives it belongs under `infrastructure/`, where `infrastructure/extraction/`
+  is a reserved directory holding a README and nothing else. `P00-OD-003` is
+  what has not been decided, and until it is there is no parser to place.
+- **5.6, `infrastructure.policy` and `infrastructure.audit`,** names two
+  directories that do not exist, and the reason differs for each. Audit is a
+  directory question only: it is `infrastructure/persistence/audit.py`, beside
+  the unit of work whose transaction it deliberately does not share. **Policy is
+  a layer question**, which matters more: there is no `infrastructure.policy`
+  and there is not going to be one, because policy is decided in
+  `application/authorization.py` over `domain/policy/decision.py`. That is not a
+  relocation of 5.6's responsibility but a stronger reading of its own last
+  sentence — "policy is not hidden in transport or adapter conditionals" — since
+  a policy that is not an adapter at all cannot be hidden in one. 5.6's
+  requirements stand where they are: one evaluation path, redacted audit, and
+  fail-closed persistence.
+
+Section 5.7's transport adapters keep their names and their meaning exactly. No
+responsibility in sections 5.1 through 5.11 is changed by this amendment — it
+describes where each lives, and nothing else.
 
 
 ```text
@@ -46,26 +98,38 @@ src/my_pa/
   domain/                 # entities, values, invariants, typed states/errors
   contracts/              # stable public/domain schemas and ports
   application/            # use cases, orchestration, policy/disclosure decisions
-  infrastructure/
-    persistence/          # PostgreSQL repositories, UoW, migrations integration
-    jobs/                 # PostgreSQL-backed job/lease/outbox implementations
-    audit/                # durable redacted audit implementation
-    policy/               # configured policy implementation
-  adapters/
+  adapters/               # driving adapters: protocol mapping only
+    normalization.py      # the one request-normalisation path both transports use
     http/                 # HTTP transport mapping only
-    mcp/                  # MCP transport mapping only
-    cli/                  # CLI presentation/input mapping only
-    sources/              # fixture and later provider adapters
-    extraction/           # bounded text/Markdown and decision-gated PDF adapters
+    mcp/                  # MCP transport mapping only (not yet built)
+    cli/                  # CLI presentation/input mapping only (not yet built)
+  infrastructure/         # driven adapters: implementations of declared ports
+    database/             # engine and connection contract
+    persistence/          # PostgreSQL repositories, UoW, audit sink, search
+    jobs/                 # PostgreSQL-backed job/lease/outbox implementations
+    providers/            # fixture and later source-provider adapters
+    migration/            # legacy extract, load, and the migration control plane
+    ...                   # further reserved directories hold a README only
   bootstrap/              # configuration, dependency composition, process setup
-  apps/
-    gateway.py            # my-pa-gateway composition root
-    worker.py             # my-pa-worker composition root
-    cli.py                # my-pa composition root
+apps/                     # repository root, a sibling of `src/`
+  gateway.py              # my-pa-gateway composition root
+  worker.py               # my-pa-worker composition root
+  cli/                    # operator commands
 ```
 
 
-A directory is not implementation authority. Only modules needed by the accepted vertical slice should be created.
+The dependency rule in section 4 is unchanged and now has a name for its middle
+row: `apps`/`bootstrap` → `adapters` → `application` → `contracts`/`domain`,
+with `infrastructure` a sibling of `application` implementing ports declared
+inward. `tests/architecture/test_dependency_direction.py` enforces the ordering,
+and `tests/architecture/test_transport_adds_no_behaviour.py` enforces that a
+driving adapter contains no decision, no disclosure, no SQL, and no provider
+access.
+
+
+A directory is not implementation authority. Only modules needed by the accepted
+vertical slice should be created; `adapters/mcp` and `adapters/cli` are named
+above because `D-23` places them, and neither exists.
 
 
 ## 4. Dependency rule

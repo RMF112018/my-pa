@@ -91,8 +91,14 @@ class Limitation(StrEnum):
     SCOPE_NOT_FULLY_EXTRACTED = "scope_not_fully_extracted"
     #: A result label is derived from a media type; no title is stored.
     LABEL_IS_MEDIA_TYPE_ONLY = "result_label_is_media_type_only"
-    #: Audit events are emitted but no durable audit store exists in this build.
-    AUDIT_IS_NOT_DURABLE = "audit_events_are_not_durably_stored"
+
+    # `AUDIT_IS_NOT_DURABLE` was published here on every disclosure until
+    # WP-4B2a. It said "audit events are emitted but no durable audit store
+    # exists", which stopped being true when WP-4B1 built one and stayed on the
+    # wire because nothing connected the sentence to the condition. It was inert
+    # while no process served a disclosure and became a false statement to a
+    # client the moment one did. Removed rather than reworded: a limitation names
+    # something a caller can act on, and there is nothing left here to act on.
 
 
 #: The absence of truncation, as one shared immutable value. A default argument
@@ -191,7 +197,10 @@ def disclosure_for(
         state = CoverageState.PARTIALLY_PROCESSED if _claims_the_whole_scope(state) else state
         tokens.append(Limitation.ELIGIBLE_TOTAL_NOT_PERSISTED)
         tokens.append(Limitation.SCOPE_IS_SOURCE_WIDE)
-    tokens.append(Limitation.AUDIT_IS_NOT_DURABLE)
+    # Every disclosure also carried `AUDIT_IS_NOT_DURABLE` from this line until
+    # WP-4B2a, unconditionally. WP-4B1 built the durable store and the token
+    # became a false statement made on every successful request; see the note on
+    # `Limitation` for why it was removed rather than reworded.
     return Disclosure(
         scope=Scope(source_ids=(enrollment.source_id,), enrollment_ids=(enrollment.enrollment_id,)),
         coverage=Coverage(
@@ -230,6 +239,10 @@ def unenrolled_disclosure(observed_at: datetime) -> Disclosure:
     `not_enrolled` with every count zero — which `CoverageCounts` permits only
     for a scope no grant covers, and which is the truthful answer here rather
     than a shape borrowed from a result that measured something.
+
+    It states no limitation at all. The one it used to carry was the audit
+    claim removed above; a capability description has nothing else to qualify,
+    and an empty tuple says so more honestly than a token kept for company.
     """
     counts = CoverageCounts(observed_at=observed_at)
     return Disclosure(
@@ -239,7 +252,6 @@ def unenrolled_disclosure(observed_at: datetime) -> Disclosure:
             observed_at=observed_at, state=FreshnessState.CURRENT_FOR_OBSERVED_VERSION
         ),
         trust=Trust(level=TrustLevel.SOURCE_ORIGINAL, basis=("configured_interface",)),
-        limitations=(Limitation.AUDIT_IS_NOT_DURABLE.value,),
         classification=Classification.PRIVATE_LOCAL,
         cloud_eligible=False,
     )

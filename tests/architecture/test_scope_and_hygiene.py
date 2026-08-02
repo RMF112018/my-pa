@@ -14,6 +14,27 @@ Alembic, and `psycopg` moved from the prohibited list to the declared set below.
 The alternative drivers stay prohibited: two drivers for one database is the
 duplicate-library case AGENTS.md section 2 rules out, and it would make the
 connection URL's scheme ambiguous.
+
+The HTTP transport entered scope with WP-4B2a, and the two dependencies it
+brings are narrowed differently rather than both being deleted from the list,
+because they are permitted in different places and "permitted" would be weaker
+than the truth in both cases:
+
+* **Starlette is confined**, not admitted. It may be imported by
+  `adapters/http`, which is the transport, and nowhere else — an application or
+  infrastructure module that imported it would have taken a transport concern,
+  and the layer rules in `test_dependency_direction.py` would not catch it,
+  because they are about direction rather than about libraries.
+* **uvicorn stays prohibited inside the package** and is a declared runtime
+  dependency all the same. It is the server that runs the application, which is
+  the composition root's business: `apps/gateway.py` imports it and nothing
+  under `src/` may. That is why the declared-set check and the import check now
+  read two different lists rather than one.
+
+FastAPI stays prohibited. `D-25` chose Starlette precisely so that HTTP would
+not acquire a second validation layer that the MCP adapter has no counterpart
+for, and a dependency admitted "just for one route" is how that decision would
+be reversed without being revisited.
 """
 
 from __future__ import annotations
@@ -29,11 +50,12 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 PACKAGE = SRC / "my_pa"
 
-#: Dependencies the phase forbids, by import root.
+#: Dependencies no module under `src/my_pa` may import, by root. `uvicorn` is
+#: here *and* declared in `pyproject.toml`: running a server is the composition
+#: root's act, and `apps/gateway.py` lives outside this tree.
 PROHIBITED_IMPORT_ROOTS = frozenset(
     {
         "fastapi",
-        "starlette",
         "uvicorn",
         "psycopg2",
         "asyncpg",
@@ -77,10 +99,40 @@ def _imports(path: Path) -> set[str]:
     return names
 
 
+#: Dependencies the package may import in exactly one subtree, and the subtree.
+#: See the module docstring: a transport library is not "in scope", it is in the
+#: transport.
+CONFINED_IMPORT_ROOTS = {"starlette": "adapters/http"}
+
+
 @pytest.mark.parametrize("path", _modules(), ids=lambda p: str(p.name))
 def test_no_prohibited_dependency_is_imported(path: Path) -> None:
     offending = _imports(path) & PROHIBITED_IMPORT_ROOTS
     assert not offending, f"{path.relative_to(PACKAGE)} imports out-of-scope {sorted(offending)}"
+
+
+@pytest.mark.parametrize("path", _modules(), ids=lambda p: str(p.name))
+def test_a_confined_dependency_is_imported_only_where_it_belongs(path: Path) -> None:
+    where = path.relative_to(PACKAGE).as_posix()
+    for root, subtree in CONFINED_IMPORT_ROOTS.items():
+        if root not in _imports(path):
+            continue
+        assert where.startswith(f"{subtree}/"), (
+            f"{where} imports {root!r}, which belongs to {subtree}/ and nowhere else"
+        )
+
+
+def test_every_confined_dependency_is_actually_used_there() -> None:
+    """A confinement nothing tests is a rule about an empty set.
+
+    Without this, deleting the transport would leave the rule above passing on
+    every module in the tree while confining nothing.
+    """
+    for root, subtree in CONFINED_IMPORT_ROOTS.items():
+        importers = [p for p in _modules() if root in _imports(p)]
+        assert importers, f"nothing imports {root!r}; the confinement guards nothing"
+        for path in importers:
+            assert path.relative_to(PACKAGE).as_posix().startswith(f"{subtree}/")
 
 
 def test_declared_runtime_dependencies_are_the_agreed_set() -> None:
@@ -92,7 +144,7 @@ def test_declared_runtime_dependencies_are_the_agreed_set() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     runtime = data["project"]["dependencies"]
     roots = {re.split(r"[><=!~\[]", item)[0].strip().lower() for item in runtime}
-    assert roots == {"pydantic", "sqlalchemy", "psycopg", "alembic"}
+    assert roots == {"pydantic", "sqlalchemy", "psycopg", "alembic", "starlette", "uvicorn"}
 
 
 def test_every_runtime_dependency_declares_a_range() -> None:
@@ -112,12 +164,45 @@ def test_declared_dev_dependencies_are_the_agreed_set() -> None:
 
 
 def test_no_declared_dependency_is_prohibited() -> None:
+    """Nothing out of scope is declared, which is a narrower list than the imports.
+
+    `uvicorn` is subtracted because it is deliberately both: declared, so the
+    gateway process can run, and un-importable by the package, so that running a
+    server stays the composition root's act. Every other prohibited root is
+    prohibited outright and may not be declared either.
+    """
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     declared = list(data["project"]["dependencies"])
     for group in data["project"].get("optional-dependencies", {}).values():
         declared.extend(group)
     roots = {re.split(r"[><=!\[]", item)[0].strip().lower() for item in declared}
-    assert not (roots & PROHIBITED_IMPORT_ROOTS)
+    assert not (roots & (PROHIBITED_IMPORT_ROOTS - {"uvicorn"}))
+
+
+def test_the_only_shipped_module_that_runs_a_server_is_the_composition_root() -> None:
+    """Across `src/` and `apps/`, `uvicorn` appears in exactly one file.
+
+    The import rule above says the package may not import it. This says where it
+    *is* imported, because "nowhere in the package" is also satisfied by a build
+    with no gateway at all.
+
+    **The scan is `src/` and `apps/`, and the qualifier is load-bearing.**
+    `tests/wire.py` imports uvicorn and runs a server too, deliberately: the
+    HTTP tests drive a real one rather than calling an ASGI app in process, and
+    it imports `apps.gateway`'s own settings so the two configurations cannot
+    drift. What is enforced here is that nothing *shipped* starts a server
+    except the composition root, which is the property that matters; a test
+    harness is not shipped, and naming this test after the wider claim would
+    have made it read as one it does not check.
+    """
+    shipped = [*_modules(), *sorted((ROOT / "apps").rglob("*.py"))]
+    importers = sorted(
+        path.relative_to(ROOT).as_posix() for path in shipped if "uvicorn" in _imports(path)
+    )
+    assert importers == ["apps/gateway.py"]
+    assert "uvicorn" in _imports(ROOT / "tests" / "wire.py"), (
+        "the harness no longer runs a real server; this test's qualifier is stale"
+    )
 
 
 def test_package_uses_the_neutral_namespace() -> None:

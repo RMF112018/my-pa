@@ -179,6 +179,34 @@ def test_readiness_limitations_track_the_manifest() -> None:
     assert DECISION_GATED_MEDIA_TYPE in complete
 
 
+def test_nothing_published_claims_the_audit_is_not_durable() -> None:
+    """The limitation that did outlive its condition, and the guard against it.
+
+    A readiness line and a disclosure token both said no durable audit store
+    existed. WP-4B1 built one — `SqlAlchemyAuditSink` commits each event on its
+    own connection into `knowledge.audit_events` — and both sentences stayed on
+    the wire, because each was written *beside* the derivation rather than
+    inside it. They were inert while nothing served a disclosure and became a
+    false statement to a client the moment WP-4B2a did.
+
+    Asserted from both directions: the store is imported here, so the condition
+    the claim denied is shown to hold, and every string either module can
+    publish is required not to deny it.
+    """
+    from my_pa.application.disclosure import Limitation
+    from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+
+    assert callable(SqlAlchemyAuditSink.record), "there is no durable sink to be truthful about"
+
+    published = [
+        *build_readiness_report(manifest()).limitations,
+        *build_readiness_report(manifest(NOTHING)).limitations,
+        *(member.value for member in Limitation),
+    ]
+    for claim in published:
+        assert "audit" not in claim.lower(), f"a published limitation names the audit: {claim}"
+
+
 def test_limits_are_the_ones_supplied() -> None:
     limits = manifest().limits
     assert limits == LIMITS

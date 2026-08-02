@@ -22,7 +22,13 @@
 
 ## Specifications
 
+- [`docs/specs/README.md`](specs/README.md) — owning index for specifications, and the provenance and verification strength of every mirrored package below.
 - [`docs/specs/mcv-read-only-vertical-slice.md`](specs/mcv-read-only-vertical-slice.md) — read-only Minimum Viable Candidate (MCV) capability, error, and disclosure contract.
+- [`docs/specs/canonical-product-definition/`](specs/canonical-product-definition/00_README.md) — mirror of the canonical whole-product definition (`MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, Drive folder `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`). **Ratified 2026-08-02 by direct operator instruction**, which is the instrument — the package's own `CURRENT_CANONICAL_PRODUCT_DEFINITION` is a self-declared status and is not ratification. See [`docs/plans/mcv-completion-plan.md`](plans/mcv-completion-plan.md) `D-19` and section 15, and [`docs/specs/README.md`](specs/README.md) for provenance. Supersedes `my-pa vNext` for current whole-product definition. Grants no implementation authority.
+- [`docs/specs/relationship-intelligence-v0.2.md`](specs/relationship-intelligence-v0.2.md) — mirror of the Relationship Intelligence product specification, promoted into scope 2026-08-01.
+- [`docs/specs/quick-capture/`](specs/quick-capture/00_README.md) — mirror of the Quick Capture feature package, promoted into scope 2026-08-01 and admitted by ADR-003.
+
+Not mirrored, routed by identity only: the **Frontier NAS MCP Connector** feature package (`MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086`, Drive folder `1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa`). It became canonical product scope on 2026-08-02 but drives no planned work package; see `docs/plans/mcv-completion-plan.md` `D-22`.
 
 ## Plans
 
@@ -40,6 +46,8 @@
 
 - [`PHASE-00-OPEN-DECISION-LEDGER.md`](../PHASE-00-OPEN-DECISION-LEDGER.md) — unresolved Phase 00 decisions and their defaults.
 - [`README-PHASE-00-DOCUMENT-PACKAGE.md`](../README-PHASE-00-DOCUMENT-PACKAGE.md) — Phase 00 document package provenance and acceptance status.
+- [`docs/plans/mcv-completion-plan.md`](plans/mcv-completion-plan.md) section 14 — the consolidated list returned to the operator, spanning all three ledgers. Its counts are derived from its own tables and enforced by `tests/architecture/test_open_decision_counts.py`.
+- [`docs/specs/canonical-product-definition/15_OPEN_OPERATOR_DECISIONS.md`](specs/canonical-product-definition/15_OPEN_OPERATOR_DECISIONS.md) — the ratified package's own operator decisions, `OP-01` through `OP-30` and `MCP-OP-001` through `MCP-OP-009`. Tracked by the package, not by section 14.
 
 The Phase 00 documents were integrated byte-faithfully from their authoring session, so their front matter and prose describe that session rather than this repository. Read them with three corrections: they are now in the repository despite `supersession_state: NEW_CANDIDATE_NOT_IN_REPOSITORY`; the routing updates they defer to a later change are the same change that placed them; and the SHA-256 values in the package README identify the Drive source bytes before encoding normalization, not the files beside it. The in-repository hashes are recorded in the integrating pull request. `docs/specs/mcv-read-only-vertical-slice.md` is the exception: its front matter and section 1 have since been reconciled to this repository, and its normative sections are unchanged.
 

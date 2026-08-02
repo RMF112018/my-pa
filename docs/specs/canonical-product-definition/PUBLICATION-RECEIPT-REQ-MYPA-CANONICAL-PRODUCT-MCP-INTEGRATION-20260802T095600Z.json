@@ -1,0 +1,99 @@
+{
+  "coordination_request_id": "REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z",
+  "package_id": "MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006",
+  "canonical_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+  "canonical_parent_folder_id": "1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz",
+  "repository_identity": {
+    "repository": "RMF112018/my-pa",
+    "branch": "main",
+    "head": "9096fa4fbe64ff1cdabc07e53a3e68c52efc8575",
+    "tree": "UNAVAILABLE",
+    "local_worktree_state": "UNAVAILABLE"
+  },
+  "owning_feature_package": {
+    "package_id": "MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086",
+    "folder_id": "1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa",
+    "feature_id": "FEATURE-MYPA-FRONTIER-NAS-MCP-CONNECTOR-001",
+    "specification_id": "SPEC-MYPA-FRONTIER-NAS-MCP-CONNECTOR-001"
+  },
+  "request": {
+    "drive_id": "1RG8od2eN3zIqKp7WDnEtSLLw0CZvRtMh",
+    "representation": "stored_raw_bytes",
+    "bytes": 32151,
+    "sha256": "9e12e0a2c70e66f42ea8fbf3b9b5b4409546c4a4bf43ced7852943bc15318053"
+  },
+  "response": {
+    "drive_id": "1TOjDtoDwoRNbDL0qNX0ugHzMcIhhCbnL",
+    "representation": "stored_raw_bytes",
+    "bytes": 17748,
+    "sha256": "e0e769829df2ed126ea3f3f53455b19bc9ae95b229d0eb99a1ac3ed063756a01",
+    "status": "COMPLETE_READBACK_VERIFIED"
+  },
+  "supporting_artifacts": [
+    {
+      "name": "READBACK-VERIFICATION-REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z.json",
+      "drive_id": "1z_0whgKsz-oKmF4PkySKspMzfA0VvHb_",
+      "representation": "stored_raw_bytes",
+      "bytes": 7869,
+      "sha256": "693e0994ef8cfe0768f3eceb25a08c0323e7ee4651da3dc4e84b8ed40b51f57f"
+    },
+    {
+      "name": "CANONICAL-ARTIFACT-DISPOSITION-REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z.json",
+      "drive_id": "1vUAc6qmFKMgz9UJ8LrQqKv9nrpAwqgEC",
+      "representation": "stored_raw_bytes",
+      "bytes": 14777,
+      "sha256": "5286ed9ba03de6d64b8451b229d0a4b49d4e44ca5eff3ce18d86fbfbfcbe6ee6"
+    },
+    {
+      "name": "18_PACKAGE_SOURCE_MANIFEST.json",
+      "drive_id": "1xxQG_fsUlTxX7VRXOCm8SSCjYF2xPV1j",
+      "representation": "stored_raw_bytes",
+      "bytes": 19096,
+      "sha256": "4b8a9159c59338743a94999a15191680f5114f3856142f576691d188df72fea7"
+    }
+  ],
+  "canonical_revision_summary": {
+    "reviewed": 21,
+    "revised": 21,
+    "retained_numbered": 0,
+    "superseded": 0,
+    "archived": 0,
+    "new_numbered": 0,
+    "all_raw_readbacks_match": true
+  },
+  "owning_index": {
+    "drive_id": "1i9r6pDI8jZQnD526_o_aFl8WWUliWX0h1ANLh_gtelE",
+    "revision_id": "AIroW34v1iCKBBP4bpRVNi8BSyTwHTFTfFXDiCFE-ddraQOTJtFjdOzgOOhnxinXAUYN30DaaRhJN51b545RJCxWHvSf3T-PKZczWl_g",
+    "export_sha256": "75de8d65d57aeec55a2ac1cd034054a1510b1515c85d884609b8744a2eeefcc0",
+    "registration": "VERIFIED",
+    "export_bytes": 27831
+  },
+  "authority": {
+    "implementation": "NOT_GRANTED",
+    "deployment": "NOT_GRANTED",
+    "production_activation": "NOT_GRANTED",
+    "risk_acceptance": "NOT_GRANTED"
+  },
+  "artifact_id": "PUBLICATION-RECEIPT-REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z",
+  "classification": "PUBLICATION_RECEIPT",
+  "status": "COMPLETE",
+  "publication_action": "REVISE 21 canonical members in place; CREATE coordination and verification controls",
+  "roundtrip_receipt": {
+    "drive_id": "1LZwqpBMKh9vtVzpFAu57m1uqIeI1FQQ-"
+  },
+  "verification": {
+    "drive_id_continuity": "VERIFIED",
+    "parent_continuity": "VERIFIED",
+    "representation_continuity": "VERIFIED",
+    "stored_raw_hashes": "VERIFIED_MATCH",
+    "request_readback": "VERIFIED_MATCH",
+    "response_readback": "VERIFIED_MATCH",
+    "supporting_artifacts": "VERIFIED_MATCH",
+    "index_readback": "VERIFIED",
+    "request_response_binding": "VERIFIED",
+    "all_required_publications_present": true
+  },
+  "invalidation_rule": "Invalid if a recorded Drive artifact changes, the package/feature is superseded, or repository architecture/scope changes materially before reliance.",
+  "disposition": "MYPA_CANONICAL_PRODUCT_MCP_INTEGRATION_COMPLETE",
+  "publication_completed_at": "2026-08-02T10:17:00Z"
+}

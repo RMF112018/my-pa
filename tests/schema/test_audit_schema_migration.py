@@ -297,8 +297,8 @@ def test_downgrading_this_revision_leaves_the_other_knowledge_tables_alone(
 ) -> None:
     """This revision added one table to a schema it did not create.
 
-    Its downgrade therefore removes one table and not the schema, and not the
-    eight rows of evidence the revisions below it own.
+    Its downgrade therefore removes tables and not the schema, and not the eight
+    rows of evidence the revisions below the extraction revision own.
     """
     engine = create_database_engine(disposable_database)
     try:
@@ -307,7 +307,11 @@ def test_downgrading_this_revision_leaves_the_other_knowledge_tables_alone(
 
         command.downgrade(_config(), EXTRACTION_REVISION)
 
-        assert _tables(engine) == before - {"audit_events"}
+        # Head is now `af3d35efb9c0`, so downgrading to the extraction revision
+        # unwinds two revisions and drops both of the tables they added. Stated as
+        # an equality against an explicit set rather than a subset: an extra table
+        # left behind by either downgrade is exactly what this test exists to see.
+        assert _tables(engine) == before - {"audit_events", "enrollment_objects"}
         assert len(_tables(engine)) == 8
 
         command.upgrade(_config(), "head")

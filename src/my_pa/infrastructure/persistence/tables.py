@@ -8,7 +8,7 @@ retry in the same tables, and would put application code on the write path of
 migration governance state. Two planes with different lifetimes, different
 writers, and different authority do not share a schema.
 
-Eight concerns, nine tables, and nothing else. There is no outbox, no scheduler,
+Eight concerns, ten tables, and nothing else. There is no outbox, no scheduler,
 no priority column, and no soft-delete flag: each of those would be a mechanism
 with no caller, and `AGENTS.md` section 2 rules them out until one exists.
 `audit_events` is not the "audit mirror" an earlier revision of this paragraph
@@ -54,6 +54,7 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
+    PrimaryKeyConstraint,
     Table,
     Text,
     UniqueConstraint,
@@ -260,6 +261,18 @@ enrollments = Table(
     Column("policy_version", Text, nullable=False),
     Column("idempotency_key", Text, nullable=False),
     Column("request_fingerprint", Text, nullable=False),
+    # `root_object_id` deliberately carries no foreign key, and the reason is
+    # structural rather than a judgement about the value. `enrollments` is
+    # created by revision `7e5a1fb93d62` through `METADATA.create_all`, and this
+    # `MetaData` is shared at import time, so declaring a `ForeignKey` here
+    # retroactively changes the DDL that already-merged revision emits: a
+    # base-to-head replay would produce a constraint the revision never
+    # described, and at head the same reference would exist twice. A revision
+    # whose meaning changes when a later one is written is not a chain. The
+    # guarantee this would have bought — an enrollment naming a root nothing
+    # observed — is held instead by enumeration: `record_scope` refuses an
+    # object its enrollment's source never observed and refuses an empty set,
+    # and both refusals roll the accepting transaction back. Do not add it.
     Column("root_object_id", Text),
     Column("object_ids", ARRAY(Text), nullable=False, server_default="{}"),
     Column("depth", Integer, nullable=False, server_default="0"),
@@ -303,6 +316,53 @@ enrollments = Table(
         "policy_version",
         "idempotency_key",
         name="enrollments_idempotency_key_is_scoped",
+    ),
+)
+
+#: The enumerated object set one enrollment authorizes: which objects, measured
+#: once, at acceptance.
+#:
+#: This is the fact `persistence.extraction.authorized_object` and
+#: `persistence.search` both record as missing and both carry to WP-4. With it,
+#: membership applies to a root selector exactly as it applies to a named one,
+#: and `count(*)` here is the eligible total nothing measured. Fixing either
+#: alone would have meant building this twice.
+#:
+#: Both columns carry a foreign key, which is the whole point of the table:
+#: `enrollments.object_ids` is an `ARRAY(Text)` and PostgreSQL has no
+#: element-level reference, so a caller-supplied identifier that named no row
+#: was storable and silently authorized nothing. Those two keys are declarable
+#: because they are on a new table this revision creates; the same reference on
+#: `enrollments.root_object_id` is not, for the reason stated at that column.
+#: A root that names no observed object is refused by `record_scope` rather than
+#: by a constraint — enumeration finds nothing for it, and an empty set is
+#: refused — so the guarantee is held, just not here.
+#:
+#: The composite primary key is the idempotency mechanism rather than a
+#: convenience: `record_scope` inserts under `ON CONFLICT DO NOTHING` against
+#: this exact constraint, so re-running an enumeration adds no row.
+#:
+#: There is no `native_locator`, no ordering column, and no per-object state.
+#: Where an object got to is `extractions` and `quarantine_records`; adding a
+#: status column here would give the same fact two writers.
+enrollment_objects = Table(
+    "enrollment_objects",
+    METADATA,
+    Column(
+        "enrollment_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.enrollments.enrollment_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "source_object_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.source_objects.source_object_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("enumerated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint(
+        "enrollment_id", "source_object_id", name="an_enrollment_holds_an_object_once"
     ),
 )
 

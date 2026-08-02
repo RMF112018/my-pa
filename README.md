@@ -27,7 +27,7 @@ Implemented, and covered by the FAST tier unless noted:
 - `adapters/cli` and `apps/cli/invoke.py` — the operator CLI, which invokes one capability and writes the envelope to standard output. It is not a privileged bypass: it composes the same runtime the gateway composes, is handed the same principal, and has no option that could change one.
 - `adapters/normalization.py` — the one place a request becomes a `(RequestMetadata, Command)` pair. All three transports call it and none of them can build either value, which is what makes `SPEC-AC-001` a structural property rather than three snapshots that agree today.
 - `infrastructure/migration` — legacy extract and load, the migration control plane, and redaction.
-- Eight Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, views, the `knowledge` schema, and the extraction tables; head `8b3f5c17d904`. Applied and rolled back in the database tier; only SQL generation is checked by FAST.
+- Ten Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, views, the `knowledge` schema, the extraction tables, the audit events table, and the enrolled object set; head `af3d35efb9c0`. Applied and rolled back in the database tier; only SQL generation is checked by FAST.
 - `.github/workflows/repository-checks.yml` — document and configuration validation, the FAST tier, a declared-dependency-floor tier, and a database tier run against a disposable PostgreSQL service. The workflow itself carries no test coverage.
 
 The migrated corpus holds 3,263,870 rows across 484 domain tables; 286 of those

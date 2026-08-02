@@ -84,12 +84,20 @@ join the retryable class by accident.
 **Identifier lifetime.** `obj_` and `ver_` suffixes are `secrets.token_hex`
 output. They are not derived from the path, from a hash of the path, or from any
 stat field, because a suffix that encoded one would defeat `INV-PKL-005` while
-still passing the shape validation `domain.common.identifiers` can perform.
-The consequence is stated plainly rather than hidden: **identifiers live as long
-as the provider instance.** Two instances over the same root issue different
-identifiers for the same file, and nothing here persists them, so an identifier
-does not survive a process restart. A durable mapping, if one is ever needed,
-belongs in the enrollment record, not in a suffix.
+still passing the shape validation `domain.common.identifiers` can perform. That
+argument is unchanged and is the reason a durable mapping is a *mapping* rather
+than a cleverer suffix.
+
+What has changed is where the mapping lives. This module no longer holds one:
+`providers.identity.ObjectIdentity` is handed in, and how long an identifier
+lives is its answer rather than this class's. The default is
+`EphemeralIdentity`, which is the three private dictionaries that used to be
+here, so the consequence that was stated plainly still holds by default --
+**identifiers live as long as the provider instance**, two instances over the
+same root issue different identifiers for the same file, and an identifier does
+not survive a process restart. A caller that needs otherwise passes
+`RegistryIdentity`, which issues through `knowledge.source_objects`; nothing
+about the suffix differs in either case, which is the point.
 
 **Ordering.** `list_children` yields immediate children only, sorted ascending
 by the code points of the entry name. It never recurses: a caller that wants a
@@ -101,14 +109,13 @@ from __future__ import annotations
 
 import errno
 import os
-import secrets
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from stat import S_ISDIR, S_ISREG
 from typing import Final
 
-from my_pa.domain.common.identifiers import IdKind, make_identifier, validate_identifier
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.source.provider import (
     ObjectKind,
     ProviderError,
@@ -118,6 +125,7 @@ from my_pa.domain.source.provider import (
     TraversalDeniedError,
     VersionChangedError,
 )
+from my_pa.infrastructure.providers.identity import EphemeralIdentity, ObjectIdentity
 
 __all__ = ["MEDIA_TYPES", "FixtureSourceProvider", "resolve_within"]
 
@@ -344,7 +352,7 @@ class FixtureSourceProvider(SourceProvider):
     that issued its own would be claiming an authority it does not have.
     """
 
-    def __init__(self, root: Path, source_id: str) -> None:
+    def __init__(self, root: Path, source_id: str, identity: ObjectIdentity | None = None) -> None:
         validate_identifier(source_id, IdKind.SOURCE)
         configured: Path | None
         try:
@@ -356,18 +364,46 @@ class FixtureSourceProvider(SourceProvider):
             # path is a habit, and this one has no reason to.
             configured = None
         resolved = configured
-        if resolved is None or not resolved.is_dir():
+        status: os.stat_result | None = None
+        if resolved is not None:
+            try:
+                status = resolved.stat()
+            except OSError:
+                status = None
+        if resolved is None or status is None or not S_ISDIR(status.st_mode):
             # A misconfigured root is an operator error, not a denial: failing
             # it as a denial would hide it behind the message that must stay
-            # uninformative.
+            # uninformative. The `stat` replaces the `is_dir()` that stood here
+            # and answers the same question -- both follow symlinks -- while
+            # also being the observation the root's identifier is now issued
+            # from, so the root is not stat'ed twice.
             raise ValueError("the configured root is not an existing directory")
         self._source_id: Final = source_id
         self._root: Final = resolved
-        self._ids: dict[Path, str] = {}
-        self._paths: dict[str, Path] = {}
+        #: Where identifiers come from. `EphemeralIdentity` by default, so every
+        #: caller that does not care -- the whole conformance suite -- keeps the
+        #: per-instance behaviour this class had, and the FAST tier stays
+        #: database-free. A caller that needs an identifier to outlive this
+        #: object hands in `RegistryIdentity`.
+        self._identity: Final = EphemeralIdentity() if identity is None else identity
+        #: The version the identity issued for each fingerprint this instance
+        #: has observed. A cache of the collaborator's answers, not a source of
+        #: identity: nothing is minted here, and an entry is only ever written
+        #: by `_identify` from what `identity.identify` returned.
         self._versions: dict[_Fingerprint, str] = {}
+        #: Per-instance, and it must be. This is the "described, then read"
+        #: binding `fetch` compares against -- a within-request freshness fact
+        #: rather than an identity. Persisting it would let a `fetch` be served
+        #: against an observation another process made.
         self._observations: dict[str, _Fingerprint] = {}
-        self._root_object_id: Final = self._identify(resolved)
+        self._root_object_id: Final = self._identify(
+            resolved,
+            kind=ObjectKind.CONTAINER,
+            fingerprint=_fingerprint(status),
+            media_type=None,
+            size_bytes=None,
+            modified_at=datetime.fromtimestamp(status.st_mtime, UTC),
+        )
 
     @property
     def source_id(self) -> str:
@@ -406,7 +442,12 @@ class FixtureSourceProvider(SourceProvider):
         for entry in entries:
             try:
                 child = resolve_within(self._root, entry, object_id)
-                children.append(self._observe(child, self._identify(child)))
+                # One `stat` per entry, and the identifier comes from it.
+                # `_identify` now needs the observation it is identifying, so
+                # identifying an entry before describing it would mean stat'ing
+                # every child twice and asking the identity about a snapshot the
+                # description then re-takes.
+                children.append(self._observe(child))
             except TraversalDeniedError:
                 continue
         return iter(tuple(children))
@@ -534,62 +575,118 @@ class FixtureSourceProvider(SourceProvider):
             is_truncated=opened.st_size > len(content),
         )
 
-    def _identify(self, path: Path) -> str:
-        """Return the opaque identifier for a resolved path, minting one once.
+    def _identify(
+        self,
+        path: Path,
+        *,
+        kind: ObjectKind,
+        fingerprint: _Fingerprint,
+        media_type: str | None,
+        size_bytes: int | None,
+        modified_at: datetime,
+    ) -> str:
+        """Return the opaque identifier for one observation, from the identity.
 
-        The mapping is private to this instance. It is what lets an opaque
-        identifier be turned back into a path without the identifier carrying
-        the path.
+        The mapping is the collaborator's rather than this instance's, which is
+        the whole of the change: an `EphemeralIdentity` answers exactly as the
+        three private dictionaries here used to, and a `RegistryIdentity`
+        answers with the identifier `knowledge.source_objects` already holds for
+        this locator. Nothing about the identifier is derived from the path in
+        either case (`INV-PKL-005`).
+
+        The locator handed over is `str(path)` and the fingerprint is the stat
+        tuple joined on `:`. Both are derived values that stay inside
+        infrastructure; neither reaches a response, a log, or an error message.
+
+        The version comes back from the same call, because the two are one fact:
+        an identity that issued an `obj_…` for a locator and a `ver_…` for a
+        fingerprint in two separate calls could be asked for one without the
+        other. It is cached on the fingerprint so `_version_of` can answer the
+        `fetch` path without a second round trip -- see there for why that
+        lookup cannot miss.
         """
-        existing = self._ids.get(path)
-        if existing is not None:
-            return existing
-        minted = make_identifier(IdKind.SOURCE_OBJECT, secrets.token_hex(16))
-        self._ids[path] = minted
-        self._paths[minted] = path
-        return minted
+        object_id, version_id = self._identity.identify(
+            str(path),
+            kind=kind,
+            fingerprint=":".join(str(part) for part in fingerprint),
+            media_type=media_type,
+            size_bytes=size_bytes,
+            modified_at=modified_at,
+        )
+        self._versions[fingerprint] = version_id
+        return object_id
 
     def _version_of(self, fingerprint: _Fingerprint) -> str:
-        """Return the opaque version for a fingerprint, minting one once.
+        """Return the version the identity issued for a fingerprint just observed.
 
-        Memoised rather than minted per call, because the port's contract is
-        that two reads returning the same `version_id` observed the same bytes,
-        and a caller comparing the version from `metadata` against the version
-        from `fetch` is how a mid-read change is detected. A fresh random
-        version per observation would make every such comparison report a
-        change that did not happen.
+        A cache read, and it cannot miss. Both callers reach it only after
+        `_identify` has run for the very fingerprint they pass: `_observe`
+        identifies the object it has just stat'ed and then builds its result,
+        and `fetch` compares the descriptor's fingerprint against the one
+        `_observe` recorded and raises `VersionChangedError` unless they are
+        equal, so by the time it asks, the entry is there.
+
+        Memoised rather than re-derived, because the port's contract is that two
+        reads returning the same `version_id` observed the same bytes, and a
+        caller comparing the version from `metadata` against the version from
+        `fetch` is how a mid-read change is detected. Asking the identity twice
+        would be correct -- both implementations are idempotent on the
+        fingerprint -- and would put a second database round trip inside a path
+        that is holding an open descriptor.
         """
-        existing = self._versions.get(fingerprint)
-        if existing is not None:
-            return existing
-        minted = make_identifier(IdKind.VERSION, secrets.token_hex(16))
-        self._versions[fingerprint] = minted
-        return minted
+        return self._versions[fingerprint]
 
     def _locate(self, source_object_id: str) -> Path:
         """Resolve an identifier to a currently contained path, or deny.
 
         A malformed identifier is a client error and raises
         `InvalidIdentifierError`: its shape is wrong whatever exists, so
-        rejecting it discloses nothing. A well-formed identifier this instance
-        never issued is denied with the same message as one that resolves
+        rejecting it discloses nothing. A well-formed identifier the identity
+        knows nothing about is denied with the same message as one that resolves
         outside the root.
+
+        `None` from the identity is that denial and nothing narrower. It covers
+        "never issued", "issued by another instance of an in-memory identity",
+        and "issued under another source", and the caller cannot tell them
+        apart -- which is the same rule the rest of this module is written
+        under, now that "never issued" is a question something other than a
+        private dictionary answers.
+
+        Containment is still proved here, on the resolved locator, exactly as
+        before. A durable identity means the locator can now be older than the
+        process, which makes re-resolving it more necessary rather than less.
         """
         validate_identifier(source_object_id, IdKind.SOURCE_OBJECT)
-        known = self._paths.get(source_object_id)
+        known = self._identity.locate(source_object_id)
         if known is None:
             raise TraversalDeniedError(f"{source_object_id} {_DENIAL}")
-        return resolve_within(self._root, known, source_object_id)
+        return resolve_within(self._root, Path(known), source_object_id)
 
-    def _observe(self, path: Path, object_id: str) -> SourceObject:
-        """Describe a contained path and record the observation for `fetch`."""
+    def _observe(self, path: Path, object_id: str | None = None) -> SourceObject:
+        """Describe a contained path and record the observation for `fetch`.
+
+        `object_id` is the identifier the *caller* named, which only `metadata`
+        has: it arrived from outside and the result must echo it back. A listing
+        has no identifier yet, passes `None`, and takes the one the identity
+        issues for what was actually observed. That ordering is deliberate --
+        classification runs first and an entry that cannot be described raises
+        before anything is identified, so nothing issues an identifier for an
+        object it then refuses. Under a durable identity that is the difference
+        between a `source_objects` row and none.
+
+        The two denials below therefore have no caller-supplied identifier to
+        name on the listing path, and use the root's. It costs nothing: every
+        denial in this module carries the same sentence precisely so that a
+        caller cannot subtract one from another, and a listing discards this one
+        without reading it.
+        """
         status: os.stat_result | None
         try:
             status = path.stat()
         except OSError:
             status = None
         if status is None:
-            raise TraversalDeniedError(f"{object_id} {_DENIAL}")
+            raise TraversalDeniedError(f"{object_id or self._root_object_id} {_DENIAL}")
 
         if S_ISDIR(status.st_mode):
             kind, size, media_type = ObjectKind.CONTAINER, None, None
@@ -602,16 +699,26 @@ class FixtureSourceProvider(SourceProvider):
             # too is what keeps a listing from advertising an object that could
             # never be read, and a directory's link count is not consulted --
             # `.` and its children make it two or more by construction.
-            raise TraversalDeniedError(f"{object_id} {_DENIAL}")
+            raise TraversalDeniedError(f"{object_id or self._root_object_id} {_DENIAL}")
 
         fingerprint = _fingerprint(status)
-        self._observations[object_id] = fingerprint
+        modified_at = datetime.fromtimestamp(status.st_mtime, UTC)
+        identified = self._identify(
+            path,
+            kind=kind,
+            fingerprint=fingerprint,
+            media_type=media_type,
+            size_bytes=size,
+            modified_at=modified_at,
+        )
+        observed = identified if object_id is None else object_id
+        self._observations[observed] = fingerprint
         return SourceObject(
             source_id=self._source_id,
-            source_object_id=object_id,
+            source_object_id=observed,
             version_id=self._version_of(fingerprint),
             kind=kind,
             media_type=media_type,
             size_bytes=size,
-            modified_at=datetime.fromtimestamp(status.st_mtime, UTC),
+            modified_at=modified_at,
         )

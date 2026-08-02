@@ -1,7 +1,18 @@
-"""Persisting an accepted enrollment, idempotently.
+"""Persisting an accepted enrollment and the object set it authorizes.
 
-One function, because there is one operation: accept this request, or tell me
-what its key is already bound to.
+Two operations. Accept this request, or tell me what its key is already bound
+to; and record which objects the enumeration found, once, at acceptance.
+
+**Why the enumerated set is a second fact and not the first one reshaped.**
+`enrollments.object_ids` is what the caller *asked for* — it is part of
+`EnrollmentRequest.normalized()` and therefore of `request_fingerprint`, which
+is what makes an idempotency-key retry distinguishable from a conflict. What the
+enumeration *found* is a different fact, and for a root selector it is not even
+the same shape. It also cannot be given a foreign key where it is: `object_ids`
+is an `ARRAY(Text)` and PostgreSQL has no element-level reference, so an
+identifier that named no row was storable and authorized nothing, silently.
+`knowledge.enrollment_objects` is the second fact, with a foreign key on each
+column.
 
 The idempotency rule of `docs/specs` section 8.6 needs two things that have to
 agree. The unique constraint permits exactly one row per (principal, purpose,
@@ -22,12 +33,14 @@ constraint exists to close.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from typing import NamedTuple
 
-from sqlalchemy import Connection, Row, select
+from sqlalchemy import Connection, Row, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.source.enrollment import (
@@ -38,9 +51,19 @@ from my_pa.domain.source.enrollment import (
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import conflicting_row
-from my_pa.infrastructure.persistence.tables import enrollments
+from my_pa.infrastructure.persistence.tables import (
+    enrollment_objects,
+    enrollments,
+    source_objects,
+)
 
-__all__ = ["AcceptedEnrollment", "accept_enrollment", "enrollments_for_principal"]
+__all__ = [
+    "AcceptedEnrollment",
+    "accept_enrollment",
+    "enrolled_object_count",
+    "enrollments_for_principal",
+    "record_scope",
+]
 
 _COLUMNS = (
     enrollments.c.enrollment_id,
@@ -169,3 +192,102 @@ def accept_enrollment(connection: Connection, request: EnrollmentRequest) -> Acc
     if enrollment.request_fingerprint != fingerprint:
         raise EnrollmentConflictError(enrollment.enrollment_id)
     return AcceptedEnrollment(enrollment, False)
+
+
+def enrolled_object_count(connection: Connection, enrollment_id: str) -> int:
+    """How many objects `enrollment_id` holds in its enumerated set.
+
+    This is the eligible total — the denominator a coverage statement is honest
+    about — read from stored rows rather than supplied by whatever assembled the
+    disclosure. Zero is a real answer here and never a benign one: an accepted
+    enrollment holds at least one object, because `record_scope` refuses to
+    record an empty set, so a zero means the enrollment was never enumerated.
+    """
+    validate_identifier(enrollment_id, IdKind.ENROLLMENT)
+    return int(
+        connection.execute(
+            select(func.count())
+            .select_from(enrollment_objects)
+            .where(enrollment_objects.c.enrollment_id == enrollment_id)
+        ).scalar_one()
+    )
+
+
+def record_scope(
+    connection: Connection, enrollment_id: str, source_object_ids: Iterable[str]
+) -> int:
+    """Record the objects `enrollment_id` authorizes, and return how many it holds.
+
+    Called once, inside the transaction that accepted the enrollment and only
+    where that acceptance created it, so a retried request re-enumerates
+    nothing.
+
+    **Idempotent by constraint, not by convention.** The insert conflicts on
+    `an_enrollment_holds_an_object_once` — the composite primary key — and does
+    nothing, so running the same enumeration twice adds no row and the count is
+    the same both times. Two concurrent callers cannot both read "absent" and
+    both insert, which a check-then-insert here would permit.
+
+    **An empty set is refused.** An enrollment nothing measured would have a
+    zero denominator and a queued job, and would report coverage over a scope no
+    row describes. Raising rolls the whole enroll transaction back, including
+    `accept_enrollment`, so the unmeasurable enrollment does not exist rather
+    than existing unmeasured. `ValueError` is what the other writers in this
+    package raise to refuse an argument — `extraction.record_limitation` refuses
+    a count below one the same way — and it is what `persistence.unit_of_work`
+    already classifies at the port boundary; this module may not import
+    `application`, so it cannot raise the public error itself.
+
+    **Membership is checked before the insert, and the foreign key is not the
+    check.** `enrollment_objects.source_object_id` references
+    `source_objects.source_object_id`, which proves the object was observed by
+    *something*; it does not prove it was observed under this enrollment's
+    source. Without the pre-check, enumerating one source and naming an object
+    of another would insert successfully and silently widen the grant. The
+    answer is `UnknownScopeError` — `not_found` in section 10's terms — and it
+    names no identifier, so a caller cannot use the refusal to learn whether an
+    object it may not see exists.
+
+    **This is also where a root that does not exist is refused.** There is no
+    foreign key on `enrollments.root_object_id` and there deliberately will not
+    be one: `enrollments` is created by revision `7e5a1fb93d62` from the shared
+    `MetaData`, so declaring that reference would retroactively change the DDL an
+    already-merged revision emits. The guarantee is held here instead. A root
+    naming no observed object enumerates to nothing, and the empty set is refused
+    above; a root that names an object of another source is refused by the
+    pre-check. Either refusal rolls back the transaction that accepted the
+    enrollment, so the enrollment does not exist rather than existing
+    unenumerable.
+    """
+    validate_identifier(enrollment_id, IdKind.ENROLLMENT)
+    wanted = {validate_identifier(value, IdKind.SOURCE_OBJECT) for value in source_object_ids}
+    if not wanted:
+        raise ValueError("an enrollment authorizes at least one object")
+
+    # One statement for both halves of the pre-check. An enrollment that does
+    # not exist has no source, so the join yields nothing and the count is zero,
+    # which is the same refusal an object of the wrong source produces — and the
+    # same refusal section 10 requires "no such enrollment" to be
+    # indistinguishable from.
+    belonging = connection.execute(
+        select(func.count())
+        .select_from(source_objects)
+        .join(enrollments, enrollments.c.source_id == source_objects.c.source_id)
+        .where(
+            enrollments.c.enrollment_id == enrollment_id,
+            source_objects.c.source_object_id.in_(wanted),
+        )
+    ).scalar_one()
+    if int(belonging) != len(wanted):
+        raise UnknownScopeError("the scope names an object this enrollment's source never observed")
+
+    rows = [
+        {"enrollment_id": enrollment_id, "source_object_id": object_id}
+        for object_id in sorted(wanted)
+    ]
+    connection.execute(
+        pg_insert(enrollment_objects)
+        .values(rows)
+        .on_conflict_do_nothing(constraint="an_enrollment_holds_an_object_once")
+    )
+    return enrolled_object_count(connection, enrollment_id)

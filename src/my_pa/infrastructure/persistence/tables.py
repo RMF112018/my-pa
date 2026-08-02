@@ -400,12 +400,17 @@ extractions = Table(
     Index("extractions_by_enrollment", "enrollment_id", "status"),
     # A functional GIN index over the same expression the search predicate uses.
     # There is no stored `tsvector` column and no trigger to maintain one, so the
-    # expression here and the one in `persistence.search` must stay identical
-    # character for character: PostgreSQL matches a functional index by the
-    # expression tree, and a difference as small as a changed text-search
-    # configuration silently drops the query back to a sequential scan that still
-    # returns correct rows. `test_the_search_predicate_uses_the_index` proves the
-    # plan, not just the result.
+    # expression here and the one in `persistence.search` must stay equal *as
+    # expressions*: PostgreSQL matches a functional index by the expression tree,
+    # not by the text, so the two need not read the same and in fact do not — the
+    # index is written over `text` and the predicate compiles to
+    # `to_tsvector('english', knowledge.extractions.text)`, which is a different
+    # string for the same tree and matches. What breaks the match is anything
+    # that changes the tree, such as a different text-search configuration, and
+    # it breaks silently: the query drops back to a sequential scan that still
+    # returns correct rows.
+    # `test_the_search_predicate_uses_the_functional_index_and_not_a_sequential_scan`
+    # proves the plan, not just the result.
     Index(
         "extractions_full_text",
         text("to_tsvector('english', text)"),

@@ -17,6 +17,21 @@ be passed in, and the table it writes has no column content could be stored in.
 The two together are why "quarantine stores IDs and safe reason codes, not
 payloads" is a property of the code rather than a promise about how it is called.
 
+**An enrollment's authorized object set is enforced, on both sides.** Filtering
+by `enrollment_id` alone is not an authorization boundary: nothing in the schema
+ties an outcome's `source_object_id` to the objects its enrollment named, so a
+row written for any object at all would be counted and returned as if it were in
+scope. `authorized_object` is the one definition of what an enrollment
+authorizes — an object of the enrollment's own source, and, where the enrollment
+named its objects, one of those — and it is applied by every count in
+`coverage_for` and by the search predicate that reads the same rows. The write
+path refuses the same objects through `UnauthorizedObjectError`, so the
+inconsistent state cannot be created rather than merely not being reported.
+
+The two halves are not redundant. The read side has to hold against rows already
+stored, written by hand, or written before the write side existed; the write side
+is what stops new ones. Neither would be enough alone.
+
 **Coverage is read for a stated enrollment and snapshot.** `coverage_for` counts
 what this schema stores and requires the caller to state what it does not: the
 eligible total, and any queued or unavailable counts. That asymmetry is
@@ -40,8 +55,9 @@ crash the read, and a repaired total leaves no record that it was repaired.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import Connection, func, select
+from sqlalchemy import ColumnElement, Connection, Text, any_, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -62,16 +78,105 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import conflicting_row
 from my_pa.infrastructure.persistence.tables import (
     coverage_limitations,
+    enrollments,
     extractions,
     quarantine_records,
+    source_objects,
 )
 
 __all__ = [
+    "UnauthorizedObjectError",
+    "authorized_object",
     "coverage_for",
     "quarantine_object",
     "record_limitation",
     "record_outcome",
 ]
+
+
+class UnauthorizedObjectError(Exception):
+    """An outcome was offered for an object its enrollment does not authorize.
+
+    Added because nothing else in this module's vocabulary fits. A `ValueError`
+    would say the arguments are malformed, and they are not — both identifiers
+    passed `validate_identifier` before this was reached. `IsolationLevelError`
+    is about a row that vanished. What happened is that the write was refused on
+    authorization grounds, and that has to be distinguishable by type, because a
+    caller may reasonably quarantine-and-continue on a malformed outcome and must
+    not do the same with one it was never entitled to record.
+
+    Carries the two identifiers, both of which the caller supplied in the call
+    being refused, so nothing here discloses anything the caller did not already
+    hold. There is no reason code and no content: this is not a quarantine.
+    """
+
+
+def authorized_object(
+    source_object_id: ColumnElement[Any], *, enrollment_id: str
+) -> ColumnElement[bool]:
+    """Whether `enrollment_id` authorizes the object `source_object_id` names.
+
+    The one definition of an enrollment's authorized object set, written once and
+    used by every read and every write that touches an outcome. Two conditions,
+    and each is a fact the schema already stores:
+
+    * The object belongs to the enrollment's own source. True of both selectors.
+      A root selector names an object of that source and depth walks within it,
+      so no object of another source can be under it; an enrollment naming
+      objects is accepted without anything checking they are that source's, which
+      is why this is enforced here rather than assumed.
+    * Where the enrollment named its objects, the object is one of them.
+      `enrollments.object_ids` *is* the authorization for that selector, and
+      `enrollment_names_exactly_one_selector` guarantees it is non-empty exactly
+      when `root_object_id` is null.
+
+    A root-selector enrollment stores no object set, so there is nothing to
+    restrict against and this deliberately does not invent one — the objects
+    under a root are known only to the enumeration that walked it, and nothing
+    persists them. That is the same gap that leaves such an enrollment's
+    denominator unmeasured, and `persistence.search` discloses it rather than
+    covering it up. The source condition still applies to it.
+
+    `correlate_except` rather than SQLAlchemy's automatic correlation: the two
+    tables named here must stay in the subquery's own `FROM` even when the
+    enclosing statement happens to select from one of them, which
+    `match_statement` does.
+    """
+    validate_identifier(enrollment_id, IdKind.ENROLLMENT)
+    return (
+        select(literal(1))
+        .where(
+            enrollments.c.enrollment_id == enrollment_id,
+            source_objects.c.source_object_id == source_object_id,
+            source_objects.c.source_id == enrollments.c.source_id,
+            or_(
+                enrollments.c.root_object_id.is_not(None),
+                source_object_id == any_(enrollments.c.object_ids),
+            ),
+        )
+        .correlate_except(enrollments, source_objects)
+        .exists()
+    )
+
+
+def _refuse_an_unauthorized_object(
+    connection: Connection, *, enrollment_id: str, source_object_id: str
+) -> None:
+    """Raise unless `enrollment_id` authorizes `source_object_id`.
+
+    One round trip before the write, which is the price of the state being
+    impossible rather than merely unreported. The alternative — a foreign key or
+    a check constraint — cannot be written: the authorized set for the named
+    selector is an array column on another table, and PostgreSQL has no
+    constraint that reaches it.
+    """
+    authorized = connection.execute(
+        select(authorized_object(literal(source_object_id, Text), enrollment_id=enrollment_id))
+    ).scalar_one()
+    if not authorized:
+        raise UnauthorizedObjectError(
+            f"enrollment {enrollment_id} does not authorize object {source_object_id}"
+        )
 
 
 def record_outcome(
@@ -92,6 +197,11 @@ def record_outcome(
     `kn_…` is returned. It is not idempotent there — section 12 makes
     reprocessing an explicit new operation, so a second quarantine is a second
     event.
+
+    Raises `UnauthorizedObjectError` for an object the enrollment does not
+    authorize, before anything is written. The check is `authorized_object`'s,
+    so an enrollment that named its objects admits only those; one that named a
+    root has no stored object set and is restricted by its source alone.
     """
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     provenance = outcome.provenance
@@ -110,6 +220,15 @@ def record_outcome(
             version_id=provenance.version_id,
             reason=reason,
         ).quarantine_id
+
+    # Checked here rather than at the top of the function so the quarantine path
+    # is checked exactly once, by `quarantine_object` itself: it is reachable
+    # both through this routing and directly.
+    _refuse_an_unauthorized_object(
+        connection,
+        enrollment_id=enrollment_id,
+        source_object_id=provenance.source_object_id,
+    )
 
     statement = (
         pg_insert(extractions)
@@ -167,11 +286,21 @@ def quarantine_object(
     proven — a containment failure at listing time, for instance. Recording a
     version that was never observed would attribute the quarantine to bytes
     nobody saw.
+
+    Raises `UnauthorizedObjectError` for an object outside what the enrollment
+    authorizes, and identifier syntax is no longer the whole of what is checked.
+    A quarantine for an object the enrollment never named used to be storable,
+    and the row it left was counted as coverage of that enrollment's scope. For
+    an enrollment that named a root there is no stored object set to check
+    against, so only its source is checked; `authorized_object` records why.
     """
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     validate_identifier(source_object_id, IdKind.SOURCE_OBJECT)
     if version_id is not None:
         validate_identifier(version_id, IdKind.VERSION)
+    _refuse_an_unauthorized_object(
+        connection, enrollment_id=enrollment_id, source_object_id=source_object_id
+    )
 
     quarantined_at = utc_now()
     quarantine_id = issue_identifier(IdKind.KNOWLEDGE)
@@ -254,11 +383,22 @@ def coverage_for(
 ) -> CoverageCounts:
     """Report coverage of `enrollment_id` for the snapshot `observed_at` names.
 
-    Outcomes are counted for the whole enrollment, because that is the scope the
-    grant defines and an outcome does not stop being true when the next pass
-    starts. Limitations are matched to the snapshot exactly: a limitation is a
-    property of one enumeration pass rather than a running total, and summing two
-    passes over the same tree would report each omission twice.
+    Outcomes are counted for the whole enrollment and for nothing beyond it.
+    "For the enrollment" is `authorized_object` and not `enrollment_id` alone:
+    an outcome stored against this enrollment for an object it does not
+    authorize is not coverage of its scope, and counting it converted a partial
+    result into a complete one — with a named-objects enrollment the stray
+    outcomes fitted inside the denominator and the read reported
+    `processed == eligible` while authorized objects had reached no outcome at
+    all. Objects that are authorized and have no outcome stay uncounted, which
+    is what leaves the result partial, and that is the direction this must fail
+    in.
+
+    Counted for the whole enrollment rather than for one pass, because that is
+    the scope the grant defines and an outcome does not stop being true when the
+    next pass starts. Limitations are matched to the snapshot exactly: a
+    limitation is a property of one enumeration pass rather than a running total,
+    and summing two passes over the same tree would report each omission twice.
 
     Deliberately not filtered by time. An extraction records when the version it
     read was observed and a quarantine records when processing stopped, which are
@@ -308,26 +448,42 @@ def coverage_for(
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     moment = ensure_utc(observed_at)
 
+    # The authorization boundary, evaluated per object and applied to every
+    # count below. Each is built separately because each restricts a different
+    # table's `source_object_id`.
+    quarantine_is_authorized = authorized_object(
+        quarantine_records.c.source_object_id, enrollment_id=enrollment_id
+    )
+    extraction_is_authorized = authorized_object(
+        extractions.c.source_object_id, enrollment_id=enrollment_id
+    )
+
     # The two subqueries are the precedence, written once and subtracted from
     # the counts that rank below them. Neither is executed on its own; each
-    # becomes an `IN (SELECT …)` inside the count that has to exclude it.
+    # becomes an `IN (SELECT …)` inside the count that has to exclude it. Both
+    # carry the boundary too: an unauthorized quarantine must not suppress an
+    # authorized extraction any more than it may be counted itself.
     quarantined_objects = select(quarantine_records.c.source_object_id).where(
-        quarantine_records.c.enrollment_id == enrollment_id
+        quarantine_records.c.enrollment_id == enrollment_id,
+        quarantine_is_authorized,
     )
     unsupported_objects = select(extractions.c.source_object_id).where(
         extractions.c.enrollment_id == enrollment_id,
         extractions.c.status == ExtractionStatus.UNSUPPORTED.value,
+        extraction_is_authorized,
     )
 
     quarantined = connection.execute(
         select(func.count(func.distinct(quarantine_records.c.source_object_id))).where(
             quarantine_records.c.enrollment_id == enrollment_id,
+            quarantine_is_authorized,
         )
     ).scalar_one()
     unsupported = connection.execute(
         select(func.count(func.distinct(extractions.c.source_object_id))).where(
             extractions.c.enrollment_id == enrollment_id,
             extractions.c.status == ExtractionStatus.UNSUPPORTED.value,
+            extraction_is_authorized,
             extractions.c.source_object_id.not_in(quarantined_objects),
         )
     ).scalar_one()
@@ -335,6 +491,7 @@ def coverage_for(
         select(func.count(func.distinct(extractions.c.source_object_id))).where(
             extractions.c.enrollment_id == enrollment_id,
             extractions.c.status == ExtractionStatus.EXTRACTED.value,
+            extraction_is_authorized,
             extractions.c.source_object_id.not_in(quarantined_objects),
             extractions.c.source_object_id.not_in(unsupported_objects),
         )

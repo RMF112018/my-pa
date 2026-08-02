@@ -4,13 +4,27 @@ Two things are proved here.
 
 **The ten states.** `docs/specs` section 12 fixes ten coverage states, requires
 them to be distinct, and forbids any of them collapsing into "empty".
-`CoverageCounts.state_value` returns the value of one of them rather than the
-member, because domain code may not import `my_pa.contracts` — see the module
-docstring in `domain/extraction/coverage.py`. The correspondence is therefore not
-enforced by the type system, and these tests are what enforce it instead, in both
-directions: every value the function can return is a `CoverageState`, and every
-`CoverageState` is reachable from some input. A one-directional check would let
-the two drift as soon as a state was added.
+`CoverageCounts.state()` returns a `CoverageState` member, so *that* much is the
+type system's job and not these tests'.
+
+What the type system cannot say is the part that matters here. It cannot show
+that every state is reachable from some arrangement of counts, and it cannot
+show that no two arrangements collapse onto one state. A state that exists in
+the enum but that nothing can produce is indistinguishable, from the caller's
+side, from a state that was never added — and `INV-PKL-007` is a rule about what
+the system is able to *say*, so a state it cannot reach is a rule it cannot
+keep. These tests hold both directions: every state is reached by some case
+below, and the number of distinct states the cases produce equals the number of
+states there are.
+
+An earlier version of this docstring said the method returned the enum's value
+rather than the member, because domain code could not import `my_pa.contracts`.
+That was true when it was written and is not true now: `CoverageState` moved to
+`domain.common.coverage` in the same change that added this file, and
+`contracts.v1.disclosure` re-exports it. The reason is recorded rather than
+quietly deleted, because the argument it made — a correspondence the type system
+does not enforce needs tests that do — is still the right argument, and it now
+applies to reachability instead.
 
 **The aggregate limitation.** `docs/plans/mcv-completion-plan.md` section 10
 records that a refused object vanishes from a listing with no signal at all.

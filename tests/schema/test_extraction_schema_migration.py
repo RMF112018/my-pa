@@ -425,16 +425,26 @@ def test_a_quarantine_row_has_nowhere_to_put_a_payload(extraction_engine: Engine
 
 
 class Enrolled(NamedTuple):
-    """One configured source, one accepted enrollment, one observed object."""
+    """One configured source, one accepted enrollment, and the objects it names.
+
+    `also_named` holds the `(source_object_id, version_id)` of any further
+    objects the enrollment authorized beyond the first. It exists because an
+    enrollment's named `object_ids` are an authorization boundary that
+    `coverage_for` and `record_outcome` enforce: a test that observes a second
+    object and records an outcome for it under this enrollment has to have that
+    object named here, or the outcome is refused and would never have been
+    counted anyway.
+    """
 
     source_id: str
     enrollment_id: str
     source_object_id: str
     version_id: str
+    also_named: tuple[tuple[str, str], ...] = ()
 
 
-def _enrolled(connection: Connection) -> Enrolled:
-    """A source, an enrollment, and one observed object."""
+def _enrolled(connection: Connection, *, also_named: int = 0) -> Enrolled:
+    """A source, an enrollment, and `1 + also_named` observed objects it authorizes."""
     source = register_source(
         connection,
         provider_kind=SourceProviderKind.FIXTURE,
@@ -452,13 +462,31 @@ def _enrolled(connection: Connection) -> Enrolled:
         media_type="text/markdown",
         size_bytes=len(SYNTHETIC_MARKDOWN),
     )
+    others = [
+        observe_object(
+            connection,
+            source_id=source.source_id,
+            native_locator=f"{NATIVE_ROOT}/other-{index}.md",
+            kind=ObjectKind.FILE,
+            fingerprint=f"fingerprint-other-{index}",
+            modified_at=OBSERVED_AT,
+            media_type="text/markdown",
+            size_bytes=8,
+        )
+        for index in range(also_named)
+    ]
     accepted = accept_enrollment(
         connection,
         EnrollmentRequest(
             source_id=source.source_id,
             principal_id=issue_identifier(IdKind.PRINCIPAL),
             purpose=Purpose.BOUNDED_ENROLLMENT,
-            scope=EnrollmentScope(object_ids=(observed.source_object_id,)),
+            scope=EnrollmentScope(
+                object_ids=(
+                    observed.source_object_id,
+                    *(other.source_object_id for other in others),
+                )
+            ),
             media_types=("text/markdown",),
             policy_version="mcv-1",
             idempotency_key="enroll-extraction-1",
@@ -471,6 +499,7 @@ def _enrolled(connection: Connection) -> Enrolled:
         enrollment_id=accepted.enrollment.enrollment_id,
         source_object_id=observed.source_object_id,
         version_id=observed.version_id,
+        also_named=tuple((other.source_object_id, other.version_id) for other in others),
     )
 
 
@@ -741,24 +770,15 @@ def test_coverage_reports_the_enrollment_the_snapshot_and_what_was_left_out(
     and no identifier.
     """
     with extraction_engine.begin() as connection:
-        enrolled = _enrolled(connection)
-        second = observe_object(
-            connection,
-            source_id=enrolled.source_id,
-            native_locator=f"{NATIVE_ROOT}/other.md",
-            kind=ObjectKind.FILE,
-            fingerprint="fingerprint-two",
-            modified_at=OBSERVED_AT,
-            media_type="text/markdown",
-            size_bytes=8,
-        )
+        enrolled = _enrolled(connection, also_named=1)
+        second_object_id, second_version_id = enrolled.also_named[0]
 
         record_outcome(connection, enrollment_id=enrolled.enrollment_id, outcome=_outcome(enrolled))
         quarantine_object(
             connection,
             enrollment_id=enrolled.enrollment_id,
-            source_object_id=second.source_object_id,
-            version_id=second.version_id,
+            source_object_id=second_object_id,
+            version_id=second_version_id,
             reason=QuarantineReason.MALFORMED_INPUT,
         )
         record_limitation(
@@ -819,6 +839,49 @@ def test_coverage_reports_only_the_limitations_of_the_snapshot_it_was_asked_for(
     # The outcome is the enrollment's, not the pass's, so both passes see it.
     assert first_pass.processed == second_pass.processed == 1
     assert first_pass.state() is CoverageState.PROCESSED
+
+
+@pytest.mark.database
+@pytest.mark.parametrize(
+    ("queued", "unavailable"),
+    [(2, 0), (0, 2), (2, 3)],
+    ids=["queued", "unavailable", "both"],
+)
+def test_a_derived_total_includes_the_queued_and_unavailable_work_the_caller_declared(
+    extraction_engine: Engine, queued: int, unavailable: int
+) -> None:
+    """`eligible=None` derives the total from *everything* the caller knows about.
+
+    A caller with no enumeration still knows about work it has queued and work it
+    found unavailable — those are its own counts, passed in beside the request.
+    Deriving the total from the stored outcomes alone would build a denominator
+    smaller than the counts standing next to it, and `CoverageCounts` refuses
+    that: the read would raise `ValueError` rather than return coverage, which is
+    the crash the derived total exists to remove and not to relocate.
+
+    Parametrized over each term separately as well as together, because one term
+    present and the other missing is exactly the shape that passes a test written
+    only for the sum.
+    """
+    with extraction_engine.begin() as connection:
+        enrolled = _enrolled(connection)
+        record_outcome(connection, enrollment_id=enrolled.enrollment_id, outcome=_outcome(enrolled))
+
+        derived = coverage_for(
+            connection,
+            enrolled.enrollment_id,
+            observed_at=OBSERVED_AT,
+            eligible=None,
+            queued=queued,
+            unavailable=unavailable,
+        )
+
+    assert derived.processed == 1
+    assert derived.eligible == 1 + queued + unavailable
+    assert derived.accounted + derived.queued == derived.eligible
+    # Never a whole-scope claim: work the caller declared outstanding is work
+    # this enrollment has not accounted for.
+    assert derived.state() is CoverageState.PARTIALLY_PROCESSED
 
 
 @pytest.mark.database

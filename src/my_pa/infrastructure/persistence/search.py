@@ -36,13 +36,15 @@ query is `EmptySearchQueryError`.
 **The query never appears in an error, and that does not depend on the engine.**
 SQLAlchemy renders bound parameters into `DBAPIError` messages unless the engine
 was built with `hide_parameters=True`, and `create_database_engine` does not set
-it. So every statement here runs through `_execute`, which converts any
-`SQLAlchemyError` into one of this module's own errors — *raised outside the
-`except` block*, so the original is not left in `__context__` where a traceback
-would render it. That makes the redaction a property of this module rather than
-of a setting in a file this module does not own.
+it. So every statement this module *builds* runs through `_execute`, which
+converts any `SQLAlchemyError` into one of this module's own errors — *raised
+outside the `except` block*, so the original is not left in `__context__` where a
+traceback would render it. That makes the redaction a property of this module
+rather than of a setting in a file this module does not own. The exception is
+named where it is: the coverage read is `coverage_for`'s statements, not this
+module's, and it is not inside `_execute`.
 
-**The index exists, and the predicate has to stay identical to it.**
+**The index exists, and the predicate has to stay equal to it as an expression.**
 `knowledge.extractions` has no `tsvector` column and no trigger maintaining one.
 What it has is a functional GIN index over the same expression this module
 builds, created beside the table by revision `8b3f5c17d904`:
@@ -88,6 +90,14 @@ which is the right plan and is what it does at test-fixture scale. This module
 also sets no statement timeout. The index removes the sequential scan as the
 only possibility; it does not bound what a query can cost.
 
+Also not claimed: that no database failure of any kind can carry detail out of
+`search_extractions`. The coverage read runs `coverage_for`'s statements, which
+this module does not wrap — `_coverage` catches `ValueError` and nothing else —
+so a `ProgrammingError` raised there escapes as a `SQLAlchemyError` whose message
+carries the statement and its bound `enrollment_id`. That is a schema fault
+rather than a query fault and no caller's text reaches it, but it is a real hole
+in the redaction and it is carried into WP-4 rather than described as closed.
+
 **`pg_trgm` is installed and deliberately unused.** `AGENTS.md` section 4 names
 it alongside full-text search as an initial mechanism, and it answers a different
 question — similarity, for fuzzy and misspelled input. Nothing in the accepted
@@ -126,8 +136,14 @@ rather have a partial disclosure than a confident wrong one.
 
 What that leaves, stated here rather than discovered later: for a root-selector
 enrollment the reported counts and the reported state disagree, and the clamp is
-what makes them disagree. `eligible == accounted` there — the sum of `processed`,
-`quarantined` and `unsupported`, not `processed` alone — so a consumer that
+what makes them disagree. `eligible == accounted` there, where `accounted` is
+`CoverageCounts`' own four-term sum — `processed + quarantined + unsupported +
+unavailable` — and the derived total is those four plus `queued`. They are equal
+for this module's calls because it passes neither `queued` nor `unavailable`,
+which is a fact about these two call sites and not a property of the arithmetic;
+a caller that passed either would break the equality, and describing it as three
+terms because the fourth is currently zero is the "currently unreachable"
+reasoning this module has now rejected twice. So a consumer that
 recomputes the state from the counts gets whichever whole-scope state the
 outcomes happen to form, or `partially_processed` where they are mixed, and the
 first case contradicts the state reported beside it. The clamp stops this module
@@ -197,11 +213,12 @@ from my_pa.domain.search.query import (
     label_for_media_type,
     rank_category,
 )
-from my_pa.infrastructure.persistence.extraction import coverage_for
+from my_pa.infrastructure.persistence.extraction import authorized_object, coverage_for
 from my_pa.infrastructure.persistence.tables import (
     coverage_limitations,
     enrollments,
     extractions,
+    source_objects,
     sources,
 )
 
@@ -470,6 +487,23 @@ def match_statement(request: SearchRequest, position: SearchCursor | None) -> Se
     size leaves "is there more" unanswerable without a second query, and section
     8.5 forbids a limit that produces an unmarked complete-looking response.
 
+    **`enrollment_id` is not the authorization.** It says which enrollment a row
+    was written against, and nothing ties that to the objects the enrollment
+    authorizes; a row stored for any object at all was matched, and its extracted
+    text returned, because it carried the right `enrollment_id`. The boundary is
+    `authorized_object`, which is the same predicate `coverage_for` counts by, so
+    what a search returns and what it claims coverage of cannot disagree about
+    what is in scope.
+
+    **The source comes from the object.** `source_objects.source_id` is joined
+    and selected rather than taken from the enrollment row, because those are two
+    different facts and only one of them is a property of the row being returned.
+    Reading it from the enrollment made every `SourceReference` assert the
+    enrollment's source whatever the object's actually was. The boundary above
+    now makes the two equal for every row this can return; the join is what makes
+    that a derivation instead of an assumption, and
+    `test_a_match_takes_its_source_from_the_matched_object` pins it.
+
     Public for the same reason as `context_statement`: the security suite
     compiles this and asserts that the query text appears among the bound
     parameters and nowhere in the SQL.
@@ -492,15 +526,23 @@ def match_statement(request: SearchRequest, position: SearchCursor | None) -> Se
     statement = (
         select(
             extractions.c.extraction_id,
+            source_objects.c.source_id,
             extractions.c.source_object_id,
             extractions.c.version_id,
             extractions.c.media_type,
             headline.label("snippet"),
             rank.label("rank"),
         )
+        .select_from(
+            extractions.join(
+                source_objects,
+                source_objects.c.source_object_id == extractions.c.source_object_id,
+            )
+        )
         .where(
             extractions.c.enrollment_id == request.enrollment_id,
             extractions.c.status == ExtractionStatus.EXTRACTED.value,
+            authorized_object(extractions.c.source_object_id, enrollment_id=request.enrollment_id),
             _document_vector().bool_op("@@")(query),
         )
         .order_by(rank.desc(), extractions.c.extraction_id.desc())
@@ -578,11 +620,18 @@ def _coverage(
     an uncaught `ValueError` is outside section 10's taxonomy, carries no
     envelope, and reaches whoever is above this layer as an unclassified crash
     that leaves search dead for that enrollment with nothing to act on.
+    Classified as internal rather than unavailable because retrying reads the
+    same rows and fails the same way.
 
-    Reached, today, when something recorded a quarantine for an object the
-    enrollment never named — `quarantine_object` checks identifier syntax and
-    not membership of the authorized scope. Classified as internal rather than
-    unavailable because retrying reads the same rows and fails the same way.
+    No call this module makes can currently reach it, and that is a change
+    rather than a claim about the design. It was reachable: an outcome recorded
+    for an object the enrollment never named was counted, so the counts could
+    exceed `cardinality(object_ids)`. `coverage_for` now counts only objects the
+    enrollment authorizes, and there cannot be more distinct such objects than
+    the array naming them holds. The guard stays because the reachability
+    argument is about this caller and `coverage_for` is public: any caller may
+    state a denominator its rows do not fit inside, and this one must not turn
+    that into an untyped crash if it ever states a different one.
 
     The `raise` is outside the `except` block for the same reason it is in
     `_execute`: leaving the handler first is what keeps the original off
@@ -640,7 +689,9 @@ def search_extractions(
                 label=label_for_media_type(row.media_type),
                 snippet=snippet,
                 rank=rank_category(float(row.rank)),
-                source_id=str(source_id),
+                # The matched object's source, not the enrollment's. See
+                # `match_statement`.
+                source_id=str(row.source_id),
                 source_object_id=str(row.source_object_id),
                 version_id=str(row.version_id),
             )

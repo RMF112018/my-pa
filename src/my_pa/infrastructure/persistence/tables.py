@@ -589,8 +589,12 @@ audit_events = Table(
     Column("outcome", Text, nullable=False),
     Column("policy_version", Text, nullable=False),
     Column("denial_reason", Text),
-    Column("item_count", Integer, nullable=False, server_default="0"),
-    Column("duration_ms", Integer, nullable=False, server_default="0"),
+    # The only count with a writer. `AuditEvent` also carries `item_count` and
+    # `duration_ms`, and neither is ever set: `authorize` passes this one alone
+    # and the mismatch branch passes none. Columns for them would be permanently
+    # zero, which `AGENTS.md` section 2 rules out — and a zero that means "never
+    # measured" reads as "nothing happened", which is worse than absent. They
+    # belong here when something computes them.
     Column("scope_source_id_count", Integer, nullable=False, server_default="0"),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
     _is_identifier("audit_id", IdKind.AUDIT),
@@ -613,10 +617,7 @@ audit_events = Table(
         f"(outcome = '{AuditOutcome.DENIED.value}') = (denial_reason IS NOT NULL)",
         name="a_denial_records_its_reason_and_nothing_else_does",
     ),
-    CheckConstraint(
-        "item_count >= 0 AND duration_ms >= 0 AND scope_source_id_count >= 0",
-        name="audit_counts_are_not_negative",
-    ),
+    CheckConstraint("scope_source_id_count >= 0", name="audit_counts_are_not_negative"),
     # The one lookup this build can already perform: a response envelope hands
     # its caller a `corr_…`, so that is how an operator finds the decision behind
     # a request. No index by principal or by time, because nothing reads by

@@ -421,6 +421,56 @@ def test_a_stop_signal_ends_the_loop_without_abandoning_the_job_it_holds(
 
 
 @pytest.mark.database
+def test_a_signal_between_the_claim_and_the_work_still_finishes_the_claimed_job(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The window the other shutdown tests leave unpinned.
+
+    `test_a_stop_signal_ends_the_loop_without_abandoning_the_job_it_holds` sets
+    the flag from inside the handler, so it pins the window *during* the work.
+    The window between the committed claim and the start of the work is a
+    different one, and a reviewer showed it was invisible: planting
+    `if stop.is_set(): break` immediately after the claim — while leaving the
+    pre-claim guard intact — abandons a job with its lease held and the whole
+    database tier still passed.
+
+    The signal is delivered from a seam around `claim_job` itself, which is
+    exactly that instant: the claim has committed, the lease is held, and the
+    handler has not started. The job must still reach a terminal state with its
+    lease released, because a worker that dropped it here would leave live work
+    that nothing is doing until the lease expires.
+    """
+    operation_id = _enqueue(engine, "signal-after-claim")
+    stop = threading.Event()
+    handler = Recorder()
+    real_claim = claim_job
+
+    def claim_then_signal(
+        connection: Connection, *, owner: str, lease_seconds: int
+    ) -> LeasedJob | None:
+        job = real_claim(connection, owner=owner, lease_seconds=lease_seconds)
+        if job is not None:
+            # As if SIGTERM arrived in the instant after the claim committed.
+            stop.set()
+        return job
+
+    monkeypatch.setattr(
+        "my_pa.infrastructure.jobs.worker.claim_job", claim_then_signal, raising=True
+    )
+
+    run = run_worker(engine, owner=issue_worker_owner(), handler=handler, stop=stop)
+
+    assert stop.is_set()
+    assert (run.claimed, run.completed, run.lost) == (1, 1, 0)
+    assert handler.calls == 1, "the claimed job was abandoned instead of being finished"
+    assert _limitations(engine) == 1
+    state, attempts, owner, code = _job_row(engine, operation_id)
+    assert (state, attempts, owner, code) == (JobState.SUCCEEDED.value, 1, None, None), (
+        "the worker stopped while still holding the lease it had just taken"
+    )
+
+
+@pytest.mark.database
 def test_a_worker_already_told_to_stop_claims_nothing(engine: Engine) -> None:
     """The condition is checked before the claim, not after it.
 

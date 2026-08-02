@@ -96,6 +96,17 @@ def _install_stop_handlers(stop: threading.Event) -> None:
         signal.signal(number, _request_stop)
 
 
+#: What this process will do with work it claims, said by the process itself.
+#: The docstring above, the runbook, and `README.md` all disclose it, and none of
+#: them is what an operator reads when a run prints `idle 1`: without this line,
+#: "no executor is wired" and "healthy worker, empty queue" are the same output.
+#: A printed sentence is the whole of it — there is no status mechanism here.
+_NO_EXECUTOR_NOTICE = (
+    "notice      no extraction executor is wired; claimed work is released as "
+    "'unavailable' and fails once its attempts are spent"
+)
+
+
 def _report(owner: str, run: WorkerRun) -> None:
     """Print what the run did. Counts, an owner token, and nothing else."""
     print(f"owner        {owner}")
@@ -113,6 +124,9 @@ def _run(args: argparse.Namespace) -> int:
     owner = issue_worker_owner()
     stop = threading.Event()
     _install_stop_handlers(stop)
+    # Said at startup rather than in the summary, because a worker running until
+    # it is signalled prints its summary only when it stops.
+    print(_NO_EXECUTOR_NOTICE, flush=True)
     try:
         run = run_worker(
             engine,

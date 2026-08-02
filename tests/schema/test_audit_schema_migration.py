@@ -72,8 +72,6 @@ EXPECTED_AUDIT_COLUMNS: Final[frozenset[str]] = frozenset(
         "outcome",
         "policy_version",
         "denial_reason",
-        "item_count",
-        "duration_ms",
         "scope_source_id_count",
         "recorded_at",
     }
@@ -108,19 +106,16 @@ GOOD_ROW: Final[dict[str, object]] = {
     "outcome": "allowed",
     "policy_version": "policy-v1",
     "denial_reason": None,
-    "item_count": 0,
-    "duration_ms": 0,
     "scope_source_id_count": 0,
     "recorded_at": WHEN,
 }
 
 _INSERT = text(
     "INSERT INTO knowledge.audit_events (audit_id, correlation_id, principal_id, "
-    " capability, purpose, outcome, policy_version, denial_reason, item_count, "
-    " duration_ms, scope_source_id_count, recorded_at) "
+    " capability, purpose, outcome, policy_version, denial_reason, "
+    " scope_source_id_count, recorded_at) "
     "VALUES (:audit_id, :correlation_id, :principal_id, :capability, :purpose, "
-    " :outcome, :policy_version, :denial_reason, :item_count, :duration_ms, "
-    " :scope_source_id_count, :recorded_at)"
+    " :outcome, :policy_version, :denial_reason, :scope_source_id_count, :recorded_at)"
 )
 
 #: The five things `AGENTS.md` section 5 and `module-boundaries.md` section 5.6
@@ -401,8 +396,13 @@ def test_only_a_denial_records_a_denial_reason(
 
 @pytest.mark.database
 def test_a_negative_count_is_refused(audit_engine: Engine) -> None:
+    """`scope_source_id_count` is the only count stored, because it is the only
+    one anything writes. `AuditEvent` also carries `item_count` and
+    `duration_ms`; nothing sets either, so a column for them would be a
+    permanently zero value indistinguishable from a measured one.
+    """
     with pytest.raises(IntegrityError), audit_engine.begin() as connection:
-        connection.execute(_INSERT, {**GOOD_ROW, "item_count": -1})
+        connection.execute(_INSERT, {**GOOD_ROW, "scope_source_id_count": -1})
 
 
 @pytest.mark.database

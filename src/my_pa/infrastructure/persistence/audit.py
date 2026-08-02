@@ -67,8 +67,13 @@ def record_audit_event(connection: Connection, event: AuditEvent) -> None:
 
     A statement, like every other function in this package. The field mapping is
     written out rather than derived from the dataclass, so a field added to
-    `AuditEvent` fails here at type-check time instead of being silently dropped
-    from the durable record.
+    `AuditEvent` has to be considered here rather than silently dropped.
+
+    Two of the event's fields are deliberately not stored. `item_count` and
+    `duration_ms` have no writer anywhere — `authorize` sets neither and the
+    mismatch branch sets none of the three — so a column for either would hold
+    zero forever and could not be told apart from a measured zero. They are
+    stored when something measures them.
     """
     connection.execute(
         audit_events.insert().values(
@@ -80,8 +85,6 @@ def record_audit_event(connection: Connection, event: AuditEvent) -> None:
             outcome=event.outcome.value,
             policy_version=event.policy_version,
             denial_reason=None if event.denial_reason is None else event.denial_reason.value,
-            item_count=event.item_count,
-            duration_ms=event.duration_ms,
             scope_source_id_count=event.scope_source_id_count,
             recorded_at=event.recorded_at,
         )

@@ -158,6 +158,20 @@ Policy evaluates principal, purpose, capability, scope, classification, fields, 
 `adapters.extraction` owns bounded parser calls and normalized outcomes. It receives bytes and media evidence and returns text, safe metadata, limitations, or quarantine reason. Parsers receive no credentials, source-write handles, unrestricted filesystem, or tool authority. Text/Markdown are mandatory; PDF is decision-gated; archive recursion is excluded.
 
 
+### 5.11 `domain.capture` and `infrastructure.persistence.capture`
+
+
+Owns the user-authored record class ADR-003 defines: capture and version
+identity, the append-only version chain, lifecycle and authority states, evidence
+spans on `unicode_code_point_v1`, and the typed errors for conflict, oversized
+text, and idempotency reuse.
+
+
+It does not import the source-provider port and exposes no update or delete of
+stored text. An architecture test asserts both, because the guarantee is worth
+more as a structural property than as a convention.
+
+
 ### 5.10 Bootstrap and apps
 
 
@@ -235,9 +249,9 @@ Conformance requires denial of traversal/containment escape; denial of unknown/a
 |---|---|---|
 | Read-only sources | Domain/application + source adapter | Cannot gain write methods through provider expansion |
 | Managed documents | Excluded | Separate domain/port/root/transactions/versioning/recovery |
-| Knowledge lifecycle | Source-bound extracted records only | Assertions/inferences/proposals require explicit promotion states |
-| Personal connectors | Excluded | Observations remain provider-bound and sensitive |
-| Relationships | Excluded | No scoring, sensitive-trait inference, or consequential action |
+| Knowledge lifecycle | Source-bound extracted records and user-authored records with span-bound proposals | Promotion to canonical requires a governed review disposition |
+| Personal connectors | Fixture only | Live observations remain provider-bound, sensitive, and separately authorized |
+| Relationships | Read-only identity and profiles | No scoring, sensitive-trait inference, synthesis, or consequential action |
 | Projection | Excluded | Rebuildable; no reverse authority |
 | Model gateway | Excluded from required path | Field-level disclosure and proposal-only output |
 

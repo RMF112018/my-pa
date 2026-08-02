@@ -12,7 +12,11 @@ Use this precedence when facts conflict:
 4. indexed Workspace publications;
 5. conversations, reports, and legacy repositories as claims or historical evidence.
 
-The product is in **Minimum Viable Candidate (MCV)** development through August 2, 2026. The objective is one complete, read-only vertical slice—not a broad platform.
+The product is in **Minimum Viable Candidate (MCV)** development. The objective is one complete vertical slice—not a broad platform.
+
+That slice was read-only until 2026-08-01, when the operator reprioritized the objective to admit Relationship Intelligence and Quick Capture. Quick Capture creates records the product itself owns, which section 4 bounds through ADR-003; it is not a source-system write and not a managed-document write. Everything else the slice excluded, it still excludes.
+
+This section previously ran the MCV "through August 2, 2026". That date has passed and no replacement is set, because choosing one is an operator decision rather than a drafting choice. Until it is set, the MCV runs until the operator declares it complete. The open decision is recorded in [`docs/plans/mcv-completion-plan.md`](docs/plans/mcv-completion-plan.md) section 14.
 
 Every change must state one objective, acceptance criteria, in-scope paths or behavior, and explicit out-of-scope items. A discovered feature goes to the backlog unless it is essential to the accepted objective. A scaffold directory is not implementation authority.
 
@@ -41,6 +45,8 @@ Unless the operator explicitly reprioritizes the objective, defer:
 - additional databases, caches, queues, worker types, or deployment environments;
 - implementation merely because a scaffold path exists.
 
+The operator exercised that reprioritization on 2026-08-01, admitting **Relationship Intelligence** and **Quick Capture**. Both are recorded with the work packages that carry them in [`docs/plans/mcv-completion-plan.md`](docs/plans/mcv-completion-plan.md) sections 12 and 13. Nothing else moved: managed documents, the Obsidian projection, live personal-data connector access, public research, and frontend implementation all remain deferred, the last by direct operator instruction. A promoted feature is still bound by everything else in this policy — admitting it to scope is not admitting its whole specification.
+
 Pull requests are single-purpose, short-lived, and reviewable. State scope changes explicitly; never hide them in implementation details. Favor one end-to-end vertical slice over multiple partial systems.
 
 ## 4. Architecture boundaries
@@ -53,6 +59,7 @@ Preserve these boundaries unless an accepted ADR supersedes them:
 - Source providers and managed-document stores are separate capabilities.
 - Original source systems are authoritative and read-only by default.
 - Managed-document writes occur only in designated managed storage.
+- Records the user authors inside `my-pa` are a third authority class under [ADR-003](docs/decisions/ADR-003-product-owned-user-authored-source-records.md): product-owned, append-only, and held in PostgreSQL. They are neither source-system writes nor managed-document writes, and they grant the read-only source-provider port no write method.
 - PostgreSQL is the canonical metadata and knowledge store. PostgreSQL full-text search and `pg_trgm` are the initial search mechanisms.
 - `pgvector` or another semantic index remains behind an abstraction and a benchmark gate; it is not an MCV prerequisite.
 - The logical database identity is `my_pa`. An existing physical compatibility alias does not authorize a rename, migration, connection, or mutation.

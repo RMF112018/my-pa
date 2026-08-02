@@ -40,12 +40,15 @@ This document identifies risks and required controls. It does not accept residua
 - Source list/metadata/fetch, text/Markdown extraction, decision-gated PDF extraction, quarantine, coverage, PostgreSQL FTS, knowledge search/read.
 - Planned PostgreSQL structured authority, jobs/leases/outbox, policy, audit, provenance, and disclosure.
 - Synthetic tests, disposable PostgreSQL, dependency/workflow supply chain, and redaction.
+- User-authored capture: create, version, read, list, and exact search over text the operator types into the product.
+- Deterministic extraction over capture text, span validation, proposals, and governed review and promotion.
+- Relationship identity, unresolved mentions, and read-only profiles over a fixture personal-source provider.
 
 
 ### Excluded but considered as future hazards
 
 
-Live NAS, existing database, personal connectors, managed writes, model/cloud processing, projections, public research, relationship intelligence, autonomous action, deployment, and production. These are deferred boundaries requiring separate threat-model updates and authorization; they are not accepted risks.
+Live NAS, existing database, **live** personal connectors, managed writes, model/cloud processing, projections, public research, **relationship synthesis and scoring**, autonomous action, deployment, and production. These are deferred boundaries requiring separate threat-model updates and authorization; they are not accepted risks.
 
 
 ## 3. Assumptions and unavailable evidence
@@ -100,6 +103,7 @@ Live NAS, existing database, personal connectors, managed writes, model/cloud pr
 | `ASSET-PKL-008` | Secrets/credentials/DB URLs/host details | Highly restricted; never stored/logged |
 | `ASSET-PKL-009` | Public contracts/opaque IDs | Integrity/compatibility/no topology leak |
 | `ASSET-PKL-010` | Dependency/workflow/repository identity | Supply-chain/exact-head assurance |
+| `ASSET-PKL-011` | User-authored capture text and its version chain | Private, immutable, product-owned; loss or silent rewrite destroys evidence that exists nowhere else |
 
 
 ## 6. Actors and threat actors
@@ -126,6 +130,7 @@ Threat actors/adverse conditions include malicious or compromised local clients;
 | `EP-PKL-008` | Model boundary | Retrieved text, templates, tool descriptions, cloud destination |
 | `EP-PKL-009` | Logs/evidence/publication | Payloads, paths, IDs, secrets, queries, stack traces |
 | `EP-PKL-010` | Repo/dependency workflow | PRs, Actions, packages, lockfiles, upstream compromise |
+| `EP-PKL-011` | Capture create, version, and sync | Free-form operator text, pasted third-party content, client timestamps, idempotency keys, launch context, batch payloads |
 
 
 Trust boundaries are client/operator, application processes, persistence, source/content, model disclosure, and future managed writes, as defined in `../architecture/system-context.md`.
@@ -148,6 +153,11 @@ Trust boundaries are client/operator, application processes, persistence, source
 - `ABUSE-PKL-012`: Introduce compromised dependency or mutable Action that exfiltrates data.
 - `ABUSE-PKL-013`: Exhaust service with expensive FTS, huge pages/files, deep traversal, retries, or operations.
 - `ABUSE-PKL-014`: Future managed-write path reuses source credentials/root and overwrites evidence.
+- `ABUSE-PKL-015`: Paste content whose embedded instructions a later extraction stage or model treats as commands rather than as evidence.
+- `ABUSE-PKL-016`: Edit a capture so a span supporting an accepted downstream record no longer matches, leaving that record standing on text that no longer says it.
+- `ABUSE-PKL-017`: Reuse an idempotency key with different content to overwrite or duplicate user evidence.
+- `ABUSE-PKL-018`: Route around the promotion path so a proposal reaches canonical without a review disposition.
+- `ABUSE-PKL-019`: Persist a relationship score, ranking, or protected-trait conclusion through an extraction or profile field.
 
 
 ## 9. Attack-tree summaries
@@ -352,6 +362,20 @@ Bound page size, source depth/items/bytes, file size, parser time/memory/output,
 Remain excluded. Before activation require separate root/store/credentials, expected-version preconditions, immutable versions, reversible archive, retention, backup/restore tests, operator authorization, audit, rollback, containment, and no source-port reuse. Threat model update and independent review are mandatory.
 
 
+### 10.14 User-authored records
+
+
+- Stored text is append-only. There is no update or delete path to attack.
+- The save transaction commits capture, version, receipt, redacted audit, and the enqueued processing job together or commits nothing. Required audit or receipt failure fails the save closed rather than reporting a save that did not durably happen.
+- Idempotency binds principal, operation, and a request hash. A reused key with a different request is a conflict, never a silent overwrite and never a duplicate.
+- Every derived record cites at least one span into an exact version, re-validated before the record is shown. A mismatch quarantines.
+- A source edit that materially changes a cited span moves the supported accepted record to `revalidation_required`. It is neither silently kept nor silently rewritten.
+- Capture text never appears in logs, audit rows, telemetry, event payloads, error bodies, URL parameters, or notification previews.
+- Captured and pasted text is evidence data. Extraction runs with no tool authority at all, so there is nothing for an injected instruction to reach.
+- Consequential proposals cannot reach canonical without an explicit review disposition.
+- No composite relationship score and no protected-trait field exists in any schema or contract, enforced by a static test rather than by review attention.
+
+
 ## 11. Fail-closed and safe errors
 
 
@@ -413,6 +437,11 @@ Required negative tests:
 | `T-PKL-015` | DoS | limits/timeouts/concurrency/rates | max-bound/retry-storm tests | 03–05 |
 | `T-PKL-016` | Unknown DB mutation | explicit config/disposable first/no guessing | absent/ambiguous fails closed | 02 |
 | `T-PKL-017` | Future write corruption | separate root/version/recovery/auth | deferred pre-Phase 06 | 06 |
+| `T-PKL-018` | User evidence lost, duplicated, or silently rewritten | append-only versions, all-or-nothing save, idempotency with request hash | induced audit failure leaves no capture; key reuse conflicts | 06 |
+| `T-PKL-019` | Derived record stands on text that changed | span re-validation, quarantine on mismatch, `revalidation_required` | mutate a version and require quarantine or revalidation | 06/07 |
+| `T-PKL-020` | Unreviewed proposal becomes canonical | review-required routing by consequence, governed dispositions | direct promotion denied for every consequential class | 07 |
+| `T-PKL-021` | Injected instruction in pasted text acts | evidence/instruction separation, no tool authority, schema-constrained output | injection corpus yields bounded proposals or safe failure | 07 |
+| `T-PKL-022` | Relationship surveillance behavior | no score, ranking, or trait field; merge review-required; fixtures only | static schema and contract test; direct merge denied | 08 |
 
 
 ## 14. Phase allocation
@@ -454,6 +483,9 @@ Later personal connectors, models/cloud, managed writes, relationships, projecti
 | `RR-PKL-006` | Cloud posture unknown | Operator/privacy/security | provider/purpose/fields/terms/audit | any private cloud request |
 | `RR-PKL-007` | Dependency vulnerabilities evolve | Maintainer | lock/advisories/review/CI | unresolved material vulnerability |
 | `RR-PKL-008` | No independent exact-head review | Operator/reviewer | review of integrated diff/head | treat package as accepted/merged |
+| `RR-PKL-009` | No model boundary decision exists, so model-assisted extraction is unspecified | Operator | model gateway design, `P00-OD-006` resolution, isolation and retention evidence | any model call is proposed |
+| `RR-PKL-010` | Retention and deletion for user-authored content is undecided | Operator | `O-10` resolution with backup, privacy, and recovery evidence | any hard delete |
+| `RR-PKL-011` | A fixture personal-source provider is not evidence about a real connector | Operator/implementer | separate connector authorization by exact account and scope, and a threat-model revision | any live personal-source read |
 
 
 This session accepts no residual risk.

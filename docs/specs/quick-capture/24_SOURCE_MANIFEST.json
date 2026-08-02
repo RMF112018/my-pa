@@ -1,0 +1,255 @@
+{
+  "artifact_id": "SOURCE-MANIFEST-MYPA-QUICK-CAPTURE-FEATURE-PACKAGE-20260801-005",
+  "date": "2026-08-01",
+  "package_id": "MYPA-QUICK-CAPTURE-FEATURE-PACKAGE-20260801-005",
+  "coordination_request_id": "REQ-MYPA-QUICK-CAPTURE-FEATURE-DEFINITION-20260801-081",
+  "repository_identity": {
+    "repository": "RMF112018/my-pa",
+    "branch": "main",
+    "authenticated_head_sha": "40391b784ba7df2aa37f99fed86b0d4ac4723034",
+    "tree_sha": "UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR",
+    "local_worktree_state": "UNAVAILABLE",
+    "authority_note": "Authenticated repository/GitHub state governs implementation truth over Drive product publications."
+  },
+  "workspace_sources": [
+    {
+      "title": "Software Delivery Control Center Master Project Source",
+      "source": "uploaded file",
+      "citation_ref": "turn0file0",
+      "status": "read"
+    },
+    {
+      "title": "Software Delivery Control Center Source Index (legacy upload)",
+      "source": "uploaded file",
+      "citation_ref": "turn0file1",
+      "status": "read_as_bootstrap_pointer"
+    },
+    {
+      "title": "00_WORKSPACE_BOOTSTRAP.md",
+      "drive_id": "1byJ8ndafXP1_yrRmvzIlIwKP-F6rPcj8d-AYYLPIzW4",
+      "status": "read"
+    },
+    {
+      "title": "01_WORKSPACE_MANIFEST.yaml",
+      "drive_id": "11Mtd1w9TNeIAn6PWJ6xbfHeU4piLkEft9m-HpB88Eo8",
+      "status": "read"
+    },
+    {
+      "title": "02_WORKSPACE_SOURCE_INDEX.md",
+      "drive_id": "1xI1wO0eUUAGmH1P4-oVx2e-ZLQQXTN-p783pJKi-Wf8",
+      "status": "read"
+    },
+    {
+      "title": "03_WORKSPACE_OPERATING_INSTRUCTIONS.md",
+      "drive_id": "1SabLXhGXhxXZ0j_Lazy7MyHve008P-SklcyZOK1xNNc",
+      "status": "read"
+    },
+    {
+      "title": "00_MYPA_INDEX.md",
+      "drive_id": "1i9r6pDI8jZQnD526_o_aFl8WWUliWX0h1ANLh_gtelE",
+      "status": "read; update required"
+    }
+  ],
+  "repository_sources": [
+    {
+      "path": "AGENTS.md",
+      "blob_sha": "14f609445587461e6e3768f7c0416690155d6468",
+      "status": "read"
+    },
+    {
+      "path": "AI_OPERATING_MANUAL.md",
+      "blob_sha": "1ee670c1dbb3bddb359833c810b4a6b692447896",
+      "status": "read"
+    },
+    {
+      "path": "CLAUDE.md",
+      "blob_sha": "8f9c9d95a14c86493cbef572bf811877f91a4ef1",
+      "status": "read"
+    },
+    {
+      "path": ".ai/project-sources/00_AEOS_MASTER_INDEX.md",
+      "blob_sha": "66869ec89ac80ddb318d737769922d0bba604f11",
+      "status": "read"
+    },
+    {
+      "path": "docs/00_REPOSITORY_SOURCE_INDEX.md",
+      "blob_sha": "bc0cfd98cbaaafdd43c886538e0820d22fd897fa",
+      "status": "read"
+    },
+    {
+      "path": "README.md",
+      "blob_sha": "ecb3b6a6d8469a845031bdcc50d570c67278edfc",
+      "status": "read; some current-state prose superseded by head commit"
+    },
+    {
+      "path": "docs/architecture/00_ARCHITECTURE_INDEX.md",
+      "blob_sha": "efc610504cc03d8f6428876564aa49bad4ecb1c0",
+      "status": "read; some current-state prose superseded by head commit"
+    },
+    {
+      "path": "docs/architecture/system-context.md",
+      "blob_sha": "717e77970cc3787148801c3362752b986eb6bdd9",
+      "status": "read"
+    },
+    {
+      "path": "docs/architecture/module-boundaries.md",
+      "blob_sha": "61a32832cd66d1be540839b7c938cbc27d1944fe",
+      "status": "read"
+    },
+    {
+      "path": "docs/architecture/data-authority.md",
+      "blob_sha": "8f8cfbdb6ae663a1eda6bb2a26521c78eb3230ff",
+      "status": "read"
+    },
+    {
+      "path": "docs/decisions/ADR-001-modular-monolith-two-processes.md",
+      "blob_sha": "d08864fac02ec99b28885512aa190d5063318ce5",
+      "status": "read"
+    },
+    {
+      "path": "docs/decisions/ADR-002-database-identity-and-compatibility-alias.md",
+      "blob_sha": "f2e729e560819bf5bf41d007997a38d6cd5de70f",
+      "status": "read"
+    },
+    {
+      "path": "docs/specs/mcv-read-only-vertical-slice.md",
+      "blob_sha": "3ea84e25cd4531ee2b39cf5bb00e8244d9d47be4",
+      "status": "read"
+    },
+    {
+      "path": "docs/plans/mcv-completion-plan.md",
+      "status": "read"
+    },
+    {
+      "path": "PHASE-00-OPEN-DECISION-LEDGER.md",
+      "status": "read"
+    },
+    {
+      "path": "commit",
+      "sha": "40391b784ba7df2aa37f99fed86b0d4ac4723034",
+      "status": "authenticated; current repository basis"
+    }
+  ],
+  "product_sources": [
+    {
+      "title": "Product Synthesis Specification \u2014 my-pa vNext",
+      "drive_id": "17olnyUF5oX-KJWB6owRIJBB8B4QTlRjJhkLG47gio9s",
+      "status": "read"
+    },
+    {
+      "title": "Frontend Architecture \u2014 my-pa vNext",
+      "drive_id": "1L5P6zU2p9KQNuIC96iTWRpTaNf_MOszgPq46dEP7rWE",
+      "status": "read"
+    },
+    {
+      "title": "GoodNotes Knowledge Ingestion Implementation Specification",
+      "drive_id": "111zA3Osva_tdi7oW-8TIBcC0uS9_cQ6VZ-w3pqmGhCA",
+      "status": "read"
+    },
+    {
+      "title": "my-pa / PRIE Formation Evaluation and Integration Recommendation",
+      "drive_id": "1al6qCKMVGMbOHHLVZg-vGHwEnZyE-maRK3XKIWsokFM",
+      "status": "read"
+    },
+    {
+      "title": "00_MYPA_INDEX.md registered product packages",
+      "drive_id": "1i9r6pDI8jZQnD526_o_aFl8WWUliWX0h1ANLh_gtelE",
+      "status": "read and used to resolve package identities"
+    }
+  ],
+  "platform_primary_sources": [
+    {
+      "title": "Web Push for Web Apps on iOS and iPadOS",
+      "publisher": "WebKit",
+      "url": "https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/",
+      "status": "reviewed"
+    },
+    {
+      "title": "App Intents",
+      "publisher": "Apple Developer",
+      "url": "https://developer.apple.com/documentation/appintents",
+      "status": "reviewed"
+    },
+    {
+      "title": "Widgets, Live Activities, and Controls",
+      "publisher": "Apple Developer",
+      "url": "https://developer.apple.com/documentation/appintents/widgets-live-activities-and-controls",
+      "status": "reviewed"
+    },
+    {
+      "title": "Controls",
+      "publisher": "Apple Developer",
+      "url": "https://developer.apple.com/documentation/widgetkit/controls-collection",
+      "status": "reviewed"
+    },
+    {
+      "title": "Progressive Web Apps documentation",
+      "publisher": "Microsoft Learn",
+      "url": "https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/landing/",
+      "status": "reviewed"
+    },
+    {
+      "title": "Share content with other apps",
+      "publisher": "Microsoft Learn",
+      "url": "https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/share",
+      "status": "reviewed"
+    },
+    {
+      "title": "Synchronize and update a PWA in the background",
+      "publisher": "Microsoft Learn",
+      "url": "https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/background-syncs",
+      "status": "reviewed"
+    },
+    {
+      "title": "Enable App Actions on Windows for a PWA",
+      "publisher": "Microsoft Learn",
+      "url": "https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/app-actions",
+      "status": "reviewed"
+    },
+    {
+      "title": "Define app shortcuts",
+      "publisher": "Microsoft Learn",
+      "url": "https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/shortcuts",
+      "status": "reviewed"
+    },
+    {
+      "title": "Web app manifest shortcuts",
+      "publisher": "MDN",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Manifest/Reference/shortcuts",
+      "status": "reviewed"
+    },
+    {
+      "title": "Web app manifest share_target",
+      "publisher": "MDN",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Manifest/Reference/share_target",
+      "status": "reviewed"
+    },
+    {
+      "title": "Background Synchronization API",
+      "publisher": "MDN",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Background_Synchronization_API",
+      "status": "reviewed"
+    },
+    {
+      "title": "Tauri global shortcut plugin",
+      "publisher": "Tauri",
+      "url": "https://v2.tauri.app/plugin/global-shortcut/",
+      "status": "reviewed"
+    }
+  ],
+  "unavailable_or_incomplete_evidence": [
+    "Exact current repository tree SHA and local worktree state were unavailable to the authenticated connector.",
+    "Proposal C substantive product package was not available; the current MY-PA index identifies its publication as incomplete.",
+    "No usability study, prototype test, or live Quick Capture implementation exists.",
+    "No live personal data, GoodNotes/NAS root, production database behavior, or runtime platform integration was accessed.",
+    "Not every historical my-pa product artifact was fetched in full; the current synthesized package, owning index, frontend architecture, GoodNotes specification, PRIE evaluation, and repository sources were the primary basis.",
+    "Platform behavior remains browser/OS/version dependent and must be reverified at implementation time."
+  ],
+  "evidence_classification": {
+    "authenticated_fact": "Repository/Drive identity directly observed through authenticated connectors.",
+    "source_claim": "Statement contained in a source but not independently runtime-verified.",
+    "inference": "Conclusion drawn from multiple sources and explicitly labeled.",
+    "recommendation": "Proposed product or architecture direction.",
+    "assumption": "Declared basis used where evidence was unavailable."
+  }
+}

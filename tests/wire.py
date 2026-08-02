@@ -39,6 +39,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
+import apps.gateway as gateway
 import uvicorn
 
 #: How long to wait for the server to bind, and for it to stop again. Generous
@@ -149,10 +150,11 @@ def serve(application: object) -> Iterator[Wire]:
     developer's own gateway is never talked to by mistake. The bound port is
     read back from the socket uvicorn opened.
 
-    Configured exactly as `apps/gateway.py` configures it: no logging
-    configuration, no access log, no server header. A test that asserted a
-    redaction property against a different configuration would be asserting it
-    about a process nobody runs.
+    Configured exactly as `apps/gateway.py` configures it — no logging
+    configuration, no access log, no server header, and the same bounded
+    graceful shutdown, imported from the composition root rather than restated.
+    A test that asserted a redaction or a shutdown property against a different
+    configuration would be asserting it about a process nobody runs.
     """
     config = uvicorn.Config(
         application,
@@ -161,6 +163,7 @@ def serve(application: object) -> Iterator[Wire]:
         log_config=None,
         access_log=False,
         server_header=False,
+        timeout_graceful_shutdown=gateway.GRACEFUL_SHUTDOWN_SECONDS,
     )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, name="gateway-under-test", daemon=True)

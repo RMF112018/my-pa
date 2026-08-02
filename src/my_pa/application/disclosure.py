@@ -197,6 +197,10 @@ def disclosure_for(
         state = CoverageState.PARTIALLY_PROCESSED if _claims_the_whole_scope(state) else state
         tokens.append(Limitation.ELIGIBLE_TOTAL_NOT_PERSISTED)
         tokens.append(Limitation.SCOPE_IS_SOURCE_WIDE)
+    # Every disclosure also carried `AUDIT_IS_NOT_DURABLE` from this line until
+    # WP-4B2a, unconditionally. WP-4B1 built the durable store and the token
+    # became a false statement made on every successful request; see the note on
+    # `Limitation` for why it was removed rather than reworded.
     return Disclosure(
         scope=Scope(source_ids=(enrollment.source_id,), enrollment_ids=(enrollment.enrollment_id,)),
         coverage=Coverage(

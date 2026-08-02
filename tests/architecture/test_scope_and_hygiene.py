@@ -179,19 +179,30 @@ def test_no_declared_dependency_is_prohibited() -> None:
     assert not (roots & (PROHIBITED_IMPORT_ROOTS - {"uvicorn"}))
 
 
-def test_only_the_composition_root_runs_a_server() -> None:
-    """`uvicorn` appears in exactly one file, and it is not under `src/`.
+def test_the_only_shipped_module_that_runs_a_server_is_the_composition_root() -> None:
+    """Across `src/` and `apps/`, `uvicorn` appears in exactly one file.
 
     The import rule above says the package may not import it. This says where it
     *is* imported, because "nowhere in the package" is also satisfied by a build
     with no gateway at all.
+
+    **The scan is `src/` and `apps/`, and the qualifier is load-bearing.**
+    `tests/wire.py` imports uvicorn and runs a server too, deliberately: the
+    HTTP tests drive a real one rather than calling an ASGI app in process, and
+    it imports `apps.gateway`'s own settings so the two configurations cannot
+    drift. What is enforced here is that nothing *shipped* starts a server
+    except the composition root, which is the property that matters; a test
+    harness is not shipped, and naming this test after the wider claim would
+    have made it read as one it does not check.
     """
+    shipped = [*_modules(), *sorted((ROOT / "apps").rglob("*.py"))]
     importers = sorted(
-        path.relative_to(ROOT).as_posix()
-        for path in [*_modules(), *sorted((ROOT / "apps").rglob("*.py"))]
-        if "uvicorn" in _imports(path)
+        path.relative_to(ROOT).as_posix() for path in shipped if "uvicorn" in _imports(path)
     )
     assert importers == ["apps/gateway.py"]
+    assert "uvicorn" in _imports(ROOT / "tests" / "wire.py"), (
+        "the harness no longer runs a real server; this test's qualifier is stale"
+    )
 
 
 def test_package_uses_the_neutral_namespace() -> None:

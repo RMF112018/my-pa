@@ -48,6 +48,23 @@ transport rule rather than an HTTP-wide one: this gateway is loopback-only
 (`D-30`), its clients are local, and a chunked body cannot be bounded before it
 has been read.
 
+**A request is bounded in time as well as in bytes, and it was not.** The first
+version of this module bounded only size, and an independent review measured
+what that costs: forty-five clients that declared a `content-length` and then
+sent nothing pinned every thread in Starlette's pool, the gateway stopped
+answering, and it would not shut down. Each cost about 130 bytes and no
+credential. That is availability rather than disclosure, and it is still a
+defect, because two documents promised otherwise — this docstring said the
+request was bounded, and the runbook promised the operator that `SIGTERM`
+completes. `BODY_TIMEOUT_SECONDS` is the missing half of the bound.
+
+The cost is a *direct* consequence of `D-27` and is worth naming rather than
+hiding: an `async def` endpoint would await the body on the event loop and pin
+no thread at all — the reviewer built that control and it answered in
+milliseconds with two threads. A synchronous endpoint cannot, so the achievable
+guarantee is that the stall is bounded and self-clearing rather than absent, and
+the tests assert exactly that and not more.
+
 **No credential is issued, read, or required** (`D-30`). The acting principal is
 supplied by the composition root and is a property of the process, not of the
 request; `metadata.principal_id` arrives from the caller and stays what the
@@ -119,6 +136,24 @@ _ENVELOPE_BYTES: Final = 32 * 128 + 8 * 1024
 #: nothing is lost by bounding it here.
 MAX_REQUEST_BYTES: Final = MAX_ENROLLMENT_ITEMS * _IDENTIFIER_JSON_BYTES + _ENVELOPE_BYTES
 
+#: How long a client has to deliver the body it announced, before the request is
+#: refused and the worker thread released.
+#:
+#: Derived rather than chosen: it is uvicorn's `timeout_keep_alive`, which is the
+#: number this same process already uses for how long a *connection* may sit idle
+#: between requests. A client that goes quiet halfway through a request is in the
+#: same state as one that goes quiet between two, and answering "as long as this
+#: process already waits for that" is a reason where five seconds on its own is
+#: not. It is restated here rather than imported because the package may not
+#: import uvicorn — running a server is the composition root's act — and
+#: `test_the_body_timeout_is_the_servers_own_idle_bound` reads the real default
+#: off `uvicorn.Config` so the restatement is a checked claim.
+#:
+#: It is generous for the case it exists to bound. On loopback a legitimate body
+#: is already in the socket buffer when the endpoint asks for it, and the largest
+#: one this transport accepts is under a mebibyte.
+BODY_TIMEOUT_SECONDS: Final = 5.0
+
 #: The HTTP status each public error code is. Written out as a table rather than
 #: derived from a rule, because the eleven codes do not fall into HTTP's classes
 #: by any rule that would still be true after the twelfth.
@@ -175,7 +210,15 @@ class _Body:
         self._loop = asyncio.get_running_loop()
 
     def read(self, request: Request) -> bytes:
-        """The complete body of `request`, read from a worker thread."""
+        """The complete body of `request`, read from a worker thread, or a refusal.
+
+        The wait is bounded, and the cancellation matters as much as the bound:
+        without it the coroutine would go on waiting on the loop for a client
+        that is not sending, so the thread would be released and the task would
+        not. `TimeoutError` leaves here for the endpoint to classify, because
+        deciding what a failure *is* belongs one level up even when it is this
+        obvious.
+        """
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -189,7 +232,12 @@ class _Body:
         loop = self._loop
         if loop is None:
             raise RuntimeError("the gateway was asked to read a body before it started")
-        return asyncio.run_coroutine_threadsafe(request.body(), loop).result()
+        pending = asyncio.run_coroutine_threadsafe(request.body(), loop)
+        try:
+            return pending.result(timeout=BODY_TIMEOUT_SECONDS)
+        except TimeoutError:
+            pending.cancel()
+            raise
 
 
 class _Gateway(Starlette):
@@ -304,10 +352,11 @@ def create_http_app(service: ApplicationService, *, principal: Principal) -> Sta
                 # and not only on what was promised.
                 raise InvalidRequestError()
             metadata, command = normalize(request.path_params["capability"], _document(received))
-        except ClientDisconnect:
+        except (ClientDisconnect, TimeoutError):
             # "malformed, incomplete, or contradictory" — the request stopped
-            # arriving. Classified rather than left to escape as a server fault
-            # for a client that is already gone.
+            # arriving, either because the client went away or because it never
+            # sent what it said it would. Classified rather than left to escape
+            # as a server fault for a caller that is not listening anyway.
             return _problem_response(InvalidRequestError())
         except ApplicationError as refusal:
             return _problem_response(refusal)

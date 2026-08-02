@@ -32,6 +32,14 @@ as a port already in use, and on a signal the pools are released by process exit
 after the graceful shutdown has already finished. There is no line after `run`
 claiming otherwise, because a line that cannot be reached is worse than none.
 
+**And "waits" now has a bound.** Uvicorn's graceful shutdown is unbounded by
+default, so a request that never finishes is a process that never stops — which
+an independent review demonstrated with clients that announced a body and never
+sent it. The transport bounds those itself now, and
+`timeout_graceful_shutdown` is the backstop for everything it does not: after
+it, uvicorn stops waiting and the process goes. A promise in a runbook that a
+signal completes has to be a promise the process can keep.
+
 **Logging.** Uvicorn is configured with no logging configuration and no access
 log, and the application emits no log records at all — `tests/security` holds
 that to be true rather than stated. What an operator sees is the two lines this
@@ -59,6 +67,18 @@ HOST: Final = "127.0.0.1"
 #: number; it is here so that starting the process needs no arguments.
 DEFAULT_PORT: Final = 8765
 
+#: How long shutdown waits for the requests already in flight.
+#:
+#: Derived rather than chosen: it is the database engine's own connection
+#: checkout timeout, which is the longest wait this process already accepts for
+#: one request on a resource it bounds. A request still unfinished after that is
+#: waiting on something that has itself already failed closed, so waiting longer
+#: buys an operator nothing and costs them a process that will not stop.
+#: Restated here because the engine's value is private to the module that builds
+#: it; `test_the_shutdown_bound_is_the_pools_own_checkout_timeout` reads it off a
+#: real engine, so the restatement is a checked claim rather than a guess.
+GRACEFUL_SHUTDOWN_SECONDS: Final = 30
+
 #: What this gateway cannot do, said by the gateway itself at startup rather
 #: than left for an operator to infer from an `unavailable` answer. Nothing
 #: registers a source in production yet — `D-37` gives that to WP-4B3 — and no
@@ -85,6 +105,8 @@ def _run(args: argparse.Namespace) -> int:
             access_log=False,
             # The framework and its version are not this process's to announce.
             server_header=False,
+            # Shutdown waits for work in flight, and no longer.
+            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
         )
     )
     print(f"serving     http://{HOST}:{args.port}/v1/<capability>")

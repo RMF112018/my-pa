@@ -61,14 +61,36 @@ that reconciles it is the driving/driven split rather than a list of exceptions:
   of `src/`, because they are programs rather than importable library modules.
 
 
-Reconciling this way moved no module. Section 5.8's `adapters.sources` is
-`infrastructure/providers/`, and section 5.9's `adapters.extraction` is
-`domain/extraction/` — the text and Markdown extractor is a pure function over
-bytes and needs no adapter, so `infrastructure/extraction/` remains a reserved
-directory with nothing in it. Renaming either would have been churn in exchange
-for agreeing with a drawing. Section 5.7's transport adapters keep their names
-and their meaning exactly. The responsibilities in sections 5.1 through 5.11 are
-unchanged — this section describes where they live, and nothing else.
+Reconciling this way moved no module, and three sections need their current
+addresses said plainly rather than left to be worked out.
+
+- **5.8, `adapters.sources`,** is `infrastructure/providers/`. A rename would
+  have been churn in exchange for agreeing with a drawing.
+- **5.9, `adapters.extraction`,** is in two halves and only one of them exists.
+  The text and Markdown half is `domain/extraction/text.py`: a bounded decode
+  over bytes, using nothing but the standard library, which is why it can live
+  in `domain` at all. The **parser** half — 5.9's "bounded parser calls", the
+  decision-gated PDF path — has no home yet and could not have one there:
+  section 5.1 forbids `domain` importing a parser library, so when a parser
+  arrives it belongs under `infrastructure/`, where `infrastructure/extraction/`
+  is a reserved directory holding a README and nothing else. `P00-OD-003` is
+  what has not been decided, and until it is there is no parser to place.
+- **5.6, `infrastructure.policy` and `infrastructure.audit`,** names two
+  directories that do not exist, and the reason differs for each. Audit is a
+  directory question only: it is `infrastructure/persistence/audit.py`, beside
+  the unit of work whose transaction it deliberately does not share. **Policy is
+  a layer question**, which matters more: there is no `infrastructure.policy`
+  and there is not going to be one, because policy is decided in
+  `application/authorization.py` over `domain/policy/decision.py`. That is not a
+  relocation of 5.6's responsibility but a stronger reading of its own last
+  sentence — "policy is not hidden in transport or adapter conditionals" — since
+  a policy that is not an adapter at all cannot be hidden in one. 5.6's
+  requirements stand where they are: one evaluation path, redacted audit, and
+  fail-closed persistence.
+
+Section 5.7's transport adapters keep their names and their meaning exactly. No
+responsibility in sections 5.1 through 5.11 is changed by this amendment — it
+describes where each lives, and nothing else.
 
 
 ```text

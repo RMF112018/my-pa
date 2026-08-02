@@ -52,7 +52,7 @@ enforced is not a maximum.
 ## Running
 
 ```bash
-# The default port.
+# The default port, 8765.
 .venv/bin/python apps/gateway.py run
 
 # Somewhere else.
@@ -65,7 +65,7 @@ per-request line is the one place a path, a query, or a principal would reach a
 file.
 
 ```text
-serving     http://127.0.0.1:8791/v1/<capability>
+serving     http://127.0.0.1:8765/v1/<capability>
 notice      no source provider is configured; sources.list, sources.metadata and sources.fetch answer 'unavailable' until a source is registered and a root authorized
 ```
 
@@ -80,7 +80,7 @@ under `payload`. `principal_id` is correlation input: the acting principal is th
 process's own, and a caller naming a different one does not become it.
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8791/v1/capabilities.get \
+curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
   -H 'content-type: application/json' \
   -d '{"request_id":"req-1",
        "purpose":"status_observation",
@@ -96,7 +96,7 @@ Observed: `200`, `content-type: application/json`, and an envelope whose
 A request for a scope the principal does not hold:
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8791/v1/sources.list \
+curl -sS -X POST http://127.0.0.1:8765/v1/sources.list \
   -H 'content-type: application/json' \
   -d '{"request_id":"req-2","purpose":"source_inspection",
        "principal_id":"prn_0123456789abcdef",
@@ -123,6 +123,16 @@ A capability that does not exist (`POST /v1/sources.destroy`) is the same `400`.
 An unknown *path* is `404` and a non-`POST` method is `405`, both with the same
 body shape.
 
+A client that announces a `content-length` and then sends nothing is refused
+`400 invalid_request` after five seconds. Observed: the refusal arrived at 5.0s;
+the connection itself closed five seconds later, which is uvicorn's keep-alive
+idle rather than the gateway still working. The bound exists because the
+endpoint reads the body on a worker thread, so an unbounded wait is a thread
+held for as long as a client cares to hold it — forty-five such clients stopped
+the gateway answering entirely before this bound was added. It is bounded, not
+free: while stalled clients hold workers, a real request waits for them to time
+out.
+
 ## Statuses
 
 The status of an answer the application produced is a function of its error
@@ -144,6 +154,12 @@ requests already in flight, closes the loop, and then re-raises the signal it
 captured — so the process exits **by** the signal, status 143 for `SIGTERM`,
 rather than returning zero. That is correct: a process stopped by a signal
 should report that it was.
+
+**The wait is bounded at thirty seconds** (`timeout_graceful_shutdown`, equal to
+the connection pool's own checkout timeout). Without that bound a single request
+that never finished was a process that never stopped, which is what stalled
+clients produced before the body bound above existed. Two mechanisms now make
+the promise keepable, and the runbook is only worth as much as the second one.
 
 Observed: `kill -TERM` against an idle gateway exited within a second with no
 further output. The in-flight guarantee is asserted rather than eyeballed —
@@ -167,9 +183,10 @@ psql "$MY_PA_DATABASE_URL" -c \
   "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()"
 ```
 
-Not run as written; the connection counts in this runbook were observed through
-SQLAlchemy, and the client form is given because it is what an operator has to
-hand.
+Ten is the ceiling, not the resting state: both pools open connections lazily.
+Observed after the requests above, and after this query opened one of its own,
+was **3**. Not run as written; the count was taken through SQLAlchemy, and the
+client form is given because it is what an operator has to hand.
 
 ## Checking the audit trail
 

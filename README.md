@@ -35,7 +35,7 @@ retained read-only and is never mutated.
 Not implemented. None of the following exists beyond a scaffold README:
 
 - HTTP transport and MCP adapter — `apps/gateway` is a README;
-- the worker process — `apps/worker` is a README;
+- an executor for the work the worker claims. `apps/worker.py` is a real process — it claims a lease, drives the job to a terminal state, and stops cleanly on a signal — but there is no extraction executor wired to it, so a claimed job is released as `unavailable` and, after its bounded attempts, fails. `apps/worker.py` states why;
 - an operator CLI beyond `apps/cli/migration.py`;
 - user-authored capture, relationship identity and profiles, managed documents, GoodNotes ingestion, and Obsidian projection;
 - any frontend. The repository contains no JavaScript toolchain and no `package.json`.

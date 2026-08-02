@@ -5,6 +5,7 @@ Operational procedures for running `my-pa` locally.
 | Runbook | Covers |
 | --- | --- |
 | [`postgres-operations.md`](postgres-operations.md) | The canonical `my_pa` PostgreSQL database: start, stop, health check, connect, back up, restore. |
+| [`worker-operations.md`](worker-operations.md) | The worker process: running it bounded or until signalled, stopping it cleanly, and how a crashed worker's job is recovered. |
 
 Related, outside this directory:
 

@@ -174,9 +174,19 @@ def authorize(
 ) -> Authorization:
     """Decide one request, record the decision, and return what was decided.
 
-    Returns a denial rather than raising it. The caller has to leave its
-    transaction normally for the audit event to commit, and an exception thrown
-    from here would roll back the record of the refusal along with it.
+    Returns a denial rather than raising it. That was originally because the
+    caller had to leave its transaction normally for the audit event to commit;
+    since `D-34` gave the audit its own transaction that reason no longer holds,
+    and the remaining one is better: a denial is a decision this function
+    reached, and raising it would make it arrive at the caller the same way a
+    port failure does — as an exception with no `Authorization` behind it — which
+    is the one distinction `service.py`'s outcome 5 exists to keep.
+
+    What an exception from here *does* still mean is that no decision was
+    recorded. `unit_of_work.audit.record` is not wrapped, deliberately: a failure
+    to persist an audit event leaves this function by raising, which rolls the
+    caller's work back and fails the request closed
+    (`module-boundaries.md` section 5.6).
 
     `correlation_id` is issued by the caller rather than here, because the same
     identifier has to appear on the response envelope of a request that never

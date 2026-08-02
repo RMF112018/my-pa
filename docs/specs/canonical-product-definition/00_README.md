@@ -87,3 +87,9 @@ The owning detailed definition remains `MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-
 
 The connector is canonical product scope but not silently inserted into the active repository MCV. Repository work must first complete the accepted read-only substrate, application services/transports, and local operational candidate. Remote read, standards-current OAuth, live NAS enrollment, managed-document writes, individual client enablement, private/public ingress, and production activation remain sequenced, tested, and operator-gated as defined by this package.
 
+## 2026-08-02 Remote Quick Capture MCV amendment
+
+Remote Quick Capture is incorporated into the current my-pa Minimum Viable Candidate product scope as the lowest-friction remote extension of Quick Capture. The selected first transport is an iOS Shortcut submitting one unrestricted text field over authenticated HTTPS to the transport-neutral `capture.create` application service. The first-party PWA remains the canonical cross-platform capture, history, correction, Review, and offline-recovery surface. Literal SMS, hosted messaging providers, new cellular service, and iMessage relay dependencies are excluded from the MCV baseline.
+
+The governing feature package is `MYPA-REMOTE-QUICK-CAPTURE-FEATURE-PACKAGE-20260802-001`, Drive folder `1lDSkTldgSkaRfJ3v9h-U10lCe-Lmwzsv`. This amendment records product scope only. Repository implementation, credentials, ingress activation, deployment, production activation, and risk acceptance remain separately governed.
+

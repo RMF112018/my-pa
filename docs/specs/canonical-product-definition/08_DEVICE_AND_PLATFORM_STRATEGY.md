@@ -78,3 +78,11 @@ Device strategy rules:
 - client mobile support is conditional until verified; desktop/web protocol success does not imply mobile parity;
 - production profiles document redirect behavior, background refresh support, schema caching, tool-count limits, and transport constraints by client/version.
 
+## Remote Quick Capture MCV platform decision
+
+The first remote capture client is an iOS Shortcut calling the authenticated `capture.create` HTTPS endpoint. Supported invocation paths include Siri, Home Screen, Share Sheet, supported Lock Screen or Action Button surfaces, and Apple Watch. The Shortcut presents one unrestricted text field and may accept dictated, pasted, or shared text.
+
+The PWA remains the canonical cross-platform client for iPhone, iPad, macOS, Windows, and Android, and owns capture history, correction, Review, attachments, and reliable offline recovery. Browser Background Sync is a progressive enhancement rather than the correctness mechanism; locally queued payloads must replay on foreground, resume, online events, or explicit retry and remain until the server receipt is verified.
+
+The initial Shortcut may use a narrowly scoped, independently revocable capture-only credential with no read, administrative, or external-action authority. A later native iOS helper may replace this with Keychain-backed credentials and stronger offline queueing.
+

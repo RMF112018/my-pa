@@ -64,3 +64,14 @@ Later operator decisions, canonical packages, ADRs, or owning feature revisions 
 | MCP-CAN-013 | Lexical search remains initial; semantic/vector infrastructure stays benchmark-gated. | RETAINED |
 | MCP-CAN-014 | No new numbered canonical artifact is required; the detailed feature package remains the owning subordinate feature definition. | ACCEPTED |
 
+## Decisions added 2026-08-02 — Remote Quick Capture MCV integration
+
+- `MYPA-RQC-D-001`: Remote Quick Capture is incorporated into the MCV as an extension of Quick Capture.
+- `MYPA-RQC-D-002`: The initial remote transport is iOS Shortcut over authenticated HTTPS to `capture.create`.
+- `MYPA-RQC-D-003`: The first-party PWA is the canonical cross-platform, offline-recovery, history, correction, and Review client.
+- `MYPA-RQC-D-004`: Literal SMS, hosted messaging APIs, additional cellular service, and iMessage relay dependencies are excluded from the MCV baseline.
+- `MYPA-RQC-D-005`: Capture success means durable source persistence and receipt before enrichment.
+- `MYPA-RQC-D-006`: Message content is evidence data and grants no external-action, deletion, command, policy, or unrestricted-tool authority.
+- `MYPA-RQC-D-007`: The governing feature package is `MYPA-REMOTE-QUICK-CAPTURE-FEATURE-PACKAGE-20260802-001`, folder `1lDSkTldgSkaRfJ3v9h-U10lCe-Lmwzsv`.
+- `MYPA-RQC-D-008`: MCV product inclusion does not itself authorize repository mutation, credentials, ingress activation, deployment, production, or risk acceptance.
+

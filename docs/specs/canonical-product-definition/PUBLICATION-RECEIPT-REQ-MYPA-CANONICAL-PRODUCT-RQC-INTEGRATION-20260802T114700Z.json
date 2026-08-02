@@ -1,0 +1,99 @@
+{
+  "coordination_request_id": "REQ-MYPA-CANONICAL-PRODUCT-RQC-INTEGRATION-20260802T114700Z",
+  "disposition": "MYPA_CANONICAL_PRODUCT_REMOTE_QUICK_CAPTURE_MCV_INTEGRATION_COMPLETE",
+  "publication_status": "COMPLETE",
+  "canonical_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+  "control_folder_id": "1t6fzDfHVrLQe6Wd2qjAtZ2ll--fYNPaF",
+  "feature_package_folder_id": "1lDSkTldgSkaRfJ3v9h-U10lCe-Lmwzsv",
+  "artifacts": [
+    {
+      "name": "00_README.md",
+      "drive_id": "1NKw2gDkl_C5iFRQqh2mRDxmSZtoZpDgQ",
+      "operation": "REVISE",
+      "representation": "text/markdown",
+      "bytes": 6137,
+      "sha256": "748c05c67744a780fb4e277bd2f9ccf4c9899a268775eb54d61b548bae95cf39",
+      "parent": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq"
+    },
+    {
+      "name": "01_EXECUTIVE_PRODUCT_DESCRIPTION.md",
+      "drive_id": "15Umcs2JBMdFvxfRgNaA-P-Nc_iC3jDHV",
+      "operation": "REVISE",
+      "representation": "text/markdown",
+      "bytes": 16241,
+      "sha256": "11e9255e3c30a18b13e5051872589606ea6e815b54f9f5a78b668380c31f1b83",
+      "parent": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq"
+    },
+    {
+      "name": "02_CANONICAL_PRODUCT_SYNTHESIS_SPECIFICATION.md",
+      "drive_id": "18l1S2iz5v_qgKZg8iVBAw47xvuHkbOjI",
+      "operation": "REVISE",
+      "representation": "text/markdown",
+      "bytes": 28118,
+      "sha256": "8e213d64fffc0f713531e7af155d3e57d42456967789792701b9ae77f13cd7e2",
+      "parent": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq"
+    },
+    {
+      "name": "08_DEVICE_AND_PLATFORM_STRATEGY.md",
+      "drive_id": "1Y7dDra-1NlN5sTrbg4yBrdEeo1F8B6HA",
+      "operation": "REVISE",
+      "representation": "text/markdown",
+      "bytes": 5218,
+      "sha256": "348c48a9cd8515c8477285c757ee79c9c216cc3301add189a56ec7425b096835",
+      "parent": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq"
+    },
+    {
+      "name": "09_CANONICAL_OBJECT_AND_DOMAIN_MODEL.md",
+      "drive_id": "1xwJPqXyXR0UepmF_lmkrOspEX8Xosq_W",
+      "operation": "REVISE",
+      "representation": "text/markdown",
+      "bytes": 11322,
+      "sha256": "79329c25e55663c2d3572e646e99b2bcb54deacfb312561a1924137a2d3ec009",
+      "parent": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq"
+    },
+    {
+      "name": "12_MVP_DEFINITION.md",
+      "drive_id": "1CwOBwGsRuxF8O3tazLFK3UnW_I-5aSAq",
+      "operation": "REVISE",
+      "representation": "text/markdown",
+      "bytes": 8524,
+      "sha256": "b99c9ba211918438c36122038d1d6deb5362f252a4242483f0b3ce244c493b4e",
+      "parent": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq"
+    },
+    {
+      "name": "13_ROADMAP_AND_DEPENDENCY_SEQUENCE.md",
+      "drive_id": "12dfRuODgib94H53RWH1wWJcGUdDHYZ7Y",
+      "operation": "REVISE",
+      "representation": "text/markdown",
+      "bytes": 8245,
+      "sha256": "3c61927f63417b37a26d50fd0b345845fe8e234254e48ff231fd0a191344ff20",
+      "parent": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq"
+    },
+    {
+      "name": "14_DECISION_LOG.md",
+      "drive_id": "1ty-sjhwJ5q8-XpUqwKINh_WO61CXg7Um",
+      "operation": "REVISE",
+      "representation": "text/markdown",
+      "bytes": 6447,
+      "sha256": "d64844db0f8e895a4b97a0f9c5afb40151259a5d8bbbdf55ba0f4e67de23ec6a",
+      "parent": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq"
+    }
+  ],
+  "index_id": "1i9r6pDI8jZQnD526_o_aFl8WWUliWX0h1ANLh_gtelE",
+  "invalidation": "Later canonical package, material repository/product authority change, failed readback, or later conflicting operator decision.",
+  "blocked_actions": [
+    "repository mutation",
+    "credential creation",
+    "ingress activation",
+    "deployment",
+    "production activation",
+    "risk acceptance"
+  ],
+  "verification": {
+    "drive_ids_preserved": true,
+    "parent_bindings_verified": true,
+    "byte_sizes_match_update_responses": true,
+    "index_registration_verified": true,
+    "canonical_specification_readback_observed": true
+  }
+}

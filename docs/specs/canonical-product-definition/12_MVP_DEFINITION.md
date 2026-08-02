@@ -106,3 +106,18 @@ Current repository truth at `main@9096fa4fbe64ff1cdabc07e53a3e68c52efc8575` show
 
 No source mutation; no broad read-plus-write default; no raw SQL, shell, arbitrary path, host, mount, or credential administration; no Google Docs/Sheets/Slides or sharing/permissions imitation; no hard delete by ordinary clients; no unbounded NAS traversal; no live personal data during synthetic proof; no claim that a frontier client replaces the first-party product.
 
+## Remote Quick Capture is included in the MCV
+
+The MCV includes the complete minimal remote text-capture slice:
+
+1. `capture.create` application service and versioned request/receipt contract.
+2. Product-owned append-only Capture and CaptureVersion persistence in PostgreSQL.
+3. Transactional audit, idempotency, receipt, and processing outbox/job creation.
+4. Authenticated HTTPS endpoint with a capture-only device/client grant.
+5. iOS Shortcut with one unrestricted text field, dictation, and explicit durable acknowledgment.
+6. PWA capture surface and offline-recovery path.
+7. Asynchronous classification, clause extraction, entity mentions, multi-domain proposals, policy evaluation, Review routing, and exact-original search.
+8. Relationship Intelligence, project, task, commitment, decision, conversation, general-note, personal, and household routing where the corresponding domain contract is available; otherwise the proposal remains retained and unresolved.
+
+The MCV excludes rich attachments beyond inert shared text/URL references, native iOS/Android applications, literal SMS, iMessage relays, hosted messaging providers, autonomous external actions, cloud model disclosure absent separate approval, and production activation.
+

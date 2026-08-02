@@ -136,3 +136,16 @@ Use transport-neutral domain names where possible. MCP-specific identifiers belo
 
 A `ManagedDocumentVersion` is canonical for stored artifact identity and content. Assertions within it retain derived/proposed/confirmed authority based on evidence and Review; document canonicality does not auto-promote claims.
 
+## Remote Quick Capture object-model amendment
+
+The MCV Capture model includes transport-neutral admission objects in addition to the existing immutable Capture and CaptureVersion chain:
+
+- `CaptureSubmission`: request, correlation, idempotency, principal, registered client/device or relay, transport, capture method, trust state, transport message identifier, client timestamps, server receipt time, payload hash, admission result, CaptureVersion, and receipt.
+- `RegisteredCaptureClient`: principal binding, device/client type, revocable credential reference, permitted capability, rate and size limits, creation, last-seen, and revocation state.
+- `CaptureDeliveryAttempt`: bounded delivery attempts and safe error classification.
+- `CaptureClassification` and `CaptureDomainAssignment`: versioned multi-label interpretation without relocating or overwriting the Capture.
+- `CaptureEntityMention`: exact surface text, evidence span, entity type, unresolved/candidate/resolved state, and later resolution lineage.
+- `CaptureCorrection`: source-text successor version, derived-value correction, identity correction, or routing correction, each with immutable lineage.
+
+No transport-specific note store, SMS memory, PRIE memory database, second knowledge store, or model-specific memory is permitted.
+

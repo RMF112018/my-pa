@@ -30,11 +30,13 @@ from pydantic import Field, ValidationError, model_validator
 
 from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
+from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_DEPTH
 
 __all__ = [
     "DATABASE_URL_SCHEME",
     "ENV_PREFIX",
+    "MAX_FETCH_BYTES_CEILING",
     "Environment",
     "LogLevel",
     "Settings",
@@ -48,6 +50,25 @@ ENV_PREFIX: Final = "MY_PA_"
 #: `postgresql://` keeps a stray `psycopg2` or `asyncpg` install from silently
 #: changing which driver the process talks to.
 DATABASE_URL_SCHEME: Final = "postgresql+psycopg"
+
+#: Most bytes `sources.fetch` may be configured to read from one object, derived
+#: rather than chosen. `D-35` accepts a provider read inside the database
+#: transaction *on the ground that the read is bounded*, so this number is also a
+#: bound on how long a transaction stays open, and it has to be one a transaction
+#: can survive. A ceiling of a gibibyte does not carry that argument.
+#:
+#: What the MCV extracts is text and Markdown, and `extract_text` quarantines
+#: anything decoding to more than `MAX_EXTRACTED_CHARACTERS` as
+#: `RESOURCE_LIMIT_EXCEEDED`. A UTF-8 character is at most four bytes, so four
+#: bytes per permitted character is the point past which no additional byte can
+#: belong to a document this build could ever extract: a larger fetch reads bytes
+#: whose only possible outcome is a quarantine. That makes 16 MiB the widest
+#: ceiling with a reason behind it rather than the largest round number.
+#:
+#: Deliberately expressed as the product and not as `16 * 1024 * 1024`. If the
+#: extraction bound moves, this moves with it, and the two cannot drift into
+#: disagreeing about what a readable document can be.
+MAX_FETCH_BYTES_CEILING: Final = MAX_EXTRACTED_CHARACTERS * 4
 
 
 class Environment(StrEnum):
@@ -106,7 +127,7 @@ class Settings(StrictModel):
     contract_strict_mode: bool = True
     max_page_size: int = Field(default=200, gt=0, le=1000)
     default_page_size: int = Field(default=50, gt=0, le=1000)
-    max_fetch_bytes: int = Field(default=8 * 1024 * 1024, gt=0, le=1 << 30)
+    max_fetch_bytes: int = Field(default=8 * 1024 * 1024, gt=0, le=MAX_FETCH_BYTES_CEILING)
     max_enrollment_depth: int = Field(default=0, ge=0, le=MAX_ENROLLMENT_DEPTH)
     database_url: str
 

@@ -498,3 +498,48 @@ def test_no_capability_calls_anything_but_the_read_only_provider_methods(
         )
     assert set(scene.provider.calls) <= {"list_children", "metadata", "fetch"}
     assert scene.provider.calls, "no capability touched the provider at all"
+
+
+def test_a_capability_payload_mismatch_is_refused_and_audited(scene: Scene) -> None:
+    """The third refusal, and the one that used to leave no trace at all.
+
+    A request whose metadata declares one capability while its payload performs
+    another would be authorized against the declaration, so refusing it is a
+    security-relevant act and `AGENTS.md` section 5 requires a proportionate
+    audit event. It was refused before the transaction opened, and a reviewer
+    measured the result: zero events, zero commits.
+
+    Recorded as `failed` rather than `denied` because no policy decision was
+    reached — there is nothing to name a `DenialReason` from — and against the
+    *declared* capability, because that is what authority would have been
+    evaluated against.
+    """
+    service = build_service(scene.world, scene.providers)
+    envelope = service.invoke(
+        metadata_for(Capability.KNOWLEDGE_READ, Purpose.KNOWLEDGE_READ, scene.principal),
+        commands_for(scene)[Capability.SOURCES_LIST],
+        principal=scene.principal,
+    )
+    assert envelope.result is None
+    assert envelope.error is not None
+    assert envelope.error.code is ErrorCode.INVALID_REQUEST
+
+    assert len(scene.world.audit) == 1, "the refusal left no audit event"
+    event = scene.world.audit[0]
+    assert event.outcome is AuditOutcome.FAILED
+    assert event.capability is Capability.KNOWLEDGE_READ
+    assert event.denial_reason is None
+    assert event.correlation_id == envelope.correlation_id
+    assert scene.world.commits == 1, "the audit event was not committed"
+    assert scene.world.rollbacks == 0
+
+
+def test_a_mismatched_request_reaches_no_handler(scene: Scene) -> None:
+    """Auditing the refusal must not have turned it into an execution."""
+    service = build_service(scene.world, scene.providers)
+    service.invoke(
+        metadata_for(Capability.SOURCES_METADATA, Purpose.SOURCE_INSPECTION, scene.principal),
+        commands_for(scene)[Capability.SOURCES_LIST],
+        principal=scene.principal,
+    )
+    assert scene.provider.calls == [], "a mismatched request touched the provider"

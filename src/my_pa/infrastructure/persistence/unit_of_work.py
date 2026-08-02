@@ -252,17 +252,32 @@ class _Knowledge(KnowledgeRepository):
         failures of the store, they are domain types the application already
         imports, and collapsing them into a repository failure would turn "your
         cursor does not belong to this request" into "try again later".
+
+        **The call runs inside `_read` as well, and that is not belt and braces.**
+        `search_extractions` does not classify every failure it can raise:
+        `persistence.search._coverage` catches `ValueError` and nothing else, so a
+        `SQLAlchemyError` raised by `coverage_for` inside it passes straight
+        through — carrying the statement and its bound `enrollment_id`.
+        `persistence.search` names that hole in its own module docstring and
+        carries it to WP-4, and this is where it is closed: `_read` is the
+        translation every other method here already runs through, and this method
+        was the one that skipped it. The three `except` clauses sit outside
+        `_read` because those types are not `SQLAlchemyError` and pass through it
+        untouched.
         """
-        try:
+
+        def statement() -> SearchOutcome:
             page = search_extractions(self._connection, request, now=now)
+            return SearchOutcome(matches=page.matches, disclosure=page.disclosure)
+
+        try:
+            return _read(statement)
         except UnknownEnrollmentError:
             failure: Exception = UnknownScopeError("the scope names no enrollment")
         except SearchUnavailableError:
             failure = EvidenceUnavailableError("the lexical index could not be read")
         except SearchInternalError:
             failure = RepositoryFailureError("the search could not be completed")
-        else:
-            return SearchOutcome(matches=page.matches, disclosure=page.disclosure)
         raise failure
 
     def read(self, knowledge_id: str, *, enrollment_id: str) -> KnowledgeRecord | None:

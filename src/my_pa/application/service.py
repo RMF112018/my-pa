@@ -9,15 +9,36 @@ therefore not something a use case is trusted not to do; it is something the
 shape of this class does not offer.
 
 **The transaction is opened once, around the decision and the work.** Leaving
-`invoke`'s `with` block normally commits, which matters most on the path that
-looks least like it needs a transaction: a *denial* returns out of the block
-normally, so the audit event recording the refusal commits, where raising from
-inside would have rolled the record of the refusal back along with everything
-else. The failure path is the reverse and deliberately so — a handler that
-raises rolls its transaction back, which is what stops a half-written enrollment
-from committing, and which also loses the audit event for that attempt. That is
-a real gap and it is named rather than papered over: closing it needs a second
-transaction and a durable audit store, and neither exists in this build.
+`invoke`'s `with` block normally commits, which matters most on the paths that
+look least like they need a transaction: a refusal returns out of the block
+normally, so the audit event recording it commits, where raising from inside
+would have rolled the record of the refusal back along with everything else.
+
+**Which outcomes leave a durable trace, exhaustively.** This list is the whole
+of it, because an incomplete disclosure of an audit gap is itself a gap, and one
+case was missing from it before a reviewer measured `audit events: 0`:
+
+1. *Policy denied the request.* Audited, and the audit commits. The reason is in
+   the record and never in the answer.
+2. *The declared capability and the payload's capability disagree.* A
+   security-relevant refusal — it is the guard against a request authorized as
+   one capability and executed as another — so it is audited as `failed`, inside
+   the transaction, and the audit commits. It is `failed` rather than `denied`
+   because no policy decision was reached: there is nothing to name a
+   `DenialReason` from, and inventing one would misreport why the request
+   stopped.
+3. *Allowed, and the handler succeeded.* Audited as allowed; commits with the
+   work.
+4. *Allowed, and the handler then failed.* Audited as allowed, and then **rolled
+   back with the failed work**, so a failed security-relevant action currently
+   leaves no trace. That is a defect rather than a design. It is here because the
+   rollback is also what stops a half-written enrollment from committing, and
+   separating the two needs a second transaction and a durable audit store,
+   neither of which exists in this build. `D-34` puts both in WP-4B.
+5. *A command that could not be constructed at all.* Not audited, and cannot be:
+   a malformed command is refused by its own `__post_init__` before `invoke` is
+   called, so this layer never sees the attempt. Whatever calls it is the only
+   thing that could record one.
 
 **Provider reads happen inside that transaction.** `module-boundaries.md`
 section 10 says long source fetches are not held inside database transactions,
@@ -97,6 +118,7 @@ from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.disclosure import Disclosure, SourceReference, Truncation
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.status import SourceStatusState
+from my_pa.domain.audit.events import AuditEvent, AuditOutcome
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
@@ -105,6 +127,7 @@ from my_pa.domain.extraction.coverage import CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus, extract_text
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
+from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
     MAX_PAGE_SIZE,
@@ -308,11 +331,34 @@ class ApplicationService:
         `metadata.principal_id` is correlation input and is deliberately not
         consulted: a caller-supplied identity is never trusted alone
         (`docs/specs` section 8.2).
+
+        **No exception leaves this method.** The first two handlers classify what
+        this layer already understands. The third is a terminal catch, and it is
+        deliberate rather than defensive: a `SQLAlchemyError` escaping an
+        unwrapped statement carries the statement and its bound parameters, and
+        letting one out of here would put the obligation to catch it — and the
+        redaction that obligation implies — on every transport that WP-4B writes.
+        A response is built in exactly one place, so the failure classification
+        has to be in that place too.
+
+        `InternalError` is constructed *outside* the handler, so the exception it
+        replaces is not left in its `__context__`. That is the same discipline the
+        persistence and provider layers apply, and here it is what keeps a
+        rendered traceback of the public error from carrying the driver message
+        the catch exists to withhold. Nothing of the original reaches the payload
+        either way: `problem_detail` reads a code and a closed token set, and
+        there is no path from an exception's text to a `ProblemDetail`.
+
+        `Exception` and not `BaseException`: a `KeyboardInterrupt` or a
+        `SystemExit` is the operator stopping the process, and converting that
+        into a 500-shaped answer would be this method deciding something it has
+        no business deciding.
         """
         correlation_id = issue_identifier(IdKind.CORRELATION)
         started_at = self._clock()
         failure: ApplicationError | None = None
         result: _Result | None = None
+        unclassified = False
         try:
             result = self._run(
                 metadata, command, principal=principal, correlation_id=correlation_id, at=started_at
@@ -324,6 +370,12 @@ class ApplicationService:
             # authorization path's own reads, for instance — still has to reach
             # the caller as a classified public error rather than as a crash.
             failure = _port_failure(error)
+        except Exception:
+            # Nothing that reaches here has been classified, so nothing about it
+            # is safe to report beyond that the request did not complete.
+            unclassified = True
+        if unclassified:
+            failure = InternalError()
         if failure is not None:
             return ResponseEnvelope(
                 request_id=metadata.request_id,
@@ -357,22 +409,53 @@ class ApplicationService:
         declares one capability while its payload performs another would be
         authorized against the declaration; there is no reading of that which is
         a valid request.
+
+        The check runs *inside* the transaction, which it did not before. It is a
+        security-relevant refusal — the whole of what it guards is a request
+        being authorized as one capability and executed as another — and
+        `AGENTS.md` section 5 requires a denied attempt to produce a
+        proportionate audit event. Checking it before the transaction opened
+        produced none at all, which a reviewer measured. The capability recorded
+        is the *declared* one, because that is what authority would have been
+        evaluated against.
+
+        Both refusals return out of the block normally rather than raising from
+        inside it, and for the same reason: raising would roll the record of the
+        refusal back along with everything else.
         """
-        if metadata.capability is not command.capability:
-            raise InvalidRequestError(SafeDetail.SUBJECT)
+        mismatch = metadata.capability is not command.capability
         with self._unit_of_work() as unit_of_work:
-            authorization = authorize(
-                unit_of_work,
-                principal=principal,
-                purpose=metadata.purpose,
-                command=command,
-                correlation_id=correlation_id,
-                at=at,
-            )
-            if authorization.allowed:
-                return _HANDLERS[command.capability](self, unit_of_work, authorization, command)
+            if mismatch:
+                unit_of_work.audit.record(
+                    AuditEvent(
+                        audit_id=issue_identifier(IdKind.AUDIT),
+                        correlation_id=correlation_id,
+                        principal_id=principal.principal_id,
+                        capability=metadata.capability,
+                        purpose=metadata.purpose,
+                        # `failed` rather than `denied`: no policy decision was
+                        # reached, so there is no `DenialReason` to name and
+                        # inventing one would misreport why the request stopped.
+                        outcome=AuditOutcome.FAILED,
+                        policy_version=POLICY_VERSION,
+                        recorded_at=at,
+                    )
+                )
+            else:
+                authorization = authorize(
+                    unit_of_work,
+                    principal=principal,
+                    purpose=metadata.purpose,
+                    command=command,
+                    correlation_id=correlation_id,
+                    at=at,
+                )
+                if authorization.allowed:
+                    return _HANDLERS[command.capability](self, unit_of_work, authorization, command)
         # Reached only after the transaction committed, which is what preserves
         # the audit event recording the refusal.
+        if mismatch:
+            raise InvalidRequestError(SafeDetail.SUBJECT)
         raise DeniedError()
 
     # ---- the eight use cases -----------------------------------------------

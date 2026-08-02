@@ -376,6 +376,134 @@ def test_only_a_composition_root_instantiates_a_concrete_implementation(path: Pa
     )
 
 
+# `MB-AC-002` reads as a structural guarantee, and a rule that only inspects a
+# module's own imports is weaker than it reads. A reviewer proved it: planting
+# `import sqlalchemy` at the top of `contracts/ports.py` — the module every
+# handler imports — left the whole suite green, because `contracts` is the one
+# layer with no third-party guard (pydantic is deliberately allowed there) and
+# the application rules above look only one hop. The two rules below close that,
+# and they close it in the general form rather than by adding one more
+# per-layer allowlist: the second walks the import graph, so any future module
+# that becomes reachable from `application` is covered without being named.
+
+#: Everything an application module may not reach, by any path.
+FORBIDDEN_FOR_APPLICATION = (
+    TRANSPORT_ROOTS | DATABASE_AND_FRAMEWORK_ROOTS | PROVIDER_AND_PARSER_ROOTS
+)
+
+
+def _module_name(path: Path) -> str:
+    """The dotted name of one module, with `__init__` folded into its package."""
+    parts = path.relative_to(PACKAGE.parent).with_suffix("").parts
+    return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+
+def _module_index() -> dict[str, Path]:
+    return {_module_name(path): path for path in _modules()}
+
+
+def _internal_imports(path: Path, index: dict[str, Path]) -> set[str]:
+    """The `my_pa` modules `path` imports, resolved to modules that exist.
+
+    `from X import Y` contributes `X.Y` as well as `X`, and `Y` is as often a
+    class as a module, so each dotted target is shortened until it names a real
+    module. Without that, `from my_pa.contracts.ports import UnitOfWork` would
+    resolve to nothing and the walk would stop one hop early — which is the
+    entire failure this test exists to prevent.
+    """
+    found: set[str] = set()
+    for imported in _imported_modules(path):
+        if not imported.startswith("my_pa"):
+            continue
+        parts = imported.split(".")
+        while parts:
+            candidate = ".".join(parts)
+            if candidate in index:
+                found.add(candidate)
+                break
+            parts.pop()
+    return found
+
+
+def _reachable(start: Path, index: dict[str, Path]) -> set[str]:
+    """Every `my_pa` module reachable from `start`, including `start` itself."""
+    seen: set[str] = set()
+    queue = [_module_name(start)]
+    while queue:
+        name = queue.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        path = index.get(name)
+        if path is not None:
+            queue.extend(_internal_imports(path, index))
+    return seen
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "contracts"], ids=lambda p: str(p.name)
+)
+def test_contracts_import_no_transport_orm_or_provider_module(path: Path) -> None:
+    """`module-boundaries.md` section 5.2: a DTO exposes no ORM or provider object.
+
+    Pydantic stays permitted — `test_pydantic_is_confined_to_contracts_and_settings`
+    is what says where it belongs — and everything that would carry a persistence
+    or transport concern does not. This layer had no third-party guard at all,
+    which made it the available way past the application rules above.
+    """
+    offending = sorted(
+        {i.split(".")[0] for i in _imported_modules(path)} & FORBIDDEN_FOR_APPLICATION
+    )
+    assert not offending, (
+        f"{path.relative_to(PACKAGE)} is contract code and imports {offending}; "
+        "public schemas and ports may not carry a persistence or transport detail"
+    )
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "application"], ids=lambda p: str(p.name)
+)
+def test_application_reaches_no_forbidden_module_by_any_path(path: Path) -> None:
+    """`MB-AC-002` as a property of the import graph, not of one hop.
+
+    An application module is isolated from transport, ORM, provider, and parser
+    detail only if *everything it can reach* is. This walks the closure and
+    reports the shortest evidence it has: the module that actually imports the
+    offending root.
+    """
+    index = _module_index()
+    offences: list[str] = []
+    for name in sorted(_reachable(path, index)):
+        reached = index.get(name)
+        if reached is None:
+            continue
+        offending = sorted(
+            {i.split(".")[0] for i in _imported_modules(reached)} & FORBIDDEN_FOR_APPLICATION
+        )
+        if offending:
+            offences.append(f"{name} imports {offending}")
+    assert not offences, (
+        f"{path.relative_to(PACKAGE)} is application code and reaches "
+        f"{offences}; MB-AC-002 is about what a use case can reach, not about "
+        "what it names directly"
+    )
+
+
+def test_the_reachability_walk_actually_walks(tmp_path: Path) -> None:
+    """Guard the walk: one that resolved nothing would pass on any tree.
+
+    A closure that stopped at the starting module would make the rule above a
+    slower copy of the one-hop rules. `service.py` is the deepest importer in the
+    package, so it is the honest sample.
+    """
+    index = _module_index()
+    service = PACKAGE / "application" / "service.py"
+    reached = _reachable(service, index)
+    assert "my_pa.contracts.ports" in reached, "the walk did not resolve a `from` import"
+    assert "my_pa.domain.policy.decision" in reached, "the walk stopped before the domain"
+    assert len(reached) >= 20, f"the walk resolved only {len(reached)} modules"
+
+
 #: One planted import per guard set, so a set narrowed to nothing cannot keep
 #: reporting success. Each of the three rules above is a set intersection, and an
 #: intersection with an empty set is empty for every module in the tree.

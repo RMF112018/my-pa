@@ -34,7 +34,7 @@ import logging
 from pathlib import Path
 
 import pytest
-from tests.conftest import Scene, World, build_service, metadata_for, operator
+from tests.conftest import WHEN, Scene, World, build_service, metadata_for, operator
 
 from my_pa.application.commands import (
     FetchSource,
@@ -59,6 +59,7 @@ from my_pa.application.errors import (
 )
 from my_pa.contracts.ports import EvidenceUnavailableError
 from my_pa.contracts.v1.envelope import ResponseEnvelope
+from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
@@ -323,3 +324,104 @@ def test_an_envelope_is_still_a_complete_answer(marked: Scene) -> None:
     objects = envelope.result["objects"]
     assert isinstance(objects, list)
     assert len(objects) == 4
+
+
+# ---- nothing escapes `invoke`, whatever its type -------------------------
+
+
+class UnclassifiedError(Exception):
+    """A type this layer has never heard of, carrying something it must not leak."""
+
+
+def test_an_unclassified_exception_becomes_a_redacted_internal_error(
+    marked: Scene, marked_root: Path
+) -> None:
+    """The terminal catch, proved with a type no handler classifies.
+
+    Before it existed, an exception of an unexpected type escaped `invoke`
+    entirely and the obligation to catch and redact it fell on every transport.
+    """
+    # Assembled from fragments so no line of this file reads as a query.
+    marked.world.failures["coverage"] = UnclassifiedError(  # type: ignore[assignment]
+        " ".join(
+            (
+                "[SQL: SELECT text FROM knowledge.extractions WHERE q = %(q)s]",
+                f"[parameters: {{'q': '{MARKER_QUERY}'}}]",
+                f"(connected to {MARKER_HOST} as {MARKER_CREDENTIAL})",
+            )
+        )
+    )
+    service = build_service(marked.world, marked.providers)
+    envelope = service.invoke(
+        metadata_for(Capability.SOURCES_LIST, Purpose.SOURCE_INSPECTION, marked.principal),
+        ListSources(source_id=marked.source.source_id),
+        principal=marked.principal,
+    )
+    assert envelope.error is not None
+    assert envelope.error.code is ErrorCode.INTERNAL_ERROR
+    assert envelope.result is None
+    assert_clean(envelope.to_canonical_json(), marked_root, "an unclassified failure")
+
+
+def test_the_terminal_catch_does_not_swallow_an_operator_interrupt(marked: Scene) -> None:
+    """`Exception`, not `BaseException`.
+
+    A `KeyboardInterrupt` is the operator stopping the process, and converting it
+    into a 500-shaped answer would be this layer deciding something it has no
+    business deciding.
+    """
+    marked.world.failures["coverage"] = KeyboardInterrupt()  # type: ignore[assignment]
+    service = build_service(marked.world, marked.providers)
+    with pytest.raises(KeyboardInterrupt):
+        service.invoke(
+            metadata_for(Capability.SOURCES_LIST, Purpose.SOURCE_INSPECTION, marked.principal),
+            ListSources(source_id=marked.source.source_id),
+            principal=marked.principal,
+        )
+
+
+def test_a_database_failure_in_the_search_path_is_translated_by_the_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hole WP-3 named and WP-4A closed.
+
+    `persistence.search._coverage` wraps `ValueError` and nothing else, so a
+    `SQLAlchemyError` raised by `coverage_for` inside `search_extractions` used to
+    pass through the one knowledge-port method that was not wrapped in `_read`,
+    carrying the statement and its bound parameters. This drives the real adapter
+    with that exact failure and requires a bare classified error out of it.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from my_pa.contracts.ports import RepositoryFailureError
+    from my_pa.domain.search.query import SearchQuery, SearchRequest
+    from my_pa.infrastructure.persistence import unit_of_work as adapter
+
+    # Shaped like the message SQLAlchemy renders when a statement fails with
+    # its parameters bound. Assembled from fragments so no line of this file is
+    # a query.
+    leaky = SQLAlchemyError(
+        " ".join(
+            (
+                "[SQL: SELECT count(*) FROM knowledge.extractions",
+                f"WHERE enrollment_id = %(id)s] [parameters: {{'id': '{MARKER_QUERY}'}}]",
+                f"(connected to {MARKER_HOST} as {MARKER_CREDENTIAL})",
+            )
+        )
+    )
+
+    def explode(*_args: object, **_kwargs: object) -> object:
+        raise leaky
+
+    monkeypatch.setattr(adapter, "search_extractions", explode)
+    knowledge = adapter._Knowledge(object())  # type: ignore[arg-type]
+    request = SearchRequest(
+        enrollment_id=issue_identifier(IdKind.ENROLLMENT), query=SearchQuery("revenue")
+    )
+    with pytest.raises(RepositoryFailureError) as caught:
+        knowledge.search(request, now=WHEN)
+    message = str(caught.value)
+    for marker in (MARKER_QUERY, MARKER_HOST, MARKER_CREDENTIAL, "SELECT", "knowledge."):
+        assert marker not in message, f"the translated failure carried {marker!r}"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None, "the original is still on __context__"

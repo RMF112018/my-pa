@@ -7,12 +7,14 @@ import pytest
 from my_pa.bootstrap.settings import (
     DATABASE_URL_SCHEME,
     ENV_PREFIX,
+    MAX_FETCH_BYTES_CEILING,
     Environment,
     LogLevel,
     Settings,
     SettingsError,
     load_settings,
 )
+from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
 
 DATABASE_URL = f"{ENV_PREFIX}DATABASE_URL"
 
@@ -88,6 +90,27 @@ def test_a_contradictory_pair_of_page_limits_fails_at_startup() -> None:
                 DATABASE_URL: _A_URL,
             }
         )
+
+
+def test_the_fetch_ceiling_is_derived_from_what_the_extractor_can_read() -> None:
+    """`D-35` accepts a provider read inside a transaction because it is bounded.
+
+    So the bound has to be one a transaction can survive, and it has to have a
+    reason: four bytes per extractable character is the point past which no byte
+    can belong to a document this build could extract.
+    """
+    assert MAX_FETCH_BYTES_CEILING == MAX_EXTRACTED_CHARACTERS * 4 == 16 * 1024 * 1024
+    with pytest.raises(SettingsError, match="invalid configuration"):
+        load_settings(
+            {
+                f"{ENV_PREFIX}MAX_FETCH_BYTES": str(MAX_FETCH_BYTES_CEILING + 1),
+                DATABASE_URL: _A_URL,
+            }
+        )
+    at_ceiling = load_settings(
+        {f"{ENV_PREFIX}MAX_FETCH_BYTES": str(MAX_FETCH_BYTES_CEILING), DATABASE_URL: _A_URL}
+    )
+    assert at_ceiling.effective_limits().max_fetch_bytes == MAX_FETCH_BYTES_CEILING
 
 
 def test_an_enrollment_depth_beyond_the_domain_ceiling_is_refused() -> None:

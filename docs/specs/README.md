@@ -17,13 +17,15 @@ New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy ide
 
 ## The ratified canonical product definition
 
-On 2026-08-02 the operator ratified a whole-product definition for `my-pa`. It is mirrored at [`canonical-product-definition/`](canonical-product-definition/00_README.md) as package `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, version 2.1, status `CURRENT_CANONICAL_PRODUCT_DEFINITION`.
+On 2026-08-02 the operator ratified a whole-product definition for `my-pa` **by direct instruction**. It is mirrored at [`canonical-product-definition/`](canonical-product-definition/00_README.md) as package `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, version 2.1.
+
+The instrument is the operator's instruction, not the package. `CURRENT_CANONICAL_PRODUCT_DEFINITION` is a status the package declares about itself, and a self-declared status is not ratification — it is the same class of evidence the repository previously ruled insufficient for the predecessor. See [`../plans/mcv-completion-plan.md`](../plans/mcv-completion-plan.md) `D-19` and section 15.
 
 **What ratification changed.** The repository previously recorded the product direction as *proposed* and named its ratification the largest open operator decision. That question is answered. The direction is now settled product meaning, and the plan's open-decision list is correspondingly shorter.
 
 **What ratification did not change.** Three things, and conflating any of them with acceptance would be the error this section exists to prevent.
 
-- **It grants no implementation authority.** The package states `implementation_authority: NOT_GRANTED` and `repository_mutation: NOT_PERFORMED` in the front matter of every artifact. Ratifying a definition of the product is not authorizing anyone to build it.
+- **It grants no implementation authority.** All 20 markdown artifacts carry `implementation_authority: NOT_GRANTED` and `repository_mutation: NOT_PERFORMED` in YAML front matter, and `18_PACKAGE_SOURCE_MANIFEST.json` carries the same under its `authority` object rather than as front matter. The publication receipt independently records `NOT_GRANTED` for implementation, deployment, production activation, and risk acceptance. Ratifying a definition of the product is not authorizing anyone to build it.
 - **It does not outrank repository policy.** Under [`AGENTS.md`](/AGENTS.md) section 1, indexed Workspace publications sit at precedence rank 4, below accepted repository specifications, ADRs, and policy at rank 3, and below authenticated runtime and repository state above those. A ratified Drive package is authoritative for *what the product means*, not for what this repository may do. Where it and policy disagree, policy still wins.
 - **It does not enlarge the active objective.** The package agrees, and says so itself: its own `OP-05` recommends completing the MCV before an explicit transition, and its roadmap step `R10.1` names finishing repository WP-4 and WP-5 as the prerequisite to everything else. Ratification endorsed the existing sequence rather than displacing it.
 
@@ -43,7 +45,8 @@ The owning Quick Capture and Relationship Intelligence specifications below **re
 | Representation | `stored_raw_bytes` (`text/markdown` and `application/json`) |
 | Retrieved | 2026-08-02 via `rclone copy --drive-root-folder-id` |
 | Repository head the package binds | `9096fa4fbe64ff1cdabc07e53a3e68c52efc8575` — current `main` at ratification |
-| Verification | **Byte-exact, against two independent in-package hash sources.** All 21 numbered artifacts were re-hashed after being written here: 21 verified, zero mismatches against `CANONICAL-ARTIFACT-DISPOSITION-…json`, and the 20 of them that `18_PACKAGE_SOURCE_MANIFEST.json` also covers verified against it independently. |
+| Verification | **Byte-exact, against three independent in-package hash sources.** All 21 numbered artifacts were re-hashed after being written here, with zero mismatches against each of: `CANONICAL-ARTIFACT-DISPOSITION-…json` (21 members), `READBACK-VERIFICATION-…json` (21 members), and `18_PACKAGE_SOURCE_MANIFEST.json` (20 — it does not hash itself, and says so in its own `self_member.result_hash_scope`). |
+| Drive member count | 31, confirmed by `rclone lsf` against the folder ID and matching the retrieved set exactly. Not attestable from the repository alone. |
 
 Twenty-four of the package's thirty-one Drive members are mirrored. The seven not mirrored are coordination correspondence and one superseded publication receipt, which remain in Drive; this follows the precedent set for `quick-capture/`, where governance correspondence was likewise left behind.
 

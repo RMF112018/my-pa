@@ -51,12 +51,13 @@ Relationship Intelligence and Quick Capture; sections 12 through 14 of that plan
 carry the work packages, the decisions that admitted them, and the decisions
 still open.
 
-On 2026-08-02 the operator ratified a canonical whole-product definition,
-mirrored at [`docs/specs/canonical-product-definition/`](docs/specs/canonical-product-definition/00_README.md).
+On 2026-08-02 the operator ratified a canonical whole-product definition by
+direct instruction, mirrored at [`docs/specs/canonical-product-definition/`](docs/specs/canonical-product-definition/00_README.md).
 It settles what the product means; it grants no implementation authority, does
 not outrank repository policy, and did not change the plan — its own roadmap
 puts finishing WP-4 and WP-5 first, which is what this plan already sequenced.
-Section 15 records the reconciliation.
+The thirty operator decisions it carries remain open. Section 15 records the
+reconciliation and the instrument it rests on.
 
 ## Approved architectural decisions
 

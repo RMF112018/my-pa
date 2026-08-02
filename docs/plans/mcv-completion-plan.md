@@ -617,39 +617,57 @@ briefings (they depend on WP-8 and on a model boundary). Pulse. Any frontend.
 ### Mapping onto the canonical object model
 
 `D-19` supersedes `D-17`: the canonical product direction is ratified as of
-2026-08-02, and the object model below is now the settled one rather than a
-proposed one. What that changes here is smaller than it sounds. The mapping was
-already correct; ratification removes the hedge in front of it, not the shape
-underneath it. Nothing above builds toward the canonical model beyond what the
+2026-08-02. Nothing above builds toward the canonical model beyond what the
 operator promoted, because ratification granted no implementation authority
 (`implementation_authority: NOT_GRANTED`) and the canonical roadmap's own first
 step is to finish WP-4 and WP-5. No abstraction is created for it; this table is
-still documentation, not a design.
+documentation, not a design.
 
-Its practical value has gone up, though. When the target model was proposed, a
-mismatch between these names and those was a tolerable risk. Now it is
-foreseeable rework, and the `Assertion` note at the end of this subsection is
-the one place that matters.
+**This table was re-derived on 2026-08-02 and most of it was wrong.** It was
+originally written against `my-pa vNext`. When ratification superseded that
+document, the first version of this change relabelled the column from "vNext
+object" to "Canonical object" and left every target unchanged — which assumed a
+mapping stays valid when the document it maps onto is replaced. Independent
+review caught it. The targets below are now derived from
+[`../specs/canonical-product-definition/09_CANONICAL_OBJECT_AND_DOMAIN_MODEL.md`](../specs/canonical-product-definition/09_CANONICAL_OBJECT_AND_DOMAIN_MODEL.md),
+sections *Definitions*, *Supporting records*, and *State patterns*.
+
+The result is better news than the old table carried. The ratified model uses
+this repository's own names for most of these objects, so the majority of rows
+are identity rather than translation, and the "foreseeable rework" the previous
+draft warned about largely does not exist. One row was actively misleading and
+is corrected.
 
 | Built here | Canonical object | Note |
 |---|---|---|
-| Capture, CaptureVersion (WP-6) | Source Record, and its exact version | A user-authored one. The version *is* the addressable evidence |
-| EvidenceSpan (WP-7) | Source Region | Same role: the addressable sub-part a claim cites |
-| ExtractionProposal (WP-7) | Assertion, before acceptance | The canonical Assertion carries trust state; a proposal is one awaiting a trust state |
-| ReviewCase (WP-8) | Review Case | Same object, same name |
-| Promotion receipt (WP-8) | Receipt | Same object |
-| Conversation (WP-8) | Event, specialised | The canonical model treats it as a dated occurrence with distinct event and recorded time |
-| Person, Organization (WP-9) | Entity | The canonical model generalises to person, organisation, project, location, topic, document |
-| Affiliation, project association (WP-9) | Relationship | Typed, time-aware, evidence-backed |
-| — | Situation, Frame, Trace | Still not built by any package here. The reason has changed: ratification satisfied the condition this row used to name, so what defers them now is that they are canonical stage `R1` scope, arriving after `R0` — which is WP-4 and WP-5 — and they carry no implementation authority |
+| Capture, CaptureVersion (WP-6) | `Capture`, `CaptureVersion` | **Identity.** Defined under those exact names. `Capture` is a "product-owned Source envelope created through explicit authoring"; `CaptureVersion` is the immutable committed text and hash, and drafts are not versions until Save — which is ADR-003's shape |
+| EvidenceSpan (WP-7) | `SourceSpan` | Both `SourceSpan` and `SourceRegion` exist. Text spans are `SourceSpan`; `SourceRegion` is the page-geometry form used for scanned and handwritten sources, so WP-7 maps to the former |
+| ExtractionProposal (WP-7) | `Proposal`, supporting an `Assertion` | The ratified model keeps **both** as distinct objects: `Proposal` is "candidate record/link/classification/transition before promotion", `Assertion` is the structured claim carrying authority state. See the note below |
+| ReviewCase (WP-8) | `ReviewCase` | **Identity**, including the spelling |
+| Promotion receipt (WP-8) | `Receipt` | **Identity.** "Immutable evidence of source acceptance or transition under exact identity/policy/authority/time" |
+| Conversation (WP-8) | `Conversation` | **Identity.** A specialized `Interaction`/`Event` aggregate, not a generic Event. `Interaction` and `Meeting` are siblings this plan does not build |
+| Person, Organization (WP-9) | `Person`, `Organization` | **Identity.** The previous draft mapped these to `Entity`, generalised across person, organisation, project, location, topic and document. **`Entity` does not exist in the ratified model** — `Person` and `Organization` are first-class, and that claim came from the superseded document |
+| Affiliation, project association (WP-9) | `Affiliation`, `ContextLink` | `Affiliation` is **identity**. `Relationship` is a separate first-class object — the time and context-aware association domain, explicitly "not a score" — and is broader than what WP-9 builds |
+| — | `Situation`, `Frame`, `Trace` | Still not built by any package here. The reason has changed: ratification satisfied the condition this row used to name, so what defers them now is that they are canonical stage `R1` scope, arriving after `R0` — which is WP-4 and WP-5 — and they carry no implementation authority |
 
-The one place to be careful is `Assertion`. WP-7's proposals and WP-8's accepted
-records are the same thing at two lifecycle points in the canonical model, where
-a single Assertion carries a trust state through Confirmed, Strongly Supported,
-Probable, Possible, Unverified, Contradicted, Stale, and Unknown. Modelling
-proposal and accepted record as two unrelated tables would be the rework. WP-7
-should therefore give a proposal a trust state from the start, even while only
-two of the values are reachable.
+The one place to be careful is still the proposal-to-accepted lifecycle, but not
+for the reason the previous draft gave. It claimed a single Assertion carries a
+trust state through "Confirmed, Strongly Supported, Probable, Possible,
+Unverified, Contradicted, Stale, and Unknown", and told WP-7 to adopt that
+ladder. **None of those values appear in the ratified model.** The ratified state
+sets are:
+
+- `Proposal`: `proposed`, `needs_review`, `accepted`, `corrected_accepted`,
+  `rejected`, `deferred`, `unresolved`, `superseded`, `invalidated`;
+- `Assertion`: `proposed`, `accepted`, `contradicted`, `stale`, `superseded`,
+  `withdrawn`, `revalidation_required`.
+
+The underlying guidance survives, because `Assertion` spans `proposed` through
+`accepted` in one object: modelling a proposal and its accepted record as two
+unrelated tables is still the rework to avoid. What changes is the vocabulary.
+**WP-7 must take its state values from the two sets above, not from the ladder
+the previous draft named**, and it should expect to carry a `Proposal` state and
+an `Assertion` state rather than one blended trust score.
 
 ### Method for every package above
 
@@ -725,10 +743,10 @@ managed-document write and grants the source-provider port nothing.
 | D-16 | Both feature specifications are mirrored into `docs/specs/` and routed from the specification and source indexes | They are `my-pa`-native product design that now drives work packages, so a reviewer should be able to open them from the repository rather than from a Drive link. `docs/specs/README.md` previously listed the read-only slice as the only specification, which understated product intent. Mirrors follow the `evidence/completion/README.md` precedent: exact Drive identity, export hash, and no claim to repository authority. Neither required redaction. **Correction, 2026-08-02:** the phrase "and source indexes" was false when written. `docs/00_REPOSITORY_SOURCE_INDEX.md` routed only the MCV specification; neither mirror, nor `docs/specs/README.md` itself, appeared there. The routing was added with `D-19`, so the claim is true now — but it was a claim about work that had not been done, which is the kind of thing this register exists to catch rather than to produce. | Accepted; one clause corrected |
 | D-14 | Model-assisted extraction stages are excluded from WP-7 | Named-entity extraction, identity resolution, contradiction detection, and summary generation all require a model gateway that does not exist and a disclosure decision (`P00-OD-006`) that is open. `AGENTS.md` section 2 forbids building the abstraction ahead of the need. Deterministic extraction proposes less and cites everything it proposes. | Deferred, disclosed |
 | D-15 | Corrected in place: the frontend hold reads as permitting backend work, and this was assumed rather than asked | `D-09` records the operator's words as "no frontend implementation is in scope until they say otherwise." Every package in section 12 is frontend-free, so none of them tests the hold. But the hold was never asked about in the direction that matters — whether backend work on a held feature may proceed at all — and the Quick Capture package's `O-04` asks only *when* to lift it, not whether backend work needs it lifted. The reading here is that it does not. It is an assumption, it is stated as one, and it is on the consolidated list in section 14 for the operator to confirm or overturn. | Assumption, disclosed |
-| D-19 | Supersedes `D-17`: the canonical product direction is ratified, and is recorded in the repository as ratified | On 2026-08-02 the operator ratified `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006` (Drive folder `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`), version 2.1, status `CURRENT_CANONICAL_PRODUCT_DEFINITION`. It supersedes `my-pa vNext` for current whole-product definition and preserves it as source history; the two are siblings under one Drive parent, so this is supersession inside a lineage rather than replacement from outside it. It is mirrored byte-exact at `../specs/canonical-product-definition/` and verified 21/21 against two independent in-package hash sources. Three limits survive ratification and are the reason this is a decision rather than a scope change: it grants no implementation authority (`implementation_authority: NOT_GRANTED`); under `AGENTS.md` section 1 it is an indexed Workspace publication at precedence rank 4, below repository policy at rank 3; and its own `OP-05` and roadmap step `R10.1` direct that WP-4 and WP-5 finish first. Ratification endorsed this plan's sequence rather than displacing it. | Ratified, and bounded — see section 15 |
+| D-19 | Supersedes `D-17`: the canonical product direction is ratified, and is recorded in the repository as ratified | **The instrument is a direct operator instruction issued 2026-08-02, not anything inside the package.** This matters, and independent review was right to demand it: the package nowhere uses the word "ratified", its status field `CURRENT_CANONICAL_PRODUCT_DEFINITION` is self-declared, its receipt grants nothing, and `15_OPEN_OPERATOR_DECISIONS.md` states "This package performs none." A self-declared status is precisely the evidence `D-17` ruled insufficient for the predecessor, so ratifying on that basis alone would have contradicted the standard this register set. What supplies it instead is the operator's instruction opening this session: that the product documentation, revised considerably, "is RATIFIED", identifying it by Drive ID `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`, with the direction to enforce it through the next implementation phase. That is the same self-executing form as the 2026-08-01 reprioritisation recorded at `D-10` — the instruction is the mechanism, and this row records what happened rather than authorising it. The subject is `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, version 2.1. It supersedes `my-pa vNext` for current whole-product definition and preserves it as source history; the two are siblings under one Drive parent, so this is supersession inside a lineage rather than replacement from outside it. It is mirrored byte-exact at `../specs/canonical-product-definition/` and verified 21/21 against three independent in-package hash sources. Three limits survive ratification and are the reason this is a decision rather than a scope change: it grants no implementation authority (`implementation_authority: NOT_GRANTED`); under `AGENTS.md` section 1 it is an indexed Workspace publication at precedence rank 4, below repository policy at rank 3; and its own `OP-05` and roadmap step `R10.1` direct that WP-4 and WP-5 finish first. Ratification endorsed this plan's sequence rather than displacing it. | Ratified, and bounded — see section 15 |
 | D-20 | `RI-OD-001` stops blocking WP-9 and moves to non-blocking | The ratified decision log records `CR-D-007` — "RI is integrated domain; PRIE historical" — as `Canonical`, and the ratified information architecture uses **Relationships** as the public area. That settles the name that enters `v1` contracts, which is the only part `D-18` said was blocking WP-9. What remains open is `OP-02`, the final UI label set, which the canonical package gates on "UI freeze" — frontend scope, independently held by `D-09`, and not a WP-9 contract input. Narrowing the claim to what the evidence supports rather than declaring the whole question closed. | Corrected; `RI-OD-001` reclassified |
 | D-21 | Section 14's headline counts were wrong and are now derived rather than asserted | Section 14 stated "Forty-one decisions are open … Sixteen of them block." Recomputed from the tables themselves: **46 distinct IDs, no duplicates across the three tables**, and **29 of them blocking** at the moment of recomputation — the second table is itself headed *Blocking*, so counting only the first understated it by thirteen. `D-20` then moved `RI-OD-001` out of the blocking table, so the current figures are 46 open and 28 blocking; the total was never affected, only the split. A corrected constant would rot the same way, so `tests/architecture/test_open_decision_counts.py` now derives every figure from the tables and fails when the prose and the tables disagree. Each of its assertions was proven non-vacuous by planting a readable-but-wrong figure and confirming the count comparison fired for the intended reason. This is the third time in this campaign an inherited number proved stale on recomputation. | Corrected, and the mechanism corrected |
-| D-22 | The Frontier NAS MCP Connector feature package is indexed by reference, not mirrored | Ratification brought a third feature package into canonical scope: `MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086` (Drive folder `1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa`, 17 members). `D-16` mirrored the other two because they drive work packages in section 12 and a reviewer needs to check citations against files. This one drives no planned package: the canonical package's own `MCP-OP-001` recommends finishing the WP-4/WP-5 sequence first, and its acceptance crosswalk marks `MCP-AC-02` and `MCP-AC-04` through `MCP-AC-06` `NOT IMPLEMENTED`. Mirroring 17 further artifacts to support no citation would be scope this plan does not need, against `AGENTS.md` section 2. It is routed by exact Drive identity so it cannot be rediscovered as a surprise. | Indexed by reference |
+| D-22 | The Frontier NAS MCP Connector feature package is indexed by reference, not mirrored | Ratification brought a third feature package into canonical scope: `MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086` (Drive folder `1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa`, 17 members by `rclone lsf` on 2026-08-02 — a count no repository artifact attests, since the package is not mirrored). `D-16` mirrored the other two because they drive work packages in section 12 and a reviewer needs to check citations against files. This one drives no planned package: the canonical package's own `MCP-OP-001` recommends finishing the WP-4/WP-5 sequence first, and its acceptance crosswalk marks `MCP-AC-02` and `MCP-AC-04` through `MCP-AC-06` `NOT IMPLEMENTED`. Mirroring 17 further artifacts to support no citation would be scope this plan does not need, against `AGENTS.md` section 2. It is routed by exact Drive identity so it cannot be rediscovered as a surprise. | Indexed by reference |
 
 ## 14. Consolidated open decisions returned to the operator
 
@@ -843,10 +861,13 @@ resolved teaches a reader nothing about how it was resolved.
    shapes rather than merely reorder them. It was asked, and answered, and the
    answer invalidated nothing.
 
-   The operator ratified `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, which
-   supersedes `my-pa vNext` for current whole-product definition and preserves it
-   as source history. Section 15 records the reconciliation in full; `D-19`
-   records the decision.
+   The operator ratified `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006` by
+   direct instruction on 2026-08-02, which supersedes `my-pa vNext` for current
+   whole-product definition and preserves it as source history. The instrument is
+   the instruction, not the package's own self-declared status — `D-19` records
+   why that distinction matters, and section 15 records the reconciliation in
+   full. Only this item is answered; the thirty operator decisions inside the
+   package remain open and are not tracked here.
 
    The part worth keeping is why the fear did not materialise. The concern was
    that ratification would make a broad vision's acceptance criteria binding and
@@ -923,11 +944,32 @@ The package is mirrored byte-exact at [`../specs/canonical-product-definition/`]
 its provenance, verification strength, and two disclosed defects are recorded in
 [`../specs/README.md`](../specs/README.md).
 
+### The instrument, and what it is not
+
+Ratification rests on a **direct operator instruction of 2026-08-02**, recorded
+at `D-19`. It does not rest on anything inside the package, and the distinction
+is load-bearing.
+
+The package never claims to be ratified. It carries a self-declared front-matter
+status, `CURRENT_CANONICAL_PRODUCT_DEFINITION`; its publication receipt grants
+`NOT_GRANTED` on implementation, deployment, production activation and risk
+acceptance; and `15_OPEN_OPERATOR_DECISIONS.md` closes with "This package
+performs none." A newer package asserting a stronger status about itself is
+exactly the evidence `D-17` refused for the predecessor, and treating it as
+sufficient here would have quietly lowered the standard this register set one
+pull request earlier.
+
+Two consequences follow. First, the thirty operator decisions inside the package
+(`OP-01` through `OP-30`) remain open — ratifying the definition did not answer
+them, and `OP-05` in particular still carries only a recommended default.
+Second, the only question section 14 marks answered is its own item 3, the
+ratification question itself. Nothing else was removed from the operator's queue.
+
 ### What ratification binds, and what it does not
 
 | Question | Answer | Evidence |
 |---|---|---|
-| Does it grant implementation authority? | No | `implementation_authority: NOT_GRANTED` in the front matter of all 21 artifacts; `authority.repository_mutation: NOT_PERFORMED` in the manifest |
+| Does it grant implementation authority? | No | `implementation_authority: NOT_GRANTED` in the YAML front matter of all 20 markdown artifacts, and under `authority` in the manifest, which is JSON and has no front matter; the publication receipt records `NOT_GRANTED` for implementation, deployment, production activation and risk acceptance |
 | Does it outrank repository policy? | No | `AGENTS.md` section 1 places indexed Workspace publications at rank 4, below accepted specifications, ADRs, and policy at rank 3 |
 | Does it change the active objective? | No | Its `OP-05` recommends "Complete MCV then explicit transition"; its `R10.1` names finishing repository WP-4 and WP-5 first |
 | Does it supersede the two feature specifications? | No | "Owning Quick Capture, RI, and GoodNotes specs remain current where more detailed and not explicitly reconciled" |
@@ -936,17 +978,19 @@ its provenance, verification strength, and two disclosed defects are recorded in
 
 ### Stage mapping
 
-The canonical roadmap and this plan's work packages are the same sequence under
-two naming schemes. `R0` is the one that matters now, and it is exactly WP-4 plus
-WP-5.
+The canonical roadmap and this plan's work packages run in the same order, but
+they are **not the same scope**. Every "planned" row below is a subset of the
+canonical stage it sits under, because the canonical stages carry frontend and
+continuity surface that section 12 excludes. Reading this table as equivalence
+would overstate what the work packages deliver.
 
 | Canonical stage | This plan | Status |
 |---|---|---|
-| `R0` complete active read-only MCV | WP-4 + WP-5 | Next, and unchanged by ratification |
-| `R1` product contracts / frontend proof | Not planned — held by `D-09` and `OP-06` | Deferred by both documents |
-| `R2` product-owned Capture source | WP-6 | Planned |
-| `R4` proposal / review / promotion | WP-7 + WP-8 | Planned |
-| `R5` relationship and project continuity | WP-9 | Planned |
+| `R0` complete active read-only MCV | WP-4 + WP-5 | Next, and unchanged by ratification. The closest to a true match |
+| `R1` product contracts / frontend proof | Not planned | **Split.** Its frontend half is held by `D-09` and `OP-06`; its contracts half — canonical object, state, error, span, Situation, Frame, Trace, Review and Receipt contracts — is simply unplanned, and no hold explains that |
+| `R2` product-owned Capture source | WP-6 | **Subset.** `R2` also requires responsive PWA, global and contextual launch, and capture modes; WP-6 is frontend-free and builds none of them |
+| `R4` proposal / review / promotion | WP-7 + WP-8 | **Subset.** `D-14` excludes the model-assisted extraction stages `R4` assumes |
+| `R5` relationship and project continuity | WP-9 | **Subset**, and the largest gap. `R5` adds commitments, briefings, Situations, Frame, Trace and Today/Pulse gates; WP-9 builds identity and read-only profiles over fixtures per `D-13` |
 | `R3` offline Capture, `R6`–`R9` | Not planned | Beyond promoted scope |
 | `R10` Frontier connector | Not planned | `D-22`; `MCP-OP-001` sequences it after `R0` |
 
@@ -980,6 +1024,30 @@ say the same thing.
    manifest bind. **Resolution: the front matter and manifest binding is
    authoritative; the discrepancy is disclosed in `../specs/README.md` and
    mirrored as authored rather than silently corrected.**
+
+5. **The section 12 object-model mapping did not survive the change of target
+   document, and the first draft of this reconciliation missed it.** The mapping
+   table was written against `my-pa vNext`. The first version of this change
+   relabelled its column header and left every target unchanged, which asserted
+   agreement that had not been checked — and did so in the one passage the same
+   change had just described as consequential. Independent review caught it.
+
+   Re-derived against `09_CANONICAL_OBJECT_AND_DOMAIN_MODEL.md`, three claims
+   were false and one was misdirected. `Entity` does not exist in the ratified
+   model; `Person` and `Organization` are first-class. `Capture` and
+   `CaptureVersion` are defined under those exact names rather than as a generic
+   "Source Record". `ReviewCase`, `Receipt`, `Conversation` and `Affiliation` are
+   likewise identity mappings. And the Assertion trust ladder the table gave WP-7
+   as an instruction — Confirmed, Strongly Supported, Probable, Possible,
+   Unverified — appears nowhere in the ratified package.
+
+   **Resolution: the table is re-derived in section 12, the corrections are
+   stated in it rather than only here, and WP-7's state vocabulary is rebound to
+   the ratified `Proposal` and `Assertion` state sets.** This is recorded as a
+   divergence rather than quietly fixed because it is the exact failure this
+   section warns about in its opening paragraph — reaching "the plan already
+   agreed with it" without checking — and the warning is worth less if the
+   instance is hidden.
 
 ### Correction to the section 12 sequence table
 
@@ -1029,7 +1097,8 @@ work. Ratification widened none of these.
 
 This reconciliation binds `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`
 version 2.1 at package folder `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`, verified
-21/21 by hash on 2026-08-02, against this plan at the commit that introduces this
+21/21 by hash against three independent in-package sources on 2026-08-02,
+against this plan at the commit that introduces this
 section. A new package version, a revision to any mirrored artifact, or an
 operator decision on `MCP-OP-001` invalidates the affected rows above and
 requires re-reconciliation. It does not invalidate WP-4, whose acceptance

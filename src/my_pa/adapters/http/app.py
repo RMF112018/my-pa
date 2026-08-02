@@ -88,17 +88,16 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import Response
 from starlette.routing import Route
 
-from my_pa.adapters.normalization import normalize
+from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.errors import ApplicationError, InvalidRequestError, problem_detail
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.principal import Principal
-from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.source.registry import issue_identifier
 
-__all__ = ["MAX_REQUEST_BYTES", "PATH_TEMPLATE", "create_http_app"]
+__all__ = ["PATH_TEMPLATE", "create_http_app"]
 
 #: Where a capability is addressed. The name is a path segment rather than a
 #: field, so that the capability a request is routed to and the capability it is
@@ -107,34 +106,6 @@ PATH_TEMPLATE: Final = "/v1/{capability}"
 
 #: The one media type this transport reads and writes.
 _JSON: Final = "application/json"
-
-#: An identifier in a JSON array: at most 72 characters, which is the bound
-#: `domain.common.identifiers` enforces, plus the two quotes and the comma that
-#: carry it. Restated rather than imported because that bound is private to the
-#: module that enforces it — and checked rather than trusted, by
-#: `test_the_request_ceiling_admits_the_largest_request_the_contract_allows`,
-#: which builds identifiers at the real maximum and measures the result.
-_IDENTIFIER_JSON_BYTES: Final = 75
-
-#: Everything a request carries that is not `sources.enroll`'s object list. An
-#: enrollment may name 32 media types and neither the domain nor the contract
-#: bounds one's length, so this is where a media type is bounded, at 128 bytes
-#: each. The rest is small and enumerable: a request id and an idempotency key
-#: at 128 characters each, a search query and a cursor at 512 characters and at
-#: most four UTF-8 bytes per character, and a dozen short scalars. Eight
-#: kibibytes covers all of it several times over.
-_ENVELOPE_BYTES: Final = 32 * 128 + 8 * 1024
-
-#: Most bytes one request body may carry, derived from the largest request the
-#: contract can express rather than chosen as a round number. `sources.enroll`
-#: at its domain ceiling is that request: `MAX_ENROLLMENT_ITEMS` object
-#: identifiers, and everything else beside them.
-#:
-#: A caller can exceed this — `RequestMetadata.scope` takes identifier lists the
-#: contract does not bound — and exceeding it is refused rather than truncated.
-#: The declared scope is correlation input that authorization does not read, so
-#: nothing is lost by bounding it here.
-MAX_REQUEST_BYTES: Final = MAX_ENROLLMENT_ITEMS * _IDENTIFIER_JSON_BYTES + _ENVELOPE_BYTES
 
 #: How long a client has to deliver the body it announced, before the request is
 #: refused and the worker thread released.

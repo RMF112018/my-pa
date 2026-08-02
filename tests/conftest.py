@@ -71,7 +71,7 @@ from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind
-from my_pa.domain.common.provenance import TrustLevel
+from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.identity.operation import Capability
@@ -505,6 +505,34 @@ def build_service(
         limits=limits,
         clock=lambda: WHEN,
     )
+
+
+def staged_record(scene: Scene, *, text: str) -> KnowledgeRecord:
+    """One stored record inside `scene`'s grant, so `knowledge.read` has an answer.
+
+    Beside `staged_search` because it is the same kind of thing: what a
+    persistence port would have returned, staged so a use case can be driven
+    without a database. `text` is the caller's, because a test about redaction
+    needs to plant its own marker in it.
+    """
+    record = KnowledgeRecord(
+        knowledge_id=issue_identifier(IdKind.KNOWLEDGE),
+        enrollment_id=scene.enrollment.enrollment_id,
+        media_type="text/markdown",
+        text=text,
+        is_truncated=False,
+        provenance=Provenance(
+            source_id=scene.source.source_id,
+            source_object_id=scene.markdown.source_object_id,
+            version_id=scene.markdown.version_id,
+            extractor="my_pa.text",
+            extractor_version="1",
+            observed_at=WHEN,
+            processed_at=WHEN,
+        ),
+    )
+    scene.world.records[(scene.enrollment.enrollment_id, record.knowledge_id)] = record
+    return record
 
 
 def staged_search(scene: Scene) -> SearchOutcome:

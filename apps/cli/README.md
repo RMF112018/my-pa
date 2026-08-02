@@ -1,5 +1,34 @@
 # Operator CLI
 
+Two programs, two planes. They share this directory because
+`docs/architecture/module-boundaries.md` section 5.10 puts operator commands
+here, and they share nothing else — no options, no runtime, no output shape.
+A migration phase is not a capability.
+
+## `invoke.py` — one public capability
+
+```text
+python apps/cli/invoke.py <capability> \
+    [--request-id ID] [--purpose PURPOSE] [--principal-id ID] \
+    [--requested-at TIME] [--contract-version V] \
+    [--scope-source-id ID]... [--scope-enrollment-id ID]... \
+    [--payload JSON]
+```
+
+The envelope is options and the capability's own fields are one JSON object.
+The answer is the response envelope on standard output, one line, always;
+standard error stays empty. Exit `0` when the envelope carries a result and `1`
+when it carries an error.
+
+**It is not a privileged bypass.** It composes the same runtime the gateway
+composes, is handed the same principal, goes through the same authorization
+path, and offers no option that could change any of that. `--principal-id` is
+correlation input the application does not trust, exactly as it is over HTTP.
+[`ops/runbooks/mcp-and-cli-operations.md`](/ops/runbooks/mcp-and-cli-operations.md)
+covers running it.
+
+## `migration.py` — the migration control plane
+
 `migration.py` drives the legacy-SQLite to PostgreSQL migration.
 
 ```text

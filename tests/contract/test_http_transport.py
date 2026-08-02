@@ -48,9 +48,9 @@ from tests.conftest import (
 )
 from tests.wire import Wire, serve
 
-from my_pa.adapters.http import MAX_REQUEST_BYTES, create_http_app
+from my_pa.adapters.http import create_http_app
 from my_pa.adapters.http.app import _STATUS
-from my_pa.adapters.normalization import normalize
+from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
     Command,
     EnrollSource,
@@ -67,12 +67,11 @@ from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
-from my_pa.domain.common.identifiers import IdKind, make_identifier
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.source.registry import issue_identifier
 
 ALL_CAPABILITIES = list(Capability)
@@ -483,37 +482,13 @@ def test_an_unknown_path_is_404_and_a_wrong_method_is_405(scene: Scene, wire: Wi
 
 
 # ---- the request ceiling -----------------------------------------------------
-
-
-def test_the_request_ceiling_admits_the_largest_request_the_contract_allows() -> None:
-    """The derivation, checked against real values rather than trusted.
-
-    `MAX_REQUEST_BYTES` restates a bound that is private to
-    `domain.common.identifiers`, and a restated constant is a claim. This builds
-    an enrollment at the domain's own ceiling — the largest request the contract
-    can express — and requires it to fit.
-    """
-    longest = make_identifier(IdKind.SOURCE_OBJECT, "a" * 64)
-    document = {
-        "request_id": "r" * 128,
-        "purpose": Purpose.BOUNDED_ENROLLMENT.value,
-        "principal_id": issue_identifier(IdKind.PRINCIPAL),
-        "requested_at": "2026-08-02T12:00:00Z",
-        "payload": {
-            "source_id": issue_identifier(IdKind.SOURCE),
-            "idempotency_key": "k" * 128,
-            "media_types": [f"application/{'x' * 100}" for _ in range(32)],
-            "object_ids": [longest for _ in range(MAX_ENROLLMENT_ITEMS)],
-        },
-    }
-    encoded = len(json.dumps(document).encode())
-    assert encoded <= MAX_REQUEST_BYTES, (
-        f"the largest request the contract allows is {encoded} bytes and the "
-        f"transport admits {MAX_REQUEST_BYTES}"
-    )
-    # And not wastefully larger: a ceiling far above the worst case would bound
-    # nothing in practice.
-    assert 2 * encoded > MAX_REQUEST_BYTES
+#
+# The derivation of `MAX_REQUEST_BYTES` moved with the constant, to
+# `tests/contract/test_transport_parity.py`: WP-4B2b relocated it out of this
+# module into `adapters/normalization.py`, because it is derived from the
+# largest request the *contract* can express and is enforced by all three
+# transports. What stays here is HTTP's own half — that an oversized body is
+# refused on the declared length, above.
 
 
 def test_the_recording_service_records_what_it_returns(

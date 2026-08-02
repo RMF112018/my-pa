@@ -2,6 +2,13 @@
 
 Running, calling, and stopping the `my-pa` HTTP gateway.
 
+The same composition root also serves the Model Context Protocol on stdio
+(`apps/gateway.py mcp`), and there is a third transport in `apps/cli/invoke.py`.
+Both are covered by
+[`mcp-and-cli-operations.md`](mcp-and-cli-operations.md); everything below about
+configuration, statuses, connections, and the audit trail applies to all three,
+because they are one composition and differ only in protocol.
+
 Every command below was executed against a **disposable** database
 (`my_pa_gateway_runbook_test`, created at head and dropped for the purpose) on
 2026-08-02. Nothing here was run against the canonical `my_pa` database.
@@ -57,6 +64,9 @@ enforced is not a maximum.
 
 # Somewhere else.
 .venv/bin/python apps/gateway.py run --port 9000
+
+# The same capabilities over MCP on stdio; see mcp-and-cli-operations.md.
+.venv/bin/python apps/gateway.py mcp
 ```
 
 Startup prints two lines and nothing more. There is no access log and no

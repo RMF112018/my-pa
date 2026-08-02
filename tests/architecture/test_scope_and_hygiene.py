@@ -31,6 +31,22 @@ than the truth in both cases:
   under `src/` may. That is why the declared-set check and the import check now
   read two different lists rather than one.
 
+**The MCP SDK entered scope with WP-4B2b and is confined the same way Starlette
+is**, not admitted. `mcp` moved off the prohibited list and onto the confined
+one, so `adapters/mcp` may import it and nothing else may — an application or
+infrastructure module that reached for it would have taken a transport concern,
+and the layer rules in `test_dependency_direction.py` are about direction rather
+than about libraries. Deleting it from the prohibited list without adding it to
+the confined one would have been admitting it package-wide, which is the
+difference this file exists to keep.
+
+Nothing was declared for the SDK's own transitive surface, and that is
+deliberate rather than an oversight: `mcp` pulls an HTTP client, `cryptography`,
+`pyjwt`, `jsonschema` and an OpenTelemetry API for the OAuth and streamable-HTTP
+surfaces `D-30` refuses. They are installed and they stay prohibited to import,
+so the guard below is what keeps "we do not use these" a checked claim rather
+than an intention. `httpx` is already on the list for exactly this reason.
+
 FastAPI stays prohibited. `D-25` chose Starlette precisely so that HTTP would
 not acquire a second validation layer that the MCP adapter has no counterpart
 for, and a dependency admitted "just for one route" is how that decision would
@@ -61,7 +77,6 @@ PROHIBITED_IMPORT_ROOTS = frozenset(
         "asyncpg",
         "redis",
         "celery",
-        "mcp",
         "anthropic",
         "openai",
         "httpx",
@@ -102,7 +117,7 @@ def _imports(path: Path) -> set[str]:
 #: Dependencies the package may import in exactly one subtree, and the subtree.
 #: See the module docstring: a transport library is not "in scope", it is in the
 #: transport.
-CONFINED_IMPORT_ROOTS = {"starlette": "adapters/http"}
+CONFINED_IMPORT_ROOTS = {"starlette": "adapters/http", "mcp": "adapters/mcp"}
 
 
 @pytest.mark.parametrize("path", _modules(), ids=lambda p: str(p.name))
@@ -144,7 +159,7 @@ def test_declared_runtime_dependencies_are_the_agreed_set() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     runtime = data["project"]["dependencies"]
     roots = {re.split(r"[><=!~\[]", item)[0].strip().lower() for item in runtime}
-    assert roots == {"pydantic", "sqlalchemy", "psycopg", "alembic", "starlette", "uvicorn"}
+    assert roots == {"pydantic", "sqlalchemy", "psycopg", "alembic", "starlette", "uvicorn", "mcp"}
 
 
 def test_every_runtime_dependency_declares_a_range() -> None:

@@ -22,7 +22,15 @@ classifiers = [
 # The `dependency-floor` CI job installs the declared floor and runs the suite
 # against it, so the lower bound is a checked claim rather than a wish.
 #
-#   pydantic          contract and settings validation.
+#   pydantic          contract and settings validation. The floor was 2.7 and is
+#                     now 2.12, and the reason is not a behaviour this code
+#                     needs: `mcp` 2.0.0's own metadata declares
+#                     `pydantic>=2.12.0`, so a build installing the declared
+#                     minimum of both is a build `pip check` reports as broken.
+#                     The floor job runs exactly that check, so leaving 2.7
+#                     declared would have been declaring a minimum that does not
+#                     resolve. Raised to the number the dependency graph
+#                     actually requires rather than to a round one.
 #   SQLAlchemy        Core engine, connection pool, and dialect. The floor is
 #                     2.0.20, not 2.0: `sqlalchemy.dialects.postgresql.insert`
 #                     was untyped (`def insert(table):`) through 2.0.10 and only
@@ -80,13 +88,59 @@ classifiers = [
 #                     surface: it binds one loopback socket. Removal path: any
 #                     other ASGI server, since nothing in the transport depends
 #                     on this one.
+#                     **The declared floor is 0.31.1, not 0.29, and the reason
+#                     is no longer this transport's.** WP-4B2b added `mcp`,
+#                     whose own metadata declares `uvicorn>=0.31.1` for every
+#                     platform this repository runs on, so `0.29` and `mcp 2.0`
+#                     do not resolve together — the `dependency-floor` job fails
+#                     `ResolutionImpossible` before it installs anything.
+#                     Observed while building the floor environment for this
+#                     change. The behavioural derivation above is unchanged and
+#                     still holds: 0.31.1 is above 0.29, so the signal
+#                     re-raise this build depends on is present. What changed is
+#                     which constraint binds.
+#   mcp               the official Model Context Protocol SDK: JSON-RPC framing,
+#                     the `initialize` handshake and protocol-version
+#                     negotiation, `tools/list`, `tools/call`, and the stdio
+#                     transport (`D-26`; stdio only, `D-30`). Used only by
+#                     `adapters/mcp`, which `tests/architecture` confines the
+#                     way it confines Starlette. `AGENTS.md` section 2 admits it
+#                     because conformance to a specification this repository
+#                     does not own is what the standard library cannot
+#                     reasonably do: hand-rolling the framing and the handshake
+#                     risks drifting from the spec silently, and a client is the
+#                     only thing that would notice.
+#                     The floor is 2.0, and it is derived from the API this
+#                     adapter uses rather than from a release date.
+#                     `create_mcp_server` registers its handlers through
+#                     `Server(name, on_list_tools=..., on_call_tool=...)`, which
+#                     is 2.0's constructor-based registration; 1.29.0 — the last
+#                     1.x — has no such keyword and offers only the decorator
+#                     form, so the adapter raises `TypeError` at composition
+#                     against anything older. Read off the 1.29.0 and 2.0.0
+#                     wheels' own `mcp/server/lowlevel/server.py`, and confirmed
+#                     by installing 1.29.0 and importing the adapter.
+#                     Maintenance cost is the honest problem with this one and
+#                     is stated rather than smoothed over: the SDK's own
+#                     requirements pull in an HTTP client, `cryptography`,
+#                     `pyjwt`, `jsonschema`, `python-multipart`, `sse-starlette`
+#                     and an OpenTelemetry API, none of which this transport
+#                     uses, because they serve the OAuth and streamable-HTTP
+#                     surfaces `D-30` refuses. There is no extra that omits
+#                     them. Security surface: what this build *runs* is the
+#                     JSON-RPC framing over a pipe — no socket is opened, no
+#                     credential is read, and the network transports are never
+#                     imported. Removal path: a hand-written JSON-RPC loop over
+#                     stdio, which would mean owning protocol conformance for a
+#                     specification that changes without us.
 dependencies = [
-  "pydantic>=2.7,<3",
+  "pydantic>=2.12,<3",
   "SQLAlchemy>=2.0.20,<3",
   "psycopg[binary]>=3.2,<4",
   "alembic>=1.13,<2",
   "starlette>=0.31,<1",
-  "uvicorn>=0.29,<1",
+  "uvicorn>=0.31.1,<1",
+  "mcp>=2.0,<3",
 ]
 
 [project.optional-dependencies]

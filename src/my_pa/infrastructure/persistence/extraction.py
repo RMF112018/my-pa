@@ -90,10 +90,14 @@ written here rather than argued at each occurrence.
 *A condition that restricts rows or branches on derived state, and that no
 arrangement of rows can make decide anything, is removed.* It is not defence in
 depth; it is a claim nothing checks, and this package has now been wrong in that
-direction more than once. The rule is why the boundary is absent from the two
-precedence subqueries in `coverage_for`, why `persistence.search` no longer tests
-`eligible > 0` before claiming complete coverage, and why `match_statement` no
-longer filters on `status`. The single exception is a condition the type checker
+direction more than once. The rule is why the boundary is absent from
+`_quarantined_objects` and `_unsupported_objects`, why `persistence.search` no
+longer tests `eligible > 0` before claiming complete coverage, and why it no
+longer tests that a truncated page is non-empty before issuing a cursor. It is
+about a condition written at a site to decide there, which is why the `status`
+test inside `extracted_text_in_scope` is not one: that list is written once and
+used twice, `status` decides at one of the two uses, and dropping it from the
+other would mean two lists again. The single exception is a condition the type checker
 requires in order to narrow a value: `record_outcome`'s missing-reason check is
 one, and it is written as the narrowing it is and says so where it stands.
 
@@ -135,7 +139,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ColumnElement, Connection, Text, any_, func, literal, or_, select
+from sqlalchemy import ColumnElement, Connection, Select, Text, any_, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -167,6 +171,7 @@ __all__ = [
     "authorized_media_type",
     "authorized_object",
     "coverage_for",
+    "extracted_text_in_scope",
     "quarantine_object",
     "record_limitation",
     "record_outcome",
@@ -311,20 +316,36 @@ def authorized_media_type(
     `application/pdf` matches nothing here, and that is the honest answer while
     `P00-OD-003` is open rather than a case to special-case.
 
-    **No `correlate_except`, and that is measured rather than an oversight.**
-    `authorized_object` needs one and says why at length: it names two tables, so
-    an enclosing statement that selects from either can capture it and the
-    predicate stops answering about its argument. This names one. SQLAlchemy will
-    not correlate away a subquery's only `FROM` element — it would leave the
-    subquery with nothing to select from — so `enrollments` is resolved here
-    whatever encloses this, and adding the call changes not one character of the
-    compiled SQL. It was compiled both ways against an enclosing statement over
-    `enrollments`, which is the case that could distinguish them, and the two are
-    byte-identical;
-    `test_the_content_type_predicate_resolves_its_own_table_whatever_encloses_it`
-    asserts the property the call would have bought. Writing the call anyway
-    would be a claim nothing checks, which is the rule this module states once.
-    A second table in this predicate would change that, and would need it.
+    `correlate_except`, for the same reason `authorized_object` has one, and the
+    argument is why. This subquery writes one table, but the column handed to it
+    brings another: both read call sites pass `extractions.media_type`, so the
+    subquery's `FROM` is `enrollments` and `extractions`, and correlating the
+    second away to the enclosing statement is what makes the predicate answer
+    about the row being counted or returned. The one that must *not* be
+    correlated away is `enrollments`, and whether SQLAlchemy does it depends on
+    what encloses the predicate rather than on how many tables it names. Compiled
+    in all four combinations of argument and enclosing statement:
+
+    * a literal argument, or `extractions.media_type` inside a statement that
+      selects from `extractions` — which is `coverage_for`'s shape and
+      `match_statement`'s — and the SQL is identical with the call and without
+      it, so neither shipped call site can distinguish them today;
+    * `extractions.media_type` inside a statement that selects from
+      `enrollments` and not from `extractions`, and the two differ. Without the
+      call SQLAlchemy correlates `enrollments` away, leaving `FROM
+      knowledge.extractions` alone, and `enrollments.enrollment_id = …` then
+      binds the *enclosing* row — the predicate stops answering about the
+      enrollment it was given, exactly as `authorized_object`'s docstring warns.
+
+    So this is the case the call is for, and it is what
+    `test_the_content_type_predicate_answers_about_its_argument_and_not_the_enclosing_row`
+    builds, with rows rather than with compiled text: uncorrelated the predicate
+    is a constant for the whole statement and every enrollment of the source is
+    returned; correlated it collapses to the one the argument names. The claim
+    that stood here before — that this predicate names one table, that
+    SQLAlchemy will not correlate away a subquery's only `FROM`, and that adding
+    the call changes not one character — was true of the argument form the test
+    passed and false of the form both call sites pass.
     """
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     return (
@@ -333,7 +354,107 @@ def authorized_media_type(
             enrollments.c.enrollment_id == enrollment_id,
             media_type == any_(enrollments.c.media_types),
         )
+        .correlate_except(enrollments)
         .exists()
+    )
+
+
+def _quarantined_objects(enrollment_id: str) -> Select[Any]:
+    """The objects `enrollment_id` holds a quarantine for, as a subquery.
+
+    Never executed on its own; it becomes a `NOT IN (SELECT …)` inside a count or
+    a page that has to exclude what a quarantine outranks.
+
+    Deliberately without the authorization boundary, which it carried until that
+    was shown to be unreachable. Every statement that subtracts it already applies
+    `authorized_object` to `extractions.source_object_id` — the same column the
+    exclusion compares — so the only objects it can decide anything about are
+    authorized ones, and `authorized_object` is a function of the object and the
+    enrollment alone. An object authorized for the extraction is therefore
+    authorized for its quarantine too, and the case the boundary here was written
+    for — an unauthorized quarantine suppressing an authorized extraction of the
+    same object — cannot exist. Both columns are `NOT NULL`, so `NOT IN` cannot go
+    three-valued and swallow the caller either.
+    """
+    return select(quarantine_records.c.source_object_id).where(
+        quarantine_records.c.enrollment_id == enrollment_id,
+    )
+
+
+def _unsupported_objects(enrollment_id: str) -> Select[Any]:
+    """The objects `enrollment_id` recorded an unsupported outcome for, as a subquery.
+
+    The second half of the precedence, on the same terms as `_quarantined_objects`
+    and without the boundary for the same reason.
+    """
+    return select(extractions.c.source_object_id).where(
+        extractions.c.enrollment_id == enrollment_id,
+        extractions.c.status == ExtractionStatus.UNSUPPORTED.value,
+    )
+
+
+def extracted_text_in_scope(enrollment_id: str) -> tuple[ColumnElement[bool], ...]:
+    """Which rows of `extractions` hold text that `enrollment_id`'s grant covers.
+
+    One list, used by `coverage_for`'s `processed` count and by
+    `persistence.search`'s `match_statement`. The two are the same set of rows
+    because they are built from this call and not because two predicate lists
+    were compared and found to agree — which is what was written here for six
+    review rounds and was false for two of the six conditions. A page of text
+    beside a coverage report that says the scope holds none of it is the exact
+    contradiction section 9.7 makes this system's reason for existing, and it is
+    reachable whenever the two lists differ by anything.
+
+    The six, and what each decides:
+
+    * `enrollment_id`, which is not authorization — it says which grant a row was
+      written under — and is not removable either, because two enrollments over
+      one source can authorize the same object and neither should read the
+      other's rows;
+      `test_a_search_returns_only_the_rows_its_own_enrollment_wrote` holds all of
+      that constant except the enrollment.
+    * `status`, which decides in the count and cannot decide in the page:
+      `text_exists_exactly_when_something_was_extracted` makes `text` null for
+      every other status, `to_tsvector` of null is null, and `null @@ query` is
+      null, so `match_statement`'s match predicate already excludes those rows.
+      It stays because this is one list rather than two asserted to be equal, and
+      dropping a condition from one side is precisely the divergence this exists
+      to prevent. That is the edge of this module's rule about conditions nothing
+      can exercise: the rule is about a condition written at a site to decide
+      there, and this one is written once, where it decides —
+      `test_a_row_filed_in_extractions_as_quarantined_is_not_counted_as_processed`
+      is what fails if it goes.
+    * `authorized_object` and `authorized_media_type`, the two dimensions of what
+      the enrollment authorizes, applied to the object and to the stored text.
+    * the two precedence exclusions. An object with any quarantine row is
+      quarantined and an object with an unsupported row is unsupported, and
+      neither is processed however successfully another version of it was read —
+      `INV-PKL-007` and `ABUSE-PKL-008` are why a later success must never hide a
+      quarantine. Applying them here rather than only to the count is what stops
+      a search from returning the text of an object the coverage beside it
+      reports as stopped.
+
+    The cost is `coverage_for`'s and is unchanged by sharing it: an object
+    quarantined at one version and extracted at a later one is reported
+    quarantined and its text is not returned, because nothing in these counts
+    orders versions or reads the quarantine's review state. That understates
+    coverage, which is the direction this can afford.
+
+    What is *not* shared, and cannot be: `coverage_for` counts distinct objects
+    and a search returns rows, so an object with two authorized extracted
+    versions is one processed object and two matches. The two agree about which
+    rows are in scope, which is what makes `processed == 0` and a non-empty page
+    impossible; they do not agree about how many things that is, and no
+    arithmetic here claims they do.
+    """
+    validate_identifier(enrollment_id, IdKind.ENROLLMENT)
+    return (
+        extractions.c.enrollment_id == enrollment_id,
+        extractions.c.status == ExtractionStatus.EXTRACTED.value,
+        authorized_object(extractions.c.source_object_id, enrollment_id=enrollment_id),
+        authorized_media_type(extractions.c.media_type, enrollment_id=enrollment_id),
+        extractions.c.source_object_id.not_in(_quarantined_objects(enrollment_id)),
+        extractions.c.source_object_id.not_in(_unsupported_objects(enrollment_id)),
     )
 
 
@@ -637,16 +758,23 @@ def coverage_for(
     in.
 
     `processed` carries the content dimension as well, and only `processed`
-    does. It is the count of objects whose *text* was read and stored, so an
-    extracted row of a media type the enrollment's allowlist does not hold is not
-    coverage of that enrollment either, and it is not counted — it stays
-    uncounted rather than moving to another count, which leaves the result
-    partial in the same safe direction. `unsupported` and `quarantined` count
-    objects whose content was never stored and are deliberately not restricted
-    this way; the module docstring gives the reason for each, and
-    `test_an_unsupported_object_is_counted_and_not_searchable` and
-    `test_an_object_quarantined_and_recorded_unsupported_is_counted_once` are
-    what would fail if either acquired the restriction.
+    does — it is `extracted_text_in_scope`, which is also what a search matches
+    within, so the two describe one set of rows. It is the count of objects whose
+    *text* was read and stored, so an extracted row of a media type the
+    enrollment's allowlist does not hold is not coverage of that enrollment
+    either, and it is not counted — it stays uncounted rather than moving to
+    another count, which leaves the result partial in the same safe direction.
+
+    `unsupported` and `quarantined` count objects whose content was never stored
+    and are deliberately not restricted this way, and the two halves of that are
+    not the same kind of decision. `unsupported` *could* carry the restriction
+    and must not: `test_an_unsupported_object_is_counted_and_not_searchable`
+    fails if it acquires one, because the count would erase the report of exactly
+    the media types the allowlist excludes. `quarantined` cannot carry it at all
+    — a quarantine stores no media type, so there is nothing to compare, as this
+    module's docstring says and `quarantine_object` says again. No test proves
+    that half, because the change it would guard against cannot be written; the
+    schema is what holds it.
 
     Counted for the whole enrollment rather than for one pass, because that is
     the scope the grant defines and an outcome does not stop being true when the
@@ -702,67 +830,30 @@ def coverage_for(
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     moment = ensure_utc(observed_at)
 
-    # The authorization boundary, evaluated per object and applied to every
-    # count below. Each is built separately because each restricts a different
-    # table's `source_object_id`.
-    quarantine_is_authorized = authorized_object(
-        quarantine_records.c.source_object_id, enrollment_id=enrollment_id
-    )
-    extraction_is_authorized = authorized_object(
-        extractions.c.source_object_id, enrollment_id=enrollment_id
-    )
-    # The content dimension, applied to the one count that counts stored text.
-    text_is_authorized = authorized_media_type(
-        extractions.c.media_type, enrollment_id=enrollment_id
-    )
-
-    # The two subqueries are the precedence, written once and subtracted from
-    # the counts that rank below them. Neither is executed on its own; each
-    # becomes a `NOT IN (SELECT …)` inside a count that has to exclude it.
-    #
-    # Deliberately without the boundary, which they carried until it was shown to
-    # be unreachable. Both are only ever subtracted from a count that already
-    # applies `extraction_is_authorized` to `extractions.source_object_id` — the
-    # same column the exclusion compares — so the only objects the exclusion can
-    # decide anything about are authorized ones, and `authorized_object` is a
-    # function of the object and the enrollment alone. An object authorized for
-    # the extraction is therefore authorized for its quarantine too, and the case
-    # the boundary here was written for — an unauthorized quarantine suppressing
-    # an authorized extraction of the same object — cannot exist. Both columns
-    # are `NOT NULL`, so `NOT IN` cannot go three-valued and swallow the count
-    # either. A predicate no arrangement of rows can exercise is not defence in
-    # depth; it is a claim nothing checks, and this module has now been wrong in
-    # that direction more than once.
-    quarantined_objects = select(quarantine_records.c.source_object_id).where(
-        quarantine_records.c.enrollment_id == enrollment_id,
-    )
-    unsupported_objects = select(extractions.c.source_object_id).where(
-        extractions.c.enrollment_id == enrollment_id,
-        extractions.c.status == ExtractionStatus.UNSUPPORTED.value,
-    )
-
     quarantined = connection.execute(
         select(func.count(func.distinct(quarantine_records.c.source_object_id))).where(
             quarantine_records.c.enrollment_id == enrollment_id,
-            quarantine_is_authorized,
+            # The object dimension of the boundary, on the quarantine ledger's own
+            # column. There is no content dimension here and there cannot be: a
+            # quarantine stores no media type.
+            authorized_object(quarantine_records.c.source_object_id, enrollment_id=enrollment_id),
         )
     ).scalar_one()
     unsupported = connection.execute(
         select(func.count(func.distinct(extractions.c.source_object_id))).where(
             extractions.c.enrollment_id == enrollment_id,
             extractions.c.status == ExtractionStatus.UNSUPPORTED.value,
-            extraction_is_authorized,
-            extractions.c.source_object_id.not_in(quarantined_objects),
+            authorized_object(extractions.c.source_object_id, enrollment_id=enrollment_id),
+            extractions.c.source_object_id.not_in(_quarantined_objects(enrollment_id)),
         )
     ).scalar_one()
+    # The one count of stored text, and the one place its scope is defined.
+    # `extracted_text_in_scope` is that definition and `persistence.search` uses
+    # the same call, which is what makes this count and the page beside it
+    # describe one set of rows.
     processed = connection.execute(
         select(func.count(func.distinct(extractions.c.source_object_id))).where(
-            extractions.c.enrollment_id == enrollment_id,
-            extractions.c.status == ExtractionStatus.EXTRACTED.value,
-            extraction_is_authorized,
-            text_is_authorized,
-            extractions.c.source_object_id.not_in(quarantined_objects),
-            extractions.c.source_object_id.not_in(unsupported_objects),
+            *extracted_text_in_scope(enrollment_id)
         )
     ).scalar_one()
     limitations = tuple(

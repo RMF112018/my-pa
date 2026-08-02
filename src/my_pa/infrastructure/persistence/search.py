@@ -87,10 +87,11 @@ What is not claimed: that every search uses the index. A search also filters on
 `enrollment_id`, and where that is the more selective condition the planner will
 use `extractions_by_enrollment` — whose leading column it is — and apply the
 match as a filter, which is the right plan and is what it does at test-fixture
-scale. That index's second column is `status`, which `match_statement` no longer
-filters on and `coverage_for` does; `match_statement` says why. This module
-also sets no statement timeout. The index removes the sequential scan as the
-only possibility; it does not bound what a query can cost.
+scale. That index's second column is `status`, and both this module and
+`coverage_for` filter on it, because both take their scope from the one
+definition `match_statement` names. This module also sets no statement timeout.
+The index removes the sequential scan as the only possibility; it does not bound
+what a query can cost.
 
 Also not claimed, and this is the largest of them: that what a search returns for
 a root-selector enrollment is bounded by that enrollment's root. It is bounded by
@@ -122,15 +123,18 @@ carries the statement and its bound `enrollment_id`. That is a schema fault
 rather than a query fault and no caller's text reaches it, but it is a real hole
 in the redaction and it is carried into WP-4 rather than described as closed.
 
-**What a search returns is bounded by the enrollment's content-type allowlist.**
-An enrollment is a selector and an allowlist, and this module read neither until
-recently: it filtered on `enrollment_id`, which is what a row was written
-against rather than what the grant covers. `match_statement` now applies both
-halves — `authorized_object` and `authorized_media_type` — and they are the same
-two predicates `coverage_for`'s `processed` count applies, so the page and the
-coverage beside it cannot disagree about what is in scope. An enrollment whose
-allowlist names no type this extractor can read matches nothing and reports
-`processed = 0`, which is the honest answer rather than a case to special-case.
+**What a search may match is one shared definition, not a list written twice.**
+`match_statement`'s scope is `extraction.extracted_text_in_scope`, and so is
+`coverage_for`'s `processed` count: one call, two uses. That is deliberately
+structural. This module filtered on `enrollment_id` alone until recently, then
+grew a list of conditions beside the coverage side's and asserted the two were
+equal — and they were not, in two of six conditions, so a search could return a
+document's text under an envelope reporting that the scope held none. A shared
+definition is the only form of that claim nothing has to re-check.
+
+An enrollment whose allowlist names no type this extractor can read matches
+nothing and reports `processed = 0`, which is the honest answer rather than a
+case to special-case.
 
 **`pg_trgm` is installed and deliberately unused.** `AGENTS.md` section 4 names
 it alongside full-text search as an initial mechanism, and it answers a different
@@ -247,9 +251,8 @@ from my_pa.domain.search.query import (
     rank_category,
 )
 from my_pa.infrastructure.persistence.extraction import (
-    authorized_media_type,
-    authorized_object,
     coverage_for,
+    extracted_text_in_scope,
 )
 from my_pa.infrastructure.persistence.tables import (
     coverage_limitations,
@@ -337,6 +340,23 @@ RANK_NORMALIZATION: Final = 32
 #: default wraps matches in `<b>` tags, and a snippet carrying markup is markup
 #: this system injected into whatever renders it. `MaxFragments=1` keeps one
 #: window rather than a stitched-together set with separators in it.
+#:
+#: `MinWords` earns its place by being strictly below `MaxWords` and by nothing
+#: else, and both halves of that are measured. PostgreSQL raises `MinWords must
+#: be less than MaxWords` when it is not — a `DataError`, which `_execute`
+#: classifies as `SearchInternalError`. `MaxWords` is the caller's
+#: `snippet_words`, whose floor is `MIN_SNIPPET_WORDS`, which is 5, so a constant
+#: floor of 5 here made the narrowest snippet a caller may legally ask for fail
+#: every query it was passed with;
+#: `test_the_narrowest_snippet_a_request_may_ask_for_is_answerable` is that case.
+#: What it does *not* do is change any snippet: in `MaxFragments` mode the window
+#: is chosen by `MaxWords`, and across seven document shapes — match at the
+#: start, at the end, a document shorter than the width, a one-word document —
+#: varying `MinWords` changed no headline of a document that matched. It decides
+#: only the fallback headline of a document that did *not*, which this module
+#: never renders, because the `@@` predicate means every row it reaches matched.
+#: So the ceiling is a bound on a value nothing else reads, and the reason it is
+#: `snippet_words - 1` rather than a constant is the inequality above.
 _HEADLINE_TEMPLATE: Final = (
     'StartSel="", StopSel="", MaxFragments=1, MaxWords={words}, MinWords={minimum}'
 )
@@ -500,6 +520,16 @@ def _limitation_tokens(connection: Connection, enrollment_id: str) -> tuple[str,
     ever equal. Asking for the newest snapshot separately keeps both answers
     right: all outcomes, and the omissions the most recent enumeration pass
     reported.
+
+    The `sorted` is ordering and not a condition, and no arrangement of rows can
+    show it: `LimitationReason` has one member and
+    `one_limitation_per_reason_per_snapshot` allows one row per reason per
+    snapshot, so this read returns at most one row today. It is kept rather than
+    removed because the rule this module applies to unexercisable *conditions*
+    is about predicates that decide which rows a caller is shown, and this
+    decides the order of a tuple in a disclosure. Deleting it would buy nothing
+    and would make the envelope's token order depend on the planner the day a
+    second reason exists.
     """
     latest = select(func.max(coverage_limitations.c.observed_at)).where(
         coverage_limitations.c.enrollment_id == enrollment_id
@@ -534,40 +564,32 @@ def match_statement(request: SearchRequest, position: SearchCursor | None) -> Se
     size leaves "is there more" unanswerable without a second query, and section
     8.5 forbids a limit that produces an unmarked complete-looking response.
 
-    **`enrollment_id` is not the authorization, and it is not removable either.**
-    It says which enrollment a row was written against, and nothing ties that to
-    what the enrollment authorizes; a row stored for any object at all was
-    matched, and its extracted text returned, because it carried the right
-    `enrollment_id`. So the boundary is `authorized_object` and
-    `authorized_media_type`, the same two predicates `coverage_for`'s `processed`
-    count applies, which is what keeps what a search returns and what it claims
-    coverage of from disagreeing about what is in scope. The `enrollment_id`
-    filter stays beside them because neither replaces it: two enrollments over
-    one source can authorize the same object, and without this filter a search
-    under one would return rows the other wrote, for an object both authorize.
-    `test_a_search_returns_only_the_rows_its_own_enrollment_wrote` holds all of
-    that constant except the enrollment.
+    **What may be matched is `extracted_text_in_scope`, and that is a call rather
+    than a list repeated here.** Everything this page is allowed to see —
+    `enrollment_id`, `status`, the object dimension, the content dimension, and
+    the two precedence exclusions — comes from that one function in
+    `persistence.extraction`, which is also what `coverage_for`'s `processed`
+    count is built from. So the page and the coverage beside it describe one set
+    of rows structurally: there is no second list to drift from the first, and
+    `processed == 0` beside a non-empty page is not a thing this can compile.
+    Which matters because it happened. Two conditions lived on the coverage side
+    only — an object quarantined at one version and extracted at a later one, or
+    recorded unsupported at a later one, was excluded from the count and returned
+    by the page, so a search answered with a document's own text while the
+    envelope beside it said `no_extracted_text_in_scope`. That is the collapse of
+    "we found nothing" into "we have not indexed this" that section 9.7 makes
+    this module's reason for existing, inverted. The precedence is
+    `coverage_for`'s and quarantine wins there on fail-closed grounds; this now
+    honours it, so a stopped object's text is not returned as a live hit.
+    `test_a_quarantine_at_one_version_withholds_the_text_extracted_at_another`
+    and
+    `test_an_object_extracted_at_one_version_and_unsupported_at_another_is_counted_once`
+    build exactly that state and assert both sides of it.
 
-    **The content dimension is the enrollment's allowlist, applied to the row
-    being returned.** `extractions.media_type` is what the text was read as, and
-    `enrollments.media_types` is what the operator authorized reading. A row
-    outside it is not returned, for the same reason its text is not counted as
-    coverage: the grant did not cover it. `record_outcome` refuses to write one,
-    so the rows this excludes are the ones written by hand or written before the
-    check — the same two halves, for the same reason, as the object dimension.
-
-    **No `status` filter, and that is the rule rather than an omission.** This
-    selected only `extracted` rows until the condition was measured and found
-    undecidable: `text_exists_exactly_when_something_was_extracted` makes `text`
-    null for every row that is not `extracted`, `to_tsvector` of null is null,
-    and `null @@ query` is null — so the `@@` predicate below already excludes
-    every such row and no arrangement of rows can make the status test change an
-    answer. `persistence.extraction` states the rule that removes it. The
-    equivalent filter in `coverage_for`'s `processed` count is *not* removed,
-    because there it does decide: a row filed in `extractions` with status
-    `quarantined` carries no text, so nothing excludes it from a count, and
-    `test_a_row_filed_in_extractions_as_quarantined_is_not_counted_as_processed`
-    is what fails if it goes.
+    The one thing the two do not share is arithmetic. `coverage_for` counts
+    distinct objects and this returns rows, so an object with two authorized
+    extracted versions is one processed object and two matches; the sets agree,
+    the totals need not, and nothing here claims otherwise.
 
     **The source comes from the object.** `source_objects.source_id` is joined
     and selected rather than taken from the enrollment row, because those are two
@@ -591,7 +613,7 @@ def match_statement(request: SearchRequest, position: SearchCursor | None) -> Se
         bindparam(
             "headline_options",
             value=_HEADLINE_TEMPLATE.format(
-                words=request.snippet_words, minimum=min(request.snippet_words, 5)
+                words=request.snippet_words, minimum=min(request.snippet_words - 1, 5)
             ),
             type_=Text,
         ),
@@ -614,9 +636,7 @@ def match_statement(request: SearchRequest, position: SearchCursor | None) -> Se
             )
         )
         .where(
-            extractions.c.enrollment_id == request.enrollment_id,
-            authorized_object(extractions.c.source_object_id, enrollment_id=request.enrollment_id),
-            authorized_media_type(extractions.c.media_type, enrollment_id=request.enrollment_id),
+            *extracted_text_in_scope(request.enrollment_id),
             _document_vector().bool_op("@@")(query),
         )
         .order_by(rank.desc(), extractions.c.extraction_id.desc())
@@ -832,6 +852,12 @@ def search_extractions(
     # a zero. A condition nothing can exercise is a claim nothing checks, which is
     # the rule `persistence.extraction` states once and this applies.
     complete = eligible_is_known and counts.processed == counts.eligible
+    # No `and page`. `page_size` is bounded below by one, `truncated` means more
+    # rows came back than that, and `page` is the first `page_size` of them — so
+    # a truncated result cannot have an empty page and the test decided nothing.
+    # It is the same rule `persistence.extraction` states and the same rule that
+    # removed the `eligible > 0` guard above; applying it at one site and not at
+    # its neighbour is what this branch has been blocked for before.
     next_cursor = (
         SearchCursor(
             binding=request.binding,
@@ -839,7 +865,7 @@ def search_extractions(
             knowledge_id=str(page[-1].extraction_id),
             issued_at=moment,
         ).encode()
-        if truncated and page
+        if truncated
         else None
     )
 

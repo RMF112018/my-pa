@@ -63,12 +63,14 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.common.time import NaiveDatetimeError
-from my_pa.domain.extraction.coverage import LimitationReason
+from my_pa.domain.extraction.coverage import LimitationReason, SnapshotState
 from my_pa.domain.extraction.quarantine import QuarantineReason
 from my_pa.domain.extraction.text import extract_text
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.search.query import (
     MAX_SNIPPET_CHARACTERS,
+    MAX_SNIPPET_WORDS,
+    MIN_SNIPPET_WORDS,
     EmptySearchQueryError,
     RankCategory,
     SearchCursorError,
@@ -764,6 +766,13 @@ def test_an_object_that_was_both_extracted_and_quarantined_is_counted_once(engin
     assert "scope_not_fully_extracted" in page.disclosure.limitations
     assert page.disclosure.partial_result is True
 
+    # The other side of the same state, which this test asserted nothing about
+    # for six review rounds. `ledger` is the document that says "revenue" four
+    # times, so a page that still holds it is a page of the text of an object the
+    # coverage beside it reports as stopped.
+    assert both.object_ids["ledger"] not in {match.source_object_id for match in page.matches}
+    assert {match.source_object_id for match in page.matches} == {both.object_ids["minutes"]}
+
 
 @pytest.mark.database
 def test_an_object_extracted_at_one_version_and_unsupported_at_another_is_counted_once(
@@ -817,6 +826,61 @@ def test_an_object_extracted_at_one_version_and_unsupported_at_another_is_counte
     assert coverage.processed == 0
     assert coverage.state is CoverageState.UNSUPPORTED
     assert page.disclosure.partial_result is True
+
+    # And the page, which this test did not look at. `processed == 0` with
+    # `no_extracted_text_in_scope` beside it is the token that means "we have not
+    # indexed this"; returning the first version's text under it would be section
+    # 9.7's forbidden collapse run backwards, and it is what this did.
+    assert "no_extracted_text_in_scope" in page.disclosure.limitations
+    assert page.matches == ()
+    assert page.disclosure.source_references == ()
+
+
+@pytest.mark.database
+def test_a_quarantine_at_one_version_withholds_the_text_extracted_at_another(
+    engine: Engine,
+) -> None:
+    """The page and the coverage beside it, on `coverage_for`'s own normal sequence.
+
+    An object extracted at one version and quarantined afterwards is the sequence
+    `coverage_for` documents and `INV-PKL-007` cares about, and it puts the two
+    sides of one answer in direct contradiction. The coverage read excludes a
+    quarantined object from `processed`; the match statement did not, so this
+    scope reported `processed=0, quarantined=1, eligible=1`, state `quarantined`,
+    and `no_extracted_text_in_scope` — the token that means "we have not indexed
+    this" — attached to a page carrying the document's own words.
+
+    One object, so nothing else can account for either side: there is no second
+    document to keep the page non-empty and no root selector to clamp the state.
+    Both halves are asserted because asserting either alone is how this survived.
+    """
+    stopped = enrol(
+        engine, key="quarantined-after-extraction", documents={"ledger": CORPUS["ledger"]}
+    )
+    with engine.begin() as connection:
+        quarantine_object(
+            connection,
+            enrollment_id=stopped.enrollment_id,
+            source_object_id=stopped.object_ids["ledger"],
+            version_id=stopped.version_ids["ledger"],
+            reason=QuarantineReason.CONTAINMENT_UNPROVEN,
+        )
+    page = search(stopped, "revenue")
+
+    coverage = page.disclosure.coverage
+    assert coverage.eligible == 1
+    assert coverage.quarantined == 1
+    assert coverage.processed == 0
+    assert coverage.state is CoverageState.QUARANTINED
+    assert "no_extracted_text_in_scope" in page.disclosure.limitations
+
+    assert page.matches == (), "a quarantined object's text was returned as a live hit"
+    assert page.disclosure.source_references == ()
+
+    # The paired control, without which the exclusion could be unconditional:
+    # the same corpus and the same query with no quarantine on it still matches.
+    unstopped = enrol(engine, key="not-quarantined", documents={"ledger": CORPUS["ledger"]})
+    assert len(search(unstopped, "revenue").matches) == 1
 
 
 @pytest.mark.database
@@ -903,6 +967,15 @@ def test_a_root_selector_enrollment_cannot_claim_complete_coverage(engine: Engin
 
     assert "eligible_total_not_persisted" in page.disclosure.limitations
     assert page.disclosure.partial_result is True
+
+    # And the state, which this asserted nothing about. Nothing here reached an
+    # outcome, so `eligible` is the honest reading and the clamp must leave it
+    # alone: `_claims_the_whole_scope` is what keeps the clamp off the six states
+    # that assert nothing about the whole scope, and without it a root-selector
+    # scope with no outcomes in it would report `partially_processed` — "objects
+    # reached outcomes, and there may be more" — about a scope where none did.
+    assert page.disclosure.coverage.state is CoverageState.ELIGIBLE
+    assert page.matches == ()
 
 
 @pytest.mark.database
@@ -2048,38 +2121,91 @@ def test_the_authorization_predicate_answers_about_its_argument_and_not_the_encl
     )
 
 
-def test_the_content_type_predicate_resolves_its_own_table_whatever_encloses_it() -> None:
-    """Why this predicate needs no `correlate_except` and its neighbour does.
+@pytest.mark.database
+def test_the_authorization_predicate_resolves_its_enrollment_whatever_encloses_it(
+    engine: Engine,
+) -> None:
+    """The other table `correlate_except` names, which the test above cannot reach.
 
-    Not a database test: this is decidable from the compiled SQL, and the
-    compiled SQL is where the difference would be. `authorized_object` names two
-    tables, so an enclosing statement selecting from either can capture one and
-    the predicate stops answering about its argument — measured, and pinned by
-    `test_the_authorization_predicate_answers_about_its_argument_and_not_the_enclosing_row`.
-    `authorized_media_type` names one, and SQLAlchemy will not correlate away a
-    subquery's only `FROM`, so adding the call changes nothing: compiled both
-    ways inside a statement over `enrollments` — the case that could distinguish
-    them — the SQL is identical, so a test that ran rows could not fail.
+    `authorized_object` protects two tables and the test above varies only one:
+    its enclosing statement selects from `source_objects`, so dropping
+    `enrollments` from the call leaves that assertion green. The enclosing
+    statement here selects from `enrollments` instead, which is where that half
+    decides — correlated away, `enrollments.enrollment_id = …` binds the
+    enclosing row and the predicate answers about whichever enrollment the outer
+    statement is looking at.
 
-    What this asserts instead is the property the call would have bought, at the
-    level where it is visible: the subquery carries its own `FROM
-    knowledge.enrollments` while nested in a statement that also selects from it.
-    A second table added to the predicate would break that, and would be the
-    point at which `correlate_except` has to come back.
+    Two enrollments over one source, asked about one of them. Resolved correctly
+    the predicate is a constant for the statement and both rows are returned;
+    correlated away it collapses to the one whose identifier equals the argument.
     """
-    predicate = authorized_media_type(
-        literal("text/plain", Text), enrollment_id=issue_identifier(IdKind.ENROLLMENT)
+    scoped = enrol(engine, key="object-correlate", documents={"ledger": CORPUS["ledger"]})
+    enrol_over(scoped, key="object-correlate-other", names=("ledger",))
+    predicate = authorized_object(
+        literal(scoped.object_ids["ledger"], Text), enrollment_id=scoped.enrollment_id
     )
-    enclosing = (
-        select(func.count()).select_from(enrollments).where(enrollments.c.depth == 0, predicate)
-    )
-    sql = str(enclosing.compile(dialect=postgresql.dialect()))
-    inner = sql[sql.index("EXISTS (") :]
 
+    with engine.connect() as connection:
+        counted = connection.execute(
+            select(func.count())
+            .select_from(enrollments)
+            .where(enrollments.c.source_id == scoped.source_id, predicate)
+        ).scalar_one()
+
+    assert counted == 2, (
+        "the predicate answered about the enclosing enrollment rather than the one it was given"
+    )
+
+
+@pytest.mark.database
+def test_the_content_type_predicate_answers_about_its_argument_and_not_the_enclosing_row(
+    engine: Engine,
+) -> None:
+    """`correlate_except` on the content dimension, in the argument form that ships.
+
+    This test previously passed `literal("text/plain")`, and under that argument
+    the property holds whether or not the call is there: the subquery's only
+    `FROM` is `enrollments`, which SQLAlchemy will not correlate away. Both read
+    call sites pass `extractions.media_type`, which brings a second table, and
+    then it is the enclosing statement that decides. Inside a statement over
+    `extractions` — `coverage_for`'s shape and `match_statement`'s — the two
+    forms still compile identically. Inside a statement over `enrollments` they
+    do not: `enrollments` is correlated away, the subquery is left selecting from
+    `extractions` alone, and `enrollments.enrollment_id = …` binds the enclosing
+    row, so the predicate answers about whichever enrollment the outer statement
+    is looking at rather than about the one it was given.
+
+    That is what this builds, with rows. Two enrollments over one source, and the
+    predicate is asked about one of them. Resolved correctly it is a constant for
+    the statement — some extraction somewhere has a type this enrollment allows —
+    and both rows are returned. Correlated away it collapses to the single
+    enrollment whose identifier equals the argument, and one row is.
+    """
+    scoped = enrol(engine, key="content-correlate", documents={"ledger": CORPUS["ledger"]})
+    enrol_over(scoped, key="content-correlate-other", names=("ledger",))
+    predicate = authorized_media_type(extractions.c.media_type, enrollment_id=scoped.enrollment_id)
+
+    sql = str(
+        select(func.count())
+        .select_from(enrollments)
+        .where(predicate)
+        .compile(dialect=postgresql.dialect())
+    )
+    inner = sql[sql.index("EXISTS (") :]
     assert "FROM knowledge.enrollments" in inner, (
         "the predicate was correlated to the enclosing statement instead of resolving its own table"
     )
-    assert sql.count("FROM knowledge.enrollments") == 2
+
+    with engine.connect() as connection:
+        counted = connection.execute(
+            select(func.count())
+            .select_from(enrollments)
+            .where(enrollments.c.source_id == scoped.source_id, predicate)
+        ).scalar_one()
+
+    assert counted == 2, (
+        "the predicate answered about the enclosing enrollment rather than about its argument"
+    )
 
 
 @pytest.mark.database
@@ -2241,6 +2367,79 @@ def test_a_retry_reads_back_its_own_enrollments_row_and_not_a_neighbours(
 
 
 @pytest.mark.database
+def test_a_retry_reads_back_the_version_it_offered_and_not_another_of_its_own(
+    engine: Engine,
+) -> None:
+    """The `version_id` filter on the same fallback read, which nothing reached either.
+
+    Its neighbour above holds the version constant and varies the enrollment.
+    This holds the enrollment constant and varies the version, which is the other
+    half of the unique constraint and the commoner state by far: `extractions`
+    holds one row per observed version, so any object read twice has two rows
+    under one grant. Without this filter the fallback read matches both of them
+    and `scalar_one_or_none` raises, turning a lawful retry into a crash; had it
+    matched one it would hand back the identifier of a different version's text.
+
+    Nothing reached it because every fixture that retries has one version.
+    """
+    scoped = enrol(engine, key="retry-version", documents={"ledger": CORPUS["ledger"]})
+    media_type, body = CORPUS["ledger"]
+    first_offer = extract_text(
+        source_id=scoped.source_id,
+        source_object_id=scoped.object_ids["ledger"],
+        observed_version_id=scoped.version_ids["ledger"],
+        content_version_id=scoped.version_ids["ledger"],
+        media_type=media_type,
+        content=body,
+        observed_at=WHEN,
+    )
+    with engine.begin() as connection:
+        # The same object read again: same locator, different bytes, so one
+        # object with two versions and two rows under one enrollment.
+        again = observe_object(
+            connection,
+            source_id=scoped.source_id,
+            native_locator=f"{NATIVE_ROOT}/retry-version/ledger",
+            kind=ObjectKind.FILE,
+            fingerprint="fingerprint-retry-version-ledger-second-pass",
+            modified_at=WHEN,
+            media_type=media_type,
+            size_bytes=len(body),
+        )
+        assert again.source_object_id == scoped.object_ids["ledger"]
+        assert again.version_id != scoped.version_ids["ledger"]
+        second_row = record_outcome(
+            connection,
+            enrollment_id=scoped.enrollment_id,
+            outcome=extract_text(
+                source_id=scoped.source_id,
+                source_object_id=again.source_object_id,
+                observed_version_id=again.version_id,
+                content_version_id=again.version_id,
+                media_type=media_type,
+                content=body,
+                observed_at=WHEN,
+            ),
+        )
+    with engine.connect() as connection:
+        first_row = connection.execute(
+            text(
+                "SELECT extraction_id FROM knowledge.extractions "
+                "WHERE enrollment_id = :enr AND version_id = :ver"
+            ),
+            {"enr": scoped.enrollment_id, "ver": scoped.version_ids["ledger"]},
+        ).scalar_one()
+    assert first_row != second_row
+
+    with engine.begin() as connection:
+        retried = record_outcome(
+            connection, enrollment_id=scoped.enrollment_id, outcome=first_offer
+        )
+
+    assert retried == first_row, "a retry returned a row written for another version"
+
+
+@pytest.mark.database
 def test_a_row_filed_in_extractions_as_quarantined_is_not_counted_as_processed(
     engine: Engine,
 ) -> None:
@@ -2280,6 +2479,38 @@ def test_a_row_filed_in_extractions_as_quarantined_is_not_counted_as_processed(
     assert coverage.unsupported == 0
     assert coverage.eligible == 2
     assert coverage.state is CoverageState.PARTIALLY_PROCESSED
+
+
+@pytest.mark.database
+def test_a_stated_snapshot_outranks_the_counts_it_was_taken_beside(engine: Engine) -> None:
+    """`coverage_for`'s `snapshot` argument, which it accepted and could have dropped.
+
+    Only the caller can compare the source against the instant the counts were
+    taken at, so staleness is an input rather than something these rows can show.
+    `CoverageCounts.state` puts it above every count for that reason: a complete
+    count of a snapshot that no longer describes the source is not `processed`.
+
+    Nothing reached it. `search_extractions` never passes the argument, so every
+    read in this suite ran on the default, and replacing the parameter with that
+    default changed no answer — the counts would have gone on reporting
+    `processed` for a scope the caller had just said was stale.
+    """
+    scoped = enrol(engine, key="snapshot", documents={"ledger": CORPUS["ledger"]})
+    with engine.connect() as connection:
+        states = {
+            snapshot: coverage_for(
+                connection,
+                scoped.enrollment_id,
+                observed_at=WHEN,
+                eligible=1,
+                snapshot=snapshot,
+            ).state()
+            for snapshot in SnapshotState
+        }
+
+    assert states[SnapshotState.CURRENT] is CoverageState.PROCESSED
+    assert states[SnapshotState.STALE] is CoverageState.STALE
+    assert states[SnapshotState.SUPERSEDED] is CoverageState.SUPERSEDED
 
 
 @pytest.mark.database
@@ -2994,9 +3225,15 @@ def test_every_result_binds_the_version_its_text_came_from(corpus: Corpus) -> No
 
 @pytest.mark.database
 def test_a_result_carries_derived_trust_and_no_cloud_eligibility(corpus: Corpus) -> None:
-    """`INV-PKL-003`: extracted text never carries source authority."""
+    """`INV-PKL-003`: extracted text never carries source authority.
+
+    The basis is asserted as well as the level. It is the machine-readable claim
+    about *where* the trust comes from, and nothing checked it: any string at all
+    survived there, including one naming a mechanism this search does not use.
+    """
     page = search(corpus, "revenue")
     assert page.disclosure.trust.level is TrustLevel.SOURCE_BOUND_DERIVED
+    assert page.disclosure.trust.basis == ("lexical_index",)
     assert page.disclosure.cloud_eligible is False
     assert page.disclosure.classification is Classification.SYNTHETIC_TEST
 
@@ -3029,6 +3266,84 @@ def test_a_narrower_snippet_is_narrower(engine: Engine) -> None:
     wide = search(long_corpus, "inventory", snippet_words=60).matches[0].snippet
     narrow = search(long_corpus, "inventory", snippet_words=8).matches[0].snippet
     assert len(narrow) < len(wide)
+
+
+#: Two matches with forty words of filler between them, so `MaxFragments` decides
+#: whether the snippet is one window or two stitched together.
+TWO_WINDOW_DOCUMENT = (
+    "The inventory procedure opens the manual. "
+    + "Filler words follow here and there. " * 40
+    + "The inventory audit closes it."
+).encode("utf-8")
+
+
+@pytest.mark.database
+def test_a_snippet_is_one_window_and_not_two_stitched_together(engine: Engine) -> None:
+    """`MaxFragments=1`, which the module claims and nothing checked.
+
+    Above one, `ts_headline` returns the best *n* windows joined by a separator,
+    and a caller handed `... " is holding two disjoint quotations presented as one
+    passage — text that reads as contiguous and is not. Every fixture document
+    matched in one place, so raising the fragment count changed no snippet any
+    test looked at.
+    """
+    two = enrol(
+        engine, key="two-windows", documents={"manual": ("text/plain", TWO_WINDOW_DOCUMENT)}
+    )
+    snippet = search(two, "inventory", snippet_words=20).matches[0].snippet
+
+    assert "inventory" in snippet
+    assert "..." not in snippet, "the snippet stitched two windows together"
+
+
+@pytest.mark.database
+def test_the_narrowest_snippet_a_request_may_ask_for_is_answerable(engine: Engine) -> None:
+    """`MIN_SNIPPET_WORDS`, which nothing ever asked for and which did not work.
+
+    `ts_headline` requires `MinWords` strictly below `MaxWords` and raises
+    `MinWords must be less than MaxWords` otherwise. `MaxWords` is the caller's
+    `snippet_words` and `MinWords` was `min(snippet_words, 5)`, so at
+    `snippet_words = MIN_SNIPPET_WORDS` the two were both 5 and every search
+    carrying that width failed — as a `DataError`, which `_execute` classifies
+    as `SearchInternalError`: "the search could not be completed", not
+    retryable, for a request the contract says is valid.
+
+    Nothing reached it because no test and no fixture had ever asked for the
+    narrowest legal snippet; `SearchRequest` validates the bound and then
+    nothing exercised it. Both ends of the range are asserted here so the
+    boundary is covered from the side that broke.
+    """
+    narrow_corpus = enrol(
+        engine, key="narrowest", documents={"manual": ("text/markdown", LONG_DOCUMENT)}
+    )
+
+    narrowest = search(narrow_corpus, "inventory", snippet_words=MIN_SNIPPET_WORDS)
+    assert len(narrowest.matches) == 1
+    assert narrowest.matches[0].snippet, "the narrowest legal request returned an empty window"
+
+    widest = search(narrow_corpus, "inventory", snippet_words=MAX_SNIPPET_WORDS)
+    assert len(widest.matches) == 1
+    assert len(narrowest.matches[0].snippet) < len(widest.matches[0].snippet)
+
+
+@pytest.mark.database
+def test_a_naive_moment_is_refused_rather_than_mixed_into_the_envelope(corpus: Corpus) -> None:
+    """`ensure_utc` on the clock a caller may supply, which nothing passed badly.
+
+    `now` reaches the freshness stamp, the coverage snapshot, and the instant a
+    cursor is issued at. A naive datetime carries no offset, so admitting one
+    would put an unanchored instant in the disclosure beside timestamps the
+    database stores with one, and would make cursor expiry compare two things
+    that are not comparable. Every fixture passes an aware datetime or none at
+    all, so dropping the call changed no answer any test looked at.
+    """
+    request = SearchRequest(enrollment_id=corpus.enrollment_id, query=SearchQuery("revenue"))
+    with corpus.engine.connect() as connection, pytest.raises(NaiveDatetimeError):
+        search_extractions(connection, request, now=datetime(2026, 8, 1, 12, 0))
+
+    # The control: the same call with the offset present is answered.
+    with corpus.engine.connect() as connection:
+        assert search_extractions(connection, request, now=WHEN).matches
 
 
 @pytest.mark.database
@@ -3069,6 +3384,37 @@ def test_paging_through_a_result_set_neither_repeats_nor_loses_a_row(corpus: Cor
 
 
 @pytest.mark.database
+def test_a_cursor_resumes_after_the_last_row_of_the_page_and_not_the_first(
+    corpus: Corpus,
+) -> None:
+    """The row the cursor is built from, which no page size above one can show.
+
+    Keyset resumption binds `(rank, knowledge_id)` of the *last* row of the page,
+    because that is the boundary the next page starts below. Every paging test
+    above uses `page_size=1`, where the first row of the page and its last row
+    are the same row, so building the cursor from `page[0]` returns the identical
+    answer and the whole suite stays green.
+
+    At `page_size=2` they are different rows, and the wrong one re-serves the
+    page's own second row at the top of the next page — pagination that repeats
+    rather than pagination that fails, which is the silent kind.
+    """
+    whole = [match.knowledge_id for match in search(corpus, "archive", page_size=50).matches]
+    assert len(whole) >= 4, "too few documents match; a two-row page would not be exercised"
+
+    first = search(corpus, "archive", page_size=2)
+    cursor = first.disclosure.truncation.next_cursor
+    assert len(first.matches) == 2
+    assert cursor
+
+    second = search(corpus, "archive", page_size=2, cursor=cursor)
+    collected = [match.knowledge_id for match in (*first.matches, *second.matches)]
+
+    assert len(set(collected)) == len(collected), "a page repeated a row the previous page held"
+    assert collected == whole[: len(collected)]
+
+
+@pytest.mark.database
 def test_a_cursor_from_a_different_query_is_refused(corpus: Corpus) -> None:
     """Scope-bound, proved against a real cursor rather than a constructed one."""
     first = search(corpus, "archive", page_size=1)
@@ -3089,6 +3435,28 @@ def test_a_short_page_is_not_reported_as_truncated(corpus: Corpus) -> None:
     page = search(corpus, "revenue", page_size=50)
     assert page.disclosure.truncation.is_truncated is False
     assert page.disclosure.truncation.next_cursor is None
+
+
+@pytest.mark.database
+def test_a_page_holding_exactly_its_limit_is_not_truncated(corpus: Corpus) -> None:
+    """The one row count at which `>` and `>=` disagree, which nothing reached.
+
+    Truncation is `len(rows) > page_size` over a `LIMIT page_size + 1`, so the
+    comparison can only decide at exactly `page_size` matches: below it every
+    test above already passes, above it the extra row is there under either
+    reading. `archive` is in all four documents and no test asked for four.
+
+    What the wrong reading costs is section 8.5 in reverse. Rather than an
+    unmarked complete response it is a marked incomplete one: a caller told the
+    answer was cut when it was whole, and handed a cursor whose page is empty.
+    """
+    page = search(corpus, "archive", page_size=len(CORPUS))
+
+    assert len(page.matches) == len(CORPUS), "the fixture no longer sits on the boundary"
+    assert page.disclosure.truncation.is_truncated is False
+    assert page.disclosure.truncation.reason is None
+    assert page.disclosure.truncation.next_cursor is None
+    assert page.disclosure.partial_result is False
 
 
 @pytest.mark.database

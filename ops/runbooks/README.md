@@ -6,6 +6,7 @@ Operational procedures for running `my-pa` locally.
 | --- | --- |
 | [`postgres-operations.md`](postgres-operations.md) | The canonical `my_pa` PostgreSQL database: start, stop, health check, connect, back up, restore. |
 | [`worker-operations.md`](worker-operations.md) | The worker process: running it bounded or until signalled, stopping it cleanly, and how a crashed worker's job is recovered. |
+| [`gateway-operations.md`](gateway-operations.md) | The HTTP gateway process: running it on loopback, calling the eight capabilities, the status each error code takes, its two connection pools, and stopping it. |
 
 Related, outside this directory:
 

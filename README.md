@@ -22,6 +22,7 @@ Implemented, and covered by the FAST tier unless noted:
 - `infrastructure/persistence` — source registry, enrollment, job lease and retry, extraction and quarantine, and lexical search over `knowledge.extractions`. Covered by the database tier.
 - `infrastructure/providers/fixture.py` — a read-only fixture source provider that proves root containment, revalidates before read, and normalizes provider errors by errno.
 - `application` — the eight capability use cases behind one entry point, one shared authorization and disclosure path, and the capability manifest and readiness report derived from that wiring rather than restated. It reaches persistence and providers only through the ports in `contracts/ports`.
+- `adapters/http` and `apps/gateway.py` — the HTTP transport and its composition root. All eight capabilities are reachable at `POST /v1/<capability>` on `127.0.0.1`, and the response body is the envelope the application produced. Starlette and uvicorn, not FastAPI; no credential is issued, read, or required, and there is no option to bind anywhere but loopback. [`ops/runbooks/gateway-operations.md`](ops/runbooks/gateway-operations.md) covers running it.
 - `infrastructure/migration` — legacy extract and load, the migration control plane, and redaction.
 - Eight Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, views, the `knowledge` schema, and the extraction tables; head `8b3f5c17d904`. Applied and rolled back in the database tier; only SQL generation is checked by FAST.
 - `.github/workflows/repository-checks.yml` — document and configuration validation, the FAST tier, a declared-dependency-floor tier, and a database tier run against a disposable PostgreSQL service. The workflow itself carries no test coverage.
@@ -34,9 +35,9 @@ retained read-only and is never mutated.
 
 Not implemented. None of the following exists beyond a scaffold README:
 
-- HTTP transport and MCP adapter — `apps/gateway` is a README;
+- the MCP adapter and the operator CLI beyond `apps/cli/migration.py`. The HTTP gateway exists; the other two transports do not, so the transport-parity matrix `SPEC-AC-001` asks for cannot yet be produced;
+- a source registered in production, and therefore anything for the gateway to read. `sources.list`, `sources.metadata`, and `sources.fetch` answer `unavailable` for every source, and the gateway says so at startup: nothing calls `register_source`, and no provider root is authorized pending `P00-OD-009`;
 - an executor for the work the worker claims. `apps/worker.py` is a real process — it claims a lease, drives the job to a terminal state, and stops cleanly on a signal — but there is no extraction executor wired to it, so a claimed job is released as `unavailable` and, after its bounded attempts, fails. `apps/worker.py` states why;
-- an operator CLI beyond `apps/cli/migration.py`;
 - user-authored capture, relationship identity and profiles, managed documents, GoodNotes ingestion, and Obsidian projection;
 - any frontend. The repository contains no JavaScript toolchain and no `package.json`.
 
@@ -44,9 +45,10 @@ Accordingly, `capabilities.get` reports every capability `available` and
 readiness `ready`, while PDF still reports `decision_gated` pending
 `P00-OD-003`. Both figures are derived from the application's own wiring rather
 than from a constant, and `ready` is a statement about the application and not
-about a deployment: no process serves it, so nothing here runs end to end yet.
-`tests/architecture/test_readme_state_claims.py` holds this paragraph to the
-values the build actually produces.
+about a deployment: a process now serves it over HTTP on loopback, and the slice
+still does not run end to end, because nothing registers a source for it to
+read. `tests/architecture/test_readme_state_claims.py` holds this paragraph to
+the values the build actually produces.
 
 The current gap audit and implementation plan is [`docs/plans/mcv-completion-plan.md`](docs/plans/mcv-completion-plan.md).
 On 2026-08-01 the operator reprioritized the objective to admit two features,

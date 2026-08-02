@@ -121,9 +121,12 @@ def _limitations(manifest: CapabilityManifest, implemented: int) -> tuple[str, .
             f"Content types awaiting an operator decision: {', '.join(gated)}. "
             "They are reported rather than silently skipped."
         )
-    limitations.append(
-        "Audit events are emitted for every decision but no durable audit store exists."
-    )
+    # A line saying "no durable audit store exists" stood here until WP-4B2a.
+    # WP-4B1 built one; the sentence outlived its condition because it was
+    # written beside the derivation rather than inside it, which is the exact
+    # failure this module's docstring describes for the manifest. Removed rather
+    # than restated: the audit is durable, and a readiness limitation exists to
+    # tell a caller what this build cannot do.
     limitations.append(
         "Listings stop at the page size and issue no continuation cursor; truncation is disclosed."
     )

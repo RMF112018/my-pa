@@ -16,7 +16,13 @@ SRC = Path(__file__).resolve().parents[2] / "src"
 PACKAGE = SRC / "my_pa"
 
 #: Layers, inner first. A layer may import itself and anything to its left.
-LAYER_ORDER: tuple[str, ...] = ("domain", "contracts", "application", "bootstrap")
+#:
+#: `adapters` joined the list with the HTTP transport (`D-23`), between
+#: `application` and `bootstrap`, and its position is the whole of the rule: a
+#: driving adapter may reach the application, a composition root may reach an
+#: adapter, and an application module that imports one has inverted the
+#: direction a transport exists to establish.
+LAYER_ORDER: tuple[str, ...] = ("domain", "contracts", "application", "adapters", "bootstrap")
 
 #: Deliberately not a member of `LAYER_ORDER`; see the note further down.
 INFRASTRUCTURE = "infrastructure"
@@ -501,6 +507,47 @@ def test_application_reaches_no_forbidden_module_by_any_path(path: Path) -> None
         f"{offences}; MB-AC-002 is about what a use case can reach, not about "
         "what it names directly"
     )
+
+
+@pytest.mark.parametrize(
+    "path", [p for p in _modules() if _layer_of(p) == "application"], ids=lambda p: str(p.name)
+)
+def test_application_reaches_no_transport_adapter_by_any_path(path: Path) -> None:
+    """`MB-AC-002` against the transport that now exists, not only its libraries.
+
+    The third-party rule above catches an application module that reaches
+    Starlette. It does not catch one that reaches `my_pa.adapters.normalization`,
+    which imports nothing third-party at all and is still a transport concern —
+    and a transport the application can call is a transport the application
+    depends on. This walks the same closure the rule above walks, so a future
+    adapter is covered by having been added rather than by being named.
+    """
+    index = _module_index()
+    offences = sorted(
+        name
+        for name in _reachable(path, index)
+        if name == "my_pa.adapters" or name.startswith("my_pa.adapters.")
+    )
+    assert not offences, (
+        f"{path.relative_to(PACKAGE)} is application code and reaches {offences}; "
+        "a transport calls the application, never the other way round"
+    )
+
+
+def test_the_transport_reachability_rule_has_a_transport_to_find() -> None:
+    """Guard the rule above: with no adapter in the tree it proves nothing.
+
+    It is a rule about the *absence* of a name, so it passes on a tree where the
+    name could not appear. This requires the adapters to exist, and requires
+    something outside `application` to actually reach them — the composition
+    root — so that "nothing reaches the adapters" is never trivially true.
+    """
+    index = _module_index()
+    adapters = sorted(name for name in index if name.startswith("my_pa.adapters"))
+    assert len(adapters) >= 3, f"only {adapters} were found"
+    composition = index["my_pa.bootstrap.gateway"]
+    reached = _reachable(composition, index)
+    assert "my_pa.application.service" in reached, "the composition root reaches no application"
 
 
 def test_the_reachability_walk_actually_walks(tmp_path: Path) -> None:

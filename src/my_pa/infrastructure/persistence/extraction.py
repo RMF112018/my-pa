@@ -103,16 +103,17 @@ one, and it is written as the narrowing it is and says so where it stands.
 
 *Every identifier crossing a public boundary of this module is validated at that
 boundary, before anything else, whether or not a callee would reject it too.*
-Two of those calls are behaviourally undecidable, and they are the two that
+Three of those calls are behaviourally undecidable, and they are the three that
 `authorized_object` reaches: it validates the enrollment identifier that
-`record_outcome` and `quarantine_object` have already validated, so deleting
-either raises the identical error from a few lines further in. They are kept
-anyway, because the rule above is about conditions that decide *rows* and this
-one is about a function's precondition. Removing the duplicates would make each
-function's precondition a property of which callee it happens to reach, which
-is the opposite of a checkable claim; keeping them uniformly means a reader never
-has to trace one. Which of the two rules a condition falls under is decided by
-what the condition is for, not by whether a test happens to reach it.
+`record_outcome`, `quarantine_object`, and `extracted_text_in_scope` have already
+validated, so deleting any raises the identical error from a few lines further
+in. They are kept anyway, because the rule above is about conditions that decide
+*rows* and this one is about a function's precondition. Removing the duplicates
+would make each function's precondition a property of which callee it happens to
+reach, which is the opposite of a checkable claim; keeping them uniformly means
+a reader never has to trace one. Which of the two rules a condition falls under
+is decided by what the condition is for, not by whether a test happens to reach
+it.
 
 **Coverage is read for a stated enrollment and snapshot.** `coverage_for` counts
 what this schema stores and requires the caller to state what it does not: the
@@ -442,10 +443,13 @@ def extracted_text_in_scope(enrollment_id: str) -> tuple[ColumnElement[bool], ..
 
     What is *not* shared, and cannot be: `coverage_for` counts distinct objects
     and a search returns rows, so an object with two authorized extracted
-    versions is one processed object and two matches. The two agree about which
-    rows are in scope, which is what makes `processed == 0` and a non-empty page
-    impossible; they do not agree about how many things that is, and no
-    arithmetic here claims they do.
+    versions is one processed object and two matches. Within one statement
+    snapshot, the two agree about which rows are in scope. Search's page and
+    coverage reads use separate READ COMMITTED snapshots, so a quarantine
+    committed between them can still make the later coverage contradict the
+    page; that cross-statement window is carried to WP-4. The two statements do
+    not agree about how many things that is, and no arithmetic here claims they
+    do.
     """
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     return (

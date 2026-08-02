@@ -748,10 +748,11 @@ def search_extractions(
     The order of the steps is the contract. The scope is resolved first, so an
     unknown enrollment is `not_found` rather than an empty result set. The query
     is checked for lexemes second, so a query with no terms is a typed error
-    rather than a no-match claim. Coverage is read before the page is described,
-    so a scope with nothing extracted in it produces a partial disclosure
-    whatever the matches say — which is the whole of section 9.7's rule that "we
-    found nothing" and "we have not indexed this" are different answers.
+    rather than a no-match claim. The page and coverage are separate READ
+    COMMITTED statements: their shared predicate set makes them agree only
+    within one statement snapshot. A quarantine committed between them can make
+    the later coverage read contradict the page; that cross-statement window is
+    a named WP-4 item rather than an impossible state claimed here.
 
     `now` is a parameter so that freshness, coverage snapshots, and cursor
     expiry all read one clock and a test can fix it.

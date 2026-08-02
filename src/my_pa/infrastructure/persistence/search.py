@@ -569,9 +569,11 @@ def match_statement(request: SearchRequest, position: SearchCursor | None) -> Se
     `enrollment_id`, `status`, the object dimension, the content dimension, and
     the two precedence exclusions — comes from that one function in
     `persistence.extraction`, which is also what `coverage_for`'s `processed`
-    count is built from. So the page and the coverage beside it describe one set
-    of rows structurally: there is no second list to drift from the first, and
-    `processed == 0` beside a non-empty page is not a thing this can compile.
+    count is built from. Within one statement snapshot they apply one predicate
+    set structurally, so there is no second list to drift from the first. Across
+    search's separate READ COMMITTED statements, concurrent changes can still
+    produce `processed == 0` beside a non-empty page; `search_extractions`
+    carries that window to WP-4 explicitly.
     Which matters because it happened. Two conditions lived on the coverage side
     only — an object quarantined at one version and extracted at a later one, or
     recorded unsupported at a later one, was excluded from the count and returned

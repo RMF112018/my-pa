@@ -853,8 +853,9 @@ def coverage_for(
     ).scalar_one()
     # The one count of stored text, and the one place its scope is defined.
     # `extracted_text_in_scope` is that definition and `persistence.search` uses
-    # the same call, which is what makes this count and the page beside it
-    # describe one set of rows.
+    # the same call, so both statements apply one predicate set within their own
+    # snapshots. Their cross-statement READ COMMITTED window is documented at
+    # the search entry point.
     processed = connection.execute(
         select(func.count(func.distinct(extractions.c.source_object_id))).where(
             *extracted_text_in_scope(enrollment_id)

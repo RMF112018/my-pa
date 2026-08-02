@@ -26,12 +26,21 @@ statement would be shown the bound query text with it.
 row; the port answers `None`, because the caller's next act is `not_found` and
 section 10 requires that answer to be indistinguishable from a refusal.
 
-**The audit sink is held, not built.** It is passed in, because there is no
-audit table in the `knowledge` schema for this package to write to and inventing
-a store here would be a schema decision made in an adapter. It is exposed
-through the unit of work rather than beside it so that an operator-only
-command's audit commits with the command or not at all
-(`module-boundaries.md` section 10).
+**The audit sink is held, not built, and it does not run in this transaction.**
+It is passed in, because choosing an implementation is a composition root's
+decision and not an adapter's. It is *reached* through the unit of work so that
+a use case cannot record an audit event outside the request it belongs to — but
+`persistence.audit.SqlAlchemyAuditSink` writes on its own connection and commits
+before returning, which is what makes an allowed request's audit survive the
+rollback of the work that failed (`D-34`). The sink's own module states why a
+second connection is the only mechanism that achieves that, and why the audit
+committing ahead of the work is the correct direction of `module-boundaries.md`
+section 10's rule rather than an exception to it.
+
+The consequence for this class is small and worth naming: `__exit__` commits and
+rolls back the *work*, and the audit is already durable by then either way. A
+failure to record therefore reaches `__exit__` as an exception and rolls the work
+back, which is section 5.6's fail-closed requirement holding by structure.
 """
 
 from __future__ import annotations

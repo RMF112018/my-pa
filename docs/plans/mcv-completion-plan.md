@@ -383,7 +383,12 @@ Two facts constrain the sequence more than anything in the feature packages.
 
 First, **neither feature has a surface**. Both are specified against an HTTP
 gateway, a worker process, and application services wired to the eight
-capabilities. None of those exist: `apps/gateway/` and `apps/worker/` hold a
+capabilities. *The sentence that follows is state at time of writing
+(2026-08-01) and is deliberately not updated: WP-4A wired the application
+services, and WP-4B1 made the worker a process, so `apps/worker/` is gone and
+`apps/worker.py` is a real composition root. It is left standing because the
+argument it supports is about the sequence, not about the tree today.* None of
+those exist: `apps/gateway/` and `apps/worker/` hold a
 README each, and `application/` holds one module that derives the capability
 manifest. Quick Capture's own architecture file says so, and the Relationship
 Intelligence specification makes "current MCV substrate completed" the first

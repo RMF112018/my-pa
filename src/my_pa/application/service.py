@@ -17,39 +17,60 @@ would have rolled the record of the refusal back along with everything else.
 **Which outcomes leave a durable trace.** An incomplete disclosure of an audit
 gap is itself a gap, and this list has been wrong twice — once by omitting the
 capability mismatch, and once by omitting case 5 while claiming to be complete.
-So it is derived rather than surveyed. `AuditSink.record` has exactly two call
-sites in this layer, `authorization.authorize` and the mismatch branch of `_run`,
-and both run inside the one transaction `_run` opens. Every outcome is therefore
-some combination of two facts — was `record` reached, and did the transaction
-commit — and the list below is closed because those two facts have no third
-value, not because six cases is where the searching stopped.
+So it is derived rather than surveyed, and the derivation itself changed when
+WP-4B1 gave the audit its own transaction (`D-34`).
 
-1. *Policy denied the request.* Recorded; commits. The reason is in the record
+`AuditSink.record` has exactly two call sites in this layer,
+`authorization.authorize` and the mismatch branch of `_run`. Both are still
+reached from inside the transaction `_run` opens, and neither is written by it:
+the durable sink commits the event on its own connection before returning, so
+whether an audit survives no longer depends on how the work transaction ended.
+Every outcome is therefore some combination of two facts — was `record`
+reached, and did `record` itself succeed — and the list below is closed because
+those two facts have no third value, not because seven cases is where the
+searching stopped.
+
+1. *Policy denied the request.* Recorded and durable. The reason is in the record
    and never in the answer.
 2. *The declared capability and the payload's capability disagree.* A
    security-relevant refusal — it is the guard against a request authorized as
-   one capability and executed as another — so it is recorded as `failed`, inside
-   the transaction, and it commits. `failed` rather than `denied` because no
-   policy decision was reached: there is nothing to name a `DenialReason` from,
-   and inventing one would misreport why the request stopped.
-3. *Allowed, and the handler succeeded.* Recorded as allowed; commits with the
-   work.
-4. *Allowed, and the handler then failed.* Recorded as allowed, and then **rolled
-   back with the failed work**, so a failed security-relevant action currently
-   leaves no trace. That is a defect rather than a design. It is here because the
-   rollback is also what stops a half-written enrollment from committing, and
-   separating the two needs a second transaction and a durable audit store,
-   neither of which exists in this build. `D-34` puts both in WP-4B.
+   one capability and executed as another — so it is recorded as `failed` and
+   durable. `failed` rather than `denied` because no policy decision was reached:
+   there is nothing to name a `DenialReason` from, and inventing one would
+   misreport why the request stopped.
+3. *Allowed, and the handler succeeded.* Recorded as allowed and durable; the
+   work commits after it.
+4. *Allowed, and the handler then failed.* Recorded as allowed and **still
+   durable**, because the event was committed before the handler ran and the
+   rollback that discards the half-written work cannot reach it. This is the
+   asymmetry WP-4B1 closed. What the record claims is that the request was
+   authorized, which is true whether or not the work landed; it does not claim
+   the work committed, and no second event is written to say that it did not —
+   the job plane and `sources.status` are where that is recorded.
 5. *A failure before any decision was reached.* A port failure in `authorize`'s
    own reads — `for_principal`, or the operation and object lookups that resolve
    a status request's scope — raises before `record` is called, and the unit of
    work may also fail to open at all. Nothing is recorded, and nothing is
-   missing: no decision existed to record. This is the case that separates it
-   from 4, where a decision *was* reached and its record was then destroyed.
-6. *A command that could not be constructed at all.* Not recorded, and cannot be:
+   missing: no decision existed to record.
+6. *The audit itself could not be persisted.* Nothing is recorded, and the
+   request **fails closed**: `record` raises, the exception leaves the `with`
+   block so the work rolls back, and `invoke` answers with an error. This is the
+   case that separates the new design from the old one — a decision was reached
+   and its record was lost, and the only correct response is to refuse the
+   request rather than to complete it unrecorded
+   (`module-boundaries.md` section 5.6). It is `_run`'s only path where a request
+   that policy allowed still fails without the handler being at fault.
+7. *A command that could not be constructed at all.* Not recorded, and cannot be:
    a malformed command is refused by its own `__post_init__` before `invoke` is
    called, so this layer never sees the attempt. Whatever calls it is the only
    thing that could record one.
+
+**No code in this class changed to achieve that**, and the reason is worth
+stating rather than leaving as an absence. Durability is a property of the sink's
+transaction, which this layer is deliberately unable to see; fail-closed is a
+property of not catching what `record` raises, which this layer already did. What
+changed is which implementation a composition root supplies, and the enumeration
+above, which was describing the old one.
 
 **Provider reads happen inside that transaction.** `module-boundaries.md`
 section 10 says long source fetches are not held inside database transactions,

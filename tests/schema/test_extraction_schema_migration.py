@@ -67,8 +67,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 EXPECTED_SCHEMA = "knowledge"
 
-#: Restated, not imported. The knowledge revision's five and this revision's
-#: three, each against the revision that must create them and no other.
+#: Restated, not imported. The knowledge revision's five, this revision's three,
+#: and the audit revision's one, each against the revision that must create them
+#: and no other.
 KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "7e5a1fb93d62": frozenset(
         {
@@ -86,6 +87,7 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "coverage_limitations",
         }
     ),
+    "9c6b4a18ed72": frozenset({"audit_events"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

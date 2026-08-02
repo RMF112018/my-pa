@@ -301,10 +301,21 @@ class _Knowledge(KnowledgeRepository):
 
 
 class _Audit(AuditSink):
+    """The audit port, over a `World`.
+
+    `World.failures["record"]` makes it refuse, which is how the fail-closed rule
+    of `module-boundaries.md` section 5.6 becomes a FAST assertion. What this
+    cannot show is durability: `World.audit` is a plain list and nothing here
+    undoes an append, so an event "survives" a rollback whatever the design is.
+    That claim belongs to `tests/schema/test_audit_durability.py`, against a
+    server that can actually roll one back.
+    """
+
     def __init__(self, world: World) -> None:
         self._world = world
 
     def record(self, event: AuditEvent) -> None:
+        self._world.fail("record")
         self._world.audit.append(event)
 
 

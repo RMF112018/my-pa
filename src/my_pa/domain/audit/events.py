@@ -23,7 +23,14 @@ __all__ = ["AuditEvent", "AuditOutcome", "audit_event_for"]
 
 
 class AuditOutcome(StrEnum):
-    """How an audited operation ended."""
+    """How the *decision* went, not how the operation ended.
+
+    `allowed` says the request was authorized, and says nothing about whether the
+    work it authorized then succeeded — the durable sink commits this record
+    before the handler runs, precisely so that an allowed request whose handler
+    fails still leaves one. What happened to the work is in the job plane and in
+    `sources.status`.
+    """
 
     ALLOWED = "allowed"
     DENIED = "denied"

@@ -8,18 +8,21 @@ retry in the same tables, and would put application code on the write path of
 migration governance state. Two planes with different lifetimes, different
 writers, and different authority do not share a schema.
 
-Seven concerns, eight tables, and nothing else. There is no outbox, no scheduler,
-no priority column, no soft-delete flag, and no audit mirror: each of those
-would be a mechanism with no caller, and `AGENTS.md` section 2 rules them out
-until one exists.
+Eight concerns, nine tables, and nothing else. There is no outbox, no scheduler,
+no priority column, and no soft-delete flag: each of those would be a mechanism
+with no caller, and `AGENTS.md` section 2 rules them out until one exists.
+`audit_events` is not the "audit mirror" an earlier revision of this paragraph
+ruled out — a mirror duplicates rows another table already owns, and this is the
+only place an audit event is stored at all (`D-34`).
 
 Exactly one column in the schema holds content: `extractions.text`, which is
 derived text bound to the version it was extracted from. It is personal data by
 default and it is confined to that one place on purpose, so the question "where
-could a document body be" has one answer. `quarantine_records` in particular has
-no column a payload could go in, which is the structural half of the section 12
-rule that a quarantine stores identifiers and codes and not the thing that
-failed.
+could a document body be" has one answer. `quarantine_records` and
+`audit_events` in particular have no column a payload could go in, which is the
+structural half of the section 12 rule that a quarantine stores identifiers and
+codes and not the thing that failed, and of the section 11 rule that an audit
+event records that something happened and never what was in it.
 
 `native_root` and `native_locator` are the only provider-native values in the
 schema, they exist because an opaque identifier has to resolve back to something,
@@ -59,11 +62,16 @@ from sqlalchemy import (
 )
 
 from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.domain.audit.events import AuditOutcome
 from my_pa.domain.common.classification import Classification
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.extraction.coverage import LimitationReason
 from my_pa.domain.extraction.quarantine import QuarantineReason, QuarantineReviewState
 from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
+from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
     MAX_ENROLLMENT_DEPTH,
@@ -120,6 +128,42 @@ def _one_of(
     which.
     """
     return CheckConstraint(f"{column} IN ({_literals(values)})", name=name or f"{column}_is_known")
+
+
+#: The suffix rule `domain.common.identifiers.validate_identifier` enforces, as a
+#: POSIX regular expression the server can check. Restated rather than imported
+#: because the domain's own pattern is private to that module; a table that
+#: imported it would reach past a deliberate boundary to avoid writing one line.
+#: `tests/schema/test_audit_schema_migration.py` compares the two, so the
+#: restatement is a checked claim rather than a copy that can drift.
+_IDENTIFIER_SUFFIX: Final = "[A-Za-z0-9]{8,64}"
+
+
+def _is_identifier(column: str, kind: IdKind) -> CheckConstraint:
+    """Constrain `column` to the shape of one opaque identifier kind.
+
+    This is the structural half of `INV-PKL-005` for a column with no closed set
+    to check against. The alphanumeric suffix admits no `/`, `.`, `:`, `@`, or
+    space, so a filesystem path, a host name, a database URL, a credential, and a
+    query string are all rejected by the server rather than by a convention the
+    writer is trusted to keep.
+    """
+    return CheckConstraint(
+        f"{column} ~ '^{kind.value}_{_IDENTIFIER_SUFFIX}$'",
+        name=f"{column}_is_an_opaque_identifier",
+    )
+
+
+def _matches(column: str, pattern: str, *, name: str) -> CheckConstraint:
+    """Constrain `column` to a Python pattern, translated to POSIX.
+
+    `\\A` and `\\Z` are Python's absolute anchors and PostgreSQL's are `^` and
+    `$`; nothing else in the patterns used here differs between the two dialects.
+    Deriving the constraint from the domain's own pattern is what keeps the rule
+    the table enforces equal to the rule the value object enforces.
+    """
+    translated = pattern.replace(r"\A", "^").replace(r"\Z", "$")
+    return CheckConstraint(f"{column} ~ '{translated}'", name=name)
 
 
 #: One row per configured source. `native_root` is the provider's own name for
@@ -506,4 +550,77 @@ coverage_limitations = Table(
         "reason",
         name="one_limitation_per_reason_per_snapshot",
     ),
+)
+
+#: One row per audit event: that something was decided, and how. Never what was
+#: in it.
+#:
+#: **Every column is closed.** Three are opaque identifiers constrained to their
+#: own shape, four are constrained to a closed enumerated set, three are bounded
+#: counts, one is a timestamp, and one is a version string constrained to the
+#: domain's own pattern. There is no `Text` column here that accepts arbitrary
+#: text, which is the structural form of the section 11 rule: a document body, a
+#: query, a path, a host, a credential, or a personal identifier cannot be stored
+#: in any of these columns, because the server rejects the value rather than
+#: because a writer remembered not to supply one. `AuditEvent` has no field to
+#: carry one either, so the guarantee holds on both sides of the boundary.
+#:
+#: **There is no foreign key, and that is the point rather than an omission.**
+#: This table is written in its own transaction, which commits *before* the work
+#: the event describes (`D-34`, and see `persistence.audit`). A foreign key to
+#: `enrollments` or `jobs` would make the audit's durability depend on the
+#: durability of the work — exactly the coupling that produced the asymmetry
+#: WP-4B1 exists to close, since a row referencing work that then rolled back
+#: could not have been written at all.
+#:
+#: **Append-only, and no retention mechanism.** Nothing here updates or deletes a
+#: row and no revision provides a way to. `P00-OD-013` (audit retention) is open
+#: and `O-10`/`RI-OD-009` cover deletion; building a retention or archival path
+#: before the operator has decided one would be this layer deciding how long
+#: evidence lives.
+audit_events = Table(
+    "audit_events",
+    METADATA,
+    Column("audit_id", Text, primary_key=True),
+    Column("correlation_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("purpose", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("policy_version", Text, nullable=False),
+    Column("denial_reason", Text),
+    # The only count with a writer. `AuditEvent` also carries `item_count` and
+    # `duration_ms`, and neither is ever set: `authorize` passes this one alone
+    # and the mismatch branch passes none. Columns for them would be permanently
+    # zero, which `AGENTS.md` section 2 rules out — and a zero that means "never
+    # measured" reads as "nothing happened", which is worse than absent. They
+    # belong here when something computes them.
+    Column("scope_source_id_count", Integer, nullable=False, server_default="0"),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("capability", Capability),
+    _one_of("purpose", Purpose),
+    _one_of("outcome", AuditOutcome, name="audit_outcome_is_known"),
+    _one_of("denial_reason", DenialReason, name="denial_reason_is_known"),
+    _matches(
+        "policy_version",
+        POLICY_VERSION_PATTERN.pattern,
+        name="audit_policy_version_is_a_known_shape",
+    ),
+    # The same rule `AuditEvent.__post_init__` enforces, stated where a future
+    # writer or a hand-run statement also meets it. A denial with no reason
+    # records that authority was insufficient without recording why, and a
+    # non-denial with one attributes a refusal to a request that was not refused.
+    CheckConstraint(
+        f"(outcome = '{AuditOutcome.DENIED.value}') = (denial_reason IS NOT NULL)",
+        name="a_denial_records_its_reason_and_nothing_else_does",
+    ),
+    CheckConstraint("scope_source_id_count >= 0", name="audit_counts_are_not_negative"),
+    # The one lookup this build can already perform: a response envelope hands
+    # its caller a `corr_…`, so that is how an operator finds the decision behind
+    # a request. No index by principal or by time, because nothing reads by
+    # either yet.
+    Index("audit_events_by_correlation", "correlation_id"),
 )

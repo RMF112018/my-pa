@@ -186,12 +186,35 @@ agent that did not author it.
    extraction; PDF reported `unsupported` because `P00-OD-003` is open;
    quarantine triggers; coverage states; version-fingerprint binding;
    PostgreSQL FTS with `pg_trgm`.
-4. **WP-4 — application services and transports.** The eight capabilities wired
-   to real behavior behind the existing v1 contracts; HTTP gateway on loopback;
-   MCP adapter with transport parity; operator CLI.
-5. **WP-5 — operations and local candidate.** Startup, shutdown, health,
+4. **WP-0R — canonical re-mirror and reconciliation.** Refreshes the mirrored
+   canonical product definition against the 2026-08-02 Remote Quick Capture
+   revision and reconciles this plan against it. Documentation only, no behavior
+   change. Out of numeric order because it was raised after WP-4 was planned and
+   depends on nothing.
+5. **WP-4A — application services.** Use cases for the eight capabilities, ports,
+   the shared policy and disclosure path, and the derived capability manifest,
+   behind the existing v1 contracts.
+6. **WP-4B — transports.** HTTP gateway on loopback, MCP adapter with proven
+   transport parity, operator CLI, both composition roots, the worker lease loop,
+   and the parity and negative-evidence matrices.
+7. **WP-5 — operations and local candidate.** Startup, shutdown, health,
    readiness, recovery and idempotency tests, empty-to-head validation, the
    end-to-end synthetic slice, operator runbook, honest limitations.
+8. **WP-6 — capture domain and durable-first persistence.** Capture contracts,
+   `capture.create`, registered client, submission, receipt, and outbox, all
+   committed in one transaction.
+9. **WP-7 — capture processing.** Proposals, evidence spans, deterministic
+   classification and domain assignment, exact search.
+10. **WP-8 — review and promotion.** Review cases, promotion, conversation
+    events, corrections.
+11. **WP-9 — relationship identity and read-only profiles.**
+12. **WP-10 — PWA capture surface and offline recovery.** Conditional on `D-32`,
+    sequenced last, and the only frontend package here.
+
+Items 4 through 12 restate section 12's sequence table, which is the authoritative
+one; `D-28` split WP-4 and the Remote Quick Capture revision added WP-0R and
+WP-10. Section 7 originally stopped at WP-5, and listing only half the merge
+order was how a reader ended up consulting two tables that disagreed.
 
 ## 8. Boundaries held throughout
 
@@ -377,17 +400,48 @@ the slice first. The operator may reorder; see `D-12`.
 
 ### Sequence
 
+**This table was superseded on 2026-08-02 and is kept for the shape it records.**
+`D-28` split WP-4 into two pull requests, and the Remote Quick Capture revision
+added WP-0R and a conditional WP-10. The sequence the campaign is executing is
+below; the original rows above are what section 15's divergence 2 corrected.
+
 | WP | Objective | Depends on | Frontend? |
 |---|---|---|---|
-| WP-4 | Application services and transports | WP-3 | No |
-| WP-5 | Operations and local candidate | WP-4 | No |
-| WP-6 | Capture domain, contracts, and durable persistence | WP-5 | No |
-| WP-7 | Capture processing, proposals, evidence spans, exact search | WP-6 | No |
-| WP-8 | Review cases, promotion, and conversation events | WP-7 | No |
-| WP-9 | Relationship identity and read-only profiles | WP-4, WP-8 | No |
+| WP-0R | Canonical re-mirror and reconciliation against the Remote Quick Capture revision | — | No |
+| WP-4A | Application services: use cases, ports, shared policy and disclosure path, derived manifest | WP-3 | No |
+| WP-4B | Transports: HTTP gateway, MCP adapter, operator CLI, composition roots, worker lease loop, parity matrices | WP-4A | No |
+| WP-5 | Operations and local candidate | WP-4B | No |
+| WP-6 | Capture domain, contracts, durable-first persistence, `capture.create`, registered client, submission, receipt, outbox | WP-5 | No |
+| WP-7 | Capture processing, proposals, evidence spans, deterministic classification and domain assignment, exact search | WP-6 | No |
+| WP-8 | Review cases, promotion, conversation events, corrections | WP-7 | No |
+| WP-9 | Relationship identity and read-only profiles | WP-4B, WP-8 | No |
+| WP-10 | PWA capture surface and offline recovery — **conditional on `D-32`** | WP-8 | **Yes** |
 
-Every package above is frontend-free and may proceed under `D-09`. The frontend
-stages — Quick Capture `QC-05` through `QC-08`, and every responsive or PWA
+Two things about that table are worth stating rather than leaving to be inferred.
+
+`D-28` split WP-4 because WP-4 as section 7 and this section specified it is
+application services plus three transports plus two composition roots plus a
+worker loop, which is more than one review can hold at the quality this campaign
+requires. The split is a packaging decision and changes no objective: WP-4A and
+WP-4B together are exactly the old WP-4, and every dependency that named WP-4
+now names whichever half it actually needs — WP-9 needs the transports, so it
+names WP-4B.
+
+**WP-6 through WP-8 absorb the six new Remote Quick Capture record types rather
+than growing a new package.** The revision added `CaptureSubmission`,
+`RegisteredCaptureClient`, `CaptureDeliveryAttempt`, `CaptureClassification` and
+`CaptureDomainAssignment`, `CaptureEntityMention`, and `CaptureCorrection` to the
+canonical object model. None of them needs a package of its own: the durable-first
+transaction, immutability, idempotency, evidence spans, and proportional review
+they depend on are already the acceptance criteria of WP-6, WP-7, and WP-8. Adding
+a package would duplicate those criteria; section 16 maps each type onto the
+package that already carries them.
+
+WP-0R through WP-9 are frontend-free and may proceed under `D-09`. **WP-10 is
+not**, and it is the one row here that rests on an assumption rather than on an
+instruction — see `D-32`, which admits it to scope, sequences it last, and states
+the reading it depends on so the operator can overturn it cheaply. The remaining
+frontend stages — Quick Capture `QC-05` through `QC-08`, and every responsive
 surface in the Relationship Intelligence specification — are not planned here
 and remain held.
 
@@ -762,16 +816,27 @@ managed-document write and grants the source-provider port nothing.
 | D-15 | Corrected in place: the frontend hold reads as permitting backend work, and this was assumed rather than asked | `D-09` records the operator's words as "no frontend implementation is in scope until they say otherwise." Every package in section 12 is frontend-free, so none of them tests the hold. But the hold was never asked about in the direction that matters — whether backend work on a held feature may proceed at all — and the Quick Capture package's `O-04` asks only *when* to lift it, not whether backend work needs it lifted. The reading here is that it does not. It is an assumption, it is stated as one, and it is on the consolidated list in section 14 for the operator to confirm or overturn. | Assumption, disclosed |
 | D-19 | Supersedes `D-17`: the canonical product direction is ratified, and is recorded in the repository as ratified | **The instrument is a direct operator instruction issued 2026-08-02, not anything inside the package.** This matters, and independent review was right to demand it: the package nowhere uses the word "ratified", its status field `CURRENT_CANONICAL_PRODUCT_DEFINITION` is self-declared, its receipt grants nothing, and `15_OPEN_OPERATOR_DECISIONS.md` states "This package performs none." A self-declared status is precisely the evidence `D-17` ruled insufficient for the predecessor, so ratifying on that basis alone would have contradicted the standard this register set. What supplies it instead is the operator's instruction opening this session: that the product documentation, revised considerably, "is RATIFIED", identifying it by Drive ID `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`, with the direction to enforce it through the next implementation phase. That is the same self-executing form as the 2026-08-01 reprioritisation recorded at `D-10` — the instruction is the mechanism, and this row records what happened rather than authorising it. The subject is `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, version 2.1. It supersedes `my-pa vNext` for current whole-product definition and preserves it as source history; the two are siblings under one Drive parent, so this is supersession inside a lineage rather than replacement from outside it. It is mirrored byte-exact at `../specs/canonical-product-definition/` and verified against three independent in-package hash sources: 21/21 against the artifact disposition, 21/21 against the readback verification, and 20/20 against the source manifest, which covers every member except itself and says so. Three limits survive ratification and are the reason this is a decision rather than a scope change: it grants no implementation authority (`implementation_authority: NOT_GRANTED`); under `AGENTS.md` section 1 it is an indexed Workspace publication at precedence rank 4, below repository policy at rank 3; and its own `OP-05` and roadmap step `R10.1` direct that WP-4 and WP-5 finish first. Ratification endorsed this plan's sequence rather than displacing it. | Ratified, and bounded — see section 15 |
 | D-20 | `RI-OD-001` stops blocking WP-9 and moves to non-blocking | The ratified decision log records `CR-D-007` — "RI is integrated domain; PRIE historical" — as `Canonical`, and the ratified executive description states that Relationship Intelligence "is the people-centered continuity domain inside my-pa… not a separate PRIE engine, database, frontend, or product", with `PRIE` "historical terminology retained only for provenance". That settles the name that enters `v1` contracts, which is the only part `D-18` said was blocking WP-9. Note what it does **not** settle, since `D-18` overstated this: the ratified information architecture lists Relationships under its **Library** section (`05_INFORMATION_ARCHITECTURE.md` line 51), and the ratified executive description states explicitly that Relationships and the collections listed beside it are "not separate top-level destinations" (`01_EXECUTIVE_PRODUCT_DESCRIPTION.md` line 88). Both citations are given because the first draft of this row credited that quotation to the information architecture, which does not contain it: `05` supplies the listing, `01` supplies the statement, and the conclusion needs both. `D-18` called it "the public area" — inherited from the superseded document, and contradicted by both. That framing is dropped here; only the naming conclusion is carried forward. What remains open is `OP-02`, the final UI label set, which the canonical package gates on "UI freeze" — frontend scope, independently held by `D-09`, and not a WP-9 contract input. Narrowing the claim to what the evidence supports rather than declaring the whole question closed. | Corrected; `RI-OD-001` reclassified |
-| D-21 | Section 14's headline counts were wrong and are now derived rather than asserted | Section 14 stated "Forty-one decisions are open … Sixteen of them block." Recomputed from the tables themselves: **46 distinct IDs, no duplicates across the three tables**, and **29 of them blocking** at the moment of recomputation — the second table is itself headed *Blocking*, so counting only the first understated it by thirteen. `D-20` then moved `RI-OD-001` out of the blocking table, so the current figures are 46 open and 28 blocking; the total was never affected, only the split. A corrected constant would rot the same way, so `tests/architecture/test_open_decision_counts.py` now derives every figure from the tables and fails when the prose and the tables disagree. Each of its assertions was proven non-vacuous by planting a readable-but-wrong figure and confirming the count comparison fired for the intended reason. This is the third time in this campaign an inherited number proved stale on recomputation. | Corrected, and the mechanism corrected |
+| D-21 | Section 14's headline counts were wrong and are now derived rather than asserted | Section 14 stated "Forty-one decisions are open … Sixteen of them block." Recomputed from the tables themselves: **46 distinct IDs, no duplicates across the three tables**, and **29 of them blocking** at the moment of recomputation — the second table is itself headed *Blocking*, so counting only the first understated it by thirteen. `D-20` then moved `RI-OD-001` out of the blocking table, so the figures immediately after this correction were 46 open and 28 blocking; the total was never affected, only the split. They have moved twice since — section 16 opened two more, and `D-24` reclassified `P00-OD-011` — and deliberately no current figure is repeated in this row, because a count restated beside the derived one is the exact defect this row exists to close. A corrected constant would rot the same way, so `tests/architecture/test_open_decision_counts.py` now derives every figure from the tables and fails when the prose and the tables disagree. Each of its assertions was proven non-vacuous by planting a readable-but-wrong figure and confirming the count comparison fired for the intended reason. This is the third time in this campaign an inherited number proved stale on recomputation. | Corrected, and the mechanism corrected |
 | D-22 | The Frontier NAS MCP Connector feature package is indexed by reference, not mirrored | Ratification brought a third feature package into canonical scope: `MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086` (Drive folder `1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa`, 17 members by `rclone lsf` on 2026-08-02 — a count no repository artifact attests, since the package is not mirrored). `D-16` mirrored the other two because they drive work packages in section 12 and a reviewer needs to check citations against files. This one drives no planned package: the canonical package's own `MCP-OP-001` recommends finishing the WP-4/WP-5 sequence first, and its acceptance crosswalk marks `MCP-AC-02` and `MCP-AC-04` through `MCP-AC-06` `NOT IMPLEMENTED`. Mirroring 17 further artifacts to support no citation would be scope this plan does not need, against `AGENTS.md` section 2. It is routed by exact Drive identity so it cannot be rediscovered as a surprise. | Indexed by reference |
+| D-23 | Reconcile the module-boundary paths toward the tree, by a driving/driven split | Driving (inbound) adapters go in `src/my_pa/adapters/{http,mcp,cli}/`. Driven (outbound) adapters stay exactly where they already are, under `src/my_pa/infrastructure/{persistence,providers,migration,extraction}/`. Composition roots stay at repository-root `apps/`, a sibling of `src/`. **No existing module moves.** `docs/architecture/module-boundaries.md` section 3 permits refinement, and section 12's WP-4 entry requires the document and the tree to stop disagreeing rather than leaving a reader to work out which of the two is current. A driving/driven split is one rule instead of an ad-hoc list of exceptions, and it costs no churn: `infrastructure/providers/` already **is** section 5.8's `adapters.sources` under another name, so the reconciliation is largely a matter of saying what is already true. The amendment to `module-boundaries.md` section 3 is made by **WP-4B**, in the same change that creates the transports, so that the document and the tree move together rather than the document moving first and being wrong in a new way. | Accepted direction, binding WP-4A and WP-4B. **Not built.** `src/my_pa/adapters/` does not exist and `module-boundaries.md` is unamended; both are WP-4B's work |
+| D-24 | `capabilities.get` publishes effective limits derived from validated `MY_PA_` configuration, not from a module constant | The current `PHASE_01_LIMITS` values in `src/my_pa/application/capabilities.py` become the configuration defaults, so no published number changes on the day this lands. What changes is where the number comes from: **the published maximum is derived from the code path that enforces it rather than maintained beside it.** This resolves `P00-OD-011` for the MCV as a bounded, reversible configuration decision inside delegated authority — the operator can change a limit without a code change, which is the property a constant cannot offer. A corrected constant would rot exactly the way section 14's headline counts did before `D-21` mechanised them; this campaign has now had three inherited numbers prove stale on recomputation, and the fix each time was to derive rather than to restate. **`P00-OD-011` therefore moves out of section 14's blocking table**, since what remains of it is the operator setting different numeric values, which this decision is designed to accept without code change. | Accepted direction, binding WP-4A. **Not built.** The constant is still a constant; `P00-OD-011` reclassified in section 14 |
+| D-25 | The HTTP transport uses Starlette and uvicorn, not FastAPI, bound to loopback | `SPEC-AC-001` requires HTTP and MCP to produce byte-equivalent normalised requests. That is provable when both transports share exactly one validation path — the existing `contracts/v1` pydantic models — and progressively harder to prove when they do not. FastAPI would add a second, HTTP-only validation layer that the MCP adapter has no counterpart for, duplicating validation this repository already owns and weakening the parity claim rather than strengthening it. Loopback binding is not a property of this choice; it is `P00-OD-010` and section 8, and it holds whichever framework is used. | Accepted direction, binding WP-4B. **Not built.** No HTTP transport exists; `apps/gateway/` holds a README |
+| D-26 | The MCP adapter uses the official `mcp` Python SDK over stdio | `AGENTS.md` section 2 admits a dependency that solves a problem the standard library reasonably cannot, and protocol conformance is that problem. Hand-rolling JSON-RPC framing, `initialize`, `tools/list`, and `tools/call` risks silent drift against a specification this repository does not own and cannot pin — a class of defect that surfaces as an incompatible client rather than as a failing test. The SDK's transitive surface substantially overlaps what `D-25` already takes, so the marginal dependency cost is small. | Accepted direction, binding WP-4B. **Not built.** No MCP adapter exists and the dependency is not added |
+| D-27 | Async stays at the transport edge | `domain`, `application`, and `infrastructure` remain synchronous. Starlette endpoints are `def`, so Starlette runs them in its threadpool; the MCP adapter's async handlers call the synchronous application through `anyio.to_thread.run_sync`. `AGENTS.md` section 2 permits async only where real I/O concurrency justifies its lifecycle, testing, and debugging cost. The concurrency here belongs to the transport, not to the use cases: an async application core would buy nothing that the threadpool does not already provide and would force async SQLAlchemy through every layer beneath it. | Accepted direction, binding WP-4A and WP-4B. **Not built.** The application core is synchronous today and stays that way |
+| D-28 | WP-4 ships as two pull requests | WP-4A is the application core — use cases for the eight capabilities, ports, the shared policy and disclosure path, and the derived capability manifest. WP-4B is the transports — HTTP gateway, MCP adapter, operator CLI, both composition roots, the worker lease loop, and the parity and negative-evidence matrices, together with the `D-23` boundary amendment. `AGENTS.md` section 3 requires pull requests to be single-purpose and reviewable, and WP-4 as section 12 specified it is application services plus three transports plus two composition roots plus a worker lease loop — more than one review can hold at the standard this campaign is held to. **This is a packaging decision and changes no scope:** WP-4A and WP-4B together are exactly the WP-4 section 12 defines, every objective and exclusion is preserved, and dependencies that named WP-4 now name whichever half they actually need. | Accepted; sections 7 and 12 updated to match |
+| D-29 | Remote Quick Capture is in MCV scope | The canonical package was revised in place on 2026-08-02 so that `12_MVP_DEFINITION.md` states "Remote Quick Capture is included in the MCV" and enumerates the complete minimal remote text-capture slice, and `13_ROADMAP_AND_DEPENDENCY_SEQUENCE.md` states it "is moved into the MCV delivery sequence rather than treated as a post-MCV enhancement." The operator's standing objective for this campaign is to complete the MCV **as defined by Drive folder `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`**. A revision to that folder's definition of the MCV is therefore a revision to the objective, reaching this plan through the objective's own reference rather than through the package's rank-4 authority. This is the same self-executing form as `D-10` and `D-19`: the row records what the objective now says, it does not authorise it. | Operator-directed, through the objective's own reference |
+| D-30 | The capture endpoint is built behind the gateway boundary on loopback and is not exposed | Roadmap step 3 of the revision requires exposing "the capture-only authenticated HTTP endpoint on the existing gateway boundary", and MCV item 4 requires "an authenticated HTTPS endpoint with a capture-only device/client grant". Three things bound how far that may be taken here, and they agree. `P00-OD-010` — the authentication mechanism — is open. `AGENTS.md` section 5 reserves credential mutation and production activation to the operator. And the revised package restates both limits itself: `MYPA-RQC-D-008` states that MCV product inclusion "does not itself authorize repository mutation, credentials, ingress activation, deployment, production, or risk acceptance", and its own roadmap step 8 defers those to "separate operator activation decisions". So the endpoint is implemented and tested against a local capture-only principal on loopback. **No credential is issued, no ingress is activated, and no authentication mechanism is selected for external use.** Activation stays an operator act, and is tracked as `O-21` and `O-22`. | Bounded by policy the package itself restates |
+| D-31 | The iOS Shortcut client is not built | It is roadmap step 4 and MCV item 5, and it is a client that must reach the endpoint across a network — which `D-30` does not open. Building it would produce something that cannot be exercised end to end without the operator act `D-30` withholds, and testing it "against a non-production endpoint" as the roadmap suggests still requires the endpoint to be reachable off the loopback interface. It is named here rather than left silent so it is not rediscovered as a surprise when WP-6 lands and the MCV is not remotely capturable. | Deferred, disclosed |
+| D-32 | The PWA capture surface is admitted to scope, sequenced last, and this reading is an assumption stated as one | `D-09` records a direct operator instruction of 2026-08-01 that no frontend implementation is in scope "until they say otherwise". The revised package puts the PWA capture surface and the offline-recovery path inside the MCV (item 6) and inside the delivery sequence (roadmap step 5), and `D-29` binds the objective to that documentation — which is the condition `D-09` set for its own lifting. **The reading is not certain.** The package also carries `implementation_authority: NOT_GRANTED`, and under `AGENTS.md` section 1 a rank-4 indexed Workspace publication cannot on its own lift a direct operator instruction; the instruction that would lift `D-09` is the objective's reference to the folder, which is a thinner instrument than the 2026-08-01 words it would be overriding. So it is recorded as an assumption rather than a finding, the package is sequenced after every backend package as WP-10, and nothing else depends on it. If the operator overturns it, one package is dropped and none of the others is wasted — which is the whole reason for sequencing it last rather than for treating the question as settled. `O-04` and `RI-OD-003` already ask the operator when to lift the hold. | Assumption, disclosed, sequenced last |
+| D-33 | The revised canonical package carries three disclosed defects | Stale front matter: all eight revised artifacts still carry `version: 2.1`, `prior_version: 2.0`, a `coordination_request_id` naming the earlier MCP-integration roundtrip, and `repository_head: 9096fa4…`, one commit behind `main` at `ef08ddd`. Unpublished readback evidence: the `revised-artifact-readbacks/`, `publication-controls/`, and `noop/` subfolders of the RQC control folder are empty while the publication receipt asserts `canonical_specification_readback_observed: true`. And no readback-verification artifact was published at all, unlike the MCP-integration set. Section 16 records each as verified here rather than inherited, and records which check therefore carries the mirror's integrity claim. They are disclosed rather than averaged into a general statement of confidence, because the first of them is the reason a version-field check would have reported no change at all. | Disclosed, not smoothed |
 
 ## 14. Consolidated open decisions returned to the operator
 
-Forty-six decisions are open: nine from the Phase 00 ledger, twenty from Quick
-Capture, and seventeen from Relationship Intelligence. Twenty-eight of them block
-a work package in section 12 — fifteen on ordinary grounds and thirteen more that
+Forty-eight decisions are open: nine from the Phase 00 ledger, twenty-two from Quick
+Capture, and seventeen from Relationship Intelligence. Twenty-nine of them block
+a work package in section 12 — fourteen on ordinary grounds and fifteen more that
 are reserved to the operator by policy and block for that reason. The remaining
-eighteen do not block anything yet and are listed so they are not rediscovered
+nineteen do not block anything yet and are listed so they are not rediscovered
 later as surprises.
 
 These numbers are derived from the three tables below, not maintained beside
@@ -779,12 +844,19 @@ them. `tests/architecture/test_open_decision_counts.py` recomputes them from thi
 and fails if this paragraph and those tables disagree.
 
 That test exists because this paragraph was wrong. It previously read "Forty-one
-decisions are open … Sixteen of them block." Both figures were incorrect: the
-tables held forty-six distinct IDs with no duplicates between them, and the
-second table is itself headed *Blocking*, so counting only the first understated
+decisions are open … Sixteen of them block." Both figures were incorrect: at that
+moment the tables held forty-six distinct IDs with no duplicates between them, and
+the second table is itself headed *Blocking*, so counting only the first understated
 the blocking total by thirteen. The correction is recorded as `D-21`, and the
 mechanism was corrected alongside the number because a hand-maintained count
 goes stale silently and this one already had.
+
+The figures above have since moved twice, which is the mechanism working rather
+than failing. Section 16 added two operator decisions to the reserved table, and
+`D-24` moved `P00-OD-011` out of the blocking table into the non-blocking group.
+Both times the paragraph was recomputed from the tables rather than edited to
+taste, and the second move was found by the test rather than remembered. The
+forty-six is left in the previous paragraph as the historical figure it is.
 
 Nothing below is decided here. Where a recommendation exists it is named as a
 recommendation.
@@ -795,7 +867,6 @@ recommendation.
 |---|---|---|---|
 | `P00-OD-003` | Phase 00 ledger | Which reviewed PDF extractor, if any | WP-5 acceptance; PDF stays `unsupported` until then, which is specified behavior, not a defect |
 | `P00-OD-010` | Phase 00 ledger | HTTP/MCP authentication mechanism | WP-4 beyond loopback. WP-4 can be built and tested locally with a local principal; it cannot be exposed |
-| `P00-OD-011` | Phase 00 ledger | Numeric resource limits | WP-4 `capabilities.get` publishes effective maxima; they are currently Phase-01 placeholders |
 | `O-01` | Quick Capture | Final capability, action, and mode names | WP-6 — capability names enter `domain/identity/operation.py` and the public `v1` contract, where renaming later is a breaking change |
 | `O-09` | Quick Capture | Private-note default classification | WP-6. Recommendation: `private_local`, no training, no lock-screen content |
 | `O-14` | Quick Capture | Editing semantics | WP-6. ADR-003 assumes immutable versions with append-only edits; confirming `O-14` ratifies that assumption |
@@ -826,6 +897,17 @@ recommendation.
 | `RI-OD-007` | Relationship Intelligence | Cloud eligibility for relationship briefings. Overlaps `P00-OD-006` |
 | `RI-OD-009` | Relationship Intelligence | Retention and deletion for captures and private notes. Overlaps `O-10` |
 | `RI-OD-016` | Relationship Intelligence | External-action scope after the read-only stages. Overlaps `O-17` |
+| `O-21` | Quick Capture — RQC amendment | Which credential issues the capture-only device/client grant, and who issues it. The revised canonical package requires "an authenticated HTTPS endpoint with a capture-only device/client grant" in the MCV, but `AGENTS.md` section 5 reserves credential creation to the operator and the package's own `MYPA-RQC-D-008` restates that MCV inclusion "does not itself authorize … credentials". `D-30` bounds the work to a local capture-only principal on loopback so the package can pass acceptance without it |
+| `O-22` | Quick Capture — RQC amendment | Whether the capture endpoint may leave loopback, and under what authentication. This presses directly on `P00-OD-010`, which asks the same question for the gateway generally; this narrows it to an endpoint the revised MCV now requires by name, so resolving `P00-OD-010` resolves this one and not the reverse. Ingress activation is reserved by `AGENTS.md` section 5 and by `MYPA-RQC-D-008`. `D-30` builds the endpoint behind the gateway boundary and does not expose it |
+
+The last two rows are opened by this plan rather than inherited from a ledger.
+The 2026-08-02 Remote Quick Capture revision added the material that raises them
+but did **not** revise `15_OPEN_OPERATOR_DECISIONS.md`, so the package that
+created the questions tracks neither. Section 16 records that gap; these rows are
+where it stops being untracked. They are placed here rather than in the ordinary
+blocking table for the reason `P00-OD-006` is: the package is bounded so it can
+pass acceptance without them, and what they block is the operator act on the far
+side of that boundary.
 
 ### Not blocking any planned package
 
@@ -840,6 +922,16 @@ WP-9. What is left is the final UI label set, tracked by the canonical package a
 contract input. See `D-20`, which also records that the ratified package
 treats Relationships as a Library collection rather than a top-level
 destination — a point the earlier `D-18` framing got wrong.
+
+`P00-OD-011` numeric resource limits, which `D-24` moved here out of the blocking
+table. It previously blocked WP-4 on the grounds that `capabilities.get`
+publishes effective maxima and the values were Phase-01 placeholders. `D-24`
+derives the published maximum from validated `MY_PA_` configuration rather than
+from a module constant, keeping the current `PHASE_01_LIMITS` values as the
+defaults. That removes the block without answering the question: the operator may
+still set different numbers, but doing so is a configuration change rather than a
+code change, which is precisely the outcome the decision was shaped to produce.
+What is left is not blocking anything.
 
 `P00-OD-004` contract freeze and `P00-OD-012` `pg_trgm` necessity, both
 `OPEN_REVIEW`. `P00-OD-013` audit retention and `P00-OD-014` parser isolation,
@@ -1128,3 +1220,295 @@ section. A new package version, a revision to any mirrored artifact, or an
 operator decision on `MCP-OP-001` invalidates the affected rows above and
 requires re-reconciliation. It does not invalidate WP-4, whose acceptance
 criteria are bound to repository tests rather than to the package.
+
+**That clause fired on 2026-08-02.** Eight mirrored artifacts were revised in
+place later the same day. Section 16 is the re-reconciliation it requires.
+
+## 16. Reconciliation against the Remote Quick Capture revision
+
+Section 15's invalidation clause names "a revision to any mirrored artifact" as a
+condition requiring re-reconciliation. On 2026-08-02 at approximately 11:49–11:50Z
+a second coordination roundtrip,
+`REQ-MYPA-CANONICAL-PRODUCT-RQC-INTEGRATION-20260802T114700Z`, revised eight of
+the mirrored artifacts in place to fold **Remote Quick Capture** into the MCV.
+This section is that re-reconciliation.
+
+The thing worth saying first is how nearly this was missed. Every revised
+artifact still declares `version: 2.1` — the same version section 15 bound — and
+every one still names the *earlier* roundtrip in its `coordination_request_id`.
+A reader checking the package's own version fields would have concluded that
+nothing had changed. Only a hash comparison found it.
+
+### What was re-mirrored, and how it was verified
+
+Eight artifacts were refreshed from Drive folder `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`
+with `rclone`, which retrieves stored raw bytes; the Drive-reported byte count of
+each matched the retrieved bytes exactly, so no conversion or normalisation
+occurred on the read path.
+
+Each was checked twice, against two independent properties.
+
+| Artifact | Drive ID | Bytes | Receipt hash | Prefix-append |
+|---|---|---|---|---|
+| `00_README.md` | `1NKw2gDkl_C5iFRQqh2mRDxmSZtoZpDgQ` | 6,137 | match | holds |
+| `01_EXECUTIVE_PRODUCT_DESCRIPTION.md` | `15Umcs2JBMdFvxfRgNaA-P-Nc_iC3jDHV` | 16,241 | match | holds |
+| `02_CANONICAL_PRODUCT_SYNTHESIS_SPECIFICATION.md` | `18l1S2iz5v_qgKZg8iVBAw47xvuHkbOjI` | 28,118 | match | holds |
+| `08_DEVICE_AND_PLATFORM_STRATEGY.md` | `1Y7dDra-1NlN5sTrbg4yBrdEeo1F8B6HA` | 5,218 | match | holds |
+| `09_CANONICAL_OBJECT_AND_DOMAIN_MODEL.md` | `1xwJPqXyXR0UepmF_lmkrOspEX8Xosq_W` | 11,322 | match | holds |
+| `12_MVP_DEFINITION.md` | `1CwOBwGsRuxF8O3tazLFK3UnW_I-5aSAq` | 8,524 | match | holds |
+| `13_ROADMAP_AND_DEPENDENCY_SEQUENCE.md` | `12dfRuODgib94H53RWH1wWJcGUdDHYZ7Y` | 8,245 | match | holds |
+| `14_DECISION_LOG.md` | `1ty-sjhwJ5q8-XpUqwKINh_WO61CXg7Um` | 6,447 | match | holds |
+
+*Receipt hash* is the retrieved bytes re-hashed and compared against the SHA-256
+published for that artifact in
+`PUBLICATION-RECEIPT-REQ-MYPA-CANONICAL-PRODUCT-RQC-INTEGRATION-20260802T114700Z.json`:
+eight of eight, zero mismatches, and the same eight verified again after being
+written into this repository. The `CANONICAL-ARTIFACT-DISPOSITION` publishes the
+same eight hashes, so the two agree — but they are not independent sources, since
+the same roundtrip produced both.
+
+*Prefix-append* is the independent property. Every revision is a pure byte-prefix
+append: the new bytes begin with the previously mirrored bytes, verified against
+the blobs committed at `ef08ddd`, with a new trailing section added. Nothing that
+this repository had already reviewed was altered, so the reconciliation in section
+15 remains valid for everything it covered and this section only has to account
+for what was added.
+
+The RQC control set lives in a new subfolder,
+`RQC-INTEGRATION-20260802T114700Z` (`1t6fzDfHVrLQe6Wd2qjAtZ2ll--fYNPaF`). Three of
+its members are mirrored beside the artifacts they attest, following the precedent
+the MCP-integration control artifacts already set: the `CANONICAL-ARTIFACT-DISPOSITION`,
+the `PUBLICATION-RECEIPT`, and the `COORDINATION-ROUNDTRIP-RECEIPT`. The
+coordination request (`1yhkRgk6qcd2V-PWucS7WuRrbCO72FVAn`) and response
+(`1qVhuUeeApFEGQQrq22lUzQwYhkQWyXN7`) are indexed by exact Drive ID and **not**
+mirrored, following `D-22`: they are governance correspondence supporting no
+citation in this repository, and mirroring material to support no citation is
+scope `AGENTS.md` section 2 does not want. As with the MCP-integration control
+artifacts, nothing in the package hashes these three, so they rest on the weaker
+check of Drive-reported byte count matching the retrieved bytes — 3,356, 3,805,
+and 786 respectively.
+
+### What the revision changed in substance
+
+**Remote Quick Capture is included in the MCV.** `12_MVP_DEFINITION.md` states it
+directly and enumerates the slice; `13_ROADMAP_AND_DEPENDENCY_SEQUENCE.md` moves
+it into the MCV delivery sequence "rather than treated as a post-MCV enhancement."
+`D-29` records what that does to this campaign's objective.
+
+**The Stage 1 transport is an iOS Shortcut posting one text field to
+`capture.create`.** One unrestricted text field is stated to be sufficient;
+prefixes such as Person, Project, or Task are "optional accelerators only". The
+service is transport-neutral, which is what lets the endpoint and the client be
+sequenced separately — as `D-30` and `D-31` do.
+
+**The durable-first contract.** Successful capture requires *one committed
+transaction* containing the stable Capture and CaptureVersion identities, the
+exact original content, a content hash, the authenticated principal, the
+registered client or device, the idempotency result, the classification and
+processing policy, an audit reference, a processing outbox job, and the receipt.
+Classification, model availability, entity resolution, domain routing, search
+indexing, and downstream promotion "cannot block or redefine capture success."
+This is a strong and welcome constraint: it is the same shape ADR-003 already
+gives Capture, and it rules out the failure mode where a capture is acknowledged
+and then lost because enrichment failed.
+
+**Captured content is untrusted data and never authorization.** It "is
+source-authoritative for what the operator wrote and for nothing else… It cannot
+send messages, delete records, modify external systems, execute shell or code,
+expand source scope, invoke unrestricted MCP tools, approve proposals, or accept
+risk." This agrees with `AGENTS.md` and with the threat model, and it is worth
+noting that the package states it rather than leaving it to the repository.
+
+**A PWA capture surface and offline-recovery path are named inside the MCV.**
+MCV item 6 and roadmap step 5. This is the one part of the revision that touches
+a standing operator instruction, and `D-32` records it as an assumption rather
+than as a finding.
+
+**SMS, iMessage, and hosted messaging are excluded from the MCV baseline.**
+`MYPA-RQC-D-004`, with `01_EXECUTIVE_PRODUCT_DESCRIPTION.md` giving the reason:
+meeting the no-incremental-service-charge constraint would otherwise require an
+already-paid receiving number and a relay device.
+
+### Six new canonical record types, and which package would build each
+
+`09_CANONICAL_OBJECT_AND_DOMAIN_MODEL.md` gained six record types under a
+*Remote Quick Capture object-model amendment* heading. The table below maps each
+onto the work package that would build it, in the same manner as section 12's
+mapping table.
+
+**A caution carried forward from that table.** It was corrected once for treating
+a bare name in `09`'s *Supporting records* list as a derivation it did not have.
+The same discipline applies here, and the honest report is that this amendment is
+*better* documented than that list: all six arrive with at least a one-clause
+gloss, so none is a bare name. Two rows are nonetheless weaker than the rest, and
+say so.
+
+| Built here | Canonical record type | Package | Note |
+|---|---|---|---|
+| Capture submission envelope | `CaptureSubmission` | **WP-6** | **Defined, and the most fully specified of the six.** `09` enumerates its fields: request, correlation, idempotency, principal, registered client/device or relay, transport, capture method, trust state, transport message identifier, client timestamps, server receipt time, payload hash, admission result, CaptureVersion, and receipt. WP-6 already owns idempotency, receipt, and the durable-first transaction, so this is the record that transaction writes |
+| Registered capture client | `RegisteredCaptureClient` | **WP-6** | **Defined.** Principal binding, device/client type, revocable credential reference, permitted capability, rate and size limits, creation, last-seen, and revocation state. Note that WP-6 builds the *record*, not a credential: `D-30` issues none, and the "revocable credential reference" is a reference to something `O-21` has not yet decided how to issue |
+| Delivery attempt log | `CaptureDeliveryAttempt` | **WP-6** | **Defined, but thinly.** `09` gives one clause — "bounded delivery attempts and safe error classification" — and no fields, unlike `CaptureSubmission` beside it. What "bounded" and the error taxonomy mean is not specified, so WP-6 derives them from the existing job lease/retry work in WP-2 rather than from `09`. Stated because the row rests on a gloss, not on a specification |
+| Classification and domain assignment | `CaptureClassification`, `CaptureDomainAssignment` | **WP-7** | **One shared gloss covering two names.** `09` defines them jointly — "versioned multi-label interpretation without relocating or overwriting the Capture" — and gives `CaptureDomainAssignment` nothing that distinguishes it from `CaptureClassification`. So this row claims the pair, not each separately, and the boundary between them is a WP-7 design question the package does not answer. The *versioned* and *without relocating or overwriting* clauses are the load-bearing part and are unambiguous |
+| Entity mention | `CaptureEntityMention` | **WP-7** | **Defined.** Exact surface text, evidence span, entity type, unresolved/candidate/resolved state, and later resolution lineage. This lands squarely on WP-7's evidence-span work, and the unresolved/candidate/resolved ladder is the same shape as the `Proposal` states section 12 already directs WP-7 to use — not the trust ladder that section corrected |
+| Correction | `CaptureCorrection` | **WP-8** | **Defined.** Four kinds — source-text successor version, derived-value correction, identity correction, routing correction — "each with immutable lineage". WP-8 owns promotion and correction, and immutable lineage is the same append-only discipline ADR-003 gives CaptureVersion |
+
+No new package is created for these. The durable-first transaction, immutability,
+idempotency, evidence spans, and proportional review they depend on are already
+the acceptance criteria of WP-6 through WP-8, and a seventh package would
+duplicate them.
+
+### The new prohibition
+
+`09` closes the amendment with a prohibition this repository should adopt without
+qualification:
+
+> No transport-specific note store, SMS memory, PRIE memory database, second
+> knowledge store, or model-specific memory is permitted.
+
+This agrees with `docs/architecture/module-boundaries.md` and with `D-20`'s
+disposal of the separate-PRIE-database framing. It is stated here because it is
+the kind of constraint that is cheap to hold now and expensive to retrofit: every
+one of the six record types above hangs off the single Capture chain, and the
+prohibition is what keeps a second transport from growing its own.
+
+### Eight new package decisions
+
+`14_DECISION_LOG.md` gained `MYPA-RQC-D-001` through `-008`: RQC incorporated into
+the MCV as an extension of Quick Capture (`-001`); iOS Shortcut over authenticated
+HTTPS as the initial transport (`-002`); the first-party PWA as the canonical
+cross-platform, offline-recovery, history, correction, and Review client (`-003`);
+SMS, hosted messaging APIs, additional cellular service, and iMessage relays
+excluded from the MCV baseline (`-004`); capture success meaning durable source
+persistence and receipt before enrichment (`-005`); message content as evidence
+data granting no external-action, deletion, command, policy, or unrestricted-tool
+authority (`-006`); and the governing feature package
+`MYPA-REMOTE-QUICK-CAPTURE-FEATURE-PACKAGE-20260802-001`, Drive folder
+`1lDSkTldgSkaRfJ3v9h-U10lCe-Lmwzsv` (`-007`), which is neither mirrored nor
+examined here.
+
+`-008` is the one to read closely, because it is the package limiting itself:
+
+> `MYPA-RQC-D-008`: MCV product inclusion does not itself authorize repository
+> mutation, credentials, ingress activation, deployment, production, or risk
+> acceptance.
+
+`D-30` and `D-31` are bounded by that sentence rather than in spite of it. When a
+publication and this repository's policy agree on a limit, the limit is not in
+tension with anything and there is no judgement call to make.
+
+### Authority did not change
+
+`implementation_authority: NOT_GRANTED` survives the revision. It is present in
+the front matter of all eight revised artifacts — the exact field, unchanged —
+and the RQC disposition JSON carries the same in its authority block:
+
+```json
+"authority": {
+  "implementation": "NOT_GRANTED",
+  "deployment": "NOT_GRANTED",
+  "production": "NOT_GRANTED",
+  "risk_acceptance": "NONE"
+}
+```
+
+The publication receipt independently lists `blocked_actions` covering repository
+mutation, credential creation, ingress activation, deployment, production
+activation, and risk acceptance. So the three limits section 15 recorded all
+survive: no implementation authority, rank 4 under `AGENTS.md` section 1, and the
+package sequencing itself behind the repository's own work. What authorises the
+work packages is the operator's objective, exactly as before — see `D-29`.
+
+### Three defects in the revised package
+
+Each was verified against the retrieved bytes and the Drive listing rather than
+inherited from a report.
+
+**1. Stale front matter.** All eight revised artifacts still carry `version: 2.1`
+and `prior_version: 2.0` — unchanged across a revision that added between 967 and
+2,620 bytes of new normative content each. All eight still carry
+`coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z`,
+naming the *earlier* roundtrip rather than the one that revised them. And all
+eight bind `repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575`, which is
+one commit behind `main` at `ef08ddd` — the commit that mirrored the package in
+the first place. The disposition JSON repeats the same stale head.
+
+The consequence is the part worth recording. **A version-field check would not
+have detected this revision at all**, because no version field moved. Only a hash
+check did. A future reader deciding how to test this mirror for staleness should
+trust the hash and not the version, and should treat `version: 2.1` in these eight
+files as naming the package generation rather than the artifact revision.
+
+**2. Unpublished readback evidence.** The RQC control folder contains three
+subfolders — `revised-artifact-readbacks/` (`1YG4ibwYuWGaieCYhKlxggtaDEfDZZeEh`),
+`publication-controls/` (`1V_6x0gaxULtU69HCrRS0A1elAjocmZof`), and `noop/`
+(`1EYk2P5VEu_HtbymbXicX8YmODAUtSYu4`) — and a recursive listing returns no members
+in any of them. They are empty. Meanwhile the publication receipt asserts
+`"canonical_specification_readback_observed": true`. The assertion may well be
+true; what is missing is the evidence that would let anyone check it. The claim
+and its support were published to the same folder in the same roundtrip, and only
+the claim arrived.
+
+One correction to how this defect has been described elsewhere: the assertion is
+in the **publication receipt**, not in the coordination roundtrip receipt. The
+roundtrip receipt carries only `index_registration_verified: true` and the
+identity bindings. The distinction matters because the two artifacts are attested
+by different steps.
+
+**3. No readback-verification artifact.** The MCP-integration control set
+published `READBACK-VERIFICATION-REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z.json`,
+which is one of the three independent hash sources section 15 relied on. The RQC
+set publishes no equivalent.
+
+So it is worth being exact about what carries the mirror's integrity claim here,
+because it is weaker than what section 15 had. Section 15 verified 21 artifacts
+against three in-package hash sources. This section has **one** hash source —
+the publication receipt, with the disposition repeating it rather than
+corroborating it — plus **one independent structural property**, the
+prefix-append check against the bytes committed at `ef08ddd`. The prefix-append
+check is what does the real work: it is the only check here not derived from the
+RQC roundtrip's own output, and it independently establishes that the previously
+verified content was not altered. There is no independent readback, and this
+section does not claim one.
+
+### `15_OPEN_OPERATOR_DECISIONS.md` was not revised
+
+It is not among the eight revised artifacts; its Drive modification time is
+2026-08-02T10:07:51Z, from the earlier roundtrip. The revision therefore created
+operator decisions that the package's own ledger does not track — and, before
+this section, that no ledger tracked at all.
+
+Two of them are concrete enough to name:
+
+- **Which credential issues the capture-only device/client grant.** MCV item 4
+  requires the grant; `RegisteredCaptureClient` carries a "revocable credential
+  reference"; nothing says who issues it or how. Now tracked as `O-21`.
+- **Whether the capture endpoint may leave loopback.** Roadmap step 3 puts an
+  authenticated endpoint on the gateway boundary; roadmap step 8 defers
+  activation to the operator; neither says what the intermediate state is. Now
+  tracked as `O-22`.
+
+`O-22` presses directly on the already-open **`P00-OD-010`**, the HTTP/MCP
+authentication mechanism. They are not duplicates and the relationship runs one
+way: `P00-OD-010` asks the general question for the gateway, `O-22` narrows it to
+an endpoint the revised MCV now requires by name. Resolving `P00-OD-010` resolves
+`O-22`; resolving `O-22` alone would leave the gateway question open. Both are in
+section 14, whose counts are derived from its tables and enforced by
+`tests/architecture/test_open_decision_counts.py`, so adding them moved the
+headline figures automatically rather than by hand.
+
+### Invalidation
+
+This reconciliation binds the eight artifacts revised by
+`REQ-MYPA-CANONICAL-PRODUCT-RQC-INTEGRATION-20260802T114700Z`, at the SHA-256
+values published in
+`PUBLICATION-RECEIPT-REQ-MYPA-CANONICAL-PRODUCT-RQC-INTEGRATION-20260802T114700Z.json`
+and re-verified here on 2026-08-02, against this plan at the commit that
+introduces this section. Section 15 continues to bind everything it covered,
+because the prefix-append property means none of it changed.
+
+A further revision to any mirrored artifact invalidates the affected rows above
+and requires re-reconciliation — and, given defect 1, **that condition must be
+tested by hash rather than by version field**, since the last revision moved no
+version. An operator decision on `D-32`, `O-21`, or `O-22` invalidates the rows
+that depend on it. Publication of the missing readback evidence would strengthen
+defects 2 and 3 rather than invalidate anything.

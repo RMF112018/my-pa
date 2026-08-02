@@ -95,3 +95,18 @@ This sequence is dependency-driven and grants no implementation authority.
 
 Parallelization may occur only where it does not weaken dependency evidence. A later repository commit, schema contract, client release, OAuth standard/profile change, or ingress topology change invalidates affected review and compatibility evidence.
 
+## Remote Quick Capture sequence amendment
+
+Remote Quick Capture is moved into the MCV delivery sequence rather than treated as a post-MCV enhancement. The bounded order is:
+
+1. Finalize the shared Capture authority, `capture.create` contract, policy matrix, migrations, receipt, audit, and outbox semantics.
+2. Implement the durable application service and asynchronous worker path using synthetic data.
+3. Expose the capture-only authenticated HTTP endpoint on the existing gateway boundary.
+4. Deliver and test the iOS Shortcut against a non-production endpoint and synthetic captures.
+5. Deliver the PWA capture/history/retry surface and prove offline reconciliation.
+6. Add multi-domain routing, unresolved identity, proportional Review, and exact Trace to original content.
+7. Run adversarial, recovery, privacy, and idempotency acceptance tests and obtain independent exact-head review.
+8. Seek separate operator activation decisions for credentials, ingress, deployment, and production.
+
+Rich attachments, native App Intents, browser extension, Android share target, desktop helpers, voice/audio, SMS/iMessage relay experiments, and other self-hosted messaging protocols remain later stages.
+

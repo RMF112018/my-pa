@@ -205,3 +205,11 @@ Google Drive-like capability is pursued at the semantic level: discover, search,
 
 The connector advances the long-term product vision by letting the evidence operating model travel to the user's preferred reasoning surfaces. It does not change the category: `my-pa` remains an evidence-grounded executive continuity system.
 
+## Remote Quick Capture in the MCV
+
+The MCV includes Remote Quick Capture as a first-class extension of the global Capture capability. From an iPhone, the user can invoke a Shortcut from Siri, the Home Screen, supported Lock Screen or Action Button surfaces, the Share Sheet, or Apple Watch; enter or dictate one unrestricted message; submit it through authenticated HTTPS; receive a durable receipt; and leave without waiting for classification or enrichment.
+
+The product preserves the exact original message before interpretation, then asynchronously classifies it, extracts entities and typed proposals, routes it across Relationships, projects, tasks, commitments, decisions, conversations, general notes, household information, and future domains, and applies proportional Review and promotion policy. No message text grants authority to send, delete, modify external systems, execute commands, or invoke unrestricted tools.
+
+The MCV transport decision is iOS Shortcut plus first-party PWA/API. Literal SMS is not required and is excluded because meeting the no-incremental-service-charge constraint would otherwise require an already-paid receiving number and relay device.
+

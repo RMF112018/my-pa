@@ -480,3 +480,32 @@ The product may expose a compact provider-neutral surface for capability discove
 9. Edge authorization never substitutes for origin validation and application policy.
 10. Every consequential mutation produces an attributable audit event and durable receipt.
 
+## Remote Quick Capture MCV requirements
+
+### Product placement
+
+Remote Quick Capture is part of Quick Capture and the MCV, not a separate messaging product or PRIE-only feature. `Capture` remains the canonical product object; `Capture Inbox` is a processing and Review view; and `capture.create` is the transport-neutral application command.
+
+### Selected Stage 1 transport
+
+- iOS Shortcut submits typed, dictated, pasted, or shared text over authenticated HTTPS.
+- One unrestricted text field is sufficient; prefixes such as Person, Project, Task, Call, or Remember are optional accelerators only.
+- The PWA provides the canonical cross-platform surface, durable device-side offline queue where supported, capture history, correction, and Review.
+- SMS, iMessage relays, hosted messaging APIs, and additional cellular lines are outside the MCV baseline.
+
+### Durable-first contract
+
+Successful capture requires one committed transaction containing the stable Capture and CaptureVersion identities, exact original content, content hash, authenticated principal, registered client/device, idempotency result, classification and processing policy, audit reference, processing outbox/job, and receipt. Classification, model availability, entity resolution, domain routing, search indexing, and downstream promotion cannot block or redefine capture success.
+
+### Authority and safety
+
+Captured content is source-authoritative for what the operator wrote and for nothing else. It is untrusted data, not authorization. It cannot send messages, delete records, modify external systems, execute shell or code, expand source scope, invoke unrestricted MCP tools, approve proposals, or accept risk.
+
+### Domain and identity behavior
+
+A single capture may create a general note plus multiple typed proposals. Name-only mentions remain unresolved or candidate-bound until governed resolution; they never silently establish a confirmed canonical identity. Low-risk explicitly user-authored private observations may promote only under an explicit policy; commitments, consequential dates, affiliation changes, ambiguity, sensitive information, contradictions, public claims, and proposed external actions require Review.
+
+### MCV acceptance additions
+
+The MCV must prove: authenticated Shortcut submission; durable acknowledgment before enrichment; exact-content retrieval and hash match; idempotent replay; safe failure without false “saved” claims; asynchronous processing; unresolved-identity preservation; cross-domain proposal routing; no content in normal logs; cloud-ineligible default; and no external action authority.
+

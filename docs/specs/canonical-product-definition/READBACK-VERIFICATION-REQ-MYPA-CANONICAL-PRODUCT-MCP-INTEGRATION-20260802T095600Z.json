@@ -1,0 +1,189 @@
+{
+  "artifact_id": "READBACK-VERIFICATION-REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z",
+  "coordination_request_id": "REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z",
+  "package_id": "MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006",
+  "folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+  "verification_time": "2026-08-02T10:13:00Z",
+  "representation": "stored_raw_bytes",
+  "hash_algorithm": "SHA-256",
+  "member_count": 21,
+  "all_readbacks_match": true,
+  "drive_id_continuity": "VERIFIED",
+  "parent_folder_continuity": "VERIFIED",
+  "mime_type_continuity": "VERIFIED",
+  "members": [
+    {
+      "name": "00_README.md",
+      "expected_bytes": 5170,
+      "readback_bytes": 5170,
+      "expected_sha256": "7a75d559ee8fab88cbf8d6d972b48bbcd11e07b308a33501e57bd2be0f14ef21",
+      "readback_sha256": "7a75d559ee8fab88cbf8d6d972b48bbcd11e07b308a33501e57bd2be0f14ef21",
+      "match": true
+    },
+    {
+      "name": "01_EXECUTIVE_PRODUCT_DESCRIPTION.md",
+      "expected_bytes": 15059,
+      "readback_bytes": 15059,
+      "expected_sha256": "cc68d07d7c06105b93924b32adabf966b61a0da937e305444151c330f459c8c4",
+      "readback_sha256": "cc68d07d7c06105b93924b32adabf966b61a0da937e305444151c330f459c8c4",
+      "match": true
+    },
+    {
+      "name": "02_CANONICAL_PRODUCT_SYNTHESIS_SPECIFICATION.md",
+      "expected_bytes": 25498,
+      "readback_bytes": 25498,
+      "expected_sha256": "94506d715b81bf95b509325f2ba4c7018a40c96234005c401efe19f9212ec6fb",
+      "readback_sha256": "94506d715b81bf95b509325f2ba4c7018a40c96234005c401efe19f9212ec6fb",
+      "match": true
+    },
+    {
+      "name": "03_PRODUCT_PRINCIPLES.md",
+      "expected_bytes": 4803,
+      "readback_bytes": 4803,
+      "expected_sha256": "78d910a8878ace0ac0eee221871f24e5b0a2e72e0e813583c2071d5a16257962",
+      "readback_sha256": "78d910a8878ace0ac0eee221871f24e5b0a2e72e0e813583c2071d5a16257962",
+      "match": true
+    },
+    {
+      "name": "04_PRODUCT_PROMISE_AND_POSITIONING.md",
+      "expected_bytes": 3593,
+      "readback_bytes": 3593,
+      "expected_sha256": "c3124707e5eb7cb6d44baecc3e861c67a847446e6971ba5b25fbd320d81b5bc5",
+      "readback_sha256": "c3124707e5eb7cb6d44baecc3e861c67a847446e6971ba5b25fbd320d81b5bc5",
+      "match": true
+    },
+    {
+      "name": "05_INFORMATION_ARCHITECTURE.md",
+      "expected_bytes": 4560,
+      "readback_bytes": 4560,
+      "expected_sha256": "23414f4bff89eb3f0378f1184abb4c25aa9552fcdbaf5250d94c63bf863df72e",
+      "readback_sha256": "23414f4bff89eb3f0378f1184abb4c25aa9552fcdbaf5250d94c63bf863df72e",
+      "match": true
+    },
+    {
+      "name": "06_WORKFLOW_INVENTORY.md",
+      "expected_bytes": 8893,
+      "readback_bytes": 8893,
+      "expected_sha256": "b245732f48ae9ed13763876f12b49d60fd79631bf4c1cde4e77712628e6c5eec",
+      "readback_sha256": "b245732f48ae9ed13763876f12b49d60fd79631bf4c1cde4e77712628e6c5eec",
+      "match": true
+    },
+    {
+      "name": "07_FRONTEND_ARCHITECTURE.md",
+      "expected_bytes": 6093,
+      "readback_bytes": 6093,
+      "expected_sha256": "83fd7b0b8104f92c720bf9115e1a5e4ea02571f29f416dc168bc6a09c72f741f",
+      "readback_sha256": "83fd7b0b8104f92c720bf9115e1a5e4ea02571f29f416dc168bc6a09c72f741f",
+      "match": true
+    },
+    {
+      "name": "08_DEVICE_AND_PLATFORM_STRATEGY.md",
+      "expected_bytes": 4141,
+      "readback_bytes": 4141,
+      "expected_sha256": "7a895e8b7436302f8c3d2a6471830e786f06d9516bd2e88dfbc5bd7100865646",
+      "readback_sha256": "7a895e8b7436302f8c3d2a6471830e786f06d9516bd2e88dfbc5bd7100865646",
+      "match": true
+    },
+    {
+      "name": "09_CANONICAL_OBJECT_AND_DOMAIN_MODEL.md",
+      "expected_bytes": 10019,
+      "readback_bytes": 10019,
+      "expected_sha256": "6fd75aaf2d2e0f135b53a185ded399bf13f27d56cd8ce43f25e93005e44c713c",
+      "readback_sha256": "6fd75aaf2d2e0f135b53a185ded399bf13f27d56cd8ce43f25e93005e44c713c",
+      "match": true
+    },
+    {
+      "name": "10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md",
+      "expected_bytes": 5217,
+      "readback_bytes": 5217,
+      "expected_sha256": "fa09a6f6e15030c33883dc9bf08293ca8e68117cca58dff14101f6dca8b18726",
+      "readback_sha256": "fa09a6f6e15030c33883dc9bf08293ca8e68117cca58dff14101f6dca8b18726",
+      "match": true
+    },
+    {
+      "name": "11_AI_REVIEW_AND_PROMOTION_STRATEGY.md",
+      "expected_bytes": 5486,
+      "readback_bytes": 5486,
+      "expected_sha256": "c84364af01042dc933d645a4a6139d180bd1b88f6994621d4a59337f1e58fce6",
+      "readback_sha256": "c84364af01042dc933d645a4a6139d180bd1b88f6994621d4a59337f1e58fce6",
+      "match": true
+    },
+    {
+      "name": "12_MVP_DEFINITION.md",
+      "expected_bytes": 7280,
+      "readback_bytes": 7280,
+      "expected_sha256": "5961b073432d2cbedbc6f134c5756f612c33fcf7c2022806fd5fd7dbecc1b7f3",
+      "readback_sha256": "5961b073432d2cbedbc6f134c5756f612c33fcf7c2022806fd5fd7dbecc1b7f3",
+      "match": true
+    },
+    {
+      "name": "13_ROADMAP_AND_DEPENDENCY_SEQUENCE.md",
+      "expected_bytes": 7044,
+      "readback_bytes": 7044,
+      "expected_sha256": "64b1506d35f4829f58d301ca4618d7c5dbd679f847d94ef040b47e56e9044628",
+      "readback_sha256": "64b1506d35f4829f58d301ca4618d7c5dbd679f847d94ef040b47e56e9044628",
+      "match": true
+    },
+    {
+      "name": "14_DECISION_LOG.md",
+      "expected_bytes": 5311,
+      "readback_bytes": 5311,
+      "expected_sha256": "6a041e4cc0ed27161e80667d5cfed48c8e91299524ff68053f586a5dc53c6c3d",
+      "readback_sha256": "6a041e4cc0ed27161e80667d5cfed48c8e91299524ff68053f586a5dc53c6c3d",
+      "match": true
+    },
+    {
+      "name": "15_OPEN_OPERATOR_DECISIONS.md",
+      "expected_bytes": 5940,
+      "readback_bytes": 5940,
+      "expected_sha256": "a31e7c485a25b79c4fbceb89d5e3f2831f02c999fc7ddeab1f3bb78e34b0b3bc",
+      "readback_sha256": "a31e7c485a25b79c4fbceb89d5e3f2831f02c999fc7ddeab1f3bb78e34b0b3bc",
+      "match": true
+    },
+    {
+      "name": "16_VISUAL_ATLAS_MANIFEST.md",
+      "expected_bytes": 4286,
+      "readback_bytes": 4286,
+      "expected_sha256": "9918cd35bf530c1a8ffb4e6769a8c695963271db0f459e583818efcf61583716",
+      "readback_sha256": "9918cd35bf530c1a8ffb4e6769a8c695963271db0f459e583818efcf61583716",
+      "match": true
+    },
+    {
+      "name": "17_STRUCTURED_VISUAL_CONCEPTS.md",
+      "expected_bytes": 9167,
+      "readback_bytes": 9167,
+      "expected_sha256": "1fb9ce138855800afc4a2a26d692f0ab44f50301d1dcb4b46a377952d019e3cf",
+      "readback_sha256": "1fb9ce138855800afc4a2a26d692f0ab44f50301d1dcb4b46a377952d019e3cf",
+      "match": true
+    },
+    {
+      "name": "18_PACKAGE_SOURCE_MANIFEST.json",
+      "expected_bytes": 19096,
+      "readback_bytes": 19096,
+      "expected_sha256": "4b8a9159c59338743a94999a15191680f5114f3856142f576691d188df72fea7",
+      "readback_sha256": "4b8a9159c59338743a94999a15191680f5114f3856142f576691d188df72fea7",
+      "match": true
+    },
+    {
+      "name": "19_ACCEPTANCE_CRITERIA_CROSSWALK.md",
+      "expected_bytes": 5413,
+      "readback_bytes": 5413,
+      "expected_sha256": "82142cd31c173bcc0d1b5f6653bc4e3b2fd3b01992b266d08a50fe0abe47dac0",
+      "readback_sha256": "82142cd31c173bcc0d1b5f6653bc4e3b2fd3b01992b266d08a50fe0abe47dac0",
+      "match": true
+    },
+    {
+      "name": "20_RISKS_AND_REJECTED_PATTERNS.md",
+      "expected_bytes": 7293,
+      "readback_bytes": 7293,
+      "expected_sha256": "f5da6c9ffa4e9f139ac3eb77df6d64534d43224251f60245b9b861785b80c0c8",
+      "readback_sha256": "f5da6c9ffa4e9f139ac3eb77df6d64534d43224251f60245b9b861785b80c0c8",
+      "match": true
+    }
+  ],
+  "limitations": [
+    "Exact Git tree SHA and local worktree state were unavailable through the authenticated GitHub connector.",
+    "No rendered visual atlas was generated; only the visual manifest and structured concepts were revised.",
+    "No client compatibility, deployment, live NAS access, or implementation validation was performed."
+  ]
+}

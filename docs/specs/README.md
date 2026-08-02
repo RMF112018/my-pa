@@ -5,6 +5,7 @@ Owning index for versioned behavioral contracts in `RMF112018/my-pa`. Repository
 | Specification | Status |
 |---|---|
 | [`mcv-read-only-vertical-slice.md`](mcv-read-only-vertical-slice.md) | Present — proposed for repository review; amended 2026-08-02 for the promoted scope |
+| [`canonical-product-definition/`](canonical-product-definition/00_README.md) | Mirror — **ratified** canonical product definition, implementation not authorized |
 | [`relationship-intelligence-v0.2.md`](relationship-intelligence-v0.2.md) | Mirror — proposed product specification, implementation not authorized |
 | [`quick-capture/`](quick-capture/00_README.md) | Mirror — proposed product specification, implementation not authorized |
 
@@ -13,6 +14,51 @@ The MCV abbreviation follows [`AGENTS.md`](/AGENTS.md): Minimum Viable Candidate
 A specification here describes intended capability, error, and disclosure behavior. It does not authorize runtime implementation, credentials, source-system access, database changes, background scheduling, deployment, or production activation; those require a separately approved goal.
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy identities may appear only in explicit compatibility or evidence records.
+
+## The ratified canonical product definition
+
+On 2026-08-02 the operator ratified a whole-product definition for `my-pa`. It is mirrored at [`canonical-product-definition/`](canonical-product-definition/00_README.md) as package `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, version 2.1, status `CURRENT_CANONICAL_PRODUCT_DEFINITION`.
+
+**What ratification changed.** The repository previously recorded the product direction as *proposed* and named its ratification the largest open operator decision. That question is answered. The direction is now settled product meaning, and the plan's open-decision list is correspondingly shorter.
+
+**What ratification did not change.** Three things, and conflating any of them with acceptance would be the error this section exists to prevent.
+
+- **It grants no implementation authority.** The package states `implementation_authority: NOT_GRANTED` and `repository_mutation: NOT_PERFORMED` in the front matter of every artifact. Ratifying a definition of the product is not authorizing anyone to build it.
+- **It does not outrank repository policy.** Under [`AGENTS.md`](/AGENTS.md) section 1, indexed Workspace publications sit at precedence rank 4, below accepted repository specifications, ADRs, and policy at rank 3, and below authenticated runtime and repository state above those. A ratified Drive package is authoritative for *what the product means*, not for what this repository may do. Where it and policy disagree, policy still wins.
+- **It does not enlarge the active objective.** The package agrees, and says so itself: its own `OP-05` recommends completing the MCV before an explicit transition, and its roadmap step `R10.1` names finishing repository WP-4 and WP-5 as the prerequisite to everything else. Ratification endorsed the existing sequence rather than displacing it.
+
+### Relationship to `my-pa vNext`
+
+The predecessor, `my-pa vNext` (`SPEC-MYPA-VNEXT-PRODUCT-SYNTHESIS-v1.0`, Drive `17olnyUF5oX-KJWB6owRIJBB8B4QTlRjJhkLG47gio9s`), is **superseded for current whole-product definition and preserved as source history**. This is supersession within one lineage, not a replacement from outside it: the vNext document and the ratified package folder are siblings under the same Drive parent `1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz`, and the package's own README states the prior package "remains preserved and authoritative source history."
+
+Evidence strength improved across that supersession, which is worth stating because it rarely does. vNext is a native Google Doc and could only ever be verified on identity. The ratified package is stored raw bytes with per-file hashes, so it can be verified byte-for-byte — see the table below.
+
+The owning Quick Capture and Relationship Intelligence specifications below **remain current** where they are more detailed and not explicitly reconciled; the package says so directly. Ratification did not supersede them.
+
+### Provenance and how strongly it can be trusted
+
+| Field | Value |
+|---|---|
+| Package folder | `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`, parent `1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz` |
+| Representation | `stored_raw_bytes` (`text/markdown` and `application/json`) |
+| Retrieved | 2026-08-02 via `rclone copy --drive-root-folder-id` |
+| Repository head the package binds | `9096fa4fbe64ff1cdabc07e53a3e68c52efc8575` — current `main` at ratification |
+| Verification | **Byte-exact, against two independent in-package hash sources.** All 21 numbered artifacts were re-hashed after being written here: 21 verified, zero mismatches against `CANONICAL-ARTIFACT-DISPOSITION-…json`, and the 20 of them that `18_PACKAGE_SOURCE_MANIFEST.json` also covers verified against it independently. |
+
+Twenty-four of the package's thirty-one Drive members are mirrored. The seven not mirrored are coordination correspondence and one superseded publication receipt, which remain in Drive; this follows the precedent set for `quick-capture/`, where governance correspondence was likewise left behind.
+
+Three mirrored artifacts carry no in-package hash and are therefore held to a weaker check than the other twenty-one: `CANONICAL-ARTIFACT-DISPOSITION-…json`, `PUBLICATION-RECEIPT-…json`, and `READBACK-VERIFICATION-…json`. Nothing inside the package hashes them, so they were verified only by their Drive-reported byte counts matching the retrieved bytes exactly — 14,777, 4,079, and 7,869 respectively. They are included because they are the provenance record for the other twenty-one, and excluding the evidence while keeping the claim would be worse.
+
+The package required no redaction. It was scanned for filesystem paths, addresses, telephone numbers, connection strings, and credential-shaped material. Three matches were reviewed and are prose about how tokens and secrets must be handled, not secrets.
+
+### Two defects in the ratified package, disclosed rather than silently mirrored
+
+Mirroring is byte-exact, so these are reproduced here as authored and are noted rather than corrected:
+
+1. `00_README.md` contains an unsubstituted template placeholder, `{PACKAGE_CONTENTS_TABLE}`, where the contents table should be.
+2. `00_README.md` binds the repository at `b48b1b177046637297467e661dfb1da023d49bed` in its body while its own front matter, and `18_PACKAGE_SOURCE_MANIFEST.json`, bind `9096fa4fbe64ff1cdabc07e53a3e68c52efc8575`. `b48b1b1` is two merges stale — it predates both `8274d88` and `9096fa4`. The front-matter and manifest binding is the correct one, and is what this repository relies on.
+
+Neither defect changes the package's meaning, and neither is load-bearing for anything below. They are recorded so that a reader who notices them knows they were seen.
 
 ## The two mirrored feature specifications
 
@@ -33,4 +79,8 @@ Neither package required redaction. Both were scanned for filesystem paths, addr
 
 ### What governs above them
 
-The Drive owning index names **my-pa vNext** (`SPEC-MYPA-VNEXT-PRODUCT-SYNTHESIS-v1.0`, Drive `17olnyUF5oX-KJWB6owRIJBB8B4QTlRjJhkLG47gio9s`) the canonical product-vision reference, with these two feature packages governing detailed behavior beneath it and this repository governing implementation truth. Its own status is `PROPOSED_CANONICAL_PRODUCT_DIRECTION` with implementation authority not granted, and **ratifying it is an operator decision that has not been made** — see `../plans/mcv-completion-plan.md` section 14. It is recorded here because an agent reading only this repository would otherwise not know the product has a defined mental model, information architecture, and object model, and could build a shape that later has to be undone.
+The ratified canonical product definition described at the top of this file governs whole-product meaning above both feature packages, and this repository governs implementation truth above all three. The two specifications below remain the more detailed authority for their own features wherever the canonical package does not explicitly reconcile them.
+
+This section previously named `my-pa vNext` the canonical product-vision reference and said ratifying it was "an operator decision that has not been made." The operator made it on 2026-08-02. The statement is corrected rather than deleted so that a reader comparing this file against the pull requests that preceded it can see what changed and when.
+
+Ratification did not make any of this repository-accepted direction on its own; see the three limits recorded above, and [`../plans/mcv-completion-plan.md`](../plans/mcv-completion-plan.md) section 15 for how the plan was reconciled against it.

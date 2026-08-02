@@ -3,21 +3,21 @@ title: my-pa — Device and Platform Strategy
 artifact_id: PLATFORM-MYPA-CANONICAL-002
 artifact_type: Device and platform strategy
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
+version: 2.2
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
 date: 2026-08-02
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.1
+feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
+feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
 ---
 
 # Device and Platform Strategy
@@ -85,4 +85,10 @@ The first remote capture client is an iOS Shortcut calling the authenticated `ca
 The PWA remains the canonical cross-platform client for iPhone, iPad, macOS, Windows, and Android, and owns capture history, correction, Review, attachments, and reliable offline recovery. Browser Background Sync is a progressive enhancement rather than the correctness mechanism; locally queued payloads must replay on foreground, resume, online events, or explicit retry and remain until the server receipt is verified.
 
 The initial Shortcut may use a narrowly scoped, independently revocable capture-only credential with no read, administrative, or external-action authority. A later native iOS helper may replace this with Keychain-backed credentials and stronger offline queueing.
+## Native Apple Reminders MCV platform decision
 
+The always-on Mac hosts a signed Swift bridge that runs in the logged-in user session, registers through `SMAppService`, authenticates to my-pa over loopback, and uses EventKit to manage one dedicated iCloud Reminders list. The bridge supplies the native permission, onboarding, list-selection, health, safe-mode, and diagnostics surface.
+
+The PWA remains the canonical my-pa task, history, correction, Review, conflict, and provenance surface. Apple Reminders is the native execution surface across iPhone, iPad, Mac, and Apple Watch. No native iOS my-pa application is required for this feature. The Mac bridge may be offline or asleep without invalidating the Task; pending projection state remains visible and reconciles when the bridge returns.
+
+AppleScript, Shortcuts-based synchronization, direct Reminders database access, LaunchDaemon execution, MCP as an internal bridge protocol, and a separate XPC service are rejected for the MCV. Shortcuts remains an explicit Remote Quick Capture client, not the reminder synchronization engine.

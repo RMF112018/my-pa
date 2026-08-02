@@ -3,21 +3,21 @@ title: my-pa — Canonical Product Description
 artifact_id: PRODUCT-MYPA-CANONICAL-DESCRIPTION-002
 artifact_type: Canonical product description
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
+version: 2.2
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
 date: 2026-08-02
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.1
+feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
+feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
 ---
 
 # my-pa — Canonical Product Description
@@ -212,4 +212,10 @@ The MCV includes Remote Quick Capture as a first-class extension of the global C
 The product preserves the exact original message before interpretation, then asynchronously classifies it, extracts entities and typed proposals, routes it across Relationships, projects, tasks, commitments, decisions, conversations, general notes, household information, and future domains, and applies proportional Review and promotion policy. No message text grants authority to send, delete, modify external systems, execute commands, or invoke unrestricted tools.
 
 The MCV transport decision is iOS Shortcut plus first-party PWA/API. Literal SMS is not required and is excluded because meeting the no-incremental-service-charge constraint would otherwise require an already-paid receiving number and relay device.
+## Native Apple Reminders execution surface
 
+my-pa can project eligible accepted Tasks into Apple Reminders through the always-on Mac so the user can execute them naturally from iPhone, iPad, Mac, or Apple Watch without remembering to create a second reminder. The product recognizes actionable captures, preserves and reviews the Task under my-pa authority, then creates or updates a native reminder under a separate external-action policy decision.
+
+Apple Reminders does not become a competing task store. It is a familiar execution surface. A reminder completed on an Apple device can complete the mapped my-pa Task after reconciliation, audit, and receipt. That completion does not by itself prove that a related Commitment, project milestone, delivery, or other real-world condition was fulfilled.
+
+The MCV uses one dedicated iCloud list, a signed Swift/EventKit bridge on the always-on Mac, partial field projection, durable command and observation ledgers, idempotent reconciliation, and explicit conflict handling. Blanket import, shared-list workflows, native recurrence-series synchronization, attachments, tags, subtasks, AppleScript automation, and last-write-wins are excluded.

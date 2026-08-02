@@ -1,0 +1,114 @@
+{
+  "request_id": "REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z",
+  "package_id": "MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006",
+  "canonical_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+  "feature_package_id": "MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001",
+  "revision_action": "REVISE",
+  "version": "2.2",
+  "artifacts": [
+    {
+      "name": "00_README.md",
+      "drive_id": "1NKw2gDkl_C5iFRQqh2mRDxmSZtoZpDgQ",
+      "bytes": 7490,
+      "sha256": "27a393237cb84016689ebdc602fc3f84579062f1bea04a3d7a47a762cf827055",
+      "readback": "MATCH",
+      "parent_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+      "representation": "stored_raw_bytes",
+      "action": "REVISE"
+    },
+    {
+      "name": "01_EXECUTIVE_PRODUCT_DESCRIPTION.md",
+      "drive_id": "15Umcs2JBMdFvxfRgNaA-P-Nc_iC3jDHV",
+      "bytes": 17452,
+      "sha256": "dae780c2c5757f02a4211a562a071ae1ad397f5d6ce757ac9d125f9e050bf8b4",
+      "readback": "MATCH",
+      "parent_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+      "representation": "stored_raw_bytes",
+      "action": "REVISE"
+    },
+    {
+      "name": "02_CANONICAL_PRODUCT_SYNTHESIS_SPECIFICATION.md",
+      "drive_id": "18l1S2iz5v_qgKZg8iVBAw47xvuHkbOjI",
+      "bytes": 32242,
+      "sha256": "453269128501757e8a079875678379b0a4862f0031bdc8f6fe490ee6962427f2",
+      "readback": "MATCH",
+      "parent_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+      "representation": "stored_raw_bytes",
+      "action": "REVISE"
+    },
+    {
+      "name": "08_DEVICE_AND_PLATFORM_STRATEGY.md",
+      "drive_id": "1Y7dDra-1NlN5sTrbg4yBrdEeo1F8B6HA",
+      "bytes": 6331,
+      "sha256": "db36e0fd8ad1120563a2633c7623b1e61a0874cce0b57d7f4278f8e9e8d15560",
+      "readback": "MATCH",
+      "parent_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+      "representation": "stored_raw_bytes",
+      "action": "REVISE"
+    },
+    {
+      "name": "09_CANONICAL_OBJECT_AND_DOMAIN_MODEL.md",
+      "drive_id": "1xwJPqXyXR0UepmF_lmkrOspEX8Xosq_W",
+      "bytes": 13509,
+      "sha256": "9a74d9ad36f4ed398828d9d2a1874fd3996dfe06454bc8447864cfc1d9cec41a",
+      "readback": "MATCH",
+      "parent_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+      "representation": "stored_raw_bytes",
+      "action": "REVISE"
+    },
+    {
+      "name": "12_MVP_DEFINITION.md",
+      "drive_id": "1CwOBwGsRuxF8O3tazLFK3UnW_I-5aSAq",
+      "bytes": 9773,
+      "sha256": "d2cfabe1bf3b68bb36ac0fe436f008f821547aa2b7ca45648e33ba4bf5dc7471",
+      "readback": "MATCH",
+      "parent_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+      "representation": "stored_raw_bytes",
+      "action": "REVISE"
+    },
+    {
+      "name": "13_ROADMAP_AND_DEPENDENCY_SEQUENCE.md",
+      "drive_id": "12dfRuODgib94H53RWH1wWJcGUdDHYZ7Y",
+      "bytes": 10066,
+      "sha256": "78e7ff216ea2e21278661398d172f505f6fbd145bdcd3a116c5e412667be5bdb",
+      "readback": "MATCH",
+      "parent_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+      "representation": "stored_raw_bytes",
+      "action": "REVISE"
+    },
+    {
+      "name": "14_DECISION_LOG.md",
+      "drive_id": "1ty-sjhwJ5q8-XpUqwKINh_WO61CXg7Um",
+      "bytes": 8138,
+      "sha256": "c8ece5d914fbae37498ef79c56ec7492ac6d9b2fc406beec7f6542e00cd858d0",
+      "readback": "MATCH",
+      "parent_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+      "representation": "stored_raw_bytes",
+      "action": "REVISE"
+    },
+    {
+      "name": "15_OPEN_OPERATOR_DECISIONS.md",
+      "drive_id": "1IknJ3s8GTJ01EvF38Q81czdEclgrAoER",
+      "bytes": 7683,
+      "sha256": "620c180f9044eddfc29aebc47ece564a0ea7d7460c30c129ebbf663a232af22c",
+      "readback": "MATCH",
+      "parent_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+      "representation": "stored_raw_bytes",
+      "action": "REVISE"
+    },
+    {
+      "name": "18_PACKAGE_SOURCE_MANIFEST.json",
+      "drive_id": "1xxQG_fsUlTxX7VRXOCm8SSCjYF2xPV1j",
+      "bytes": 20280,
+      "sha256": "fbe590c977b79174c7ecb595d067436c0c98c737a75c4284aeba54637443c303",
+      "readback": "MATCH",
+      "parent_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+      "representation": "stored_raw_bytes",
+      "action": "REVISE"
+    }
+  ],
+  "readback": "10/10 MATCH",
+  "manifest_drive_id": "1xxQG_fsUlTxX7VRXOCm8SSCjYF2xPV1j",
+  "manifest_sha256": "fbe590c977b79174c7ecb595d067436c0c98c737a75c4284aeba54637443c303",
+  "status": "COMPLETE"
+}

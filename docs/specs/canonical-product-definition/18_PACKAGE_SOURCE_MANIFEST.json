@@ -1,8 +1,8 @@
 {
   "artifact_id": "SOURCE-MANIFEST-MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006",
   "package_id": "MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006",
-  "coordination_request_id": "REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z",
-  "version": "2.1",
+  "coordination_request_id": "REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z",
+  "version": "2.2",
   "date": "2026-08-02",
   "status": "COMPLETE",
   "classification": "INTERNAL_PRODUCT_DEFINITION",
@@ -10,7 +10,7 @@
   "repository_identity": {
     "repository": "RMF112018/my-pa",
     "branch": "main",
-    "head_sha": "9096fa4fbe64ff1cdabc07e53a3e68c52efc8575",
+    "head_sha": "f18e7e3ded45f82456fbfa722443b23a004de0b3",
     "tree_sha": "UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR",
     "local_worktree": "UNAVAILABLE",
     "runtime": "UNAVAILABLE",
@@ -23,17 +23,17 @@
     "drive_id_continuity_required": true
   },
   "owning_feature_package": {
-    "package_id": "MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086",
-    "folder_id": "1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa",
-    "feature_id": "FEATURE-MYPA-FRONTIER-NAS-MCP-CONNECTOR-001",
-    "specification_id": "SPEC-MYPA-FRONTIER-NAS-MCP-CONNECTOR-001",
-    "disposition": "MYPA_FRONTIER_NAS_MCP_FEATURE_PACKAGE_READY_FOR_IMPLEMENTATION_PLANNING",
-    "request_id": "1T9eB_cJcQAepzCxgnvDIvndpG2LiLhci",
-    "response_id": "1vK3AJW9p_LkQ3xtJ36HGIlp4VUiYUIV-",
-    "source_manifest_id": "1Y1QLFqMuGqZrMVTcA28Xs9pWIm007dDu",
-    "package_manifest_id": "1QcJNUHqqF41W7FMhwq22OycgExr-Vky0",
-    "publication_receipt_id": "1VwSoTqwnZcbcK1_mUYuUp7-QWGUAcs4L",
-    "roundtrip_receipt_id": "1QXGpX-BjNmQhMVYWE_SETAssplaftW7c"
+    "package_id": "MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001",
+    "folder_id": "1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq",
+    "feature_id": "NATIVE-APPLE-REMINDERS-INTEGRATION",
+    "request_id": "1YOvTrgSaoc9YMPAsULvwRI2ayhNZbFHT",
+    "response_id": "1gc3cGz9PACGhLHeW2dLcz5wOkQFmVLZ4",
+    "source_manifest_id": "19u_De-hc2oi6YhWTDLoLxmF47TDIUSUe",
+    "package_manifest_id": "1l8TEriQY9qVe-yzg-1ybOjbhexICQG6F",
+    "publication_receipt_id": "114BQPgEEsLlnZ4LlIfiiFCxHEudYZ6wV",
+    "roundtrip_receipt_id": "1svDVpt-jiYWujgLFGgXwDlC-6MQm4R98",
+    "archive_id": "1LKgYIreCy-cwg56jnl9JXSM_xwAGA0wD",
+    "status": "CURRENT_FEATURE_SPECIFICATION"
   },
   "predecessor_discovery_evidence": {
     "folder_id": "18HDqid40Vn5Qk-FQApFDB7ZqxM3P4fmV",
@@ -71,7 +71,9 @@
     "Exact current repository tree SHA was unavailable from the authenticated GitHub connector.",
     "Local worktree, branch checkout, dirty/untracked state, container state, and runtime were unavailable.",
     "No live NAS root, personal source, production credential, OAuth registration, frontier client, Cloudflare configuration, or managed-write service was accessed.",
-    "No independent implementation review, usability study, or current client conformance test was performed."
+    "No independent implementation review, usability study, or current client conformance test was performed.",
+    "Target-Mac EventKit feasibility, TCC permission behavior, iCloud propagation latency, code-signing identity, and live reminder-list identity remain unavailable until implementation preflight.",
+    "Canonical package revision does not itself verify repository implementation or alter repository governance and plans."
   ],
   "members": [
     {
@@ -81,13 +83,13 @@
       "parent_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
       "representation": "stored_raw_bytes",
       "mime_type": "text/markdown",
-      "source_bytes": 2465,
-      "source_sha256": "82ef3a49d2b51a3f6bd2a6dc4cbcc3e6ff998c6701d575f385cdac23ea887c92",
-      "result_bytes": 5170,
-      "result_sha256": "7a75d559ee8fab88cbf8d6d972b48bbcd11e07b308a33501e57bd2be0f14ef21",
+      "source_bytes": 6137,
+      "source_sha256": "748c05c67744a780fb4e277bd2f9ccf4c9899a268775eb54d61b548bae95cf39",
+      "result_bytes": 7490,
+      "result_sha256": "27a393237cb84016689ebdc602fc3f84579062f1bea04a3d7a47a762cf827055",
       "readback_verification": "VERIFIED_MATCH",
-      "readback_bytes": 5170,
-      "readback_sha256": "7a75d559ee8fab88cbf8d6d972b48bbcd11e07b308a33501e57bd2be0f14ef21"
+      "readback_bytes": 7490,
+      "readback_sha256": "27a393237cb84016689ebdc602fc3f84579062f1bea04a3d7a47a762cf827055"
     },
     {
       "name": "01_EXECUTIVE_PRODUCT_DESCRIPTION.md",
@@ -96,13 +98,13 @@
       "parent_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
       "representation": "stored_raw_bytes",
       "mime_type": "text/markdown",
-      "source_bytes": 12744,
-      "source_sha256": "3d306c6f270bcd7d9e1c797532b64a2fb645b962b095e9999200b4d34bc121ba",
-      "result_bytes": 15059,
-      "result_sha256": "cc68d07d7c06105b93924b32adabf966b61a0da937e305444151c330f459c8c4",
+      "source_bytes": 16241,
+      "source_sha256": "11e9255e3c30a18b13e5051872589606ea6e815b54f9f5a78b668380c31f1b83",
+      "result_bytes": 17452,
+      "result_sha256": "dae780c2c5757f02a4211a562a071ae1ad397f5d6ce757ac9d125f9e050bf8b4",
       "readback_verification": "VERIFIED_MATCH",
-      "readback_bytes": 15059,
-      "readback_sha256": "cc68d07d7c06105b93924b32adabf966b61a0da937e305444151c330f459c8c4"
+      "readback_bytes": 17452,
+      "readback_sha256": "dae780c2c5757f02a4211a562a071ae1ad397f5d6ce757ac9d125f9e050bf8b4"
     },
     {
       "name": "02_CANONICAL_PRODUCT_SYNTHESIS_SPECIFICATION.md",
@@ -111,13 +113,13 @@
       "parent_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
       "representation": "stored_raw_bytes",
       "mime_type": "text/markdown",
-      "source_bytes": 17606,
-      "source_sha256": "f8a5ac0163361ffe8b9eb23067c8121992ff626f3b94a28f66f3d7aad4593ccf",
-      "result_bytes": 25498,
-      "result_sha256": "94506d715b81bf95b509325f2ba4c7018a40c96234005c401efe19f9212ec6fb",
+      "source_bytes": 28118,
+      "source_sha256": "8e213d64fffc0f713531e7af155d3e57d42456967789792701b9ae77f13cd7e2",
+      "result_bytes": 32242,
+      "result_sha256": "453269128501757e8a079875678379b0a4862f0031bdc8f6fe490ee6962427f2",
       "readback_verification": "VERIFIED_MATCH",
-      "readback_bytes": 25498,
-      "readback_sha256": "94506d715b81bf95b509325f2ba4c7018a40c96234005c401efe19f9212ec6fb"
+      "readback_bytes": 32242,
+      "readback_sha256": "453269128501757e8a079875678379b0a4862f0031bdc8f6fe490ee6962427f2"
     },
     {
       "name": "03_PRODUCT_PRINCIPLES.md",
@@ -201,13 +203,13 @@
       "parent_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
       "representation": "stored_raw_bytes",
       "mime_type": "text/markdown",
-      "source_bytes": 2861,
-      "source_sha256": "082a0c4b686b4708ffb885ee20c6e449fc2bf2db3ae0875aa8b3941242605305",
-      "result_bytes": 4141,
-      "result_sha256": "7a895e8b7436302f8c3d2a6471830e786f06d9516bd2e88dfbc5bd7100865646",
+      "source_bytes": 5218,
+      "source_sha256": "348c48a9cd8515c8477285c757ee79c9c216cc3301add189a56ec7425b096835",
+      "result_bytes": 6331,
+      "result_sha256": "db36e0fd8ad1120563a2633c7623b1e61a0874cce0b57d7f4278f8e9e8d15560",
       "readback_verification": "VERIFIED_MATCH",
-      "readback_bytes": 4141,
-      "readback_sha256": "7a895e8b7436302f8c3d2a6471830e786f06d9516bd2e88dfbc5bd7100865646"
+      "readback_bytes": 6331,
+      "readback_sha256": "db36e0fd8ad1120563a2633c7623b1e61a0874cce0b57d7f4278f8e9e8d15560"
     },
     {
       "name": "09_CANONICAL_OBJECT_AND_DOMAIN_MODEL.md",
@@ -216,13 +218,13 @@
       "parent_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
       "representation": "stored_raw_bytes",
       "mime_type": "text/markdown",
-      "source_bytes": 6598,
-      "source_sha256": "da44f6acf58123748080a3546277d7b6f3b7e496b2f73bce9b4e3c67e8bd5940",
-      "result_bytes": 10019,
-      "result_sha256": "6fd75aaf2d2e0f135b53a185ded399bf13f27d56cd8ce43f25e93005e44c713c",
+      "source_bytes": 11322,
+      "source_sha256": "79329c25e55663c2d3572e646e99b2bcb54deacfb312561a1924137a2d3ec009",
+      "result_bytes": 13509,
+      "result_sha256": "9a74d9ad36f4ed398828d9d2a1874fd3996dfe06454bc8447864cfc1d9cec41a",
       "readback_verification": "VERIFIED_MATCH",
-      "readback_bytes": 10019,
-      "readback_sha256": "6fd75aaf2d2e0f135b53a185ded399bf13f27d56cd8ce43f25e93005e44c713c"
+      "readback_bytes": 13509,
+      "readback_sha256": "9a74d9ad36f4ed398828d9d2a1874fd3996dfe06454bc8447864cfc1d9cec41a"
     },
     {
       "name": "10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md",
@@ -261,13 +263,13 @@
       "parent_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
       "representation": "stored_raw_bytes",
       "mime_type": "text/markdown",
-      "source_bytes": 4589,
-      "source_sha256": "0af1e381a0290c7f58bb17438a4b387bec3b999499a3a9deb2d27c61e76a280b",
-      "result_bytes": 7280,
-      "result_sha256": "5961b073432d2cbedbc6f134c5756f612c33fcf7c2022806fd5fd7dbecc1b7f3",
+      "source_bytes": 8524,
+      "source_sha256": "b99c9ba211918438c36122038d1d6deb5362f252a4242483f0b3ce244c493b4e",
+      "result_bytes": 9773,
+      "result_sha256": "d2cfabe1bf3b68bb36ac0fe436f008f821547aa2b7ca45648e33ba4bf5dc7471",
       "readback_verification": "VERIFIED_MATCH",
-      "readback_bytes": 7280,
-      "readback_sha256": "5961b073432d2cbedbc6f134c5756f612c33fcf7c2022806fd5fd7dbecc1b7f3"
+      "readback_bytes": 9773,
+      "readback_sha256": "d2cfabe1bf3b68bb36ac0fe436f008f821547aa2b7ca45648e33ba4bf5dc7471"
     },
     {
       "name": "13_ROADMAP_AND_DEPENDENCY_SEQUENCE.md",
@@ -276,13 +278,13 @@
       "parent_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
       "representation": "stored_raw_bytes",
       "mime_type": "text/markdown",
-      "source_bytes": 3991,
-      "source_sha256": "8cde905cf47175f6a280c798b1b3b9ed79ea2d49a0bd11484900d3941bcada64",
-      "result_bytes": 7044,
-      "result_sha256": "64b1506d35f4829f58d301ca4618d7c5dbd679f847d94ef040b47e56e9044628",
+      "source_bytes": 8245,
+      "source_sha256": "3c61927f63417b37a26d50fd0b345845fe8e234254e48ff231fd0a191344ff20",
+      "result_bytes": 10066,
+      "result_sha256": "78e7ff216ea2e21278661398d172f505f6fbd145bdcd3a116c5e412667be5bdb",
       "readback_verification": "VERIFIED_MATCH",
-      "readback_bytes": 7044,
-      "readback_sha256": "64b1506d35f4829f58d301ca4618d7c5dbd679f847d94ef040b47e56e9044628"
+      "readback_bytes": 10066,
+      "readback_sha256": "78e7ff216ea2e21278661398d172f505f6fbd145bdcd3a116c5e412667be5bdb"
     },
     {
       "name": "14_DECISION_LOG.md",
@@ -291,13 +293,13 @@
       "parent_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
       "representation": "stored_raw_bytes",
       "mime_type": "text/markdown",
-      "source_bytes": 2885,
-      "source_sha256": "0e327258eb198fbdb8489e5aa8677412ebd6ccc214f89ed5023a934223ee2d0a",
-      "result_bytes": 5311,
-      "result_sha256": "6a041e4cc0ed27161e80667d5cfed48c8e91299524ff68053f586a5dc53c6c3d",
+      "source_bytes": 6447,
+      "source_sha256": "d64844db0f8e895a4b97a0f9c5afb40151259a5d8bbbdf55ba0f4e67de23ec6a",
+      "result_bytes": 8138,
+      "result_sha256": "c8ece5d914fbae37498ef79c56ec7492ac6d9b2fc406beec7f6542e00cd858d0",
       "readback_verification": "VERIFIED_MATCH",
-      "readback_bytes": 5311,
-      "readback_sha256": "6a041e4cc0ed27161e80667d5cfed48c8e91299524ff68053f586a5dc53c6c3d"
+      "readback_bytes": 8138,
+      "readback_sha256": "c8ece5d914fbae37498ef79c56ec7492ac6d9b2fc406beec7f6542e00cd858d0"
     },
     {
       "name": "15_OPEN_OPERATOR_DECISIONS.md",
@@ -306,13 +308,13 @@
       "parent_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
       "representation": "stored_raw_bytes",
       "mime_type": "text/markdown",
-      "source_bytes": 3599,
-      "source_sha256": "a14effe690f53aea224019a2721b43ae97c83eb46062ca893667e6817721f7b8",
-      "result_bytes": 5940,
-      "result_sha256": "a31e7c485a25b79c4fbceb89d5e3f2831f02c999fc7ddeab1f3bb78e34b0b3bc",
+      "source_bytes": 5940,
+      "source_sha256": "a31e7c485a25b79c4fbceb89d5e3f2831f02c999fc7ddeab1f3bb78e34b0b3bc",
+      "result_bytes": 7683,
+      "result_sha256": "620c180f9044eddfc29aebc47ece564a0ea7d7460c30c129ebbf663a232af22c",
       "readback_verification": "VERIFIED_MATCH",
-      "readback_bytes": 5940,
-      "readback_sha256": "a31e7c485a25b79c4fbceb89d5e3f2831f02c999fc7ddeab1f3bb78e34b0b3bc"
+      "readback_bytes": 7683,
+      "readback_sha256": "620c180f9044eddfc29aebc47ece564a0ea7d7460c30c129ebbf663a232af22c"
     },
     {
       "name": "16_VISUAL_ATLAS_MANIFEST.md",
@@ -384,12 +386,12 @@
     "mime_type": "application/json",
     "source_bytes": 20367,
     "source_sha256": "77b52d6655e387cb402816aad43eb8842a8123288e3146edb0d0d1820c21d53c",
-    "result_hash_scope": "recorded in publication and roundtrip receipts to avoid self-referential hash",
-    "readback_verification": "FINAL_REVISION_TO_BE_RECORDED_IN_RECEIPTS"
+    "result_hash_scope": "verified_externally_after_publication",
+    "readback_verification": "BOUND_BY_CANONICAL_INTEGRATION_ROUNDTRIP_RECEIPT"
   },
   "supersession": {
-    "prior_package_version": "2.0",
-    "new_package_version": "2.1",
+    "prior_package_version": "2.1",
+    "new_package_version": "2.2",
     "drive_ids_preserved": true,
     "parallel_package_created": false,
     "feature_package_remains_owning_detailed_definition": true
@@ -404,13 +406,33 @@
     "risk_acceptance": "NOT_PERFORMED"
   },
   "publication_verification": {
-    "verified_at": "2026-08-02T10:12:00Z",
+    "verified_at": "2026-08-02T15:07:00Z",
     "member_count": 21,
-    "non_self_members_verified": 20,
-    "self_member_verification": "recorded in publication and roundtrip receipts after final in-place revision",
+    "revised_non_self_members_verified": "9/9 VERIFIED_MATCH",
+    "self_member_verification": "EXTERNAL_ROUNDTRIP_RECEIPT_REQUIRED_AND_PRODUCED",
     "drive_id_continuity": "VERIFIED",
     "parent_continuity": "VERIFIED",
     "representation_continuity": "VERIFIED",
-    "stored_raw_byte_hashes": "VERIFIED_MATCH"
-  }
+    "stored_raw_byte_hashes": "VERIFIED_FOR_9_REVISED_CONTENT_MEMBERS; MANIFEST_HASH_BOUND_EXTERNALLY"
+  },
+  "canonical_amendments": [
+    {
+      "request_id": "REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z",
+      "feature_package_id": "MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001",
+      "feature_package_folder_id": "1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq",
+      "scope": "Native Apple Reminders Integration admitted to MCV as opt-in external execution projection",
+      "revised_members": [
+        "00_README.md",
+        "01_EXECUTIVE_PRODUCT_DESCRIPTION.md",
+        "02_CANONICAL_PRODUCT_SYNTHESIS_SPECIFICATION.md",
+        "08_DEVICE_AND_PLATFORM_STRATEGY.md",
+        "09_CANONICAL_OBJECT_AND_DOMAIN_MODEL.md",
+        "12_MVP_DEFINITION.md",
+        "13_ROADMAP_AND_DEPENDENCY_SEQUENCE.md",
+        "14_DECISION_LOG.md",
+        "15_OPEN_OPERATOR_DECISIONS.md"
+      ],
+      "implementation_authority": "NOT_GRANTED"
+    }
+  ]
 }

@@ -3,21 +3,21 @@ title: my-pa — Canonical Reconciliation Decision Log
 artifact_id: DECISIONS-MYPA-CANONICAL-002
 artifact_type: Decision log
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
+version: 2.2
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
 date: 2026-08-02
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.1
+feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
+feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
 ---
 
 # Canonical Reconciliation Decision Log
@@ -74,4 +74,17 @@ Later operator decisions, canonical packages, ADRs, or owning feature revisions 
 - `MYPA-RQC-D-006`: Message content is evidence data and grants no external-action, deletion, command, policy, or unrestricted-tool authority.
 - `MYPA-RQC-D-007`: The governing feature package is `MYPA-REMOTE-QUICK-CAPTURE-FEATURE-PACKAGE-20260802-001`, folder `1lDSkTldgSkaRfJ3v9h-U10lCe-Lmwzsv`.
 - `MYPA-RQC-D-008`: MCV product inclusion does not itself authorize repository mutation, credentials, ingress activation, deployment, production, or risk acceptance.
+## Native Apple Reminders integration decisions
 
+- `MYPA-NAR-D-001`: Native Apple Reminders Integration is included in the MCV as an opt-in Native Productivity Integration and External Execution Projection.
+- `MYPA-NAR-D-002`: my-pa Task is authoritative; Apple Reminder is never the system of record.
+- `MYPA-NAR-D-003`: The canonical implementation is a signed Swift macOS bridge using EventKit, authenticated loopback application services, and `SMAppService`.
+- `MYPA-NAR-D-004`: The MCV uses one dedicated iCloud Reminders list and does not map lists to Projects or domains.
+- `MYPA-NAR-D-005`: Synchronization is hybrid and field-level; no last-write-wins rule is allowed.
+- `MYPA-NAR-D-006`: Apple completion may complete the mapped Task but does not automatically fulfill a Commitment or prove an external condition.
+- `MYPA-NAR-D-007`: Existing reminders are not blanket-imported; unmanaged reminders remain untouched.
+- `MYPA-NAR-D-008`: Native recurrence is deferred; my-pa projects one Task occurrence at a time.
+- `MYPA-NAR-D-009`: External deletion never deletes the canonical Task and requires preservation/conflict handling.
+- `MYPA-NAR-D-010`: AppleScript, Shortcut-based synchronization, direct Reminders database access, LaunchDaemon, MCP internal transport, and premature XPC are rejected for the MCV.
+- `MYPA-NAR-D-011`: The governing feature package is `MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001`, folder `1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq`.
+- `MYPA-NAR-D-012`: Product inclusion does not authorize repository mutation, EventKit permission, credentials, code signing, deployment, production activation, or risk acceptance.

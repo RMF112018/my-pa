@@ -405,11 +405,25 @@ def _module_index() -> dict[str, Path]:
 def _internal_imports(path: Path, index: dict[str, Path]) -> set[str]:
     """The `my_pa` modules `path` imports, resolved to modules that exist.
 
-    `from X import Y` contributes `X.Y` as well as `X`, and `Y` is as often a
-    class as a module, so each dotted target is shortened until it names a real
-    module. Without that, `from my_pa.contracts.ports import UnitOfWork` would
-    resolve to nothing and the walk would stop one hop early — which is the
-    entire failure this test exists to prevent.
+    Each dotted target is shortened until it names a real module, and it is worth
+    being exact about what that loop does, because the comment here previously
+    credited it with carrying the walk and a reviewer showed it does not: with
+    the loop deleted the suite still passed.
+
+    It is redundancy, not the mechanism. `_imported_modules` contributes
+    `node.module` for every `from X import Y` *independently* of `X.Y`, and an
+    `import a.b.c` is only legal when `c` is itself a module — so every legal
+    import already contributes at least one token that is an exact module name,
+    and the shortening resolves nothing the exact token would not have resolved.
+    `from my_pa.contracts.ports import UnitOfWork` yields `my_pa.contracts.ports`
+    on its own; only the useless `…ports.UnitOfWork` needs shortening.
+
+    It is kept rather than deleted because what makes it redundant is a property
+    of a *different* function. The day `_imported_modules` stops emitting
+    `node.module` — a plausible simplification, since that entry looks duplicated
+    beside `X.Y` — this loop becomes the only thing resolving a `from` import,
+    and the walk would otherwise stop one hop out in silence. A guard whose
+    failure mode is a hole that reports success is worth six redundant lines.
     """
     found: set[str] = set()
     for imported in _imported_modules(path):

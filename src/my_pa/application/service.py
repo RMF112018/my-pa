@@ -14,28 +14,39 @@ look least like they need a transaction: a refusal returns out of the block
 normally, so the audit event recording it commits, where raising from inside
 would have rolled the record of the refusal back along with everything else.
 
-**Which outcomes leave a durable trace, exhaustively.** This list is the whole
-of it, because an incomplete disclosure of an audit gap is itself a gap, and one
-case was missing from it before a reviewer measured `audit events: 0`:
+**Which outcomes leave a durable trace.** An incomplete disclosure of an audit
+gap is itself a gap, and this list has been wrong twice — once by omitting the
+capability mismatch, and once by omitting case 5 while claiming to be complete.
+So it is derived rather than surveyed. `AuditSink.record` has exactly two call
+sites in this layer, `authorization.authorize` and the mismatch branch of `_run`,
+and both run inside the one transaction `_run` opens. Every outcome is therefore
+some combination of two facts — was `record` reached, and did the transaction
+commit — and the list below is closed because those two facts have no third
+value, not because six cases is where the searching stopped.
 
-1. *Policy denied the request.* Audited, and the audit commits. The reason is in
-   the record and never in the answer.
+1. *Policy denied the request.* Recorded; commits. The reason is in the record
+   and never in the answer.
 2. *The declared capability and the payload's capability disagree.* A
    security-relevant refusal — it is the guard against a request authorized as
-   one capability and executed as another — so it is audited as `failed`, inside
-   the transaction, and the audit commits. It is `failed` rather than `denied`
-   because no policy decision was reached: there is nothing to name a
-   `DenialReason` from, and inventing one would misreport why the request
-   stopped.
-3. *Allowed, and the handler succeeded.* Audited as allowed; commits with the
+   one capability and executed as another — so it is recorded as `failed`, inside
+   the transaction, and it commits. `failed` rather than `denied` because no
+   policy decision was reached: there is nothing to name a `DenialReason` from,
+   and inventing one would misreport why the request stopped.
+3. *Allowed, and the handler succeeded.* Recorded as allowed; commits with the
    work.
-4. *Allowed, and the handler then failed.* Audited as allowed, and then **rolled
+4. *Allowed, and the handler then failed.* Recorded as allowed, and then **rolled
    back with the failed work**, so a failed security-relevant action currently
    leaves no trace. That is a defect rather than a design. It is here because the
    rollback is also what stops a half-written enrollment from committing, and
    separating the two needs a second transaction and a durable audit store,
    neither of which exists in this build. `D-34` puts both in WP-4B.
-5. *A command that could not be constructed at all.* Not audited, and cannot be:
+5. *A failure before any decision was reached.* A port failure in `authorize`'s
+   own reads — `for_principal`, or the operation and object lookups that resolve
+   a status request's scope — raises before `record` is called, and the unit of
+   work may also fail to open at all. Nothing is recorded, and nothing is
+   missing: no decision existed to record. This is the case that separates it
+   from 4, where a decision *was* reached and its record was then destroyed.
+6. *A command that could not be constructed at all.* Not recorded, and cannot be:
    a malformed command is refused by its own `__post_init__` before `invoke` is
    called, so this layer never sees the attempt. Whatever calls it is the only
    thing that could record one.

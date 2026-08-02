@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from conftest import CONTROL_SCHEMA
 from sqlalchemy import Engine, text
 
+from conftest import CONTROL_SCHEMA
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.migration.control_plane import METADATA
 

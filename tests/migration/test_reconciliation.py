@@ -18,6 +18,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from sqlalchemy import Engine
+
 from conftest import (
     PHASE_ONE,
     TARGET_SCHEMA,
@@ -25,8 +27,6 @@ from conftest import (
     prepare_target,
     synthetic_registry,
 )
-from sqlalchemy import Engine
-
 from my_pa.infrastructure.migration import binding, loader, reconciliation, redaction, runs
 from my_pa.infrastructure.migration.reconciliation_report import render
 from my_pa.infrastructure.migration.source import Disposition

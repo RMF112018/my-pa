@@ -14,8 +14,9 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from conftest import build_source, prepare_target, synthetic_registry
 from sqlalchemy import Engine, text
+
+from conftest import build_source, prepare_target, synthetic_registry
 
 ROOT = Path(__file__).resolve().parents[2]
 CLI_PATH = ROOT / "apps" / "cli" / "migration.py"

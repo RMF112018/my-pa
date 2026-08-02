@@ -224,6 +224,56 @@ REQUEST_VALUES = frozenset(
     {"RequestMetadata", *(member.__name__ for member in Command.__value__.__args__)}
 )
 
+#: Pydantic's other two constructors. `RequestMetadata.model_validate(document)`
+#: builds one exactly as calling the class does, and `model_construct` builds one
+#: while **skipping every validator** — which would be a second normalisation
+#: that is not merely a copy of the first but a weaker one.
+MODEL_CONSTRUCTORS = frozenset({"model_validate", "model_validate_json", "model_construct"})
+
+
+def _builds_a_request_value(path: Path) -> set[str]:
+    """How `path` constructs a request value, by whatever route.
+
+    A previous version collected call *names* only, and an independent review
+    walked past it twice in one plant: `RequestMetadata.model_validate(...)` is
+    not a call to `RequestMetadata`, and `import RequestMetadata as _RM; _RM(...)`
+    is not a call to that name either. Both built a real second normalisation in
+    `adapters/mcp/server.py` while every structural rule here passed.
+
+    So the check resolves the *binding* first — every local name a request value
+    was imported under, alias included, which is what made the name check
+    evadable — and then flags a call on any of those bindings, plus any of
+    pydantic's constructors reached through an attribute on anything at all.
+    `model_construct` is on that list and matters most: it builds a model while
+    skipping every validator, so it would be a second normalisation that is not
+    a copy of the first but a weaker one.
+
+    **Reading is not building, and the line is drawn there deliberately.**
+    `adapters/mcp/tools.py` imports `RequestMetadata` to call
+    `model_json_schema()` on it, because the tool schema it publishes has to be
+    the document `normalize` actually accepts; deriving that from the model is
+    the opposite of building a second one. Making the bare import an offence
+    would have forced that derivation somewhere worse to satisfy a rule about
+    something it does not do.
+    """
+    tree = _tree(path)
+    bindings = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.name in REQUEST_VALUES
+    } | REQUEST_VALUES
+    offences: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id in bindings:
+            offences.add(node.func.id)
+        elif isinstance(node.func, ast.Attribute) and node.func.attr in MODEL_CONSTRUCTORS:
+            offences.add(f"{node.func.attr}()")
+    return offences
+
 
 def _transport_modules() -> list[Path]:
     """Every adapter module that is not the normalisation itself."""
@@ -246,11 +296,89 @@ def test_no_transport_builds_a_request_value_of_its_own(path: Path) -> None:
     that could would be a second validation path, and the criterion would fall
     back to "the snapshots agreed when they were taken".
     """
-    offending = sorted(_called(path) & REQUEST_VALUES)
+    offending = sorted(_builds_a_request_value(path))
     assert not offending, (
         f"{path.relative_to(PACKAGE)} builds {offending}; requests are normalised in "
         "adapters/normalization.py and nowhere else"
     )
+
+
+@pytest.mark.parametrize(
+    ("name", "source"),
+    [
+        ("called directly", "def go(f: dict) -> object:\n    return RequestMetadata(**f)\n"),
+        (
+            "called under an alias",
+            "from my_pa.contracts.v1.envelope import RequestMetadata as _RM\n\n\n"
+            "def go(f: dict) -> object:\n    return _RM(**f)\n",
+        ),
+        (
+            "built by model_validate",
+            "from my_pa.contracts.v1.envelope import RequestMetadata\n\n\n"
+            "def go(f: dict) -> object:\n    return RequestMetadata.model_validate(f)\n",
+        ),
+        (
+            "built by model_construct, skipping every validator",
+            "def go(f: dict, m: object) -> object:\n    return m.model_construct(**f)\n",
+        ),
+        (
+            "a command under an alias",
+            "from my_pa.application.commands import ListSources as _LS\n\n\n"
+            "def go(f: dict) -> object:\n    return _LS(**f)\n",
+        ),
+    ],
+    ids=lambda value: str(value),
+)
+def test_the_structural_guard_catches_every_route_to_a_second_normalisation(
+    tmp_path: Path, name: str, source: str
+) -> None:
+    """The four ways a second normalisation can be written, each planted.
+
+    An independent review demonstrated that the first three of these evaded the
+    guard entirely — it read call names, and two of these are not calls to a
+    name at all. A rule this file's whole structural claim rests on has to be
+    checked against the ways round it, not only the obvious one.
+    """
+    planted = tmp_path / "planted.py"
+    planted.write_text(source, encoding="utf-8")
+    assert _builds_a_request_value(planted), f"{name} escaped the structural guard"
+
+
+@pytest.mark.parametrize(
+    ("name", "source"),
+    [
+        (
+            "a transport that calls normalize",
+            "from my_pa.adapters.normalization import normalize\n\n\n"
+            "def go(name: str, document: dict) -> object:\n"
+            "    return normalize(name, document)\n",
+        ),
+        (
+            "reading the schema off the model",
+            "from my_pa.contracts.v1.envelope import RequestMetadata\n\n\n"
+            "def schema() -> dict:\n    return RequestMetadata.model_json_schema()\n",
+        ),
+        (
+            "annotating a value it was handed",
+            "from my_pa.contracts.v1.envelope import RequestMetadata\n\n\n"
+            "def go(metadata: RequestMetadata) -> str:\n    return metadata.request_id\n",
+        ),
+    ],
+    ids=lambda value: str(value),
+)
+def test_the_structural_guard_does_not_fire_on_reading_or_annotating(
+    tmp_path: Path, name: str, source: str
+) -> None:
+    """The narrowing is bounded and deliberate: reading a model is not building one.
+
+    Without this, a guard that flagged every mention would pass every planted
+    violation above while making the rule unusable, and the next author would
+    weaken the rule rather than the code. `adapters/mcp/tools.py` is the real
+    instance of the middle case.
+    """
+    planted = tmp_path / "planted.py"
+    planted.write_text(source, encoding="utf-8")
+    assert not _builds_a_request_value(planted), f"{name} was wrongly flagged"
 
 
 @pytest.mark.parametrize("subtree", sorted(TRANSPORT_NAMES))
@@ -396,20 +524,48 @@ def _identifiers(value: Any) -> set[str]:  # noqa: ANN401 - walks a decoded docu
     return set()
 
 
+def _kind_of(identifier: str) -> str:
+    """The kind prefix an identifier declares, as the domain defines it.
+
+    `corr_…` is a correlation identifier and `op_…` is an operation; the domain
+    already carries the distinction and this reads it rather than restating it.
+    """
+    return identifier.partition("_")[0]
+
+
 def masked(answer: Mapping[str, Any], supplied: set[str]) -> Any:  # noqa: ANN401 - a document
     """The answer with request-minted identifiers replaced by stable placeholders.
 
-    Positional rather than dropped: the placeholder is assigned by order of
+    Positional rather than dropped: the placeholder is numbered by order of
     first appearance, so an answer that repeats one identifier in two places
     still has to agree about that. An identifier the *request* carried is left
     alone and compared literally, because it was not minted and a transport that
     returned a different one would be answering about a different subject.
+
+    **The placeholder carries the kind, and leaving it out was a hole.** An
+    independent review had one transport swap `correlation_id` with
+    `result.operation_id` before returning, and the whole tier stayed green:
+    with a purely positional placeholder, exchanging two identifiers that each
+    appear once also exchanges their first-appearance order, so the two
+    renderings are byte-identical. The mask was erasing the one property that
+    made the swap wrong — that a correlation identifier is not an operation
+    identifier. Numbering *within* a kind keeps the ordering claim and makes a
+    permutation across kinds visible, which is what `corr` and `op` being
+    different prefixes already meant.
     """
     minted: dict[str, str] = {}
+    counts: dict[str, int] = {}
+
+    def placeholder(identifier: str) -> str:
+        kind = _kind_of(identifier)
+        counts[kind] = counts.get(kind, 0) + 1
+        return f"<minted-{kind}-{counts[kind] - 1}>"
 
     def walk(value: Any) -> Any:  # noqa: ANN401 - a decoded JSON document
         if isinstance(value, str) and value not in supplied and _identifiers(value):
-            return minted.setdefault(value, f"<minted-{len(minted)}>")
+            if value not in minted:
+                minted[value] = placeholder(value)
+            return minted[value]
         if isinstance(value, dict):
             return {key: walk(item) for key, item in value.items()}
         if isinstance(value, list):
@@ -471,10 +627,48 @@ def test_the_mask_hides_a_minted_identifier_and_nothing_else(
     answers = answers_for(scene, Capability.SOURCES_ENROLL.value, request)
     supplied = _identifiers(request)
     rendered = json.dumps(masked(answers["http"].document, supplied))
-    assert "<minted-0>" in rendered
-    assert len(set(re.findall(r"<minted-\d+>", rendered))) >= 3, rendered
+    placeholders = set(re.findall(r"<minted-[a-z]+-\d+>", rendered))
+    assert len(placeholders) >= 3, rendered
+    # And each names the kind it stands for, so a permutation across kinds is a
+    # difference rather than a relabelling.
+    assert {"<minted-corr-0>", "<minted-enr-0>", "<minted-op-0>"} <= placeholders, placeholders
     assert scene.source.source_id in rendered, "a supplied identifier was masked"
     assert not _identifiers(json.loads(rendered)) - supplied, "an identifier escaped the mask"
+
+
+def test_the_mask_does_not_absorb_a_permutation_of_two_identifiers(
+    staged: tuple[Scene, KnowledgeRecord],
+) -> None:
+    """The hole an independent review found, planted here so it stays closed.
+
+    One transport is made to return the correlation identifier where the
+    operation identifier belongs and vice versa. Under the purely positional
+    mask this file first shipped, the two renderings were byte-identical — the
+    swap also swapped the order of first appearance — and the entire tier passed
+    while a transport was returning an operation identifier as a correlation
+    identifier. Keying the placeholder on the kind is what makes the exchange a
+    difference, and this is what says so.
+    """
+    scene, record = staged
+    request = document(
+        Capability.SOURCES_ENROLL,
+        scene.principal.principal_id,
+        payloads_for(scene, record)[Capability.SOURCES_ENROLL],
+    )
+    answers = answers_for(scene, Capability.SOURCES_ENROLL.value, request)
+    honest = answers["http"].document
+    assert honest["correlation_id"] != honest["result"]["operation_id"]
+
+    swapped = deepcopy(honest)
+    swapped["correlation_id"] = honest["result"]["operation_id"]
+    swapped["result"]["operation_id"] = honest["correlation_id"]
+    swapped["error"] = None
+
+    supplied = _identifiers(request)
+    assert masked(swapped, supplied) != masked(honest, supplied), (
+        "the mask absorbed a permutation: an operation identifier was returned "
+        "as a correlation identifier and the rendering did not change"
+    )
 
 
 def test_the_answer_comparison_would_have_seen_a_difference(

@@ -33,6 +33,18 @@ The CLI adds one thing HTTP does not have and it is asserted separately: an
 terminal and in a shell history, and no response-body assertion would ever see
 it.
 
+**Two rules here run over all three transports rather than the two this file is
+named for**, and the exception is deliberate. A caller-declared `principal_id`
+reaching another principal's scope was proven for HTTP by two assertions and for
+the other two transports by none, and an independent review escalated a CLI
+request into a full `knowledge.read` result — text, provenance, disclosure —
+with the whole tier green. The two tests that looked like they covered it did
+not: one turns on principal *kind*, which the escalation preserves, and the
+other never lets the declared and acting principals differ. Proving a claim for
+two transports while the third is proven elsewhere by different assertions is
+how that opened, so this one is proven the same way, in one place, for all
+three.
+
 Everything is synthetic: an invented directory name, invented documents, an
 invented credential in an invented URL. No live source, no real path, no real
 person.
@@ -67,7 +79,14 @@ from tests.contract.test_transport_parity import (
     document,
     payloads_for,
 )
-from tests.transports import Answer, CliTransport, Transport, cli_transport, mcp_transport
+from tests.transports import (
+    Answer,
+    CliTransport,
+    Transport,
+    all_transports,
+    cli_transport,
+    mcp_transport,
+)
 
 from my_pa.adapters.cli import run
 from my_pa.adapters.mcp import TOOLS
@@ -302,6 +321,97 @@ def test_every_capability_refuses_a_purpose_it_does_not_permit_over_both_transpo
     recorded = {event.denial_reason for event in marked.world.audit}
     assert recorded == {DenialReason.PURPOSE_NOT_PERMITTED_FOR_CAPABILITY}
     assert len(marked.world.audit) == 2, "one audit event per transport, and no more"
+
+
+# ---- a declared identity is correlation, never authority ---------------------
+
+
+def test_a_declared_principal_id_does_not_reach_another_principals_scope(
+    marked: Scene, marked_root: Path
+) -> None:
+    """`docs/specs` section 8.2, over every transport, on the **scope** dimension.
+
+    This is the escalation an independent review found, and the reason it found
+    it is worth keeping beside the fix. Two tests already covered a declared
+    identity and both missed this: one exercises the operator-only dimension,
+    which turns on principal *kind*, and a plant that copies the declared
+    identifier preserves the kind; the other sends the stranger's own identifier
+    while acting as the stranger, so the declared and acting principals never
+    differ. The plant — `principal = replace(principal, principal_id=metadata.principal_id)`
+    before `invoke` — passed the entire tier on the CLI while failing two HTTP
+    tests immediately. `P05-SPEC-AC-002`'s scope half was proven for one
+    transport and not for its neighbours, which is this campaign's recorded
+    pattern exactly.
+
+    So: **A acts, B owns the grant, A declares B.** The answer must be the
+    denial A gets without declaring anything, and the audit must record A. Run
+    over all three transports rather than the two this file is named for,
+    because "a caller-supplied identity is not authority" is a claim about every
+    transport and proving it for two while the third is proven elsewhere by two
+    different assertions is how the hole opened.
+    """
+    stranger = operator()
+    owner = marked.principal
+    record = staged_record(marked, text=MARKER_CONTENT)
+    assert stranger.principal_id != owner.principal_id
+    assert stranger.kind is owner.kind, "the escalation must not turn on principal kind"
+
+    payload = payloads_for(marked, record)[Capability.KNOWLEDGE_READ]
+    honest = document(Capability.KNOWLEDGE_READ, stranger.principal_id, payload)
+    claiming = document(Capability.KNOWLEDGE_READ, owner.principal_id, payload)
+
+    service = build_service(marked.world, marked.providers)
+    with all_transports(service, stranger) as transports:
+        for transport in transports:
+            plain = transport.send(Capability.KNOWLEDGE_READ.value, honest)
+            claimed = transport.send(Capability.KNOWLEDGE_READ.value, claiming)
+            for name, answer in (("honest", plain), ("claiming the owner", claimed)):
+                where = f"{transport.name}, {name}"
+                assert answer.failed is True, where
+                error = answer.document.get("error") or answer.document
+                assert error["code"] == ErrorCode.DENIED.value, where
+                assert answer.document.get("result") is None, where
+                # The record's own text is the thing the escalation would have
+                # disclosed, so its absence is the assertion that matters.
+                assert MARKER_CONTENT not in answer.rendered, where
+                assert_clean(answer.rendered, marked_root, where)
+
+    # And every event names the principal that acted, never the one declared.
+    assert marked.world.audit, "nothing was audited"
+    recorded = {event.principal_id for event in marked.world.audit}
+    assert recorded == {stranger.principal_id}, recorded
+    assert owner.principal_id not in recorded
+
+
+def test_a_declared_principal_id_does_not_change_an_allowed_request_either(
+    marked: Scene, marked_root: Path
+) -> None:
+    """The other direction, so the rule is not "declaring anything denies".
+
+    The owner acts and declares a stranger. The request still succeeds on the
+    owner's own scope, because the declared value is correlation input the
+    application does not read — and the audit still records the owner. Without
+    this, a transport that refused every request whose declared identifier
+    differed from the acting one would pass the test above while being wrong.
+    """
+    stranger = operator()
+    record = staged_record(marked, text=MARKER_CONTENT)
+    claiming = document(
+        Capability.KNOWLEDGE_READ,
+        stranger.principal_id,
+        payloads_for(marked, record)[Capability.KNOWLEDGE_READ],
+    )
+    service = build_service(marked.world, marked.providers)
+    with all_transports(service, marked.principal) as transports:
+        for transport in transports:
+            answer = transport.send(Capability.KNOWLEDGE_READ.value, claiming)
+            assert answer.failed is False, f"{transport.name}: {answer.document}"
+            assert answer.document["result"] is not None
+            # The caller's own correlation input is echoed, as the contract says.
+            assert answer.document["request_id"] == claiming["request_id"]
+    recorded = {event.principal_id for event in marked.world.audit}
+    assert recorded == {marked.principal.principal_id}, recorded
+    assert stranger.principal_id not in recorded
 
 
 # ---- source mutation ---------------------------------------------------------

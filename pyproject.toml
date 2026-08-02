@@ -127,7 +127,19 @@ classifiers = [
 #                     and an OpenTelemetry API, none of which this transport
 #                     uses, because they serve the OAuth and streamable-HTTP
 #                     surfaces `D-30` refuses. There is no extra that omits
-#                     them. Security surface: what this build *runs* is the
+#                     them. **They are prohibited from being imported, and that
+#                     prohibition is now derived rather than typed.** The first
+#                     version of this comment claimed the enforcement while the
+#                     guard enforced none of it — an independent review imported
+#                     all six into `application/service.py` with the whole FAST
+#                     tier green, because not one root was on the hand-written
+#                     list and the entry meant to cover the HTTP client named
+#                     `httpx` while `mcp` 2.0 declares `httpx2`.
+#                     `tests/architecture/test_scope_and_hygiene.py` now walks
+#                     `mcp`'s declared requirement closure, extras included, and
+#                     maps each distribution to the import names it installs, so
+#                     a future release cannot add a package nobody thought to
+#                     type here. Security surface: what this build *runs* is the
 #                     JSON-RPC framing over a pipe — no socket is opened, no
 #                     credential is read, and the network transports are never
 #                     imported. Removal path: a hand-written JSON-RPC loop over

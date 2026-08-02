@@ -40,13 +40,31 @@ What it does NOT do, and the distinction matters more than the check:
   `NOT_GRANTED` to `GRANTED____` in a publication receipt and to `GRANTED` in a
   disposition; both plants were reproduced here and the architecture tier stayed
   at 847 passed each time. What holds those ten up
-  instead is recorded in `docs/specs/README.md`, and it is uneven: five carry a
-  published in-package SHA-256 that this module simply does not read, and five
-  carry no hash anywhere in the package and rest on a Drive-reported byte count.
+  instead is recorded in `docs/specs/README.md`, and it is uneven: **six** carry
+  a published SHA-256 somewhere in the package that this module simply does not
+  read, and **four** carry no hash anywhere in the package and rest on a
+  Drive-reported byte count.
+
+  That six/four split is scoped to the **42-member Drive package**, not to the
+  **31 mirrored members** — and the distinction is not pedantry, it is how the
+  number was got wrong. A previous revision of this docstring said five and
+  five, because the sweep behind it recomputed over the mirror while stating a
+  claim about the package. One of the six, the MCP publication receipt, is
+  hashed only by `COORDINATION-ROUNDTRIP-RECEIPT-…MCP-INTEGRATION-…json`, which
+  is a package member that is not mirrored, so a mirror-bounded sweep cannot see
+  it. Whenever a count appears near this module, say which of the two universes
+  it counts over.
+
   **Do not close the gap by checking those byte counts here.** A same-length edit
   passes a byte count, so that buys the appearance of coverage and none of the
-  substance. For the five with no hash the remedy is upstream and only the
-  publisher can supply it — a published hash for the control artifacts.
+  substance. For the four with no hash anywhere in the package — the three RQC
+  control artifacts and the Native Apple Reminders coordination-roundtrip
+  receipt — the remedy is upstream and only the publisher can supply it: a
+  published hash for those control artifacts. For the MCP publication receipt
+  the remedy is repository-side instead, because the publisher already did its
+  part: mirroring that MCP coordination-roundtrip receipt would bring an
+  existing published hash into this repository, where a later revision of this
+  module could read it.
 
 Two constraints shape the implementation, both learned the hard way:
 

@@ -25,8 +25,17 @@ scope. `authorized_object` is the one definition of what an enrollment
 authorizes — an object of the enrollment's own source, and, where the enrollment
 named its objects, one of those — and it is applied by every count in
 `coverage_for` and by the search predicate that reads the same rows. The write
-path refuses the same objects through `UnauthorizedObjectError`, so the
-inconsistent state cannot be created rather than merely not being reported.
+path refuses the same objects through `UnauthorizedObjectError`.
+
+For an enrollment that named its objects that makes the inconsistent state
+impossible to create rather than merely unreported: the set is stored, so both
+sides can restrict to it. For an enrollment that named a root it does not. There
+is no stored object set for a root, so both sides admit every object of the
+enrollment's source, including objects of that source outside the root — the
+write path accepts them and the read path counts and returns them. That is a
+limit of what the schema knows and not a check that was forgotten;
+`authorized_object` says what would close it, and `persistence.search` discloses
+it in the envelope rather than leaving a caller to infer it.
 
 The two halves are not redundant. The read side has to hold against rows already
 stored, written by hand, or written before the write side existed; the write side
@@ -105,9 +114,24 @@ class UnauthorizedObjectError(Exception):
     caller may reasonably quarantine-and-continue on a malformed outcome and must
     not do the same with one it was never entitled to record.
 
-    Carries the two identifiers, both of which the caller supplied in the call
-    being refused, so nothing here discloses anything the caller did not already
-    hold. There is no reason code and no content: this is not a quarantine.
+    Carries the two identifiers, and that is a decision rather than a default,
+    because this message may reach a log. Both values were supplied by the caller
+    in the call being refused, so the message discloses nothing the caller did not
+    already hold; both are opaque `enr_…` and `obj_…` identifiers rather than
+    locators, names, or media types, so a log line carrying them says which grant
+    refused which object and nothing about what either contains. They are also
+    the only thing that makes the refusal actionable: a caller persisting a batch
+    of outcomes has to know which one was refused, and an error naming neither
+    would leave it re-deriving that from the batch.
+
+    That is the opposite decision from `persistence.search`'s errors, which carry
+    nothing at all, and the difference is who receives them. Those cross back to
+    whoever asked the question and are classified by section 10; this one goes to
+    the writer that already holds both values.
+
+    There is no reason code and no content: this is not a quarantine.
+    `test_a_refused_object_names_the_two_identifiers_its_caller_supplied` asserts
+    the message rather than leaving this paragraph to be believed.
     """
 
 
@@ -131,16 +155,44 @@ def authorized_object(
       when `root_object_id` is null.
 
     A root-selector enrollment stores no object set, so there is nothing to
-    restrict against and this deliberately does not invent one — the objects
-    under a root are known only to the enumeration that walked it, and nothing
-    persists them. That is the same gap that leaves such an enrollment's
-    denominator unmeasured, and `persistence.search` discloses it rather than
-    covering it up. The source condition still applies to it.
+    restrict against and this deliberately does not invent one. What that costs
+    is stated plainly because it is larger than it sounds: such an enrollment
+    authorizes *its whole source*, root or no root. An object of the same source
+    sitting outside the root — a sibling directory, anything the depth walk would
+    never have reached — passes this predicate, so it can be written under the
+    enrollment, is counted by `coverage_for`, and is returned by a search.
 
-    `correlate_except` rather than SQLAlchemy's automatic correlation: the two
-    tables named here must stay in the subquery's own `FROM` even when the
-    enclosing statement happens to select from one of them, which
-    `match_statement` does.
+    Containment is not implemented rather than being implemented badly, and the
+    reason is that the fact it needs is not stored. `source_objects` holds a
+    `native_locator` and a `source_id` and no parent link, so a subtree test
+    could only be a prefix comparison over locators, and no provider promises
+    that a locator prefix means containment. The object set under a root was
+    known to the enumeration that walked it and nothing persists it; there is no
+    worker yet that could.
+
+    **What WP-4 should do, once, rather than twice.** Persist the enumerated
+    object set at enrollment time. It is one missing fact — which objects are
+    under this root — and it closes two things that are currently carried
+    separately: this containment gap, because membership would then apply to a
+    root selector exactly as it applies to a named one, and the unmeasured
+    denominator in `persistence.search`, because the size of that set is the
+    eligible total search has no honest number for. Fixing either alone would
+    mean building the same persistence twice.
+
+    `correlate_except` rather than SQLAlchemy's automatic correlation, and what
+    it buys is stated as narrowly as it is measured. This predicate takes the
+    object column as an argument, so its two tables have to be resolved inside
+    the subquery whatever the enclosing statement's `FROM` happens to hold.
+    Without it SQLAlchemy correlates `source_objects` to an enclosing statement
+    that selects from it, and the condition `source_objects.source_object_id ==
+    source_object_id` then constrains the *enclosing* row instead of looking the
+    argument up — the predicate stops answering about its argument. For
+    `match_statement`'s statement in particular the two forms happen to agree,
+    because it joins `source_objects` on exactly that equality, so no result
+    there can distinguish them; the difference is real for any other enclosing
+    statement, and
+    `test_the_authorization_predicate_answers_about_its_argument_and_not_the_enclosing_row`
+    measures it against one.
     """
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     return (
@@ -383,7 +435,15 @@ def coverage_for(
 ) -> CoverageCounts:
     """Report coverage of `enrollment_id` for the snapshot `observed_at` names.
 
-    Outcomes are counted for the whole enrollment and for nothing beyond it.
+    Outcomes are counted for the whole enrollment and for nothing the enrollment
+    does not authorize. That is not the same as "nothing beyond it", and the
+    difference is the root selector: `authorized_object` restricts a root-selector
+    enrollment to its source and no further, so an object of that source outside
+    the root is authorized, and its outcomes are counted here. The counts are then
+    of a scope wider than the enrollment's root. `authorized_object` records why
+    that cannot be narrowed with what the schema stores and what would close it;
+    `persistence.search` discloses it to a caller.
+
     "For the enrollment" is `authorized_object` and not `enrollment_id` alone:
     an outcome stored against this enrollment for an object it does not
     authorize is not coverage of its scope, and counting it converted a partial
@@ -460,17 +520,27 @@ def coverage_for(
 
     # The two subqueries are the precedence, written once and subtracted from
     # the counts that rank below them. Neither is executed on its own; each
-    # becomes an `IN (SELECT …)` inside the count that has to exclude it. Both
-    # carry the boundary too: an unauthorized quarantine must not suppress an
-    # authorized extraction any more than it may be counted itself.
+    # becomes a `NOT IN (SELECT …)` inside a count that has to exclude it.
+    #
+    # Deliberately without the boundary, which they carried until it was shown to
+    # be unreachable. Both are only ever subtracted from a count that already
+    # applies `extraction_is_authorized` to `extractions.source_object_id` — the
+    # same column the exclusion compares — so the only objects the exclusion can
+    # decide anything about are authorized ones, and `authorized_object` is a
+    # function of the object and the enrollment alone. An object authorized for
+    # the extraction is therefore authorized for its quarantine too, and the case
+    # the boundary here was written for — an unauthorized quarantine suppressing
+    # an authorized extraction of the same object — cannot exist. Both columns
+    # are `NOT NULL`, so `NOT IN` cannot go three-valued and swallow the count
+    # either. A predicate no arrangement of rows can exercise is not defence in
+    # depth; it is a claim nothing checks, and this module has now been wrong in
+    # that direction more than once.
     quarantined_objects = select(quarantine_records.c.source_object_id).where(
         quarantine_records.c.enrollment_id == enrollment_id,
-        quarantine_is_authorized,
     )
     unsupported_objects = select(extractions.c.source_object_id).where(
         extractions.c.enrollment_id == enrollment_id,
         extractions.c.status == ExtractionStatus.UNSUPPORTED.value,
-        extraction_is_authorized,
     )
 
     quarantined = connection.execute(

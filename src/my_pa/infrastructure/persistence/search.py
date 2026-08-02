@@ -90,6 +90,28 @@ which is the right plan and is what it does at test-fixture scale. This module
 also sets no statement timeout. The index removes the sequential scan as the
 only possibility; it does not bound what a query can cost.
 
+Also not claimed, and this is the largest of them: that what a search returns for
+a root-selector enrollment is bounded by that enrollment's root. It is bounded by
+its *source*. `authorized_object` restricts a root selector to the enrollment's
+`source_id` and no further, because nothing persists the objects under a root, so
+an extraction stored under that enrollment for an object of the same source
+outside the root passes the boundary and its text is returned — with a
+`source_object_id` and a `version_id` that are honest and a scope the caller has
+no way to check them against. The same object is counted by `coverage_for`. This
+module never states a denominator for a root selector so it cannot trip over that
+itself, but a caller that *did* enumerate the root and states that count to
+`coverage_for` gets counts larger than it, which `coverage_for` refuses and
+`_coverage` reports as `SearchInternalError`: the truthful denominator is the one
+that fails. Every root-selector search therefore carries
+`scope_is_source_wide_not_root_bounded` beside `eligible_total_not_persisted`, so
+the limit is readable from the envelope rather than from this file.
+
+The two tokens are one missing fact and should be fixed once. Persisting the
+enumerated object set at enrollment time supplies both the membership a root
+selector cannot check and the eligible total nothing measured;
+`persistence.extraction.authorized_object` records the same conclusion where the
+predicate is. Both are carried into WP-4.
+
 Also not claimed: that no database failure of any kind can carry detail out of
 `search_extractions`. The coverage read runs `coverage_for`'s statements, which
 this module does not wrap — `_coverage` catches `ValueError` and nothing else —
@@ -308,6 +330,10 @@ _HEADLINE_TEMPLATE: Final = (
 #: token in the envelope, so `limitations` cannot become a free-text channel.
 _NO_STORED_LABEL: Final = "result_label_is_media_type_only"
 _ELIGIBLE_UNKNOWN: Final = "eligible_total_not_persisted"
+#: Named after what it is rather than after the fix it is waiting for: for a
+#: root-selector enrollment the searched scope is the enrollment's whole source,
+#: not the subtree under its root. See the module docstring.
+_SCOPE_IS_SOURCE_WIDE: Final = "scope_is_source_wide_not_root_bounded"
 _SNIPPET_TRUNCATED: Final = "snippet_truncated"
 _NO_INDEXED_COVERAGE: Final = "no_extracted_text_in_scope"
 _COVERAGE_INCOMPLETE: Final = "scope_not_fully_extracted"
@@ -690,7 +716,15 @@ def search_extractions(
                 snippet=snippet,
                 rank=rank_category(float(row.rank)),
                 # The matched object's source, not the enrollment's. See
-                # `match_statement`.
+                # `match_statement`. Pinned at the statement level and only
+                # there, which is the honest level rather than a gap left open:
+                # the boundary makes `source_objects.source_id` and
+                # `enrollments.source_id` equal for every row this can return, so
+                # reading either produces identical values and no comparison of
+                # returned data can tell them apart.
+                # `test_a_match_takes_its_source_from_the_matched_object` asserts
+                # which column the statement selects, which is where the two are
+                # still distinguishable.
                 source_id=str(row.source_id),
                 source_object_id=str(row.source_object_id),
                 version_id=str(row.version_id),
@@ -729,7 +763,13 @@ def search_extractions(
         _NO_STORED_LABEL,
     ]
     if not eligible_is_known:
+        # Two facts, disclosed separately because they are separately actionable:
+        # the denominator was never measured, and the numerator was not gathered
+        # from the root the caller asked about but from everything its source
+        # holds. A caller told only the first would read the counts as a partial
+        # measurement of the right scope.
         limitations.append(_ELIGIBLE_UNKNOWN)
+        limitations.append(_SCOPE_IS_SOURCE_WIDE)
     if counts.processed == 0:
         limitations.append(_NO_INDEXED_COVERAGE)
     elif counts.processed != counts.eligible:

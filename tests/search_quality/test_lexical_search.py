@@ -40,14 +40,14 @@ from typing import Any
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import ColumnElement, Engine, Select, select, text
+from sqlalchemy import ColumnElement, Engine, Select, Text, func, literal, select, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import make_url
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.v1.disclosure import CoverageState, FreshnessState
 from my_pa.domain.common.classification import Classification
-from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.extraction.coverage import LimitationReason
 from my_pa.domain.extraction.quarantine import QuarantineReason
@@ -68,6 +68,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.enrollment import accept_enrollment
 from my_pa.infrastructure.persistence.extraction import (
     UnauthorizedObjectError,
+    authorized_object,
     quarantine_object,
     record_limitation,
     record_outcome,
@@ -363,6 +364,84 @@ def enrol_under_a_root(
     return Corpus(
         engine=engine,
         source_id=source.source_id,
+        enrollment_id=accepted.enrollment.enrollment_id,
+        object_ids={name: entry.source_object_id for name, entry in observed.items()},
+        version_ids={name: entry.version_id for name, entry in observed.items()},
+    )
+
+
+def enrol_beside(
+    corpus: Corpus,
+    *,
+    key: str,
+    documents: dict[str, tuple[str, bytes]],
+    extract: frozenset[str] | None = None,
+) -> Corpus:
+    """A second enrollment over `corpus`'s own source, naming objects it does not.
+
+    The only helper that holds the source constant, and the reason it exists is
+    that nothing else can reach half the authorization boundary.
+    `authorized_object` has two conditions — the object's source is the
+    enrollment's, and where objects were named the object is one of them — and
+    every object built by a separate `enrol` violates both at once, because
+    `enrol` registers its own source. A refusal proved that way is proof of
+    nothing about membership: the source condition alone accounts for it, and
+    replacing the membership condition with a constant true leaves such a test
+    green.
+
+    Objects observed here belong to `corpus.source_id`, so the source condition
+    is satisfied and only membership decides. That is the single-condition
+    variation the membership half needs.
+    """
+    chosen = frozenset(documents) if extract is None else extract
+    with corpus.engine.begin() as connection:
+        observed = {
+            name: observe_object(
+                connection,
+                source_id=corpus.source_id,
+                native_locator=f"{NATIVE_ROOT}/{key}/{name}",
+                kind=ObjectKind.FILE,
+                fingerprint=f"fingerprint-{key}-{name}",
+                modified_at=WHEN,
+                media_type=media_type,
+                size_bytes=len(body),
+            )
+            for name, (media_type, body) in documents.items()
+        }
+        accepted = accept_enrollment(
+            connection,
+            EnrollmentRequest(
+                source_id=corpus.source_id,
+                principal_id=issue_identifier(IdKind.PRINCIPAL),
+                purpose=Purpose.BOUNDED_ENROLLMENT,
+                scope=EnrollmentScope(
+                    object_ids=tuple(entry.source_object_id for entry in observed.values())
+                ),
+                media_types=("text/markdown", "text/plain"),
+                policy_version="mcv-1",
+                idempotency_key=f"beside-{key}-{secrets.token_hex(4)}",
+                max_items=100,
+                max_bytes=1_000_000,
+            ),
+        )
+        for name in sorted(chosen):
+            media_type, body = documents[name]
+            record_outcome(
+                connection,
+                enrollment_id=accepted.enrollment.enrollment_id,
+                outcome=extract_text(
+                    source_id=corpus.source_id,
+                    source_object_id=observed[name].source_object_id,
+                    observed_version_id=observed[name].version_id,
+                    content_version_id=observed[name].version_id,
+                    media_type=media_type,
+                    content=body,
+                    observed_at=WHEN,
+                ),
+            )
+    return Corpus(
+        engine=corpus.engine,
+        source_id=corpus.source_id,
         enrollment_id=accepted.enrollment.enrollment_id,
         object_ids={name: entry.source_object_id for name, entry in observed.items()},
         version_ids={name: entry.version_id for name, entry in observed.items()},
@@ -671,6 +750,44 @@ def test_an_object_extracted_at_one_version_and_unsupported_at_another_is_counte
 
 
 @pytest.mark.database
+def test_an_object_quarantined_and_recorded_unsupported_is_counted_once(engine: Engine) -> None:
+    """The third pair of the precedence, and the one nothing reached.
+
+    Two tests above hold quarantine above extracted and unsupported above
+    extracted. The remaining pair is quarantine above *unsupported*, which is its
+    own exclusion in its own statement: measured, deleting it alone left both
+    tiers green. It is reachable in one object — a PDF that reached an outcome
+    saying so, and then a containment failure — and per row that is two outcomes
+    in a scope of one, which the denominator refuses outright.
+
+    Quarantine wins here for the same reason it wins everywhere else in these
+    counts: an object with a quarantine on it has stopped, and letting any other
+    outcome rank above it would report a stopped object as accounted for.
+    """
+    stopped = enrol(
+        engine,
+        key="quarantined-unsupported",
+        documents={"handbook": ("application/pdf", b"%PDF-1.7\nnot extracted here\n%%EOF\n")},
+    )
+    with engine.begin() as connection:
+        quarantine_object(
+            connection,
+            enrollment_id=stopped.enrollment_id,
+            source_object_id=stopped.object_ids["handbook"],
+            version_id=None,
+            reason=QuarantineReason.CONTAINMENT_UNPROVEN,
+        )
+
+    coverage = search(stopped, "revenue").disclosure.coverage
+
+    assert coverage.eligible == 1
+    assert coverage.quarantined == 1
+    assert coverage.unsupported == 0, "one object was counted as two outcomes"
+    assert coverage.processed == 0
+    assert coverage.state is CoverageState.QUARANTINED
+
+
+@pytest.mark.database
 def test_an_aggregate_limitation_reaches_the_disclosure_as_a_count(engine: Engine) -> None:
     """The plumbing `docs/plans/mcv-completion-plan.md` section 10 asked for.
 
@@ -850,7 +967,14 @@ def test_more_outcomes_than_the_enrollment_ceiling_is_still_a_searchable_scope(
 
 
 def plant_an_extraction(
-    engine: Engine, *, enrollment_id: str, source_object_id: str, version_id: str, body: str
+    engine: Engine,
+    *,
+    enrollment_id: str,
+    source_object_id: str,
+    version_id: str,
+    body: str | None = None,
+    status: str = "extracted",
+    media_type: str = "text/markdown",
 ) -> None:
     """Store an extraction row by raw SQL, bypassing `record_outcome` entirely.
 
@@ -860,14 +984,22 @@ def plant_an_extraction(
     no boundary at all: rows already stored, written by hand, or written before
     the writer was checked would still be counted and returned. Raw SQL is how
     that state is reached now that the supported path cannot reach it.
+
+    `status` is a parameter because the read side applies the boundary to three
+    counts separately and a suite that only ever plants `extracted` rows exercises
+    one of them. `text_exists_exactly_when_something_was_extracted` is why `body`
+    and `status` move together: an unsupported row holds no text and an extracted
+    one must.
     """
+    if (body is not None) != (status == "extracted"):
+        raise AssertionError("an extracted row carries text and any other row carries none")
     with engine.begin() as connection:
         connection.execute(
             text(
                 "INSERT INTO knowledge.extractions (extraction_id, enrollment_id, "
                 " source_object_id, version_id, status, media_type, extractor, "
                 " extractor_version, text, observed_at, processed_at) "
-                "VALUES (:kn, :enr, :obj, :ver, 'extracted', 'text/markdown', "
+                "VALUES (:kn, :enr, :obj, :ver, :status, :media_type, "
                 " 'my_pa.text', '1', :body, :at, :at)"
             ),
             {
@@ -875,7 +1007,36 @@ def plant_an_extraction(
                 "enr": enrollment_id,
                 "obj": source_object_id,
                 "ver": version_id,
+                "status": status,
+                "media_type": media_type,
                 "body": body,
+                "at": WHEN,
+            },
+        )
+
+
+def plant_a_quarantine(
+    engine: Engine, *, enrollment_id: str, source_object_id: str, version_id: str | None = None
+) -> None:
+    """Store a quarantine row by raw SQL, for the same reason as the extraction above.
+
+    `quarantine_object` refuses exactly the rows the read-side tests need, so the
+    quarantine half of the boundary has no other way to be exercised. Without one
+    of these every stray the suite builds is an `extractions` row, and the
+    boundary on the quarantine count is asserted by nothing.
+    """
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.quarantine_records (quarantine_id, enrollment_id, "
+                " source_object_id, version_id, reason, review_state, quarantined_at) "
+                "VALUES (:kn, :enr, :obj, :ver, 'containment_unproven', 'pending_review', :at)"
+            ),
+            {
+                "kn": issue_identifier(IdKind.KNOWLEDGE),
+                "enr": enrollment_id,
+                "obj": source_object_id,
+                "ver": version_id,
                 "at": WHEN,
             },
         )
@@ -915,6 +1076,14 @@ def test_an_outcome_stored_outside_the_named_scope_is_neither_counted_nor_return
     Those extractions hold text, and searching returned it: a document from a
     source outside this enrollment, with its `source_object_id` and `version_id`
     in the disclosure's `source_references`.
+
+    The strays here are of another source *and* unnamed, so this pins neither
+    condition of `authorized_object` on its own; what it pins is the arithmetic —
+    strays that fit inside the denominator. The single-condition reads are
+    `test_an_object_the_enrollment_names_but_another_source_owns_is_not_in_scope`
+    for the source half and
+    `test_an_object_of_the_enrollments_own_source_it_did_not_name_is_neither_counted_nor_returned`
+    for membership.
     """
     scoped = enrol(engine, key="stray", documents=CORPUS, extract=frozenset({"ledger", "minutes"}))
     neighbour = enrol(
@@ -1045,6 +1214,21 @@ def test_an_object_the_enrollment_names_but_another_source_owns_is_not_in_scope(
     assert search(crossed, INTRUDER).matches == ()
 
 
+def test_the_authorization_predicate_validates_the_enrollment_it_is_given() -> None:
+    """`authorized_object` checks its own argument, and nothing else was checking it.
+
+    Not a database test: the predicate is built before anything is executed, and
+    this is where the check runs. Every caller in this package happens to validate
+    the same identifier first, so deleting the check here left both tiers green —
+    which is an accident of the current callers rather than a property of the
+    function. It is public, it composes into other modules' statements, and an
+    identifier it never looked at would compile into a predicate that silently
+    matches nothing instead of being refused.
+    """
+    with pytest.raises(InvalidIdentifierError):
+        authorized_object(literal("obj_x", Text), enrollment_id=f"{NATIVE_ROOT}/ledger")
+
+
 def test_a_match_takes_its_source_from_the_matched_object() -> None:
     """Which table the returned `source_id` is read out of, asserted on the statement.
 
@@ -1112,6 +1296,10 @@ def test_a_quarantine_for_an_object_the_enrollment_does_not_authorize_is_refused
 
     The refusal is checked to be complete: nothing is written, so a caller
     retrying after fixing its scope is not competing with a half-recorded event.
+
+    The neighbour is a separate source, so what refuses this call is the source
+    condition; the membership condition is refused on the same writer by
+    `test_an_object_of_the_enrollments_own_source_it_did_not_name_is_refused_by_both_writers`.
     """
     scoped = enrol(engine, key="unauthorized-quarantine", documents=CORPUS)
     neighbour = enrol(engine, key="unauthorized-neighbour", documents={"ledger": CORPUS["ledger"]})
@@ -1154,6 +1342,10 @@ def test_an_extraction_outcome_for_an_object_the_enrollment_does_not_authorize_i
     inserts everything else itself, so a check placed only on the quarantine path
     would leave the path that stores *text* unguarded — the worse of the two,
     because the row it writes is the one a search returns.
+
+    Refused here by the source condition, the neighbour being its own source. The
+    membership condition on this writer is
+    `test_an_object_of_the_enrollments_own_source_it_did_not_name_is_refused_by_both_writers`.
     """
     scoped = enrol(engine, key="unauthorized-outcome", documents={"ledger": CORPUS["ledger"]})
     neighbour = enrol(
@@ -1205,6 +1397,366 @@ def test_a_root_selector_enrollment_refuses_an_object_of_another_source(engine: 
             version_id=None,
             reason=QuarantineReason.CONTAINMENT_UNPROVEN,
         )
+
+
+@pytest.mark.database
+def test_an_object_of_the_enrollments_own_source_it_did_not_name_is_refused_by_both_writers(
+    engine: Engine,
+) -> None:
+    """The membership half of the boundary, with the source half held constant.
+
+    Every other refusal test above builds its unauthorized object with a separate
+    `enrol`, which mints a separate source — so the object fails *both* conditions
+    of `authorized_object` at once and the refusal proves neither. Measured:
+    replacing the membership condition with a constant true leaves the whole suite
+    green. A test that violates two conditions pins neither.
+
+    Here one source carries two enrollments. `scoped` names `ledger`; `beside`
+    names `minutes`; both objects belong to the same source, so the source
+    condition is satisfied for both and membership is the only thing that can
+    refuse. Both writers are exercised, because `record_outcome` routes
+    quarantines to `quarantine_object` and inserts everything else itself, so a
+    check on one path says nothing about the other.
+    """
+    scoped = enrol(engine, key="member-write", documents={"ledger": CORPUS["ledger"]})
+    beside = enrol_beside(
+        scoped, key="member-write-beside", documents={"minutes": CORPUS["minutes"]}
+    )
+    assert beside.source_id == scoped.source_id, "the two enrollments must share one source"
+
+    media_type, body = CORPUS["minutes"]
+    with pytest.raises(UnauthorizedObjectError), engine.begin() as connection:
+        record_outcome(
+            connection,
+            enrollment_id=scoped.enrollment_id,
+            outcome=extract_text(
+                source_id=scoped.source_id,
+                source_object_id=beside.object_ids["minutes"],
+                observed_version_id=beside.version_ids["minutes"],
+                content_version_id=beside.version_ids["minutes"],
+                media_type=media_type,
+                content=body,
+                observed_at=WHEN,
+            ),
+        )
+    with pytest.raises(UnauthorizedObjectError), engine.begin() as connection:
+        quarantine_object(
+            connection,
+            enrollment_id=scoped.enrollment_id,
+            source_object_id=beside.object_ids["minutes"],
+            version_id=None,
+            reason=QuarantineReason.CONTAINMENT_UNPROVEN,
+        )
+
+    with engine.connect() as connection:
+        stored = connection.execute(
+            text(
+                "SELECT (SELECT count(*) FROM knowledge.extractions WHERE enrollment_id = :enr), "
+                " (SELECT count(*) FROM knowledge.quarantine_records WHERE enrollment_id = :enr)"
+            ),
+            {"enr": scoped.enrollment_id},
+        ).one()
+    # One extraction, the fixture's own; nothing was half-written by either refusal.
+    assert stored == (1, 0)
+
+    # The control, on the same source and the same writers: the object this
+    # enrollment did name is accepted, so what refused the other one is
+    # membership and not something about the pair of enrollments.
+    with engine.begin() as connection:
+        quarantine_object(
+            connection,
+            enrollment_id=scoped.enrollment_id,
+            source_object_id=scoped.object_ids["ledger"],
+            version_id=None,
+            reason=QuarantineReason.CONTAINMENT_UNPROVEN,
+        )
+
+
+@pytest.mark.database
+def test_an_object_of_the_enrollments_own_source_it_did_not_name_is_neither_counted_nor_returned(
+    engine: Engine,
+) -> None:
+    """The same single-condition variation on the read side.
+
+    `scoped` names one object of its source and has extracted it. Two more
+    objects of *that same source* belong to a second enrollment, and extractions
+    holding text are planted against `scoped` for both — the state the writer now
+    refuses and that rows written by hand or written earlier still reach.
+
+    With membership enforced the strays are outside the scope: they are not
+    counted, and their text is not returned. Without it they are counted, and the
+    counts then exceed `cardinality(object_ids)` — the denominator `search` takes
+    from the enrollment itself — so `coverage_for` raises and search is dead for
+    this enrollment rather than merely wrong about it. Both halves are asserted,
+    because the count and the content are the same row.
+    """
+    scoped = enrol(engine, key="member-read", documents={"ledger": CORPUS["ledger"]})
+    beside = enrol_beside(
+        scoped,
+        key="member-read-beside",
+        documents={name: CORPUS[name] for name in ("minutes", "charter")},
+    )
+    for name in ("minutes", "charter"):
+        plant_an_extraction(
+            engine,
+            enrollment_id=scoped.enrollment_id,
+            source_object_id=beside.object_ids[name],
+            version_id=beside.version_ids[name],
+            body=INTRUDER_DOCUMENT,
+        )
+
+    page = search(scoped, "revenue")
+    coverage = page.disclosure.coverage
+
+    assert coverage.eligible == 1
+    assert coverage.processed == 1, "an object of the source the enrollment never named was counted"
+    assert coverage.state is CoverageState.PROCESSED
+    assert {match.source_object_id for match in page.matches} == {scoped.object_ids["ledger"]}
+    assert search(scoped, INTRUDER).matches == ()
+    assert not {
+        reference.source_object_id for reference in page.disclosure.source_references
+    } & set(beside.object_ids.values())
+
+
+@pytest.mark.database
+def test_a_quarantine_outside_the_named_objects_of_the_same_source_is_not_counted(
+    engine: Engine,
+) -> None:
+    """The boundary on the quarantine count, which no other test reaches.
+
+    Every stray the rest of this file builds is an `extractions` row, so deleting
+    the boundary from the quarantine count alone left both tiers green. The row
+    is planted rather than written, because `quarantine_object` refuses it, and it
+    names an object of the enrollment's *own* source that the enrollment did not
+    name — one condition varied, not two.
+
+    Counted, it would be a second outcome inside a scope of one object, which the
+    denominator refuses outright: the read would raise rather than return a wrong
+    number. Both are stated, since the count is the claim and the crash is only
+    how this particular fixture happens to notice it.
+    """
+    scoped = enrol(engine, key="stray-quarantine", documents={"ledger": CORPUS["ledger"]})
+    beside = enrol_beside(
+        scoped, key="stray-quarantine-beside", documents={"minutes": CORPUS["minutes"]}
+    )
+    plant_a_quarantine(
+        engine,
+        enrollment_id=scoped.enrollment_id,
+        source_object_id=beside.object_ids["minutes"],
+        version_id=beside.version_ids["minutes"],
+    )
+
+    coverage = search(scoped, "revenue").disclosure.coverage
+
+    assert coverage.quarantined == 0, "a quarantine outside the authorized scope was counted"
+    assert coverage.processed == 1
+    assert coverage.eligible == 1
+    assert coverage.state is CoverageState.PROCESSED
+
+
+@pytest.mark.database
+def test_an_unsupported_row_outside_the_named_objects_of_the_same_source_is_not_counted(
+    engine: Engine,
+) -> None:
+    """The boundary on the unsupported count, for the same reason and in the same shape.
+
+    `coverage_for` applies the boundary at three counts and each is its own
+    statement. A suite that plants only `extracted` rows exercises one of them, so
+    this plants an `unsupported` one — no text, which is what
+    `text_exists_exactly_when_something_was_extracted` requires of it — for an
+    object of the enrollment's own source that it did not name.
+    """
+    scoped = enrol(engine, key="stray-unsupported", documents={"ledger": CORPUS["ledger"]})
+    beside = enrol_beside(
+        scoped, key="stray-unsupported-beside", documents={"minutes": CORPUS["minutes"]}
+    )
+    plant_an_extraction(
+        engine,
+        enrollment_id=scoped.enrollment_id,
+        source_object_id=beside.object_ids["minutes"],
+        version_id=beside.version_ids["minutes"],
+        status="unsupported",
+        media_type="application/pdf",
+    )
+
+    coverage = search(scoped, "revenue").disclosure.coverage
+
+    assert coverage.unsupported == 0, "an unsupported row outside the authorized scope was counted"
+    assert coverage.processed == 1
+    assert coverage.eligible == 1
+    assert coverage.state is CoverageState.PROCESSED
+
+
+@pytest.mark.database
+def test_a_root_selector_enrollment_reaches_its_whole_source_and_the_envelope_says_so(
+    engine: Engine,
+) -> None:
+    """The limit this branch does not close, asserted rather than described.
+
+    An enrollment naming a root is restricted by `authorized_object` to its
+    source and no further, because nothing persists which objects are under the
+    root. So an object of the same source that the depth walk would never have
+    reached is accepted by both writers, counted by `coverage_for`, and returned
+    by a search with nothing in the match distinguishing it — and a caller that
+    *did* enumerate the root and states that count as its denominator gets a read
+    that fails instead of a read that is merely wide.
+
+    This test exists so that the limit is a measured fact rather than a paragraph.
+    What it requires is the disclosure: every root-selector search says
+    `scope_is_source_wide_not_root_bounded`, so a caller can tell from the
+    envelope what it would otherwise have to read this module to learn. When WP-4
+    persists the enumerated object set, the acceptances below become refusals and
+    this test is the one that has to be rewritten — which is the point of writing
+    it down.
+    """
+    rooted = enrol_under_a_root(
+        engine, key="rooted-source-wide", documents={"ledger": CORPUS["ledger"]}
+    )
+    with engine.begin() as connection:
+        # A sibling of the root, not under it, in the same source.
+        outside = observe_object(
+            connection,
+            source_id=rooted.source_id,
+            native_locator=f"{NATIVE_ROOT}/rooted-source-wide-sibling/payroll.md",
+            kind=ObjectKind.FILE,
+            fingerprint="fingerprint-rooted-source-wide-sibling",
+            modified_at=WHEN,
+            media_type="text/markdown",
+            size_bytes=len(INTRUDER_DOCUMENT),
+        )
+        # Accepted. Not asserted as correct — asserted as what happens.
+        record_outcome(
+            connection,
+            enrollment_id=rooted.enrollment_id,
+            outcome=extract_text(
+                source_id=rooted.source_id,
+                source_object_id=outside.source_object_id,
+                observed_version_id=outside.version_id,
+                content_version_id=outside.version_id,
+                media_type="text/markdown",
+                content=INTRUDER_DOCUMENT.encode("utf-8"),
+                observed_at=WHEN,
+            ),
+        )
+
+    page = search(rooted, INTRUDER)
+    assert {match.source_object_id for match in page.matches} == {outside.source_object_id}
+    assert search(rooted, "revenue").disclosure.coverage.processed == 2
+
+    # The disclosure, which is what this change is accountable for.
+    assert "scope_is_source_wide_not_root_bounded" in page.disclosure.limitations
+    assert "eligible_total_not_persisted" in page.disclosure.limitations
+    assert page.disclosure.partial_result is True
+
+    # And the cost to a caller that did enumerate the root: one object under it,
+    # two outcomes counted, so the truthful denominator no longer fits.
+    with pytest.raises(SearchInternalError), engine.connect() as connection:
+        _coverage(connection, rooted.enrollment_id, moment=WHEN, eligible=1)
+
+
+@pytest.mark.database
+def test_an_enrollment_that_named_its_objects_makes_no_source_wide_disclosure(
+    corpus: Corpus,
+) -> None:
+    """The paired negative, without which the token above could be unconditional.
+
+    A token every search carries discloses nothing. This enrollment named its
+    objects, so its scope really is bounded by what it named, and saying otherwise
+    would be a limitation claimed where none applies.
+    """
+    limitations = search(corpus, "revenue").disclosure.limitations
+    assert "scope_is_source_wide_not_root_bounded" not in limitations
+    assert "eligible_total_not_persisted" not in limitations
+
+
+@pytest.mark.database
+def test_the_authorization_predicate_answers_about_its_argument_and_not_the_enclosing_row(
+    engine: Engine,
+) -> None:
+    """What `correlate_except` is for, at the only level where it is visible.
+
+    `authorized_object` takes the object column as an argument, so both of its
+    tables have to be resolved inside its own subquery. Left to SQLAlchemy's
+    automatic correlation, `source_objects` binds to an enclosing statement that
+    selects from it, and `source_objects.source_object_id == source_object_id`
+    stops being a lookup of the argument and becomes a restriction on the
+    enclosing row.
+
+    `match_statement` cannot show this and it is worth saying why rather than
+    picking a fixture that happens to work: it joins `source_objects` on exactly
+    that equality, so the correlated and uncorrelated forms agree there for every
+    row, and removing `correlate_except` leaves the whole suite green. The
+    statement below is the general case the predicate is written for — an
+    enclosing `FROM` that includes one of the two tables and does *not* constrain
+    it to the argument. With the tables uncorrelated the predicate is a constant
+    for the whole statement and every row of the source is returned; correlated,
+    it collapses to the single row whose identifier happens to equal the argument.
+    """
+    scoped = enrol(
+        engine,
+        key="correlate",
+        documents={name: CORPUS[name] for name in ("ledger", "minutes", "charter")},
+    )
+    authorized = authorized_object(
+        literal(scoped.object_ids["ledger"], Text), enrollment_id=scoped.enrollment_id
+    )
+    with engine.connect() as connection:
+        counted = connection.execute(
+            select(func.count())
+            .select_from(source_objects)
+            .where(source_objects.c.source_id == scoped.source_id, authorized)
+        ).scalar_one()
+
+    assert counted == len(scoped.object_ids) == 3, (
+        "the predicate answered about the enclosing row rather than about its argument"
+    )
+
+
+@pytest.mark.database
+def test_a_refused_object_names_the_two_identifiers_its_caller_supplied(engine: Engine) -> None:
+    """What `UnauthorizedObjectError` may carry, asserted rather than asserted to.
+
+    Its docstring says the message is the two identifiers, no reason code and no
+    content, and nothing checked it while `SearchInternalError`'s redaction was
+    pinned twice over. The two errors make opposite decisions and both are
+    deliberate: this one goes back to the writer that supplied both values and has
+    to say which outcome of a batch was refused, so it names them.
+
+    What it must not acquire is anything the caller did not hand it — a locator, a
+    media type, the text of the outcome, or the reason the object is out of scope,
+    which would say something about the enrollment's contents. `__cause__` and
+    `__context__` are checked for the same reason they are on the search errors: a
+    traceback rendered through a database error is how detail comes back after the
+    message has been kept clean.
+    """
+    scoped = enrol(engine, key="refusal-message", documents={"ledger": CORPUS["ledger"]})
+    beside = enrol_beside(
+        scoped, key="refusal-message-beside", documents={"minutes": CORPUS["minutes"]}
+    )
+
+    with pytest.raises(UnauthorizedObjectError) as raised, engine.begin() as connection:
+        quarantine_object(
+            connection,
+            enrollment_id=scoped.enrollment_id,
+            source_object_id=beside.object_ids["minutes"],
+            version_id=None,
+            reason=QuarantineReason.CONTAINMENT_UNPROVEN,
+        )
+
+    message = str(raised.value)
+    assert scoped.enrollment_id in message
+    assert beside.object_ids["minutes"] in message
+    for withheld in (
+        NATIVE_ROOT,
+        "text/markdown",
+        QuarantineReason.CONTAINMENT_UNPROVEN.value,
+        CORPUS["minutes"][1].decode(),
+        scoped.object_ids["ledger"],
+        beside.version_ids["minutes"],
+    ):
+        assert withheld not in message
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
 
 
 @pytest.mark.database

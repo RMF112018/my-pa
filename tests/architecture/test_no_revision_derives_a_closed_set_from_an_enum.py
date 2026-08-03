@@ -43,6 +43,32 @@ and `test_every_revision_declares_its_emission_readably` refuses a revision that
 touches the shared declaration through a shape this module cannot read — without
 which a later revision could derive freely simply by being written differently.
 
+**What it does NOT detect, stated because a control described as closing a class
+it does not close is the overclaim this campaign keeps catching (`D-86`).** This
+module reads a constraint whose admitted vocabulary is a whole closed *set*. Six
+constraints instead embed a single enum **value**, and every one of them is
+outside this guard's coverage:
+
+- `a_job_is_running_exactly_while_leased` and
+  `a_capture_job_is_running_exactly_while_leased`, from `JobState.RUNNING`;
+- `derived_text_is_never_source_original`, from
+  `TrustLevel.SOURCE_BOUND_DERIVED`;
+- `text_exists_exactly_when_something_was_extracted` and
+  `only_a_supported_media_type_is_extracted`, from `ExtractionStatus.EXTRACTED`;
+- `a_denial_records_its_reason_and_nothing_else_does`, from
+  `AuditOutcome.DENIED`.
+
+The reviewer measured the gap rather than inferring it: renaming
+`AuditOutcome.DENIED` moves the DDL an already-merged revision emits and this
+module **stays green**. So it is the same family as `D-69` and `D-81`, and it is
+recorded as ledger rather than fixed here for one reason, which `D-86` states:
+**adding an enum member is silent, whereas renaming a value breaks loudly** at
+the constant, the persistence mapping, every fixture and every assertion that
+names the string. `D-81`'s hazard is silent drift; this one announces itself.
+What would close it is a rule reading each revision's emitted `CHECK` text for
+any enum value it can attribute to a live member — which is a different parse
+from the set equality below, not an extension of it.
+
 Nothing here opens a connection or a path. Every value is read out of the
 repository's own declarations.
 """

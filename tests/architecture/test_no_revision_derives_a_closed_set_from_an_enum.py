@@ -17,9 +17,14 @@ hazard*, because the next member added to that enum is the moment they stop
 agreeing — and one of the two will change silently. So the test does not care how
 the constraint was written; it cares whether the revision still tracks the domain.
 
-**The allowlist must shrink.** `ALLOWED` is the ten sites in the three revisions
-`D-81` deliberately does not edit. Each entry pins the *exact* vocabulary that
-site emits today, so the guard reddens three ways:
+**The allowlist must shrink.** `ALLOWED` is the ten sites, in ten distinct
+sources, carried by the two revisions `D-81` deliberately does not edit
+(`D-92`; the count said "nine sources" in `D-81` and in WP-7's brief, and the
+omitted tenth was `my_pa.contracts.v1.errors.ErrorCode`, which reaches
+`jobs.last_error_code_is_a_public_error_code` without being a `StrEnum` — the
+same undercount `D-81` warns about, repeated inside the row that warns about
+it). Each entry pins the *exact* vocabulary that site emits today, so the guard
+reddens three ways:
 
 - a member added to any listed enum changes an emitted vocabulary — red;
 - a new derived constraint appears in any revision — red, because it is not in
@@ -56,7 +61,13 @@ outside this guard's coverage:
 - `text_exists_exactly_when_something_was_extracted` and
   `only_a_supported_media_type_is_extracted`, from `ExtractionStatus.EXTRACTED`;
 - `a_denial_records_its_reason_and_nothing_else_does`, from
-  `AuditOutcome.DENIED`.
+  `AuditOutcome.DENIED`;
+- `an_invalidated_proposal_records_its_reason_and_nothing_else_does`, from
+  `ProposalState.INVALIDATED` — the seventh, added by WP-7 and named here rather
+  than left for a later sweep to find, because `D-86`'s second half is
+  "implemented, not promised". It sits inside `2b7e9f4c1a83`, whose closed sets
+  are frozen, so the *set* is safe; the embedded single value is not, on exactly
+  the terms the six above are not.
 
 The reviewer measured the gap rather than inferring it: renaming
 `AuditOutcome.DENIED` moves the DDL an already-merged revision emits and this
@@ -68,6 +79,21 @@ names the string. `D-81`'s hazard is silent drift; this one announces itself.
 What would close it is a rule reading each revision's emitted `CHECK` text for
 any enum value it can attribute to a live member — which is a different parse
 from the set equality below, not an extension of it.
+
+**One revision is structurally invisible to this module, and it is disclosed
+rather than fixed** (`D-99`). `migrations/versions/20260801_4b9f0d27ac31_
+create_migration_control_plane.py` calls `METADATA.create_all(bind)` on
+`my_pa.infrastructure.migration.control_plane`'s **separate** `MetaData`, never
+imports `DECLARATION`, and holds no `Table` in its namespace — so
+`test_every_revision_declares_its_emission_readably` skips it and `_emitted`
+returns `None` for it. `control_plane.py` derives five further closed-set
+constraints from live enums (`RunStatus`, `PhaseStatus`, `TableState`,
+`QuarantineCode`, `AuditEvent`), and not one of them is reachable from here,
+because `DECLARATION` above hard-codes a single declaration module. That is a
+larger hole than the single-value class named just above: those six are
+detected-and-allowlisted, and this one is unreachable. Closing it means teaching
+this module a second `MetaData`, which is its own package with its own review.
+A control that names its own blind spot beats one that implies totality.
 
 Nothing here opens a connection or a path. Every value is read out of the
 repository's own declarations.
@@ -100,18 +126,32 @@ DECLARATION = "my_pa.infrastructure.persistence.tables"
 #: A revision that emits shared-declaration tables exposes them as one of these.
 #: A callable is what a revision uses when it freezes something — it returns
 #: copies with the derived constraints replaced. `_TABLES` is the plain case.
-_EMISSION_CALLABLES: Final = ("_historical_audit_events", "_historical_capture_tables")
+_EMISSION_CALLABLES: Final = (
+    "_historical_audit_events",
+    "_historical_capture_tables",
+    "_historical_wp7_tables",
+)
 _EMISSION_LIST: Final = "_TABLES"
 
-#: `column IN ('a', 'b')`, wherever it sits in a larger expression — the two
-#: error-code constraints wrap theirs in `... IS NULL OR ...`.
-_CLOSED_SET = re.compile(r"IN \(([^)]*)\)")
+#: `column IN ('a', 'b')` or `column <@ ARRAY['a', 'b']`, wherever either sits in
+#: a larger expression — the two error-code constraints wrap theirs in `... IS
+#: NULL OR ...`.
+#:
+#: The array form is read because a closed set over an array column cannot be
+#: written as `IN`, and a shape this module could not parse would be a derived
+#: site nobody could see — which is this module's entire subject. It was added
+#: with `capture_proposals.a_missing_required_field_is_a_required_field`, and it
+#: names no site that was previously hidden: no revision in the chain emitted an
+#: `ARRAY[…]` literal before that one, which `test_the_allowlist_names_only_
+#: revisions_this_package_does_not_edit` holds at ten.
+_CLOSED_SET = re.compile(r"IN \(([^)]*)\)|<@ ARRAY\[([^\]]*)\]")
 _LITERAL = re.compile(r"'([^']*)'")
 
 #: Every still-derived site, with the revision that emits it, the closed set it
-#: tracks, and the exact vocabulary it emits today. Ten sites in three revisions,
-#: none of which WP-6 edits — freezing them is a separate package (`D-81`), and
-#: WP-6 changes the membership of none of these sets, so none of them fires.
+#: tracks, and the exact vocabulary it emits today. Ten sites in ten sources,
+#: carried by two revisions, neither of which WP-6 or WP-7 edits — freezing them
+#: is a separate package (`D-81`), and neither package changes the membership of
+#: any of these sets, so none of them fires.
 #:
 #: The independent reviewer's list named nine sites and eight sources. Both
 #: numbers were low: `quarantine_review_state_is_known` derives from
@@ -277,6 +317,73 @@ FROZEN: Final[dict[str, dict[str, tuple[str, ...]]]] = {
             "internal_error",
         ),
     },
+    "2b7e9f4c1a83": {
+        "capture_stage_is_known": (
+            "datetime_normalization",
+            "detect_language",
+            "deterministic_extraction",
+            "index_capture_text",
+            "normalize",
+            "persist_proposals",
+            "segment",
+            "validate",
+            "work_object_extraction",
+        ),
+        "capture_processing_state_is_known": (
+            "complete",
+            "partial",
+            "permanent_failure",
+            "policy_denied",
+            "retryable_failure",
+            "running",
+            "waiting",
+        ),
+        "span_offset_basis_is_known": ("unicode_code_point_v1",),
+        "span_role_is_known": ("context", "counterevidence", "direct"),
+        "proposal_type_is_known": (
+            "commitment",
+            "decision",
+            "follow_up",
+            "issue",
+            "open_question",
+            "risk",
+            "task",
+        ),
+        "proposal_state_is_known": (
+            "accepted",
+            "corrected_accepted",
+            "deferred",
+            "invalidated",
+            "needs_review",
+            "proposed",
+            "rejected",
+            "superseded",
+            "unresolved",
+        ),
+        "proposal_risk_class_is_known": ("critical", "high", "low", "moderate"),
+        "proposal_method_is_known": ("deterministic_rule",),
+        "proposal_quarantine_reason_is_known": (
+            "span_cites_another_version",
+            "span_outside_version_text",
+            "span_text_does_not_re_derive",
+        ),
+        "a_missing_required_field_is_a_required_field": (
+            "action",
+            "actor",
+            "counterparty",
+            "due_condition",
+            "status",
+        ),
+        "capture_label_is_known": (
+            "commitment_mention",
+            "date_mention",
+            "external_reference",
+            "financial_mention",
+            "identifier_mention",
+        ),
+        "mention_entity_type_is_known": ("document", "project", "url"),
+        "mention_resolution_state_is_known": ("unresolved",),
+    },
 }
 
 
@@ -334,7 +441,11 @@ def _closed_sets(table: Table) -> Iterator[tuple[str, frozenset[str]]]:
         if not isinstance(constraint, CheckConstraint) or constraint.name is None:
             continue
         for match in _CLOSED_SET.finditer(str(constraint.sqltext)):
-            values = frozenset(_LITERAL.findall(match.group(1)))
+            # One alternation, two groups: whichever branch matched is the one
+            # that is not `None`. Reading `group(1)` alone would silently see
+            # nothing in every array-form constraint, which is the shape of hole
+            # this module exists to refuse.
+            values = frozenset(_LITERAL.findall(match.group(1) or match.group(2) or ""))
             if values:
                 yield str(constraint.name), values
 
@@ -383,9 +494,9 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 11
-    assert len({revision for revision, _ in revisions}) == 11
-    assert {"9c6b4a18ed72", "1a4c9e77b2d5", "7e5a1fb93d62", "8b3f5c17d904"} <= {
+    assert len(revisions) == 12
+    assert len({revision for revision, _ in revisions}) == 12
+    assert {"9c6b4a18ed72", "1a4c9e77b2d5", "2b7e9f4c1a83", "7e5a1fb93d62", "8b3f5c17d904"} <= {
         revision for revision, _ in revisions
     }
 
@@ -448,9 +559,9 @@ def test_no_revision_derives_a_closed_set_outside_the_allowlist() -> None:
 def test_the_allowlist_names_only_revisions_this_package_does_not_edit() -> None:
     """`D-81`'s boundary, held to.
 
-    The two revisions WP-6 writes or edits carry no derived constraint at all.
-    If one appears in the allowlist, the freeze that closed it has been undone
-    and the residual class has grown rather than shrunk.
+    The revisions WP-6 and WP-7 write or edit carry no derived constraint at
+    all. If one appears in the allowlist, the freeze that closed it has been
+    undone and the residual class has grown rather than shrunk.
     """
     assert {revision for revision, *_ in ALLOWED} == {"7e5a1fb93d62", "8b3f5c17d904"}
     assert len(ALLOWED) == 10
@@ -461,10 +572,11 @@ def test_the_allowlist_names_only_revisions_this_package_does_not_edit() -> None
 def test_a_frozen_revision_emits_its_recorded_vocabulary(revision: str) -> None:
     """The other end of the property, so a plant proves something.
 
-    A member added to `Capability`, `DenialReason`, `JobState` or any of the six
-    capture sets must leave these twelve constraint texts exactly where they are.
-    That is what "the revision goes on denoting one schema" means, and it is the
-    half the reviewer measured as broken for `denial_reason`.
+    A member added to `Capability`, `DenialReason`, `JobState`, any of the six
+    capture sets, or any of the thirteen the proposal revision freezes must
+    leave all twenty-five constraint texts exactly where they are. That is what
+    "the revision goes on denoting one schema" means, and it is the half the
+    reviewer measured as broken for `denial_reason`.
     """
     module = dict(_revisions())[revision]
     tables = _emitted(module)

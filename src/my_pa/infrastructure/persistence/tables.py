@@ -8,20 +8,26 @@ retry in the same tables, and would put application code on the write path of
 migration governance state. Two planes with different lifetimes, different
 writers, and different authority do not share a schema.
 
-Nine concerns, fifteen tables, and nothing else. There is no scheduler, no
+Ten concerns, twenty-two tables, and nothing else. There is no scheduler, no
 priority column, and no soft-delete flag: each of those would be a mechanism with
 no caller, and `AGENTS.md` section 2 rules them out until one exists.
 `audit_events` is not the "audit mirror" an earlier revision of this paragraph
 ruled out — a mirror duplicates rows another table already owns, and this is the
 only place an audit event is stored at all (`D-34`).
 
-**Two columns in the schema hold content, and they are two different
+**Three columns in the schema hold content, and they are three different
 authorities.** `extractions.text` is derived text bound to the source version it
 was extracted from. `capture_versions.content` is the text the user typed, which
 `ADR-003` makes a product-owned record rather than a source read — a third
-authority class, not a source-system write and not a managed-document write. They
-are confined to those two places on purpose, so the question "where could a
-document body be" has an enumerable answer. `quarantine_records`,
+authority class, not a source-system write and not a managed-document write.
+`capture_processing_text.normalized_text` is `P-02`'s conservative rewrite of
+that text for processing only; it is bound to the version it was derived from
+and to the mapping that carries its offsets back, and it never replaces the
+original. They are confined to those three places on purpose, so the question
+"where could a document body be" has an enumerable answer — and that is why
+`capture_spans` stores a digest of the quoted text and not the quote, and why
+`capture_stage_results` stores a digest of a stage's output and not the output.
+`quarantine_records`,
 `audit_events`, `capture_submissions`, and `capture_receipts` in particular have
 no column a payload could go in, which is the structural half of the section 12
 rule that a quarantine stores identifiers and codes and not the thing that
@@ -69,6 +75,32 @@ from sqlalchemy import (
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
+from my_pa.domain.capture.classification import (
+    MAX_SCHEME_CHARACTERS,
+    CaptureLabel,
+    EntityType,
+    ResolutionState,
+)
+from my_pa.domain.capture.pipeline import (
+    MAX_PIPELINE_VERSION_CHARACTERS,
+    PipelineStage,
+    ProcessingState,
+)
+from my_pa.domain.capture.proposal import (
+    MAX_NORMALIZED_VALUE_CHARACTERS,
+    MAX_PROPOSAL_VERSION_CHARACTERS,
+    ProposalField,
+    ProposalMethod,
+    ProposalQuarantineReason,
+    ProposalState,
+    ProposalType,
+    RiskClass,
+)
+from my_pa.domain.capture.span import (
+    MAX_MAPPING_VERSION_CHARACTERS,
+    OffsetBasis,
+    SpanRole,
+)
 from my_pa.domain.capture.submission import (
     MAX_IDEMPOTENCY_KEY_CHARACTERS,
     MAX_REQUEST_ID_CHARACTERS,
@@ -147,6 +179,21 @@ def _one_of(
     which.
     """
     return CheckConstraint(f"{column} IN ({_literals(values)})", name=name or f"{column}_is_known")
+
+
+def _each_one_of(
+    column: str, values: type[StrEnum] | frozenset[str], *, name: str
+) -> CheckConstraint:
+    """Constrain every element of an array `column` to a closed set.
+
+    `IN` cannot express containment of an array, so this is the array form of
+    `_one_of` and it is written as `<@ ARRAY[…]`.
+    `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`
+    reads both shapes, which is why this one may exist at all: a closed set a
+    revision emits that the guard could not parse would be a derived site nobody
+    could see, and that guard's whole subject is derived sites nobody can see.
+    """
+    return CheckConstraint(f"{column} <@ ARRAY[{_literals(values)}]", name=name)
 
 
 #: The suffix rule `domain.common.identifiers.validate_identifier` enforces, as a
@@ -992,4 +1039,428 @@ capture_jobs = Table(
         name="capture_job_attempts_are_bounded",
     ),
     Index("capture_jobs_by_state", "state", "created_at"),
+)
+
+#: `P-02`'s output: the conservative processing text and the mapping that takes
+#: an offset in it back to an offset in the original.
+#:
+#: **The original is never rewritten**, which is what makes this a second row
+#: rather than a column on `capture_versions` — and `capture_versions` is
+#: append-only at the server, so it could not have been a column there in any
+#: case. `11_EXTRACTION_AND_PROPOSAL_PIPELINE.md:50-54` requires the original to
+#: be retained untouched and the mapping to be generated; `09_LOGICAL_DATA_MODEL.md:197`
+#: requires the mapping to be reversible and traceable, and `10:89` says no
+#: proposal may cite only normalized text — so a span measured here names this
+#: row and the mapping is how it resolves back.
+#:
+#: **The mapping is three parallel arrays of runs, not one array per character.**
+#: A per-character map over a hundred-thousand-character capture is a hundred
+#: thousand integers to store a transformation that changes almost nothing.
+#: Conservative normalization is piecewise affine — a run of characters shifts
+#: by a constant — so `(normalized_start, original_start, length)` per run is
+#: exact, reversible in both directions, and small. The constraint that the
+#: three have equal, non-zero cardinality is what stops a partially written
+#: mapping from being storable at all.
+#:
+#: **There is no `transformations` column.** `09_LOGICAL_DATA_MODEL.md:198` lists
+#: one; `normalization_version` names the transformation set, and a second
+#: column stating the same fact in another vocabulary is two writers for one
+#: fact. A later normalization is a new version and a new row.
+capture_processing_text = Table(
+    "capture_processing_text",
+    METADATA,
+    Column("processing_text_id", Text, primary_key=True),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("normalization_version", Text, nullable=False),
+    Column("normalized_text", Text, nullable=False),
+    Column("normalized_sha256", Text, nullable=False),
+    # `unknown` is a real answer `11_…:59` requires to be available, and it is
+    # not the same answer as "not detected yet", which is null.
+    Column("language", Text),
+    Column("run_normalized_start", ARRAY(Integer), nullable=False),
+    Column("run_original_start", ARRAY(Integer), nullable=False),
+    Column("run_length", ARRAY(Integer), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("processing_text_id", IdKind.PROCESSING_TEXT),
+    _matches("normalized_sha256", DIGEST_PATTERN.pattern, name="normalized_sha256_is_a_digest"),
+    CheckConstraint(
+        f"length(normalization_version) BETWEEN 1 AND {MAX_PIPELINE_VERSION_CHARACTERS}",
+        name="a_normalization_version_is_a_bounded_token",
+    ),
+    CheckConstraint("length(normalized_text) > 0", name="processing_text_carries_text"),
+    CheckConstraint(
+        f"length(normalized_text) <= {MAX_CAPTURE_CHARACTERS}",
+        name="processing_text_is_bounded",
+    ),
+    CheckConstraint(
+        "language IS NULL OR language ~ '^([a-z]{2,3}|unknown)$'",
+        name="a_detected_language_is_a_code_or_unknown",
+    ),
+    CheckConstraint(
+        "cardinality(run_normalized_start) > 0 "
+        "AND cardinality(run_normalized_start) = cardinality(run_original_start) "
+        "AND cardinality(run_normalized_start) = cardinality(run_length)",
+        name="an_offset_mapping_is_whole",
+    ),
+    UniqueConstraint(
+        "version_id",
+        "normalization_version",
+        name="one_processing_text_per_normalization_per_version",
+    ),
+)
+
+#: One row per stage the pipeline ran for one version, and the key that makes
+#: re-running it return the prior output instead of a second one.
+#:
+#: **`idempotency_key` is `UNIQUE`, and that index *is* the `QC-AC-035`
+#: mechanism.** It is `11_…:209`'s recommended key,
+#: `sha256(capture_version_id | stage | pipeline_version | stage_config_hash)`,
+#: built by `domain.capture.pipeline.stage_identity`. Enforcing replay detection
+#: in Python alone would leave two workers able to both read "absent" and both
+#: insert; the constraint means the second insert is refused by the server. It
+#: mirrors `a_capture_key_admits_one_submission`, which does the same job for a
+#: save.
+#:
+#: **There is no output column, and that is structural.** A stage's output is
+#: the rows it wrote — processing text, spans, proposals, classifications,
+#: mentions — which are readable by version and stage. Storing the output here
+#: as well would put derived capture content in a fourth place and would make
+#: "returns the prior output" a read of a copy rather than of the record.
+#: `output_sha256` identifies what was produced without carrying it, and
+#: `output_row_count` is the only quantity.
+#:
+#: **`processing_state` is not `JobState`** (`D-91`, and see
+#: `domain.capture.pipeline`). A job says whether a worker holds work; this says
+#: how far the pipeline got and whether what it produced is whole.
+capture_stage_results = Table(
+    "capture_stage_results",
+    METADATA,
+    Column("stage_result_id", Text, primary_key=True),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "operation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_jobs.operation_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("stage", Text, nullable=False),
+    Column("pipeline_version", Text, nullable=False),
+    Column("stage_config_sha256", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("processing_state", Text, nullable=False),
+    Column("output_sha256", Text),
+    Column("output_row_count", Integer, nullable=False, server_default="0"),
+    Column("started_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("completed_at", DateTime(timezone=True)),
+    _is_identifier("stage_result_id", IdKind.STAGE_RESULT),
+    _one_of("stage", PipelineStage, name="capture_stage_is_known"),
+    _one_of("processing_state", ProcessingState, name="capture_processing_state_is_known"),
+    _matches("idempotency_key", DIGEST_PATTERN.pattern, name="a_stage_key_is_a_digest"),
+    _matches("stage_config_sha256", DIGEST_PATTERN.pattern, name="a_stage_config_is_a_digest"),
+    CheckConstraint(
+        "output_sha256 IS NULL OR output_sha256 ~ '^[0-9a-f]{64}$'",
+        name="a_stage_output_digest_is_a_digest",
+    ),
+    CheckConstraint(
+        f"length(pipeline_version) BETWEEN 1 AND {MAX_PIPELINE_VERSION_CHARACTERS}",
+        name="a_pipeline_version_is_a_bounded_token",
+    ),
+    CheckConstraint("output_row_count >= 0", name="a_stage_writes_no_negative_rows"),
+    CheckConstraint(
+        "completed_at IS NULL OR completed_at >= started_at",
+        name="a_stage_completes_after_it_starts",
+    ),
+    UniqueConstraint("idempotency_key", name="a_stage_key_admits_one_result"),
+    Index("capture_stage_results_by_version", "version_id", "stage"),
+)
+
+#: `SourceSpan`: an exact, validated trace from a derived record to the text it
+#: came from (`09_LOGICAL_DATA_MODEL.md:167-185`, `10:77-98`).
+#:
+#: **There is no `quoted_text` column**, and its absence is what makes
+#: validation mean something. `09_LOGICAL_DATA_MODEL.md:185` requires validation
+#: to "re-derive the quoted text from the immutable source version"; storing the
+#: quote beside its digest would make that a comparison of one stored value
+#: against another, which passes whenever the two were written together —
+#: including when both are wrong. See `domain.capture.span`.
+#:
+#: **`offset_basis` admits one value and it is written out in the revision**
+#: rather than read from a Python constant (`D-97`). The scheme name is the
+#: specification's (`10:82`), the freeze mechanism owns the literal, and no new
+#: single-value-embedding site is created.
+capture_spans = Table(
+    "capture_spans",
+    METADATA,
+    Column("span_id", Text, primary_key=True),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # Nullable: a span measured against the original text names no processing
+    # text, and `10:89` only requires that a proposal not cite normalized text
+    # *alone*.
+    Column(
+        "processing_text_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_processing_text.processing_text_id", ondelete="CASCADE"),
+    ),
+    Column("start_offset", Integer, nullable=False),
+    Column("end_offset", Integer, nullable=False),
+    Column("offset_basis", Text, nullable=False),
+    Column("line_start", Integer, nullable=False),
+    Column("column_start", Integer, nullable=False),
+    Column("line_end", Integer, nullable=False),
+    Column("column_end", Integer, nullable=False),
+    Column("quoted_text_sha256", Text, nullable=False),
+    Column("span_role", Text, nullable=False),
+    Column("mapping_version", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("span_id", IdKind.SPAN),
+    _one_of("offset_basis", OffsetBasis, name="span_offset_basis_is_known"),
+    _one_of("span_role", SpanRole, name="span_role_is_known"),
+    _matches("quoted_text_sha256", DIGEST_PATTERN.pattern, name="quoted_text_sha256_is_a_digest"),
+    CheckConstraint(
+        "start_offset >= 0 AND end_offset > start_offset",
+        name="a_span_covers_at_least_one_character",
+    ),
+    CheckConstraint(
+        f"end_offset <= {MAX_CAPTURE_CHARACTERS}",
+        name="a_span_lies_inside_a_capture",
+    ),
+    CheckConstraint(
+        "line_start >= 1 AND column_start >= 1 AND line_end >= 1 AND column_end >= 1",
+        name="span_lines_and_columns_start_at_one",
+    ),
+    CheckConstraint(
+        "line_end > line_start OR (line_end = line_start AND column_end > column_start)",
+        name="a_span_ends_after_it_starts",
+    ),
+    CheckConstraint(
+        f"mapping_version IS NULL OR length(mapping_version) "
+        f"BETWEEN 1 AND {MAX_MAPPING_VERSION_CHARACTERS}",
+        name="a_mapping_version_is_a_bounded_token",
+    ),
+    Index("capture_spans_by_version", "version_id"),
+)
+
+#: `Proposal`: a typed, non-canonical candidate derived from one version
+#: (`09_LOGICAL_DATA_MODEL.md:143-165`).
+#:
+#: **`accepted_record_type` and `accepted_record_id` carry no foreign key**, and
+#: the reason is that the table they will name does not exist: acceptance is
+#: WP-8's. They are declared nullable rather than deferred to that package
+#: because it is the very next one and the table is already scoped, which is the
+#: difference between a forward reference and the speculative column `D-74`
+#: refused for `registered_client_id` — that one had no package and no
+#: mechanism.
+#:
+#: **`quarantine_reason` has its own vocabulary** rather than reusing
+#: `QuarantineReason`, which is about source objects and is keyed by
+#: `(enrollment_id, source_object_id)`. See `domain.capture.proposal`.
+#:
+#: **Every proposal carries at least one span**, and that is a deferred
+#: constraint trigger rather than a column here (`D-98`). A counter column would
+#: be a second statement of a fact `capture_proposal_spans` already holds and
+#: would need an `UPDATE` path on this table to maintain.
+capture_proposals = Table(
+    "capture_proposals",
+    METADATA,
+    Column("proposal_id", Text, primary_key=True),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("proposal_type", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("risk_class", Text, nullable=False),
+    Column("method", Text, nullable=False),
+    Column("method_version", Text, nullable=False),
+    Column("schema_version", Text, nullable=False),
+    Column(
+        "missing_required_fields",
+        ARRAY(Text),
+        nullable=False,
+        server_default="{}",
+    ),
+    Column("normalized_value", Text),
+    Column("quarantine_reason", Text),
+    Column("accepted_record_type", Text),
+    Column("accepted_record_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("proposal_id", IdKind.PROPOSAL),
+    _one_of("proposal_type", ProposalType, name="proposal_type_is_known"),
+    _one_of("state", ProposalState, name="proposal_state_is_known"),
+    _one_of("risk_class", RiskClass, name="proposal_risk_class_is_known"),
+    _one_of("method", ProposalMethod, name="proposal_method_is_known"),
+    CheckConstraint(
+        "quarantine_reason IS NULL OR quarantine_reason IN ("
+        + _literals(ProposalQuarantineReason)
+        + ")",
+        name="proposal_quarantine_reason_is_known",
+    ),
+    _each_one_of(
+        "missing_required_fields",
+        ProposalField,
+        name="a_missing_required_field_is_a_required_field",
+    ),
+    # The rule `domain.capture.proposal.Proposal` also enforces, stated where a
+    # hand-run statement meets it too. An `invalidated` proposal with no reason
+    # records that evidence failed without recording how.
+    CheckConstraint(
+        f"(state = '{ProposalState.INVALIDATED.value}') = (quarantine_reason IS NOT NULL)",
+        name="an_invalidated_proposal_records_its_reason_and_nothing_else_does",
+    ),
+    CheckConstraint(
+        "(accepted_record_type IS NULL) = (accepted_record_id IS NULL)",
+        name="an_accepted_record_is_named_by_type_and_identifier",
+    ),
+    CheckConstraint(
+        f"normalized_value IS NULL OR length(normalized_value) "
+        f"BETWEEN 1 AND {MAX_NORMALIZED_VALUE_CHARACTERS}",
+        name="a_normalized_value_is_bounded",
+    ),
+    CheckConstraint(
+        f"length(method_version) BETWEEN 1 AND {MAX_PROPOSAL_VERSION_CHARACTERS} "
+        f"AND length(schema_version) BETWEEN 1 AND {MAX_PROPOSAL_VERSION_CHARACTERS}",
+        name="proposal_versions_are_bounded_tokens",
+    ),
+    Index("capture_proposals_by_version", "version_id", "state"),
+)
+
+#: The `[1..n]` between a proposal and the spans it cites
+#: (`09_LOGICAL_DATA_MODEL.md:37`).
+#:
+#: The composite primary key is the upper half: a proposal cites one span once.
+#: The lower half — *at least* one — cannot be a `CHECK`, because PostgreSQL
+#: evaluates a check against one row of one table, and is a `DEFERRABLE
+#: INITIALLY DEFERRED` constraint trigger installed by the revision instead
+#: (`D-98`). Deferred because the proposal and its links are written in one
+#: transaction and the proposal has to be inserted first for the link to
+#: reference it.
+capture_proposal_spans = Table(
+    "capture_proposal_spans",
+    METADATA,
+    Column(
+        "proposal_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_proposals.proposal_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "span_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_spans.span_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("linked_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("proposal_id", "span_id", name="a_proposal_cites_a_span_once"),
+    Index("capture_proposal_spans_by_span", "span_id"),
+)
+
+#: `CaptureClassification`: one label a deterministic rule attached to one
+#: version, with the span it was derived from.
+#:
+#: **`span_id` is `NOT NULL`**, which is the whole boundary between this record
+#: and `CaptureDomainAssignment` (`D-94`, and see
+#: `domain.capture.classification`): a classification can be cited and a domain
+#: assignment cannot, so the one that can is the one that must.
+#:
+#: The unique key is `09_CANONICAL_…:146`'s "versioned multi-label": many labels
+#: per version, one row per label per scheme version, and a later scheme adds
+#: rows beside these rather than replacing them.
+capture_classifications = Table(
+    "capture_classifications",
+    METADATA,
+    Column("classification_id", Text, primary_key=True),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "span_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_spans.span_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("scheme", Text, nullable=False),
+    Column("scheme_version", Text, nullable=False),
+    Column("label", Text, nullable=False),
+    Column("rule", Text, nullable=False),
+    Column("rule_version", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("classification_id", IdKind.CAPTURE_CLASSIFICATION),
+    _one_of("label", CaptureLabel, name="capture_label_is_known"),
+    CheckConstraint(
+        f"length(scheme) BETWEEN 1 AND {MAX_SCHEME_CHARACTERS} "
+        f"AND length(scheme_version) BETWEEN 1 AND {MAX_SCHEME_CHARACTERS} "
+        f"AND length(rule) BETWEEN 1 AND {MAX_SCHEME_CHARACTERS} "
+        f"AND length(rule_version) BETWEEN 1 AND {MAX_SCHEME_CHARACTERS}",
+        name="classification_tokens_are_bounded",
+    ),
+    UniqueConstraint(
+        "version_id",
+        "scheme",
+        "scheme_version",
+        "label",
+        name="one_label_per_scheme_version_per_capture_version",
+    ),
+)
+
+#: `CaptureEntityMention`, restricted to the deterministic subset (`D-93`).
+#:
+#: **There is no surface-text column.** `09_CANONICAL_…:147` asks for "exact
+#: surface text"; the span this row requires points at exactly that in the
+#: immutable version and re-derives on read, so a second copy would be a fourth
+#: place capture content sits and would make "exact" a claim about the copy.
+#:
+#: `resolution_state` admits one value and is frozen at it. Resolution is `P-07`
+#: and `P-07` is excluded, so `candidate` and `resolved` are unreachable; the
+#: `D-78` precedent is a forward `ALTER` when a resolver arrives, not a column
+#: that already admits states nothing can write.
+capture_entity_mentions = Table(
+    "capture_entity_mentions",
+    METADATA,
+    Column("mention_id", Text, primary_key=True),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "span_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_spans.span_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("entity_type", Text, nullable=False),
+    Column(
+        "resolution_state",
+        Text,
+        nullable=False,
+        server_default=ResolutionState.UNRESOLVED.value,
+    ),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("mention_id", IdKind.CAPTURE_ENTITY_MENTION),
+    _one_of("entity_type", EntityType, name="mention_entity_type_is_known"),
+    _one_of("resolution_state", ResolutionState, name="mention_resolution_state_is_known"),
+    UniqueConstraint(
+        "version_id", "span_id", "entity_type", name="one_mention_per_span_per_entity_type"
+    ),
 )

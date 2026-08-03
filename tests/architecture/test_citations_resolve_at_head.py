@@ -46,6 +46,20 @@ closes.**
   that window rather than closing it; `D-83`'s form rule — inside a file, cite
   the heading or the row id — is what closes it, and rule 3 is the mechanical
   half of that rule.
+
+  **This is not hypothetical and the size of it is written down rather than
+  left as a caveat.** Measured at `862846e`, over every citation pointing into a
+  file this branch modified: **ten pointers had moved, across five files**, and
+  all four rules above were green on every one of them, because each cited line
+  still existed. Three of the ten were written *by this branch* and were wrong
+  the day they shipped — one of them in a guard module, citing four lines of a
+  test file that grew past them before the branch ended. What closes the class
+  is form, not arithmetic: **cite the function, test, or constant by name
+  whenever the target is a file the change touches**, which `D-83` now states.
+  A rule that compared the cited line's *text* to the claim about it is the
+  thing that would redden here, and it is a different parse from the four above
+  — it would need to know what the sentence asserts, which is why this guard
+  does not attempt it and says so instead of implying totality.
 - `docs/specs/canonical-product-definition/` and `docs/specs/quick-capture/` are
   byte-faithful mirrors of external packages (`D-44`), so citations *written
   inside* them are not this repository's to correct and are not read. Citations

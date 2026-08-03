@@ -9,7 +9,13 @@ each survived for a reason worth writing down:
   two lines the same commit corrected to `twelve`. Every rule here is
   case-insensitive.
 - **The sweep was scoped to `src/`.** `tests/` held eleven more. This reads
-  `src/`, `tests/`, `apps/`, `ops/`, and the plan's section 3.
+  `src/`, `tests/`, `apps/`, `ops/`, and every section of the plan that the
+  plan's own line 7 declares to be current state — sections 1 and 3, not
+  section 3 alone. **Scoping it to section 3 was itself an instance of the
+  defect**: section 1's Alembic row and section 3's said ten revisions and
+  eleven at the same head, 48 lines apart, and only the lower one was read.
+  A rule that covers the section that motivated it and not its neighbour is
+  the shape this campaign keeps catching.
 - **The count was written down.** A guard holding a literal `12` is the next
   stale claim, one release later. Every count here is derived: from `Capability`
   and `Purpose` themselves, and from the very `find` commands section 3 names.
@@ -59,9 +65,9 @@ from my_pa.domain.identity.purpose import Purpose
 ROOT = Path(__file__).resolve().parents[2]
 PLAN = ROOT / "docs" / "plans" / "mcv-completion-plan.md"
 
-#: Where a claim may be written. The plan is read too, but only its section 3,
-#: which is maintained current-state prose; the register below it is a history
-#: and its rows say what was true when they were written.
+#: Where a claim may be written. The plan is read too, but only its current-state
+#: sections, which are maintained prose; the register below them is a history and
+#: its rows say what was true when they were written.
 SWEPT_ROOTS = ("apps", "ops", "src", "tests")
 
 SKIPPED_DIRECTORIES = frozenset({"__pycache__", ".ruff_cache", ".mypy_cache", ".pytest_cache"})
@@ -367,12 +373,37 @@ def swept_files() -> list[Path]:
     return sorted(found)
 
 
-def plan_section_3() -> str:
-    """Section 3 alone: `## 3. What is implemented` up to the next `## `."""
+#: Every section the plan's own line 7 declares to be current state. Named for
+#: what that line declares rather than for one heading number, because a helper
+#: called `plan_section_3` that also reads section 1 is the next stale claim.
+CURRENT_STATE_SECTIONS = (
+    (1, "\n## 1. Authenticated identities"),
+    (3, "\n## 3. What is implemented"),
+)
+
+
+def plan_current_state() -> list[tuple[str, int]]:
+    """Each current-state section's text, with the line its slice starts on.
+
+    Sections rather than a section: line 7 of the plan declares section 1 to be
+    current identities, and section 1 carries the same two Alembic figures that
+    section 3 carries. Reading only section 3 is what let this branch add a
+    revision, correct the row that was checked, and leave the row 48 lines above
+    it saying `ten` at a head that had moved — a control that does not cover its
+    neighbour, inside the package that built the control.
+    """
     text = PLAN.read_text(encoding="utf-8")
-    start = text.index("\n## 3. What is implemented")
-    end = text.index("\n## 4. ", start)
-    return text[start:end]
+    found: list[tuple[str, int]] = []
+    for number, heading in CURRENT_STATE_SECTIONS:
+        start = text.index(heading)
+        end = text.index(f"\n## {number + 1}. ", start)
+        found.append((text[start:end], text[:start].count("\n")))
+    return found
+
+
+def plan_current_state_text() -> str:
+    """The current-state sections as one passage, for rules that only match."""
+    return "\n".join(section for section, _ in plan_current_state())
 
 
 #: Leading markers that are layout rather than prose: a Python comment hash, a
@@ -487,10 +518,8 @@ def claims() -> list[Claim]:
     found: list[Claim] = []
     for path in swept_files():
         found.extend(_claims_in(path, path.read_text(encoding="utf-8")))
-    text = PLAN.read_text(encoding="utf-8")
-    section_3 = plan_section_3()
-    line_offset = text[: text.index(section_3)].count("\n")
-    found.extend(_claims_in(PLAN, section_3, offset=line_offset))
+    for section, offset in plan_current_state():
+        found.extend(_claims_in(PLAN, section, offset=offset))
     return found
 
 
@@ -547,7 +576,7 @@ def test_section_3_states_the_module_counts_it_says_it_derives() -> None:
     match = re.search(
         r"(?P<modules>[A-Za-z-]+) Python modules under `src/my_pa` and\s+"
         r"(?P<tests>[a-z-]+) test modules",
-        plan_section_3(),
+        plan_current_state_text(),
     )
     assert match is not None, (
         "Section 3's module-count sentence no longer matches the shape this test "
@@ -561,32 +590,113 @@ def test_section_3_states_the_module_counts_it_says_it_derives() -> None:
         )
 
 
-def test_section_3_states_the_alembic_revision_count_and_head() -> None:
-    """The same sentence's third figure, and the identifier beside it.
+#: A spelled count of Alembic revisions, wherever a current-state section states
+#: one. The noun is not in `NAMED_NOUNS` because nothing else in the corpus
+#: derives it; here it is derived from `migrations/versions/` directly.
+REVISION_COUNT = re.compile(rf"\b(?P<count>{_NUMBER})\s+revisions\b", re.IGNORECASE)
+
+#: A chain head, in either shape the plan writes it: `head \`x\`` in section 3's
+#: row and `Alembic head | \`x\`` in section 1's identity table. Twelve hex
+#: digits followed by the closing backtick, so the forty-character git SHA in
+#: section 1's `Local \`main\` head` row is not read as a revision.
+CHAIN_HEAD = re.compile(r"\bhead\b[^`\n]{0,12}`(?P<head>[0-9a-f]{12})`", re.IGNORECASE)
+
+#: The fewest of each before this rule is deciding anything. Set at the
+#: measurement rather than under it, because the universe is two rows and both
+#: are load-bearing: section 1's identity table and section 3's row. Losing
+#: either — by rewording it out of this shape, which is exactly how a stale
+#: figure escapes a rule — reddens here rather than silently halving the check.
+FEWEST_REVISION_COUNTS = 2
+FEWEST_CHAIN_HEADS = 2
+
+
+def chain_claims() -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+    """Every revision count and every chain head in the current-state sections."""
+    counts: list[tuple[int, str]] = []
+    heads: list[tuple[int, str]] = []
+    for section, offset in plan_current_state():
+        for match in REVISION_COUNT.finditer(section):
+            counts.append((offset + section[: match.start()].count("\n") + 1, match["count"]))
+        for match in CHAIN_HEAD.finditer(section):
+            heads.append((offset + section[: match.start()].count("\n") + 1, match["head"]))
+    return counts, heads
+
+
+def test_every_current_state_section_states_the_chain_it_derives() -> None:
+    """Both places the plan names the chain, not only the lower one.
 
     The count is spelled and the head is not, but they rot together and from the
-    same cause, so they are derived together.
+    same cause, so they are derived together — and they are stated **twice**, in
+    section 1's identity table and in section 3's row, 48 lines apart. The
+    predecessor of this test read section 3 alone. The branch that added
+    `1a4c9e77b2d5` corrected the row that was read and left the row that was
+    not, so the plan asserted ten revisions and eleven revisions at the same
+    head, and every rule in this module stayed green. The derivation was already
+    here; only the universe was wrong.
     """
-    match = re.search(
-        r"Implemented, (?P<count>[a-z-]+) revisions, head `(?P<head>[0-9a-f]+)`",
-        plan_section_3(),
+    counts, heads = chain_claims()
+    assert len(counts) >= FEWEST_REVISION_COUNTS, (
+        f"only {len(counts)} spelled revision count(s) found in the plan's current-state "
+        "sections; both the section 1 identity table and the section 3 row state one, so "
+        "a rewording that hides one from this rule is the way a stale figure escapes"
     )
-    assert match is not None, (
-        "Section 3's Alembic row no longer matches the shape this test reads. "
-        "Update the row and this test together."
+    assert len(heads) >= FEWEST_CHAIN_HEADS, (
+        f"only {len(heads)} chain head(s) found in the plan's current-state sections; "
+        "see the note on the revision count above"
     )
-    word = match["count"].lower()
-    assert word in CARDINALS, f"section 3 states '{match['count']}', which this test cannot read"
-    assert CARDINALS[word] == len(revision_files()), (
-        f"section 3 states {CARDINALS[word]} revisions and "
-        f"`migrations/versions/` holds {len(revision_files())}"
-    )
-    assert match["head"] == alembic_head(), (
-        f"section 3 states head {match['head']} and the chain's head is {alembic_head()}"
+
+    expected_count = len(revision_files())
+    expected_head = alembic_head()
+    wrong = [
+        f"{PLAN.relative_to(ROOT)}:{line} states {stated(word)} revisions and "
+        f"`migrations/versions/` holds {expected_count}"
+        for line, word in counts
+        if word.lower() not in CARDINALS or CARDINALS[word.lower()] != expected_count
+    ]
+    wrong += [
+        f"{PLAN.relative_to(ROOT)}:{line} states head {head} and the chain's head is "
+        f"{expected_head}"
+        for line, head in heads
+        if head != expected_head
+    ]
+    assert not wrong, (
+        f"{len(wrong)} Alembic claim(s) in the plan's current-state sections disagree with "
+        f"`migrations/versions/`, which is what the repository actually declares: {wrong}"
     )
 
 
 # ---- the plants ---------------------------------------------------------------
+
+
+def test_a_chain_claim_is_read_in_both_shapes_the_plan_writes() -> None:
+    """The two shapes, and the two tokens that must not be read as either.
+
+    Section 1 writes the head inside an identity table and section 3 writes it
+    in a row of prose. A rule that read only one of those shapes is what this
+    cycle corrected, so both are planted wrong and both must be read. The two
+    rejections are live in section 1 and are the reason this rule is not simply
+    "a backticked hex string": a forty-character git SHA under ``Local `main`
+    head``, and the canonical database's revision, which is deliberately *not*
+    the chain head and is introduced by no `head` at all.
+    """
+    planted = (
+        "| Alembic head | `0123456789ab` in the repository, ten revisions; the\n"
+        "canonical database remains at `6c4d3ea82f10` |\n"
+        "| Local `main` head | `8274d88a6211c417c43d2d937edfe2c8ccc369be` |\n"
+        "| Alembic revisions | Implemented, twelve revisions, head `abcdef012345` |\n"
+    )
+
+    assert [match["count"] for match in REVISION_COUNT.finditer(planted)] == ["ten", "twelve"]
+    assert [match["head"] for match in CHAIN_HEAD.finditer(planted)] == [
+        "0123456789ab",
+        "abcdef012345",
+    ]
+
+    correct = f"Implemented, {_UNITS[len(revision_files())]} revisions, head `{alembic_head()}`"
+    count = REVISION_COUNT.search(correct)
+    head = CHAIN_HEAD.search(correct)
+    assert count is not None and CARDINALS[count["count"].lower()] == len(revision_files())
+    assert head is not None and head["head"] == alembic_head()
 
 
 def test_the_case_insensitive_flag_is_the_one_that_mattered(tmp_path: Path) -> None:

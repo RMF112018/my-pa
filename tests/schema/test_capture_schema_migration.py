@@ -7,16 +7,17 @@ enums, so the database and the domain could not drift — at the cost of an
 already-merged revision emitting different DDL every time a member was added,
 which is the `D-48` hazard in a new shape and was measured rather than argued.
 The derivation is now frozen inside `9c6b4a18ed72` and widened forward by an
-explicit `ALTER` here. What that costs is the coupling, and `tables.py:134-140`
-is the precedent for what replaces it: **a restatement is acceptable when it is
+explicit `ALTER` here. What that costs is the coupling, and `_IDENTIFIER_SUFFIX` in `tables.py` is
+the precedent for what replaces it: **a restatement is acceptable when it is
 a checked claim rather than a copy that can drift.** These are the checks.
 
 Six claims, separated because they fail for different reasons.
 
 **The revision is in the chain.** Deliberately not "is the head", for the reason
-`test_audit_schema_migration.py:147-158` records: that property is true only
-until the next revision is written, and asserting it makes every later work
-package edit this file.
+`test_the_audit_revision_is_in_the_chain_on_the_extraction_revision` in
+`test_audit_schema_migration.py` records: that property is true only until the
+next revision is written, and asserting it makes every later work package edit
+this file.
 
 **Empty to head and head to empty.** What `AGENTS.md` section 6 requires of a
 schema change, plus the two things this revision adds that a table drop does not

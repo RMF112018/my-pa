@@ -85,8 +85,13 @@ Parent: 3a8e2cb16d59
 *What stood here read `Rev: 3a8e2cb16d59 (head)`, and it was wrong twice over:
 canonical `my_pa` has been at `6c4d3ea82f10` since 2026-08-01, and Alembic
 prints no `(head)` marker for it, because it is not the head — the chain ends at
-`1a4c9e77b2d5`. The same mislabel is corrected under the size query below; this
-was its second site and the sweep that found the first did not reach it.*
+`1a4c9e77b2d5`. The same mislabel is corrected under the size query below and
+again in the restore-verification query near the end of this runbook. **Three
+sites, found one per review cycle, each sweep stopping at the site it was looking
+for.** The class is a rule now rather than a sweep:
+`../../tests/architecture/test_no_stored_revision_is_labelled_head.py` reads
+every query in this repository that selects a stored revision and fails if any of
+them aliases a column to the head of the chain.*
 
 If that line ends in `/my_pa`, you are pointed at the canonical database. Stop.
 
@@ -369,7 +374,7 @@ Verify before promoting the restored database to anything:
 
 ```sh
 docker exec my-pa-postgres psql -U my_pa -d my_pa_restored -c "
-SELECT (SELECT version_num FROM public.alembic_version) AS head,
+SELECT (SELECT version_num FROM public.alembic_version) AS revision,
        (SELECT count(*) FROM pg_constraint WHERE contype='f') AS fks,
        (SELECT count(*) FROM pg_constraint WHERE contype='f' AND NOT convalidated) AS not_valid,
        (SELECT count(*) FROM migration_control.migration_runs) AS runs;"

@@ -218,8 +218,8 @@ ALLOWED: Final[frozenset[tuple[str, str, str, str, tuple[str, ...]]]] = frozense
 
 #: The revisions that carry frozen literals, and the vocabulary each freezes.
 #: Restated here rather than imported from the revision, for the reason
-#: `test_capture_schema_migration.py:92-95` gives: a test that read the
-#: revision's own literal would pass however that literal changed.
+#: `FROZEN_CAPABILITIES` in `test_capture_schema_migration.py` gives: a test that
+#: read the revision's own literal would pass however that literal changed.
 FROZEN: Final[dict[str, dict[str, tuple[str, ...]]]] = {
     "9c6b4a18ed72": {
         "capability_is_known": (

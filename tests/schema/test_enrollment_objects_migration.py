@@ -3,9 +3,10 @@
 Three claims, separated because they fail for different reasons.
 
 **The revision is in the chain.** Deliberately not "is the head", for the reason
-`test_audit_schema_migration.py:147-158` records: that property is true only
-until the next revision is written, and asserting it makes every later work
-package edit this file. A single unbranched chain containing this revision on
+`test_the_audit_revision_is_in_the_chain_on_the_extraction_revision` in
+`test_audit_schema_migration.py` records: that property is true only until the
+next revision is written, and asserting it makes every later work package edit
+this file. A single unbranched chain containing this revision on
 `9c6b4a18ed72` is the property everything below actually depends on.
 
 **The DDL is reviewable offline.** `--sql` from the revision below to this one
@@ -131,9 +132,10 @@ def test_the_enrollment_objects_revision_is_in_the_chain() -> None:
     """Guards the rest of this module: an absent revision would create nothing.
 
     Deliberately not "is the head", for the reason
-    `test_audit_schema_migration.py:147-158` gives: that property is true only
-    until the next revision is written, and asserting it would make every later
-    work package edit this file.
+    `test_the_audit_revision_is_in_the_chain_on_the_extraction_revision` in
+    `test_audit_schema_migration.py` gives: that property is true only until the
+    next revision is written, and asserting it would make every later work
+    package edit this file.
     """
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1

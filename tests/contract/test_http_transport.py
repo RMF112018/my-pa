@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the eight capabilities is addressable over HTTP
+**Reachability.** Every one of the twelve capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a ninth capability added to the domain arrives as a failing row instead
+here, so a thirteenth capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised

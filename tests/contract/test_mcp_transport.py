@@ -121,8 +121,8 @@ def test_no_capability_name_is_written_down_in_the_adapter() -> None:
 def test_a_ninth_capability_gets_a_schema_without_the_adapter_being_edited() -> None:
     """The derivation is generic, shown against a command that does not exist.
 
-    A synthetic ninth command is put through the same schema builder the eight
-    go through. If the builder were a lookup table it would have nothing to say
+    A synthetic thirteenth command is put through the same schema builder the
+    twelve go through. If the builder were a lookup table it would have nothing to say
     about this one; because it reads the dataclass, it describes it exactly.
     """
     from dataclasses import dataclass

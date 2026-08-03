@@ -76,6 +76,22 @@ AUDIT_REVISION = "9c6b4a18ed72"
 #: only that a string was defined once. The primary key is named in the
 #: declaration; the two foreign keys are not, so PostgreSQL names them, and these
 #: are the names it gives.
+#: The tables the revisions *above* this one create, which a downgrade reached
+#: from head therefore also removes. Stated explicitly rather than derived, in
+#: the style this suite already uses for the same claim: an extra table left
+#: behind by any of those downgrades is exactly what these equalities exist to
+#: see, and a set computed from the chain would absorb one.
+TABLES_ABOVE: Final[frozenset[str]] = frozenset(
+    {
+        "captures",
+        "capture_versions",
+        "capture_receipts",
+        "capture_submissions",
+        "capture_jobs",
+    }
+)
+
+
 SCOPE_PRIMARY_KEY = "an_enrollment_holds_an_object_once"
 SCOPE_FOREIGN_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -313,8 +329,10 @@ def test_downgrading_this_revision_leaves_the_other_knowledge_tables_alone(
 ) -> None:
     """This revision added one table to a schema it did not create.
 
-    Its downgrade therefore removes one table and not the schema, and not the
-    nine tables of evidence the revisions below it own.
+    Its downgrade therefore removes its own table and not the schema, and not the
+    nine tables of evidence the revisions below it own. Reaching it from head
+    also unwinds the revisions above it, so their tables go too — which is what
+    `TABLES_ABOVE` names.
     """
     engine = create_database_engine(disposable_database)
     try:
@@ -324,7 +342,7 @@ def test_downgrading_this_revision_leaves_the_other_knowledge_tables_alone(
 
         command.downgrade(_config(), AUDIT_REVISION)
 
-        assert _tables(engine) == before - {"enrollment_objects"}
+        assert _tables(engine) == before - {"enrollment_objects", *TABLES_ABOVE}
         assert len(_tables(engine)) == 9
         assert not (SCOPE_FOREIGN_KEYS & _constraints(engine, "f"))
         assert SCOPE_PRIMARY_KEY not in _constraints(engine, "p")

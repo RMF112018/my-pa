@@ -92,6 +92,21 @@ EXPECTED_AUDIT_CHECKS: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: The tables the revisions *above* this one create, which a downgrade to this
+#: revision therefore also removes. Stated explicitly rather than derived, in the
+#: style this suite already uses for the same claim: an extra table left behind
+#: by any of those downgrades is exactly what these equalities exist to see, and
+#: a set computed from the chain would absorb one.
+TABLES_ABOVE: Final[frozenset[str]] = frozenset(
+    {
+        "captures",
+        "capture_versions",
+        "capture_receipts",
+        "capture_submissions",
+        "capture_jobs",
+    }
+)
+
 WHEN = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 
 #: One well-formed row, as keyword parameters. Each refusal below is this row
@@ -307,11 +322,15 @@ def test_downgrading_this_revision_leaves_the_other_knowledge_tables_alone(
 
         command.downgrade(_config(), EXTRACTION_REVISION)
 
-        # Head is now `af3d35efb9c0`, so downgrading to the extraction revision
-        # unwinds two revisions and drops both of the tables they added. Stated as
-        # an equality against an explicit set rather than a subset: an extra table
-        # left behind by either downgrade is exactly what this test exists to see.
-        assert _tables(engine) == before - {"audit_events", "enrollment_objects"}
+        # Downgrading to the extraction revision unwinds every revision above it
+        # and drops every table they added. Stated as an equality against an
+        # explicit set rather than a subset: an extra table left behind by any of
+        # those downgrades is exactly what this test exists to see.
+        assert _tables(engine) == before - {
+            "audit_events",
+            "enrollment_objects",
+            *TABLES_ABOVE,
+        }
         assert len(_tables(engine)) == 8
 
         command.upgrade(_config(), "head")

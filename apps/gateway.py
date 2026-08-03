@@ -89,15 +89,27 @@ DEFAULT_PORT: Final = 8765
 #: real engine, so the restatement is a checked claim rather than a guess.
 GRACEFUL_SHUTDOWN_SECONDS: Final = 30
 
-#: What this gateway cannot do, said by the gateway itself at startup rather
-#: than left for an operator to infer from an `unavailable` answer. Nothing
-#: registers a source in production yet — `D-37` gives that to WP-4B3 — and no
-#: provider root is authorized, because `P00-OD-009` requires the operator to
-#: name one by exact path. So the three source-reading capabilities answer
-#: `unavailable` for every source, truthfully.
-_NO_PROVIDER_NOTICE = (
-    "notice      no source provider is configured; sources.list, sources.metadata and "
-    "sources.fetch answer 'unavailable' until a source is registered and a root authorized"
+#: What the three source-reading capabilities will and will not answer, said by
+#: the gateway itself at startup rather than left for an operator to infer from
+#: an `unavailable` answer.
+#:
+#: **It states the condition; it does not assert an absence.** This line is
+#: printed unconditionally on both surfaces and reads no store, so a sentence
+#: asserting that no source is configured would be a claim this process has not
+#: checked — and `apps/cli/sources.py register` makes it one an operator can
+#: falsify. It is true whether or not a source has been registered, which is
+#: what lets it stay unconditional and keeps a database read out of startup.
+#: The defect it avoids is the one `application.disclosure` removed in this same
+#: package: a sentence that outlived its condition because nothing connected the
+#: two.
+#:
+#: `P00-OD-009` is untouched, and that half of the old sentence survives intact:
+#: this composition configures no root and holds no default, so a source is
+#: served only at the exact path an operator names when registering it.
+_SOURCE_PROVIDER_NOTICE = (
+    "notice      sources.list, sources.metadata and sources.fetch answer 'unavailable' for "
+    "every source no operator has registered; registration names the source's root by exact "
+    "path, and this process configures none"
 )
 
 
@@ -120,7 +132,7 @@ def _run(args: argparse.Namespace) -> int:
         )
     )
     print(f"serving     http://{HOST}:{args.port}/v1/<capability>")
-    print(_NO_PROVIDER_NOTICE, flush=True)
+    print(_SOURCE_PROVIDER_NOTICE, flush=True)
     try:
         server.run()
     finally:
@@ -148,7 +160,7 @@ def _mcp(args: argparse.Namespace) -> int:
     settings = load_settings()
     runtime = build_gateway_runtime(settings)
     print(f"serving     mcp on stdio as {SERVER_NAME}", file=sys.stderr)
-    print(_NO_PROVIDER_NOTICE, file=sys.stderr, flush=True)
+    print(_SOURCE_PROVIDER_NOTICE, file=sys.stderr, flush=True)
     try:
         serve_stdio(runtime.service, principal=runtime.principal)
     finally:

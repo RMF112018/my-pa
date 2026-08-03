@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import typing
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -338,3 +339,40 @@ def test_error_correlation_id_must_match_the_envelope() -> None:
                 retry=RetryGuidance.AFTER_AUTHORITY_CHANGE,
             ),
         )
+
+
+#: The two limitation tokens WP-4B3 deleted from the emittable vocabulary. Both
+#: said the same missing fact — nothing persisted the object set under a root, so
+#: the denominator was unmeasured and the numerator was gathered from the whole
+#: source — and `knowledge.enrollment_objects` is that fact.
+REMOVED_TOKENS = ("eligible_total_not_persisted", "scope_is_source_wide_not_root_bounded")
+
+
+def test_no_disclosure_can_emit_the_two_removed_tokens() -> None:
+    """A source-text scan over `src/`, and the reason it is a scan.
+
+    The logic these tokens gated was written out **twice** — once in
+    `application.disclosure` and once in `infrastructure.persistence.search` —
+    because the two layers may not import each other. That is the shape of this
+    campaign's signature defect: a test that built one envelope and asserted the
+    token was absent would pass with the other copy fully intact, because no
+    request reaches both. Scanning the source is what covers both copies and any
+    third nobody has written yet.
+
+    Asserted against the literal strings rather than against `Limitation`, so
+    reintroducing either under a new enum member is still caught. The scan reads
+    every `.py` under `src/` — its own count is asserted non-zero first, because
+    a scan that opened nothing agrees with a clean tree.
+    """
+    package = Path(__file__).resolve().parents[2] / "src"
+    modules = sorted(package.rglob("*.py"))
+    assert len(modules) > 50, f"the scan found only {len(modules)} modules"
+
+    offending = {
+        f"{module.relative_to(package)}:{number}": token
+        for module in modules
+        for number, line in enumerate(module.read_text(encoding="utf-8").splitlines(), start=1)
+        for token in REMOVED_TOKENS
+        if token in line
+    }
+    assert not offending, f"a deleted limitation token is still in the source: {offending}"

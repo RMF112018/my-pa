@@ -241,6 +241,33 @@ jobs:
     # one: the URL names `my_pa_ci`, and every test creates and drops its own
     # `my_pa_*_test` database off the `postgres` maintenance database, so even
     # the configured database is never written to.
+    #
+    # This job selects `database or recovery or e2e` (`D-46`, premise corrected
+    # by `D-53`). The two FAST jobs above deselect every one of the three and
+    # keep doing so; this is the only job that runs any of them.
+    #
+    # The reason first given for widening it was wrong, and is not repeated
+    # here: it said recovery and e2e tests "would never run in CI". Recomputed
+    # against the tree, `-m database` selects any test carrying the `database`
+    # marker whatever else it also carries, and every `recovery`-marked test
+    # carries both — `-m "recovery and not database"` collects 0. Those tests
+    # already ran. Two reasons that do hold replace it:
+    #
+    #   1. `-m e2e` collected 0 before WP-4B3, so the marker was declared and
+    #      unused, and `tests/end_to_end/test_vertical_slice.py` — acceptance
+    #      criterion 7, the whole slice — would have run in no job at all had it
+    #      not also happened to carry `database`.
+    #   2. Today's safety is contingent on every future `recovery`/`e2e` test
+    #      also carrying `database`, and nothing enforces that. A test that
+    #      carried only `recovery` would be committed, collected by no job, and
+    #      reported green. Selecting the markers directly removes the
+    #      contingency rather than relying on it.
+    #
+    # `AGENTS.md` section 7 places recovery and idempotency tests in FULL, so
+    # the markers carry meaning and stay on the tests; dropping them to make the
+    # `-m database` selection sufficient would have destroyed the information
+    # instead of acting on it. No new marker is introduced — one would need
+    # `pyproject.toml` and both `-m` expressions above as well.
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -291,4 +318,4 @@ jobs:
           # reads this one from PGPASSWORD.
           MY_PA_DATABASE_URL: postgresql+psycopg://my_pa@localhost:5432/my_pa_ci
           PGPASSWORD: ci_throwaway_not_a_secret
-        run: python -m pytest -m database
+        run: python -m pytest -m "database or recovery or e2e"

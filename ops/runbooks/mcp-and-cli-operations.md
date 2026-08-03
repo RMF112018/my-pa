@@ -71,7 +71,7 @@ client's first read, before `initialize` has been answered.
 
 ```text
 serving     mcp on stdio as my-pa
-notice      no source provider is configured; sources.list, sources.metadata and sources.fetch answer 'unavailable' until a source is registered and a root authorized
+notice      sources.list, sources.metadata and sources.fetch answer 'unavailable' for every source no operator has registered; registration names the source's root by exact path, and this process configures none
 ```
 
 ## The handshake
@@ -257,19 +257,23 @@ all observed as the identical document above with exit `1`.
 
 `--help` still works and prints option names, never values.
 
-## It is beside `migration.py`, not instead of it
+## It is beside the other two, not instead of them
 
-`apps/cli/` holds two operator programs and they share nothing but the
+`apps/cli/` holds three operator programs and they share nothing but the
 directory:
 
 | Program | Plane |
 | --- | --- |
 | [`apps/cli/migration.py`](/apps/cli/migration.py) | the legacy-SQLite to PostgreSQL migration control plane — runs, phases, loads, resume |
+| [`apps/cli/sources.py`](/apps/cli/sources.py) | source configuration — register a root, observe it, list what is configured |
 | [`apps/cli/invoke.py`](/apps/cli/invoke.py) | one public capability, one response envelope |
 
-They have no option in common except `--help`. A migration phase is not a
-capability and a capability is not a migration phase; merging them would have
-made one look like the other.
+They have no option in common except `--help`, which
+`tests/contract/test_cli_transport.py` holds across all three. A migration phase
+is not a capability, registering a source is not a capability, and merging any
+two of them would have made one look like another —
+`tests/architecture/test_operator_commands_are_not_capabilities.py` decides that
+for `sources.py` mechanically rather than by this sentence.
 
 ---
 

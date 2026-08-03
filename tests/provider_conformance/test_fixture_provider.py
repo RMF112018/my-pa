@@ -9,7 +9,15 @@ that has to *change* an object -- a rewrite, a deletion -- happens in `tmp_path`
 because a test that mutated the committed corpus would leave the repository
 dirty and the next test looking at a different tree.
 
-No database, no marker, no network. This provider reads a directory.
+Almost everything here is unmarked and reads a directory and nothing else. The
+one exception is at the bottom of the file: `RegistryIdentity` is the second
+implementation of the identity seam and it issues identifiers through
+`knowledge.source_objects`, so the test that its identifiers survive a new
+provider instance needs a database and carries the `database` marker. It sits
+here rather than in `tests/schema` because what it asserts is a *provider*
+property -- the same claim the ephemeral tests above make, against the other
+implementation -- and separating the two would leave each half looking like the
+whole.
 """
 
 from __future__ import annotations
@@ -18,10 +26,18 @@ import hashlib
 import os
 import secrets
 import stat
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import Engine, text
+from sqlalchemy.engine import make_url
 
+from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import (
     IdKind,
     InvalidIdentifierError,
@@ -36,11 +52,19 @@ from my_pa.domain.source.provider import (
     TraversalDeniedError,
     VersionChangedError,
 )
+from my_pa.domain.source.registry import SourceProviderKind
+from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.registry import register_source
 from my_pa.infrastructure.providers import fixture as fixture_module
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
+from my_pa.infrastructure.providers.identity import EphemeralIdentity, ObjectIdentity
+from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
 
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS = ROOT / "fixtures" / "mcv" / "root"
+
+#: Created and dropped by the fixture below, never the configured database.
+DISPOSABLE_DATABASE = "my_pa_provider_identity_test"
 
 #: Every path in the committed corpus, relative to it. Stated here rather than
 #: derived from the tree, so that a missing fixture is a failure instead of a
@@ -691,3 +715,375 @@ def test_no_denial_carries_a_path_a_root_or_a_chained_operating_system_error(
         assert fragment not in rendered
     assert raised.value.__cause__ is None
     assert raised.value.__context__ is None
+
+
+# --- The identity seam -------------------------------------------------------
+#
+# `FixtureSourceProvider` no longer holds the map from a path to an `obj_…`.
+# `ObjectIdentity` does, and there are two of them. Everything above this line
+# runs against the default, which is `EphemeralIdentity` and which is the three
+# private dictionaries the provider used to hold -- so those tests are the
+# ephemeral half of the seam's conformance and are unchanged. What follows is
+# the part the seam itself adds: that the default really is ephemeral, that
+# every identifier and every locator goes through the collaborator, that a
+# collaborator which resolves nothing produces the ordinary denial, and that the
+# registry-backed implementation issues an identifier that outlives the instance.
+
+
+class RecordingIdentity(ObjectIdentity):
+    """An ephemeral identity that writes down every call before answering.
+
+    A recording *fake*, not a stub: it delegates to `EphemeralIdentity`, so the
+    provider under it behaves exactly as it does everywhere else in this file
+    and the call log is evidence about a working provider rather than about a
+    provider propped up to be observed.
+
+    `issued` is the second half. A log alone proves the provider asked; `issued`
+    is what it was told, so a test can assert that the identifier the provider
+    *returned* is the one the collaborator answered with. Without that, a
+    provider that asked and then minted its own would pass on the log.
+    """
+
+    def __init__(self) -> None:
+        self._delegate = EphemeralIdentity()
+        self.calls: list[tuple[str, ...]] = []
+        self.issued: dict[str, tuple[str, str]] = {}
+
+    def identify(
+        self,
+        native_locator: str,
+        *,
+        kind: ObjectKind,
+        fingerprint: str,
+        media_type: str | None,
+        size_bytes: int | None,
+        modified_at: datetime,
+    ) -> tuple[str, str]:
+        answer = self._delegate.identify(
+            native_locator,
+            kind=kind,
+            fingerprint=fingerprint,
+            media_type=media_type,
+            size_bytes=size_bytes,
+            modified_at=modified_at,
+        )
+        self.calls.append(("identify", native_locator, kind.value))
+        self.issued[native_locator] = answer
+        return answer
+
+    def locate(self, source_object_id: str) -> str | None:
+        answer = self._delegate.locate(source_object_id)
+        self.calls.append(("locate", source_object_id))
+        return answer
+
+
+class BlindIdentity(ObjectIdentity):
+    """Issues identifiers and then resolves none of them.
+
+    The state a durable identity reaches when a row is deleted under a live
+    provider, and the state an in-memory one is in for an identifier another
+    instance issued. Constructed rather than staged, because both are races.
+    """
+
+    def __init__(self) -> None:
+        self._delegate = EphemeralIdentity()
+
+    def identify(
+        self,
+        native_locator: str,
+        *,
+        kind: ObjectKind,
+        fingerprint: str,
+        media_type: str | None,
+        size_bytes: int | None,
+        modified_at: datetime,
+    ) -> tuple[str, str]:
+        return self._delegate.identify(
+            native_locator,
+            kind=kind,
+            fingerprint=fingerprint,
+            media_type=media_type,
+            size_bytes=size_bytes,
+            modified_at=modified_at,
+        )
+
+    def locate(self, source_object_id: str) -> str | None:
+        return None
+
+
+def test_the_default_identity_is_the_ephemeral_one_and_changes_nothing() -> None:
+    """The seam's default is the behaviour every test above already pins.
+
+    Asserted against an explicitly-injected `EphemeralIdentity` rather than by
+    inspecting an attribute, because what has to hold is that the two are
+    indistinguishable from outside. The identifiers are the one thing that
+    *must* differ -- two ephemeral identities over the same tree issue different
+    ones, which is what "ephemeral" means -- so the comparison is on the
+    described objects with the identifiers taken out, and the disjointness is
+    asserted separately rather than left implied.
+    """
+    default = provider(CORPUS)
+    explicit = FixtureSourceProvider(
+        CORPUS, make_identifier(IdKind.SOURCE, secrets.token_hex(8)), EphemeralIdentity()
+    )
+
+    described = [list(source.list_children()) for source in (default, explicit)]
+    assert [len(listing) for listing in described] == [len(EXPECTED_ROOT_ORDER)] * 2
+    assert [
+        [(entry.kind, entry.media_type, entry.size_bytes) for entry in listing]
+        for listing in described
+    ] == [
+        [
+            (ObjectKind.FILE, "application/pdf", (CORPUS / "handbook.pdf").stat().st_size),
+            (ObjectKind.CONTAINER, None, None),
+            (ObjectKind.FILE, "text/markdown", (CORPUS / "notes.md").stat().st_size),
+            (ObjectKind.FILE, None, (CORPUS / "opaque.bin").stat().st_size),
+            (ObjectKind.FILE, "text/plain", (CORPUS / "readme.txt").stat().st_size),
+        ]
+    ] * 2
+
+    identifiers = [{entry.source_object_id for entry in listing} for listing in described]
+    assert len(identifiers[0]) == len(EXPECTED_ROOT_ORDER)
+    assert identifiers[0].isdisjoint(identifiers[1])
+
+
+def test_every_identifier_and_every_locator_goes_through_the_identity(sandbox: Path) -> None:
+    """`_identify`, `_locate`, and `_version_of` all delegate, and the log says so.
+
+    The call log is asserted as an exact sequence, not as a membership test: the
+    failure this package is built around is silent, so "it was asked at least
+    once" would pass for a provider that asked once and minted the rest. The
+    sequence also pins *when* each call happens -- one identification per
+    observation, one resolution per identifier that arrives from outside -- which
+    is the property a caching regression would break without changing any
+    returned value.
+
+    `_version_of` has no call of its own by design; it reads what `identify`
+    already answered. It is proved delegated by the last two assertions, which
+    require the version the provider hands back from `metadata` *and* from
+    `fetch` to be the one the collaborator issued.
+    """
+    target = sandbox / "note.md"
+    target.write_bytes(b"observed through the seam")
+    identity = RecordingIdentity()
+
+    source = FixtureSourceProvider(
+        sandbox, make_identifier(IdKind.SOURCE, secrets.token_hex(8)), identity
+    )
+    root_locator, note_locator = str(sandbox.resolve()), str(target.resolve())
+    assert identity.calls == [("identify", root_locator, "container")]
+    root_object_id = identity.issued[root_locator][0]
+
+    listed = list(source.list_children())
+    assert len(listed) == 1
+    child = listed[0]
+    assert child.source_object_id == identity.issued[note_locator][0]
+    assert child.version_id == identity.issued[note_locator][1]
+
+    described = source.metadata(child.source_object_id)
+    assert described.version_id == identity.issued[note_locator][1]
+
+    content = source.fetch(child.source_object_id, max_bytes=64)
+    assert content.content == b"observed through the seam"
+    assert content.version_id == identity.issued[note_locator][1]
+
+    assert identity.calls == [
+        ("identify", root_locator, "container"),
+        ("locate", root_object_id),
+        ("identify", note_locator, "file"),
+        ("locate", child.source_object_id),
+        ("identify", note_locator, "file"),
+        ("locate", child.source_object_id),
+    ]
+
+
+def test_an_identity_that_resolves_nothing_denies_in_the_ordinary_words(
+    sandbox: Path,
+) -> None:
+    """A `None` from `locate` is the denial every other refusal uses.
+
+    The point of the test is the *sameness*, so an identifier the blind identity
+    issued and an identifier nobody ever issued are put through the same three
+    entry points and the messages collected into one set. A denial that began
+    discriminating between "no such object" and "not yours" would produce two.
+
+    The control is the same corpus under the ordinary identity, in this test,
+    returning a described object -- without it, a provider that denied
+    everything unconditionally would satisfy every assertion above it.
+    """
+    target = sandbox / "note.md"
+    target.write_bytes(b"issued, then unresolvable")
+    identity = BlindIdentity()
+    source = FixtureSourceProvider(
+        sandbox, make_identifier(IdKind.SOURCE, secrets.token_hex(8)), identity
+    )
+    control = provider(sandbox)
+    served = next(iter(control.list_children()))
+    assert served.size_bytes == len(b"issued, then unresolvable")
+
+    issued = identity.identify(
+        str(target.resolve()),
+        kind=ObjectKind.FILE,
+        fingerprint="0:0:0:0:0",
+        media_type="text/markdown",
+        size_bytes=1,
+        modified_at=datetime.now(UTC),
+    )[0]
+    unknown = make_identifier(IdKind.SOURCE_OBJECT, secrets.token_hex(16))
+
+    messages = set()
+    for object_id, call in (
+        (issued, source.metadata),
+        (unknown, source.metadata),
+        (issued, lambda oid: source.fetch(oid, max_bytes=8)),
+        (issued, lambda oid: source.list_children(oid)),
+    ):
+        with pytest.raises(TraversalDeniedError) as raised:
+            call(object_id)
+        messages.add(template(raised.value, object_id))
+        assert raised.value.__cause__ is None
+        assert raised.value.__context__ is None
+
+    assert messages == {f"<object> {fixture_module._DENIAL}"}
+
+
+def test_a_listing_issues_no_identifier_for_an_entry_it_cannot_describe(
+    sandbox: Path,
+) -> None:
+    """Classification runs before identification, and the log is the proof.
+
+    An entry that is neither a regular file nor a directory is omitted from a
+    listing. Under an ephemeral identity that was invisible; under a durable one
+    it is the difference between a `source_objects` row and none, so the order
+    of the two steps is now a fact worth pinning. The control is the regular
+    file in the same listing, which *is* identified -- a provider that issued
+    nothing at all would otherwise pass.
+    """
+    (sandbox / "regular.txt").write_bytes(b"a real file")
+    os.mkfifo(sandbox / "pipe")
+    identity = RecordingIdentity()
+
+    source = FixtureSourceProvider(
+        sandbox, make_identifier(IdKind.SOURCE, secrets.token_hex(8)), identity
+    )
+    listed = list(source.list_children())
+
+    assert len(listed) == 1
+    assert listed[0].size_bytes == len(b"a real file")
+    assert sorted(identity.issued) == [
+        str(sandbox.resolve()),
+        str((sandbox / "regular.txt").resolve()),
+    ]
+
+
+# --- The registry-backed half of the seam ------------------------------------
+#
+# Everything above runs against `EphemeralIdentity`. `RegistryIdentity` is the
+# second implementation, and the claim it exists to satisfy -- an identifier
+# outlives the provider instance that issued it -- cannot be stated against the
+# first, which is precisely what makes it a second implementation rather than a
+# variation. It needs `knowledge.source_objects`, so it needs a database.
+
+
+@pytest.fixture
+def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """Create an empty database, point the settings at it, drop it afterwards.
+
+    Never the configured `my_pa` database: this fixture drops what it names.
+    """
+    configured = make_url(load_settings().database_url)
+    maintenance = create_database_engine(
+        configured.set(database="postgres").render_as_string(hide_password=False)
+    )
+    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
+
+    def _administer(*statements: object) -> None:
+        # CREATE and DROP DATABASE cannot run inside a transaction block.
+        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            for statement in statements:
+                connection.execute(statement)  # type: ignore[arg-type]
+
+    try:
+        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
+        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
+        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
+        yield url
+    finally:
+        _administer(drop)
+        maintenance.dispose()
+
+
+@pytest.fixture
+def registry_engine(disposable_database: str) -> Iterator[Engine]:
+    """A disposable database upgraded to head, disposed afterwards."""
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_a_registered_source_issues_the_same_object_id_to_a_new_provider_instance(
+    registry_engine: Engine,
+) -> None:
+    """The whole point of the seam, stated as an equality between two instances.
+
+    Two providers are built from the same row, by two separate `for_source`
+    calls, and neither is the other. Under the ephemeral identity they would
+    disagree on every identifier -- that is the control at the end, and without
+    it the equality would be satisfied by a provider that returned the same
+    constant to everyone.
+
+    The second half is the one that makes the identifier *usable*: an identifier
+    the first instance issued is handed to the second, which never listed it,
+    and it resolves to a described object with the same version. That is the
+    call the executor makes, and it is the one that could not be made at all
+    before this seam, because a persisted identifier reached a provider whose
+    private dictionary had never heard of it.
+    """
+    with registry_engine.begin() as connection:
+        configured = register_source(
+            connection,
+            provider_kind=SourceProviderKind.FIXTURE,
+            label="MCV fixture corpus",
+            classification=Classification.SYNTHETIC_TEST,
+            native_root=str(CORPUS),
+        )
+        lookup = RegisteredSourceProviders(connection)
+
+        first = lookup.for_source(configured.source_id)
+        assert first is not None
+        issued = list(first.list_children())
+
+        second = lookup.for_source(configured.source_id)
+        assert second is not None
+        assert second is not first
+        again = list(second.list_children())
+
+        assert len(issued) == len(EXPECTED_ROOT_ORDER)
+        assert [entry.source_object_id for entry in issued] == [
+            entry.source_object_id for entry in again
+        ]
+        assert [entry.version_id for entry in issued] == [entry.version_id for entry in again]
+
+        # A file, not the container: `fetch` is what a persisted identifier is
+        # for and a container cannot be fetched.
+        persisted = by_name(issued, CORPUS)["readme.txt"]
+        third = lookup.for_source(configured.source_id)
+        assert third is not None
+        described = third.metadata(persisted.source_object_id)
+        assert described.source_object_id == persisted.source_object_id
+        assert described.version_id == persisted.version_id
+        content = third.fetch(persisted.source_object_id, max_bytes=1 << 16)
+        assert content.content == (CORPUS / "readme.txt").read_bytes()
+
+        assert lookup.for_source(make_identifier(IdKind.SOURCE, secrets.token_hex(8))) is None
+
+    # The control. Without a registry behind it the same corpus issues
+    # identifiers that agree with nothing, which is what the equality above is
+    # measured against.
+    ephemeral = {entry.source_object_id for entry in provider(CORPUS).list_children()}
+    assert len(ephemeral) == len(EXPECTED_ROOT_ORDER)
+    assert ephemeral.isdisjoint({entry.source_object_id for entry in issued})

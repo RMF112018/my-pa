@@ -15,31 +15,31 @@ Argparse, like every other operational script here. The target is explicit —
 output is counts and states, never a row value.
 
 **Shutdown.** `SIGINT` and `SIGTERM` set one event. The loop finishes the job it
-holds and then stops, so no lease is abandoned and no partial work is committed;
-a second signal is left to Python's default handling, because an operator asking
-twice is asking for the process to go now and this script should not be the
-thing that refuses.
+holds and then stops, so no lease is abandoned and nothing is left `running` for
+another worker to wait out; a second signal is left to Python's default handling,
+because an operator asking twice is asking for the process to go now and this
+script should not be the thing that refuses.
 
-**What this worker executes, and what it does not.** There is no extraction
-executor to wire, so `_unexecutable` is the handler and every claimed job is
-released as `unavailable` until its attempts are spent. That is a deferral
-stated as one, not a stub pretending to work, and the reason is a gap this work
-package does not own: `sources.enroll` records the `obj_…` identifiers a
-*provider instance* minted, and `FixtureSourceProvider` documents that those
-live only as long as the instance and are never derived from a locator, while
-`persistence.extraction` will only record an outcome against a `source_objects`
-row that `observe_object` issued from a native locator. Nothing in the tree
-bridges the two — `register_source` and `observe_object` have no production
-caller at all — so an executor written here would have to invent that bridge,
-which is a source-registration and enumeration design rather than a lease loop.
-Releasing as `unavailable` records what is actually known, which is the same
-answer and the same code `reap_abandoned_jobs` writes for a worker that stopped
-being available before it reported anything.
+**What this worker executes.** `infrastructure.jobs.extraction.extract_enrollment`
+is the handler, and one claimed job is one enrollment's outstanding objects:
+for each, the provider its source is configured with is asked to describe and
+read it, `domain.extraction.text` decides what came back, and the outcome is
+stored. Work commits per object, so a worker that is killed or loses its lease
+part-way leaves the objects it had already recorded and the next attempt starts
+from the ones that have no outcome yet.
 
-In practice this worker finds no work: nothing registers a source, so nothing
-can enroll one, so nothing enqueues a job. The handler is what happens if
-something does, and it is bounded — three attempts and the job is terminal
-`failed` rather than retried forever.
+**What it still does not do, stated rather than left as an absence.** PDFs are
+recorded as `unsupported` and counted; nothing here extracts them, because
+`P00-OD-003` is an open operator decision. An object whose bytes changed after it
+was extracted keeps its stored text and its old version — reprocessing is an
+explicit new operation and there is no scheduler for it. And a job whose
+enrollment is enormous can still exhaust its three attempts before it finishes,
+in which case it lands terminal `failed` with the coverage it did achieve, which
+`sources.status` reports honestly as partial.
+
+This worker finds work only where an operator has both registered a source
+(`apps/cli/sources.py`) and enrolled part of it (`sources.enroll`); with neither,
+it idles, and the counts it prints say so.
 """
 
 from __future__ import annotations
@@ -50,37 +50,21 @@ import sys
 import threading
 from types import FrameType
 
-from sqlalchemy import Connection
-
 from my_pa.bootstrap.settings import load_settings
-from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.jobs.extraction import extract_enrollment
 from my_pa.infrastructure.jobs.worker import (
     DEFAULT_LEASE_SECONDS,
     DEFAULT_POLL_SECONDS,
-    JobExecutionError,
     WorkerRun,
     issue_worker_owner,
     run_worker,
 )
-from my_pa.infrastructure.persistence.jobs import LeasedJob
 
 #: The signals an operator stops this process with. `SIGHUP` is deliberately
 #: absent: it has no defined meaning for this process, and claiming one would be
 #: inventing an operational contract nothing asked for.
 _STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
-
-
-def _unexecutable(connection: Connection, job: LeasedJob) -> None:
-    """Refuse the job truthfully: no executor is wired to perform it.
-
-    Named and raised rather than quietly completed. Completing would write
-    `succeeded` for work nobody did, which `sources.status` would then report as
-    `complete_for_scope` — a claim about a bounded scope that was never
-    processed. See this module's docstring for what is missing and why building
-    it is a different work package.
-    """
-    raise JobExecutionError(ErrorCode.UNAVAILABLE)
 
 
 def _install_stop_handlers(stop: threading.Event) -> None:
@@ -94,17 +78,6 @@ def _install_stop_handlers(stop: threading.Event) -> None:
 
     for number in _STOP_SIGNALS:
         signal.signal(number, _request_stop)
-
-
-#: What this process will do with work it claims, said by the process itself.
-#: The docstring above, the runbook, and `README.md` all disclose it, and none of
-#: them is what an operator reads when a run prints `idle 1`: without this line,
-#: "no executor is wired" and "healthy worker, empty queue" are the same output.
-#: A printed sentence is the whole of it — there is no status mechanism here.
-_NO_EXECUTOR_NOTICE = (
-    "notice      no extraction executor is wired; claimed work is released as "
-    "'unavailable' and fails once its attempts are spent"
-)
 
 
 def _report(owner: str, run: WorkerRun) -> None:
@@ -124,14 +97,11 @@ def _run(args: argparse.Namespace) -> int:
     owner = issue_worker_owner()
     stop = threading.Event()
     _install_stop_handlers(stop)
-    # Said at startup rather than in the summary, because a worker running until
-    # it is signalled prints its summary only when it stops.
-    print(_NO_EXECUTOR_NOTICE, flush=True)
     try:
         run = run_worker(
             engine,
             owner=owner,
-            handler=_unexecutable,
+            handler=extract_enrollment,
             stop=stop,
             max_iterations=1 if args.once else args.max_iterations,
             lease_seconds=args.lease_seconds,

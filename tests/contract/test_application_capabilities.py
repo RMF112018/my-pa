@@ -28,9 +28,7 @@ from pathlib import Path
 
 from tests.conftest import (
     DEFAULT_LIMITS,
-    WHEN,
     FakeProviders,
-    FakeUnitOfWork,
     Scene,
     World,
     build_provider,
@@ -710,41 +708,335 @@ def test_a_recorded_limitation_reaches_the_envelope(scene: Scene) -> None:
     assert limitation.disclosure in envelope.disclosure.limitations
 
 
-def test_a_root_selector_never_claims_whole_scope_coverage(
-    world: World, fixture_root: Path
-) -> None:
-    """No measured denominator means no state that asserts the whole scope."""
-    principal = operator()
-    source = world.add_source()
-    provider = build_provider(fixture_root, source.source_id)
-    children = list(provider.list_children())
-    root = next(c for c in children if c.kind is ObjectKind.CONTAINER)
-    enrollment = world.add_enrollment(
-        source_id=source.source_id,
-        principal_id=principal.principal_id,
-        root_object_id=root.source_object_id,
+# ---- sources.enroll: enumeration at acceptance -----------------------------
+
+
+class Grove:
+    """A three-level tree, one source over it, and a grant that reaches it.
+
+    The provider is opened over `tmp_path` itself so that the directory below it
+    is a *child* and therefore has an identifier a request can name as its root.
+    `SourceProvider` speaks only in `obj_…` and has no "identify the root" call,
+    so a root selector can only ever name something a listing disclosed — which
+    is the real constraint an operator works under, not a test convenience.
+
+    The shape, and every enumeration assertion below is decidable by reading it:
+
+        tree/  a.md  b.txt  deep/
+        tree/deep/  c.md  deeper/
+        tree/deep/deeper/  d.md
+
+    Two files at level one, one more at level two, one more at level three, and a
+    container at every level to prove containers are descended and not counted.
+
+    `bootstrap` is an enrollment over the same source naming one object, and it
+    exists only so policy resolves the request's scope to a source the principal
+    holds a grant over. It is not the enrollment any test asserts about.
+    """
+
+    def __init__(self, world: World, tmp_path: Path) -> None:
+        tree = tmp_path / "tree"
+        tree.mkdir()
+        (tree / "a.md").write_bytes(b"# A\n\nfirst level\n")
+        (tree / "b.txt").write_bytes(b"first level, plain\n")
+        deep = tree / "deep"
+        deep.mkdir()
+        (deep / "c.md").write_bytes(b"# C\n\nsecond level\n")
+        deeper = deep / "deeper"
+        deeper.mkdir()
+        (deeper / "d.md").write_bytes(b"# D\n\nthird level\n")
+
+        self.world = world
+        self.principal = operator()
+        self.source = world.add_source()
+        self.provider = build_provider(tmp_path, self.source.source_id)
+        self.root = next(iter(self.provider.list_children()))
+        assert self.root.kind is ObjectKind.CONTAINER
+        self.bootstrap = world.add_enrollment(
+            source_id=self.source.source_id,
+            principal_id=self.principal.principal_id,
+            object_ids=(self.root.source_object_id,),
+        )
+        self.providers = FakeProviders({self.source.source_id: self.provider})
+        self.provider.calls.clear()
+
+    def enroll(
+        self,
+        service: ApplicationService,
+        *,
+        key: str,
+        depth: int = 0,
+        max_items: int | None = None,
+    ) -> ResponseEnvelope:
+        return service.invoke(
+            metadata_for(Capability.SOURCES_ENROLL, Purpose.BOUNDED_ENROLLMENT, self.principal),
+            EnrollSource(
+                source_id=self.source.source_id,
+                media_types=(MARKDOWN, PLAIN),
+                idempotency_key=key,
+                root_object_id=self.root.source_object_id,
+                depth=depth,
+                max_items=max_items,
+            ),
+            principal=self.principal,
+        )
+
+
+def deep_limits(depth: int) -> EffectiveLimits:
+    """The default limits with the enrollment-depth ceiling raised to `depth`.
+
+    `DEFAULT_LIMITS` puts it at zero, which is the product default and what
+    `docs/specs` section 9.6 asks for; a test about the walk has to be allowed to
+    ask for one.
+    """
+    return EffectiveLimits(
+        max_page_size=DEFAULT_LIMITS.max_page_size,
+        default_page_size=DEFAULT_LIMITS.default_page_size,
+        max_fetch_bytes=DEFAULT_LIMITS.max_fetch_bytes,
+        max_enrollment_depth=depth,
     )
+
+
+def test_enrolling_a_root_records_the_object_set_the_walk_found(
+    world: World, tmp_path: Path
+) -> None:
+    """Criterion 1 at this layer: the grant carries a measured scope, not a promise.
+
+    At depth zero the walk is one `list_children` call and the answer is the two
+    files at the first level — `deep/` is a container and holds no content to be
+    eligible for, so it is descended past rather than counted.
+
+    Both halves are asserted because either alone is satisfiable by an accident:
+    the recorded set says what was stored, and the disclosed `eligible` says the
+    coverage read that same set. A denominator of two beside a stored set of two
+    is the property; a non-empty result on both sides is what makes the zero that
+    a mismatched identifier produces visible.
+    """
+    grove = Grove(world, tmp_path)
+    service = build_service(world, grove.providers)
+    envelope = grove.enroll(service, key="grove-depth-zero")
+
+    result = succeeded(envelope)
+    enrollment_id = str(result["enrollment_id"])
+    assert result["created"] is True
+    assert world.scopes[enrollment_id] == (
+        *(
+            o.source_object_id
+            for o in grove.provider.list_children(grove.root.source_object_id)
+            if o.kind is ObjectKind.FILE
+        ),
+    )
+    assert len(world.scopes[enrollment_id]) == 2
+    assert envelope.disclosure is not None
+    assert envelope.disclosure.coverage.eligible == 2
+
+
+def test_enumeration_walks_exactly_depth_plus_one_levels(world: World, tmp_path: Path) -> None:
+    """Depth is levels of listing, and the level count is `depth + 1`.
+
+    `domain.source.enrollment` fixes depth zero as "the named root itself and its
+    immediate children — never a walk", so zero is one listing. Each further
+    level adds exactly the files one directory deeper: two, then three, then
+    four, against the tree `Grove` documents.
+
+    Written as three enrollments over one tree rather than as three trees,
+    because the fixture is then the constant and the depth is the only variable.
+    Changing `depth + 1` to `depth` in `_enumerate` leaves the depth-one case
+    reporting two objects instead of three.
+    """
+    grove = Grove(world, tmp_path)
+    found: dict[int, int] = {}
+    for depth in (0, 1, 2):
+        service = build_service(world, grove.providers, deep_limits(depth))
+        result = succeeded(grove.enroll(service, key=f"grove-depth-{depth}", depth=depth))
+        found[depth] = len(world.scopes[str(result["enrollment_id"])])
+
+    assert found == {0: 2, 1: 3, 2: 4}
+
+
+def test_enumeration_refuses_a_scope_larger_than_max_items(world: World, tmp_path: Path) -> None:
+    """The ceiling stops the walk, and the refusal takes the enrollment with it.
+
+    `max_items` is the enrollment's own ceiling and `_enumerate` restates none of
+    its own: the walk stops at `max_items + 1` objects and refuses. The refusal
+    raises out of the transaction, so `accept_enrollment` rolls back and the
+    over-large enrollment does not exist rather than existing over a scope
+    silently truncated to fit — which is the laundering `docs/specs` section 12
+    forbids.
+
+    The control is in the same test and is what makes the refusal about the
+    ceiling: one more item of headroom over the identical tree accepts, and
+    stores both objects.
+    """
+    grove = Grove(world, tmp_path)
+    service = build_service(world, grove.providers)
+
+    refused = grove.enroll(service, key="grove-over-ceiling", max_items=1)
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.INVALID_REQUEST
+    assert "max_items" in refused.error.safe_details
+    assert world.jobs == {}
+
+    allowed = grove.enroll(service, key="grove-at-ceiling", max_items=2)
+    result = succeeded(allowed)
+    assert len(world.scopes[str(result["enrollment_id"])]) == 2
+
+
+def test_a_root_that_encloses_no_extractable_object_is_refused(
+    world: World, tmp_path: Path
+) -> None:
+    """An enrollment nobody can enumerate is never accepted.
+
+    The whole argument for enumerating at acceptance rests on this: there is no
+    instant at which a stored enrollment has an unmeasured denominator, because
+    the empty enumeration refuses and its refusal rolls `accept_enrollment` back
+    with it. `invalid_request` rather than `internal_error` — the operator named
+    a root that holds nothing, which is a fact about the request.
+
+    The control is the sibling call in the same test over the same tree: the
+    non-empty root accepts, so the refusal is about what was under the root and
+    not about the machinery failing to see anything at all.
+    """
+    grove = Grove(world, tmp_path)
+    empty = tmp_path / "tree" / "empty"
+    empty.mkdir()
+    service = build_service(world, grove.providers, deep_limits(1))
+    hollow = next(
+        child
+        for child in grove.provider.list_children(grove.root.source_object_id)
+        if child.kind is ObjectKind.CONTAINER
+        and child.source_object_id != grove.root.source_object_id
+        and not tuple(grove.provider.list_children(child.source_object_id))
+    )
+
+    refused = service.invoke(
+        metadata_for(Capability.SOURCES_ENROLL, Purpose.BOUNDED_ENROLLMENT, grove.principal),
+        EnrollSource(
+            source_id=grove.source.source_id,
+            media_types=(MARKDOWN,),
+            idempotency_key="grove-hollow-root",
+            root_object_id=hollow.source_object_id,
+        ),
+        principal=grove.principal,
+    )
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.INVALID_REQUEST
+    assert world.jobs == {}
+    assert world.rollbacks == 1
+
+    accepted = succeeded(grove.enroll(service, key="grove-hollow-control"))
+    assert len(world.scopes[str(accepted["enrollment_id"])]) == 2
+
+
+def test_an_enroll_over_a_source_with_no_provider_stores_nothing(
+    world: World, tmp_path: Path
+) -> None:
+    """No adapter means no enumeration, and no enumeration means no grant.
+
+    `unavailable` rather than `not_found`: the source row exists and the operator
+    can see it in `sources.list`, so reporting it absent would describe a wiring
+    gap as a fact about the corpus. What matters beyond the code is that nothing
+    is left behind — the acceptance had already run inside the transaction when
+    the lookup failed, and the rollback is what makes that not a stored
+    enrollment with no measured scope.
+
+    What this tier can prove is that the transaction ended by exception, which is
+    `World.rollbacks`; that no work was queued and no scope was recorded; and
+    that the same request against a lookup which *does* serve the source does all
+    three. What it cannot prove is that the acceptance row itself vanished —
+    `FakeUnitOfWork` counts how the block ended and undoes nothing, the same
+    limitation `_Audit` carries — and that claim belongs to the `database` tier,
+    against a server that can actually roll one back.
+    """
+    grove = Grove(world, tmp_path)
+    service = build_service(world, FakeProviders({}))
+    refused = grove.enroll(service, key="grove-no-provider")
+
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.UNAVAILABLE
+    assert world.rollbacks == 1
+    assert world.jobs == {}
+    # No enumerated set for anything but the bootstrap grant, which is what
+    # "no measured scope was stored" looks like from here.
+    assert set(world.scopes) == {grove.bootstrap.enrollment_id}
+
+    served = build_service(world, grove.providers)
+    result = succeeded(grove.enroll(service=served, key="grove-provider-control"))
+    assert len(world.jobs) == 1
+    assert len(world.scopes[str(result["enrollment_id"])]) == 2
+
+
+def test_a_retried_enroll_re_enumerates_nothing(world: World, tmp_path: Path) -> None:
+    """Criterion 4: the retry makes no provider call at all.
+
+    `record_scope` and `enqueue` are both gated on `acceptance.created`, so the
+    same idempotency key carrying the same normalized request enumerates nothing
+    and queues nothing. **The assertion is on the provider's call log and not on
+    the row count**, and that is the point of the test rather than a stylistic
+    choice: `record_scope` inserts under a primary key, so the stored set is
+    identical whether the walk ran again or not, and a row-count assertion would
+    pass with the gate removed.
+
+    The first call's log is the control: it is non-empty, so an empty second log
+    means "did not walk" rather than "the log was never written".
+    """
+    grove = Grove(world, tmp_path)
+    service = build_service(world, grove.providers)
+
+    first = succeeded(grove.enroll(service, key="grove-retry"))
+    walked = [call for call in grove.provider.calls if call == "list_children"]
+    grove.provider.calls.clear()
+
+    second = succeeded(grove.enroll(service, key="grove-retry"))
+
+    assert walked == ["list_children"]
+    assert grove.provider.calls == []
+    assert second["created"] is False
+    assert second["operation_id"] is None
+    assert second["enrollment_id"] == first["enrollment_id"]
+    assert len(world.scopes[str(first["enrollment_id"])]) == 2
+    assert len(world.jobs) == 1
+
+
+def test_a_root_selector_reports_the_measured_total_and_neither_removed_token(
+    world: World, tmp_path: Path
+) -> None:
+    """Criterion 3 at this layer, in the place a clamp test used to stand.
+
+    `test_a_root_selector_never_claims_whole_scope_coverage` asserted the
+    opposite of this until WP-4B3: with no persisted object set a root selector
+    had no denominator, so the state was held at `partially_processed` and two
+    tokens said why. The enumerated set is that denominator, so the state is now
+    the counts' own and the tokens are gone from the vocabulary.
+
+    One of two enumerated objects is extracted, so the honest reading is
+    `partially_processed` over `eligible == 2` — a number neither outcome count
+    produces, which is what makes this an assertion about the stored set.
+    """
+    grove = Grove(world, tmp_path)
+    service = build_service(world, grove.providers)
+    enrolled = succeeded(grove.enroll(service, key="grove-disclosure"))
+    enrollment_id = str(enrolled["enrollment_id"])
     world.record_outcome(
-        enrollment_id=enrollment.enrollment_id,
-        source_object_id=root.source_object_id,
+        enrollment_id=enrollment_id,
+        source_object_id=world.scopes[enrollment_id][0],
         status=ExtractionStatus.EXTRACTED,
     )
-    service = ApplicationService(
-        unit_of_work=lambda: FakeUnitOfWork(world),
-        providers=FakeProviders({source.source_id: provider}),
-        limits=DEFAULT_LIMITS,
-        clock=lambda: WHEN,
-    )
+
     envelope = service.invoke(
-        metadata_for(Capability.SOURCES_LIST, Purpose.SOURCE_INSPECTION, principal),
-        ListSources(source_id=source.source_id),
-        principal=principal,
+        metadata_for(Capability.SOURCES_STATUS, Purpose.STATUS_OBSERVATION, grove.principal),
+        GetSourceStatus(enrollment_id=enrollment_id),
+        principal=grove.principal,
     )
-    assert envelope.disclosure is not None
-    assert envelope.disclosure.coverage.state is CoverageState.PARTIALLY_PROCESSED
-    assert envelope.disclosure.partial_result
-    assert Limitation.ELIGIBLE_TOTAL_NOT_PERSISTED.value in envelope.disclosure.limitations
-    assert Limitation.SCOPE_IS_SOURCE_WIDE.value in envelope.disclosure.limitations
+    disclosure = envelope.disclosure
+    assert envelope.error is None, envelope.error
+    assert disclosure is not None
+    assert disclosure.coverage.eligible == 2
+    assert disclosure.coverage.processed == 1
+    assert disclosure.coverage.state is CoverageState.PARTIALLY_PROCESSED
+    assert "eligible_total_not_persisted" not in disclosure.limitations
+    assert "scope_is_source_wide_not_root_bounded" not in disclosure.limitations
+    assert Limitation.SCOPE_NOT_FULLY_EXTRACTED.value in disclosure.limitations
 
 
 # ---- D-24: the published limit is the enforced limit -----------------------

@@ -10,6 +10,21 @@ The handler always writes something real — a `coverage_limitations` row for th
 job's own enrollment — so "the work committed" and "the work was discarded" are
 row counts rather than assertions about a flag the test set itself.
 
+**The handler commits as it goes, because the real one has to.** It receives the
+`Engine` and the lease owner, opens one transaction per unit of work, and takes
+`hold_lease` as that transaction's first statement — which is the discipline
+`infrastructure.jobs.extraction` follows and the discipline the loop's guarantee
+now rests on. A `Recorder` that wrote on a connection handed to it would be
+proving a property the product no longer has.
+
+**The lease guarantee is proved narrowly, not only coarsely.** "A lost lease
+commits nothing" used to be a statement about a whole job, and a test that only
+counted rows at the end of a job would still pass on a handler that asserted the
+lease once and then wrote ten times. So the tests below write *before* the lease
+is taken away and again *after*, in the same run, and assert that the first row
+is there and the second is not. The non-zero half is what makes the zero half
+mean anything.
+
 Everything is synthetic. The source root is an invented path that is never
 opened and no live source is reached.
 """
@@ -43,12 +58,20 @@ from my_pa.domain.source.registry import SourceProviderKind, issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs.worker import (
     JobExecutionError,
+    LeaseLostError,
     issue_worker_owner,
     run_worker,
 )
 from my_pa.infrastructure.persistence.enrollment import accept_enrollment
 from my_pa.infrastructure.persistence.extraction import record_limitation
-from my_pa.infrastructure.persistence.jobs import LeasedJob, claim_job, enqueue_job, job_state
+from my_pa.infrastructure.persistence.jobs import (
+    LeasedJob,
+    claim_job,
+    complete_job,
+    enqueue_job,
+    hold_lease,
+    job_state,
+)
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
 from my_pa.infrastructure.persistence.tables import DEFAULT_MAX_ATTEMPTS, JobState
 
@@ -58,6 +81,12 @@ ROOT = Path(__file__).resolve().parents[2]
 DISPOSABLE_DATABASE = "my_pa_worker_test"
 
 WHEN = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
+
+#: Two snapshots, so that "written while the lease was held" and "written after
+#: it was gone" are two rows a test can count separately rather than one
+#: accumulating total.
+BEFORE = datetime(2026, 8, 2, 11, 0, tzinfo=UTC)
+AFTER = datetime(2026, 8, 2, 13, 0, tzinfo=UTC)
 
 #: Synthetic throughout. No such path exists and none is opened.
 NATIVE_ROOT = "/synthetic/worker/corpus"
@@ -146,12 +175,37 @@ def _enqueue(engine: Engine, key: str, *, max_attempts: int = DEFAULT_MAX_ATTEMP
         return enqueue_job(connection, accepted.enrollment.enrollment_id, max_attempts=max_attempts)
 
 
+def _write_one(engine: Engine, job: LeasedJob, owner: str, *, at: datetime = WHEN) -> None:
+    """One unit of committed work, guarded exactly as the executor guards its own.
+
+    `hold_lease` first, in the same transaction as the write, and a false answer
+    raises before anything is written. This is the whole of what replaced "the
+    handler runs on the connection that completes the job", so a test double that
+    skipped it would be measuring a discipline the product does not follow.
+
+    The row is a `coverage_limitations` row for the job's own enrollment: real
+    work with a real unique key, so "it committed" and "it was discarded" are row
+    counts. `at` distinguishes two writes within one run, because the accumulator
+    on `one_limitation_per_reason_per_snapshot` would otherwise merge them into
+    one row and hide which of the two survived.
+    """
+    with engine.begin() as connection:
+        if not hold_lease(connection, job.operation_id, owner=owner):
+            raise LeaseLostError(job.operation_id)
+        record_limitation(
+            connection,
+            enrollment_id=job.enrollment_id,
+            observed_at=at,
+            reason=LimitationReason.OBJECTS_OMITTED_CONTAINMENT_UNPROVEN,
+            affected_count=1,
+        )
+
+
 class Recorder:
     """A handler that writes one real row per attempt and counts its calls.
 
-    The row is a `coverage_limitations` row for the job's own enrollment, which
-    is real work with a real unique key: it commits or it does not, and a test
-    can tell which by counting.
+    Commits as it goes, on its own transaction, exactly as the extraction
+    executor does — see `_write_one` for what that costs and buys.
     """
 
     def __init__(self, *, fail: bool = False, code: ErrorCode = ErrorCode.UNAVAILABLE) -> None:
@@ -160,16 +214,10 @@ class Recorder:
         self._fail = fail
         self._code = code
 
-    def __call__(self, connection: Connection, job: LeasedJob) -> None:
+    def __call__(self, engine: Engine, job: LeasedJob, owner: str) -> None:
         self.calls += 1
         self.jobs.append(job.operation_id)
-        record_limitation(
-            connection,
-            enrollment_id=job.enrollment_id,
-            observed_at=WHEN,
-            reason=LimitationReason.OBJECTS_OMITTED_CONTAINMENT_UNPROVEN,
-            affected_count=1,
-        )
+        _write_one(engine, job, owner)
         if self._fail:
             raise JobExecutionError(self._code)
 
@@ -179,6 +227,26 @@ def _limitations(engine: Engine) -> int:
         return int(
             connection.execute(
                 text("SELECT count(*) FROM knowledge.coverage_limitations")
+            ).scalar_one()
+        )
+
+
+def _limitation_at(engine: Engine, observed_at: datetime) -> int:
+    """The objects recorded against one snapshot, or zero when nothing was.
+
+    Two writes in one run share an enrollment and a reason, so
+    `one_limitation_per_reason_per_snapshot` would accumulate them into one row
+    and `_limitations` could not tell which of the two survived. The snapshot is
+    what separates them.
+    """
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                text(
+                    "SELECT coalesce(sum(affected_count), 0) "
+                    "FROM knowledge.coverage_limitations WHERE observed_at = :at"
+                ),
+                {"at": observed_at},
             ).scalar_one()
         )
 
@@ -234,11 +302,21 @@ def test_the_worker_claims_executes_and_completes(engine: Engine) -> None:
 
 
 @pytest.mark.database
-def test_a_failed_attempt_is_released_and_the_work_is_discarded(engine: Engine) -> None:
+def test_a_failed_attempt_is_released_and_keeps_what_it_had_committed(engine: Engine) -> None:
     """A release returns the job to `queued` while attempts remain.
 
-    The handler wrote a row before it failed, and that row is gone: the work and
-    the completion share one transaction, so a failure takes both.
+    **The property changed here, and the change is the point.** The handler used
+    to run on the connection that completed the job, so a failure rolled its work
+    back with it and this test asserted a zero. A handler that reads source bytes
+    cannot hold one transaction across a whole enrollment
+    (`module-boundaries.md` section 10), so it commits per unit of work, and what
+    it committed before it failed is still there.
+
+    That is not a weakening dressed up: those rows were written while the lease
+    was held, they are true, and the next attempt starts from the work that has
+    no outcome yet rather than from nothing. What a failed attempt still may not
+    do is write `succeeded`, and the job below is `queued` with its error code
+    recorded.
     """
     operation_id = _enqueue(engine, "releases")
     handler = Recorder(fail=True)
@@ -252,7 +330,7 @@ def test_a_failed_attempt_is_released_and_the_work_is_discarded(engine: Engine) 
     )
 
     assert (run.claimed, run.completed, run.released, run.lost) == (1, 0, 1, 0)
-    assert _limitations(engine) == 0, "a failed attempt committed its partial work"
+    assert _limitations(engine) == 1, "the work committed under the lease was rolled back"
     state, attempts, owner, code = _job_row(engine, operation_id)
     assert (state, attempts, owner, code) == (
         JobState.QUEUED.value,
@@ -290,7 +368,11 @@ def test_poison_work_stops_being_claimed_once_its_attempts_are_spent(engine: Eng
     assert attempts == DEFAULT_MAX_ATTEMPTS
     assert owner is None
     assert code == ErrorCode.UNAVAILABLE.value
-    assert _limitations(engine) == 0
+    # Each attempt kept what it had committed under its own lease, and they
+    # accumulate onto one row because they share an enrollment, a reason, and a
+    # snapshot. The count is the bound: three attempts, three objects accounted
+    # for, and no fourth.
+    assert _limitation_at(engine, WHEN) == DEFAULT_MAX_ATTEMPTS
 
     # And a fresh worker cannot pick it up either.
     with engine.begin() as connection:
@@ -299,26 +381,26 @@ def test_poison_work_stops_being_claimed_once_its_attempts_are_spent(engine: Eng
 
 
 @pytest.mark.database
-def test_a_worker_that_lost_its_lease_commits_nothing(engine: Engine) -> None:
-    """ "A lost lease cannot commit", proved by taking the lease mid-handler.
+def test_a_worker_stops_writing_at_the_object_its_lease_was_taken(engine: Engine) -> None:
+    """The narrow form: one write under the lease, one after it, one survivor.
 
-    The handler writes its row and, while still inside the work transaction, a
-    second connection reassigns the lease — which is exactly what a slow worker
-    whose lease expired would find. `complete_job` then matches no row, the loop
-    raises, and the row the handler wrote goes with the rollback. Anything less
-    would leave two workers' results for one job.
+    This is the test the coarse one could not be. A handler that commits per
+    object gets to write many times per job, so "a lost lease commits nothing"
+    has to be decided per write and not once at the end — a handler that checked
+    the lease before its first object and then wrote nine more would pass a
+    per-job assertion and be exactly the defect.
+
+    So the run writes at `BEFORE` while the lease is held, has the lease taken by
+    a second connection — which is what a slow worker whose lease expired finds —
+    and writes again at `AFTER`. The first row is the control that makes the
+    second row's absence mean something: without it, a handler that wrote nothing
+    at all would satisfy the same assertion.
     """
     operation_id = _enqueue(engine, "stolen")
     thief = issue_worker_owner()
 
-    def steal(connection: Connection, job: LeasedJob) -> None:
-        record_limitation(
-            connection,
-            enrollment_id=job.enrollment_id,
-            observed_at=WHEN,
-            reason=LimitationReason.OBJECTS_OMITTED_CONTAINMENT_UNPROVEN,
-            affected_count=1,
-        )
+    def steal(worker_engine: Engine, job: LeasedJob, owner: str) -> None:
+        _write_one(worker_engine, job, owner, at=BEFORE)
         with engine.begin() as other:
             other.execute(
                 text(
@@ -328,6 +410,7 @@ def test_a_worker_that_lost_its_lease_commits_nothing(engine: Engine) -> None:
                 ),
                 {"owner": thief, "id": job.operation_id},
             )
+        _write_one(worker_engine, job, owner, at=AFTER)
 
     run = run_worker(
         engine,
@@ -338,10 +421,100 @@ def test_a_worker_that_lost_its_lease_commits_nothing(engine: Engine) -> None:
     )
 
     assert (run.claimed, run.completed, run.released, run.lost) == (1, 0, 0, 1)
-    assert _limitations(engine) == 0, "a worker without the lease committed its work"
+    assert _limitation_at(engine, BEFORE) == 1, "the write made under the lease was lost"
+    assert _limitation_at(engine, AFTER) == 0, "a worker without the lease committed its work"
+    assert _limitations(engine) == 1, "the run left a row it had no lease to write"
     state, _, owner, _ = _job_row(engine, operation_id)
-    # Still running, still owned by whoever has it now. This worker wrote nothing.
+    # Still running, still owned by whoever has it now, and never `succeeded`.
     assert (state, owner) == (JobState.RUNNING.value, thief)
+
+
+@pytest.mark.database
+def test_a_worker_whose_lease_merely_expired_also_stops_writing(engine: Engine) -> None:
+    """The other half of the narrow property: expiry, with nobody stealing it.
+
+    The stolen-lease test changes the `lease_owner`, so it would pass against a
+    guard that compared owners and never looked at the clock. Here the owner is
+    untouched and only `lease_expires_at` moves into the past, which is the state
+    every crashed-worker recovery goes through. `hold_lease` compares against
+    `now()` inside the statement, so the second write is refused by the server's
+    clock rather than by this worker's.
+
+    Same shape as its neighbour: a control write at `BEFORE`, the expiry, a
+    refused write at `AFTER`.
+    """
+    operation_id = _enqueue(engine, "expired-mid-pass")
+
+    def outlive(worker_engine: Engine, job: LeasedJob, owner: str) -> None:
+        _write_one(worker_engine, job, owner, at=BEFORE)
+        with engine.begin() as other:
+            other.execute(
+                text(
+                    "UPDATE knowledge.jobs SET lease_expires_at = now() - interval '1 second' "
+                    "WHERE operation_id = :id"
+                ),
+                {"id": job.operation_id},
+            )
+        _write_one(worker_engine, job, owner, at=AFTER)
+
+    run = run_worker(
+        engine,
+        owner=issue_worker_owner(),
+        handler=outlive,
+        stop=threading.Event(),
+        max_iterations=1,
+    )
+
+    assert (run.claimed, run.completed, run.lost) == (1, 0, 1)
+    assert _limitation_at(engine, BEFORE) == 1, "the write made under a live lease was lost"
+    assert _limitation_at(engine, AFTER) == 0, "a worker wrote against an expired lease"
+    state, _, _, _ = _job_row(engine, operation_id)
+    assert state != JobState.SUCCEEDED.value, "an expired attempt reported success"
+
+
+@pytest.mark.database
+def test_the_lease_assertion_answers_about_the_owner_the_clock_and_the_state(
+    engine: Engine,
+) -> None:
+    """`hold_lease` itself, against the four ways a lease stops being ours.
+
+    Each false answer sits beside the true one taken moments earlier on the same
+    row, so none of them is the trivially-false answer a broken predicate would
+    give to everything.
+    """
+    operation_id = _enqueue(engine, "assertion")
+    holder = issue_worker_owner()
+    stranger = issue_worker_owner()
+    with engine.begin() as connection:
+        assert claim_job(connection, owner=holder, lease_seconds=60) is not None
+
+    with engine.begin() as connection:
+        assert hold_lease(connection, operation_id, owner=holder) is True
+        assert hold_lease(connection, operation_id, owner=stranger) is False
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE knowledge.jobs SET lease_expires_at = now() - interval '1 second'")
+        )
+    with engine.begin() as connection:
+        assert hold_lease(connection, operation_id, owner=holder) is False, (
+            "an expired lease still answered as held"
+        )
+
+    # Restore a live lease, so the last case is about the state and not about a
+    # clock that is still in the past — and take the true answer once more, so
+    # the false one below is a change rather than a continuation.
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE knowledge.jobs SET lease_expires_at = now() + interval '60 seconds'")
+        )
+    with engine.begin() as connection:
+        assert hold_lease(connection, operation_id, owner=holder) is True
+        assert complete_job(connection, operation_id, owner=holder) is True
+    with engine.begin() as connection:
+        assert hold_lease(connection, operation_id, owner=holder) is False, (
+            "a finished job still answered as held"
+        )
 
 
 @pytest.mark.database
@@ -401,8 +574,8 @@ def test_a_stop_signal_ends_the_loop_without_abandoning_the_job_it_holds(
     stop = threading.Event()
     handler = Recorder()
 
-    def stopping(connection: Connection, job: LeasedJob) -> None:
-        handler(connection, job)
+    def stopping(worker_engine: Engine, job: LeasedJob, owner: str) -> None:
+        handler(worker_engine, job, owner)
         # As if SIGTERM arrived here.
         stop.set()
 
@@ -518,7 +691,7 @@ def test_an_unclassified_handler_failure_is_recorded_as_internal_error(engine: E
     """
     operation_id = _enqueue(engine, "unclassified")
 
-    def explode(connection: Connection, job: LeasedJob) -> None:
+    def explode(worker_engine: Engine, job: LeasedJob, owner: str) -> None:
         raise ZeroDivisionError("a failure this loop was never told how to classify")
 
     run = run_worker(

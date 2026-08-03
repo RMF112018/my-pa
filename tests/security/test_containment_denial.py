@@ -482,7 +482,8 @@ def test_the_open_refuses_a_final_component_that_became_a_symlink(
 
     source = provider(root)
     aliased = next(iter(source.list_children()))
-    assert source._paths[aliased.source_object_id].is_symlink(), "the staged path is not a symlink"
+    staged = source._identity.locate(aliased.source_object_id)
+    assert staged is not None and Path(staged).is_symlink(), "the staged path is not a symlink"
     with pytest.raises(TraversalDeniedError):
         source.fetch(aliased.source_object_id, max_bytes=64)
 

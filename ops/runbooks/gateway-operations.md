@@ -27,15 +27,19 @@ uses — is open and reserved to the operator, so the gateway issues, reads, and
 requires no credential, and configures no TLS. The address is a constant in the
 source rather than a flag with a safe default.
 
-**No source provider is configured.** The three source-reading capabilities
-answer `unavailable` for every source, and the process says so at startup.
-Nothing registers a source in production yet (`D-37`, WP-4B3) and no provider
-root is authorized (`P00-OD-009`, which needs the operator to name one by exact
-path). `capabilities.get`, `sources.status`, `sources.enroll`, `knowledge.search`
-and `knowledge.read` reach the database and answer for real.
+**No root is configured here, and there is no default one.** The three
+source-reading capabilities answer `unavailable` for every source no operator
+has registered, and the process says so at startup — unconditionally, because
+that sentence is true either way and startup reads no store to decide it.
+`apps/cli/sources.py register` is what creates a `knowledge.sources` row, and
+`P00-OD-009` is untouched by it: the command requires `--root` by exact path, so
+which roots are legitimate stays the operator's decision rather than this
+composition's. `capabilities.get`, `sources.status`, `sources.enroll`,
+`knowledge.search` and `knowledge.read` reach the database and answer for real.
 
-Read that as: running this gateway today is safe, answers truthfully, and has
-no corpus to answer about.
+Read that as: running this gateway today is safe and answers truthfully, and the
+corpus it can answer about is exactly the one an operator registered and
+enrolled — nothing wider, and nothing this repository chose.
 
 ## Configuration
 
@@ -76,7 +80,7 @@ file.
 
 ```text
 serving     http://127.0.0.1:8765/v1/<capability>
-notice      no source provider is configured; sources.list, sources.metadata and sources.fetch answer 'unavailable' until a source is registered and a root authorized
+notice      sources.list, sources.metadata and sources.fetch answer 'unavailable' for every source no operator has registered; registration names the source's root by exact path, and this process configures none
 ```
 
 ## Calling it

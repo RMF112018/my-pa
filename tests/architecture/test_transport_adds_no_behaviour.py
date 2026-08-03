@@ -146,7 +146,10 @@ FORBIDDEN_NAMES = frozenset(
         "Truncation",
         "disclosure_for",
         "unenrolled_disclosure",
-        "eligible_total",
+        # `eligible_total` stood here until WP-4B3 deleted the function. A guard
+        # naming something that does not exist can never fire, which is a defect
+        # this campaign shipped once and caught only in re-review, so the entry
+        # goes with the function rather than after it.
         # a composition
         "SqlAlchemyUnitOfWork",
         "SqlAlchemyAuditSink",

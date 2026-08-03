@@ -276,9 +276,9 @@ def test_a_traversal_attempt_is_denied_over_the_wire(world: World, tmp_path: Pat
     decoy.unlink()
     decoy.symlink_to(outside / "secret.md")
 
+    world.providers = FakeProviders({source.source_id: provider})
     service = ApplicationService(
         unit_of_work=lambda: FakeUnitOfWork(world),
-        providers=FakeProviders({source.source_id: provider}),
         limits=DEFAULT_LIMITS,
         clock=lambda: WHEN,
     )

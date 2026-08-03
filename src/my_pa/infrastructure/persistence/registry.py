@@ -46,6 +46,7 @@ from my_pa.infrastructure.persistence.tables import (
 
 __all__ = [
     "UnknownSourceError",
+    "all_sources",
     "get_source",
     "observe_object",
     "register_source",
@@ -138,6 +139,36 @@ def get_source(connection: Connection, source_id: str) -> ConfiguredSource:
     if row is None:
         raise UnknownSourceError(f"no configured source {source_id}")
     return _to_source(row)
+
+
+def all_sources(connection: Connection) -> tuple[ConfiguredSource, ...]:
+    """Every configured source, oldest first, and never a locator.
+
+    `get_source` answers about one; this answers about the set, which is what an
+    operator listing what they have configured is asking. It reads
+    `_SOURCE_COLUMNS` — the same five `get_source` and `register_source` read —
+    so `native_root` is absent by construction rather than by the caller
+    remembering not to select it. `ConfiguredSource` has no field it could go in.
+
+    It exists because the alternative was worse in a way worth recording.
+    `apps/cli/sources.py list` built its own `select` over the `sources` table
+    declaration, which meant `tests/architecture/test_operator_commands_are_not_capabilities.py`
+    had to admit the *table* to the operator command's permitted persistence
+    names. A table declaration is a write surface — `insert()` and `update()`
+    are as reachable through it as `select()` — so the allowlist that exists to
+    keep an operator command narrow was widened by one write surface in order to
+    permit one read. Naming a reader instead returns the allowlist to readers
+    and writers this module has decided on.
+
+    An empty tuple is a truthful answer and not an absence: no source has been
+    configured. It is ordered so two runs against an unchanged registry print
+    the same thing, and by `configured_at` with `source_id` breaking the tie,
+    because `configured_at` has a server default and two rows can share it.
+    """
+    rows = connection.execute(
+        select(*_SOURCE_COLUMNS).order_by(sources.c.configured_at, sources.c.source_id)
+    ).all()
+    return tuple(_to_source(row) for row in rows)
 
 
 def source_of_object(connection: Connection, source_object_id: str) -> str | None:

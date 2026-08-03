@@ -26,6 +26,7 @@ claims live in `tests/security`. This is the program.
 
 from __future__ import annotations
 
+import argparse
 import io
 import json
 from collections.abc import Sequence
@@ -331,22 +332,56 @@ def test_the_entry_point_releases_its_runtime_on_every_path() -> None:
     assert "runtime.close()" in source
 
 
-def test_the_migration_cli_is_untouched_and_separate() -> None:
-    """`apps/cli/` holds two operator programs, and they share no surface.
+def test_the_other_operator_programs_are_untouched_and_separate() -> None:
+    """`apps/cli/` holds three operator programs, and they share no surface.
 
     Stated as a test because "extend rather than replace" is only checkable if
-    something checks that the other program still exists and still means what it
-    did. A capability name arriving in the migration CLI, or a migration phase
-    arriving here, would be the two planes merging.
+    something checks that the other programs still exist and still mean what they
+    did. A capability name arriving in the migration CLI, a migration phase
+    arriving here, or a `--root` reaching the capability transport would be the
+    planes merging.
+
+    `sources.py` joined them with `D-42`, and it is the one that most needed
+    pinning: it writes to the same database as this transport does and is
+    deliberately not a capability.
+    `tests/architecture/test_operator_commands_are_not_capabilities.py` is what
+    holds that; this holds the weaker and more visible half, which is that the
+    three do not share an option between them.
     """
     import apps.cli.migration as migration
+    import apps.cli.sources as source_registration
 
     assert migration.build_parser is not entry_point.main
-    migration_options = {
-        option for action in migration.build_parser()._actions for option in action.option_strings
-    }
-    cli_options = {option for action in build_parser()._actions for option in action.option_strings}
+    assert source_registration.build_parser is not entry_point.main
+    assert source_registration.build_parser is not migration.build_parser
+
+    def options(parser: object) -> set[str]:
+        """Every option a program offers, subcommands included.
+
+        Descending into the subparsers is what makes this decide anything: two
+        of the three programs put every option behind a subcommand, so a
+        comparison of the top-level parsers alone would compare two copies of
+        `--help`.
+        """
+        actions = list(parser._actions)  # type: ignore[attr-defined]
+        found: set[str] = set()
+        while actions:
+            action = actions.pop()
+            found.update(action.option_strings)
+            if isinstance(action, argparse._SubParsersAction):
+                for nested in action.choices.values():
+                    actions.extend(nested._actions)
+        return found
+
+    migration_options = options(migration.build_parser())
+    sources_options = options(source_registration.build_parser())
+    cli_options = options(build_parser())
+    assert {"--source", "--run-id"} <= migration_options
+    assert {"--root", "--provider", "--label", "--classification"} <= sources_options
+    assert {"--payload", "--request-id"} <= cli_options
     assert migration_options & cli_options == {"-h", "--help"}
+    assert sources_options & cli_options == {"-h", "--help"}
+    assert sources_options & migration_options == {"-h", "--help"}
 
 
 def test_the_world_used_here_is_not_empty(scene: Scene) -> None:

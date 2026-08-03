@@ -5,10 +5,11 @@ leases one resource per migration run and is written by the loader; conflating
 the two would make an enrollment retry and a migration retry the same row, and
 would put application code on the write path of migration governance state.
 
-Five operations, because five is what a worker needs:
+Six operations, because six is what a worker needs:
 
 * `enqueue_job` records that an enrollment has work outstanding.
 * `claim_job` takes the oldest claimable job under a bounded lease.
+* `hold_lease` asserts, inside a write transaction, that the lease is still ours.
 * `complete_job` and `release_job` end an attempt.
 * `reap_abandoned_jobs` makes an abandoned final attempt terminal.
 
@@ -42,6 +43,17 @@ whose lease expired while it was still running must not be able to report on
 work another worker has since claimed, and the way it finds out is that its
 update matches no row.
 
+`hold_lease` is the same question asked *before* a write rather than after it,
+and it exists because the worker no longer commits its whole job in one
+transaction. `infrastructure.jobs.worker` used to hand a handler the connection
+that then called `complete_job`, so a lost lease discarded the work by rolling
+back the transaction it was written on. An extraction commits per object —
+`module-boundaries.md` section 10 does not permit source bytes to be read inside
+a database transaction, so the work cannot be one — and each of those
+transactions asserts the lease itself. Without it, a worker whose lease expired
+mid-pass would keep writing outcomes beside the results of the worker that took
+over.
+
 The clock is the server's. Every comparison and every expiry is computed with
 `now()` inside the statement, so a worker with a skewed clock cannot extend its
 own lease or declare another's expired.
@@ -71,6 +83,7 @@ __all__ = [
     "claim_job",
     "complete_job",
     "enqueue_job",
+    "hold_lease",
     "job_for",
     "job_state",
     "reap_abandoned_jobs",
@@ -239,6 +252,50 @@ def claim_job(connection: Connection, *, owner: str, lease_seconds: int) -> Leas
         attempt=int(row[2]),
         lease_expires_at=row[3],
     )
+
+
+def hold_lease(connection: Connection, operation_id: str, *, owner: str) -> bool:
+    """Lock the job row and report whether `owner` still holds a live lease.
+
+    Called first inside every transaction that writes an outcome, and its answer
+    is what makes "a lost lease commits nothing" true of a worker that commits
+    per object. A false answer is the caller's signal to raise, because raising
+    is what rolls this transaction back; returning false and writing anyway
+    would put one worker's result beside another's for the same job.
+
+    `FOR UPDATE`, and that is the whole reason this is not two statements or a
+    plain `SELECT`. The row lock is held until this transaction ends, so a claim
+    by another worker cannot land between this read and the write that follows
+    it — `claim_job` takes the same row `FOR UPDATE SKIP LOCKED` and will skip
+    it while we hold it, and `complete_job` and `release_job` update it and
+    block. Without the lock the answer would be true of an instant that had
+    already passed by the time the outcome was inserted.
+
+    The expiry is compared against `now()` inside the statement, like every other
+    comparison in this module, so a worker with a skewed clock cannot decide its
+    own lease is still good. The three conditions are the same three
+    `complete_job` matches on plus that expiry: `complete_job` may rely on the
+    reap having made an abandoned row terminal, while this runs mid-attempt, when
+    nothing has yet reported the expiry.
+
+    Returns false rather than raising for every way the lease can be gone — no
+    such job, no longer running, owned by somebody else, or expired — because
+    they are one fact to the caller and telling them apart would say something
+    about a job this worker no longer holds.
+    """
+    validate_identifier(operation_id, IdKind.OPERATION)
+    _validate_owner(owner)
+    held = connection.execute(
+        select(jobs.c.operation_id)
+        .where(
+            jobs.c.operation_id == operation_id,
+            jobs.c.state == JobState.RUNNING.value,
+            jobs.c.lease_owner == owner,
+            jobs.c.lease_expires_at > func.now(),
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    return held is not None
 
 
 def complete_job(connection: Connection, operation_id: str, *, owner: str) -> bool:

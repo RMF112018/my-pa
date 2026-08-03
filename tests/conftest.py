@@ -33,7 +33,7 @@ Everything is synthetic: no real path, no real person, no live source.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -114,6 +114,13 @@ class World:
     sources: dict[str, ConfiguredSource] = field(default_factory=dict)
     objects: dict[str, str] = field(default_factory=dict)
     enrollments: list[Enrollment] = field(default_factory=list)
+    #: The enumerated object set of each enrollment, which is what
+    #: `record_scope` writes and what `coverage`'s denominator counts. Empty for
+    #: an enrollment nothing enumerated, which the real writer refuses to create.
+    scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: The adapters `UnitOfWork.providers` answers with. Held here rather than
+    #: on the service, because the real lookup is bound to the transaction.
+    providers: SourceProviders = field(default_factory=lambda: FakeProviders())
     jobs: dict[str, tuple[str, SourceStatusState]] = field(default_factory=dict)
     outcomes: dict[str, dict[str, ExtractionStatus]] = field(default_factory=dict)
     limitations: dict[str, tuple[AggregateLimitation, ...]] = field(default_factory=dict)
@@ -175,7 +182,21 @@ class World:
             self.objects[object_id] = source_id
         if root_object_id is not None:
             self.objects[root_object_id] = source_id
+        # An accepted enrollment holds an enumerated set, because `record_scope`
+        # refuses an empty one and its refusal rolls the acceptance back. A named
+        # selector enumerates to what it named; a root selector's set is whatever
+        # the test walking it recorded, and `scope_of` is how a test states one.
+        self.scopes[enrollment.enrollment_id] = object_ids
         return enrollment
+
+    def scope_of(self, enrollment_id: str, source_object_ids: tuple[str, ...]) -> None:
+        """State the enumerated object set of an already-added enrollment.
+
+        For a root selector, whose set is what the walk found rather than what
+        the request named. Without it the fake reports `eligible == 0`, which is
+        the state the real writer refuses to create.
+        """
+        self.scopes[enrollment_id] = source_object_ids
 
     def record_outcome(
         self, *, enrollment_id: str, source_object_id: str, status: ExtractionStatus
@@ -229,6 +250,22 @@ class _Enrollments(EnrollmentRepository):
         self._world.keys[request.idempotency_key] = request.fingerprint
         return Acceptance(enrollment=enrollment, created=True)
 
+    def record_scope(self, enrollment_id: str, source_object_ids: Iterable[str]) -> int:
+        """Record the enumerated set, refusing an empty one as the writer does.
+
+        The refusal is the fake's, not decoration: `persistence.enrollment`
+        raises `ValueError` for an empty set so that an unmeasurable enrollment
+        rolls back rather than existing with a zero denominator, and a fake that
+        accepted one would let a test prove a state the store cannot hold.
+        """
+        self._world.fail("record_scope")
+        wanted = tuple(dict.fromkeys(source_object_ids))
+        if not wanted:
+            raise ValueError("an enrollment authorizes at least one object")
+        held = self._world.scopes.get(enrollment_id, ())
+        self._world.scopes[enrollment_id] = tuple(dict.fromkeys((*held, *wanted)))
+        return len(self._world.scopes[enrollment_id])
+
 
 class _Operations(OperationQueue):
     def __init__(self, world: World) -> None:
@@ -258,19 +295,32 @@ class _Knowledge(KnowledgeRepository):
         enrollment_id: str,
         *,
         observed_at: datetime,
-        eligible: int | None,
         queued: int = 0,
     ) -> CoverageCounts:
+        """Count the outcomes, over the denominator the enumerated set gives.
+
+        `eligible` is `len(World.scopes[enrollment_id])`, which is what
+        `coverage_for` reads out of `knowledge.enrollment_objects` rather than
+        anything a caller states — the parameter is gone from the port. Only
+        outcomes for objects in that set are counted, because
+        `authorized_object` is membership of exactly those rows, so a test that
+        records an outcome for an object outside the scope sees it excluded here
+        for the same reason the database would exclude it.
+        """
         self._world.fail("coverage")
-        outcomes = self._world.outcomes.get(enrollment_id, {})
+        scope = self._world.scopes.get(enrollment_id, ())
+        outcomes = {
+            object_id: status
+            for object_id, status in self._world.outcomes.get(enrollment_id, {}).items()
+            if object_id in scope
+        }
         processed = sum(1 for s in outcomes.values() if s is ExtractionStatus.EXTRACTED)
         quarantined = sum(1 for s in outcomes.values() if s is ExtractionStatus.QUARANTINED)
         unsupported = sum(1 for s in outcomes.values() if s is ExtractionStatus.UNSUPPORTED)
-        total = processed + quarantined + unsupported + queued if eligible is None else eligible
         return CoverageCounts(
             observed_at=observed_at,
             enrollment_id=enrollment_id,
-            eligible=total,
+            eligible=len(scope),
             queued=queued,
             processed=processed,
             quarantined=quarantined,
@@ -356,6 +406,10 @@ class FakeUnitOfWork(UnitOfWork):
             self._world.commits += 1
         else:
             self._world.rollbacks += 1
+
+    @property
+    def providers(self) -> SourceProviders:
+        return self._world.providers
 
     @property
     def sources(self) -> SourceRepository:
@@ -498,10 +552,18 @@ class Scene:
 def build_service(
     world: World, providers: FakeProviders, limits: EffectiveLimits = DEFAULT_LIMITS
 ) -> ApplicationService:
-    """The service under test, with a fixed clock and in-memory repositories."""
+    """The service under test, with a fixed clock and in-memory repositories.
+
+    `providers` is still a parameter and is no longer passed to the service.
+    `ApplicationService` takes no `SourceProviders` any more — the lookup comes
+    from the unit of work, because a provider resolves identifiers against rows
+    the same transaction has to see — so the adapters go into the `World` the
+    fake unit of work reads. Keeping the parameter is what lets a test say which
+    adapters exist without knowing where the port hangs.
+    """
+    world.providers = providers
     return ApplicationService(
         unit_of_work=lambda: FakeUnitOfWork(world),
-        providers=providers,
         limits=limits,
         clock=lambda: WHEN,
     )

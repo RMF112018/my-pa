@@ -58,6 +58,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import CursorResult, make_url
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.ports import UnknownScopeError
 from my_pa.contracts.v1.disclosure import CoverageState, FreshnessState
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError
@@ -82,7 +83,7 @@ from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind, issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence import IsolationLevelError
-from my_pa.infrastructure.persistence.enrollment import accept_enrollment
+from my_pa.infrastructure.persistence.enrollment import accept_enrollment, record_scope
 from my_pa.infrastructure.persistence.extraction import (
     UnauthorizedObjectError,
     authorized_media_type,
@@ -100,7 +101,6 @@ from my_pa.infrastructure.persistence.search import (
     SearchPage,
     SearchUnavailableError,
     UnknownEnrollmentError,
-    _claims_the_whole_scope,
     _configuration,
     _coverage,
     _execute,
@@ -289,6 +289,16 @@ def enrol(
                 max_bytes=1_000_000,
             ),
         )
+        # The enumerated object set, which every read now restricts to and whose
+        # size is the eligible total `coverage_for` reads for itself. Written
+        # here because `sources.enroll` writes it there: an enrollment with no
+        # such set authorizes nothing at all, which is a state the writer refuses
+        # to create and no test should reach by omission.
+        record_scope(
+            connection,
+            accepted.enrollment.enrollment_id,
+            [entry.source_object_id for entry in observed.values()],
+        )
         for name in sorted(chosen):
             media_type, body = documents[name]
             record_outcome(
@@ -380,6 +390,16 @@ def enrol_under_a_root(
                 max_bytes=1_000_000,
             ),
         )
+        # The enumerated object set, which every read now restricts to and whose
+        # size is the eligible total `coverage_for` reads for itself. Written
+        # here because `sources.enroll` writes it there: an enrollment with no
+        # such set authorizes nothing at all, which is a state the writer refuses
+        # to create and no test should reach by omission.
+        record_scope(
+            connection,
+            accepted.enrollment.enrollment_id,
+            [entry.source_object_id for entry in observed.values()],
+        )
         for name in sorted(chosen):
             media_type, body = documents[name]
             record_outcome(
@@ -458,6 +478,11 @@ def enrol_beside(
                 max_bytes=1_000_000,
             ),
         )
+        record_scope(
+            connection,
+            accepted.enrollment.enrollment_id,
+            [entry.source_object_id for entry in observed.values()],
+        )
         for name in sorted(chosen):
             media_type, body = documents[name]
             record_outcome(
@@ -510,6 +535,11 @@ def enrol_over(corpus: Corpus, *, key: str, names: tuple[str, ...]) -> Corpus:
                 max_items=100,
                 max_bytes=1_000_000,
             ),
+        )
+        record_scope(
+            connection,
+            accepted.enrollment.enrollment_id,
+            [corpus.object_ids[name] for name in names],
         )
     return Corpus(
         engine=corpus.engine,
@@ -950,129 +980,118 @@ def test_an_aggregate_limitation_reaches_the_disclosure_as_a_count(engine: Engin
 
 
 @pytest.mark.database
-def test_a_root_selector_enrollment_cannot_claim_complete_coverage(engine: Engine) -> None:
-    """The denominator nothing persists, disclosed rather than invented.
+def test_a_root_selector_reports_a_measured_eligible_total(engine: Engine) -> None:
+    """The denominator a root selector never had, read from the stored set.
 
-    An enrollment that named a root has an eligible total only enumeration
-    knows. Search says so instead of dividing by the rows that happen to exist,
-    which would report complete coverage of a scope nobody measured.
+    Five tests stood here until WP-4B3, and all five pinned the same clamp: with
+    no persisted object set, a root-selector enrollment's eligible total was
+    derived from the outcomes it happened to hold, so whichever outcome dominated
+    divided out to the whole scope. `processed`, `quarantined`, and `unsupported`
+    were each reachable as a false whole-scope claim, and the fix was to hold the
+    reported state at `partially_processed` and disclose two tokens saying why.
 
-    Nothing is extracted here, so the counts are all zero and the branch that
-    replaces the eligible total is reached with nothing in it. The test below
-    covers the case that has outcomes in it, which is where the claim could
-    actually have been made.
+    `knowledge.enrollment_objects` replaces all of it with a measurement. Four
+    objects were enumerated and two were extracted, so `eligible` is **4** — a
+    number no arithmetic over the two outcomes produces, which is what makes this
+    assertion about the stored set rather than about the counts beside it.
+
+    The two deleted tokens are asserted absent *by value*, not through the enum
+    that no longer holds them, so this test still means something if one is ever
+    reintroduced under a new name in `Limitation`.
     """
-    rooted = enrol_under_a_root(engine, key="rooted", documents={})
+    rooted = enrol_under_a_root(
+        engine,
+        key="rooted-measured",
+        documents=CORPUS,
+        extract=frozenset({"ledger", "minutes"}),
+    )
     page = search(rooted, "revenue")
 
-    assert "eligible_total_not_persisted" in page.disclosure.limitations
+    assert page.disclosure.coverage.eligible == 4
+    assert page.disclosure.coverage.processed == 2
+    assert len(page.matches) == 2
+    assert page.disclosure.coverage.state is CoverageState.PARTIALLY_PROCESSED
+    assert "eligible_total_not_persisted" not in page.disclosure.limitations
+    assert "scope_is_source_wide_not_root_bounded" not in page.disclosure.limitations
+    # The honest incompleteness is still reported, and it is now the *only*
+    # thing reported: two of four objects reached an outcome.
+    assert "scope_not_fully_extracted" in page.disclosure.limitations
     assert page.disclosure.partial_result is True
-
-    # And the state, which this asserted nothing about. Nothing here reached an
-    # outcome, so `eligible` is the honest reading and the clamp must leave it
-    # alone: `_claims_the_whole_scope` is what keeps the clamp off the six states
-    # that assert nothing about the whole scope, and without it a root-selector
-    # scope with no outcomes in it would report `partially_processed` — "objects
-    # reached outcomes, and there may be more" — about a scope where none did.
-    assert page.disclosure.coverage.state is CoverageState.ELIGIBLE
-    assert page.matches == ()
 
 
 @pytest.mark.database
-def test_a_root_selector_enrollment_with_outcomes_still_cannot_report_processed(
-    engine: Engine,
-) -> None:
-    """The same rule where it is actually reachable: every outcome a success.
+def test_the_coverage_state_of_a_fully_extracted_root_needs_no_clamp(engine: Engine) -> None:
+    """The direction a clamp removal can be wrong in, asserted as the stronger state.
 
-    With an unknown eligible total the reported total is what was accounted for,
-    so a scope whose every outcome is an extraction divides out to all of it and
-    `state` was `processed` — the machine-readable claim that the whole eligible
-    scope was covered, over a denominator taken from the numerator and never
-    measured. A caller reading the state rather than the limitation token was
-    told something false.
-
-    `partially_processed` is the honest reading and is what must be reported:
-    objects were processed, and how many more there are is not known. The counts
-    are deliberately left alone; the fix is to stop making the claim, not to
-    invent a bigger denominator to hide it behind.
+    Every object of the enumerated set was extracted, so `processed == eligible`
+    and the honest state is `processed` with `partial_result` false. That is a
+    claim the clamp made unsayable for a root selector however true it was, and a
+    reinstated clamp turns it back into `partially_processed` — which is why this
+    asserts the strong state and the false flag rather than merely a non-empty
+    page.
     """
     rooted = enrol_under_a_root(
-        engine, key="rooted-extracted", documents={"ledger": CORPUS["ledger"]}
+        engine, key="rooted-complete", documents={name: CORPUS[name] for name in ("ledger",)}
     )
     page = search(rooted, "revenue")
 
     assert len(page.matches) == 1
-    assert page.disclosure.coverage.processed == 1
     assert page.disclosure.coverage.eligible == 1
-    assert page.disclosure.coverage.state is not CoverageState.PROCESSED
-    assert page.disclosure.coverage.state is CoverageState.PARTIALLY_PROCESSED
-    assert "eligible_total_not_persisted" in page.disclosure.limitations
-    assert page.disclosure.partial_result is True
+    assert page.disclosure.coverage.processed == 1
+    assert page.disclosure.coverage.state is CoverageState.PROCESSED
+    assert page.disclosure.partial_result is False
+    assert "scope_not_fully_extracted" not in page.disclosure.limitations
+    assert "no_extracted_text_in_scope" not in page.disclosure.limitations
 
 
 @pytest.mark.database
-def test_a_root_selector_enrollment_with_only_quarantines_cannot_report_quarantined(
-    engine: Engine,
-) -> None:
-    """The same false claim as the test above, in its more dangerous form.
+def test_search_finds_nothing_for_an_object_outside_the_enumerated_set(engine: Engine) -> None:
+    """Containment for a root selector, in the shape that used to leak.
 
-    Nothing was extracted and one object was quarantined, so the derived total is
-    that one object and `quarantined == eligible` — "every eligible object in
-    this scope was quarantined", about a scope nobody enumerated. It is the
-    identical divide-the-numerator-by-itself construction as `processed`, and a
-    clamp that covered only `processed` let this one through. It is worse than
-    the `processed` case rather than milder: a caller acting on "all of it was
-    quarantined" is likelier to act destructively.
+    An object of the enrollment's own source that the enumeration did not
+    include, carrying text nothing else in the corpus holds. **At base this
+    returned the text**: `authorized_object` restricted a root selector to its
+    `source_id` and no further, so a sibling of the root was authorized, counted,
+    and searchable.
+
+    The zero is meaningless on its own — a mismatched identifier produces an
+    empty result with no exception anywhere — so the control is in the same test
+    and against the same enrollment: a query for an object the enumeration *did*
+    include returns exactly one match, and the coverage denominator stays the
+    enumerated one rather than growing by the stray.
     """
     rooted = enrol_under_a_root(
-        engine,
-        key="rooted-quarantined",
-        documents={"charter": CORPUS["charter"]},
-        extract=frozenset(),
+        engine, key="rooted-outside", documents={name: CORPUS[name] for name in ("ledger",)}
     )
     with rooted.engine.begin() as connection:
-        quarantine_object(
+        stray = observe_object(
             connection,
-            enrollment_id=rooted.enrollment_id,
-            source_object_id=rooted.object_ids["charter"],
-            version_id=None,
-            reason=QuarantineReason.CONTAINMENT_UNPROVEN,
+            source_id=rooted.source_id,
+            native_locator=f"{NATIVE_ROOT}/rooted-outside-sibling/schedule.md",
+            kind=ObjectKind.FILE,
+            fingerprint="fingerprint-rooted-outside-sibling",
+            modified_at=WHEN,
+            media_type="text/markdown",
+            size_bytes=len(INTRUDER_DOCUMENT),
         )
-    page = search(rooted, "quarterly")
-
-    assert page.disclosure.coverage.quarantined == 1
-    assert page.disclosure.coverage.eligible == 1
-    assert page.disclosure.coverage.state is not CoverageState.QUARANTINED
-    assert page.disclosure.coverage.state is CoverageState.PARTIALLY_PROCESSED
-    assert "eligible_total_not_persisted" in page.disclosure.limitations
-    assert page.disclosure.partial_result is True
-
-
-@pytest.mark.database
-def test_a_root_selector_enrollment_with_only_unsupported_media_cannot_report_unsupported(
-    engine: Engine,
-) -> None:
-    """The third reachable form of the same claim.
-
-    One object, its media type not text this system reads, so the derived total
-    is one and `unsupported == eligible`. "Nothing in this scope could be
-    extracted" is a statement about a whole scope, and the scope was never
-    enumerated.
-    """
-    rooted = enrol_under_a_root(
+    plant_an_extraction(
         engine,
-        key="rooted-unsupported",
-        documents={"handbook": ("application/pdf", b"%PDF-1.7\nnot extracted here\n%%EOF\n")},
+        enrollment_id=rooted.enrollment_id,
+        source_object_id=stray.source_object_id,
+        version_id=stray.version_id,
+        body=INTRUDER_DOCUMENT,
     )
-    page = search(rooted, "revenue")
 
-    assert page.matches == ()
-    assert page.disclosure.coverage.unsupported == 1
-    assert page.disclosure.coverage.eligible == 1
-    assert page.disclosure.coverage.state is not CoverageState.UNSUPPORTED
-    assert page.disclosure.coverage.state is CoverageState.PARTIALLY_PROCESSED
-    assert "eligible_total_not_persisted" in page.disclosure.limitations
-    assert page.disclosure.partial_result is True
+    outside = search(rooted, INTRUDER)
+    inside = search(rooted, "revenue")
+
+    assert outside.matches == ()
+    # The control, in the same test and under the same enrollment: the boundary
+    # excludes the stray and nothing else.
+    assert len(inside.matches) == 1
+    assert inside.matches[0].source_object_id == rooted.object_ids["ledger"]
+    assert inside.disclosure.coverage.eligible == 1
+    assert inside.disclosure.coverage.processed == 1
 
 
 @pytest.mark.database
@@ -1089,9 +1108,10 @@ def test_more_outcomes_than_the_enrollment_ceiling_is_still_a_searchable_scope(
     ceiling raised `ValueError` out of the coverage guard, uncaught and untyped,
     and search stayed dead for the enrollment for as long as the rows existed.
 
-    With the total stated as unmeasured there is no ceiling to violate. The
-    scope is still one nobody enumerated, so everything the tests above require
-    still holds.
+    The denominator is now the enumerated set, which is three, so the ceiling is
+    not a number this read can reach at all. That is a stronger answer than the
+    unmeasured total that replaced it: the scope is complete and is reported
+    complete, over a total nothing had to invent.
     """
     rooted = enrol_under_a_root(
         engine,
@@ -1104,9 +1124,8 @@ def test_more_outcomes_than_the_enrollment_ceiling_is_still_a_searchable_scope(
     assert len(page.matches) == 3
     assert page.disclosure.coverage.processed == 3
     assert page.disclosure.coverage.eligible == 3
-    assert page.disclosure.coverage.state is CoverageState.PARTIALLY_PROCESSED
-    assert "eligible_total_not_persisted" in page.disclosure.limitations
-    assert page.disclosure.partial_result is True
+    assert page.disclosure.coverage.state is CoverageState.PROCESSED
+    assert page.disclosure.partial_result is False
 
 
 def plant_an_extraction(
@@ -1269,21 +1288,28 @@ def test_an_outcome_stored_outside_the_named_scope_is_neither_counted_nor_return
 def test_an_object_the_enrollment_names_but_another_source_owns_is_not_in_scope(
     engine: Engine,
 ) -> None:
-    """The condition `object_ids` membership alone does not supply.
+    """The condition membership of the enumerated set does not supply.
 
-    Nothing validates that a named object belongs to the enrollment's source:
-    `accept_enrollment` writes the array as given, and an array column cannot
-    carry a foreign key to a row in another table's source. So an enrollment can
-    name an object of a different source, membership passes, and without the
-    source condition that object's extracted text would be returned under a
-    disclosure whose `scope.source_ids` names only the enrollment's source.
+    `accept_enrollment` writes `object_ids` as given and an array column cannot
+    carry an element-level foreign key, so an enrollment can still *name* an
+    object of another source. Two things then have to hold, and this test is both
+    of them because a fix applied to one is this package's recurring defect.
+
+    **The writer refuses it.** `record_scope` checks every identifier against the
+    enrollment's own source before inserting, so the crossed object never becomes
+    a row of `enrollment_objects` and the state is unreachable through the
+    supported path. `UnknownScopeError`, naming no identifier.
+
+    **The reader refuses it too.** `authorized_object` still tests the source
+    beside the membership, and it has to: the two tables it joins have foreign
+    keys to different parents and no constraint relates them, so a row written by
+    hand — or before that writer existed — names an object of another source and
+    passes membership. The row is planted by raw SQL here precisely because the
+    writer can no longer produce it.
 
     That is also what makes `SearchMatch.source_id` a real question rather than a
     style one: taken from the enrollment row it would have asserted the wrong
-    source for this object, and taken from the object it is right. Both
-    conditions are enforced, so the two are now equal for every row a search can
-    return — proved by `test_every_match_names_the_source_its_object_belongs_to`
-    rather than assumed here.
+    source for this object, and taken from the object it is right.
     """
     owner = enrol(engine, key="named-foreign", documents={"ledger": CORPUS["ledger"]})
     foreign = enrol(engine, key="named-foreign-other", documents={"minutes": CORPUS["minutes"]})
@@ -1314,6 +1340,30 @@ def test_an_object_the_enrollment_names_but_another_source_owns_is_not_in_scope(
             "minutes": foreign.version_ids["minutes"],
         },
     )
+
+    # The writer's half: the crossed identifier is refused, and the refusal names
+    # nothing, so a caller cannot use it to learn that an object it may not see
+    # exists.
+    with pytest.raises(UnknownScopeError) as refused, engine.begin() as connection:
+        record_scope(
+            connection,
+            crossed.enrollment_id,
+            [crossed.object_ids["ledger"], crossed.object_ids["minutes"]],
+        )
+    assert crossed.object_ids["minutes"] not in str(refused.value)
+
+    # What the enumeration would legitimately have recorded, plus the crossed row
+    # planted by hand — which is the only way to reach the state the reader has
+    # to hold against now that the writer refuses it.
+    with engine.begin() as connection:
+        record_scope(connection, crossed.enrollment_id, [crossed.object_ids["ledger"]])
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.enrollment_objects (enrollment_id, source_object_id) "
+                "VALUES (:enr, :obj)"
+            ),
+            {"enr": crossed.enrollment_id, "obj": crossed.object_ids["minutes"]},
+        )
 
     media_type, body = CORPUS["ledger"]
     with engine.begin() as connection:
@@ -1351,6 +1401,9 @@ def test_an_object_the_enrollment_names_but_another_source_owns_is_not_in_scope(
     page = search(crossed, "revenue")
 
     assert {match.source_object_id for match in page.matches} == {crossed.object_ids["ledger"]}
+    # Two rows in the enumerated set, one of them planted, and only the one whose
+    # source matches is counted — so the denominator sees the planted row and the
+    # numerator does not, which is the shape a source condition alone can produce.
     assert page.disclosure.coverage.eligible == 2
     assert page.disclosure.coverage.processed == 1
     assert page.disclosure.partial_result is True
@@ -1533,27 +1586,46 @@ def test_an_extraction_outcome_for_an_object_the_enrollment_does_not_authorize_i
 
 @pytest.mark.database
 def test_a_root_selector_enrollment_refuses_an_object_of_another_source(engine: Engine) -> None:
-    """What the write side *can* check for the selector that stores no object set.
+    """The write side, for the selector that used to store no object set.
 
-    An enrollment naming a root has no persisted list of authorized objects, so
-    membership cannot be checked and nothing here pretends otherwise. Its
-    `source_id` is persisted, though, and a root is an object of that source that
-    depth walks within — no object of another source is reachable under it. That
-    much is a stored fact rather than an invented one, and it is enforced.
+    An enrollment naming a root now persists what its enumeration found, so
+    `authorized_object` tests membership for it exactly as for a named list. Both
+    of its conditions are therefore live here, and this test holds the *source*
+    one: an object of another source is refused whatever the enumeration
+    recorded.
+
+    The control is in the same test and is what makes the refusal about the
+    object rather than about the enrollment: the enumerated object of the
+    enrollment's own source is quarantined successfully, in the same transaction
+    shape, and the count moves.
     """
-    rooted = enrol_under_a_root(engine, key="rooted-write-side", documents={})
+    rooted = enrol_under_a_root(
+        engine, key="rooted-write-side", documents={"ledger": CORPUS["ledger"]}, extract=frozenset()
+    )
     neighbour = enrol(
-        engine, key="rooted-write-side-neighbour", documents={"ledger": CORPUS["ledger"]}
+        engine, key="rooted-write-side-neighbour", documents={"minutes": CORPUS["minutes"]}
     )
 
     with pytest.raises(UnauthorizedObjectError), engine.begin() as connection:
         quarantine_object(
             connection,
             enrollment_id=rooted.enrollment_id,
-            source_object_id=neighbour.object_ids["ledger"],
+            source_object_id=neighbour.object_ids["minutes"],
             version_id=None,
             reason=QuarantineReason.CONTAINMENT_UNPROVEN,
         )
+
+    with engine.begin() as connection:
+        quarantine_object(
+            connection,
+            enrollment_id=rooted.enrollment_id,
+            source_object_id=rooted.object_ids["ledger"],
+            version_id=None,
+            reason=QuarantineReason.CONTAINMENT_UNPROVEN,
+        )
+    coverage = search(rooted, "revenue").disclosure.coverage
+    assert coverage.quarantined == 1
+    assert coverage.eligible == 1
 
 
 @pytest.mark.database
@@ -1997,26 +2069,29 @@ def test_the_allowlist_does_not_erase_the_report_of_a_type_it_excludes(engine: E
 
 
 @pytest.mark.database
-def test_a_root_selector_enrollment_reaches_its_whole_source_and_the_envelope_says_so(
+def test_a_root_selector_enrollment_no_longer_reaches_its_whole_source(
     engine: Engine,
 ) -> None:
-    """The limit this branch does not close, asserted rather than described.
+    """The limit this suite used to assert *as a fact*, now closed and asserted closed.
 
-    An enrollment naming a root is restricted by `authorized_object` to its
-    source and no further, because nothing persists which objects are under the
-    root. So an object of the same source that the depth walk would never have
-    reached is accepted by both writers, counted by `coverage_for`, and returned
-    by a search with nothing in the match distinguishing it — and a caller that
-    *did* enumerate the root and states that count as its denominator gets a read
-    that fails instead of a read that is merely wide.
+    Until WP-4B3 this test was named
+    `test_a_root_selector_enrollment_reaches_its_whole_source_and_the_envelope_says_so`
+    and it required the opposite of what it requires now: an object of the same
+    source that the depth walk would never have reached was accepted by both
+    writers, counted by `coverage_for`, and returned by a search, and the test's
+    obligation was that two limitation tokens disclosed it. Its own docstring said
+    "when WP-4 persists the enumerated object set, the acceptances below become
+    refusals and this test is the one that has to be rewritten". This is that
+    rewrite.
 
-    This test exists so that the limit is a measured fact rather than a paragraph.
-    What it requires is the disclosure: every root-selector search says
-    `scope_is_source_wide_not_root_bounded`, so a caller can tell from the
-    envelope what it would otherwise have to read this module to learn. When WP-4
-    persists the enumerated object set, the acceptances below become refusals and
-    this test is the one that has to be rewritten — which is the point of writing
-    it down.
+    The sibling is refused by the writer and, planted past the writer, is still
+    excluded by the reader — both halves, because the read side has to hold
+    against rows already stored or written by hand and the write side is what
+    stops new ones.
+
+    Every assertion sits beside a control over the enumerated object in the same
+    enrollment: one match, one processed, one eligible. A suite that only checked
+    the sibling's absence would agree with an enrollment that authorized nothing.
     """
     rooted = enrol_under_a_root(
         engine, key="rooted-source-wide", documents={"ledger": CORPUS["ledger"]}
@@ -2033,7 +2108,9 @@ def test_a_root_selector_enrollment_reaches_its_whole_source_and_the_envelope_sa
             media_type="text/markdown",
             size_bytes=len(INTRUDER_DOCUMENT),
         )
-        # Accepted. Not asserted as correct — asserted as what happens.
+
+    # Refused now. This was an acceptance, asserted as what happened.
+    with pytest.raises(UnauthorizedObjectError), engine.begin() as connection:
         record_outcome(
             connection,
             enrollment_id=rooted.enrollment_id,
@@ -2048,30 +2125,37 @@ def test_a_root_selector_enrollment_reaches_its_whole_source_and_the_envelope_sa
             ),
         )
 
+    # And past the writer, by hand, because the reader is a separate guarantee.
+    plant_an_extraction(
+        engine,
+        enrollment_id=rooted.enrollment_id,
+        source_object_id=outside.source_object_id,
+        version_id=outside.version_id,
+        body=INTRUDER_DOCUMENT,
+    )
     page = search(rooted, INTRUDER)
-    assert {match.source_object_id for match in page.matches} == {outside.source_object_id}
-    assert search(rooted, "revenue").disclosure.coverage.processed == 2
+    control = search(rooted, "revenue")
 
-    # The disclosure, which is what this change is accountable for.
-    assert "scope_is_source_wide_not_root_bounded" in page.disclosure.limitations
-    assert "eligible_total_not_persisted" in page.disclosure.limitations
-    assert page.disclosure.partial_result is True
-
-    # And the cost to a caller that did enumerate the root: one object under it,
-    # two outcomes counted, so the truthful denominator no longer fits.
-    with pytest.raises(SearchInternalError), engine.connect() as connection:
-        _coverage(connection, rooted.enrollment_id, moment=WHEN, eligible=1)
+    assert page.matches == ()
+    assert {match.source_object_id for match in control.matches} == {rooted.object_ids["ledger"]}
+    assert control.disclosure.coverage.processed == 1
+    assert control.disclosure.coverage.eligible == 1
+    assert control.disclosure.coverage.state is CoverageState.PROCESSED
+    assert "scope_is_source_wide_not_root_bounded" not in control.disclosure.limitations
+    assert "eligible_total_not_persisted" not in control.disclosure.limitations
 
 
 @pytest.mark.database
 def test_an_enrollment_that_named_its_objects_makes_no_source_wide_disclosure(
     corpus: Corpus,
 ) -> None:
-    """The paired negative, without which the token above could be unconditional.
+    """The paired negative for the test above, kept because the pair is the claim.
 
-    A token every search carries discloses nothing. This enrollment named its
-    objects, so its scope really is bounded by what it named, and saying otherwise
-    would be a limitation claimed where none applies.
+    Neither token may appear for either selector now. The named-objects case is
+    where they never applied, so a token here would have been a limitation
+    claimed where none applies; the root case above is where they did apply and
+    no longer do. Asserting both is what makes "removed from the vocabulary"
+    different from "moved to the other branch".
     """
     limitations = search(corpus, "revenue").disclosure.limitations
     assert "scope_is_source_wide_not_root_bounded" not in limitations
@@ -2502,7 +2586,6 @@ def test_a_stated_snapshot_outranks_the_counts_it_was_taken_beside(engine: Engin
                 connection,
                 scoped.enrollment_id,
                 observed_at=WHEN,
-                eligible=1,
                 snapshot=snapshot,
             ).state()
             for snapshot in SnapshotState
@@ -2545,7 +2628,7 @@ def test_coverage_counts_the_limitations_of_the_enrollment_it_was_asked_about(
         )
 
     with engine.connect() as connection:
-        counts = coverage_for(connection, scoped.enrollment_id, observed_at=WHEN, eligible=1)
+        counts = coverage_for(connection, scoped.enrollment_id, observed_at=WHEN)
 
     assert counts.disclosed_limitations == (f"{reason.value}:3",), (
         "another enrollment's omissions were counted as this one's"
@@ -2603,28 +2686,65 @@ def test_a_refused_object_names_the_two_identifiers_its_caller_supplied(engine: 
 def test_a_coverage_read_that_does_not_fit_its_denominator_is_a_typed_error(
     engine: Engine,
 ) -> None:
-    """The floor under the coverage read, kept where `search_extractions` can no longer reach it.
+    """The floor under the coverage read, kept where `search_extractions` cannot reach it.
 
-    `coverage_for` raises `ValueError` when the counts do not fit inside a
-    denominator the caller supplied. With the boundary enforced on both sides no
-    call `search_extractions` makes can produce that any more — the counts are
-    restricted to the objects `object_ids` names, and there cannot be more of
-    those than the array holds. `coverage_for` is public and the guard is about
-    any caller, so it is exercised directly rather than deleted along with the
-    route that used to reach it.
+    `coverage_for` raises `ValueError` through `CoverageCounts` when the counts
+    it assembles do not fit inside its own eligible total. No call
+    `search_extractions` makes can produce that: every count is restricted to
+    membership of `enrollment_objects` and the total is `count(*)` of those same
+    rows, and this module declares neither `queued` nor `unavailable`. The
+    remaining way to reach it is a broken store — outcome rows whose enumerated
+    row has gone — and that is what is built here, by deleting the enumerated set
+    out from under a stored extraction.
 
-    What it must not be is a bare `ValueError`: outside section 10's taxonomy,
-    with no envelope, reaching the caller as an unclassified crash. It is
-    `SearchInternalError` — this system's fault, not retryable — and it carries
+    What the failure must not be is a bare `ValueError`: outside section 10's
+    taxonomy, with no envelope, reaching the caller as an unclassified crash. It
+    is `SearchInternalError` — this system's fault, not retryable — and it carries
     the same empty message as every other error this module raises. The
     assertions on `__cause__` and `__context__` are the module's own rule that a
     typed error is raised outside the handler, because a traceback rendered
     through the original is how redacted detail comes back.
+
+    The control is the same read before the deletion, in the same test: it
+    returns counts, so what follows is about the broken state and not about the
+    enrollment being unreadable.
+
+    **What the broken store does, measured rather than assumed**, because it is
+    not what it used to be: deleting the enumerated rows drops the denominator
+    and every numerator together, since each count is restricted to membership
+    of exactly those rows. The read reports a coherent zero rather than raising.
+    That is the honest answer for a scope nothing describes, and it is asserted
+    here so the deletion is a tested state rather than an untried one.
+
+    The typed error is then exercised where a caller can still cause it — through
+    `ensure_utc`, which raises a `ValueError` subclass, on a call that never
+    reaches the connection. `queued` is the other route and it belongs to the
+    port rather than to this module;
+    `tests/schema/test_persistence_ports.py::test_a_broken_read_becomes_a_port_failure_and_carries_no_statement`
+    holds that one.
     """
     scoped = enrol(engine, key="denominator", documents=CORPUS)
 
-    with pytest.raises(SearchInternalError) as raised, engine.connect() as connection:
-        _coverage(connection, scoped.enrollment_id, moment=WHEN, eligible=0)
+    with engine.connect() as connection:
+        honest = _coverage(connection, scoped.enrollment_id, moment=WHEN)
+    assert honest.eligible == len(CORPUS)
+    assert honest.processed == len(CORPUS)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM knowledge.enrollment_objects WHERE enrollment_id = :enr"),
+            {"enr": scoped.enrollment_id},
+        )
+    with engine.connect() as connection:
+        emptied = _coverage(connection, scoped.enrollment_id, moment=WHEN)
+    assert (emptied.eligible, emptied.processed) == (0, 0)
+    assert emptied.state() is CoverageState.ELIGIBLE
+
+    # Deliberately naive, which is what `coverage_for` refuses. The connection is
+    # `None` to say that the refusal happens before anything is executed: a call
+    # that reached the database would fail on the argument instead.
+    with pytest.raises(SearchInternalError) as raised:
+        _coverage(None, scoped.enrollment_id, moment=datetime(2026, 8, 1, 12, 0))  # type: ignore[arg-type]
 
     message = str(raised.value)
     assert message == "the search could not be completed"
@@ -2989,12 +3109,10 @@ def test_the_coverage_read_validates_its_enrollment_before_anything_else() -> No
     naive = datetime(2026, 8, 1, 12, 0)
 
     with pytest.raises(InvalidIdentifierError):
-        coverage_for(None, f"{NATIVE_ROOT}/ledger", observed_at=naive, eligible=None)  # type: ignore[arg-type]
+        coverage_for(None, f"{NATIVE_ROOT}/ledger", observed_at=naive)  # type: ignore[arg-type]
 
     with pytest.raises(NaiveDatetimeError):
-        coverage_for(  # type: ignore[arg-type]
-            None, issue_identifier(IdKind.ENROLLMENT), observed_at=naive, eligible=None
-        )
+        coverage_for(None, issue_identifier(IdKind.ENROLLMENT), observed_at=naive)  # type: ignore[arg-type]
 
 
 @pytest.mark.database
@@ -3473,44 +3591,6 @@ def test_a_result_label_is_the_media_type_and_says_so(corpus: Corpus) -> None:
     for match in page.matches:
         assert NATIVE_ROOT not in match.label
         assert "ledger" not in match.label
-
-
-def test_every_coverage_state_that_claims_a_whole_scope_is_classified_as_one() -> None:
-    """The clamp's membership, stated over every state rather than the reachable ones.
-
-    Not a database test, and that is the point of having it: `unavailable` cannot
-    be produced through `search_extractions` today, because search passes no
-    `unavailable` count. "Currently unreachable" is how the first clamp came to
-    cover `processed` alone while `quarantined` and `unsupported` walked past it,
-    so the state is classified here and will be clamped the moment a caller can
-    reach it.
-
-    The exhaustiveness assertion is a second lock on the same door. The partition
-    in `search` is written with `assert_never`, so an eleventh `CoverageState`
-    that nobody classified is a `mypy` error rather than a state that silently
-    escapes the clamp; this asserts the same thing at runtime, where a suite that
-    does not type-check its tests can still see it.
-    """
-    whole_scope = {
-        CoverageState.PROCESSED,
-        CoverageState.QUARANTINED,
-        CoverageState.UNSUPPORTED,
-        CoverageState.UNAVAILABLE,
-    }
-    partial = {
-        CoverageState.NOT_ENROLLED,
-        CoverageState.ELIGIBLE,
-        CoverageState.QUEUED,
-        CoverageState.PARTIALLY_PROCESSED,
-        CoverageState.STALE,
-        CoverageState.SUPERSEDED,
-    }
-    assert whole_scope | partial == set(CoverageState), "a coverage state is classified nowhere"
-    assert not whole_scope & partial
-    for state in whole_scope:
-        assert _claims_the_whole_scope(state) is True
-    for state in partial:
-        assert _claims_the_whole_scope(state) is False
 
 
 def test_only_an_indexed_text_search_configuration_can_be_written_into_the_sql() -> None:

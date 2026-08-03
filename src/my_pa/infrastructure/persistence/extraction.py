@@ -20,18 +20,18 @@ payloads" is a property of the code rather than a promise about how it is called
 **An enrollment authorizes in two dimensions, and both are enforced.** Section
 9.6 makes an enrollment request a selector *and* a content-type allowlist, so
 "what this enrollment authorizes" is two stored facts and not one:
-`enrollments.object_ids` with `enrollments.source_id`, and
+`knowledge.enrollment_objects` with `enrollments.source_id`, and
 `enrollments.media_types`. `authorized_object` is the whole of the first and
 `authorized_media_type` is the whole of the second. Neither is a definition of
 the other, and this module said for five review rounds that the first was the
 only one, which is how the second went unenforced everywhere.
 
 **The object dimension.** Filtering by `enrollment_id` alone is not an
-authorization boundary: nothing in the schema ties an outcome's
-`source_object_id` to the objects its enrollment named, so a row written for any
+authorization boundary: nothing in `extractions` ties an outcome's
+`source_object_id` to the objects its enrollment holds, so a row written for any
 object at all would be counted and returned as if it were in scope.
-`authorized_object` is an object of the enrollment's own source, and, where the
-enrollment named its objects, one of those. It is applied by every count in
+`authorized_object` is a row of `enrollment_objects` for this enrollment, whose
+object belongs to the enrollment's own source. It is applied by every count in
 `coverage_for` and by the search predicate that reads the same rows. The write
 path refuses the same objects through `UnauthorizedObjectError`.
 
@@ -68,15 +68,13 @@ allowed. Neither count discloses content, both are counts of objects section
 writer did not can hand `coverage_for` a denominator its rows no longer fit
 inside — which raises, in the direction that fails rather than overclaims.
 
-For an enrollment that named its objects that makes the inconsistent state
-impossible to create rather than merely unreported: the set is stored, so both
-sides can restrict to it. For an enrollment that named a root it does not. There
-is no stored object set for a root, so both sides admit every object of the
-enrollment's source, including objects of that source outside the root — the
-write path accepts them and the read path counts and returns them. That is a
-limit of what the schema knows and not a check that was forgotten;
-`authorized_object` says what would close it, and `persistence.search` discloses
-it in the envelope rather than leaving a caller to infer it.
+That makes the inconsistent state impossible to create rather than merely
+unreported, and it is now true of both selectors rather than of one:
+`enrollment_objects` stores the set for a root exactly as it stores the set for
+a named list, so both sides restrict to it. The gap this paragraph used to
+record — a root selector authorizing its whole source, including objects
+outside the root — is closed by that one stored fact, and nothing here
+discloses it any more because there is nothing left to disclose.
 
 The two halves are not redundant. The read side has to hold against rows already
 stored, written by hand, or written before the write side existed; the write side
@@ -115,24 +113,25 @@ a reader never has to trace one. Which of the two rules a condition falls under
 is decided by what the condition is for, not by whether a test happens to reach
 it.
 
-**Coverage is read for a stated enrollment and snapshot.** `coverage_for` counts
-what this schema stores and requires the caller to state what it does not: the
-eligible total, and any queued or unavailable counts. That asymmetry is
-deliberate. Only the layer that enumerated the scope knows how many objects were
-eligible, and deriving the denominator from the rows that happen to exist would
-report complete coverage of a scope nobody measured — exactly the global
-inference section 12 forbids.
+**Coverage is read for a stated enrollment and snapshot, denominator included.**
+`coverage_for` takes no `eligible` argument. It reads the denominator from
+`enrollment_objects` in the same function, from the same schema, on the same
+connection as the numerator, because the enumeration that measured the scope now
+persists what it found. That is not the global inference section 12 forbids: the
+total is a stored count of *this* enrollment's objects, measured once at
+acceptance, and not an arithmetic identity derived from whichever outcomes
+happen to exist.
 
-A caller that never enumerated the scope says so, with `eligible=None`, and the
-total is then derived from what was accounted for. That is the same arithmetic
-the paragraph above rejects, and it is admissible only because it is *stated*:
-`None` is a caller declaring the denominator unmeasured, where an integer is a
-caller asserting one. What the two must not share is a coverage *state*, and
-`None` is the fact a caller needs to hold the state below any that would claim
-the whole scope reached an outcome. The alternative — making a caller invent a
-plausible integer and then repair the counts afterwards — is what produced two
-defects here already: an invented ceiling can disagree with the stored rows and
-crash the read, and a repaired total leaves no record that it was repaired.
+The parameter was removed rather than defaulted. It used to accept `None` from a
+caller with no enumeration to quote, and the total was then derived from what had
+been accounted for — a number every whole-scope state divides out of, which is
+why two disclosure tokens and a state clamp existed in two layers to stop it
+being read as a measurement. `record_scope` refuses an empty set and rolls the
+accepting transaction back with it, so an accepted enrollment holds at least one
+object and there is no instant at which the denominator is unmeasured. Leaving
+`eligible: int | None = None` in place with the new meaning would have changed
+what `None` asserts without changing a call site, which is the same class of
+defect as the one being removed.
 """
 
 from __future__ import annotations
@@ -140,7 +139,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ColumnElement, Connection, Select, Text, any_, func, literal, or_, select
+from sqlalchemy import ColumnElement, Connection, Select, Text, any_, func, literal, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -159,8 +158,10 @@ from my_pa.domain.extraction.quarantine import (
 from my_pa.domain.extraction.text import ExtractionOutcome, ExtractionStatus
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import conflicting_row
+from my_pa.infrastructure.persistence.enrollment import enrolled_object_count
 from my_pa.infrastructure.persistence.tables import (
     coverage_limitations,
+    enrollment_objects,
     enrollments,
     extractions,
     quarantine_records,
@@ -225,55 +226,44 @@ def authorized_object(
 
     The one definition of an enrollment's authorized object set, written once and
     used by every read and every write that touches an outcome. Two conditions,
-    and each is a fact the schema already stores:
+    and each is a fact the schema stores:
 
-    * The object belongs to the enrollment's own source. True of both selectors.
-      A root selector names an object of that source and depth walks within it,
-      so no object of another source can be under it; an enrollment naming
-      objects is accepted without anything checking they are that source's, which
-      is why this is enforced here rather than assumed.
-    * Where the enrollment named its objects, the object is one of them.
-      `enrollments.object_ids` *is* the authorization for that selector, and
-      `enrollment_names_exactly_one_selector` guarantees it is non-empty exactly
-      when `root_object_id` is null.
+    * The object is in this enrollment's enumerated set —
+      `knowledge.enrollment_objects` holds a row for the pair. **This applies to
+      a root selector exactly as it applies to a named one**, which is the whole
+      of what the new table bought. The enumeration that walked the root at
+      acceptance recorded what it found, and `record_scope` refuses an empty set,
+      so every accepted enrollment has a set to be a member of.
+    * The object belongs to the enrollment's own source.
 
-    A root-selector enrollment stores no object set, so there is nothing to
-    restrict against and this deliberately does not invent one. What that costs
-    is stated plainly because it is larger than it sounds: such an enrollment
-    authorizes *its whole source*, root or no root. An object of the same source
-    sitting outside the root — a sibling directory, anything the depth walk would
-    never have reached — passes this predicate, so it can be written under the
-    enrollment, is counted by `coverage_for`, and is returned by a search.
+    The second is not implied by the first, and that is why it is still written.
+    `enrollment_objects.source_object_id` references `source_objects` and
+    `enrollments.source_id` references `sources`, and no constraint in the schema
+    relates the two, so a row inserted by hand can name an object of another
+    source. `record_scope` refuses to write one — but the read side has to hold
+    against rows already stored, written by hand, or written before that writer
+    existed, which is the division this module's docstring states.
 
-    Containment is not implemented rather than being implemented badly, and the
-    reason is that the fact it needs is not stored. `source_objects` holds a
-    `native_locator` and a `source_id` and no parent link, so a subtree test
-    could only be a prefix comparison over locators, and no provider promises
-    that a locator prefix means containment. The object set under a root was
-    known to the enumeration that walked it and nothing persists it; there is no
-    worker yet that could.
-
-    **What WP-4 should do, once, rather than twice.** Persist the enumerated
-    object set at enrollment time. It is one missing fact — which objects are
-    under this root — and it closes two things that are currently carried
-    separately: this containment gap, because membership would then apply to a
-    root selector exactly as it applies to a named one, and the unmeasured
-    denominator in `persistence.search`, because the size of that set is the
-    eligible total search has no honest number for. Fixing either alone would
-    mean building the same persistence twice.
+    What this predicate used to say, and no longer has to: that a root-selector
+    enrollment authorized its *whole source*, because nothing persisted the
+    object set under a root. An object of the same source outside the root passed
+    it, was counted by `coverage_for`, and was returned by a search, and
+    `persistence.search` carried two disclosure tokens describing it. There is
+    now one membership test for both selectors, so there is no wider scope to
+    disclose and no clamp to hold a state down.
 
     `correlate_except` rather than SQLAlchemy's automatic correlation, and what
     it buys is stated as narrowly as it is measured. This predicate takes the
-    object column as an argument, so its two tables have to be resolved inside
-    the subquery whatever the enclosing statement's `FROM` happens to hold.
-    Without it SQLAlchemy correlates `source_objects` to an enclosing statement
-    that selects from it, and the condition `source_objects.source_object_id ==
-    source_object_id` then constrains the *enclosing* row instead of looking the
-    argument up — the predicate stops answering about its argument. For
-    `match_statement`'s statement in particular the two forms happen to agree,
-    because it joins `source_objects` on exactly that equality, so no result
-    there can distinguish them; the difference is real for any other enclosing
-    statement, and
+    object column as an argument, so its tables have to be resolved inside the
+    subquery whatever the enclosing statement's `FROM` happens to hold. Without
+    it SQLAlchemy correlates `source_objects` — or `extractions`, through the
+    column it is handed — to an enclosing statement that selects from the same
+    table, and the condition then constrains the *enclosing* row instead of
+    looking the argument up, so the predicate stops answering about its argument.
+    For `match_statement`'s statement in particular the two forms happen to
+    agree, because it joins `source_objects` on exactly that equality, so no
+    result there can distinguish them; the difference is real for any other
+    enclosing statement, and
     `test_the_authorization_predicate_answers_about_its_argument_and_not_the_enclosing_row`
     measures it against one.
     """
@@ -281,15 +271,13 @@ def authorized_object(
     return (
         select(literal(1))
         .where(
-            enrollments.c.enrollment_id == enrollment_id,
-            source_objects.c.source_object_id == source_object_id,
+            enrollment_objects.c.enrollment_id == enrollment_id,
+            enrollment_objects.c.source_object_id == source_object_id,
+            enrollments.c.enrollment_id == enrollment_objects.c.enrollment_id,
+            source_objects.c.source_object_id == enrollment_objects.c.source_object_id,
             source_objects.c.source_id == enrollments.c.source_id,
-            or_(
-                enrollments.c.root_object_id.is_not(None),
-                source_object_id == any_(enrollments.c.object_ids),
-            ),
         )
-        .correlate_except(enrollments, source_objects)
+        .correlate_except(enrollment_objects, enrollments, source_objects)
         .exists()
     )
 
@@ -470,10 +458,14 @@ def _refuse_an_unauthorized_object(
     """Raise unless `enrollment_id` authorizes `source_object_id`.
 
     One round trip before the write, which is the price of the state being
-    impossible rather than merely unreported. The alternative — a foreign key or
-    a check constraint — cannot be written: the authorized set for the named
-    selector is an array column on another table, and PostgreSQL has no
-    constraint that reaches it.
+    impossible rather than merely unreported. The alternative — a foreign key
+    from `extractions` to `enrollment_objects` — would need `(enrollment_id,
+    source_object_id)` to reference that table's composite primary key, and it
+    would make an outcome undeletable-in-place rather than refused: the
+    constraint fires at insert with a driver message rather than with the typed
+    refusal a caller persisting a batch has to act on, and `quarantine_records`
+    would need the same pair for the same reason. It is one statement here
+    against two constraints and a translation there.
     """
     authorized = connection.execute(
         select(authorized_object(literal(source_object_id, Text), enrollment_id=enrollment_id))
@@ -529,8 +521,8 @@ def record_outcome(
 
     Raises `UnauthorizedObjectError` for an object the enrollment does not
     authorize, before anything is written. The check is `authorized_object`'s,
-    so an enrollment that named its objects admits only those; one that named a
-    root has no stored object set and is restricted by its source alone.
+    so an enrollment admits exactly the objects its enumeration recorded —
+    whichever selector it named.
 
     Raises it again, naming the content type rather than the object, for an
     *extracted* outcome whose media type the enrollment's allowlist does not
@@ -640,10 +632,9 @@ def quarantine_object(
 
     Raises `UnauthorizedObjectError` for an object outside what the enrollment
     authorizes, and identifier syntax is no longer the whole of what is checked.
-    A quarantine for an object the enrollment never named used to be storable,
-    and the row it left was counted as coverage of that enrollment's scope. For
-    an enrollment that named a root there is no stored object set to check
-    against, so only its source is checked; `authorized_object` records why.
+    A quarantine for an object the enrollment never held used to be storable, and
+    the row it left was counted as coverage of that enrollment's scope. The check
+    is `authorized_object`'s and applies to both selectors alike.
 
     The object is the only dimension checked here, and that is stated rather than
     left implied. A quarantine carries no media type — this function has no such
@@ -737,7 +728,6 @@ def coverage_for(
     enrollment_id: str,
     *,
     observed_at: datetime,
-    eligible: int | None,
     queued: int = 0,
     unavailable: int = 0,
     snapshot: SnapshotState = SnapshotState.CURRENT,
@@ -745,13 +735,11 @@ def coverage_for(
     """Report coverage of `enrollment_id` for the snapshot `observed_at` names.
 
     Outcomes are counted for the whole enrollment and for nothing the enrollment
-    does not authorize. That is not the same as "nothing beyond it", and the
-    difference is the root selector: `authorized_object` restricts a root-selector
-    enrollment to its source and no further, so an object of that source outside
-    the root is authorized, and its outcomes are counted here. The counts are then
-    of a scope wider than the enrollment's root. `authorized_object` records why
-    that cannot be narrowed with what the schema stores and what would close it;
-    `persistence.search` discloses it to a caller.
+    does not authorize, and that now *is* the same as "nothing beyond it".
+    `authorized_object` is membership of `enrollment_objects`, which the
+    enumeration wrote for a root selector exactly as for a named one, so an
+    object of the same source outside the root is not authorized and its outcomes
+    are not counted. The scope these counts describe is the enrollment's scope.
 
     "For the enrollment" is `authorized_object` and not `enrollment_id` alone:
     an outcome stored against this enrollment for an object it does not
@@ -819,23 +807,29 @@ def coverage_for(
     this can afford; the reverse would be a false claim that the object is
     covered.
 
-    `eligible` is the enumerated total, or `None` from a caller that has no
-    enumeration to quote. `None` is not a default and not a convenience: it is
-    the caller stating that the denominator was never measured, and the total is
-    then the objects this schema can account for — the outcomes counted here plus
-    whatever queued and unavailable work the caller declared. A caller passing
-    `None` gets a total it must not present as a measured scope; the whole-scope
-    coverage states are the claim it has to withhold, because a denominator taken
-    from the numerator divides out to all of it whichever outcome dominates.
+    **The denominator is read, not stated.** `eligible` is
+    `enrolled_object_count` — `count(*)` over this enrollment's rows in
+    `enrollment_objects` — taken on the caller's own connection, from the same
+    schema, beside the three numerators. No caller supplies it and no caller can:
+    the parameter was removed rather than defaulted, because a `None` that used
+    to mean "nobody measured this" and now meant "read it yourself" would have
+    changed what every existing call asserts without changing a call site.
 
-    Raises `ValueError` — through `CoverageCounts` — when the counts do not fit
-    inside an `eligible` the caller supplied. That is the right failure: a scope
-    smaller than what was processed within it means the caller's denominator is
-    wrong, and reporting coverage from it would be a number that cannot be true.
-    It cannot arise from `None`, which is derived to fit exactly.
+    Every count here is restricted by `authorized_object`, which is membership of
+    the very rows this total counts, so `accounted` cannot exceed `eligible` and
+    the arithmetic guard in `CoverageCounts` cannot be tripped by the outcomes.
+    It can still be tripped by `queued` and `unavailable`, which remain the
+    caller's to declare, and the failure is the right one: work claimed against a
+    scope smaller than it is a number that cannot be true, and raising is better
+    than reporting it.
     """
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
     moment = ensure_utc(observed_at)
+    # The one denominator, read where the numerators are read. It is
+    # `persistence.enrollment`'s function rather than a fourth `count(*)` written
+    # out here, because two statements over `enrollment_objects` that had to
+    # agree would be the divergence this package keeps being blocked for.
+    eligible = enrolled_object_count(connection, enrollment_id)
 
     quarantined = connection.execute(
         select(func.count(func.distinct(quarantine_records.c.source_object_id))).where(
@@ -873,15 +867,6 @@ def coverage_for(
             )
         )
     )
-
-    if eligible is None:
-        # The caller has no enumeration, so the total is what is accounted for
-        # and nothing is invented on top of it. `queued` and `unavailable` are
-        # included because they are objects the caller already knows about:
-        # leaving them out would build a total smaller than the counts beside it
-        # and raise from `CoverageCounts`, which is the crash this branch exists
-        # to remove rather than relocate.
-        eligible = int(processed) + int(quarantined) + int(unsupported) + unavailable + queued
 
     return CoverageCounts(
         observed_at=moment,

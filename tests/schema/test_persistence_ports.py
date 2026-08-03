@@ -31,7 +31,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
-from tests.conftest import DEFAULT_LIMITS, FakeProviders, RecordingAudit, build_provider
+from tests.conftest import DEFAULT_LIMITS, RecordingAudit
 
 from my_pa.application.commands import ListSources
 from my_pa.application.service import ApplicationService
@@ -51,7 +51,7 @@ from my_pa.domain.source.enrollment import EnrollmentRequest, EnrollmentScope
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind, issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
-from my_pa.infrastructure.persistence.enrollment import accept_enrollment
+from my_pa.infrastructure.persistence.enrollment import accept_enrollment, record_scope
 from my_pa.infrastructure.persistence.extraction import (
     quarantine_object,
     record_limitation,
@@ -118,9 +118,16 @@ def engine(disposable_database: str) -> Iterator[Engine]:
 
 
 class Corpus:
-    """One source, three observed objects, and one enrollment naming them."""
+    """One source, three observed objects, and one enrollment naming them.
 
-    def __init__(self, engine: Engine, key: str) -> None:
+    `native_root` is a parameter because the source lookup is now driven by the
+    stored row: a request that reaches a provider builds one over exactly this
+    path, so a test that needs the provider to work has to register a directory
+    that exists. The default stays the synthetic locator, which is right for
+    every test here that never leaves persistence.
+    """
+
+    def __init__(self, engine: Engine, key: str, native_root: str | None = None) -> None:
         self.engine = engine
         self.principal_id = issue_identifier(IdKind.PRINCIPAL)
         with engine.begin() as connection:
@@ -129,7 +136,7 @@ class Corpus:
                 provider_kind=SourceProviderKind.FIXTURE,
                 label="Synthetic corpus",
                 classification=Classification.SYNTHETIC_TEST,
-                native_root=f"{NATIVE_ROOT}/{key}",
+                native_root=f"{NATIVE_ROOT}/{key}" if native_root is None else native_root,
             )
             self.source_id = source.source_id
             self.objects = {
@@ -165,6 +172,15 @@ class Corpus:
                     max_bytes=1_000_000,
                 ),
             ).enrollment
+            # The enumerated object set: what every read restricts to, and the
+            # eligible total the coverage port reads for itself. `sources.enroll`
+            # writes it inside the accepting transaction, so a fixture that
+            # skipped it would build an enrollment authorizing nothing.
+            record_scope(
+                connection,
+                self.enrollment.enrollment_id,
+                [o.source_object_id for o in self.objects.values()],
+            )
 
     def object_id(self, name: str) -> str:
         return self.objects[name].source_object_id
@@ -248,9 +264,7 @@ def test_the_coverage_port_counts_what_the_extraction_writer_wrote(
     corpus = Corpus(engine, "coverage")
     work, _ = unit_of_work(engine)
     with work as opened:
-        before = opened.knowledge.coverage(
-            corpus.enrollment.enrollment_id, observed_at=WHEN, eligible=3
-        )
+        before = opened.knowledge.coverage(corpus.enrollment.enrollment_id, observed_at=WHEN)
     assert before.processed == 0
     assert before.state() is CoverageState.ELIGIBLE
 
@@ -259,9 +273,11 @@ def test_the_coverage_port_counts_what_the_extraction_writer_wrote(
 
     work, _ = unit_of_work(engine)
     with work as opened:
-        after = opened.knowledge.coverage(
-            corpus.enrollment.enrollment_id, observed_at=WHEN, eligible=3
-        )
+        after = opened.knowledge.coverage(corpus.enrollment.enrollment_id, observed_at=WHEN)
+    # Three objects were enumerated, so the denominator is three whichever
+    # outcomes exist. No caller states it and none can: the port has no
+    # `eligible` parameter to state it with.
+    assert after.eligible == 3
     assert after.processed == 1
     assert after.unsupported == 1
     assert after.state() is CoverageState.PARTIALLY_PROCESSED
@@ -396,16 +412,29 @@ def test_a_broken_read_becomes_a_port_failure_and_carries_no_statement(
 ) -> None:
     """An inconsistency is classified, and nothing of the statement escapes.
 
-    The failure induced here is the real one `coverage_for` can raise: a stated
-    denominator the stored rows do not fit inside. It is `RepositoryFailureError`
-    rather than an unavailability, because retrying reads the same rows and fails
-    the same way, and its message carries neither the schema nor the statement.
+    The failure induced here is the one `coverage_for` can still raise now that
+    it reads its own denominator: `queued` is the caller's, and work claimed
+    against a scope smaller than it is a number that cannot be true. Three
+    objects are enumerated and four are declared queued. It is
+    `RepositoryFailureError` rather than an unavailability, because retrying
+    reads the same rows and fails the same way, and its message carries neither
+    the schema nor the statement.
+
+    The control is the same call without the impossible declaration, in the same
+    test: it returns counts rather than raising, so the refusal is about the
+    arithmetic and not about the fixture being unreadable.
     """
     corpus = Corpus(engine, "broken")
     corpus.extract("notes", b"# Notes\n\ntext\n", "text/markdown")
     work, _ = unit_of_work(engine)
+    with work as opened:
+        honest = opened.knowledge.coverage(corpus.enrollment.enrollment_id, observed_at=WHEN)
+    assert honest.eligible == 3
+    assert honest.processed == 1
+
+    work, _ = unit_of_work(engine)
     with work as opened, pytest.raises(RepositoryFailureError) as caught:
-        opened.knowledge.coverage(corpus.enrollment.enrollment_id, observed_at=WHEN, eligible=0)
+        opened.knowledge.coverage(corpus.enrollment.enrollment_id, observed_at=WHEN, queued=4)
     assert "knowledge" not in str(caught.value)
     assert "SELECT" not in str(caught.value)
 
@@ -423,15 +452,13 @@ def test_the_application_discloses_coverage_read_from_the_database(
     root.mkdir()
     (root / "notes.md").write_bytes(b"# Notes\n\nquarterly revenue\n")
 
-    corpus = Corpus(engine, "envelope")
-    provider = build_provider(root, corpus.source_id)
+    corpus = Corpus(engine, "envelope", native_root=str(root))
     principal = Principal(
         principal_id=corpus.principal_id, kind=PrincipalKind.OPERATOR, authenticated=True
     )
     audit = RecordingAudit()
     service = ApplicationService(
         unit_of_work=lambda: SqlAlchemyUnitOfWork(engine, audit=audit),
-        providers=FakeProviders({corpus.source_id: provider}),
         limits=DEFAULT_LIMITS,
     )
     from tests.conftest import metadata_for

@@ -418,7 +418,16 @@ def test_the_stdio_transport_serves_a_real_child_process() -> None:
     # And the operator's notice was on standard error, where it cannot corrupt
     # the stream the client is parsing.
     assert b"serving     mcp on stdio" in errors
-    assert b"no source provider is configured" in errors
+    # Pinned to the whole sentence, not a fragment of it. The notice is printed
+    # unconditionally and reads no store, so the only thing keeping it true is
+    # that it states a condition instead of asserting an absence; a substring
+    # match would have passed against the superseded wording, which asserted
+    # that no source provider was configured at all.
+    assert (
+        b"notice      sources.list, sources.metadata and sources.fetch answer 'unavailable' "
+        b"for every source no operator has registered; registration names the source's root "
+        b"by exact path, and this process configures none"
+    ) in errors
 
 
 def test_the_composition_root_offers_no_network_option() -> None:

@@ -34,7 +34,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
-from tests.conftest import DEFAULT_LIMITS, FakeProviders, build_provider
+from tests.conftest import DEFAULT_LIMITS
 
 from my_pa.application.commands import (
     EnrollSource,
@@ -58,6 +58,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.registry import register_source
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -188,8 +189,15 @@ def audited(engine: Engine, planted_root: Path) -> list[dict[str, object]]:
             native_root=str(planted_root),
         )
 
-    provider = build_provider(planted_root, source.source_id)
-    children = {child.media_type: child for child in provider.list_children()}
+    # The provider comes from the registered row, through the same lookup a
+    # request uses, so the identifiers below are the persisted ones. A provider
+    # built here would mint its own, and `record_scope` refuses an identifier
+    # `knowledge.source_objects` has never seen — which would have made the
+    # enrollment fail rather than the redaction.
+    with engine.begin() as connection:
+        registered = RegisteredSourceProviders(connection).for_source(source.source_id)
+        assert registered is not None, "the registered source has no adapter"
+        children = {child.media_type: child for child in registered.list_children()}
     markdown = children["text/markdown"]
 
     sink = SqlAlchemyAuditSink(engine)
@@ -199,7 +207,6 @@ def audited(engine: Engine, planted_root: Path) -> list[dict[str, object]]:
 
     service = ApplicationService(
         unit_of_work=unit_of_work,
-        providers=FakeProviders({source.source_id: provider}),
         limits=DEFAULT_LIMITS,
         clock=lambda: WHEN,
     )

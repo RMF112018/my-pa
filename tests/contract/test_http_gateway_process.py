@@ -75,9 +75,11 @@ class HeldService(ApplicationService):
     """
 
     def __init__(self, world: World) -> None:
+        # `ApplicationService` takes no `SourceProviders`: the lookup comes from
+        # the unit of work, so the adapters go into the `World` the fake reads.
+        world.providers = FakeProviders({})
         super().__init__(
             unit_of_work=lambda: FakeUnitOfWork(world),
-            providers=FakeProviders({}),
             limits=DEFAULT_LIMITS,
             clock=lambda: WHEN,
         )
@@ -494,7 +496,13 @@ def test_the_gateway_process_starts_serves_and_exits_by_its_signal(tmp_path: Pat
 
     assert process.returncode == -signal.SIGTERM, f"exit {process.returncode}: {output}"
     assert f"serving     http://127.0.0.1:{port}" in output
-    assert "no source provider is configured" in output
+    # Pinned to the whole sentence, not a fragment of it; see the matching
+    # assertion in `tests/contract/test_mcp_transport.py` for why.
+    assert (
+        "notice      sources.list, sources.metadata and sources.fetch answer 'unavailable' "
+        "for every source no operator has registered; registration names the source's root "
+        "by exact path, and this process configures none"
+    ) in output
     # Nothing per-request was written: the process prints two lines and logs none.
     assert "capabilities.get" not in output
     assert "Traceback" not in output

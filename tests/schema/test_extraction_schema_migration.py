@@ -53,13 +53,15 @@ from my_pa.domain.source.enrollment import EnrollmentRequest, EnrollmentScope
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind, issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
-from my_pa.infrastructure.persistence.enrollment import accept_enrollment
+from my_pa.infrastructure.persistence.enrollment import accept_enrollment, record_scope
 from my_pa.infrastructure.persistence.extraction import (
+    UnauthorizedObjectError,
     coverage_for,
     quarantine_object,
     record_limitation,
     record_outcome,
 )
+from my_pa.infrastructure.persistence.knowledge import pending_objects
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
 from my_pa.infrastructure.persistence.tables import METADATA
 
@@ -68,8 +70,8 @@ ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_SCHEMA = "knowledge"
 
 #: Restated, not imported. The knowledge revision's five, this revision's three,
-#: and the audit revision's one, each against the revision that must create them
-#: and no other.
+#: the audit revision's one, and the enrollment-objects revision's one, each
+#: against the revision that must create them and no other.
 KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "7e5a1fb93d62": frozenset(
         {
@@ -88,6 +90,7 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
         }
     ),
     "9c6b4a18ed72": frozenset({"audit_events"}),
+    "af3d35efb9c0": frozenset({"enrollment_objects"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare
@@ -496,12 +499,89 @@ def _enrolled(connection: Connection, *, also_named: int = 0) -> Enrolled:
             max_bytes=4096,
         ),
     )
+    # The enumerated object set: what `authorized_object` tests membership of and
+    # what `coverage_for` counts for its denominator. `sources.enroll` writes it
+    # inside the accepting transaction, so an enrollment built without one here
+    # would authorize nothing and every assertion below would be about that.
+    record_scope(
+        connection,
+        accepted.enrollment.enrollment_id,
+        [observed.source_object_id, *(other.source_object_id for other in others)],
+    )
     return Enrolled(
         source_id=source.source_id,
         enrollment_id=accepted.enrollment.enrollment_id,
         source_object_id=observed.source_object_id,
         version_id=observed.version_id,
         also_named=tuple((other.source_object_id, other.version_id) for other in others),
+    )
+
+
+def _enrolled_under_a_root(connection: Connection) -> Enrolled:
+    """An enrollment that names a *root*, with one object under it and one beside it.
+
+    The shape the containment gap lived in. Both objects belong to the same
+    source, so the source half of `authorized_object` cannot account for a
+    refusal and only membership of the enumerated set can — the single-condition
+    variation this test needs. `record_scope` records only the object under the
+    root, which is what the walk would have found.
+    """
+    source = register_source(
+        connection,
+        provider_kind=SourceProviderKind.FIXTURE,
+        label="Rooted corpus",
+        classification=Classification.SYNTHETIC_TEST,
+        native_root=f"{NATIVE_ROOT}/rooted",
+    )
+    root = observe_object(
+        connection,
+        source_id=source.source_id,
+        native_locator=f"{NATIVE_ROOT}/rooted/tree",
+        kind=ObjectKind.CONTAINER,
+        fingerprint="fingerprint-rooted-tree",
+        modified_at=OBSERVED_AT,
+    )
+    inside = observe_object(
+        connection,
+        source_id=source.source_id,
+        native_locator=f"{NATIVE_ROOT}/rooted/tree/inside.md",
+        kind=ObjectKind.FILE,
+        fingerprint="fingerprint-rooted-inside",
+        modified_at=OBSERVED_AT,
+        media_type="text/markdown",
+        size_bytes=len(SYNTHETIC_MARKDOWN),
+    )
+    beside = observe_object(
+        connection,
+        source_id=source.source_id,
+        native_locator=f"{NATIVE_ROOT}/rooted/sibling.md",
+        kind=ObjectKind.FILE,
+        fingerprint="fingerprint-rooted-beside",
+        modified_at=OBSERVED_AT,
+        media_type="text/markdown",
+        size_bytes=len(SYNTHETIC_MARKDOWN),
+    )
+    accepted = accept_enrollment(
+        connection,
+        EnrollmentRequest(
+            source_id=source.source_id,
+            principal_id=issue_identifier(IdKind.PRINCIPAL),
+            purpose=Purpose.BOUNDED_ENROLLMENT,
+            scope=EnrollmentScope(root_object_id=root.source_object_id, depth=0),
+            media_types=("text/markdown",),
+            policy_version="mcv-1",
+            idempotency_key="enroll-extraction-rooted",
+            max_items=10,
+            max_bytes=4096,
+        ),
+    )
+    record_scope(connection, accepted.enrollment.enrollment_id, [inside.source_object_id])
+    return Enrolled(
+        source_id=source.source_id,
+        enrollment_id=accepted.enrollment.enrollment_id,
+        source_object_id=inside.source_object_id,
+        version_id=inside.version_id,
+        also_named=((beside.source_object_id, beside.version_id),),
     )
 
 
@@ -795,7 +875,6 @@ def test_coverage_reports_the_enrollment_the_snapshot_and_what_was_left_out(
             connection,
             enrolled.enrollment_id,
             observed_at=OBSERVED_AT,
-            eligible=2,
             snapshot=SnapshotState.CURRENT,
         )
 
@@ -829,12 +908,8 @@ def test_coverage_reports_only_the_limitations_of_the_snapshot_it_was_asked_for(
                 affected_count=affected,
             )
 
-        first_pass = coverage_for(
-            connection, enrolled.enrollment_id, observed_at=OBSERVED_AT, eligible=1
-        )
-        second_pass = coverage_for(
-            connection, enrolled.enrollment_id, observed_at=later, eligible=1
-        )
+        first_pass = coverage_for(connection, enrolled.enrollment_id, observed_at=OBSERVED_AT)
+        second_pass = coverage_for(connection, enrolled.enrollment_id, observed_at=later)
 
     assert first_pass.disclosed_limitations == ("objects_omitted_containment_unproven:1",)
     assert second_pass.disclosed_limitations == ("objects_omitted_containment_unproven:4",)
@@ -844,46 +919,200 @@ def test_coverage_reports_only_the_limitations_of_the_snapshot_it_was_asked_for(
 
 
 @pytest.mark.database
+def test_the_denominator_is_the_enumerated_set_and_not_the_outcomes(
+    extraction_engine: Engine,
+) -> None:
+    """`coverage_for` reads its own eligible total, and the number proves which.
+
+    Until WP-4B3 the denominator was a caller's argument, and a caller with no
+    enumeration passed `None` and got the outcomes back as their own total —
+    which every whole-scope state then divided out of. Three objects are
+    enumerated here and one reaches an outcome, so `eligible` is **3**: a number
+    no arithmetic over the counts beside it produces, which is what makes this an
+    assertion about `knowledge.enrollment_objects` rather than about the counts.
+
+    Asserted twice over the same rows, before and after an outcome lands, because
+    a denominator that moved with the numerator is exactly the defect: the total
+    is the same 3 both times while `processed` goes from 0 to 1.
+    """
+    with extraction_engine.begin() as connection:
+        enrolled = _enrolled(connection, also_named=2)
+
+        empty = coverage_for(connection, enrolled.enrollment_id, observed_at=OBSERVED_AT)
+        record_outcome(connection, enrollment_id=enrolled.enrollment_id, outcome=_outcome(enrolled))
+        one = coverage_for(connection, enrolled.enrollment_id, observed_at=OBSERVED_AT)
+
+    assert (empty.eligible, empty.processed) == (3, 0)
+    assert empty.state() is CoverageState.ELIGIBLE
+    assert (one.eligible, one.processed) == (3, 1)
+    assert one.state() is CoverageState.PARTIALLY_PROCESSED
+
+
+@pytest.mark.database
 @pytest.mark.parametrize(
     ("queued", "unavailable"),
-    [(2, 0), (0, 2), (2, 3)],
+    [(4, 0), (0, 4), (2, 3)],
     ids=["queued", "unavailable", "both"],
 )
-def test_a_derived_total_includes_the_queued_and_unavailable_work_the_caller_declared(
+def test_work_declared_beyond_the_enumerated_scope_is_refused(
     extraction_engine: Engine, queued: int, unavailable: int
 ) -> None:
-    """`eligible=None` derives the total from *everything* the caller knows about.
+    """The two terms a caller still contributes, and the failure they can cause.
 
-    A caller with no enumeration still knows about work it has queued and work it
-    found unavailable — those are its own counts, passed in beside the request.
-    Deriving the total from the stored outcomes alone would build a denominator
-    smaller than the counts standing next to it, and `CoverageCounts` refuses
-    that: the read would raise `ValueError` rather than return coverage, which is
-    the crash the derived total exists to remove and not to relocate.
+    `queued` and `unavailable` are the caller's: work in flight and work it could
+    not reach are facts about the job plane and the provider, not about the
+    stored scope, so they stay parameters. What they can no longer do is enlarge
+    the denominator to fit themselves. Declaring more outstanding work than the
+    enumerated set holds is a claim that cannot be true, and `CoverageCounts`
+    refuses it rather than reporting a coverage figure derived from it.
 
     Parametrized over each term separately as well as together, because one term
     present and the other missing is exactly the shape that passes a test written
     only for the sum.
+
+    The control is in the same test: the same call with the declaration inside
+    the scope returns counts, so the refusal is about the arithmetic and not
+    about the fixture.
     """
     with extraction_engine.begin() as connection:
-        enrolled = _enrolled(connection)
+        enrolled = _enrolled(connection, also_named=2)
         record_outcome(connection, enrollment_id=enrolled.enrollment_id, outcome=_outcome(enrolled))
 
-        derived = coverage_for(
-            connection,
-            enrolled.enrollment_id,
-            observed_at=OBSERVED_AT,
-            eligible=None,
-            queued=queued,
-            unavailable=unavailable,
+        honest = coverage_for(
+            connection, enrolled.enrollment_id, observed_at=OBSERVED_AT, queued=1, unavailable=1
         )
+        with pytest.raises(ValueError, match="cannot exceed the eligible count"):
+            coverage_for(
+                connection,
+                enrolled.enrollment_id,
+                observed_at=OBSERVED_AT,
+                queued=queued,
+                unavailable=unavailable,
+            )
 
-    assert derived.processed == 1
-    assert derived.eligible == 1 + queued + unavailable
-    assert derived.accounted + derived.queued == derived.eligible
-    # Never a whole-scope claim: work the caller declared outstanding is work
-    # this enrollment has not accounted for.
-    assert derived.state() is CoverageState.PARTIALLY_PROCESSED
+    assert honest.eligible == 3
+    assert honest.accounted + honest.queued == 3
+
+
+@pytest.mark.database
+def test_pending_objects_excludes_both_kinds_of_outcome(extraction_engine: Engine) -> None:
+    """The executor's work list, and the one idempotency that is a predicate.
+
+    Three objects are enumerated. One is extracted, one is quarantined, and one
+    has reached nothing — so exactly one is pending, and the two exclusions are
+    separated by construction rather than asserted together. Dropping the
+    `extractions` exclusion makes the answer two; dropping the
+    `quarantine_records` exclusion makes it two as well, and that is the one that
+    matters: `quarantine_records` is append-only by design, so a second pass over
+    a quarantined object writes a **second** quarantine. There is no constraint
+    to lean on and this predicate is the whole of the protection.
+
+    Asserted as an exact tuple rather than by length, so a right count of the
+    wrong objects fails, and the empty case sits beside it as the second
+    assertion: once the last object reaches an outcome the list is empty, which
+    is what makes the non-empty answer above mean "this one and no other" rather
+    than "the query returned something".
+    """
+    with extraction_engine.begin() as connection:
+        enrolled = _enrolled(connection, also_named=2)
+        quarantined_id, quarantined_version = enrolled.also_named[0]
+        untouched_id, untouched_version = enrolled.also_named[1]
+
+        record_outcome(connection, enrollment_id=enrolled.enrollment_id, outcome=_outcome(enrolled))
+        quarantine_object(
+            connection,
+            enrollment_id=enrolled.enrollment_id,
+            source_object_id=quarantined_id,
+            version_id=quarantined_version,
+            reason=QuarantineReason.MALFORMED_INPUT,
+        )
+        pending = pending_objects(connection, enrolled.enrollment_id)
+
+        record_outcome(
+            connection,
+            enrollment_id=enrolled.enrollment_id,
+            outcome=_outcome(enrolled, source_object_id=untouched_id, version_id=untouched_version),
+        )
+        finished = pending_objects(connection, enrolled.enrollment_id)
+
+    assert pending == (untouched_id,)
+    assert finished == ()
+
+
+@pytest.mark.database
+def test_pending_objects_offers_only_what_the_enumeration_recorded(
+    extraction_engine: Engine,
+) -> None:
+    """A work list, not a diff: an object nothing enumerated is not work.
+
+    An object of the enrollment's own source that the enumeration did not record
+    is not offered, because `authorized_object` would refuse the outcome the
+    executor then tried to write — and a work list that handed out objects the
+    writer refuses is the disagreement `docs/specs` section 12 calls a broken
+    store, arriving one layer earlier.
+
+    The control is in the same test: the enumerated object *is* offered, so the
+    absence of the other one is about membership rather than about the read
+    returning nothing.
+    """
+    with extraction_engine.begin() as connection:
+        rooted = _enrolled_under_a_root(connection)
+        outside_id, _outside_version = rooted.also_named[0]
+        pending = pending_objects(connection, rooted.enrollment_id)
+
+    assert pending == (rooted.source_object_id,)
+    assert outside_id not in pending
+
+
+@pytest.mark.database
+def test_an_object_of_the_same_source_outside_the_enumerated_set_is_not_authorized(
+    extraction_engine: Engine,
+) -> None:
+    """Containment, for a **root** selector, which is where it used to be absent.
+
+    `authorized_object` restricted a root-selector enrollment to its `source_id`
+    and no further, because nothing persisted the objects under a root: a sibling
+    of the root was writable under the enrollment, counted by `coverage_for`, and
+    returned by a search. `knowledge.enrollment_objects` is the fact that closes
+    it, and the membership test is now identical for both selectors.
+
+    Three assertions, because the boundary has three faces and a fix applied to
+    one is this campaign's recurring defect: the write path refuses, the
+    quarantine path refuses, and the count excludes. The control is the enrolled
+    object in the same test, which passes all three — a refusal that refused
+    everything would prove nothing.
+    """
+    with extraction_engine.begin() as connection:
+        rooted = _enrolled_under_a_root(connection)
+
+        # The control: an object the enumeration recorded is writable and counted.
+        record_outcome(
+            connection,
+            enrollment_id=rooted.enrollment_id,
+            outcome=_outcome(rooted),
+        )
+        counted = coverage_for(connection, rooted.enrollment_id, observed_at=OBSERVED_AT)
+        assert counted.eligible == 1
+        assert counted.processed == 1
+
+        outside_id, outside_version = rooted.also_named[0]
+        with pytest.raises(UnauthorizedObjectError):
+            record_outcome(
+                connection,
+                enrollment_id=rooted.enrollment_id,
+                outcome=_outcome(rooted, source_object_id=outside_id, version_id=outside_version),
+            )
+        with pytest.raises(UnauthorizedObjectError):
+            quarantine_object(
+                connection,
+                enrollment_id=rooted.enrollment_id,
+                source_object_id=outside_id,
+                version_id=outside_version,
+                reason=QuarantineReason.MALFORMED_INPUT,
+            )
+
+    # The denominator did not grow to admit the object the boundary refused.
+    assert counted.eligible == 1
 
 
 @pytest.mark.database

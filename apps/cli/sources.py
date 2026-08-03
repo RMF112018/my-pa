@@ -53,15 +53,14 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine
 
 from my_pa.bootstrap.settings import load_settings
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind
 from my_pa.infrastructure.database.engine import create_database_engine
-from my_pa.infrastructure.persistence.registry import observe_object, register_source
-from my_pa.infrastructure.persistence.tables import sources
+from my_pa.infrastructure.persistence.registry import all_sources, observe_object, register_source
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
 #: What a refusal is worth to a shell. `0` and `1` and nothing finer: a caller
@@ -148,29 +147,36 @@ def _register(args: argparse.Namespace) -> int:
 def _list(args: argparse.Namespace) -> int:
     """Print one line per configured source, and no root.
 
-    `native_root` is a column of the row this reads and is deliberately not
-    selected: `domain.source.registry.ConfiguredSource` has no locator field for
-    the same reason, and a listing that carried one would put every configured
-    path into any terminal, shell history, or evidence file that ran this.
+    `native_root` is a column of the rows behind this and is deliberately not
+    reachable from here: `all_sources` returns
+    `domain.source.registry.ConfiguredSource` values, which have no locator
+    field, so a listing that carried one would take a domain change to write. A
+    listing that did carry one would put every configured path into any
+    terminal, shell history, or evidence file that ran this.
+
+    It reads through `all_sources` rather than selecting from the `sources`
+    table here, and the difference is not stylistic. Importing the table
+    declaration into an operator command admits a **write** surface in order to
+    perform a read — `insert()` and `update()` are as reachable through a
+    `Table` as `select()` is — and
+    `tests/architecture/test_operator_commands_are_not_capabilities.py` would
+    have had to widen its permitted-name allowlist by exactly that to let it
+    through.
     """
     engine = _engine()
     try:
         with engine.connect() as connection:
-            rows = connection.execute(
-                select(
-                    sources.c.source_id,
-                    sources.c.provider_kind,
-                    sources.c.classification,
-                    sources.c.label,
-                    sources.c.configured_at,
-                ).order_by(sources.c.configured_at, sources.c.source_id)
-            ).all()
+            configured = all_sources(connection)
     finally:
         engine.dispose()
 
-    for row in rows:
-        print(f"{row[0]}  {row[1]:<8s}  {row[2]:<18s}  {row[4].isoformat()}  {row[3]}")
-    print(f"sources     {len(rows)}")
+    for source in configured:
+        print(
+            f"{source.source_id}  {source.provider_kind.value:<8s}  "
+            f"{source.classification.value:<18s}  "
+            f"{source.configured_at.isoformat()}  {source.label}"
+        )
+    print(f"sources     {len(configured)}")
     return EXIT_OK
 
 

@@ -47,15 +47,19 @@ FORBIDDEN_PACKAGES = ("my_pa.application", "my_pa.adapters")
 
 #: Every name rule 2 permits the command to import from persistence.
 #:
-#: `sources` is the table declaration, and it is here because the command lists
-#: the sources it registered and `infrastructure.persistence.registry` has no
-#: reader for the whole set — `get_source` answers about one. Naming the table
-#: rather than a reader widens what this rule admits by exactly one write
-#: surface, and that one is `knowledge.sources`, which `register_source` already
-#: writes. Nothing about an enrollment, a job, an extraction, or a quarantine is
-#: reachable through it.
+#: Four readers and writers, and **no table declaration**. This set briefly held
+#: `sources`, the `Table` object, because the command's listing selected from it
+#: directly and `infrastructure.persistence.registry` had no reader for the whole
+#: set — `get_source` answers about one. That was a documented workaround and it
+#: is now closed: a `Table` is a *write* surface, since `insert()` and `update()`
+#: reach through it exactly as `select()` does, so admitting one to let an
+#: operator command perform a read widened this rule by a write it never needed.
+#: `registry.all_sources` is the reader that replaced it, and this set is back to
+#: naming only functions whose own signatures decide what they may do. Nothing
+#: about an enrollment, a job, an extraction, or a quarantine is reachable
+#: through any of them.
 PERMITTED_PERSISTENCE_NAMES = frozenset(
-    {"register_source", "observe_object", "get_source", "sources"}
+    {"register_source", "observe_object", "get_source", "all_sources"}
 )
 
 #: The identifier rule 3 forbids anywhere in the file.

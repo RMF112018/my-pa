@@ -36,10 +36,15 @@ live database on 2026-08-01. [`docs/migration/00_MIGRATION_INDEX.md`](docs/migra
 owns the result record and the deliberate exclusions. The legacy SQLite source is
 retained read-only and is never mutated.
 
+Two entries stood here until WP-4B3 and are recorded rather than deleted, because
+both were true of every earlier commit and a reader of one of those commits
+should be able to find out when each stopped being true.
+
+- *"a source registered in production, and therefore anything for the gateway to read… nothing calls `register_source`."* `apps/cli/sources.py register` calls it, and `RegisteredSourceProviders` serves whichever roots the resulting `knowledge.sources` rows name. **`P00-OD-009` is untouched**: no root is configured anywhere in the tree, the command requires `--root` by exact path, and which roots are legitimate is still the operator's decision rather than a default.
+- *"an executor for the work the worker claims… there is no extraction executor wired to it."* `src/my_pa/infrastructure/jobs/extraction.py` is that executor, and `apps/worker.py` wires it. A claimed job now reads each enumerated object through its provider and records an extraction, an `unsupported` row, or a quarantine, one transaction per object.
+
 Not implemented. None of the following exists beyond a scaffold README:
 
-- a source registered in production, and therefore anything for the gateway to read. `sources.list`, `sources.metadata`, and `sources.fetch` answer `unavailable` for every source, and the gateway says so at startup: nothing calls `register_source`, and no provider root is authorized pending `P00-OD-009`;
-- an executor for the work the worker claims. `apps/worker.py` is a real process — it claims a lease, drives the job to a terminal state, and stops cleanly on a signal — but there is no extraction executor wired to it, so a claimed job is released as `unavailable` and, after its bounded attempts, fails. `apps/worker.py` states why;
 - user-authored capture, relationship identity and profiles, managed documents, GoodNotes ingestion, and Obsidian projection;
 - any frontend. The repository contains no JavaScript toolchain and no `package.json`.
 
@@ -47,9 +52,12 @@ Accordingly, `capabilities.get` reports every capability `available` and
 readiness `ready`, while PDF still reports `decision_gated` pending
 `P00-OD-003`. Both figures are derived from the application's own wiring rather
 than from a constant, and `ready` is a statement about the application and not
-about a deployment: a process now serves it over HTTP on loopback, and the slice
-still does not run end to end, because nothing registers a source for it to
-read. `tests/architecture/test_readme_state_claims.py` holds this paragraph to
+about a deployment: a process serves it over HTTP on loopback, and the slice now
+runs end to end over synthetic fixtures — an operator registers a source, an
+enrollment enumerates it, the worker extracts it, and `knowledge.read` returns
+one of its records with the identifier enumeration issued.
+`tests/end_to_end/test_vertical_slice.py` is that path, walked.
+`tests/architecture/test_readme_state_claims.py` holds this paragraph to
 the values the build actually produces.
 
 The current gap audit and implementation plan is [`docs/plans/mcv-completion-plan.md`](docs/plans/mcv-completion-plan.md).

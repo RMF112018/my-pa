@@ -114,7 +114,7 @@ src/my_pa/
 apps/                     # repository root, a sibling of `src/`
   gateway.py              # my-pa-gateway composition root: HTTP and MCP surfaces
   worker.py               # my-pa-worker composition root
-  cli/                    # operator commands: invoke.py and migration.py
+  cli/                    # invoke.py, and the operator commands migration.py and sources.py
 ```
 
 
@@ -131,9 +131,20 @@ A directory is not implementation authority. Only modules needed by the accepted
 vertical slice should be created. `adapters/mcp` and `adapters/cli` were named
 above by `D-23` before either existed; WP-4B2b built both, and the amendment
 here is that sentence catching up rather than a change of shape. `apps/cli/`
-now holds two programs — `migration.py` and `invoke.py` — and `apps/gateway.py`
-serves both surfaces section 5.10 gives it, HTTP under `run` and MCP under
-`mcp`. Every other reserved directory still holds a README and nothing else.
+now holds **three** programs — `migration.py`, `invoke.py`, and WP-4B3's
+`sources.py` — and `apps/gateway.py` serves both surfaces section 5.10 gives it,
+HTTP under `run` and MCP under `mcp`. Every other reserved directory still holds
+a README and nothing else.
+
+Two of the three are operator commands and one is a transport, and the split is
+the reason they sit together rather than a reason to separate them. `invoke.py`
+invokes one of the eight capabilities and therefore composes
+`bootstrap.gateway.build_gateway_runtime`, exactly as the served transports do,
+so it cannot differ from them in a limit, a clock, or a principal.
+`migration.py` and `sources.py` invoke none, compose their own engine, and reach
+`infrastructure` directly. `D-42` records why source registration is one of the
+second kind: the capability set is closed at eight by the canonical contract, and
+a ninth member is what an operator command must not become.
 
 
 ## 4. Dependency rule

@@ -1322,7 +1322,7 @@ capture_proposals = Table(
     # records that evidence failed without recording how.
     CheckConstraint(
         f"(state = '{ProposalState.INVALIDATED.value}') = (quarantine_reason IS NOT NULL)",
-        name="an_invalidated_proposal_records_its_reason_and_nothing_else_does",
+        name="an_invalidated_proposal_records_its_reason",
     ),
     CheckConstraint(
         "(accepted_record_type IS NULL) = (accepted_record_id IS NULL)",

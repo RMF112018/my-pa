@@ -62,7 +62,7 @@ outside this guard's coverage:
   `only_a_supported_media_type_is_extracted`, from `ExtractionStatus.EXTRACTED`;
 - `a_denial_records_its_reason_and_nothing_else_does`, from
   `AuditOutcome.DENIED`;
-- `an_invalidated_proposal_records_its_reason_and_nothing_else_does`, from
+- `an_invalidated_proposal_records_its_reason`, from
   `ProposalState.INVALIDATED` — the seventh, added by WP-7 and named here rather
   than left for a later sweep to find, because `D-86`'s second half is
   "implemented, not promised". It sits inside `2b7e9f4c1a83`, whose closed sets

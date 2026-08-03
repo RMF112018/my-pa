@@ -165,7 +165,8 @@ class ProposalQuarantineReason(StrEnum):
     #: The span's offsets fall outside the version's code-point length.
     SPAN_OUTSIDE_VERSION_TEXT = "span_outside_version_text"
     #: The span belongs to a different version than the proposal citing it —
-    #: the supersession case at `10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md:107`.
+    #: the supersession case at
+    #: `docs/specs/quick-capture/10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md:107`.
     SPAN_CITES_ANOTHER_VERSION = "span_cites_another_version"
 
 

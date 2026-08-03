@@ -70,8 +70,9 @@ ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_SCHEMA = "knowledge"
 
 #: Restated, not imported. The knowledge revision's five, this revision's three,
-#: the audit revision's one, and the enrollment-objects revision's one, each
-#: against the revision that must create them and no other.
+#: the audit revision's one, the enrollment-objects revision's one, the capture
+#: revision's five, and the proposal revision's seven, each against the revision
+#: that must create them and no other.
 KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "7e5a1fb93d62": frozenset(
         {
@@ -98,6 +99,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "capture_receipts",
             "capture_submissions",
             "capture_jobs",
+        }
+    ),
+    "2b7e9f4c1a83": frozenset(
+        {
+            "capture_processing_text",
+            "capture_stage_results",
+            "capture_spans",
+            "capture_proposals",
+            "capture_proposal_spans",
+            "capture_classifications",
+            "capture_entity_mentions",
         }
     ),
 }

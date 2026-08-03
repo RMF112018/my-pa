@@ -2,14 +2,14 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-twelve capabilities. There are two ways to prove that and only one of them stays
+thirteen capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
 **Structural: there is one normalisation, and all three call it.** A comparison
 of three snapshots proves that three implementations agreed on the day the
 snapshots were taken. What actually holds the property is that there is nothing
-to disagree: `RequestMetadata` and the twelve commands are constructed in exactly
+to disagree: `RequestMetadata` and the thirteen commands are constructed in exactly
 one module, `adapters/normalization.py`, and every transport reaches the
 application by handing that module a capability name and a document. The rules
 below check both halves by parsing — no transport builds a request value of its
@@ -26,7 +26,7 @@ way to see what a transport *built* rather than what it returned — and compare
 as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
-**And the answers, over all twelve capabilities and eight refusals.** Each
+**And the answers, over all thirteen capabilities and eight refusals.** Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
 `sources.enroll` alone would make the second and third callers idempotent
@@ -939,7 +939,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: twelve capabilities answered from an empty world prove little."""
+    """Guard the matrix: thirteen capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

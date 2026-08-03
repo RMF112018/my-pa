@@ -107,11 +107,14 @@ from my_pa.infrastructure.persistence.tables import (
     SCHEMA,
     capture_classifications,
     capture_entity_mentions,
+    capture_jobs,
     capture_processing_text,
     capture_proposal_spans,
     capture_proposals,
     capture_spans,
     capture_stage_results,
+    capture_versions,
+    captures,
 )
 
 revision: str = "2b7e9f4c1a83"
@@ -232,6 +235,18 @@ def _historical_wp7_tables() -> list[Table]:
     `capture_processing_text` — resolve inside the copy rather than back at the
     shared declaration.
 
+    **Three tables this revision does not create are copied in first**, and that
+    is not an oversight in the list above. Six of the seven reference
+    `capture_versions` and one references `capture_jobs`, and
+    `Table.to_metadata` resolves a foreign key inside the metadata it is copied
+    into: without them, emitting this revision raises `NoReferencedTableError`
+    before it reaches a server, which is how it was found — `--sql` offline mode
+    failed for every revision in the chain. They are copied so the references
+    resolve and are **not** returned, so `create_all` and `drop_all` are still
+    handed exactly the seven this revision owns and the guard still reads
+    exactly the thirteen closed sets this revision emits. `captures` comes with
+    them because `capture_versions` references it.
+
     The name is in `_EMISSION_CALLABLES` in
     `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`.
     Without that entry the guard's `_emitted` returns `None` for this revision
@@ -239,6 +254,8 @@ def _historical_wp7_tables() -> list[Table]:
     why the entry is part of this change rather than a follow-up.
     """
     frozen = MetaData(schema=SCHEMA)
+    for referenced in (captures, capture_versions, capture_jobs):
+        referenced.to_metadata(frozen)
     copies = [table.to_metadata(frozen) for table in _TABLES]
     for copy in copies:
         replacements = _FROZEN.get(copy.name, {})

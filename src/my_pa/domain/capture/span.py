@@ -7,7 +7,7 @@ name is used here, on the ruling `docs/plans/mcv-completion-plan.md:920` makes
 for state vocabularies — canonical over quick-capture where the two disagree.
 
 **Offsets are code points, and the basis is stored rather than assumed.**
-`10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md:82` fixes the scheme name
+`docs/specs/quick-capture/10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md:82` fixes the scheme name
 `unicode_code_point_v1`. Python string indexing is already code-point indexing,
 so `text[start:end]` *is* the quote — which is exactly why the basis has to be
 recorded: a later reader in another language, or a repair script written against
@@ -70,7 +70,8 @@ class OffsetBasis(StrEnum):
     """How a span's offsets are counted.
 
     One member, and it is the specification's own name rather than this
-    repository's (`10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md:82`). A second
+    repository's
+    (`docs/specs/quick-capture/10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md:82`). A second
     basis — UTF-8 bytes, UTF-16 units — is a different way of pointing at the
     same text, so the two could never be compared without knowing which was
     meant; recording the basis is what makes that knowable.

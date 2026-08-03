@@ -36,6 +36,14 @@ runbook now uses.
   not read at all: the plan says "answers exactly as head does" and the gateway
   runbook says "the same as head", and both are correct English about a
   comparison rather than aliases.
+- **The implicit-alias branch reads position, not grammar.** It cannot tell a
+  select list from a sentence, so a region that is prose *and* qualifies as a
+  revision-reading query would have an English clause ending in "… head,"
+  reported as an alias. No such region exists — measured, none across the
+  searched corpus — and the branch is shaped to need that comma precisely so
+  the prose already in the corpus stays out. The same branch reaches a *table*
+  alias (`FROM public.alembic_version head`), which names no column and so is
+  over-reach; it is kept, because the correction is the same word either way.
 - **It does not check that the query is right**, only that its column does not
   claim to be the head. A query reading the wrong table, or reading the right one
   and being transcribed wrongly, is invisible here.
@@ -77,7 +85,27 @@ STORED_REVISION = re.compile(r"alembic_version|\bversion_num\b", re.IGNORECASE)
 
 _SELECT = re.compile(r"\bselect\b", re.IGNORECASE)
 
-_ALIAS = re.compile(r"\bAS\s+(?P<name>\w+)", re.IGNORECASE)
+#: An alias, in the spellings PostgreSQL accepts for one. `AS name` was the only
+#: one this pattern read at first, so `AS "head"` — where the quotes are not
+#: `\w` — and a bare implicit `head` each produced a column literally named
+#: `head` that this rule passed. Both are widened into the pattern the rule
+#: already owns rather than carried as a known hole (`D-88`).
+#:
+#: **The implicit branch is positional, not an optional `AS`.** Making the
+#: keyword optional matches every word in the region, and the regions this rule
+#: reads are not all SQL: `apps/cli/health.py:126` qualifies as a
+#: revision-reading query while being English prose, because it names the table
+#: and the verb. Measured over all 14805 regions of the searched corpus, an
+#: optional-`AS` branch finds one such word — `head` in the prose of
+#: `tests/schema/test_head_round_trip.py`, a region one `SELECT` away from being
+#: read — and this branch finds none. So an implicit alias is required to sit
+#: where an alias sits: after something an expression can end with, and before
+#: the comma, the `FROM`, or the end of the select list.
+_ALIAS = re.compile(
+    r'\bAS\s+"?(?P<name>\w+)"?'
+    r'|(?<=[\w")])\s+"?(?P<implicit>\w+)"?\s*(?=,|\bFROM\b|$)',
+    re.IGNORECASE,
+)
 
 #: Names that assert the end of the chain rather than the state of a database.
 #: `revision` and `version_num` are the honest ones and are absent by design.
@@ -189,9 +217,9 @@ def head_aliases(text: str) -> list[str]:
         if not STORED_REVISION.search(statement):
             continue
         found.extend(
-            match.group(0)
+            match.group(0).strip()
             for match in _ALIAS.finditer(statement)
-            if match["name"].lower() in HEAD_NAMES
+            if (match["name"] or match["implicit"]).lower() in HEAD_NAMES
         )
     return found
 
@@ -232,6 +260,11 @@ def test_no_revision_reading_query_aliases_a_column_to_the_chain_head() -> None:
         ("SELECT version_num AS revision, pg_database_size('my_pa') AS size", False),
         ("SELECT capture_id AS head FROM knowledge.capture_versions", False),
         ("SELECT version_number AS head FROM knowledge.capture_versions", False),
+        ('SELECT (SELECT version_num FROM public.alembic_version) AS "head", 1 AS fks', True),
+        ("SELECT (SELECT version_num FROM public.alembic_version) head, 1 AS fks", True),
+        ('SELECT version_num AS "revision" FROM public.alembic_version', False),
+        ("SELECT av.version_num FROM public.alembic_version av", False),
+        ("SELECT version_num FROM public.alembic_version head", True),
     ],
     ids=[
         "the defect, in the shape it shipped in",
@@ -240,6 +273,11 @@ def test_no_revision_reading_query_aliases_a_column_to_the_chain_head() -> None:
         "the honest alias beside another alias",
         "a query reading something else is not this rule's business",
         "nor is `version_number`, which is a capture column",
+        "the quoted identifier, which `\\w` alone does not reach",
+        "the implicit alias, which has no `AS` to key on",
+        "quoting the honest alias does not make it a claim",
+        "an ordinary table alias is not every word in the region",
+        "a table aliased `head` is reached too, which is over-reach and named",
     ],
 )
 def test_the_rule_separates_a_head_claim_from_an_honest_alias(

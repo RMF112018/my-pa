@@ -35,6 +35,15 @@ class IdKind(StrEnum):
     SOURCE_OBJECT = "obj"
     VERSION = "ver"
     ENROLLMENT = "enr"
+    #: The capture plane. `CAPTURE_VERSION` is deliberately not `VERSION`, which
+    #: already denotes an observed *source object* version: one prefix for two
+    #: unrelated things would make an audit row or a stored reference ambiguous
+    #: about which plane it belongs to, and no later check could recover the
+    #: distinction.
+    CAPTURE = "cap"
+    CAPTURE_VERSION = "capver"
+    RECEIPT = "rcpt"
+    SUBMISSION = "sub"
     OPERATION = "op"
     KNOWLEDGE = "kn"
     AUDIT = "audit"

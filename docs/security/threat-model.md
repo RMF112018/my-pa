@@ -34,7 +34,7 @@ This document identifies risks and required controls. It does not accept residua
 ### In scope
 
 
-- Eight proposed `v1` read-only public capabilities and equivalent HTTP/MCP/CLI semantics.
+- Twelve `v1` public capabilities and equivalent HTTP/MCP/CLI semantics. Eight are read-only. The four `capture.*` capabilities write a **product-owned** record, which `ADR-003` clause 5 makes a third authority class: neither a source-system write nor a managed-document write, and it grants the read-only source-provider port no write method. "Read-only" therefore describes what this build does to *sources*, which is the property the rest of this document is about, and no longer describes the whole capability set.
 - Operator-only bounded enrollment.
 - Fixture source provider and constraints that later apply to a NAS provider.
 - Source list/metadata/fetch, text/Markdown extraction, decision-gated PDF extraction, quarantine, coverage, PostgreSQL FTS, knowledge search/read.

@@ -154,7 +154,7 @@ def extract_enrollment(engine: Engine, job: LeasedJob, owner: str) -> None:
     the stored rows do not already say better: `coverage_for` reads the same rows
     and is the one place the numbers are assembled.
     """
-    plan = _plan(engine, job.enrollment_id)
+    plan = _plan(engine, job.subject_id)
     if plan is None:
         # Nothing pending. The common case for a re-run, and the honest one for a
         # job whose enrollment has been deleted underneath it — the cascade takes

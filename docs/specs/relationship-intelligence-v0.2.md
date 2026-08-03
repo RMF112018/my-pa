@@ -1666,7 +1666,7 @@ Any cache:
 
 \#\# 25\. Proposed service and capability contracts
 
-The current repository exposes eight source and knowledge capabilities. Relationship Intelligence must not be forced into those contracts without a versioned decision. The following is a proposed future semantic capability family, not an accepted public API:
+The current repository exposes twelve capabilities: eight source and knowledge, and — since WP-6 — four `capture.*`. Relationship Intelligence must not be forced into those contracts without a versioned decision. The following is a proposed future semantic capability family, not an accepted public API:
 
 \#\#\# 25.1 Read capabilities
 

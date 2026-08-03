@@ -64,6 +64,11 @@ class SafeDetail(StrEnum):
     ENROLLMENT_ID = "enrollment_id"
     OPERATION_ID = "operation_id"
     KNOWLEDGE_ID = "knowledge_id"
+    CAPTURE_ID = "capture_id"
+    VERSION_ID = "version_id"
+    TEXT = "text"
+    CLIENT_CREATED_AT = "client_created_at"
+    OCCURRED_AT = "occurred_at"
     QUERY = "query"
     CURSOR = "cursor"
     PAGE_SIZE = "page_size"
@@ -79,6 +84,7 @@ class SafeDetail(StrEnum):
     SUBJECT = "subject"
     #: Which bound refused the request.
     MAX_ENROLLMENT_DEPTH = "max_enrollment_depth"
+    MAX_CAPTURE_CHARACTERS = "max_capture_characters"
     #: Why a scope could not be resolved to exactly one grant.
     MULTIPLE_ENROLLMENTS_COVER_THE_SCOPE = "multiple_enrollments_cover_the_scope"
     #: What the extractor said about an object's content type.

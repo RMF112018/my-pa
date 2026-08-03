@@ -55,8 +55,10 @@ the defect and never the value.
 nobody to read anything: every read still requires an enrollment, which requires
 the operator-only `sources.enroll`, which is authorized and audited. This program
 builds no application service and no principal, and it writes no audit event —
-`audit_events.capability` is closed to the eight capabilities, and a ninth member
-is exactly what an operator command must not become.
+`audit_events.capability` is closed to the twelve capabilities, and a further
+member for source registration is exactly what an operator command must not
+become. (It read "the eight" until WP-6 added the four `capture.*` capabilities;
+the count moved, the argument did not.)
 
 The register-then-enroll-then-run sequence is in
 [`ops/runbooks/worker-operations.md`](/ops/runbooks/worker-operations.md).
@@ -88,12 +90,15 @@ request through it answers `internal_error` and says nothing about why.
 Correcting that classification is out of scope and named by `D-65`; this command
 is how an operator finds out.
 
-**`not_at_head` is per-build, not per-capability.** At `9c6b4a18ed72`, one
-revision behind head `af3d35efb9c0`, `capabilities.get` serves and `sources.list`
-answers exactly as it does at head — so `not_at_head` is not a diagnosis that
+**`not_at_head` is per-build, not per-capability.** At `9c6b4a18ed72` — **two**
+revisions behind head `1a4c9e77b2d5` since WP-6, and one behind `af3d35efb9c0`
+when this was measured — `capabilities.get` serves and `sources.list`
+answers exactly as it does at head, so `not_at_head` is not a diagnosis that
 every capability fails. It is still the right refusal: at that same revision
-`sources.enroll` answers `internal_error`, because head creates
-`enrollment_objects`. Exiting `1` below head is an operational policy (`D-62`)
+`sources.enroll` answers `internal_error` because `af3d35efb9c0` creates
+`enrollment_objects`, and every `capture.*` request does too, because
+`1a4c9e77b2d5` creates the capture tables and widens `audit_events.capability` to
+admit a capture at all. Exiting `1` below head is an operational policy (`D-62`)
 that the measurement supports rather than a claim the measurement refutes.
 
 **It prints no URL, host, port, or database name, on any path.** The

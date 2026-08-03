@@ -1,4 +1,4 @@
-"""The ports the eight capability use cases call, and nothing else.
+"""The ports the twelve capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -49,6 +49,9 @@ from types import TracebackType
 from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
+from my_pa.domain.capture.submission import CaptureReceipt
+from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
@@ -61,6 +64,10 @@ from my_pa.domain.source.registry import ConfiguredSource
 __all__ = [
     "Acceptance",
     "AuditSink",
+    "CaptureAdmission",
+    "CaptureAdmissionRequest",
+    "CaptureRepository",
+    "CaptureSummary",
     "EnrollmentRepository",
     "EvidenceUnavailableError",
     "KnowledgeRecord",
@@ -161,6 +168,129 @@ class SearchOutcome:
 
     matches: tuple[SearchMatch, ...]
     disclosure: Disclosure
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureAdmissionRequest:
+    """Everything one admission needs, decided before the transaction opens.
+
+    `capture_id` is `None` for `capture.create` and names an existing capture for
+    `capture.revise`, which is the whole difference between the two: one starts a
+    chain and the other appends to it.
+
+    **Three of the five timestamps are supplied here and two are not.**
+    `server_received_at` is when this process received the request,
+    `accepted_at` is when the admission decided, and the store writes
+    `recorded_at` from the server's own clock — three different clocks reading at
+    three different moments, so the criterion that they stay distinct is a
+    property of where they come from rather than of a caller remembering to pass
+    three values. `client_created_at` and `occurred_at` are the caller's, and
+    both are optional: a transport may supply no device clock and a note may be
+    about no particular moment. Neither is defaulted from anything.
+
+    `audit_id` names the audit event that has *already committed*, on the audit
+    sink's own connection (`D-34`). The version stores the reference so that a
+    stored capture can be tied back to the authorization that admitted it,
+    without the audit's durability depending on this transaction.
+    """
+
+    capture_id: str | None
+    content: CaptureContent
+    idempotency_key: str
+    request_id: str
+    correlation_id: str
+    principal_id: str
+    audit_id: str
+    classification: Classification
+    processing_policy: ProcessingPolicy
+    server_received_at: datetime
+    accepted_at: datetime
+    client_created_at: datetime | None = None
+    occurred_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureAdmission:
+    """The receipt for an admitted capture, and whether this call created it.
+
+    `created` false means the idempotency key was already bound to byte-identical
+    content, so the correct answer is the receipt the first call got — the
+    `QC-AC-031` replay. A key bound to different content is a
+    `domain.capture.errors.CaptureConflictError` and never a receipt.
+    """
+
+    receipt: CaptureReceipt
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureSummary:
+    """One capture as a listing sees it: identity, size, and where its chain got to.
+
+    No content and no digest of a version the caller did not ask for. A listing
+    that carried text would put every capture's content into one response, which
+    is the opposite of what `capture.read` exists to bound.
+    """
+
+    capture_id: str
+    owner_principal_id: str
+    created_at: datetime
+    version_count: int
+    latest_version_id: str
+    latest_version_number: int
+    latest_recorded_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.capture_id, IdKind.CAPTURE)
+        validate_identifier(self.latest_version_id, IdKind.CAPTURE_VERSION)
+
+
+class CaptureRepository(ABC):
+    """The capture plane, as the four operations the capabilities need.
+
+    **No update and no delete, and their absence is the port's contribution to
+    `QC-AC-010`.** A method that changed a stored version could not be added here
+    without also defeating the `BEFORE UPDATE OR DELETE` trigger the schema
+    carries, so the two halves fail independently: the port offers no such call,
+    and the server refuses one made anyway.
+
+    **Nothing here takes an owning principal as a filter** (`D-72`).
+    `owner_principal_id` is stored on every version because `ADR-003` clause 6
+    requires it, and read back so a caller can see who wrote one, but it is not
+    an input to any lookup. Identity in this build is process-scoped, so
+    owner-scoped reads would make a capture unreadable after a restart while
+    enforcing a distinction a single-local-principal deployment cannot make.
+    """
+
+    @abstractmethod
+    def admit(self, request: CaptureAdmissionRequest) -> CaptureAdmission:
+        """Store one capture version and everything that commits with it.
+
+        The capture (for a new chain), the version, the receipt, the submission,
+        and the queued processing job are written on this transaction's
+        connection, so they commit together or not at all. The audit event the
+        request's `audit_id` names is not among them: it committed first, on its
+        own connection, and this stores the reference (`D-34`).
+
+        Raises `domain.capture.errors.CaptureConflictError` when the idempotency
+        key is already bound to different content, and `UnknownScopeError` when
+        `capture_id` names no capture.
+        """
+
+    @abstractmethod
+    def version(self, capture_id: str, *, version_id: str | None = None) -> CaptureVersion | None:
+        """One stored version of `capture_id`, or `None`.
+
+        `version_id` omitted means the current one, which is the greatest version
+        number the capture holds. Named, it means exactly that version — a
+        superseded predecessor included, which is the "independently
+        retrievable" half of `QC-AC-010`. A version of another capture is `None`,
+        the same answer as one that does not exist.
+        """
+
+    @abstractmethod
+    def captures(self, *, limit: int) -> tuple[CaptureSummary, ...]:
+        """One bounded page of captures, newest first."""
 
 
 class SourceRepository(ABC):
@@ -392,6 +522,17 @@ class UnitOfWork(ABC):
     @abstractmethod
     def knowledge(self) -> KnowledgeRepository:
         """Coverage and stored records, inside this transaction."""
+
+    @property
+    @abstractmethod
+    def captures(self) -> CaptureRepository:
+        """The capture plane, inside this transaction.
+
+        Inside, and that is the whole of the durable-first guarantee: the capture,
+        its version, its receipt, its submission, and its queued processing job
+        are written on the connection this unit of work owns, so a failure
+        anywhere in the request leaves none of them.
+        """
 
     @property
     @abstractmethod

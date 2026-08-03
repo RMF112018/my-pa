@@ -8,21 +8,26 @@ retry in the same tables, and would put application code on the write path of
 migration governance state. Two planes with different lifetimes, different
 writers, and different authority do not share a schema.
 
-Eight concerns, ten tables, and nothing else. There is no outbox, no scheduler,
-no priority column, and no soft-delete flag: each of those would be a mechanism
-with no caller, and `AGENTS.md` section 2 rules them out until one exists.
+Nine concerns, fifteen tables, and nothing else. There is no scheduler, no
+priority column, and no soft-delete flag: each of those would be a mechanism with
+no caller, and `AGENTS.md` section 2 rules them out until one exists.
 `audit_events` is not the "audit mirror" an earlier revision of this paragraph
 ruled out — a mirror duplicates rows another table already owns, and this is the
 only place an audit event is stored at all (`D-34`).
 
-Exactly one column in the schema holds content: `extractions.text`, which is
-derived text bound to the version it was extracted from. It is personal data by
-default and it is confined to that one place on purpose, so the question "where
-could a document body be" has one answer. `quarantine_records` and
-`audit_events` in particular have no column a payload could go in, which is the
-structural half of the section 12 rule that a quarantine stores identifiers and
-codes and not the thing that failed, and of the section 11 rule that an audit
-event records that something happened and never what was in it.
+**Two columns in the schema hold content, and they are two different
+authorities.** `extractions.text` is derived text bound to the source version it
+was extracted from. `capture_versions.content` is the text the user typed, which
+`ADR-003` makes a product-owned record rather than a source read — a third
+authority class, not a source-system write and not a managed-document write. They
+are confined to those two places on purpose, so the question "where could a
+document body be" has an enumerable answer. `quarantine_records`,
+`audit_events`, `capture_submissions`, and `capture_receipts` in particular have
+no column a payload could go in, which is the structural half of the section 12
+rule that a quarantine stores identifiers and codes and not the thing that
+failed, of the section 11 rule that an audit event records that something
+happened and never what was in it, and of `QC-AC-041`, which requires that no
+capture text appear in an event payload or a receipt.
 
 `native_root` and `native_locator` are the only provider-native values in the
 schema, they exist because an opaque identifier has to resolve back to something,
@@ -64,6 +69,19 @@ from sqlalchemy import (
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
+from my_pa.domain.capture.submission import (
+    MAX_IDEMPOTENCY_KEY_CHARACTERS,
+    MAX_REQUEST_ID_CHARACTERS,
+    AdmissionResult,
+    CaptureMethod,
+    CaptureTransport,
+    TrustState,
+)
+from my_pa.domain.capture.version import (
+    DIGEST_PATTERN,
+    MAX_CAPTURE_CHARACTERS,
+    ProcessingPolicy,
+)
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
@@ -683,4 +701,295 @@ audit_events = Table(
     # a request. No index by principal or by time, because nothing reads by
     # either yet.
     Index("audit_events_by_correlation", "correlation_id"),
+)
+
+#: One row per user-authored record: its identity, its owner, and when it began.
+#:
+#: **There is no `current_version_id` and no lifecycle-state column, and their
+#: absence is the design rather than an omission.** Either would have to be
+#: written by a revise, which would put an `UPDATE` on the identity row of a
+#: chain whose whole guarantee is that it has no mutation path. The current
+#: version is `max(version_number)` over `capture_versions` for this capture — a
+#: read of the rows themselves, which cannot disagree with them. Withdrawal and
+#: archive (`ADR-003` clause 3) are out of scope for this package and are absent
+#: rather than declared and unreachable.
+#:
+#: `owner_principal_id` is stored because `ADR-003` clause 6 requires every
+#: stored record to bind its owning principal. It is deliberately *not* an
+#: authorization input: see `capture_versions`.
+captures = Table(
+    "captures",
+    METADATA,
+    Column("capture_id", Text, primary_key=True),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("capture_id", IdKind.CAPTURE),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+)
+
+#: One row per immutable version of one capture. Insert only, enforced by the
+#: server: revision `1a4c9e77b2d5` adds a `BEFORE UPDATE OR DELETE` trigger,
+#: because no CHECK can express "no UPDATE" and `QC-AC-010` asks for the
+#: constraint to hold under concurrent write. That is the difference between
+#: immutability as a property of the schema and immutability as a property of
+#: the current writer — the same argument
+#: `tests/schema/test_audit_schema_migration.py` already makes for redaction.
+#:
+#: **`supersedes_version_id` is `UNIQUE`, and that is what makes the chain
+#: unforkable.** Without it two versions could name the same predecessor, and
+#: "the successor of v2" would have two answers with nothing to choose between
+#: them. With it, a chain is a line.
+#:
+#: **Five timestamps, none defaulting from another.**
+#: `docs/specs/quick-capture/20_TESTING_EVALUATION_AND_ACCEPTANCE.md:191` requires
+#: device, server, occurred, processed, and accepted times to remain distinct.
+#: `client_created_at` and `occurred_at` are nullable because a transport may
+#: supply no device clock and a note may be about no particular moment; a null
+#: here is honest absence, and deriving one of them from `server_received_at`
+#: would invent a fact about the world out of a fact about this process.
+#:
+#: **`audit_id` is a reference and not a foreign key.** The audit event it names
+#: has already committed, on its own connection, before the transaction holding
+#: this row (`D-34`). A reference constraint would make the audit's durability
+#: depend on the durability of the work it exists to outlive, which is the same
+#: reason `audit_events` itself declares none.
+#:
+#: **`owner_principal_id` is recorded and never authorized on** (`D-72`).
+#: Identity in this build is process-scoped — a restart mints a new principal —
+#: so requiring owner equality on read or revise would make `QC-AC-013`
+#: unprovable across two processes while enforcing a distinction a
+#: single-local-principal, loopback-only deployment cannot make. The column is an
+#: honest record of who wrote the version. `docs/operations/mcv-limitations.md`
+#: is where the consequence is disclosed.
+capture_versions = Table(
+    "capture_versions",
+    METADATA,
+    Column("version_id", Text, primary_key=True),
+    Column(
+        "capture_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.captures.capture_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("version_number", Integer, nullable=False),
+    Column(
+        "supersedes_version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        unique=True,
+    ),
+    Column("content", Text, nullable=False),
+    Column("content_sha256", Text, nullable=False),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("classification", Text, nullable=False),
+    Column("processing_policy", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("client_created_at", DateTime(timezone=True)),
+    Column("server_received_at", DateTime(timezone=True), nullable=False),
+    Column("occurred_at", DateTime(timezone=True)),
+    Column("accepted_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("version_id", IdKind.CAPTURE_VERSION),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _one_of("classification", Classification, name="capture_classification_is_known"),
+    _one_of("processing_policy", ProcessingPolicy),
+    _matches("content_sha256", DIGEST_PATTERN.pattern, name="content_sha256_is_a_sha256_digest"),
+    CheckConstraint("version_number >= 1", name="version_numbers_start_at_one"),
+    # The chain rule the value object also enforces, stated where a hand-run
+    # statement meets it too. A first version that supersedes something joins a
+    # chain it is not the head of; a later version that supersedes nothing starts
+    # a second chain inside one capture.
+    CheckConstraint(
+        "(version_number = 1) = (supersedes_version_id IS NULL)",
+        name="only_the_first_version_supersedes_nothing",
+    ),
+    # An empty capture is not a capture. The domain refuses one on construction
+    # and this refuses one from anywhere else.
+    CheckConstraint("length(content) > 0", name="a_capture_version_carries_text"),
+    CheckConstraint(
+        f"length(content) <= {MAX_CAPTURE_CHARACTERS}",
+        name="capture_content_is_bounded",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_capture_version_records_a_bounded_key",
+    ),
+    UniqueConstraint("capture_id", "version_number", name="one_version_number_per_capture"),
+    Index("capture_versions_by_capture", "capture_id", "version_number"),
+)
+
+#: One row per admitted submission: how a capture arrived and that it was
+#: accepted. The content it admitted is on the version, once; nothing here holds
+#: it, and `payload_sha256` is what makes an idempotent replay decidable without
+#: a second copy.
+#:
+#: **`idempotency_key` is `NOT NULL UNIQUE`, and that index *is* the
+#: `QC-AC-031`/`QC-AC-032` mechanism.** Enforcing replay detection in Python
+#: alone would leave two concurrent requests able to both read "absent" and both
+#: insert; the constraint means the second insert is refused by the server rather
+#: than by a check that already ran. It mirrors
+#: `enrollments_idempotency_key_is_scoped`, which does the same job for
+#: `sources.enroll`.
+#:
+#: **There is no `registered_client_id`** — absent, not nullable and never
+#: written (`D-74`). `RegisteredCaptureClient` is deferred because `D-30` issues
+#: no credential, `O-21` has decided no issuance, and `P00-OD-010` has selected
+#: no mechanism, so the column could never hold a value; the rule is the one that
+#: keeps `item_count` out of `audit_events`.
+#:
+#: `request_id` is caller-supplied correlation input, so it is bounded by a
+#: constraint rather than trusted: an unbounded caller-controlled column is a
+#: payload channel whatever it is called.
+capture_submissions = Table(
+    "capture_submissions",
+    METADATA,
+    Column("submission_id", Text, primary_key=True),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_id", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("transport", Text, nullable=False),
+    Column("capture_method", Text, nullable=False),
+    Column("trust_state", Text, nullable=False),
+    Column("payload_sha256", Text, nullable=False),
+    Column("client_created_at", DateTime(timezone=True)),
+    Column("server_received_at", DateTime(timezone=True), nullable=False),
+    Column("admission_result", Text, nullable=False),
+    # Both references are `DEFERRABLE INITIALLY DEFERRED`, and that is what makes
+    # the unique key above the *first* statement of an admission rather than the
+    # last. The alternative — insert the capture, the version and the receipt and
+    # then discover the key is taken — cannot be undone without a savepoint, so a
+    # replay would have to unwind rows it had already written. Inserting this row
+    # first under `ON CONFLICT DO NOTHING` means a replay writes nothing at all
+    # and a conflict writes nothing at all, which is exactly what `QC-AC-032`
+    # requires; the references are still checked, at commit, so nothing dangling
+    # can survive the transaction.
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.capture_versions.version_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    ),
+    Column(
+        "receipt_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.capture_receipts.receipt_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    ),
+    _is_identifier("submission_id", IdKind.SUBMISSION),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("transport", CaptureTransport, name="capture_transport_is_known"),
+    _one_of("capture_method", CaptureMethod, name="capture_method_is_known"),
+    _one_of("trust_state", TrustState, name="capture_trust_state_is_known"),
+    _one_of("admission_result", AdmissionResult, name="admission_result_is_known"),
+    _matches("payload_sha256", DIGEST_PATTERN.pattern, name="payload_sha256_is_a_sha256_digest"),
+    CheckConstraint(
+        f"length(request_id) BETWEEN 1 AND {MAX_REQUEST_ID_CHARACTERS}",
+        name="a_submission_records_a_bounded_request_id",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_submission_records_a_bounded_key",
+    ),
+    UniqueConstraint("idempotency_key", name="a_capture_key_admits_one_submission"),
+)
+
+#: One row per issued receipt: safe evidence that one version was accepted.
+#:
+#: Carries no content and no hash beyond the one the version already holds.
+#: `version_id` is `UNIQUE` because a version is accepted once, so a second
+#: receipt for it would be a second acknowledgement of one act.
+capture_receipts = Table(
+    "capture_receipts",
+    METADATA,
+    Column("receipt_id", Text, primary_key=True),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("idempotency_key", Text, nullable=False),
+    Column("issued_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("receipt_id", IdKind.RECEIPT),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_receipt_records_a_bounded_key",
+    ),
+)
+
+#: One row per unit of processing a stored capture version implies: the capture
+#: plane's half of the job/outbox the repository already has.
+#:
+#: **A separate table rather than a widened `jobs`, and this is the design's most
+#: contestable choice** (`D-76`). `jobs.enrollment_id` is `NOT NULL` with a
+#: foreign key to `knowledge.enrollments`, and a capture has no enrollment.
+#: Relaxing that column would retroactively change the DDL already-merged
+#: revision `8b3f5c17d904` emits, which is the hazard `D-48` refused. The `D-41`
+#: objection — "the same persistence twice" — is real, and it is answered by
+#: **sharing code rather than tables**: the lease, claim, and retry functions in
+#: `persistence.jobs` are parameterised over the table they operate on, so there
+#: is one implementation of the lease rule and two tables it runs against. Do not
+#: merge the two tables to remove the duplication; the duplication is in the
+#: column list, and the column list is what differs.
+#:
+#: Nothing consumes this queue until WP-7. That is what durable-first means: the
+#: work is recorded at the moment it is authorized, so a crash between accepting
+#: a capture and processing it loses no work. It is not a speculative column.
+capture_jobs = Table(
+    "capture_jobs",
+    METADATA,
+    Column("operation_id", Text, primary_key=True),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("state", Text, nullable=False, server_default=JobState.QUEUED.value),
+    Column("attempt_count", Integer, nullable=False, server_default="0"),
+    Column("max_attempts", Integer, nullable=False, server_default=str(DEFAULT_MAX_ATTEMPTS)),
+    Column("lease_owner", Text),
+    Column("lease_expires_at", DateTime(timezone=True)),
+    Column("last_error_code", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("operation_id", IdKind.OPERATION),
+    _one_of("state", JobState, name="capture_job_state_is_known"),
+    CheckConstraint(
+        "last_error_code IS NULL OR last_error_code IN ("
+        + ", ".join(f"'{code.value}'" for code in ErrorCode)
+        + ")",
+        name="capture_job_error_code_is_a_public_error_code",
+    ),
+    CheckConstraint(
+        "(lease_owner IS NULL) = (lease_expires_at IS NULL)",
+        name="a_capture_lease_has_an_owner_and_an_expiry",
+    ),
+    CheckConstraint(
+        f"(state = '{JobState.RUNNING.value}') = (lease_owner IS NOT NULL)",
+        name="a_capture_job_is_running_exactly_while_leased",
+    ),
+    CheckConstraint(
+        f"attempt_count >= 0 AND max_attempts BETWEEN 1 AND {DEFAULT_MAX_ATTEMPTS * 10} "
+        "AND attempt_count <= max_attempts",
+        name="capture_job_attempts_are_bounded",
+    ),
+    Index("capture_jobs_by_state", "state", "created_at"),
 )

@@ -194,7 +194,7 @@ def _write_one(engine: Engine, job: LeasedJob, owner: str, *, at: datetime = WHE
             raise LeaseLostError(job.operation_id)
         record_limitation(
             connection,
-            enrollment_id=job.enrollment_id,
+            enrollment_id=job.subject_id,
             observed_at=at,
             reason=LimitationReason.OBJECTS_OMITTED_CONTAINMENT_UNPROVEN,
             affected_count=1,

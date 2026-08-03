@@ -57,6 +57,10 @@ from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 from my_pa.contracts.ports import (
     Acceptance,
     AuditSink,
+    CaptureAdmission,
+    CaptureAdmissionRequest,
+    CaptureRepository,
+    CaptureSummary,
     EnrollmentRepository,
     EvidenceUnavailableError,
     KnowledgeRecord,
@@ -71,12 +75,18 @@ from my_pa.contracts.ports import (
     UnknownScopeError,
 )
 from my_pa.contracts.v1.status import SourceStatusState
+from my_pa.domain.capture.version import CaptureVersion
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.search.query import SearchRequest
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.registry import ConfiguredSource
 from my_pa.infrastructure.persistence import IsolationLevelError
+from my_pa.infrastructure.persistence.capture import (
+    admit_capture,
+    capture_page,
+    capture_version,
+)
 from my_pa.infrastructure.persistence.enrollment import (
     accept_enrollment,
     enrollments_for_principal,
@@ -218,11 +228,45 @@ class _Operations(OperationQueue):
                 return None
             return Operation(
                 operation_id=found.operation_id,
-                enrollment_id=found.enrollment_id,
+                # This queue is the enrollment plane, so the subject is a grant.
+                # `persistence.jobs` names the column for what it holds rather
+                # than for one plane's use of it, because the capture plane's
+                # subject is a version.
+                enrollment_id=found.subject_id,
                 state=_public_state(found.state),
             )
 
         return _read(statement)
+
+
+class _Captures(CaptureRepository):
+    """The capture plane, over `persistence.capture`.
+
+    Three methods and no fourth. There is no `update` and no `delete` here
+    because there is none in the module below it and none the server would
+    accept: `capture_versions` carries a trigger that refuses both.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def admit(self, request: CaptureAdmissionRequest) -> CaptureAdmission:
+        """Admit one submission, letting both of its refusals through.
+
+        `CaptureConflictError` is a domain type the application already imports
+        and is an answer about the caller's own idempotency key rather than a
+        failure of the store; translating it into a repository failure would turn
+        "this key is bound to something else" into "try again later".
+        `UnknownScopeError` is already the port's own vocabulary, so translating
+        it here would mean catching a port error to raise the same port error.
+        """
+        return _read(lambda: admit_capture(self._connection, request))
+
+    def version(self, capture_id: str, *, version_id: str | None = None) -> CaptureVersion | None:
+        return _read(lambda: capture_version(self._connection, capture_id, version_id=version_id))
+
+    def captures(self, *, limit: int) -> tuple[CaptureSummary, ...]:
+        return _read(lambda: capture_page(self._connection, limit=limit))
 
 
 class _Knowledge(KnowledgeRepository):
@@ -417,6 +461,10 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def knowledge(self) -> KnowledgeRepository:
         return _Knowledge(self._open)
+
+    @property
+    def captures(self) -> CaptureRepository:
+        return _Captures(self._open)
 
     @property
     def audit(self) -> AuditSink:

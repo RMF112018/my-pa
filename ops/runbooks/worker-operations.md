@@ -4,7 +4,15 @@ Running, bounding, and stopping the `my-pa` worker process.
 
 Every command below was executed against a **disposable** database
 (`my_pa_worker_runbook_test`, created and dropped for the purpose) on
-2026-08-03. Nothing here was run against the canonical `my_pa` database, and
+2026-08-03, **and none of them was re-executed for WP-6** — this file is unchanged
+since `6660dbb` and no transcript in it was produced at head `1a4c9e77b2d5`. They
+were not re-run because WP-6 adds no work to the extraction job plane this
+runbook drives; the capture outbox it creates is consumed by nothing until WP-7.
+*Disclosure added 2026-08-03: the date above is the same string the re-executed
+runbooks use for their 2026-08-03 markers, so date alone cannot tell a reader
+which transcripts are current. It is the head that discriminates, and this file's
+is `af3d35efb9c0`.* Nothing here was run against the canonical `my_pa` database,
+and
 nothing here needs to be: the worker writes to the `knowledge` schema's job
 plane, and pointing it at the canonical database before there is work worth
 doing would put attempt counts on rows nobody queued.

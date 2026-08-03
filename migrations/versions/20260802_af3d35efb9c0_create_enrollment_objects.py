@@ -34,7 +34,9 @@ to nothing, and `record_scope` refuses both an unobserved object and an empty
 set — so an enrollment naming a root that does not exist is never accepted.
 
 This revision is therefore purely declaration-driven, which is exactly the
-pattern `tables.py:33-40` states.
+pattern `tables.py`'s module docstring states, under "The tables are declared
+once here" — cited by heading rather than by line, because WP-6 moved that
+paragraph and the line numbers that stood here went with it.
 
 The downgrade drops the table. It leaves the `knowledge` schema and the nine
 tables below it in place, because this revision created none of them.

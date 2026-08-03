@@ -9,18 +9,38 @@ is the part none of them can state alone, and it starts where an operator should
 start: **ask whether the database can serve this build before doing anything
 else.**
 
-Every command below was executed against a **disposable** database
-(`my_pa_end_to_end_runbook`, created empty and dropped for the purpose) on
-2026-08-03, and **every transcript below is that database's output** — step 1's
-`revision none` is the disposable database before step 2 migrates it, not a
-reading of anything else.
+**Provenance, corrected 2026-08-03: this document spans two runs at two heads,
+and the paragraph that stood here claimed one.** It said "every transcript below
+is that database's output", which is false as written — `that database` is
+singular, and there were two, both named `my_pa_end_to_end_runbook`.
+[`README.md`](README.md) requires each procedure to state which of its commands
+were **not** run and why, and this one did not.
+
+| Steps | Run | Head | Database |
+|---|---|---|---|
+| **1–2** | re-executed 2026-08-03 for WP-6 | `1a4c9e77b2d5` | a freshly created, empty `my_pa_end_to_end_runbook` |
+| **3–10** | **not re-executed**; carried unchanged from `08e7c81` | `af3d35efb9c0` | the `my_pa_end_to_end_runbook` of that run |
+
+**Why 3–10 were not re-run.** WP-6 moved the Alembic head, which is what steps 1
+and 2 report, so those two transcripts had to be replaced or they would have been
+wrong. Steps 3–10 walk a source from registration to `knowledge.read` and WP-6
+changes nothing on that path — it adds a capture plane that this sequence does not
+touch. Re-running them would have produced new opaque identifiers and new
+timestamps and proved nothing that the carried transcripts do not. The identifiers
+below (`src_d588df08…`, `obj_6fdbc462…`, `enr_c0b3f774…`, `kn_e0662a8a…`, and the
+two `worker-…` lease owners) are therefore artifacts of the `08e7c81` run, and the
+`2026-08-03T13:3x` timestamps inside those payloads are that run's, not this one's.
+
+Both runs used a **disposable** database created empty and dropped for the
+purpose. Step 1's `revision none` is the disposable database before step 2
+migrates it, not a reading of anything else.
 
 **Nothing here was run against the canonical `my_pa` database, and nothing here
 could be.** That is a different measurement and it is deliberately not in this
 document: the probe run against canonical `my_pa` is transcribed in
 [`postgres-operations.md`](postgres-operations.md), which recorded it at
-`6c4d3ea82f10` against a head of `af3d35efb9c0` — exactly the condition this
-sequence refuses to proceed from.
+`6c4d3ea82f10` against a head of `1a4c9e77b2d5` — re-measured 2026-08-03, and
+exactly the condition this sequence refuses to proceed from.
 
 All commands run from the repository root, with one variable exported for the
 whole sequence:
@@ -38,14 +58,16 @@ supplies it, because an embedded one fails `scram-sha-256` from the host.
 .venv/bin/python apps/cli/health.py
 ```
 
-Observed against the freshly created, unmigrated database — exit `1`:
+**Re-executed 2026-08-03** against a freshly created, unmigrated
+`my_pa_end_to_end_runbook`, because WP-6 moved the head this reports. Observed —
+exit `1`:
 
 ```text
 state            not_at_head
 server_version   17.10 (Debian 17.10-1.pgdg13+1)
 extensions       plpgsql
 revision         none
-head             af3d35efb9c0
+head             1a4c9e77b2d5
 the configured database is not at the migration head and cannot serve this build
 ```
 
@@ -54,7 +76,8 @@ for one several revisions behind. `not_at_head` is a statement about the **build
 and not a diagnosis of any one capability: measured, a database before
 `9c6b4a18ed72`, which creates `knowledge.audit_events`, answers `internal_error`
 to every capability — "the request could not be completed", which names nothing —
-while `9c6b4a18ed72` itself, one revision behind head, serves `capabilities.get`
+while `9c6b4a18ed72` itself, one revision behind head when that was measured and
+two behind `1a4c9e77b2d5` now, serves `capabilities.get`
 and still fails the capability that enrolls a scope (`D-61`, `D-65`, and
 limitation 8 of `docs/operations/mcv-limitations.md`, which names both
 boundaries). An empty database is below both, so step 2 is not optional here.
@@ -65,15 +88,21 @@ boundaries). An empty database is below both, so step 2 is not optional here.
 .venv/bin/alembic upgrade head
 ```
 
-Then probe again. Exit `0`, which is the gate for everything below:
+Then probe again. **Re-executed 2026-08-03.** Exit `0`, which is the gate for
+everything below:
 
 ```text
 state            ready
 server_version   17.10 (Debian 17.10-1.pgdg13+1)
 extensions       pg_trgm, plpgsql, unaccent
-revision         af3d35efb9c0
-head             af3d35efb9c0
+revision         1a4c9e77b2d5
+head             1a4c9e77b2d5
 ```
+
+The eleventh revision, `1a4c9e77b2d5`, creates the five capture tables and the
+trigger that makes a stored capture version append-only, and widens
+`audit_events`' two closed-set constraints to the capture vocabulary by explicit
+`ALTER` (`D-69`).
 
 **Never run this against canonical `my_pa`.** `ops/runbooks/postgres-operations.md`
 states why and what an unset variable does; the canonical database is
@@ -261,7 +290,14 @@ composition, and `apps/cli/invoke.py` composes a runtime per invocation. So each
 enrollment, and `authorize` reads the authorized scope from the enrollments that
 principal holds (`application/authorization.py`).
 
-Measured on this database. `sources.enroll` through `invoke.py` succeeded and
+Measured on the `08e7c81` run's `my_pa_end_to_end_runbook`, at head
+`af3d35efb9c0` — one of the **two** disposable databases this document spans, per
+the provenance table above, and not re-executed for WP-6. *Corrected 2026-08-03:
+this read "Measured on this database", singular, which is the exact claim the
+provenance table at the top of this file was added to retract.
+`../../docs/operations/mcv-limitations.md` quotes and corrects this sentence
+downstream; the downstream citation was fixed and this source sentence was left
+standing.* `sources.enroll` through `invoke.py` succeeded and
 wrote its enrollment; three later `invoke.py` calls to `sources.status` for that
 enrollment were each `denied`, `denial_reason scope_not_authorized`, under three
 **different** principal identifiers — while the same four capabilities through
@@ -275,7 +311,14 @@ Consequences, stated rather than worked around:
   which no single invocation can do. Through a running gateway or a running MCP
   server they work, because that process holds one principal for its lifetime.
 - `capabilities.get` is the exception and works from the CLI, because it carries
-  no source scope at all (`domain/policy/decision.py`).
+  no source scope at all (`domain/policy/decision.py`). **WP-6 added four more
+  exceptions**: `capture.create`, `capture.revise`, `capture.read` and
+  `capture.list` are scopeless for the same structural reason — a capture is a
+  product-owned record belonging to no configured source — so they too are
+  usable from `apps/cli/invoke.py`. What they do *not* get is continuity: each
+  invocation writes under a new principal, so `capture.list` from the CLI shows
+  captures that other processes own, which is `D-72` and limitation 2 of
+  `docs/operations/mcv-limitations.md` rather than a defect in this sequence.
 - This is not a defect this runbook may fix. Which identity a local principal
   has, and whether it survives a process, is an authentication question, and
   `P00-OD-010` is open and reserved to the operator (`D-30`). It is recorded in

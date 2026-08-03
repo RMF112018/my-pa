@@ -31,6 +31,10 @@ def test_contract_prefixes_are_stable() -> None:
         "audit",
         "prn",
         "corr",
+        "cap",
+        "capver",
+        "rcpt",
+        "sub",
     }
 
 

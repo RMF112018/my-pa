@@ -45,6 +45,10 @@ from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import (
     Acceptance,
     AuditSink,
+    CaptureAdmission,
+    CaptureAdmissionRequest,
+    CaptureRepository,
+    CaptureSummary,
     EnrollmentRepository,
     KnowledgeRecord,
     KnowledgeRepository,
@@ -55,6 +59,7 @@ from my_pa.contracts.ports import (
     SourceProviders,
     SourceRepository,
     UnitOfWork,
+    UnknownScopeError,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.disclosure import (
@@ -68,6 +73,9 @@ from my_pa.contracts.v1.disclosure import (
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
+from my_pa.domain.capture.errors import CaptureConflictError
+from my_pa.domain.capture.submission import CaptureReceipt
+from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind
@@ -129,6 +137,17 @@ class World:
     #: Fingerprints of accepted enrollment requests, by idempotency key, so the
     #: fake can tell a retry from a conflict the way the unique constraint does.
     keys: dict[str, str] = field(default_factory=dict)
+    #: The capture plane. `captures` is identity only — no current-version
+    #: pointer and no lifecycle column, because the table has neither — and the
+    #: current version is derived from `capture_versions` exactly as the writer
+    #: derives it. `capture_keys` is the fake's stand-in for the unique index on
+    #: `capture_submissions.idempotency_key`, which is what tells a replay from a
+    #: conflict; a fake that decided that some other way would let a test prove a
+    #: behaviour the constraint does not give.
+    captures: dict[str, tuple[str, datetime]] = field(default_factory=dict)
+    capture_versions: list[CaptureVersion] = field(default_factory=list)
+    capture_receipts: dict[str, CaptureReceipt] = field(default_factory=dict)
+    capture_keys: dict[str, tuple[str, str]] = field(default_factory=dict)
     audit: list[AuditEvent] = field(default_factory=list)
     commits: int = 0
     rollbacks: int = 0
@@ -350,6 +369,127 @@ class _Knowledge(KnowledgeRepository):
         return self._world.records.get((enrollment_id, knowledge_id))
 
 
+class _Captures(CaptureRepository):
+    """The capture plane, over a `World`.
+
+    Three methods, and no update or delete — which is not restraint but the port:
+    there is no such method to implement. What this fake *cannot* prove is that a
+    stored version is immutable against a writer that does not go through the
+    port, because a Python list has no trigger. That claim belongs to the
+    `database` tier, against a server that actually refuses the `UPDATE`.
+
+    The idempotency rule is reproduced rather than approximated: a key already in
+    use with the same payload digest returns the stored receipt and creates
+    nothing, and a key in use with a different digest raises. Those are the two
+    answers the unique index on `capture_submissions.idempotency_key` produces,
+    so a test about `QC-AC-031`/`QC-AC-032` at this tier is about the same rule
+    the store enforces.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def admit(self, request: CaptureAdmissionRequest) -> CaptureAdmission:
+        self._world.fail("admit")
+        held = self._world.capture_keys.get(request.idempotency_key)
+        if held is not None:
+            digest, receipt_id = held
+            if digest != request.content.digest:
+                raise CaptureConflictError("the idempotency key is bound to different content")
+            return CaptureAdmission(receipt=self._world.capture_receipts[receipt_id], created=False)
+
+        if request.capture_id is None:
+            capture_id = issue_identifier(IdKind.CAPTURE)
+            self._world.captures[capture_id] = (request.principal_id, request.accepted_at)
+            number, supersedes = 1, None
+        else:
+            capture_id = request.capture_id
+            head = self._head(capture_id)
+            if head is None:
+                raise UnknownScopeError("the request names no stored capture")
+            number, supersedes = head.version_number + 1, head.version_id
+
+        version = CaptureVersion(
+            version_id=issue_identifier(IdKind.CAPTURE_VERSION),
+            capture_id=capture_id,
+            version_number=number,
+            supersedes_version_id=supersedes,
+            content=request.content,
+            owner_principal_id=request.principal_id,
+            classification=request.classification,
+            processing_policy=request.processing_policy,
+            idempotency_key=request.idempotency_key,
+            correlation_id=request.correlation_id,
+            audit_id=request.audit_id,
+            client_created_at=request.client_created_at,
+            server_received_at=request.server_received_at,
+            occurred_at=request.occurred_at,
+            accepted_at=request.accepted_at,
+            # The store writes this from the server's own clock, which is a third
+            # reading; here it is the accepted moment, because a fake has no
+            # server clock to be different from. A test that needs the five to
+            # differ needs the `database` tier.
+            recorded_at=request.accepted_at,
+        )
+        self._world.capture_versions.append(version)
+        receipt = CaptureReceipt(
+            receipt_id=issue_identifier(IdKind.RECEIPT),
+            capture_id=capture_id,
+            version_id=version.version_id,
+            version_number=number,
+            idempotency_key=request.idempotency_key,
+            content_sha256=request.content.digest,
+            issued_at=request.accepted_at,
+        )
+        self._world.capture_receipts[receipt.receipt_id] = receipt
+        self._world.capture_keys[request.idempotency_key] = (
+            request.content.digest,
+            receipt.receipt_id,
+        )
+        return CaptureAdmission(receipt=receipt, created=True)
+
+    def version(self, capture_id: str, *, version_id: str | None = None) -> CaptureVersion | None:
+        self._world.fail("capture_version")
+        if version_id is None:
+            return self._head(capture_id)
+        return next(
+            (
+                version
+                for version in self._world.capture_versions
+                if version.capture_id == capture_id and version.version_id == version_id
+            ),
+            None,
+        )
+
+    def captures(self, *, limit: int) -> tuple[CaptureSummary, ...]:
+        self._world.fail("capture_page")
+        summaries: list[CaptureSummary] = []
+        for capture_id, (owner, created_at) in self._world.captures.items():
+            head = self._head(capture_id)
+            if head is None:
+                continue
+            summaries.append(
+                CaptureSummary(
+                    capture_id=capture_id,
+                    owner_principal_id=owner,
+                    created_at=created_at,
+                    version_count=sum(
+                        1 for v in self._world.capture_versions if v.capture_id == capture_id
+                    ),
+                    latest_version_id=head.version_id,
+                    latest_version_number=head.version_number,
+                    latest_recorded_at=head.recorded_at,
+                )
+            )
+        summaries.sort(key=lambda s: (s.created_at, s.capture_id), reverse=True)
+        return tuple(summaries[:limit])
+
+    def _head(self, capture_id: str) -> CaptureVersion | None:
+        """The greatest version number the capture holds, derived not stored."""
+        held = [v for v in self._world.capture_versions if v.capture_id == capture_id]
+        return max(held, key=lambda v: v.version_number) if held else None
+
+
 class _Audit(AuditSink):
     """The audit port, over a `World`.
 
@@ -428,6 +568,10 @@ class FakeUnitOfWork(UnitOfWork):
         return _Knowledge(self._world)
 
     @property
+    def captures(self) -> CaptureRepository:
+        return _Captures(self._world)
+
+    @property
     def audit(self) -> AuditSink:
         return _Audit(self._world)
 
@@ -462,12 +606,22 @@ class RecordingProvider(SourceProvider):
 
 
 class FakeProviders(SourceProviders):
-    """The lookup from a source identity to the adapter serving it."""
+    """The lookup from a source identity to the adapter serving it.
+
+    `lookups` records every identifier a use case *asked* about, which is one
+    step earlier than `RecordingProvider.calls`. The distinction matters for the
+    capture plane: a capture path that resolved a provider and then called
+    nothing on it would leave `calls` empty and would still have reached for a
+    source, and `ADR-003` clause 5 is a claim about reaching rather than about
+    what was reached for.
+    """
 
     def __init__(self, providers: dict[str, SourceProvider] | None = None) -> None:
         self.providers: dict[str, SourceProvider] = providers or {}
+        self.lookups: list[str] = []
 
     def for_source(self, source_id: str) -> SourceProvider | None:
+        self.lookups.append(source_id)
         return self.providers.get(source_id)
 
 
@@ -625,6 +779,37 @@ def staged_search(scene: Scene) -> SearchOutcome:
         classification=Classification.SYNTHETIC_TEST,
     )
     return SearchOutcome(matches=(match,), disclosure=disclosure)
+
+
+def staged_capture(scene: Scene, *, text: str = "a synthetic note") -> CaptureVersion:
+    """One stored capture inside `scene`'s world, so `capture.read` has an answer.
+
+    Written through the port rather than pushed into `World` directly, so the
+    version number, the supersession link, and the receipt are the ones the
+    admission produces. A test that staged the rows by hand could stage a state
+    the writer cannot reach.
+    """
+    unit_of_work = FakeUnitOfWork(scene.world)
+    admission = unit_of_work.captures.admit(
+        CaptureAdmissionRequest(
+            capture_id=None,
+            content=CaptureContent(text),
+            idempotency_key=f"staged-capture-{len(scene.world.capture_keys)}",
+            request_id="req-staged-capture",
+            correlation_id=issue_identifier(IdKind.CORRELATION),
+            principal_id=scene.principal.principal_id,
+            audit_id=issue_identifier(IdKind.AUDIT),
+            classification=Classification.PRIVATE_LOCAL,
+            processing_policy=ProcessingPolicy.LOCAL_ONLY,
+            server_received_at=WHEN,
+            accepted_at=WHEN,
+        )
+    )
+    stored = unit_of_work.captures.version(
+        admission.receipt.capture_id, version_id=admission.receipt.version_id
+    )
+    assert stored is not None
+    return stored
 
 
 @pytest.fixture

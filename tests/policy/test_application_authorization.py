@@ -10,7 +10,7 @@ surface, because that is what makes the second set of tests exhaustive rather
 than a sample.
 
 **Behavioural.** Every capability is then invoked with an unauthorized request
-and required to be denied — not one capability, all eight, and for each of the
+and required to be denied — not one capability, every one of them, and for each of the
 four ways authority can be missing. A capability that grew a bypass would fail
 its own row here.
 
@@ -46,18 +46,23 @@ from tests.conftest import (
     build_service,
     metadata_for,
     operator,
+    staged_capture,
     staged_search,
 )
 
 from my_pa.application.commands import (
     Command,
+    CreateCapture,
     EnrollSource,
     FetchSource,
     GetCapabilities,
     GetSourceMetadata,
     GetSourceStatus,
+    ListCaptures,
     ListSources,
+    ReadCapture,
     ReadKnowledge,
+    ReviseCapture,
     SearchKnowledge,
 )
 from my_pa.application.service import ApplicationService
@@ -105,6 +110,21 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             knowledge_id=issue_identifier(IdKind.KNOWLEDGE),
             enrollment_id=scene.enrollment.enrollment_id,
         ),
+        # The capture commands name no source and no enrollment, because a
+        # capture belongs to neither. Their identifiers are minted rather than
+        # taken from the scene for the same reason the knowledge identifier
+        # above is: every test here refuses before a handler runs, so what the
+        # identifier names is irrelevant and its *shape* is not.
+        Capability.CAPTURE_CREATE: CreateCapture(
+            text="a synthetic note", idempotency_key="denial-probe-capture-0001"
+        ),
+        Capability.CAPTURE_REVISE: ReviseCapture(
+            capture_id=issue_identifier(IdKind.CAPTURE),
+            text="a synthetic note, revised",
+            idempotency_key="denial-probe-capture-0002",
+        ),
+        Capability.CAPTURE_READ: ReadCapture(capture_id=issue_identifier(IdKind.CAPTURE)),
+        Capability.CAPTURE_LIST: ListCaptures(),
     }
 
 
@@ -137,6 +157,10 @@ def invoke(
 
 
 ALL_CAPABILITIES = list(Capability)
+
+#: The family whose claim is a zero — a capture reaches no source provider at
+#: all — and which therefore has no non-vacuity control of its own.
+CAPTURE_CAPABILITIES = frozenset(c for c in Capability if c.value.startswith("capture."))
 
 
 def test_the_service_offers_exactly_one_public_entry_point() -> None:
@@ -215,14 +239,32 @@ def test_every_capability_refuses_a_purpose_it_does_not_permit(
     assert scene.world.audit[-1].denial_reason is DenialReason.PURPOSE_NOT_PERMITTED_FOR_CAPABILITY
 
 
-#: Capabilities whose authority is a held scope. `capabilities.get` describes the
-#: interface and carries no scope at all; `sources.enroll` is the operation that
-#: *grants* scope, so requiring the scope to be held already would make it
-#: permanently unusable — `domain.policy.decision._scope_is_authorized` says so,
-#: and its authority is the operator-only check instead, which has its own row
-#: below. Both exclusions are derived from the domain rule rather than chosen.
+#: Capabilities whose authority is a held scope.
+#:
+#: `sources.enroll` is the operation that *grants* scope, so requiring the scope
+#: to be held already would make it permanently unusable —
+#: `domain.policy.decision._scope_is_authorized` says so, and its authority is
+#: the operator-only check instead, which has its own row below.
+#:
+#: The rest carry no source scope at all: `capabilities.get` describes the
+#: interface, and the four capture capabilities read and write a product-owned
+#: record that `ADR-003` makes a third authority class — it belongs to no
+#: configured source and to no enrollment. **This set widens as capture is
+#: added; it does not weaken**, because every excluded capability is excluded by
+#: a property the domain states, and the guard below re-derives every partition
+#: from `evaluate` rather than from this list.
 SCOPED_CAPABILITIES = [
-    c for c in Capability if c not in {Capability.CAPABILITIES_GET, Capability.SOURCES_ENROLL}
+    c
+    for c in Capability
+    if c
+    not in {
+        Capability.CAPABILITIES_GET,
+        Capability.SOURCES_ENROLL,
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.CAPTURE_READ,
+        Capability.CAPTURE_LIST,
+    }
 ]
 
 
@@ -267,16 +309,25 @@ def _decision(capability: Capability, requested: frozenset[str], held: frozenset
     ).allowed
 
 
-def test_the_two_capabilities_outside_the_scope_matrix_are_the_domains_own_two() -> None:
+def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None:
     """Guard the exclusions above, which would otherwise narrow the matrix silently.
 
     A capability dropped from `SCOPED_CAPABILITIES` for convenience would lose
-    its unknown-scope row and nothing would say so. The two that are excluded are
-    excluded because the domain treats them specially, and each is identified
-    here by the property that makes it special rather than by name.
+    its unknown-scope row and nothing would say so. Every excluded capability is
+    excluded because the domain treats it specially, and each partition below is
+    re-derived from `evaluate` rather than read off the list it is guarding —
+    which is what makes this a check on the domain rather than a restatement of
+    the exclusion.
     """
+    scopeless_capabilities = {
+        Capability.CAPABILITIES_GET,
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.CAPTURE_READ,
+        Capability.CAPTURE_LIST,
+    }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
-    assert excluded == {Capability.CAPABILITIES_GET, Capability.SOURCES_ENROLL}
+    assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}
 
     unheld = frozenset({issue_identifier(IdKind.SOURCE)})
     granting = {c for c in Capability if _decision(c, unheld, frozenset())}
@@ -285,8 +336,9 @@ def test_the_two_capabilities_outside_the_scope_matrix_are_the_domains_own_two()
     )
 
     scopeless = {c for c in Capability if _decision(c, frozenset(), frozenset())}
-    assert scopeless == {Capability.CAPABILITIES_GET}, (
-        "exactly one capability carries no source scope: the one that describes the interface"
+    assert scopeless == scopeless_capabilities, (
+        "the capabilities carrying no source scope are the interface description "
+        "and the capture plane, which belongs to no source"
     )
 
 
@@ -485,17 +537,51 @@ def test_the_source_provider_port_exposes_no_mutating_method() -> None:
 def test_no_capability_calls_anything_but_the_read_only_provider_methods(
     scene: Scene,
 ) -> None:
-    """Every capability, run once, against a provider that records what it did."""
+    """Every capability, run once, against a provider that records what it did.
+
+    **The capture commands are re-pointed at a staged capture, and the answers
+    are asserted, and neither is decoration.** `commands_for` mints capture
+    identifiers that name nothing, which is correct for the denial matrix above —
+    every test there refuses before a handler runs, so what the identifier names
+    is irrelevant. It is not correct here, where the purpose is permitted and the
+    handler is meant to run: `capture.revise` and `capture.read` answered
+    `not_found` and this test still passed. Measured: with all four `capture.*`
+    handlers raising on every call, this test passed unchanged.
+
+    That is the same defect the independent reviewer measured in
+    `tests/security/test_mcp_and_cli_negative_evidence.py`, at a second site
+    nobody had named — "only read-only methods were called" is satisfied for free
+    by a capability that never reached a method at all. The zero needs the
+    non-zero beside it, and for `capture.*` the non-zero is a successful answer.
+
+    Success is asserted for the capture family only. `knowledge.read` here names
+    a *minted* knowledge identifier and answers `not_found` by construction, and
+    the source capabilities have `assert scene.provider.calls` as their control —
+    reads demonstrably happened. Only `capture.*` claims a zero with no such
+    control, which is why only `capture.*` needs the answer checked.
+    """
     service = build_service(scene.world, scene.providers)
     scene.world.searches[scene.enrollment.enrollment_id] = staged_search(scene)
-    for capability, command in commands_for(scene).items():
-        invoke(
+    staged = staged_capture(scene)
+    commands = commands_for(scene) | {
+        Capability.CAPTURE_REVISE: ReviseCapture(
+            capture_id=staged.capture_id,
+            text="a synthetic note, revised",
+            idempotency_key="read-only-probe-capture-0001",
+        ),
+        Capability.CAPTURE_READ: ReadCapture(capture_id=staged.capture_id),
+    }
+    for capability, command in commands.items():
+        answer = invoke(
             service,
             scene.principal,
             capability,
             a_permitted_purpose(capability),
             command,
         )
+        if capability in CAPTURE_CAPABILITIES:
+            assert answer.error is None, f"{capability.value} failed: {answer.error}"
+            assert answer.result is not None, f"{capability.value} answered nothing"
     assert set(scene.provider.calls) <= {"list_children", "metadata", "fetch"}
     assert scene.provider.calls, "no capability touched the provider at all"
 
@@ -535,11 +621,20 @@ def test_a_capability_payload_mismatch_is_refused_and_audited(scene: Scene) -> N
 
 
 def test_a_mismatched_request_reaches_no_handler(scene: Scene) -> None:
-    """Auditing the refusal must not have turned it into an execution."""
+    """Auditing the refusal must not have turned it into an execution.
+
+    The refusal itself is asserted beside the zero. Without it the request could
+    have been refused for any reason at all, or answered, and the empty call log
+    would read the same — the shape the class sweep of this correction cycle
+    found at four other sites.
+    """
     service = build_service(scene.world, scene.providers)
-    service.invoke(
+    envelope = service.invoke(
         metadata_for(Capability.SOURCES_METADATA, Purpose.SOURCE_INSPECTION, scene.principal),
         commands_for(scene)[Capability.SOURCES_LIST],
         principal=scene.principal,
     )
+    assert envelope.result is None
+    assert envelope.error is not None
+    assert envelope.error.code is ErrorCode.INVALID_REQUEST
     assert scene.provider.calls == [], "a mismatched request touched the provider"

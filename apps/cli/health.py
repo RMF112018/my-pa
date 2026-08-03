@@ -26,12 +26,16 @@ turns that into an answer an operator can act on. `D-61`, `D-62`.
 academic.** Measured by stepping a disposable database through the whole chain:
 below `9c6b4a18ed72`, which creates `knowledge.audit_events`, *every* capability
 answers `internal_error`, because a request that cannot commit its audit row
-fails rather than being served unaudited. At `9c6b4a18ed72` itself — one revision
-behind head `af3d35efb9c0` — `capabilities.get` and `sources.list` answer exactly
+fails rather than being served unaudited. At `9c6b4a18ed72` itself —
+**two** revisions behind head `1a4c9e77b2d5` since WP-6, measured at the time as
+one behind `af3d35efb9c0` — `capabilities.get` and `sources.list` answer exactly
 as they do at head, so this command's refusal there is **not** a claim that every
 capability fails. It is still correct: at that same revision `sources.enroll`
-answers `internal_error`, because head creates `enrollment_objects`. Exiting `1`
-below head is an operational policy (`D-62`) that the measurement supports.
+answers `internal_error`, because `af3d35efb9c0` creates `enrollment_objects`,
+and every `capture.*` request does too, because `1a4c9e77b2d5` creates the
+capture tables *and* is the revision that widens `audit_events.capability` to
+admit a capture at all (`D-69`). Exiting `1` below head is an operational policy
+(`D-62`) that the measurement supports.
 
 **It diagnoses that condition; it does not reclassify it.** Correcting the
 application's error taxonomy so a request that cannot record its audit row
@@ -40,7 +44,7 @@ answers something better than `internal_error` is a separate change against
 `D-65` names it and defers it; this command is how an operator finds out, not the
 fix.
 
-**It is not a ninth capability, and not a route.** It builds no
+**It is not a further capability, and not a route.** It builds no
 `ApplicationService`, no `Principal`, and no `SourceProviders`, exactly as
 `apps/cli/sources.py` does not, and
 `tests/architecture/test_operator_commands_are_not_capabilities.py` decides that

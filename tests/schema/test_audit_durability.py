@@ -53,6 +53,7 @@ from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import (
     AuditSink,
+    CaptureRepository,
     EnrollmentRepository,
     EvidenceUnavailableError,
     KnowledgeRecord,
@@ -227,6 +228,10 @@ class _FailsAfterTheWork(UnitOfWork):
     @property
     def knowledge(self) -> KnowledgeRepository:
         return _FailingKnowledge(self._inner.knowledge)
+
+    @property
+    def captures(self) -> CaptureRepository:
+        return self._inner.captures
 
     @property
     def audit(self) -> AuditSink:

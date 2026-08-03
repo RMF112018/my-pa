@@ -7,7 +7,7 @@ that a parity matrix therefore cannot reach:
 * the **handshake** — `initialize` answers, negotiates a protocol version, and
   declares a tools capability;
 * the **tool list** — derived from the capability set rather than maintained, so
-  a ninth capability appears without anyone editing the adapter, and the schema
+  a new capability appears without anyone editing the adapter, and the schema
   for a capability is derived from the command it builds;
 * **stdio, in a real child process** — the transport `D-26` and `D-30` actually
   authorise, driven once end to end by the SDK's own client over pipes, because
@@ -106,10 +106,10 @@ def test_tools_list_publishes_exactly_the_capability_set(served: Served[McpTrans
 def test_no_capability_name_is_written_down_in_the_adapter() -> None:
     """The list is derived, and this is what makes "derived" checkable.
 
-    Equality with `Capability` above is also satisfied by eight names typed out
-    by hand that happen to match today. What rules that out is that none of the
-    eight strings appears in the adapter's source at all — so a ninth capability
-    cannot be missing from a list nobody wrote.
+    Equality with `Capability` above is also satisfied by the same names typed
+    out by hand that happen to match today. What rules that out is that none of
+    the capability strings appears in the adapter's source at all — so a new
+    capability cannot be missing from a list nobody wrote.
     """
     adapters = Path(mcp_module.__file__).resolve().parent
     for path in sorted(adapters.rglob("*.py")):
@@ -121,8 +121,8 @@ def test_no_capability_name_is_written_down_in_the_adapter() -> None:
 def test_a_ninth_capability_gets_a_schema_without_the_adapter_being_edited() -> None:
     """The derivation is generic, shown against a command that does not exist.
 
-    A synthetic ninth command is put through the same schema builder the eight
-    go through. If the builder were a lookup table it would have nothing to say
+    A synthetic thirteenth command is put through the same schema builder the
+    twelve go through. If the builder were a lookup table it would have nothing to say
     about this one; because it reads the dataclass, it describes it exactly.
     """
     from dataclasses import dataclass

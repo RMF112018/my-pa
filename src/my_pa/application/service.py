@@ -1,4 +1,4 @@
-"""The eight capabilities, behind one authorization and one transaction.
+"""Every capability, behind one authorization and one transaction.
 
 `ApplicationService` has exactly one public method. That is the whole design.
 A use case cannot be reached without going through `invoke`, `invoke` cannot
@@ -116,14 +116,18 @@ from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.commands import (
     Command,
+    CreateCapture,
     EnrollSource,
     FetchSource,
     GetCapabilities,
     GetSourceMetadata,
     GetSourceStatus,
+    ListCaptures,
     ListSources,
+    ReadCapture,
     ReadKnowledge,
     Representation,
+    ReviseCapture,
     SearchKnowledge,
 )
 from my_pa.application.disclosure import Limitation, disclosure_for, unenrolled_disclosure
@@ -143,6 +147,8 @@ from my_pa.application.errors import (
 )
 from my_pa.contracts.ports import (
     Acceptance,
+    CaptureAdmission,
+    CaptureAdmissionRequest,
     EvidenceUnavailableError,
     PortError,
     SearchOutcome,
@@ -150,10 +156,19 @@ from my_pa.contracts.ports import (
     UnknownScopeError,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits
+from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
 from my_pa.contracts.v1.disclosure import Disclosure, SourceReference, Truncation
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent, AuditOutcome
+from my_pa.domain.capture.errors import (
+    CaptureBoundsError,
+    CaptureConflictError,
+    CaptureError,
+    EmptyCaptureError,
+)
+from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
@@ -320,6 +335,62 @@ def _provider_failure(error: ProviderError) -> ApplicationError:
     return UnavailableError(SafeDetail.SOURCE_OBJECT_ID)
 
 
+#: What a capture answer's trust rests on. Not `source_provider` and not
+#: `text_extractor`: nothing read a source and nothing derived anything.
+#: `ADR-003` makes a user-authored record an authority in its own right, so the
+#: level is `source_original` and the basis names the person who wrote it.
+_CAPTURE_TRUST_BASIS: Final = ("user_authored",)
+
+
+def _capture_content(text: str) -> CaptureContent:
+    """Build the domain value, reporting which field a refusal was about.
+
+    The two refusals are different answers and are reported as such: an empty
+    capture names the field, and one past the bound names the field and the
+    bound. Neither message carries the text — the domain's own exceptions do not
+    hold it, and the public error's details are closed tokens.
+    """
+    failure: ApplicationError | None = None
+    try:
+        return CaptureContent(text)
+    except EmptyCaptureError:
+        failure = InvalidRequestError(SafeDetail.TEXT)
+    except CaptureBoundsError:
+        failure = InvalidRequestError(SafeDetail.TEXT, SafeDetail.MAX_CAPTURE_CHARACTERS)
+    except CaptureError:
+        failure = InvalidRequestError(SafeDetail.TEXT)
+    # Raised outside the handler so the original — whose traceback frames render
+    # the value that was refused — is not left in `__context__`.
+    raise failure
+
+
+def _capture_version_view(version: CaptureVersion, *, is_current: bool) -> CaptureVersionView:
+    """One stored version as the contract publishes it.
+
+    `is_current` is passed in rather than read off the version, because there is
+    no column that says so: the current version is the greatest version number
+    the capture holds, and the use case is what has read both.
+    """
+    return CaptureVersionView(
+        capture_id=version.capture_id,
+        version_id=version.version_id,
+        version_number=version.version_number,
+        supersedes_version_id=version.supersedes_version_id,
+        is_current=is_current,
+        owner_principal_id=version.owner_principal_id,
+        classification=version.classification,
+        processing_policy=version.processing_policy.value,
+        content_sha256=version.content.digest,
+        character_count=version.content.character_count,
+        text=version.content.text,
+        client_created_at=version.client_created_at,
+        server_received_at=version.server_received_at,
+        occurred_at=version.occurred_at,
+        accepted_at=version.accepted_at,
+        recorded_at=version.recorded_at,
+    )
+
+
 @contextmanager
 def _translated() -> Iterator[None]:
     """Run a block, converting a port or provider failure into a public error.
@@ -481,6 +552,7 @@ class ApplicationService:
                     purpose=metadata.purpose,
                     command=command,
                     correlation_id=correlation_id,
+                    request_id=metadata.request_id,
                     at=at,
                 )
                 if authorization.allowed:
@@ -491,7 +563,7 @@ class ApplicationService:
             raise InvalidRequestError(SafeDetail.SUBJECT)
         raise DeniedError()
 
-    # ---- the eight use cases -----------------------------------------------
+    # ---- the source and knowledge planes -----------------------------------
 
     def _capabilities_get(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetCapabilities
@@ -928,6 +1000,198 @@ class ApplicationService:
             ),
         )
 
+    # ---- the capture plane -------------------------------------------------
+
+    def _capture_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateCapture
+    ) -> _Result:
+        """Store one user-authored note as the first version of a new capture."""
+        return self._admit(
+            unit_of_work,
+            authorization,
+            capture_id=None,
+            text=command.text,
+            idempotency_key=command.idempotency_key,
+            client_created_at=command.client_created_at,
+            occurred_at=command.occurred_at,
+        )
+
+    def _capture_revise(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReviseCapture
+    ) -> _Result:
+        """Append a successor version to an existing capture.
+
+        Authorized on capability and purpose alone, and **not** on owning the
+        capture (`D-72`). Identity in this build is a property of the serving
+        process — three CLI invocations mint three principals and a gateway
+        restart mints a new one — so an owner-equality check would make a
+        capture unrevisable by anything but the process that wrote it, and would
+        make `QC-AC-013` unprovable across two processes. Under `P00-OD-010`,
+        loopback-only and single-principal, there is no second principal for such
+        a check to distinguish. `docs/operations/mcv-limitations.md` is where
+        that is disclosed, and it is worded as blocking on multi-principal
+        operation.
+        """
+        return self._admit(
+            unit_of_work,
+            authorization,
+            capture_id=command.capture_id,
+            text=command.text,
+            idempotency_key=command.idempotency_key,
+            client_created_at=command.client_created_at,
+            occurred_at=command.occurred_at,
+        )
+
+    def _capture_read(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadCapture
+    ) -> _Result:
+        """One stored version of one capture, exactly as it was written.
+
+        A named version is returned whether or not it is the current one, which
+        is `QC-AC-010`'s "independently retrievable": an edit appends, and the
+        predecessor stays readable at its own identifier.
+        """
+        with _translated():
+            version = unit_of_work.captures.version(
+                command.capture_id, version_id=command.version_id
+            )
+            current = unit_of_work.captures.version(command.capture_id)
+        if version is None or current is None:
+            raise NotFoundError(SafeDetail.CAPTURE_ID)
+        view = _capture_version_view(version, is_current=version.version_id == current.version_id)
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CAPTURE_TRUST_BASIS),
+        )
+
+    def _capture_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListCaptures
+    ) -> _Result:
+        """One page of stored captures, newest first, carrying no content.
+
+        Bounded by the same published page size every other listing here uses
+        (`D-24`), so `capabilities.get` states the limit a caller will actually
+        get. One row past the page is read so that truncation is a fact rather
+        than a guess, exactly as `sources.list` does it.
+        """
+        page_size = self._page_size(command.page_size)
+        with _translated():
+            found = unit_of_work.captures.captures(limit=page_size + 1)
+        truncated = len(found) > page_size
+        page = found[:page_size]
+        return _Result(
+            payload={
+                "captures": [
+                    CaptureListEntry(
+                        capture_id=summary.capture_id,
+                        owner_principal_id=summary.owner_principal_id,
+                        created_at=summary.created_at,
+                        version_count=summary.version_count,
+                        latest_version_id=summary.latest_version_id,
+                        latest_version_number=summary.latest_version_number,
+                        latest_recorded_at=summary.latest_recorded_at,
+                    ).to_canonical_dict()
+                    for summary in page
+                ]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CAPTURE_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated, reason="page_size_reached" if truncated else None
+                ),
+                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
+            ),
+        )
+
+    def _admit(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        *,
+        capture_id: str | None,
+        text: str,
+        idempotency_key: str,
+        client_created_at: datetime | None,
+        occurred_at: datetime | None,
+    ) -> _Result:
+        """The one write path both `capture.create` and `capture.revise` take.
+
+        **The transaction is the one this method was handed.** `_run` opened it
+        before `authorize` ran and the commit is that `with` block's exit, so the
+        capture, its version, its receipt, its submission, and its queued
+        processing job commit together or not at all without this method
+        arranging anything (`QC-AC-034`). The redacted audit event is *not* among
+        them: it committed first, on the sink's own connection, and the version
+        stores its identifier (`D-34`). A failed audit therefore fails the
+        request closed before any of this runs, and a failed work transaction
+        leaves an audit event describing an authorization whose work never
+        landed, which `D-34` records as the correct direction of the trade.
+
+        **Three clocks, read at three moments.** `authorization.at` is when this
+        process received the request, `self._clock()` here is when the admission
+        decided, and the store writes `recorded_at` from the server's own clock.
+        The two the caller may supply are passed through untouched, including
+        when they are absent. Five columns, five origins, no default from one to
+        another (`QC-AC-012`).
+        """
+        content = _capture_content(text)
+        request = CaptureAdmissionRequest(
+            capture_id=capture_id,
+            content=content,
+            idempotency_key=idempotency_key,
+            request_id=authorization.request_id,
+            correlation_id=authorization.correlation_id,
+            principal_id=authorization.principal.principal_id,
+            audit_id=authorization.audit_id,
+            # Fixed rather than requested. `QC-AC-040` requires the default to be
+            # private-local with cloud and training false, and a caller-selected
+            # classification would be a caller widening its own processing
+            # eligibility, which `docs/specs/quick-capture/09_LOGICAL_DATA_MODEL.md`
+            # forbids: `:56` names the field and defaults it to `private_local`,
+            # and `:73` states that "classification changes cannot silently widen
+            # processing eligibility". Two lines, not one sentence.
+            classification=Classification.PRIVATE_LOCAL,
+            processing_policy=ProcessingPolicy.LOCAL_ONLY,
+            server_received_at=authorization.at,
+            accepted_at=self._clock(),
+            client_created_at=client_created_at,
+            occurred_at=occurred_at,
+        )
+        admission: CaptureAdmission | None = None
+        conflict: ApplicationError | None = None
+        with _translated():
+            try:
+                admission = unit_of_work.captures.admit(request)
+            except CaptureConflictError:
+                # The key is bound to materially different content. `conflict`,
+                # which is one of the eleven public codes; there is no
+                # `idempotency_conflict` and inventing one would be an
+                # unauthorised expansion of the v1 error set. Which field differs
+                # is deliberately not reported: that would describe the stored
+                # request to whoever guessed the key. The raise is outside the
+                # handler for the usual reason.
+                conflict = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        if conflict is not None:
+            raise conflict
+        if admission is None:
+            raise InternalError()
+
+        receipt = admission.receipt
+        return _Result(
+            payload=CaptureReceiptView(
+                receipt_id=receipt.receipt_id,
+                capture_id=receipt.capture_id,
+                version_id=receipt.version_id,
+                version_number=receipt.version_number,
+                idempotency_key=receipt.idempotency_key,
+                content_sha256=receipt.content_sha256,
+                issued_at=receipt.issued_at,
+                created=admission.created,
+            ).to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CAPTURE_TRUST_BASIS),
+        )
+
     # ---- shared helpers ----------------------------------------------------
 
     def _page_size(self, requested: int | None) -> int:
@@ -1235,5 +1499,9 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.SOURCES_ENROLL: ApplicationService._sources_enroll,
         Capability.KNOWLEDGE_SEARCH: ApplicationService._knowledge_search,
         Capability.KNOWLEDGE_READ: ApplicationService._knowledge_read,
+        Capability.CAPTURE_CREATE: ApplicationService._capture_create,
+        Capability.CAPTURE_REVISE: ApplicationService._capture_revise,
+        Capability.CAPTURE_READ: ApplicationService._capture_read,
+        Capability.CAPTURE_LIST: ApplicationService._capture_list,
     }
 )

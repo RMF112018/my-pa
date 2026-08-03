@@ -3,9 +3,10 @@
 Three claims, separated because they fail for different reasons.
 
 **The revision is in the chain.** Deliberately not "is the head", for the reason
-`test_audit_schema_migration.py:147-158` records: that property is true only
-until the next revision is written, and asserting it makes every later work
-package edit this file. A single unbranched chain containing this revision on
+`test_the_audit_revision_is_in_the_chain_on_the_extraction_revision` in
+`test_audit_schema_migration.py` records: that property is true only until the
+next revision is written, and asserting it makes every later work package edit
+this file. A single unbranched chain containing this revision on
 `9c6b4a18ed72` is the property everything below actually depends on.
 
 **The DDL is reviewable offline.** `--sql` from the revision below to this one
@@ -76,6 +77,22 @@ AUDIT_REVISION = "9c6b4a18ed72"
 #: only that a string was defined once. The primary key is named in the
 #: declaration; the two foreign keys are not, so PostgreSQL names them, and these
 #: are the names it gives.
+#: The tables the revisions *above* this one create, which a downgrade reached
+#: from head therefore also removes. Stated explicitly rather than derived, in
+#: the style this suite already uses for the same claim: an extra table left
+#: behind by any of those downgrades is exactly what these equalities exist to
+#: see, and a set computed from the chain would absorb one.
+TABLES_ABOVE: Final[frozenset[str]] = frozenset(
+    {
+        "captures",
+        "capture_versions",
+        "capture_receipts",
+        "capture_submissions",
+        "capture_jobs",
+    }
+)
+
+
 SCOPE_PRIMARY_KEY = "an_enrollment_holds_an_object_once"
 SCOPE_FOREIGN_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -115,9 +132,10 @@ def test_the_enrollment_objects_revision_is_in_the_chain() -> None:
     """Guards the rest of this module: an absent revision would create nothing.
 
     Deliberately not "is the head", for the reason
-    `test_audit_schema_migration.py:147-158` gives: that property is true only
-    until the next revision is written, and asserting it would make every later
-    work package edit this file.
+    `test_the_audit_revision_is_in_the_chain_on_the_extraction_revision` in
+    `test_audit_schema_migration.py` gives: that property is true only until the
+    next revision is written, and asserting it would make every later work
+    package edit this file.
     """
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1
@@ -313,8 +331,10 @@ def test_downgrading_this_revision_leaves_the_other_knowledge_tables_alone(
 ) -> None:
     """This revision added one table to a schema it did not create.
 
-    Its downgrade therefore removes one table and not the schema, and not the
-    nine tables of evidence the revisions below it own.
+    Its downgrade therefore removes its own table and not the schema, and not the
+    nine tables of evidence the revisions below it own. Reaching it from head
+    also unwinds the revisions above it, so their tables go too — which is what
+    `TABLES_ABOVE` names.
     """
     engine = create_database_engine(disposable_database)
     try:
@@ -324,7 +344,7 @@ def test_downgrading_this_revision_leaves_the_other_knowledge_tables_alone(
 
         command.downgrade(_config(), AUDIT_REVISION)
 
-        assert _tables(engine) == before - {"enrollment_objects"}
+        assert _tables(engine) == before - {"enrollment_objects", *TABLES_ABOVE}
         assert len(_tables(engine)) == 9
         assert not (SCOPE_FOREIGN_KEYS & _constraints(engine, "f"))
         assert SCOPE_PRIMARY_KEY not in _constraints(engine, "p")

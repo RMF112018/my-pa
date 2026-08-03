@@ -8,8 +8,31 @@ each was chosen — is documented in [`../postgres/README.md`](../postgres/READM
 and defined by [`../compose/postgres.yml`](../compose/postgres.yml). This runbook
 does not repeat that; it covers the operations.
 
-All commands run from the repository root. Every command below was executed on
-2026-08-01 except where marked otherwise.
+All commands run from the repository root.
+
+**Provenance, corrected 2026-08-03: a date is not provenance, and this file is
+the proof.** Every command below was executed on 2026-08-01 against canonical
+`my_pa` except where marked otherwise, and until this correction that sentence
+was the whole of what this runbook said about its own currency.
+[`worker-operations.md`](worker-operations.md) states why that is not enough —
+several runbooks carry the same date string, so the date cannot tell a reader
+which transcripts were produced at which head — and this file demonstrated it:
+the `alembic current -v` transcript below read `Rev: 3a8e2cb16d59 (head)`,
+**contradicted twice in this same file** by the two transcripts marked
+*Re-measured 2026-08-03*, which read `6c4d3ea82f10`. It has now been
+re-executed. Where a transcript's currency matters, the marker names the date
+and the revision, not the date alone.
+
+| Transcripts | Run | Canonical `my_pa` was at | Repository head was at |
+|---|---|---|---|
+| the `alembic current -v` guard, the size-and-revision query, the `health.py` probe | re-executed or re-measured 2026-08-03 for WP-6 | `6c4d3ea82f10` | `1a4c9e77b2d5` |
+| everything else, including the restore rehearsal | executed 2026-08-01, **not re-executed** | `3a8e2cb16d59`, which is what the rehearsal transcript reports | before the `knowledge` schema existed |
+
+**Why the rest were not re-run.** They are backup, restore, start, stop and
+connect procedures against a database WP-6 does not migrate — canonical `my_pa`
+is deliberately not at application head, as the section below explains — so
+re-running them would produce new timings and prove nothing the carried
+transcripts do not. The restore rehearsal's figures are that run's.
 
 | | |
 | --- | --- |
@@ -50,10 +73,25 @@ connected to:
 .venv/bin/alembic current -v
 ```
 
+**Re-executed 2026-08-03** against canonical `my_pa`, which this command only
+reads:
+
 ```
 Current revision(s) for postgresql+psycopg://my_pa@localhost:5433/my_pa:
-Rev: 3a8e2cb16d59 (head)
+Rev: 6c4d3ea82f10
+Parent: 3a8e2cb16d59
 ```
+
+*What stood here read `Rev: 3a8e2cb16d59 (head)`, and it was wrong twice over:
+canonical `my_pa` has been at `6c4d3ea82f10` since 2026-08-01, and Alembic
+prints no `(head)` marker for it, because it is not the head — the chain ends at
+`1a4c9e77b2d5`. The same mislabel is corrected under the size query below and
+again in the restore-verification query near the end of this runbook. **Three
+sites, found one per review cycle, each sweep stopping at the site it was looking
+for.** The class is a rule now rather than a sweep:
+`../../tests/architecture/test_no_stored_revision_is_labelled_head.py` reads
+every query in this repository that selects a stored revision and fails if any of
+them aliases a column to the head of the chain.*
 
 If that line ends in `/my_pa`, you are pointed at the canonical database. Stop.
 
@@ -165,15 +203,18 @@ knows nothing about what the repository's chain ends at, so an alias reading
 was two migrations stale by the time anyone read it.
 
 **Canonical `my_pa` is deliberately not at application head.** It is at
-`6c4d3ea82f10`; the chain ends at `af3d35efb9c0`, four revisions later, and it
-carries no `knowledge` schema. The four are the application's own tables, and
+`6c4d3ea82f10`; the chain ends at `1a4c9e77b2d5`, **five** revisions later
+(re-measured 2026-08-03; it was `af3d35efb9c0` and four until WP-6 added the
+capture revision), and it
+carries no `knowledge` schema. The five are the application's own tables, and
 this database is the migrated corpus rather than the application's store. The
 consequence is worth knowing before pointing anything at it: `9c6b4a18ed72`
 creates `knowledge.audit_events`, canonical `my_pa` is three revisions before
 it, and every served request commits an audit row — so a request against this
 database answers `internal_error`, which names nothing. **That follows from
 this database's revision and not from "behind head" in general**: measured at
-`9c6b4a18ed72`, one revision behind head, `capabilities.get` and `sources.list`
+`9c6b4a18ed72`, one revision behind head then and two behind `1a4c9e77b2d5`
+now, `capabilities.get` and `sources.list`
 both answered exactly as they do at head, while `sources.enroll` on that same
 database answered `internal_error` (`D-61`). Behind head is not one condition.
 Ask the probe rather than reading a transcript:
@@ -183,12 +224,15 @@ MY_PA_DATABASE_URL='postgresql+psycopg://my_pa@localhost:5433/my_pa' \
   .venv/bin/python apps/cli/health.py
 ```
 
+**Re-executed 2026-08-03** against canonical `my_pa`, which this probe only
+reads:
+
 ```
 state            not_at_head
 server_version   17.10 (Debian 17.10-1.pgdg13+1)
 extensions       pg_trgm, plpgsql, unaccent
 revision         6c4d3ea82f10
-head             af3d35efb9c0
+head             1a4c9e77b2d5
 the configured database is not at the migration head and cannot serve this build
 ```
 
@@ -309,7 +353,8 @@ Verified end to end on 2026-08-01: a full dump of `my_pa` restored into a fresh
 `my_pa_restored` in **44.8 seconds**, exit 0, no errors. The restored database
 matched the original on every dimension checked — 494 base tables, 277 foreign
 keys with 0 `NOT VALID`, 1,511 indexes, extensions `pg_trgm`/`plpgsql`/`unaccent`,
-Alembic head `3a8e2cb16d59`, 3,263,870 domain rows, 2 migration runs, 398
+Alembic **revision** `3a8e2cb16d59` — the revision canonical `my_pa` was at on
+that date, and not a head then or now — 3,263,870 domain rows, 2 migration runs, 398
 `table_progress` rows, 8 `quarantine_records`, 3,228,581 `source_key_map` rows,
 collation `C.UTF-8`. The rehearsal database was dropped afterwards.
 
@@ -329,7 +374,7 @@ Verify before promoting the restored database to anything:
 
 ```sh
 docker exec my-pa-postgres psql -U my_pa -d my_pa_restored -c "
-SELECT (SELECT version_num FROM public.alembic_version) AS head,
+SELECT (SELECT version_num FROM public.alembic_version) AS revision,
        (SELECT count(*) FROM pg_constraint WHERE contype='f') AS fks,
        (SELECT count(*) FROM pg_constraint WHERE contype='f' AND NOT convalidated) AS not_valid,
        (SELECT count(*) FROM migration_control.migration_runs) AS runs;"

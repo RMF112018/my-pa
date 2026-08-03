@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes eight capability names and not one of them mutates,
+  ends: the transport routes twelve capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -54,6 +54,7 @@ from tests.conftest import (
     build_provider,
     build_service,
     operator,
+    staged_capture,
     staged_search,
 )
 from tests.wire import Reply, Wire, serve
@@ -184,6 +185,14 @@ def wire(marked: Scene) -> Iterator[Wire]:
 
 
 def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dict[str, Any]]:
+    """One payload per capability, every one of them carrying the marker.
+
+    The capture payloads carry `MARKER_CONTENT` deliberately: a capture is the
+    one request in this build that *sends* content, so the redaction scans below
+    are checking a path that has the marker in its input rather than only in its
+    output.
+    """
+    capture = staged_capture(marked, text=MARKER_CONTENT)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -210,6 +219,17 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "knowledge_id": record.knowledge_id,
             "enrollment_id": marked.enrollment.enrollment_id,
         },
+        Capability.CAPTURE_CREATE: {
+            "text": MARKER_CONTENT,
+            "idempotency_key": "wire-capture-0001",
+        },
+        Capability.CAPTURE_REVISE: {
+            "capture_id": capture.capture_id,
+            "text": MARKER_CONTENT,
+            "idempotency_key": "wire-capture-revise-0001",
+        },
+        Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
+        Capability.CAPTURE_LIST: {},
     }
 
 
@@ -319,8 +339,24 @@ def test_an_identifier_the_provider_never_issued_is_denied_over_the_wire(
 # ---- unknown scope and purpose escalation -----------------------------------
 
 
+#: Capabilities whose authority is a held scope. The exclusions are the domain's
+#: own, `tests/policy/test_application_authorization.py` re-derives them from
+#: `evaluate` rather than from a list, and repeating that derivation here would
+#: be repeating a domain test through a transport. `capture.*` joins
+#: `capabilities.get` on the scopeless side: a capture is a product-owned record
+#: under `ADR-003` and belongs to no configured source.
 SCOPED_CAPABILITIES = [
-    c for c in Capability if c not in {Capability.CAPABILITIES_GET, Capability.SOURCES_ENROLL}
+    c
+    for c in Capability
+    if c
+    not in {
+        Capability.CAPABILITIES_GET,
+        Capability.SOURCES_ENROLL,
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.CAPTURE_READ,
+        Capability.CAPTURE_LIST,
+    }
 ]
 
 
@@ -375,9 +411,35 @@ def test_every_capability_refuses_a_purpose_it_does_not_permit_over_the_wire(
 
 MUTATING_NAMES = ("write", "create", "update", "delete", "remove", "rename", "move", "put")
 
+#: The capabilities the name check above does *not* apply to, and the reason it
+#: does not (`D-71`).
+#:
+#: The substring list is a **proxy** for ADR-003 clause 5 / `MB-AC-003` — no
+#: source mutation — and it is already an imprecise one: `sources.enroll` writes
+#: to the database and passes only because "enroll" is not on the list. The
+#: capture plane writes a *product-owned* record, which `ADR-003` makes a third
+#: authority class that is neither a source-system write nor a managed-document
+#: write, so `capture.create` is a name the proxy refuses and the property
+#: permits. The canonical package fixes that name in six places and it is not
+#: negotiable.
+#:
+#: **The exemption is exactly the capture family and nothing else**, so a future
+#: `knowledge.delete` or `sources.delete` is still caught here. And the property
+#: the proxy stands for is carried for `capture.*` by
+#: `test_no_capability_over_either_transport_calls_anything_but_a_read`, which
+#: drives every capability against a recording provider — a stronger claim than
+#: the name check, made about what actually ran. If that test stops covering
+#: `capture.*`, this exemption is a hole; the guard beside it is what says so.
+CAPTURE_CAPABILITIES = frozenset(c for c in Capability if c.value.startswith("capture."))
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
-    """One route, one method, and eight names — none of which mutates a source."""
+    """One route, one method, and no name that mutates a *source*.
+
+    The capture family is exempt from the name check and is not exempt from the
+    property; see `CAPTURE_CAPABILITIES`. The exemption is asserted to be
+    non-empty and to be exactly the capture family, so it cannot quietly grow.
+    """
     application = create_http_app(
         build_service(World(), FakeProviders({})),
         principal=operator(),
@@ -387,8 +449,17 @@ def test_the_transport_routes_no_mutating_capability() -> None:
     assert routes[0].methods == {"POST"}
 
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over HTTP"
-    for capability in _BUILDERS:
+    assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
+    checked = [c for c in _BUILDERS if c not in CAPTURE_CAPABILITIES]
+    assert len(checked) == len(Capability) - len(CAPTURE_CAPABILITIES)
+    for capability in checked:
         assert not any(verb in capability.value for verb in MUTATING_NAMES)
+    assert {c.value for c in CAPTURE_CAPABILITIES} == {
+        "capture.create",
+        "capture.revise",
+        "capture.read",
+        "capture.list",
+    }, "the exemption is exactly the capture family"
 
 
 @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"], ids=str)
@@ -582,11 +653,19 @@ def test_no_header_of_any_answer_names_anything(
     The framework and its version are not announced either: `server_header` is
     off in `apps/gateway.py` and in the harness that mirrors it, so a client
     cannot read what is serving it from a header.
+
+    **`200` is asserted per answer, and that is the non-vacuity control.** A
+    scan of an error envelope's headers proves nothing about the headers of an
+    answer that carried a result, and every capability here is one that should
+    succeed. The class sweep that produced this line measured the alternative:
+    with the capture handlers raising, four of twelve iterations scanned a `500`
+    and the test reported the property proved.
     """
     record = staged_record(marked)
     marked.world.searches[marked.enrollment.enrollment_id] = staged_search(marked)
     for capability, payload in payloads_for(marked, record).items():
         reply = wire.send(capability.value, document(capability, marked.principal, payload))
+        assert reply.status == 200, f"{capability.value} answered {reply.status}: {reply.body}"
         rendered = " ".join(f"{name}: {value}" for name, value in reply.headers.items())
         assert_clean(rendered, marked_root, f"{capability.value} headers")
         assert "server" not in reply.headers
@@ -611,7 +690,11 @@ def test_a_running_gateway_writes_nothing_sensitive_to_a_log(
         wire_for(build_service(marked.world, marked.providers), marked.principal) as client,
     ):
         for capability, payload in payloads_for(marked, record).items():
-            client.send(capability.value, document(capability, marked.principal, payload))
+            answer = client.send(capability.value, document(capability, marked.principal, payload))
+            # The control for the scan below. "Nothing sensitive is in the log"
+            # is satisfied for free by requests that never ran, and by a log
+            # capture that captured nothing. Both are asserted against.
+            assert answer.status == 200, f"{capability.value} answered {answer.status}"
         client.send(
             Capability.KNOWLEDGE_SEARCH.value,
             document(
@@ -623,6 +706,10 @@ def test_a_running_gateway_writes_nothing_sensitive_to_a_log(
         )
         client.send("capabilities.get", raw=f'{{"broken": "{MARKER_QUERY}"')
         client.send("sources.destroy", document(Capability.SOURCES_LIST, marked.principal, {}))
+    assert caplog.records, (
+        "no log record was captured at all, so the absence of the marker from "
+        "the log is an absence from an empty log"
+    )
     assert_no_marker(caplog.text, marked_root, "the gateway log")
     assert MARKER_CONTENT not in caplog.text
     assert MARKER_INJECTION not in caplog.text

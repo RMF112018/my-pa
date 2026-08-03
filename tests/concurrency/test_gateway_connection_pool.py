@@ -82,6 +82,7 @@ from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.settings import ENV_PREFIX, Settings, load_settings
 from my_pa.contracts.ports import (
     AuditSink,
+    CaptureRepository,
     EnrollmentRepository,
     KnowledgeRepository,
     OperationQueue,
@@ -193,6 +194,10 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def knowledge(self) -> KnowledgeRepository:
         return self._inner.knowledge
+
+    @property
+    def captures(self) -> CaptureRepository:
+        return self._inner.captures
 
     @property
     def audit(self) -> AuditSink:

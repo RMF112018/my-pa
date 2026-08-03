@@ -4,7 +4,7 @@
 in transport or adapter conditionals". This module is what that sentence buys:
 every capability reaches `domain.policy.decision.evaluate` through `authorize`
 and through nothing else, so there is one answer to "may this happen" rather
-than eight of them that could drift.
+than twelve of them that could drift.
 
 **The authorized scope is read, never supplied.** `PolicyRequest.authorized_source_ids`
 comes from the enrollments the principal actually holds, loaded inside the same
@@ -31,8 +31,10 @@ Three shapes of derivation, and each fails closed:
   contributes that, or the empty set when the lookup finds nothing.
 
 An empty requested scope is not a wildcard. `domain.policy.decision` treats it
-as unauthorized for every capability except `capabilities.get`, which describes
-the interface itself and carries no scope at all.
+as unauthorized for every capability outside its `_SCOPELESS` set —
+`capabilities.get`, which describes the interface itself, and the four capture
+capabilities, which read and write a product-owned record that belongs to no
+configured source.
 
 **The audit event is written here and not by the caller.** `audit_event_for`
 derives outcome and reason from the decision, so the record and the decision
@@ -48,13 +50,17 @@ from datetime import datetime
 
 from my_pa.application.commands import (
     Command,
+    CreateCapture,
     EnrollSource,
     FetchSource,
     GetCapabilities,
     GetSourceMetadata,
     GetSourceStatus,
+    ListCaptures,
     ListSources,
+    ReadCapture,
     ReadKnowledge,
+    ReviseCapture,
     SearchKnowledge,
 )
 from my_pa.contracts.ports import UnitOfWork
@@ -85,6 +91,18 @@ class Authorization:
     capability: Capability
     purpose: Purpose
     correlation_id: str
+    #: The caller's own identifier for this request. Correlation input, exactly
+    #: as `metadata.principal_id` is: nothing authorizes on it. It is carried
+    #: here because a use case that records an admission has to record which
+    #: request admitted it, and the alternative — handing every handler the
+    #: whole `RequestMetadata` — would put a caller-controlled document inside
+    #: the layer that decides what a result is.
+    request_id: str
+    #: The audit event this decision was recorded as. Already committed, on the
+    #: sink's own connection, before this value exists (`D-34`), so a use case
+    #: can store the *reference* inside its own transaction and a later reader
+    #: can tie a stored record back to the decision that admitted it.
+    audit_id: str
     at: datetime
     decision: PolicyDecision
     requested_source_ids: frozenset[str]
@@ -118,7 +136,13 @@ def _requested_scope(
 ) -> frozenset[str]:
     """The sources this command would read, derived from the command itself."""
     match command:
-        case GetCapabilities():
+        # A capture is a product-owned record under `ADR-003` and belongs to no
+        # configured source, so there is no source for it to contribute. That is
+        # the empty set as a *measurement* rather than as a failure to resolve
+        # one, and `domain.policy.decision._SCOPELESS` is where it is read that
+        # way — a capability missing from that set is denied here instead, with
+        # nothing to say the mapping was never made.
+        case GetCapabilities() | CreateCapture() | ReviseCapture() | ReadCapture() | ListCaptures():
             return frozenset()
         case ListSources() | GetSourceMetadata() | FetchSource() | EnrollSource():
             return frozenset({command.source_id})
@@ -169,6 +193,7 @@ def authorize(
     purpose: Purpose,
     command: Command,
     correlation_id: str,
+    request_id: str,
     at: datetime,
     classification: Classification = Classification.PRIVATE_LOCAL,
 ) -> Authorization:
@@ -205,9 +230,10 @@ def authorize(
             authorized_source_ids=frozenset(e.source_id for e in enrollments),
         )
     )
+    audit_id = issue_identifier(IdKind.AUDIT)
     unit_of_work.audit.record(
         audit_event_for(
-            audit_id=issue_identifier(IdKind.AUDIT),
+            audit_id=audit_id,
             correlation_id=correlation_id,
             principal_id=principal.principal_id,
             capability=command.capability,
@@ -222,6 +248,12 @@ def authorize(
         capability=command.capability,
         purpose=purpose,
         correlation_id=correlation_id,
+        request_id=request_id,
+        # Issued before `record` and returned only after it, so an
+        # `Authorization` can only ever name an audit event that is already
+        # durable: a failure to record raises out of this function and no
+        # reference to a lost decision reaches a use case.
+        audit_id=audit_id,
         at=at,
         decision=decision,
         requested_source_ids=requested,

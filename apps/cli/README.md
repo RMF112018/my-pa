@@ -1,13 +1,14 @@
 # Operator CLI
 
-Three programs, three planes. They share this directory because
+Four programs, four planes. They share this directory because
 `docs/architecture/module-boundaries.md` section 5.10 puts operator commands
 here, and they share nothing else — no options, no runtime, no output shape.
-A migration phase is not a capability, and neither is registering a source.
+A migration phase is not a capability, and neither is registering a source or
+asking whether the database can serve one.
 
-`tests/contract/test_cli_transport.py` holds the three option surfaces disjoint,
+`tests/contract/test_cli_transport.py` holds the four option surfaces disjoint,
 and `tests/architecture/test_operator_commands_are_not_capabilities.py` holds
-`sources.py` mechanically outside the capability path.
+`sources.py` and `health.py` mechanically outside the capability path.
 
 ## `invoke.py` — one public capability
 
@@ -59,6 +60,47 @@ is exactly what an operator command must not become.
 
 The register-then-enroll-then-run sequence is in
 [`ops/runbooks/worker-operations.md`](/ops/runbooks/worker-operations.md).
+
+## `health.py` — the runtime probe
+
+`health.py` answers one question about the configured database: can it serve
+this build?
+
+```text
+python apps/cli/health.py
+```
+
+It takes no option at all — the target is `MY_PA_DATABASE_URL` and there is
+nothing else to decide. It prints a `state` line with one of three values and
+exits `0` only for the first:
+
+| `state` | means | exit |
+| --- | --- | --- |
+| `ready` | reachable, and carrying the migration head's schema | `0` |
+| `not_at_head` | reachable, but its Alembic revision is not head | `1` |
+| `unreachable` | no server answered | `1` |
+
+**The revision half is the part that earns the command** (`D-61`, `D-62`).
+Reachability alone would call the canonical `my_pa` database healthy while it
+cannot serve a single capability: it carries no `knowledge` schema, so it has no
+`knowledge.audit_events` for the audit row every served request commits, and a
+request through it answers `internal_error` and says nothing about why.
+Correcting that classification is out of scope and named by `D-65`; this command
+is how an operator finds out.
+
+**`not_at_head` is per-build, not per-capability.** At `9c6b4a18ed72`, one
+revision behind head `af3d35efb9c0`, `capabilities.get` serves and `sources.list`
+answers exactly as it does at head — so `not_at_head` is not a diagnosis that
+every capability fails. It is still the right refusal: at that same revision
+`sources.enroll` answers `internal_error`, because head creates
+`enrollment_objects`. Exiting `1` below head is an operational policy (`D-62`)
+that the measurement supports rather than a claim the measurement refutes.
+
+**It prints no URL, host, port, or database name, on any path.** The
+unreachable report states the fact rather than the driver's message, because the
+driver's message renders with the endpoint it failed to reach.
+[`ops/runbooks/end-to-end-operations.md`](/ops/runbooks/end-to-end-operations.md)
+runs it as the first step of the operator sequence.
 
 ## `migration.py` — the migration control plane
 

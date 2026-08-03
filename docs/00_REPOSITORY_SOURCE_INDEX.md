@@ -41,6 +41,25 @@ Not mirrored, routed by identity only: the **Frontier NAS MCP Connector** featur
 
 - [`docs/security/threat-model.md`](security/threat-model.md) — entry points, abuse cases, controls, and residual risk.
 
+## Operations
+
+Running the local candidate on one machine. A procedure under `ops/runbooks/` is written only after it has been executed; deployment, production activation, and destructive data operations remain operator-gated (`AGENTS.md` section 5).
+
+- [`docs/operations/mcv-limitations.md`](operations/mcv-limitations.md) — what the read-only slice does **not** do, each limitation citing the test or measurement that bounds it. Read this before reading the runbooks as a statement of capability.
+- [`ops/runbooks/README.md`](../ops/runbooks/README.md) — owning index for the operational runbooks: the database, the worker, the gateway, the other two transports, and the end-to-end operator sequence.
+- [`apps/cli/README.md`](../apps/cli/README.md) — the four operator programs: the capability transport, the source configuration plane, the runtime probe, and the migration control plane.
+- [`ops/postgres/README.md`](../ops/postgres/README.md) — the PostgreSQL instance itself: image, tuning, locale, collation contract, cluster-creation settings, and reset procedure.
+- [`ops/compose/README.md`](../ops/compose/README.md) — the container definition the instance is started from.
+
+## Schema, fixtures, and evidence
+
+- [`migrations/README.md`](../migrations/README.md) — the Alembic chain: what each revision owns and where the migration load sits in the sequence.
+- [`migrations/versions/README.md`](../migrations/versions/README.md) — the revision files themselves, and the naming they follow.
+- [`src/my_pa/infrastructure/database/README.md`](../src/my_pa/infrastructure/database/README.md) — the engine, its pool, and the health check the runtime probe calls.
+- [`fixtures/mcv/README.md`](../fixtures/mcv/README.md) — the synthetic corpus the read-only vertical slice is proven over. Synthetic throughout; `P00-OD-009` is open and no live root is configured.
+- [`evidence/README.md`](../evidence/README.md) — owning index for acceptance and completion evidence.
+- [`evidence/completion/README.md`](../evidence/completion/README.md) — the completion records themselves, with their Drive provenance.
+
 ## Migration
 
 - [`docs/migration/00_MIGRATION_INDEX.md`](migration/00_MIGRATION_INDEX.md) — owning index for `GOAL-MYPA-POSTGRESQL-MIGRATION-001` governance, identity, and phase records, and for the completed migration result. Records and routing only; it is not itself a database, DDL, ETL, or deployment surface.
@@ -59,5 +78,7 @@ The Phase 00 documents were integrated byte-faithfully from their authoring sess
 - [`docs/governance/GOVERNANCE-AUDIT-MYPA-MCV-20260730.md`](governance/GOVERNANCE-AUDIT-MYPA-MCV-20260730.md) — evidence basis, GitHub management plan, test policy rationale, and three-day MCV workflow for the current governance candidate.
 
 ## Working records
+
+- [`.ai/goals/README.md`](../.ai/goals/README.md) — what a goal directory must record: identity, repository and head, scope and acceptance criteria, authorization boundary, evidence, and final state. Directory presence does not activate a goal.
 
 Use GitHub issues for bounded work, pull requests for review and acceptance evidence, Actions for automated checks, and releases for versioned candidate notes. Add repository documentation only when it defines durable behavior, architecture, security, operations, or developer workflow.

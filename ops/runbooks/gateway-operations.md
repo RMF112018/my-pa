@@ -12,8 +12,25 @@ because they are one composition and differ only in protocol.
 Every command below was executed against a **disposable** database
 (`my_pa_gateway_runbook_test`, created at head and dropped for the purpose) on
 2026-08-02. Nothing here was run against the canonical `my_pa` database.
-Pointing the gateway at it would be safe to read from and would write audit rows
-for requests nobody made, which is the reason not to.
+
+**Corrected 2026-08-03: the reason first given here was incomplete, and the true
+one is stronger.** It said pointing the gateway at canonical `my_pa` "would be
+safe to read from and would write audit rows for requests nobody made", which
+reads as politeness. Measured: canonical `my_pa` is at `6c4d3ea82f10` while the
+chain ends at `af3d35efb9c0` and it carries **no `knowledge` schema**, so it has
+no `knowledge.audit_events` to commit the audit row every served request writes
+— every request fails inside the unit of work and the caller is told
+`internal_error`, which explains nothing (`D-61`, `D-65`). Run
+`.venv/bin/python apps/cli/health.py` against a database before pointing this
+process at it; that is what it is for, and
+`ops/runbooks/end-to-end-operations.md` makes it step 1.
+
+Everything below therefore describes a gateway over a database at head. **Head is
+not the narrowest state in which it answers *something*** — at `9c6b4a18ed72`,
+one revision behind head, `capabilities.get` serves and `sources.list` answers as
+it does at head (`D-61`) — but it is the narrowest state in which it answers
+*everything*: at that same revision `sources.enroll` returns `internal_error`,
+because head creates `enrollment_objects`. Point this process at head.
 
 ## What the gateway is, and what it does not yet do
 
@@ -106,6 +123,20 @@ curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
 Observed: `200`, `content-type: application/json`, and an envelope whose
 `result.manifest` lists eight capabilities `available`, `application/pdf`
 `decision_gated`, and `readiness.state: ready`. No `server` header.
+
+**What `readiness.state` measures, since an operator will read it as a probe.**
+It counts wired handlers in the manifest, so its *derivation* is build-time. Its
+*observation* is not: `ApplicationService._run` opens the unit of work before it
+dispatches, so a caller sees this value only from a database that was reachable
+and writable and could record the request's audit row. Measured (`D-61`):
+unreachable answers `unavailable`; a database before `9c6b4a18ed72`, which
+creates `knowledge.audit_events`, answers `internal_error`; and `9c6b4a18ed72`
+itself — one revision behind head — answers `ready`, the same as head, while
+`sources.enroll` on that same database answers `internal_error`. So this
+transcript is accurate and this envelope is a liveness signal, but it diagnoses
+nothing and it is **not** a head check: a `ready` here does not mean every
+capability will serve. `apps/cli/health.py` is what reports revision against
+head, and it is stricter than this envelope on purpose.
 
 A request for a scope the principal does not hold:
 

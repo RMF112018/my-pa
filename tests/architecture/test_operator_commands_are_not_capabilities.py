@@ -1,4 +1,4 @@
-"""`apps/cli/sources.py` registers a source. It is not a ninth capability.
+"""`apps/cli/` holds operator commands. None of them is a ninth capability.
 
 The capability set is closed at eight (`domain/identity/operation.py`), and an
 operator command that quietly became a ninth would be the widest hole this
@@ -7,9 +7,20 @@ ninth would have to be admitted to the contract, the audit table, and the policy
 decision at once — or, worse, would run beside them without any of the three.
 
 **The check is mechanical, not asserted.** Every claim below is decided by
-reading `apps/cli/sources.py` with `ast`, so it holds against what the file says
-rather than against what a docstring says about it. A prose assertion in the
-module under test cannot fail; this can.
+reading the command with `ast`, so it holds against what the file says rather
+than against what a docstring says about it. A prose assertion in the module
+under test cannot fail; this can.
+
+**Two commands, not one.** `sources.py` came first, with `D-42`. `health.py`
+joined it with `D-62`, and it is the one a guard written for a single file would
+have missed — the pattern this campaign keeps catching is a guarantee proven in
+one shape and not in its neighbour. Its permitted persistence set is **empty**,
+which is a stronger claim than `sources.py`'s rather than a weaker one: the probe
+reads a server's version and its Alembic revision and reaches no product table at
+all, so any persistence name arriving in it is a write surface appearing in a
+program that has none. `migration.py` is deliberately *not* here: it is the
+migration control plane and writes to `migration_runs` by design, so it is
+governed by `tests/contract/test_cli_transport.py`'s disjointness rule instead.
 
 **Each rule has a planted violation in this file.** A guard whose set has been
 narrowed to nothing keeps reporting success on every module in the tree, which is
@@ -40,12 +51,11 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-COMMAND = ROOT / "apps" / "cli" / "sources.py"
 
 #: The forbidden packages of rule 1, by import prefix.
 FORBIDDEN_PACKAGES = ("my_pa.application", "my_pa.adapters")
 
-#: Every name rule 2 permits the command to import from persistence.
+#: Every name rule 2 permits `sources.py` to import from persistence.
 #:
 #: Four readers and writers, and **no table declaration**. This set briefly held
 #: `sources`, the `Table` object, because the command's listing selected from it
@@ -62,10 +72,25 @@ PERMITTED_PERSISTENCE_NAMES = frozenset(
     {"register_source", "observe_object", "get_source", "all_sources"}
 )
 
+#: The commands these rules govern, and — for rule 2 — exactly what each may name
+#: out of `infrastructure.persistence`.
+#:
+#: `health.py`'s empty set is the whole of its claim. It composes an engine,
+#: calls `healthcheck`, and asks Alembic what revision the server is at; it names
+#: no table, no reader, and no writer, so this rule is what keeps it that way.
+COMMANDS = {
+    "sources.py": PERMITTED_PERSISTENCE_NAMES,
+    "health.py": frozenset(),
+}
+
 #: The identifier rule 3 forbids anywhere in the file.
 FORBIDDEN_IDENTIFIER = "Capability"
 
 PERSISTENCE = "my_pa.infrastructure.persistence"
+
+
+def _command(name: str) -> Path:
+    return ROOT / "apps" / "cli" / name
 
 
 def _tree(path: Path) -> ast.Module:
@@ -129,51 +154,67 @@ def _identifiers(path: Path) -> set[str]:
     return found
 
 
-def test_the_command_exists_and_is_read() -> None:
+@pytest.mark.parametrize("command", sorted(COMMANDS), ids=lambda value: str(value))
+def test_the_command_exists_and_is_read(command: str) -> None:
     """Guard the three rules below: each is an emptiness test on a parsed file.
 
     A missing or unparsed file would make all three pass without deciding
     anything, so what is asserted here is that the file has real imports and real
     identifiers in it.
     """
-    assert COMMAND.is_file(), f"{COMMAND} is gone; the three rules below decide nothing"
-    imported = _imported_modules(COMMAND)
-    assert len(imported) >= 5, f"only {len(imported)} imports parsed out of the command"
-    assert _persistence_names(COMMAND), "the command imports nothing from persistence at all"
-    assert len(_identifiers(COMMAND)) >= 20
+    path = _command(command)
+    assert path.is_file(), f"{path} is gone; the three rules below decide nothing"
+    imported = _imported_modules(path)
+    assert len(imported) >= 5, f"only {len(imported)} imports parsed out of {command}"
+    assert len(_identifiers(path)) >= 20
 
 
-def test_the_command_reaches_no_capability_path() -> None:
+def test_the_persistence_rule_decides_something_for_the_command_that_writes() -> None:
+    """Rule 2 is a subset test, and a subset test over an empty set is free.
+
+    `health.py`'s permitted set is empty *and* it imports no persistence name, so
+    for that command the rule holds trivially — which is exactly the state the
+    claim describes. This asserts the other command really does import from
+    persistence, so the rule below is deciding something for at least one of
+    them rather than passing over two empty sets.
+    """
+    named = _persistence_names(_command("sources.py"))
+    assert named, "sources.py imports no persistence name; the rule below decides nothing"
+    assert named <= PERMITTED_PERSISTENCE_NAMES
+
+
+@pytest.mark.parametrize("command", sorted(COMMANDS), ids=lambda value: str(value))
+def test_the_command_reaches_no_capability_path(command: str) -> None:
     """Rule 1: no `my_pa.application` and no `my_pa.adapters`, at any depth."""
     offending = sorted(
         imported
-        for imported in _imported_modules(COMMAND)
+        for imported in _imported_modules(_command(command))
         if any(
             imported == package or imported.startswith(f"{package}.")
             for package in FORBIDDEN_PACKAGES
         )
     )
     assert not offending, (
-        f"apps/cli/sources.py imports {offending}; an operator command that can "
+        f"apps/cli/{command} imports {offending}; an operator command that can "
         "reach the application can invoke a capability, which is what makes it one"
     )
 
 
-def test_the_command_names_only_the_writers_it_needs() -> None:
+@pytest.mark.parametrize("command", sorted(COMMANDS), ids=lambda value: str(value))
+def test_the_command_names_only_the_writers_it_needs(command: str) -> None:
     """Rule 2: the persistence names it imports are inside the permitted set."""
-    named = _persistence_names(COMMAND)
-    assert named, "the command imports no persistence name; this rule decides nothing"
-    beyond = sorted(named - PERMITTED_PERSISTENCE_NAMES)
+    beyond = sorted(_persistence_names(_command(command)) - COMMANDS[command])
     assert not beyond, (
-        f"apps/cli/sources.py imports {beyond} from persistence; it may configure a "
-        "source and observe its root, and may not write an enrollment, a job, or an outcome"
+        f"apps/cli/{command} imports {beyond} from persistence; each command names "
+        "only the readers and writers its own job needs, and no others"
     )
 
 
-def test_the_command_never_names_a_capability() -> None:
+@pytest.mark.parametrize("command", sorted(COMMANDS), ids=lambda value: str(value))
+def test_the_command_never_names_a_capability(command: str) -> None:
     """Rule 3: the word does not appear, so it cannot become one by accident."""
-    assert FORBIDDEN_IDENTIFIER not in _identifiers(COMMAND), (
-        "apps/cli/sources.py names `Capability`; the set is closed at eight and an "
+    assert FORBIDDEN_IDENTIFIER not in _identifiers(_command(command)), (
+        f"apps/cli/{command} names `Capability`; the set is closed at eight and an "
         "operator command is configuration rather than a ninth member of it"
     )
 

@@ -1,9 +1,13 @@
 # Operator CLI
 
-Two programs, two planes. They share this directory because
+Three programs, three planes. They share this directory because
 `docs/architecture/module-boundaries.md` section 5.10 puts operator commands
 here, and they share nothing else — no options, no runtime, no output shape.
-A migration phase is not a capability.
+A migration phase is not a capability, and neither is registering a source.
+
+`tests/contract/test_cli_transport.py` holds the three option surfaces disjoint,
+and `tests/architecture/test_operator_commands_are_not_capabilities.py` holds
+`sources.py` mechanically outside the capability path.
 
 ## `invoke.py` — one public capability
 
@@ -26,6 +30,35 @@ path, and offers no option that could change any of that. `--principal-id` is
 correlation input the application does not trust, exactly as it is over HTTP.
 [`ops/runbooks/mcp-and-cli-operations.md`](/ops/runbooks/mcp-and-cli-operations.md)
 covers running it.
+
+## `sources.py` — the source configuration plane
+
+`sources.py` configures a root as a source and observes it, which is the
+bootstrap `sources.enroll` needs: an enrollment names a `src_…` and a root
+`obj_…`, and until this existed nothing in the product issued either.
+
+```text
+python apps/cli/sources.py register \
+    --provider fixture --root <path> \
+    --label "MCV fixture corpus" --classification private_local
+python apps/cli/sources.py list
+```
+
+`register` prints the `source_id` and the `root_object_id` an enrollment then
+names, and `list` prints one line per configured source. **Neither prints the
+root.** Every option is required — nothing is inferred — and the target database
+comes from `MY_PA_DATABASE_URL`. Exit `0` on success, `1` on a refusal that names
+the defect and never the value.
+
+**It creates configuration, not a grant.** Registering a source authorizes
+nobody to read anything: every read still requires an enrollment, which requires
+the operator-only `sources.enroll`, which is authorized and audited. This program
+builds no application service and no principal, and it writes no audit event —
+`audit_events.capability` is closed to the eight capabilities, and a ninth member
+is exactly what an operator command must not become.
+
+The register-then-enroll-then-run sequence is in
+[`ops/runbooks/worker-operations.md`](/ops/runbooks/worker-operations.md).
 
 ## `migration.py` — the migration control plane
 

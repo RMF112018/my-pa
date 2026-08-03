@@ -4,28 +4,76 @@ Running, bounding, and stopping the `my-pa` worker process.
 
 Every command below was executed against a **disposable** database
 (`my_pa_worker_runbook_test`, created and dropped for the purpose) on
-2026-08-02. Nothing here was run against the canonical `my_pa` database, and
+2026-08-03. Nothing here was run against the canonical `my_pa` database, and
 nothing here needs to be: the worker writes to the `knowledge` schema's job
 plane, and pointing it at the canonical database before there is work worth
 doing would put attempt counts on rows nobody queued.
 
-## What the worker is, and what it does not yet do
+## What the worker is, and what it does
 
-`apps/worker.py` claims one queued job under a bounded lease, runs a handler
-inside the transaction that will also record the completion, and then completes
-or releases it. It stops cleanly on `SIGINT` or `SIGTERM`.
+`apps/worker.py` claims one queued job under a bounded lease, runs the extraction
+executor, and then completes or releases the job. It stops cleanly on `SIGINT` or
+`SIGTERM`.
 
-**There is no extraction executor wired to it.** A claimed job is released as
-`unavailable`, and after its bounded attempts the job becomes terminal `failed`.
-`apps/worker.py`'s module docstring states why: nothing bridges the object
-identifiers a source provider mints to the `source_objects` rows the extraction
-writer records outcomes against, and building that bridge is a source
-registration and enumeration design rather than a lease loop. In practice the
-worker finds no work at all, because nothing registers a source.
+One claimed job is one enrollment's outstanding objects. For each, the provider
+its source is configured with is asked to describe and read the object, the text
+extractor decides what came back, and the outcome is stored — an extraction, an
+`unsupported` row, or a quarantine with the reason that stopped it.
 
-Read that as: running this worker today is safe and does nothing. It is here so
-that the process, its lease discipline, and its shutdown are real and tested
-before anything depends on them.
+**Work commits per object, and that is a property to know before reading a job
+row.** The bytes cannot be read inside a database transaction
+(`docs/architecture/module-boundaries.md` section 10), so the handler is given
+the engine rather than an open connection and opens one short transaction per
+object. Each of those transactions re-asserts the lease as its first statement,
+so a worker whose lease has been taken stops writing at the object it lost it on.
+What it had already committed stays, is true, and is skipped by the worker that
+takes over — convergence, not a partial write to be cleaned up.
+
+## Getting there from nothing
+
+A worker finds work only when a source has been registered and part of it
+enrolled. Both steps are operator commands:
+
+```bash
+# 1. Configure a root. Prints the source_id and the root_object_id, never the root.
+.venv/bin/python apps/cli/sources.py register \
+    --provider fixture --root fixtures/mcv/root \
+    --label "MCV fixture corpus" --classification synthetic_test
+
+# 2. Grant a bounded enrollment over it. Operator-only, authorized, and audited.
+.venv/bin/python apps/cli/invoke.py sources.enroll \
+    --request-id req-0002 --purpose bounded_enrollment \
+    --principal-id prn_00000000000000000000000000 \
+    --requested-at 2026-08-03T07:00:00Z \
+    --payload '{"source_id":"<src_…>","root_object_id":"<obj_…>","depth":0,
+                "media_types":["text/markdown","text/plain"],
+                "idempotency_key":"runbook-1","max_items":100,"max_bytes":65536}'
+
+# 3. Run the worker.
+.venv/bin/python apps/worker.py run --max-iterations 2
+```
+
+Observed, in that order, against the disposable database and `fixtures/mcv/root`.
+Step 1 printed a `source_id` and a `root_object_id` and no path. Step 2 answered
+`created: true` with `coverage.eligible = 4` and `state: queued` — the four files
+under the root, measured at acceptance rather than estimated. Step 3 printed
+`claimed 1, completed 1, idle 1`, and the enrollment then read:
+
+```text
+eligible 4  processed 2  unsupported 2  quarantined 0  state partially_processed
+```
+
+The two `unsupported` rows are `handbook.pdf` and `opaque.bin`. **A PDF is
+reported, not skipped**: `P00-OD-003` is open, no PDF library is a dependency of
+this repository, and the honest answer is a counted `unsupported` outcome rather
+than an absence. `partially_processed` is the truthful state for a scope that
+holds objects this extractor does not read.
+
+Re-running `sources.py register` over the same root prints the same
+`source_id` and `root_object_id`: registration is idempotent on
+`(provider_kind, native_root)`. A root that is not an existing directory is
+refused with exit `1` and the message `the configured root is not an existing
+directory`, which names the defect and not the path.
 
 ## Configuration
 
@@ -53,13 +101,14 @@ installation.
 .venv/bin/python apps/worker.py run --max-iterations 20 --lease-seconds 60
 ```
 
-Every run prints counts and nothing else:
+Every run prints counts and nothing else. Observed against the disposable
+database with one queued enrollment and `--max-iterations 2`:
 
 ```text
-owner        worker-9c45135a10897468
-iterations   1
-claimed      0
-completed    0
+owner        worker-44556ee7c883fb38
+iterations   2
+claimed      1
+completed    1
 released     0
 lost         0
 idle         1
@@ -67,32 +116,30 @@ idle         1
 
 `owner` is the lease-owner token this process minted. It is random and names no
 machine — `AGENTS.md` §5 keeps hosts out of columns operators read, and
-`persistence/jobs.py` refuses a name that could be one. `lost` counts attempts
-whose lease was taken by another worker before they finished; their work was
-rolled back, which is the intended outcome and not an error to chase.
+`persistence/jobs.py` refuses a name that could be one. `idle 1` is the second
+iteration finding an empty queue, which is how the loop reports "nothing to do"
+rather than by blocking.
 
-Observed against the disposable database with one queued job and
-`--max-iterations 6`:
+`lost` counts attempts whose lease was taken by another worker before they
+finished. Such an attempt stopped writing at the object it lost the lease on and
+never reported the job finished; the objects it had committed before that are
+kept and are skipped by the worker that took over. It is the intended outcome and
+not an error to chase.
 
-```text
-iterations 6, claimed 3, completed 0, released 3, idle 3
-```
-
-and the job row afterwards:
-
-```text
-state=failed  attempt_count=3  max_attempts=3  lease_owner=NULL  last_error_code=unavailable
-```
-
-Three attempts, then terminal. The bound is the row's, not the loop's: a job
-whose attempts are spent stops being claimable by *any* worker.
+`released` counts attempts that failed. A failed attempt returns the job to
+`queued` while attempts remain and to `failed` once they do not — three attempts,
+then terminal, with the error code of the last one. The bound is the row's, not
+the loop's: a job whose attempts are spent stops being claimable by *any* worker.
 
 ## Stopping
 
 Send `SIGINT` (Ctrl-C) or `SIGTERM`. The worker finishes the job it is holding,
-releases or completes it, prints its counts, and exits `0`. It does not abandon
-a lease, and it does not commit half-finished work: the handler and the
-completion share one transaction.
+releases or completes it, prints its counts, and exits `0`. It does not abandon a
+lease, so nothing is left `running` for another worker to wait out.
+
+It does not *undo* the objects it had already recorded, and that is deliberate
+rather than an oversight: those outcomes were committed under a live lease, they
+are true, and the next run starts from the objects that have no outcome yet.
 
 Observed: `kill -TERM` against a worker idling on a 1-second poll exited `0`
 within the poll interval and printed its summary.
@@ -111,9 +158,13 @@ There is no sweeper and nothing to restart.
   `claim_job`, which reaps before it claims. `sources.status` derives the same
   answer from the same predicate in the meantime, so a status read is honest in
   the window before that happens.
-- A worker whose lease expired while it was working discovers it at
-  `complete_job`, which matches on the owner. Its work is rolled back rather
-  than committed beside the new owner's.
+- A worker whose lease expired while it was working discovers it at the *next
+  object it tries to write*: every write transaction re-asserts the lease as its
+  first statement and rolls back when it is gone. It also discovers it at
+  `complete_job`, which matches on the owner, so `succeeded` is never written by
+  a worker that no longer holds the job. What it committed under the live lease
+  stays; the worker that takes over is offered only the objects with no outcome,
+  so nothing is done twice.
 
 ## Checking the job plane
 

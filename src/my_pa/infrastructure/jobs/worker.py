@@ -12,25 +12,49 @@ polling/lease execution", and that is the split taken here — the mechanics are
 in this module and the *process* is in `apps/worker.py`: settings, engine,
 signals, and what is printed when it stops.
 
-**The transaction shape is the whole correctness argument.** Three transactions
-per job, and each boundary is where it is for a reason.
+**The transaction shape is the whole correctness argument.** This loop opens
+three transactions per job and the handler opens its own; each boundary is where
+it is for a reason.
 
 1. *Claim, and commit.* The lease has to be visible to every other worker before
    the work starts, so the claim cannot sit inside the work's transaction. The
    claim also increments `attempt_count` in the same statement, so an attempt is
    spent even by a worker that dies immediately afterwards, and the bound
    converges without anything having to clean up.
-2. *Work and completion, together.* The handler runs on the same connection that
-   then calls `complete_job`, inside one transaction. `complete_job` matches on
-   the lease owner and returns false when the lease has since been taken by
-   somebody else — and that false raises, which rolls the *work* back with it.
-   This is what makes "a lost lease cannot commit" true rather than merely
-   likely: a worker whose lease expired mid-extraction does not get to write its
-   result beside the result of the worker that took over.
-3. *Release, alone.* A failed attempt is reported in its own transaction,
-   because the one that failed has already been rolled back and there is nothing
-   left to write it on. `release_job` also matches on the owner, so a worker that
-   lost its lease writes nothing and says so.
+2. *Work, on the engine.* The handler is given the `Engine` and the lease owner
+   rather than an open `Connection`, and it opens as many transactions as the
+   work needs. That is not a preference: `module-boundaries.md` section 10 says
+   source bytes are read *outside* the database transaction, and
+   `application/service.py` names this worker's extraction path as the rule's
+   target. A handler holding one transaction across a whole enrollment would
+   also have to finish inside `DEFAULT_LEASE_SECONDS`, which at the configured
+   ceilings it cannot — the rollback would then discard every object rather than
+   the last one, and three attempts later the job would be terminal `failed`
+   having recorded nothing at all.
+3. *Completion, alone.* `complete_job` runs in its own transaction and matches on
+   the lease owner. A false answer raises, and `succeeded` is not written.
+4. *Release, alone.* A failed attempt is reported in its own transaction, because
+   the one that failed has already been rolled back and there is nothing left to
+   write it on. `release_job` also matches on the owner, so a worker that lost
+   its lease writes nothing and says so.
+
+**What the old shape bought, and what buys it now.** The handler used to run on
+the connection that then called `complete_job`, so raising discarded the work it
+had written. That is where "a lost lease cannot commit" came from, and it is
+gone. It is replaced by `persistence.jobs.hold_lease`, which every write
+transaction takes as its first statement: a worker whose lease has been taken
+finds out *before* it writes, and its transaction rolls back having written
+nothing. The property is now per object rather than per job, and it is proved in
+that narrow form — a coarse proof would pass on a handler that asserted the
+lease once and then wrote ten times.
+
+**What a lost lease may leave behind, said plainly rather than papered over.**
+Objects the handler committed *before* the lease went are still there, and they
+are true: they were written while the lease was held, they are keyed under
+`one_extraction_per_version_per_enrollment`, and the worker that takes the job
+over skips them because they are no longer pending. This is convergence, not
+atomicity, and the difference matters — a reader who believed the job was atomic
+would expect a re-run to start from nothing.
 
 **Bounded, and the bound is the row's.** `release_job` returns the job to
 `queued` while attempts remain and to `failed` once they do not, and
@@ -62,7 +86,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final
 
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Engine
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.infrastructure.persistence.jobs import (
@@ -118,19 +142,34 @@ class JobExecutionError(Exception):
 
 
 class LeaseLostError(Exception):
-    """Raised inside the work transaction when the lease is no longer ours.
+    """Raised, by a handler or by this module, when the lease is no longer ours.
 
-    Raised rather than returned, because raising is what rolls the work back.
-    A worker that discovered this and returned normally would commit a result
-    for a job another worker now owns.
+    Raised rather than returned, because raising is what rolls back the
+    transaction that discovered it. A handler that found this and returned
+    normally would go on to write outcomes for a job another worker now owns,
+    and this loop would then mark it `succeeded`.
+
+    A handler raises it from inside a write transaction, on a false answer from
+    `persistence.jobs.hold_lease`; `_execute` raises it on a false answer from
+    `complete_job`. Both mean the same thing to the loop, which is why there is
+    one type for them.
     """
 
 
-#: What a worker does with one claimed job, on the connection whose transaction
-#: will also record the completion. Raising `JobExecutionError` names the code
-#: the attempt failed with; raising anything else is an unclassified failure and
-#: is recorded as `internal_error`.
-type JobHandler = Callable[[Connection, LeasedJob], None]
+#: What a worker does with one claimed job. It receives the engine and the lease
+#: owner rather than an open connection, because the extraction path reads source
+#: bytes and `module-boundaries.md` section 10 does not permit that inside a
+#: database transaction. The owner travels with it because a handler that commits
+#: as it goes has to assert the lease itself: what the old signature bought — "a
+#: lost lease commits nothing", because raising discarded work written on the
+#: completing connection — is bought instead by `hold_lease`, which every write
+#: transaction takes before it writes.
+#:
+#: Raising `JobExecutionError` names the code the attempt failed with; raising
+#: `LeaseLostError` says the lease went and the attempt belongs to somebody else;
+#: raising anything else is an unclassified failure and is recorded as
+#: `internal_error`.
+type JobHandler = Callable[[Engine, LeasedJob, str], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,17 +207,25 @@ def _execute(engine: Engine, job: LeasedJob, *, owner: str, handler: JobHandler)
 
     Returns `"completed"`, `"released"`, or `"lost"`. The two failure paths are
     separated because they mean different things: a released attempt failed and
-    may be retried within the bound, while a lost lease means this worker's
-    result was discarded and the job belongs to somebody else.
+    may be retried within the bound, while a lost lease means this worker stopped
+    writing at the moment it lost the job and the job belongs to somebody else.
+
+    The handler runs before the completion and outside it. Its own transactions
+    are its own — see the module docstring for why they have to be, and for what
+    `hold_lease` re-establishes in their place. What this function still owns is
+    that `succeeded` is written only by the lease holder, in a transaction of its
+    own, after the handler has returned.
     """
     failure: ErrorCode | None = None
     lost = False
     try:
+        handler(engine, job, owner)
         with engine.begin() as connection:
-            handler(connection, job)
             if not complete_job(connection, job.operation_id, owner=owner):
-                # The lease went while we were working. Raising is what discards
-                # the work the handler just wrote on this connection.
+                # The lease went while we were working. There is nothing to
+                # discard here any more — the handler committed as it went, and
+                # `hold_lease` is what stopped it once the lease was gone — so
+                # what this raise prevents is the `succeeded` state itself.
                 raise LeaseLostError(job.operation_id)
         return "completed"
     except LeaseLostError:
@@ -253,7 +300,10 @@ def run_worker(
         claimed += 1
         # Deliberately not interruptible. A signal arriving now is honoured by
         # the `while` condition after this job has reached an end, so no lease is
-        # abandoned and no partial work is left behind.
+        # abandoned and nothing is left `running` for another worker to wait out.
+        # What a handler had already committed stays committed and is skipped by
+        # the attempt that follows; the module docstring says why that is
+        # convergence rather than a partial write.
         match _execute(engine, job, owner=owner, handler=handler):
             case "completed":
                 completed += 1

@@ -8,26 +8,24 @@ limitations come from `KnowledgeRepository.limitations`, which reads the
 omissions the last enumeration pass recorded; and the only arithmetic in this
 module decides which of those a caller may safely believe.
 
-**The denominator is the hard part, and it is the same hard part twice.** An
-enrollment that named its objects has an eligible total that is stored and
-authoritative — the size of the array is the authorization. An enrollment that
-named a root plus a depth has one that only an enumeration knows and that
-nothing persists, so `eligible_total` answers `None` there, which is how
-`coverage_for` is told that the denominator was never measured rather than being
-handed a plausible integer. `infrastructure.persistence.extraction` records why
-that distinction exists and what it cost when it was got wrong.
+**The denominator is no longer this layer's problem, and that is a deletion.**
+An enrollment records the object set its enumeration found, in
+`knowledge.enrollment_objects`, for a root selector exactly as for a named list;
+`KnowledgeRepository.coverage` reads that count beside the outcomes it counts. So
+this module states no eligible total, holds no coverage state down, and emits no
+token about an unmeasured scope. `eligible_total`, `_claims_the_whole_scope`, and
+the `ELIGIBLE_TOTAL_NOT_PERSISTED` and `SCOPE_IS_SOURCE_WIDE` tokens are gone
+from the emittable vocabulary rather than left unreachable, because a token
+nothing can emit is a claim nobody can act on and a guard nothing can fire.
 
-**A total derived from the outcomes divides out to all of them.** With no
-measured denominator, whichever outcome an enrollment happens to hold becomes
-the whole of its scope, so "every eligible object here was processed" — or
-quarantined, or unsupported, or unavailable — is available and unearned.
-`_claims_the_whole_scope` is that partition, written out member by member and
-exhaustively, and a state that escaped it would escape the clamp silently. The
-same rule is applied by `infrastructure.persistence.search` for the same reason.
-It is stated twice rather than shared because the two layers may not import each
-other; the partition is written the same way in both, and `assert_never` makes a
-newly added `CoverageState` a type error in each rather than a state nobody
-classified.
+The same logic was written out a second time in
+`infrastructure.persistence.search`, because the two layers may not import each
+other, and it is deleted there in the same change. Fixing one copy and not the
+other is this package's signature defect; deletion is the only form of the fix
+that cannot leave a divergence behind. `Disclosure.limitations` is
+`tuple[str, ...]`, so removing tokens narrows what can appear and is not a v1
+contract break — `eligible` stays a required integer and is now always a true
+one, which is what `P00-OD-004` asks of it.
 
 **Limitations are closed tokens.** `Disclosure.limitations` is a tuple of bare
 strings, which is exactly the shape a free-text channel takes, so every token
@@ -40,7 +38,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Final, assert_never
+from typing import Final
 
 from my_pa.contracts.v1.disclosure import (
     Coverage,
@@ -61,7 +59,6 @@ from my_pa.domain.source.enrollment import Enrollment
 __all__ = [
     "Limitation",
     "disclosure_for",
-    "eligible_total",
     "unenrolled_disclosure",
 ]
 
@@ -74,11 +71,6 @@ class Limitation(StrEnum):
     reach it. Each names something a caller can act on, and none names a value.
     """
 
-    #: The enrollment named a root, so no eligible total was ever measured.
-    ELIGIBLE_TOTAL_NOT_PERSISTED = "eligible_total_not_persisted"
-    #: A root selector authorizes its whole source; nothing persists the object
-    #: set under the root, so the scope reported is wider than the root.
-    SCOPE_IS_SOURCE_WIDE = "scope_is_source_wide_not_root_bounded"
     #: A listing stopped at the page size and this build issues no cursor.
     LISTING_HAS_NO_CONTINUATION = "listing_has_no_continuation_cursor"
     #: Returned text was cut to the maximum the request asked for.
@@ -99,6 +91,17 @@ class Limitation(StrEnum):
     # while no process served a disclosure and became a false statement to a
     # client the moment one did. Removed rather than reworded: a limitation names
     # something a caller can act on, and there is nothing left here to act on.
+    #
+    # `ELIGIBLE_TOTAL_NOT_PERSISTED` and `SCOPE_IS_SOURCE_WIDE` were published on
+    # every root-selector disclosure until WP-4B3, and both said the same missing
+    # fact twice: nothing persisted the object set under a root, so the
+    # denominator was unmeasured and the numerator was gathered from the whole
+    # source. `knowledge.enrollment_objects` is that fact. Removed rather than
+    # left unreachable, for the reason above and one more: a token still in this
+    # enum is a token a later branch can reach, and the guard in
+    # `tests/architecture/test_transport_adds_no_behaviour.py` that named
+    # `eligible_total` had to be removed with the function or it would have gone
+    # on listing something that does not exist.
 
 
 #: The absence of truncation, as one shared immutable value. A default argument
@@ -117,46 +120,6 @@ _PARTIAL_STATES: frozenset[CoverageState] = frozenset(
         CoverageState.STALE,
     }
 )
-
-
-def _claims_the_whole_scope(state: CoverageState) -> bool:
-    """Whether `state` asserts that every eligible object reached an outcome.
-
-    The four in the first case each say "the whole scope ended this way", and
-    all four are unsayable without a denominator somebody measured. The six in
-    the second assert nothing of the kind: two say work has not finished, one
-    says there is no scope, two are about the snapshot rather than the counts,
-    and `partially_processed` is the honest reading this exists to fall back to.
-    """
-    match state:
-        case (
-            CoverageState.PROCESSED
-            | CoverageState.QUARANTINED
-            | CoverageState.UNSUPPORTED
-            | CoverageState.UNAVAILABLE
-        ):
-            return True
-        case (
-            CoverageState.NOT_ENROLLED
-            | CoverageState.ELIGIBLE
-            | CoverageState.QUEUED
-            | CoverageState.PARTIALLY_PROCESSED
-            | CoverageState.STALE
-            | CoverageState.SUPERSEDED
-        ):
-            return False
-    assert_never(state)
-
-
-def eligible_total(enrollment: Enrollment) -> int | None:
-    """The measured size of `enrollment`'s scope, or `None` when nothing measured it.
-
-    An explicit object list *is* the authorized scope, so its length is the
-    denominator. A root selector's object set was known to the enumeration that
-    walked it and nothing persists it, and `None` is how that is stated rather
-    than guessed.
-    """
-    return None if enrollment.scope.root_object_id is not None else len(enrollment.scope.object_ids)
 
 
 def _coverage_limitations(counts: CoverageCounts) -> tuple[Limitation, ...]:
@@ -183,20 +146,13 @@ def disclosure_for(
 ) -> Disclosure:
     """Build the envelope for a result produced inside one enrollment's grant.
 
-    The coverage state is clamped where the denominator was never measured, and
-    the two facts that make the clamp necessary are disclosed beside it: the
-    total is unmeasured, and a root selector's numerator was gathered from the
-    enrollment's whole source rather than from the subtree under its root. A
-    caller told only the first would read the counts as a partial measurement of
-    the right scope.
+    The coverage state is the counts' own. Nothing is clamped and nothing is
+    qualified about the denominator, because the denominator was measured: the
+    counts arrive from a repository that read them beside the enumerated object
+    set, and an enrollment with no such set does not exist.
     """
-    measured = eligible_total(enrollment) is not None
     state = counts.state()
     tokens: list[Limitation] = [*extra_limitations, *_coverage_limitations(counts)]
-    if not measured:
-        state = CoverageState.PARTIALLY_PROCESSED if _claims_the_whole_scope(state) else state
-        tokens.append(Limitation.ELIGIBLE_TOTAL_NOT_PERSISTED)
-        tokens.append(Limitation.SCOPE_IS_SOURCE_WIDE)
     # Every disclosure also carried `AUDIT_IS_NOT_DURABLE` from this line until
     # WP-4B2a, unconditionally. WP-4B1 built the durable store and the token
     # became a false statement made on every successful request; see the note on

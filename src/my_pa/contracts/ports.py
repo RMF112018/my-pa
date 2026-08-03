@@ -41,6 +41,7 @@ that holds source content, and it is bounded by the caller before it is built.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from types import TracebackType
@@ -203,6 +204,22 @@ class EnrollmentRepository(ABC):
         is bound to a materially different normalized request.
         """
 
+    @abstractmethod
+    def record_scope(self, enrollment_id: str, source_object_ids: Iterable[str]) -> int:
+        """Record the objects this enrollment authorizes, and return how many.
+
+        Called once, inside the transaction that accepted the enrollment and
+        only where that acceptance created it, so a retried request
+        re-enumerates nothing. Idempotent by constraint rather than by
+        convention: running the same enumeration twice records no second row.
+
+        Raises `UnknownScopeError` when an identifier names no object of this
+        enrollment's source, and `ValueError` for an empty set. Both roll the
+        accepting transaction back, which is what makes "an enrollment that
+        cannot be enumerated does not exist" structural: the alternative is an
+        accepted grant with a zero denominator and queued work behind it.
+        """
+
 
 @dataclass(frozen=True, slots=True)
 class Operation:
@@ -244,15 +261,15 @@ class KnowledgeRepository(ABC):
         enrollment_id: str,
         *,
         observed_at: datetime,
-        eligible: int | None,
         queued: int = 0,
     ) -> CoverageCounts:
         """Coverage of `enrollment_id` at `observed_at`.
 
-        `eligible` is the enumerated total, or `None` from a caller that has no
-        enumeration to quote. `None` is not a convenience: it states that the
-        denominator was never measured, which is what stops the derived total
-        from being presented as a measured scope.
+        There is no `eligible` parameter. The denominator is the enumerated
+        object set the enrollment stores, so it is read beside the numerators
+        rather than stated by a caller that would have had to measure it
+        somewhere else. `queued` stays the caller's, because work in flight is a
+        fact about the job plane and not about the scope.
         """
 
     @abstractmethod
@@ -333,6 +350,28 @@ class UnitOfWork(ABC):
         traceback: TracebackType | None,
     ) -> None:
         """Commit when the block succeeded, roll back when it did not."""
+
+    @property
+    @abstractmethod
+    def providers(self) -> SourceProviders:
+        """The source providers, inside this transaction.
+
+        Inside, for the reason the four repositories are: a provider resolves an
+        `obj_…` against `knowledge.source_objects`, so it has to read the same
+        rows under the same snapshot as the coverage reported beside its result,
+        and identifiers it issues have to roll back with the work that issued
+        them. A provider holding its own connection while a use case holds a work
+        connection is the pool cycle `bootstrap.gateway` derives, and it would
+        form at exactly five concurrent requests.
+
+        This is a *removal* of a constructor dependency rather than a new
+        contract: `ApplicationService` was handed a `SourceProviders` at
+        construction and no longer is. It satisfies
+        `module-boundaries.md` section 5.2's rule that contracts exist only for a
+        current use case because there are four current callers — `sources.list`,
+        `sources.metadata`, `sources.fetch`, and the enumeration inside
+        `sources.enroll`.
+        """
 
     @property
     @abstractmethod

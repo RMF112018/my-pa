@@ -64,7 +64,7 @@ from my_pa.domain.source.enrollment import EnrollmentRequest, EnrollmentScope
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind, issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
-from my_pa.infrastructure.persistence.enrollment import accept_enrollment
+from my_pa.infrastructure.persistence.enrollment import accept_enrollment, record_scope
 from my_pa.infrastructure.persistence.extraction import record_outcome
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
 from my_pa.infrastructure.persistence.search import (
@@ -340,6 +340,10 @@ def corpus(disposable_database: str) -> Iterator[tuple[Engine, str]]:
                     max_bytes=100_000,
                 ),
             )
+            # The enumerated object set, which every read restricts to and whose
+            # size is the eligible total coverage reads for itself. An enrollment
+            # without one authorizes nothing at all.
+            record_scope(connection, accepted.enrollment.enrollment_id, [observed.source_object_id])
             record_outcome(
                 connection,
                 enrollment_id=accepted.enrollment.enrollment_id,

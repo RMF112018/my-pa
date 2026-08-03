@@ -75,9 +75,11 @@ class HeldService(ApplicationService):
     """
 
     def __init__(self, world: World) -> None:
+        # `ApplicationService` takes no `SourceProviders`: the lookup comes from
+        # the unit of work, so the adapters go into the `World` the fake reads.
+        world.providers = FakeProviders({})
         super().__init__(
             unit_of_work=lambda: FakeUnitOfWork(world),
-            providers=FakeProviders({}),
             limits=DEFAULT_LIMITS,
             clock=lambda: WHEN,
         )

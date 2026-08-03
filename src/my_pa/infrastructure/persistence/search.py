@@ -93,27 +93,21 @@ definition `match_statement` names. This module also sets no statement timeout.
 The index removes the sequential scan as the only possibility; it does not bound
 what a query can cost.
 
-Also not claimed, and this is the largest of them: that what a search returns for
-a root-selector enrollment is bounded by that enrollment's root. It is bounded by
-its *source*. `authorized_object` restricts a root selector to the enrollment's
-`source_id` and no further, because nothing persists the objects under a root, so
-an extraction stored under that enrollment for an object of the same source
-outside the root passes the boundary and its text is returned — with a
-`source_object_id` and a `version_id` that are honest and a scope the caller has
-no way to check them against. The same object is counted by `coverage_for`. This
-module never states a denominator for a root selector so it cannot trip over that
-itself, but a caller that *did* enumerate the root and states that count to
-`coverage_for` gets counts larger than it, which `coverage_for` refuses and
-`_coverage` reports as `SearchInternalError`: the truthful denominator is the one
-that fails. Every root-selector search therefore carries
-`scope_is_source_wide_not_root_bounded` beside `eligible_total_not_persisted`, so
-the limit is readable from the envelope rather than from this file.
-
-The two tokens are one missing fact and should be fixed once. Persisting the
-enumerated object set at enrollment time supplies both the membership a root
-selector cannot check and the eligible total nothing measured;
-`persistence.extraction.authorized_object` records the same conclusion where the
-predicate is. Both are carried into WP-4.
+**What a search returns is bounded by the enrollment's scope, both selectors.**
+This was the largest of the things this module used to disclaim. A root-selector
+enrollment was bounded by its *source* rather than by its root, because nothing
+persisted the objects under a root, so an extraction stored for an object of the
+same source outside the root was returned with an honest `source_object_id` and a
+scope the caller had no way to check it against — and every such search carried
+two limitation tokens, `_SCOPE_IS_SOURCE_WIDE` beside `_ELIGIBLE_UNKNOWN`, to say
+so. Their literal values are deliberately not written anywhere in this file any
+more: `test_no_disclosure_can_emit_the_two_removed_tokens` scans `src/` for them,
+and a scan that tolerated prose would be a scan with an exception in it.
+`knowledge.enrollment_objects` is the one fact that closed both:
+`authorized_object` is now membership of the enumerated set, and the size of that
+set is the eligible total `coverage_for` reads for itself. Two tokens, a state
+clamp, and a `context_statement` column were deleted rather than reworded,
+because a token nothing can emit is a vocabulary entry that can never fire.
 
 Also not claimed: that no database failure of any kind can carry detail out of
 `search_extractions`. The coverage read runs `coverage_for`'s statements, which
@@ -144,64 +138,40 @@ objective asks for that, adding it would introduce a second relevance signal wit
 no benchmark to weigh it against the first, and `AGENTS.md` section 2 rules out
 machinery with no current caller. It stays available.
 
-**Coverage is read, not inferred, and the denominator is the hard part.**
-`coverage_for` takes the eligible total from whoever enumerated the scope,
-because deriving it from the rows that exist would report complete coverage of a
-scope nobody measured. Search runs long after that enumeration and in another
-process, so it can supply the total in exactly one case: an enrollment that named
-its objects explicitly, where the count of `object_ids` *is* the authorized
-scope. An enrollment selecting a root plus a depth has an eligible total that
-only enumeration knows and that nothing persists, so search passes `eligible=None`
-— which is `coverage_for`'s way of being told the denominator was never measured
-— rather than quoting a number it would have had to invent. It invented one
-before: `max_items`, the enrollment's own ceiling, which bounds what a single
-pass may do and not how many outcomes accumulate across passes over a changing
-tree, so a long-lived enrollment eventually exceeded it and the read raised
-`ValueError` out of the coverage guard. A denominator nothing measured has no
-valid stand-in, and the fix is to stop supplying one.
+**Coverage is read, not inferred, and this module no longer states a
+denominator.** `coverage_for` reads its own eligible total from
+`knowledge.enrollment_objects`, so search asks it for coverage and passes nothing
+about the size of the scope. That is a deletion of machinery rather than a move
+of it. Search used to supply the total in one case — an enrollment that named its
+objects, where `cardinality(object_ids)` *is* the authorized scope — and `None`
+in the other, which was `coverage_for`'s way of being told the denominator was
+never measured. Before that it invented one: `max_items`, the enrollment's own
+ceiling, which bounds what a single pass may do and not how many outcomes
+accumulate across passes, so a long-lived enrollment exceeded it and the read
+raised out of the coverage guard.
 
-What search reports for that enrollment is a partial result carrying
-`eligible_total_not_persisted`, and a coverage *state* held at
-`partially_processed`. The clamp covers every state that asserts the whole scope
-reached an outcome — `processed`, `quarantined`, `unsupported`, `unavailable` —
-and not the states that assert nothing of the kind. All four are reachable the
-same way and all four are the same false claim: with the total derived from the
-outcomes, whichever outcome the enrollment happens to hold divides out to the
-whole of it, so "every eligible object here was quarantined" is as available and
-as unfounded as "every eligible object here was processed", and it is the more
-dangerous of the two because a caller is likelier to act destructively on it. A
-search cannot claim whole-scope coverage it cannot prove, and section 9.7 would
-rather have a partial disclosure than a confident wrong one.
+With `None` went everything built to keep it from being read as a measurement:
+`_ELIGIBLE_UNKNOWN`, `_SCOPE_IS_SOURCE_WIDE`, `_claims_the_whole_scope`, and the
+clamp that held a root-selector state at `partially_processed`. The clamp existed
+because a total derived from the outcomes divides out to all of them, so "every
+eligible object here was quarantined" was as available and as unfounded as "every
+eligible object here was processed" — and it left the reported counts and the
+reported state disagreeing with each other, which a consumer recomputing the
+state from the counts would have noticed. A measured denominator makes both the
+clamp and that contradiction unnecessary. `eligible` stays a required integer in
+the v1 disclosure and is now always a true one, so `P00-OD-004` is untouched.
 
-What that leaves, stated here rather than discovered later: for a root-selector
-enrollment the reported counts and the reported state disagree, and the clamp is
-what makes them disagree. `eligible == accounted` there, where `accounted` is
-`CoverageCounts`' own four-term sum — `processed + quarantined + unsupported +
-unavailable` — and the derived total is those four plus `queued`. They are equal
-for this module's calls because it passes neither `queued` nor `unavailable`,
-which is a fact about these two call sites and not a property of the arithmetic;
-a caller that passed either would break the equality, and describing it as three
-terms because the fourth is currently zero is the "currently unreachable"
-reasoning this module has now rejected twice. So a consumer that
-recomputes the state from the counts gets whichever whole-scope state the
-outcomes happen to form, or `partially_processed` where they are mixed, and the
-first case contradicts the state reported beside it. The clamp stops this module
-from making the claim; it cannot stop a consumer from deriving it, because
-`eligible` is a required integer in the v1 disclosure and no integer is true
-here. The enumerated total is the one number that would be, and nothing persists
-it. The three signals that do not lie — `eligible_total_not_persisted`,
-`partial_result`, and the state — are what a consumer should read, and a consumer
-reading the counts alone will be wrong.
-
-Fixing it properly means either persisting the eligible total at enrollment or
-letting `eligible` be absent in the contract, and the second is a v1 change
-gated by `P00-OD-004`. Both are out of scope here and are carried into WP-4."""
+The identical logic was written out a second time in `application.disclosure`,
+because the two layers may not import each other, and it is deleted there in the
+same change. Deleting one and not the other is the defect class this package has
+been blocked for; deletion is the only form of this fix that cannot leave a
+divergence."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final, assert_never
+from typing import Any, Final
 
 from sqlalchemy import (
     ColumnElement,
@@ -233,7 +203,6 @@ from my_pa.contracts.v1.disclosure import (
     Trust,
 )
 from my_pa.domain.common.classification import Classification
-from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.common.time import ensure_utc, utc_now
@@ -365,11 +334,6 @@ _HEADLINE_TEMPLATE: Final = (
 #: Limitation tokens this module can disclose. Closed values, like every other
 #: token in the envelope, so `limitations` cannot become a free-text channel.
 _NO_STORED_LABEL: Final = "result_label_is_media_type_only"
-_ELIGIBLE_UNKNOWN: Final = "eligible_total_not_persisted"
-#: Named after what it is rather than after the fix it is waiting for: for a
-#: root-selector enrollment the searched scope is the enrollment's whole source,
-#: not the subtree under its root. See the module docstring.
-_SCOPE_IS_SOURCE_WIDE: Final = "scope_is_source_wide_not_root_bounded"
 _SNIPPET_TRUNCATED: Final = "snippet_truncated"
 _NO_INDEXED_COVERAGE: Final = "no_extracted_text_in_scope"
 _COVERAGE_INCOMPLETE: Final = "scope_not_fully_extracted"
@@ -468,15 +432,19 @@ def _document_vector() -> ColumnElement[Any]:
 def context_statement(request: SearchRequest) -> Select[Any]:
     """Everything about the scope that one row can answer, in one round trip.
 
-    The enrollment's source and classification, whether its eligible total is
-    knowable, and how many lexemes the query produced. The last is not an
-    aggregate and the rest are plain columns, so they compose; asking for the
-    lexeme count separately would be a second round trip for one integer.
+    The enrollment's source and classification, and how many lexemes the query
+    produced. The last is not an aggregate and the rest are plain columns, so
+    they compose; asking for the lexeme count separately would be a second round
+    trip for one integer.
 
-    `max_items` is deliberately not among them. It was, as the denominator for a
-    root-selector enrollment, and it was the wrong number: it bounds one pass's
-    authorization rather than the outcomes an enrollment accumulates, so reading
-    it here was reading a limit as if it were a measurement.
+    Neither selector column is among them any more, and that is the point of the
+    change rather than a tidy-up. `root_object_id` was here to decide whether the
+    eligible total was knowable and `cardinality(object_ids)` was the total it
+    supplied when it was; `coverage_for` reads the enumerated total for itself,
+    for both selectors, so neither column decides anything here. `max_items` was
+    here before either of them, as the denominator for a root selector, and it
+    was the wrong number: it bounds one pass's authorization rather than the
+    outcomes an enrollment accumulates.
 
     Public, and the reason is a test rather than a caller. Building a statement
     and running it are separate acts, and separating them lets
@@ -488,8 +456,6 @@ def context_statement(request: SearchRequest) -> Select[Any]:
         select(
             enrollments.c.source_id,
             sources.c.classification,
-            enrollments.c.root_object_id,
-            func.cardinality(enrollments.c.object_ids).label("named_objects"),
             func.numnode(_tsquery(request)).label("lexemes"),
         )
         # An inner join, and nothing can tell: `enrollments.source_id` is `NOT
@@ -663,73 +629,27 @@ def _matches(
     return list(_execute(connection, match_statement(request, position)).all())
 
 
-def _claims_the_whole_scope(state: CoverageState) -> bool:
-    """Whether `state` asserts that every eligible object reached an outcome.
-
-    The partition is written out member by member, and exhaustively, because the
-    question it answers is which states a search may not report when it has no
-    measured denominator — and a state that escaped the classification would
-    escape that rule silently, which is precisely how the `processed`-only clamp
-    this replaces came to be wrong. `assert_never` makes a newly added
-    `CoverageState` a type error here rather than a state nobody classified.
-
-    The four in the first case all say "the whole scope ended this way", so all
-    four are unsayable without a denominator someone measured. `unavailable` is
-    among them although no call in this module can currently produce it: search
-    passes no `unavailable` count today, and "currently unreachable" is exactly
-    the reasoning that left `quarantined` and `unsupported` out of the first
-    clamp.
-
-    None of the six in the second case asserts anything of the kind, so an
-    unmeasured total cannot make any of them false. `partially_processed` is the
-    honest reading this function exists to fall back to; `eligible` and `queued`
-    say work has not finished; `not_enrolled` says there is no scope; `stale` and
-    `superseded` are about the snapshot rather than the counts and outrank them.
-    """
-    match state:
-        case (
-            CoverageState.PROCESSED
-            | CoverageState.QUARANTINED
-            | CoverageState.UNSUPPORTED
-            | CoverageState.UNAVAILABLE
-        ):
-            return True
-        case (
-            CoverageState.NOT_ENROLLED
-            | CoverageState.ELIGIBLE
-            | CoverageState.QUEUED
-            | CoverageState.PARTIALLY_PROCESSED
-            | CoverageState.STALE
-            | CoverageState.SUPERSEDED
-        ):
-            return False
-    assert_never(state)
-
-
-def _coverage(
-    connection: Connection, enrollment_id: str, *, moment: datetime, eligible: int | None
-) -> CoverageCounts:
+def _coverage(connection: Connection, enrollment_id: str, *, moment: datetime) -> CoverageCounts:
     """Read coverage, or fail as this module's own error rather than a bare one.
 
-    `coverage_for` raises `ValueError` when the counts do not fit inside a
-    denominator the caller supplied, which for search means the enrollment's
-    named `object_ids` and the stored outcomes disagree about what is in scope.
-    That is a real inconsistency and it must be reported, but as a typed error:
-    an uncaught `ValueError` is outside section 10's taxonomy, carries no
-    envelope, and reaches whoever is above this layer as an unclassified crash
-    that leaves search dead for that enrollment with nothing to act on.
-    Classified as internal rather than unavailable because retrying reads the
-    same rows and fails the same way.
+    `coverage_for` raises `ValueError` — through `CoverageCounts` — when the
+    counts it assembles do not fit inside its own eligible total. That is a real
+    inconsistency and it must be reported, but as a typed error: an uncaught
+    `ValueError` is outside section 10's taxonomy, carries no envelope, and
+    reaches whoever is above this layer as an unclassified crash that leaves
+    search dead for that enrollment with nothing to act on. Classified as
+    internal rather than unavailable because retrying reads the same rows and
+    fails the same way.
 
-    No call this module makes can currently reach it, and that is a change
-    rather than a claim about the design. It was reachable: an outcome recorded
-    for an object the enrollment never named was counted, so the counts could
-    exceed `cardinality(object_ids)`. `coverage_for` now counts only objects the
-    enrollment authorizes, and there cannot be more distinct such objects than
-    the array naming them holds. The guard stays because the reachability
-    argument is about this caller and `coverage_for` is public: any caller may
-    state a denominator its rows do not fit inside, and this one must not turn
-    that into an untyped crash if it ever states a different one.
+    No call this module makes can reach it. Every count `coverage_for` takes is
+    restricted to `enrollment_objects` membership and the total is `count(*)` of
+    those same rows, and this module declares neither `queued` nor `unavailable`,
+    which are the only two terms a caller still contributes. The guard stays
+    because the reachability argument is about this caller and `coverage_for` is
+    public: another caller may declare queued work against a scope smaller than
+    it, and a broken store — outcome rows whose enumerated row has gone — is the
+    other arrangement that produces it. This one must not turn either into an
+    untyped crash.
 
     The `raise` is outside the `except` block for the same reason it is in
     `_execute`: leaving the handler first is what keeps the original off
@@ -738,7 +658,7 @@ def _coverage(
     read. The message says nothing but that the search did not complete.
     """
     try:
-        return coverage_for(connection, enrollment_id, observed_at=moment, eligible=eligible)
+        return coverage_for(connection, enrollment_id, observed_at=moment)
     except ValueError:
         pass
     raise SearchInternalError("the search could not be completed")
@@ -765,14 +685,13 @@ def search_extractions(
     position = request.position(moment)
 
     context = _context(connection, request)
-    source_id, classification, root_object_id, named_objects, lexemes = context
+    source_id, classification, lexemes = context
     validate_identifier(str(source_id), IdKind.SOURCE)
     if int(lexemes) == 0:
         # No terms, so nothing was searched. Reporting zero matches here would
         # be the false no-match claim section 9.7 exists to prevent.
         raise EmptySearchQueryError("the query yielded no search terms")
 
-    eligible_is_known = root_object_id is None
     rows = _matches(connection, request, position)
     truncated = len(rows) > request.page_size
     page = rows[: request.page_size]
@@ -804,45 +723,18 @@ def search_extractions(
             )
         )
 
-    # The denominator, and the whole difficulty of this function. An enrollment
-    # that named its objects has one that is stored and authoritative. One that
-    # named a root has none, and `None` is how that is said: `coverage_for`
-    # derives the total from what it accounted for, which is honest arithmetic
-    # only because the caller stated it was unmeasured rather than quoting a
-    # number. Three things keep the derived total from being read as a measured
-    # scope: `_ELIGIBLE_UNKNOWN` is disclosed, the result is partial whatever the
-    # counts say, and the reported state is clamped immediately below.
-    counts = _coverage(
-        connection,
-        request.enrollment_id,
-        moment=moment,
-        eligible=int(named_objects) if eligible_is_known else None,
-    )
+    # The denominator was the whole difficulty of this function and is now
+    # nobody's argument to pass: `coverage_for` reads the enumerated total of
+    # this enrollment's own objects, for a root selector exactly as for a named
+    # one. There is no unmeasured case left to disclose and no state to hold
+    # down, so the state is the counts' own.
+    counts = _coverage(connection, request.enrollment_id, moment=moment)
     state = counts.state()
-    if not eligible_is_known and _claims_the_whole_scope(state):
-        # A denominator taken from the numerator divides out to all of it, so
-        # every whole-scope state is available here and none of them is earned.
-        # Whichever it is — the scope was processed, quarantined, unsupported,
-        # unavailable — it is the machine-readable claim that a total nobody
-        # measured was fully accounted for. `PARTIALLY_PROCESSED` is the honest
-        # reading: objects reached outcomes, and how many more there are is not
-        # known. The counts themselves are left alone; inventing a larger
-        # denominator to force the state would be the invention this branch just
-        # removed, put back one line lower.
-        state = CoverageState.PARTIALLY_PROCESSED
 
     limitations = [
         *_limitation_tokens(connection, request.enrollment_id),
         _NO_STORED_LABEL,
     ]
-    if not eligible_is_known:
-        # Two facts, disclosed separately because they are separately actionable:
-        # the denominator was never measured, and the numerator was not gathered
-        # from the root the caller asked about but from everything its source
-        # holds. A caller told only the first would read the counts as a partial
-        # measurement of the right scope.
-        limitations.append(_ELIGIBLE_UNKNOWN)
-        limitations.append(_SCOPE_IS_SOURCE_WIDE)
     if counts.processed == 0:
         limitations.append(_NO_INDEXED_COVERAGE)
     elif counts.processed != counts.eligible:
@@ -850,13 +742,12 @@ def search_extractions(
     if snippet_truncated:
         limitations.append(_SNIPPET_TRUNCATED)
 
-    # No `eligible > 0` guard. `eligible_is_known` means the enrollment named its
-    # objects, `enrollment_names_exactly_one_selector` makes that array non-empty
-    # whenever `root_object_id` is null, and the denominator is
-    # `cardinality(object_ids)` — so no arrangement of rows reaches this line with
-    # a zero. A condition nothing can exercise is a claim nothing checks, which is
-    # the rule `persistence.extraction` states once and this applies.
-    complete = eligible_is_known and counts.processed == counts.eligible
+    # No `eligible > 0` guard. `record_scope` refuses an empty set and rolls the
+    # accepting transaction back with it, so an enrollment that exists holds at
+    # least one object and no arrangement of rows reaches this line with a zero
+    # denominator. A condition nothing can exercise is a claim nothing checks,
+    # which is the rule `persistence.extraction` states once and this applies.
+    complete = counts.processed == counts.eligible
     # No `and page`. `page_size` is bounded below by one, `truncated` means more
     # rows came back than that, and `page` is the first `page_size` of them — so
     # a truncated result cannot have an empty page and the test decided nothing.

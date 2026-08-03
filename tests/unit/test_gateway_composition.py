@@ -2,7 +2,8 @@
 
 `bootstrap.gateway` makes four decisions, and three of them can be read off the
 objects it returns without anything connecting: which principal the process
-acts as, which source providers it has, and how many connection pools it holds.
+acts as, where the source lookup comes from, and how many connection pools it
+holds.
 The fourth — that two pools are what keeps the audit sink from starving the work
 it records — needs a real server to demonstrate and lives in
 `tests/concurrency/test_gateway_connection_pool.py`.
@@ -18,16 +19,10 @@ from collections.abc import Iterator
 
 import pytest
 
-from my_pa.bootstrap.gateway import (
-    GatewayRuntime,
-    NoConfiguredSources,
-    build_gateway_runtime,
-    local_principal,
-)
+from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime, local_principal
 from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
-from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.principal import PrincipalKind
-from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 A_URL = f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere"
 
@@ -90,16 +85,35 @@ def test_two_runs_are_two_principals(runtime: GatewayRuntime) -> None:
     assert local_principal().principal_id != runtime.principal.principal_id
 
 
-def test_no_source_provider_is_configured() -> None:
+def test_the_source_lookup_comes_from_the_transaction_and_not_from_here() -> None:
     """Truthful rather than convenient. See `bootstrap.gateway`'s docstring.
 
-    Nothing registers a source in production (`D-37`) and no provider root is
-    authorized (`P00-OD-009`), so the lookup answers `None` and the application
-    reports `unavailable` for a source it cannot serve. A fixture root wired
-    into a composition root would be an invented corpus.
+    This composition chooses no provider and names no root: which sources are
+    served is `knowledge.sources` rows, read on the connection of the request
+    asking. A build with no registered row still answers `None` and still reports
+    `unavailable` — the same truth as the hard-coded `NoConfiguredSources` this
+    replaces, now derived.
+
+    Asserted through the unit of work the composition actually hands the
+    application, and asserted by the *refusal*: asking a unit of work that is not
+    inside a transaction raises rather than answering `None`, which is what makes
+    "the provider is bound to the caller's transaction" a property of the object
+    rather than a sentence in a docstring. A lookup that answered outside one
+    would be drawing its own connection, which is the pool cycle this module
+    derives.
+
+    Database-free, and it has to be: this is the FAST tier and the URL above is
+    unreachable. `create_engine` connects lazily, and the refusal happens before
+    anything would.
     """
-    providers = NoConfiguredSources()
-    assert providers.for_source(issue_identifier(IdKind.SOURCE)) is None
+    built = build_gateway_runtime(Settings(database_url=A_URL))
+    try:
+        unit_of_work = built.service._unit_of_work()
+        assert isinstance(unit_of_work, SqlAlchemyUnitOfWork)
+        with pytest.raises(RuntimeError, match="not inside a transaction"):
+            _ = unit_of_work.providers
+    finally:
+        built.close()
 
 
 def test_the_runtime_releases_both_pools() -> None:

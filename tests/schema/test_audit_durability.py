@@ -46,7 +46,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
-from tests.conftest import DEFAULT_LIMITS, FakeProviders
+from tests.conftest import DEFAULT_LIMITS
 
 from my_pa.application.commands import EnrollSource, GetCapabilities, ListSources
 from my_pa.application.service import ApplicationService
@@ -59,6 +59,7 @@ from my_pa.contracts.ports import (
     KnowledgeRepository,
     OperationQueue,
     SearchOutcome,
+    SourceProviders,
     SourceRepository,
     UnitOfWork,
 )
@@ -208,6 +209,10 @@ class _FailsAfterTheWork(UnitOfWork):
         self._inner.__exit__(exc_type, exc, traceback)
 
     @property
+    def providers(self) -> SourceProviders:
+        return self._inner.providers
+
+    @property
     def sources(self) -> SourceRepository:
         return self._inner.sources
 
@@ -281,7 +286,6 @@ def _service(
 
     return ApplicationService(
         unit_of_work=unit_of_work,
-        providers=FakeProviders({}),
         limits=DEFAULT_LIMITS,
         clock=lambda: WHEN,
     )

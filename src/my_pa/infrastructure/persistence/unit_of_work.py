@@ -45,7 +45,7 @@ back, which is section 5.6's fail-closed requirement holding by structure.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
 from datetime import datetime
 from types import TracebackType
@@ -65,6 +65,7 @@ from my_pa.contracts.ports import (
     OperationQueue,
     RepositoryFailureError,
     SearchOutcome,
+    SourceProviders,
     SourceRepository,
     UnitOfWork,
     UnknownScopeError,
@@ -76,7 +77,11 @@ from my_pa.domain.search.query import SearchRequest
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.registry import ConfiguredSource
 from my_pa.infrastructure.persistence import IsolationLevelError
-from my_pa.infrastructure.persistence.enrollment import accept_enrollment, enrollments_for_principal
+from my_pa.infrastructure.persistence.enrollment import (
+    accept_enrollment,
+    enrollments_for_principal,
+    record_scope,
+)
 from my_pa.infrastructure.persistence.extraction import coverage_for
 from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
 from my_pa.infrastructure.persistence.knowledge import (
@@ -96,6 +101,7 @@ from my_pa.infrastructure.persistence.search import (
     search_extractions,
 )
 from my_pa.infrastructure.persistence.tables import JobState
+from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
 
 __all__ = ["SqlAlchemyUnitOfWork"]
 
@@ -180,6 +186,21 @@ class _Enrollments(EnrollmentRepository):
 
         return _read(statement)
 
+    def record_scope(self, enrollment_id: str, source_object_ids: Iterable[str]) -> int:
+        """Record the enumerated set, letting both of its refusals through.
+
+        `UnknownScopeError` is already the port's own vocabulary — the writer
+        raises it directly, because `contracts.ports` is the one package both
+        layers may import — so translating it here would mean catching a port
+        error to raise the same port error. `ValueError` for an empty set passes
+        through untranslated as well, and that is a decision rather than an
+        omission: it is an answer about the scope the caller asked for, the
+        application refuses the empty enumeration before it reaches this, and
+        collapsing it into `RepositoryFailureError` would report an operator's
+        empty root as this system being broken.
+        """
+        return _read(lambda: record_scope(self._connection, enrollment_id, source_object_ids))
+
 
 class _Operations(OperationQueue):
     """The job plane, over `persistence.jobs`."""
@@ -215,7 +236,6 @@ class _Knowledge(KnowledgeRepository):
         enrollment_id: str,
         *,
         observed_at: datetime,
-        eligible: int | None,
         queued: int = 0,
     ) -> CoverageCounts:
         def statement() -> CoverageCounts:
@@ -223,16 +243,18 @@ class _Knowledge(KnowledgeRepository):
                 self._connection,
                 enrollment_id,
                 observed_at=observed_at,
-                eligible=eligible,
                 queued=queued,
             )
 
         try:
             return _read(statement)
         except ValueError:
-            # `coverage_for` raises through `CoverageCounts` when the stated
-            # denominator and the stored rows disagree about what is in scope.
-            # That is a real inconsistency and this system's fault: retrying
+            # `coverage_for` raises through `CoverageCounts` when the counts and
+            # the enumerated total disagree about what is in scope. No outcome
+            # can produce that any more — every count is restricted to the rows
+            # the total counts — so what remains is queued work declared against
+            # a scope smaller than it, and outcome rows whose enumerated row has
+            # gone. Both are a broken store and this system's fault: retrying
             # reads the same rows and fails the same way. Classified rather than
             # left as an untyped crash, and raised outside the handler so a
             # traceback does not render the frames of a coverage read.
@@ -358,6 +380,27 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         if connection is None:
             raise RuntimeError("this unit of work is not inside a transaction")
         return connection
+
+    @property
+    def providers(self) -> SourceProviders:
+        """The lookup driven by `knowledge.sources`, on this transaction's connection.
+
+        A fresh `RegisteredSourceProviders` per access, like every repository
+        above, and bound to the open connection for the reason `contracts.ports`
+        gives: an identifier a provider issues belongs to this transaction, and a
+        provider that drew its own connection would close the pool cycle
+        `bootstrap.gateway` derives.
+
+        What is *not* translated here, stated rather than left to be found:
+        `for_source` runs a `SELECT`, and a failure of it escapes as a
+        `SQLAlchemyError` rather than as `EvidenceUnavailableError`. Wrapping it
+        would mean a decorating implementation of `SourceProviders` whose only
+        job is to re-raise, and the failure is already caught and classified by
+        `ApplicationService.invoke`'s terminal handler, which discloses nothing
+        of it. It reaches a caller as `internal_error` where `unavailable` would
+        be the more accurate of the two.
+        """
+        return RegisteredSourceProviders(self._open)
 
     @property
     def sources(self) -> SourceRepository:

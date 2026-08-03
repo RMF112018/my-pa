@@ -82,13 +82,26 @@ an opaque identifier, which `INV-PKL-005` forbids.
 
 ## The providers
 
-There are none, and that is stated rather than papered over. Nothing registers a
-source in production — `register_source` and `observe_object` still have no
-production caller, which is the hole `D-37` gives to WP-4B3 — and no provider
-root is authorized, because `P00-OD-009` requires the operator to name one by
-exact path and that has not happened. So the lookup answers `None`, and the
-application reports `unavailable` for the source it cannot serve, which is the
-truth. A fixture root wired here would be this module inventing a corpus.
+Nothing is wired here, and that is a stronger statement than the one it replaces
+rather than a weaker one. This module used to hand `ApplicationService` a
+`NoConfiguredSources` that answered `None` to everything, because nothing
+registered a source and no root was authorized. The lookup is now
+`UnitOfWork.providers` — `infrastructure.providers.RegisteredSourceProviders`
+over the caller's own transaction — so which sources are served is read from
+`knowledge.sources` rows, and the row exists exactly when an operator registered
+one by exact path.
+
+A build with no registered source therefore still answers `None`, and the
+application still reports `unavailable` for the source it cannot serve. **The
+same truth, now derived from rows rather than hard-coded**: this composition
+names no root, holds no default, and has nothing left to invent a corpus with.
+`P00-OD-009` is untouched — which roots are legitimate is still the operator's
+decision, made by running the registration command and not by editing this file.
+
+The lookup moved into the transaction for a reason this module's pool arithmetic
+already derives: a provider resolves `obj_…` against `knowledge.source_objects`,
+and one holding its own connection while a request holds a work connection is
+exactly the cycle above, at exactly five concurrent requests.
 """
 
 from __future__ import annotations
@@ -99,29 +112,15 @@ from sqlalchemy import Engine
 
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import Settings
-from my_pa.contracts.ports import SourceProviders, UnitOfWork
+from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.principal import Principal, PrincipalKind
-from my_pa.domain.source.provider import SourceProvider
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
-__all__ = ["GatewayRuntime", "NoConfiguredSources", "build_gateway_runtime", "local_principal"]
-
-
-class NoConfiguredSources(SourceProviders):
-    """The source lookup of a build that has no source to look up.
-
-    Not a placeholder that pretends: `for_source` answering `None` is what makes
-    `sources.list`, `sources.metadata`, and `sources.fetch` report `unavailable`
-    for a source whose adapter is not wired, which is exactly the state this
-    build is in. See this module's docstring for why there is nothing to wire.
-    """
-
-    def for_source(self, source_id: str) -> SourceProvider | None:
-        return None
+__all__ = ["GatewayRuntime", "build_gateway_runtime", "local_principal"]
 
 
 def local_principal() -> Principal:
@@ -170,7 +169,6 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     return GatewayRuntime(
         service=ApplicationService(
             unit_of_work=unit_of_work,
-            providers=NoConfiguredSources(),
             limits=settings.effective_limits(),
         ),
         principal=local_principal(),

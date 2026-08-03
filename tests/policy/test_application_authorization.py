@@ -417,9 +417,9 @@ def test_a_traversal_attempt_is_denied_with_the_typed_error(world: World, tmp_pa
     decoy.unlink()
     decoy.symlink_to(outside / "secret.md")
 
+    world.providers = FakeProviders({source.source_id: provider})
     service = ApplicationService(
         unit_of_work=lambda: FakeUnitOfWork(world),
-        providers=FakeProviders({source.source_id: provider}),
         limits=DEFAULT_LIMITS,
         clock=lambda: WHEN,
     )

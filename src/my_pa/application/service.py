@@ -80,6 +80,15 @@ does not own. What is gained is that the coverage a disclosure states and the
 bytes the same response returns come from one consistent read. Should a provider
 ever be remote, this is the sentence that has to change first.
 
+`_enumerate` is a *new caller* of that decision and not a reopening of it, and it
+is said here rather than left to be discovered in review. It reads no bytes —
+`iterdir` and `stat`, bounded by the enrollment's own `max_items` — so it is
+strictly cheaper than `sources.fetch`, which already runs inside the transaction
+under the same decision. It has to be inside: the identifiers it records are
+issued by a provider bound to this connection, so an enrollment that rolls back
+must issue none, and the enumerated set has to commit with the acceptance it
+measures or the two can disagree.
+
 **Nothing here decides what is authorized.** The handlers receive an
 `Authorization`, not a `Principal`; there is no `is_operator` to consult, no
 scope to widen, and the enrollments were loaded once by the shared path. What a
@@ -117,12 +126,7 @@ from my_pa.application.commands import (
     Representation,
     SearchKnowledge,
 )
-from my_pa.application.disclosure import (
-    Limitation,
-    disclosure_for,
-    eligible_total,
-    unenrolled_disclosure,
-)
+from my_pa.application.disclosure import Limitation, disclosure_for, unenrolled_disclosure
 from my_pa.application.errors import (
     AmbiguousRequestError,
     ApplicationError,
@@ -142,7 +146,6 @@ from my_pa.contracts.ports import (
     EvidenceUnavailableError,
     PortError,
     SearchOutcome,
-    SourceProviders,
     UnitOfWork,
     UnknownScopeError,
 )
@@ -345,12 +348,10 @@ class ApplicationService:
         self,
         *,
         unit_of_work: Callable[[], UnitOfWork],
-        providers: SourceProviders,
         limits: EffectiveLimits,
         clock: Callable[[], datetime] = utc_now,
     ) -> None:
         self._unit_of_work = unit_of_work
-        self._providers = providers
         self._limits = _effective_limits(limits)
         self._clock = clock
 
@@ -517,7 +518,7 @@ class ApplicationService:
         truncation is a fact rather than a guess.
         """
         enrollment = self._one_enrollment(authorization, command.source_id, command.enrollment_id)
-        provider = self._provider(command.source_id)
+        provider = self._provider(unit_of_work, command.source_id)
         page_size = self._page_size(command.page_size)
         with _translated():
             children = tuple(
@@ -551,7 +552,7 @@ class ApplicationService:
         because the port that would perform one has no such method.
         """
         enrollment = self._one_enrollment(authorization, command.source_id, command.enrollment_id)
-        provider = self._provider(command.source_id)
+        provider = self._provider(unit_of_work, command.source_id)
         with _translated():
             observed = provider.metadata(command.source_object_id)
             outcome = unit_of_work.knowledge.outcome_for_object(
@@ -592,7 +593,7 @@ class ApplicationService:
         cannot widen the ceiling.
         """
         enrollment = self._one_enrollment(authorization, command.source_id, command.enrollment_id)
-        provider = self._provider(command.source_id)
+        provider = self._provider(unit_of_work, command.source_id)
         ceiling = self._limits.max_fetch_bytes
         max_bytes = ceiling if command.max_bytes is None else min(command.max_bytes, ceiling)
         with _translated():
@@ -705,19 +706,35 @@ class ApplicationService:
     def _sources_enroll(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: EnrollSource
     ) -> _Result:
-        """Persist one bounded grant and queue the work it authorizes.
+        """Enumerate one bounded grant, persist it, and queue the work it authorizes.
 
-        The enrollment, the queued operation, and the decision's audit event
-        commit together or not at all: they are one transaction, and a partial
-        commit would create work with no authority or no evidence behind it
-        (`module-boundaries.md` section 10).
+        The enrollment, its enumerated object set, the queued operation, and the
+        decision's audit event commit together or not at all: they are one
+        transaction, and a partial commit would create work with no authority, no
+        measured scope, or no evidence behind it (`module-boundaries.md` section
+        10).
 
-        A retry — the same idempotency key carrying the same normalized request
-        — queues nothing. `enqueue_job` is deliberately not idempotent, because
-        two calls are two operations to observe separately, so the enrollment's
-        own key is what makes "queue this once" true. The response says so with
-        a null operation rather than inventing an identifier for work that was
-        never queued.
+        **The enumeration happens here, before the job is queued, and that is the
+        decision the rest of the package rests on.** The alternative — the worker
+        walks the root — leaves a window between this call returning and the job
+        running in which an accepted grant has no measured denominator, so every
+        disclosure in that window has to say so, which is the token and the clamp
+        this package just deleted plus a *new* token distinguishing "not measured
+        yet" from "not measurable". Measuring at acceptance means there is no such
+        instant: `record_scope` refuses an empty set and its refusal rolls back
+        `accept_enrollment` with it, so `enrollment_objects` is non-empty for
+        every stored enrollment by construction rather than by convention.
+
+        A retry — the same idempotency key carrying the same normalized request —
+        enumerates nothing and queues nothing. Both are gated on
+        `acceptance.created`, so a retry makes no provider call at all; the row
+        count would be identical either way because `record_scope` inserts under
+        a primary key, which is why the assertion that proves this has to be on a
+        recording provider's call log. `enqueue_job` is deliberately not
+        idempotent, because two calls are two operations to observe separately,
+        so the enrollment's own key is what makes "queue this once" true. The
+        response says so with a null operation rather than inventing an
+        identifier for work that was never queued.
         """
         with _translated():
             source = unit_of_work.sources.source(command.source_id)
@@ -746,7 +763,19 @@ class ApplicationService:
         enrollment = acceptance.enrollment
         operation_id: str | None = None
         if acceptance.created:
+            # Enumeration happens inside this branch and nowhere above it, so a
+            # retry resolves no provider and makes no provider call.
+            enumerated = self._enumerate(unit_of_work, enrollment)
+            if not enumerated:
+                # Refused here rather than left to `record_scope`, which refuses
+                # the empty set too. Both roll the transaction back; only this one
+                # can say what the caller did wrong. A root that holds no
+                # extractable object is a scope the operator named and not a fault
+                # of this system, and reporting it as `internal_error` would be
+                # the misclassification `docs/specs` section 10 forbids.
+                raise InvalidRequestError(SafeDetail.SELECTOR)
             with _translated():
+                unit_of_work.enrollments.record_scope(enrollment.enrollment_id, enumerated)
                 operation_id = unit_of_work.operations.enqueue(enrollment.enrollment_id)
 
         counts = self._coverage(
@@ -907,17 +936,99 @@ class ApplicationService:
             return self._limits.default_page_size
         return min(requested, self._limits.max_page_size)
 
-    def _provider(self, source_id: str) -> SourceProvider:
+    def _provider(self, unit_of_work: UnitOfWork, source_id: str) -> SourceProvider:
         """The adapter serving `source_id`, or a truthful unavailability.
 
         A source that is configured but has no adapter wired is `unavailable`
         rather than `not_found`: the source exists, and saying otherwise would
         report a wiring gap as a fact about the corpus.
+
+        Taken from the unit of work rather than from a constructor argument, and
+        `contracts.ports.UnitOfWork.providers` gives the reason: the adapter
+        resolves opaque identifiers against `knowledge.source_objects`, so it has
+        to read the rows this request's transaction sees, and the identifiers it
+        issues have to roll back with it.
         """
-        provider = self._providers.for_source(source_id)
+        provider = unit_of_work.providers.for_source(source_id)
         if provider is None:
             raise UnavailableError(SafeDetail.SOURCE_ID)
         return provider
+
+    def _enumerate(self, unit_of_work: UnitOfWork, enrollment: Enrollment) -> tuple[str, ...]:
+        """The objects `enrollment` authorizes, measured once, at acceptance.
+
+        For an enrollment that named its objects this is those objects: the list
+        *is* the authorization, and walking anything would answer a question
+        nobody asked. **No provider is resolved on that path**, which is a
+        decision rather than an ordering accident: requiring an adapter to
+        enumerate a set the request already stated would make `sources.enroll`
+        fail for a source whose root is momentarily unreachable, over an answer
+        that never depended on the root. `record_scope` still refuses an
+        identifier `knowledge.source_objects` has no row for, so the named set is
+        checked against the store rather than trusted.
+
+        For a root selector it is the walk, and every bound the walk obeys is
+        read off the accepted enrollment rather than restated here —
+        `scope.depth` and `max_items`, both of which the domain already refused
+        to construct outside their ceilings. There the provider *is* required,
+        and a source with no adapter is `unavailable` with the whole transaction
+        rolled back: an enrollment nobody can enumerate must not exist.
+
+        **Depth is levels of listing, and the level count is `depth + 1`.**
+        `domain.source.enrollment` fixes depth zero as "the named root itself and
+        its immediate children — never a walk", so the default enrollment is one
+        `list_children` call. Depth one adds the children of those children, and
+        so on to `MAX_ENROLLMENT_DEPTH`.
+
+        **Containers are descended and not recorded.** The eligible total is a
+        count of objects that could hold extractable content, and a directory
+        holds none; counting one would make `processed == eligible` unreachable
+        for every enrollment that contains a folder. The table's own docstring
+        records the same decision from the schema's side.
+
+        Refuses with `InvalidRequestError(MAX_ITEMS)` at `max_items + 1` objects,
+        so the walk stops rather than materialising a scope the enrollment never
+        authorized. The refusal rolls the accepting transaction back, so the
+        enrollment does not exist rather than existing over a truncated scope.
+
+        The provider reads run inside the enroll transaction, under `D-35`, which
+        permits it while the provider is local. This is a new caller of that
+        decision and not a reopening of it: enumeration reads no bytes — only
+        `iterdir` and `stat` — so it is strictly cheaper than `sources.fetch`,
+        which already runs inside the transaction under the same decision. This
+        module's own docstring, at "Provider reads happen inside that
+        transaction", is the sentence that has to change first if a provider ever
+        becomes remote.
+        """
+        scope = enrollment.scope
+        if scope.root_object_id is None:
+            return scope.object_ids
+
+        provider = self._provider(unit_of_work, enrollment.source_id)
+        found: list[str] = []
+        frontier: list[str] = [scope.root_object_id]
+        for _ in range(scope.depth + 1):
+            if not frontier:
+                break
+            descend: list[str] = []
+            for parent in frontier:
+                with _translated():
+                    children = tuple(provider.list_children(parent))
+                for child in children:
+                    if child.kind is ObjectKind.CONTAINER:
+                        descend.append(child.source_object_id)
+                        continue
+                    found.append(child.source_object_id)
+                    if len(found) > enrollment.max_items:
+                        raise InvalidRequestError(SafeDetail.MAX_ITEMS)
+            frontier = descend
+        # A symlink inside the root and its target are one object with one
+        # identifier (`providers.fixture.list_children`), so the same object can
+        # be listed twice under two names. `dict.fromkeys` keeps the first
+        # occurrence and the order; `record_scope` would collapse the duplicate
+        # against its primary key anyway, but then `max_items` would have been
+        # counted against a number the stored set does not have.
+        return tuple(dict.fromkeys(found))
 
     def _one_enrollment(
         self, authorization: Authorization, source_id: str, named: str | None
@@ -987,12 +1098,18 @@ class ApplicationService:
         *,
         queued: int = 0,
     ) -> CoverageCounts:
-        """Coverage of one enrollment, with the denominator it can honestly state."""
+        """Coverage of one enrollment, with the denominator the store measured.
+
+        Nothing about the size of the scope is passed down. The repository reads
+        the enumerated object set beside the outcomes it counts, which is what
+        makes the reported `eligible` a measurement rather than this layer's
+        arithmetic. `queued` is still stated here, because work in flight is a
+        fact about the job plane that no count of objects can carry.
+        """
         with _translated():
             return unit_of_work.knowledge.coverage(
                 enrollment.enrollment_id,
                 observed_at=observed_at,
-                eligible=eligible_total(enrollment),
                 queued=queued,
             )
 

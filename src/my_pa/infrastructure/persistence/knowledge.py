@@ -1,4 +1,4 @@
-"""The three reads `knowledge.read` and `sources.status` need, and no writes.
+"""The reads `knowledge.read`, `sources.status`, and the executor need; no writes.
 
 Every function here takes a `Connection` and the caller owns the transaction, as
 everywhere else in this package. They are reads only: nothing in this module can
@@ -39,6 +39,17 @@ outranks unsupported, which outranks extracted, and for the reason `coverage_for
 gives: a later success must never hide a quarantine (`INV-PKL-007`,
 `ABUSE-PKL-008`). It answers about one object, so it is a different shape from
 the counts, but it must not be able to give a different answer.
+
+**`pending_objects` is the executor's work list, and its predicate is the only
+idempotency protecting a quarantine.** `extractions` has
+`one_extraction_per_version_per_enrollment` and `record_outcome` inserts under
+it, so re-extracting an unchanged object writes no second row. A quarantine has
+no such constraint and deliberately will not get one: `quarantine_records` is
+append-only because a second quarantine of the same object is a second event.
+What stops a re-run duplicating one is that this function never offers an object
+that already holds a row in either table for this enrollment. It is stated here
+rather than implied, because it is the one idempotency in this package that is a
+predicate instead of a constraint, and a test plants against exactly it.
 """
 
 from __future__ import annotations
@@ -53,12 +64,13 @@ from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.infrastructure.persistence.extraction import authorized_object, extracted_text_in_scope
 from my_pa.infrastructure.persistence.tables import (
     coverage_limitations,
+    enrollment_objects,
     extractions,
     quarantine_records,
     source_objects,
 )
 
-__all__ = ["latest_limitations", "outcome_for_object", "read_extraction"]
+__all__ = ["latest_limitations", "outcome_for_object", "pending_objects", "read_extraction"]
 
 _RECORD_COLUMNS = (
     extractions.c.extraction_id,
@@ -151,6 +163,51 @@ def outcome_for_object(
     if ExtractionStatus.EXTRACTED.value in statuses:
         return ExtractionStatus.EXTRACTED
     return None
+
+
+def pending_objects(connection: Connection, enrollment_id: str) -> tuple[str, ...]:
+    """The objects `enrollment_id` holds that have reached no outcome yet.
+
+    A row of `enrollment_objects` for this enrollment with no row in
+    `extractions` and no row in `quarantine_records` for it, under the same
+    enrollment. Both exclusions are needed and neither implies the other: an
+    unsupported outcome and a successful extraction are both rows in
+    `extractions`, and a quarantine is a row in neither. Dropping the quarantine
+    half would make a re-run quarantine the same object twice, because that
+    ledger is append-only by design and has no unique key to conflict against.
+
+    Restricted to the enumerated set rather than to the enrollment identifier,
+    which is what makes this a work list and not a diff: an object nothing
+    enumerated is not work this enrollment authorizes, and offering it would hand
+    the executor an object `authorized_object` will then refuse — the
+    disagreement that `docs/specs` section 12 calls a broken store.
+
+    Ordered by identifier, so two workers over the same enrollment plan the same
+    sequence and a re-run after a crash resumes in a decidable order rather than
+    in whatever order the planner returned.
+
+    The empty tuple is a real answer and the common one: an enrollment whose work
+    is finished has nothing pending. It is not "no such enrollment" — that is
+    also empty, and the two are deliberately indistinguishable here for the
+    reason this module's docstring gives about `read_extraction`.
+    """
+    validate_identifier(enrollment_id, IdKind.ENROLLMENT)
+    extracted = select(extractions.c.source_object_id).where(
+        extractions.c.enrollment_id == enrollment_id
+    )
+    quarantined = select(quarantine_records.c.source_object_id).where(
+        quarantine_records.c.enrollment_id == enrollment_id
+    )
+    rows = connection.execute(
+        select(enrollment_objects.c.source_object_id)
+        .where(
+            enrollment_objects.c.enrollment_id == enrollment_id,
+            enrollment_objects.c.source_object_id.not_in(extracted),
+            enrollment_objects.c.source_object_id.not_in(quarantined),
+        )
+        .order_by(enrollment_objects.c.source_object_id)
+    ).scalars()
+    return tuple(str(value) for value in rows)
 
 
 def _to_record(row: Row[tuple[object, ...]]) -> KnowledgeRecord:

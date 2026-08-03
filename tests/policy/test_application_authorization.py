@@ -10,7 +10,7 @@ surface, because that is what makes the second set of tests exhaustive rather
 than a sample.
 
 **Behavioural.** Every capability is then invoked with an unauthorized request
-and required to be denied — not one capability, all eight, and for each of the
+and required to be denied — not one capability, every one of them, and for each of the
 four ways authority can be missing. A capability that grew a bypass would fail
 its own row here.
 

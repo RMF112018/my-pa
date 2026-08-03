@@ -1,10 +1,17 @@
-"""`apps/cli/` holds operator commands. None of them is a ninth capability.
+"""`apps/cli/` holds operator commands. None of them is a further capability.
 
-The capability set is closed at eight (`domain/identity/operation.py`), and an
-operator command that quietly became a ninth would be the widest hole this
-package could open: `audit_events.capability` is constrained to those eight, so a
-ninth would have to be admitted to the contract, the audit table, and the policy
+The capability set is closed by `domain/identity/operation.py`, and an operator
+command that quietly joined it would be the widest hole this package could open:
+`audit_events.capability` is constrained to exactly that set, so a new member
+would have to be admitted to the contract, the audit table, and the policy
 decision at once — or, worse, would run beside them without any of the three.
+
+**No count is written here, and that is deliberate.** This docstring stated the
+old size three times, unchanged, through the pull request that widened the set —
+in the one module whose entire subject is that closure — and the sentence below
+about a prose assertion is exactly why nothing caught it. The size belongs to
+`Capability`; where a message below needs it, it is derived from `Capability` at
+the point of use.
 
 **The check is mechanical, not asserted.** Every claim below is decided by
 reading the command with `ast`, so it holds against what the file says rather
@@ -49,6 +56,8 @@ import ast
 from pathlib import Path
 
 import pytest
+
+from my_pa.domain.identity.operation import Capability
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -214,8 +223,8 @@ def test_the_command_names_only_the_writers_it_needs(command: str) -> None:
 def test_the_command_never_names_a_capability(command: str) -> None:
     """Rule 3: the word does not appear, so it cannot become one by accident."""
     assert FORBIDDEN_IDENTIFIER not in _identifiers(_command(command)), (
-        f"apps/cli/{command} names `Capability`; the set is closed at eight and an "
-        "operator command is configuration rather than a ninth member of it"
+        f"apps/cli/{command} names `Capability`; the set is closed at {len(Capability)} "
+        "and an operator command is configuration rather than a member of it"
     )
 
 

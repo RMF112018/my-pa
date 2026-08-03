@@ -265,7 +265,7 @@ def _list_captures(payload: Mapping[str, Any]) -> Command:
 
 #: One builder per capability. A mapping rather than a `match`, so that
 #: `test_every_capability_has_exactly_one_builder` can compare its keys against
-#: `Capability` and a ninth capability cannot be unreachable over a transport
+#: `Capability` and a further capability cannot be unreachable over a transport
 #: while the manifest publishes it.
 _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = MappingProxyType(
     {

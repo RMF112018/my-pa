@@ -1,4 +1,4 @@
-"""Eight capabilities over a socket, and nothing decided on the way.
+"""Every capability over a socket, and nothing decided on the way.
 
 Three claims, and they are different in kind.
 
@@ -253,7 +253,7 @@ class RecordingService(ApplicationService):
 
 @pytest.fixture
 def staged(scene: Scene) -> tuple[Scene, KnowledgeRecord]:
-    """A scene with a search page and a stored record, so all eight can succeed."""
+    """A scene with a search page and a stored record, so every capability succeeds."""
     scene.world.searches[scene.enrollment.enrollment_id] = staged_search(scene)
     return scene, staged_record(scene)
 
@@ -278,7 +278,7 @@ def wire(staged: tuple[Scene, KnowledgeRecord], service: RecordingService) -> It
 def test_every_capability_is_reachable_over_http(
     capability: Capability, staged: tuple[Scene, KnowledgeRecord], wire: Wire
 ) -> None:
-    """All eight, addressed by name, answering successfully."""
+    """Every one of them, addressed by name, answering successfully."""
     scene, record = staged
     payload = payloads_for(scene, record)[capability]
     reply = wire.send(capability.value, document_for(capability, scene, payload))

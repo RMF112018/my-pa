@@ -19,7 +19,7 @@ on the database, while this invokes a public capability, which is a request
 against the application. They share `apps/cli/` because section 5.10 puts
 operator commands there, and they share nothing else — no options, no runtime,
 no output shape. Merging them under one program would have made a migration
-phase look like a ninth capability.
+phase look like a further capability.
 
 **The same runtime as the gateway, deliberately.** A CLI that composed its own
 `ApplicationService` could differ from the served one in a limit, a clock, or a

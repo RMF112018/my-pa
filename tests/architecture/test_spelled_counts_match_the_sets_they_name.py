@@ -159,13 +159,23 @@ _NUMBER = "|".join(re.escape(word) for word in _READ_CARDINALS + _READ_ORDINALS)
 #: Adjectives the corpus writes between the number and the noun.
 _ADJECTIVE = r"(?:existing|new|public|remaining|other|further|capability)\s+"
 
-#: A count of capabilities, of purposes, or — in a block already about
-#: capabilities — of members.
+#: Nouns that name the set outright, wherever they are written.
+NAMED_NOUNS = ("capabilit(?:y|ies)", "purposes?")
+
+#: Nouns that name the set only where the block is already about capabilities.
+#: `member`, `name`, `string` and `tool` are all how this corpus refers to a
+#: capability without saying the word — "eight names typed out by hand", "none
+#: of the eight strings", "a ninth member of it" — and all four are also
+#: ordinary English about other things, so context decides.
+BORROWED_NOUNS = ("members?", "names?", "strings?", "tools?")
+
 CLAIM = re.compile(
     rf"\b(?P<number>{_NUMBER})[\s-]+(?:{_ADJECTIVE})?"
-    r"(?P<noun>capabilit(?:y|ies)|purposes?|members?)\b",
+    rf"(?P<noun>{'|'.join(NAMED_NOUNS + BORROWED_NOUNS)})\b",
     re.IGNORECASE,
 )
+
+_BORROWED = re.compile(rf"^(?:{'|'.join(BORROWED_NOUNS)})$", re.IGNORECASE)
 
 #: How this corpus states the capability set's size without naming the noun.
 CLOSED_AT = re.compile(rf"\bclosed at (?P<number>{_NUMBER})\b", re.IGNORECASE)
@@ -180,9 +190,9 @@ CLOSED_AT = re.compile(rf"\bclosed at (?P<number>{_NUMBER})\b", re.IGNORECASE)
 #: times, always about the three transports, and every one of them continues.
 ALL_OF = re.compile(rf"\ball (?P<number>{_NUMBER})(?=[,.])", re.IGNORECASE)
 
-#: `member` is read only where the block is already about capabilities, because
-#: five enums in `src/` are described as having "one member" or gaining "a
-#: second member" and none of them is the capability set.
+#: A borrowed noun is read only where the block is already about capabilities,
+#: because five enums in `src/` are described as having "one member" or gaining
+#: "a second member" and none of them is the capability set.
 _MEMBER_NEEDS = re.compile(r"capabilit", re.IGNORECASE)
 
 
@@ -453,7 +463,7 @@ def _claims_in(path: Path, text: str, offset: int = 0) -> list[Claim]:
                     # about capabilities. Five enums in `src/` are described as
                     # having one member or gaining a second, and none is this one.
                     continue
-                if noun.lower().startswith("member") and not about_capabilities:
+                if _BORROWED.match(noun) and not about_capabilities:
                     continue
                 if any(start < match.end() and match.start() < end for start, end in taken):
                     # `all twelve capabilities` is one claim, not two: the noun
@@ -607,7 +617,7 @@ def test_a_planted_claim_of_every_shape_is_caught(tmp_path: Path) -> None:
     phrases = sorted(" ".join(claim.phrase.split()).lower() for claim in found)
     assert phrases == [
         "closed at eight",
-        "eight capability",
+        "eight capability names",
         "eighth purpose",
         "ninth capability",
         "seven\npurposes".replace("\n", " "),

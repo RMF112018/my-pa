@@ -58,12 +58,15 @@ is not a defect.
 
 ## 3. What is implemented
 
-Ninety-three Python modules under `src/my_pa` and sixty-nine test modules, both
-recomputed at WP-4B3 rather than restated — `find src/my_pa -name "*.py"` and
-`find tests -name "test_*.py"`. The figures published here were sixty-eight and
-forty, which were true at the audit basis and were carried through six merged
-packages that each added modules. Nothing checks them, so they are stated with
-the command that produces them.
+Ninety-nine Python modules under `src/my_pa` and eighty-seven test modules —
+`find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
+published here have now gone stale twice: sixty-eight and forty were true at the
+audit basis, ninety-three and sixty-nine were true at WP-4B3, and each was
+carried through the packages that followed. **"Nothing checks them" was the
+diagnosis and it is now wrong**:
+`../../tests/architecture/test_spelled_counts_match_the_sets_they_name.py` runs
+both commands above, and the revision count and head below, and fails when this
+section disagrees with the tree.
 
 | Area | State |
 |---|---|
@@ -77,11 +80,11 @@ the command that produces them.
 | `domain/source`, `domain/extraction`, `domain/search` — registry, bounded enrollment, provider port, extraction outcomes, quarantine, coverage, search query | Implemented and tested |
 | `infrastructure/persistence` — registry, enrollment, jobs, extraction, quarantine, coverage, lexical search | Implemented; covered by the database tier |
 | `infrastructure/providers/fixture.py` — read-only fixture source provider | Implemented and tested |
-| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, the enrolled object set | Implemented, ten revisions, head `af3d35efb9c0` |
+| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, the enrolled object set | Implemented, eleven revisions, head `1a4c9e77b2d5` |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
-All eight capability names, their operator-only flags, and their permitted
-purposes already exist in `domain/identity/operation.py`. The v1 request,
+All twelve capability names, their operator-only flags, and their permitted
+purposes exist in `domain/identity/operation.py`, alongside nine purposes. The v1 request,
 response, disclosure, and error shapes already exist and are contract-tested.
 
 ## 4. What is not implemented

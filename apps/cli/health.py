@@ -44,7 +44,7 @@ answers something better than `internal_error` is a separate change against
 `D-65` names it and defers it; this command is how an operator finds out, not the
 fix.
 
-**It is not a ninth capability, and not a route.** It builds no
+**It is not a further capability, and not a route.** It builds no
 `ApplicationService`, no `Principal`, and no `SourceProviders`, exactly as
 `apps/cli/sources.py` does not, and
 `tests/architecture/test_operator_commands_are_not_capabilities.py` decides that

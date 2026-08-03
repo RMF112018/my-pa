@@ -58,7 +58,8 @@ because that process holds one principal for its lifetime.
 
 This is not a defect any of the work packages so far may fix: whether a local
 principal has a durable identity is an authentication question and `P00-OD-010`
-is open.
+is open. Recorded as `D-67` in `docs/plans/mcv-completion-plan.md`, which defers
+it to that decision rather than closing it here.
 
 Evidence: `src/my_pa/bootstrap/gateway.py`,
 `src/my_pa/application/authorization.py`, `src/my_pa/domain/policy/decision.py`,

@@ -12,8 +12,20 @@ because they are one composition and differ only in protocol.
 Every command below was executed against a **disposable** database
 (`my_pa_gateway_runbook_test`, created at head and dropped for the purpose) on
 2026-08-02. Nothing here was run against the canonical `my_pa` database.
-Pointing the gateway at it would be safe to read from and would write audit rows
-for requests nobody made, which is the reason not to.
+
+**Corrected 2026-08-03: the reason first given here was incomplete, and the true
+one is stronger.** It said pointing the gateway at canonical `my_pa` "would be
+safe to read from and would write audit rows for requests nobody made", which
+reads as politeness. Measured: canonical `my_pa` is at `6c4d3ea82f10` while the
+chain ends at `af3d35efb9c0` and it carries **no `knowledge` schema**, so it
+cannot serve a single capability — every request fails inside the unit of work
+and the caller is told `internal_error`, which explains nothing (`D-61`,
+`D-65`). Run `.venv/bin/python apps/cli/health.py` against a database before
+pointing this process at it; that is what it is for, and
+`ops/runbooks/end-to-end-operations.md` makes it step 1.
+
+Everything below therefore describes a gateway over a database at head, which is
+the only state in which it answers.
 
 ## What the gateway is, and what it does not yet do
 
@@ -106,6 +118,16 @@ curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
 Observed: `200`, `content-type: application/json`, and an envelope whose
 `result.manifest` lists eight capabilities `available`, `application/pdf`
 `decision_gated`, and `readiness.state: ready`. No `server` header.
+
+**What `readiness.state` measures, since an operator will read it as a probe.**
+It counts wired handlers in the manifest, so its *derivation* is build-time. Its
+*observation* is not: `ApplicationService._run` opens the unit of work before it
+dispatches, so a caller sees this value only when the database was reachable,
+writable, and at head — the same three conditions `apps/cli/health.py` reports
+directly. Measured (`D-61`): unreachable answers `unavailable`, reachable but
+behind head answers `internal_error`, and only reachable-at-head answers `ready`.
+So this transcript is accurate and this envelope is a liveness signal, but it
+diagnoses nothing; the probe is what tells the three apart.
 
 A request for a scope the principal does not hold:
 

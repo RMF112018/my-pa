@@ -143,19 +143,53 @@ DatabaseHealth(server_version='17.10 (Debian 17.10-1.pgdg13+1)',
 It reports the server version and installed extensions, carries no row content,
 and raises the driver's own error when the server is unreachable.
 
-A one-line content check — expect the migration head and the database size:
+A one-line content check — the database's own Alembic revision and its size:
 
 ```sh
 docker exec my-pa-postgres psql -U my_pa -d my_pa -c "
-SELECT (SELECT version_num FROM public.alembic_version) AS head,
+SELECT (SELECT version_num FROM public.alembic_version) AS revision,
        pg_size_pretty(pg_database_size('my_pa')) AS size;"
 ```
 
 ```
-     head     |  size
+   revision   |  size
 --------------+---------
- 3a8e2cb16d59 | 4412 MB
+ 6c4d3ea82f10 | 4412 MB
 ```
+
+Re-measured 2026-08-03. **The column is aliased `revision` and not `head`, and
+the change is not cosmetic.** This query reports what the *database* is at; it
+knows nothing about what the repository's chain ends at, so an alias reading
+`head` turns any transcript of it into a head claim. The transcript here said
+`3a8e2cb16d59` under that alias — revision 5 of 10, which was never head — and
+was two migrations stale by the time anyone read it.
+
+**Canonical `my_pa` is deliberately not at application head.** It is at
+`6c4d3ea82f10`; the chain ends at `af3d35efb9c0`, four revisions later, and it
+carries no `knowledge` schema. The four are the application's own tables, and
+this database is the migrated corpus rather than the application's store. The
+consequence is worth knowing before pointing anything at it: a reachable
+database behind head answers `internal_error` to every capability, which names
+nothing (`D-61`). Ask the probe rather than reading a transcript:
+
+```sh
+MY_PA_DATABASE_URL='postgresql+psycopg://my_pa@localhost:5433/my_pa' \
+  .venv/bin/python apps/cli/health.py
+```
+
+```
+state            not_at_head
+server_version   17.10 (Debian 17.10-1.pgdg13+1)
+extensions       pg_trgm, plpgsql, unaccent
+revision         6c4d3ea82f10
+head             af3d35efb9c0
+the configured database is not at the migration head and cannot serve this build
+```
+
+Exit `1`. It reports `ready` and exits `0` only for a database that is both
+reachable and at head; `state unreachable` is the third answer and is
+distinguishable from this one.
+`ops/runbooks/end-to-end-operations.md` uses it as step 1.
 
 ## Connect
 

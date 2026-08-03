@@ -121,13 +121,37 @@ def evaluate(request: PolicyRequest) -> PolicyDecision:
     return PolicyDecision(allowed=True, policy_version=POLICY_VERSION)
 
 
+#: Capabilities that carry no source scope at all, and for which naming one is
+#: therefore a contradiction rather than a request.
+#:
+#: `capabilities.get` describes the interface itself. The four capture
+#: capabilities read and write a product-owned record, which `ADR-003` makes a
+#: third authority class: a capture belongs to no configured source and no
+#: enrollment, so requiring one would make them permanently unusable in exactly
+#: the way requiring a held scope would make `sources.enroll` unusable.
+#:
+#: **This set widening is what an added capability most easily gets wrong.** An
+#: unlisted capability falls to the rule below, which denies an empty requested
+#: scope — a correct default, and a silent one: the request is refused with
+#: `scope_not_authorized` and nothing says the capability was never mapped.
+_SCOPELESS: frozenset[Capability] = frozenset(
+    {
+        Capability.CAPABILITIES_GET,
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.CAPTURE_READ,
+        Capability.CAPTURE_LIST,
+    }
+)
+
+
 def _scope_is_authorized(request: PolicyRequest) -> bool:
     """Whether the requested scope lies inside the authorized enrollment.
 
-    `capabilities.get` describes the interface itself and carries no source
-    scope. Every other capability must name a scope it already holds.
+    A scopeless capability must name no scope; every other capability must name
+    a scope it already holds.
     """
-    if request.capability is Capability.CAPABILITIES_GET:
+    if request.capability in _SCOPELESS:
         return not request.requested_source_ids
     if not request.requested_source_ids:
         return False

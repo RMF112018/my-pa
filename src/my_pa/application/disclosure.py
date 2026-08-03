@@ -188,17 +188,33 @@ def disclosure_for(
     )
 
 
-def unenrolled_disclosure(observed_at: datetime) -> Disclosure:
-    """The envelope for a result that describes the interface rather than a scope.
+def unenrolled_disclosure(
+    observed_at: datetime,
+    *,
+    trust_basis: tuple[str, ...] = ("configured_interface",),
+    truncation: Truncation = _NO_TRUNCATION,
+    extra_limitations: tuple[Limitation, ...] = (),
+) -> Disclosure:
+    """The envelope for a result produced outside any enrollment's grant.
 
-    `capabilities.get` reads no source and no enrollment, so its coverage is
+    Two kinds of result are: `capabilities.get`, which describes the interface,
+    and the capture capabilities, which read a product-owned record rather than
+    a source. Neither reads a source or an enrollment, so coverage is
     `not_enrolled` with every count zero — which `CoverageCounts` permits only
     for a scope no grant covers, and which is the truthful answer here rather
-    than a shape borrowed from a result that measured something.
+    than a shape borrowed from a result that measured something. `Scope` is
+    empty for the same reason: a capture belongs to no `src_…` and no `enr_…`,
+    and naming one would be inventing a grant.
 
-    It states no limitation at all. The one it used to carry was the audit
-    claim removed above; a capability description has nothing else to qualify,
-    and an empty tuple says so more honestly than a token kept for company.
+    **`trust_basis` is the caller's because the two answers rest on different
+    things.** A capability description rests on configuration; a capture rests
+    on the person who typed it, which `TrustLevel.SOURCE_ORIGINAL` is the
+    correct level for — `ADR-003` makes a user-authored record an authority in
+    its own right rather than something derived from one.
+
+    `capabilities.get` states no limitation and passes none. A capture listing
+    stops at the page size like every other listing in this build, so it passes
+    the same token `sources.list` does.
     """
     counts = CoverageCounts(observed_at=observed_at)
     return Disclosure(
@@ -207,7 +223,10 @@ def unenrolled_disclosure(observed_at: datetime) -> Disclosure:
         freshness=Freshness(
             observed_at=observed_at, state=FreshnessState.CURRENT_FOR_OBSERVED_VERSION
         ),
-        trust=Trust(level=TrustLevel.SOURCE_ORIGINAL, basis=("configured_interface",)),
+        trust=Trust(level=TrustLevel.SOURCE_ORIGINAL, basis=trust_basis),
+        truncation=truncation,
+        limitations=tuple(sorted(token.value for token in dict.fromkeys(extra_limitations))),
+        partial_result=truncation.is_truncated,
         classification=Classification.PRIVATE_LOCAL,
         cloud_eligible=False,
     )

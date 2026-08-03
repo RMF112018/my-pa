@@ -33,23 +33,29 @@ inside the payload the caller controls.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import ClassVar
 
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
+from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
 from my_pa.domain.identity.operation import Capability
 
 __all__ = [
     "Command",
+    "CreateCapture",
     "EnrollSource",
     "FetchSource",
     "GetCapabilities",
     "GetSourceMetadata",
     "GetSourceStatus",
+    "ListCaptures",
     "ListSources",
+    "ReadCapture",
     "ReadKnowledge",
     "Representation",
+    "ReviseCapture",
     "SearchKnowledge",
 ]
 
@@ -76,6 +82,44 @@ def _identifier(value: str, kind: IdKind, detail: SafeDetail) -> str:
     # Raised outside the handler so the original — which renders the rejected
     # value — is not left in `__context__` for a traceback to print.
     raise InvalidRequestError(detail)
+
+
+def _moment(value: datetime | None, detail: SafeDetail) -> datetime | None:
+    """Validate one caller-supplied time, reporting the field rather than the value.
+
+    A naive datetime is refused rather than assumed to be UTC, which is the rule
+    `domain.common.time` states: guessing an offset would fabricate authority
+    over a moment nobody stated. `None` is a real answer here and stays one — a
+    transport may supply no device clock, and a note may be about no particular
+    moment. Defaulting either to the request clock would invent a fact about the
+    world out of a fact about this process, which is what `QC-AC-012` exists to
+    prevent.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, datetime):
+        raise InvalidRequestError(detail)
+    try:
+        ensure_utc(value)
+    except NaiveDatetimeError:
+        pass
+    else:
+        return value
+    raise InvalidRequestError(detail)
+
+
+def _text(value: str, detail: SafeDetail) -> str:
+    """Check that a capture carries text, without reading it into a message.
+
+    Only presence and type. The bound and the emptiness rule belong to
+    `domain.capture.version.CaptureContent`, which the handler builds, for the
+    reason this module's docstring gives: what a command checks is what is
+    decidable without configuration, and refusing here as well would be a second
+    place the same rule could drift.
+    """
+    if not isinstance(value, str):
+        raise InvalidRequestError(detail)
+    return value
 
 
 def _positive(value: int | None, detail: SafeDetail) -> int | None:
@@ -302,6 +346,115 @@ class ReadKnowledge:
         _positive(self.max_characters, SafeDetail.MAX_CHARACTERS)
 
 
+@dataclass(frozen=True, slots=True)
+class CreateCapture:
+    """`capture.create`: store one user-authored note as the first version of a new capture.
+
+    `text` is `repr=False` for the reason `SearchKnowledge.query` is: a dataclass
+    `repr` reaches a traceback, a log record, and an assertion message without
+    anyone deciding it should, and this is the one field in the request that
+    carries content.
+
+    **The two client times are optional and are never invented.** A transport
+    with no device clock supplies neither, and the stored value is then null —
+    honest absence rather than the request clock wearing a device's name
+    (`QC-AC-012`).
+
+    **There is no capture identifier here.** Creating names nothing that exists;
+    revising does. That is the whole difference between this command and
+    `ReviseCapture`, and it is a difference in the type rather than in a
+    nullable field, so no request can be ambiguous about which it is.
+    """
+
+    capability: ClassVar[Capability] = Capability.CAPTURE_CREATE
+
+    text: str = field(repr=False)
+    idempotency_key: str
+    client_created_at: datetime | None = None
+    occurred_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.text, SafeDetail.TEXT)
+        if not isinstance(self.idempotency_key, str):
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        if not self.idempotency_key:
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _moment(self.client_created_at, SafeDetail.CLIENT_CREATED_AT)
+        _moment(self.occurred_at, SafeDetail.OCCURRED_AT)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseCapture:
+    """`capture.revise`: append a successor version to an existing capture.
+
+    `revise` rather than `update`, and it is the name that says what happens:
+    ADR-003 clause 3 makes an edit a new version, so nothing is overwritten and
+    the predecessor stays retrievable. There is no field here that could name a
+    version to replace, because replacing one is not an operation this system
+    has.
+    """
+
+    capability: ClassVar[Capability] = Capability.CAPTURE_REVISE
+
+    capture_id: str
+    text: str = field(repr=False)
+    idempotency_key: str
+    client_created_at: datetime | None = None
+    occurred_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.capture_id, IdKind.CAPTURE, SafeDetail.CAPTURE_ID)
+        _text(self.text, SafeDetail.TEXT)
+        if not isinstance(self.idempotency_key, str):
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        if not self.idempotency_key:
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _moment(self.client_created_at, SafeDetail.CLIENT_CREATED_AT)
+        _moment(self.occurred_at, SafeDetail.OCCURRED_AT)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadCapture:
+    """`capture.read`: one stored version of one capture, exactly as written.
+
+    `version_id` omitted means the current version. Named, it means that
+    version — including a superseded one, which is the "independently
+    retrievable" half of `QC-AC-010` and the reason this command has the field
+    at all.
+
+    There is no truncation option, deliberately, and the absence is the point:
+    the criterion is that the *original* text is retrievable, and a read that
+    could silently return part of it would answer a weaker question.
+    """
+
+    capability: ClassVar[Capability] = Capability.CAPTURE_READ
+
+    capture_id: str
+    version_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.capture_id, IdKind.CAPTURE, SafeDetail.CAPTURE_ID)
+        if self.version_id is not None:
+            _identifier(self.version_id, IdKind.CAPTURE_VERSION, SafeDetail.VERSION_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListCaptures:
+    """`capture.list`: one page of stored captures, newest first.
+
+    No content, and no filter. A filter on owner would be the owner-scoped
+    lookup `D-72` refuses to build, and a filter on text would be search, which
+    is WP-7's.
+    """
+
+    capability: ClassVar[Capability] = Capability.CAPTURE_LIST
+
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
 type Command = (
@@ -313,4 +466,8 @@ type Command = (
     | EnrollSource
     | SearchKnowledge
     | ReadKnowledge
+    | CreateCapture
+    | ReviseCapture
+    | ReadCapture
+    | ListCaptures
 )

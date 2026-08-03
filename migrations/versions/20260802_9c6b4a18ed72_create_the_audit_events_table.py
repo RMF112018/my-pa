@@ -108,9 +108,7 @@ def _historical_audit_events() -> Table:
     exactly the part that must not change when a later package adds a member.
     """
     table = audit_events.to_metadata(MetaData(schema=SCHEMA))
-    for constraint in [
-        candidate for candidate in table.constraints if candidate.name in _FROZEN
-    ]:
+    for constraint in [candidate for candidate in table.constraints if candidate.name in _FROZEN]:
         table.constraints.discard(constraint)
     for name, expression in _FROZEN.items():
         table.append_constraint(CheckConstraint(expression, name=name))

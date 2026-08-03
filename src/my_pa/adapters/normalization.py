@@ -49,19 +49,24 @@ delivered — but the number they enforce is one number.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Final
 
 from my_pa.application.commands import (
     Command,
+    CreateCapture,
     EnrollSource,
     FetchSource,
     GetCapabilities,
     GetSourceMetadata,
     GetSourceStatus,
+    ListCaptures,
     ListSources,
+    ReadCapture,
     ReadKnowledge,
     Representation,
+    ReviseCapture,
     SearchKnowledge,
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail
@@ -99,6 +104,13 @@ _ENVELOPE_BYTES: Final = 32 * 128 + 8 * 1024
 #: contract can express rather than chosen as a round number. `sources.enroll`
 #: at its domain ceiling is that request: `MAX_ENROLLMENT_ITEMS` object
 #: identifiers, and everything else beside them.
+#:
+#: `capture.create` at *its* domain ceiling is the other candidate and is
+#: smaller: `MAX_CAPTURE_CHARACTERS` characters escape to at most six JSON bytes
+#: each, which is under this bound with the envelope beside it. So the ceiling
+#: the domain publishes for a capture is reachable over every transport rather
+#: than being silently cut off by this one — which would refuse the largest legal
+#: capture with `invalid_request` and no field to name.
 #:
 #: A caller can exceed this — `RequestMetadata.scope` takes identifier lists the
 #: contract does not bound — and exceeding it is refused rather than truncated.
@@ -191,6 +203,66 @@ def _read_knowledge(payload: Mapping[str, Any]) -> Command:
     return ReadKnowledge(**payload)
 
 
+#: The two caller-supplied times a capture may carry, and the token each is
+#: refused under. Both are optional and neither is ever defaulted from the other
+#: or from the request clock (`QC-AC-012`).
+_CAPTURE_MOMENTS: Mapping[str, SafeDetail] = MappingProxyType(
+    {
+        "client_created_at": SafeDetail.CLIENT_CREATED_AT,
+        "occurred_at": SafeDetail.OCCURRED_AT,
+    }
+)
+
+
+def _moments(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve a capture's optional times from RFC 3339 strings to datetimes.
+
+    Shape conversion, like `_fetch_source`'s representation: JSON has no
+    datetime, and the command refuses anything that is not one, so a caller's
+    `"2026-08-03T09:00:00Z"` would otherwise be rejected for being a string
+    rather than for naming a moment. `fromisoformat` accepts the `Z` suffix on
+    Python 3.11 and later, which is the form the contract publishes.
+
+    A key that is absent stays absent, and a key that is present and `null`
+    stays `None`: the command distinguishes "the caller did not say" from "the
+    caller said nothing", and both mean the same stored value here — but
+    inventing one from the request clock would be the coercion `QC-AC-012`
+    exists to prevent, so neither is filled in.
+    """
+    converted = dict(payload)
+    for name, detail in _CAPTURE_MOMENTS.items():
+        supplied = converted.get(name)
+        if supplied is None:
+            continue
+        if not isinstance(supplied, str):
+            raise InvalidRequestError(detail)
+        try:
+            converted[name] = datetime.fromisoformat(supplied)
+        except ValueError:
+            pass
+        else:
+            continue
+        # Outside the handler: the original renders the rejected value.
+        raise InvalidRequestError(detail)
+    return converted
+
+
+def _create_capture(payload: Mapping[str, Any]) -> Command:
+    return CreateCapture(**_moments(payload))
+
+
+def _revise_capture(payload: Mapping[str, Any]) -> Command:
+    return ReviseCapture(**_moments(payload))
+
+
+def _read_capture(payload: Mapping[str, Any]) -> Command:
+    return ReadCapture(**payload)
+
+
+def _list_captures(payload: Mapping[str, Any]) -> Command:
+    return ListCaptures(**payload)
+
+
 #: One builder per capability. A mapping rather than a `match`, so that
 #: `test_every_capability_has_exactly_one_builder` can compare its keys against
 #: `Capability` and a ninth capability cannot be unreachable over a transport
@@ -205,6 +277,10 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.SOURCES_ENROLL: _enroll_source,
         Capability.KNOWLEDGE_SEARCH: _search_knowledge,
         Capability.KNOWLEDGE_READ: _read_knowledge,
+        Capability.CAPTURE_CREATE: _create_capture,
+        Capability.CAPTURE_REVISE: _revise_capture,
+        Capability.CAPTURE_READ: _read_capture,
+        Capability.CAPTURE_LIST: _list_captures,
     }
 )
 

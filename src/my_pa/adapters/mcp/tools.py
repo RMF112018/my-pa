@@ -3,10 +3,12 @@
 An MCP client learns what a server can do from `tools/list`, so that list is a
 second statement of the capability set — and a second statement is a second
 thing to keep true. Nothing here names a capability, a field, or a schema. The
-eight tools come from `Capability`, each tool's payload shape comes from the
-command that capability builds, and the metadata beside the payload comes from
-`RequestMetadata`'s own JSON Schema. A ninth capability with a ninth command
-appears as a ninth tool with the correct schema, and no one edits this file.
+tools come from `Capability`, each tool's payload shape comes from the command
+that capability builds, and the metadata beside the payload comes from
+`RequestMetadata`'s own JSON Schema. A new capability with a new command appears
+as a new tool with the correct schema, and no one edits this file — which WP-6
+exercised: four capabilities were added, and the only change here was a schema
+for a field type no earlier command used.
 
 **Why the schema is assembled here and not owned by one model.** A request is
 two documents with two owners: `RequestMetadata` validates the envelope, and the
@@ -39,6 +41,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import Mapping
+from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType, UnionType
 from typing import Any, Final, Union, get_args, get_origin, get_type_hints
@@ -71,6 +74,13 @@ def _schema_for(annotation: Any) -> dict[str, Any] | None:  # noqa: ANN401 - a t
     """
     if annotation in _SCALARS:
         return {"type": _SCALARS[annotation]}
+    if annotation is datetime:
+        # A command holds a real `datetime` and `adapters.normalization` is what
+        # converts a caller's string into one, exactly as it converts a string
+        # into a `Representation`. On the wire it is a string, and JSON Schema
+        # has a name for which kind, so this publishes the wire shape rather than
+        # the Python type.
+        return {"type": "string", "format": "date-time"}
     origin = get_origin(annotation)
     if origin is UnionType or origin is Union:
         optional = [member for member in get_args(annotation) if member is not type(None)]

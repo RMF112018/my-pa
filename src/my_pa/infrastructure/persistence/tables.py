@@ -818,9 +818,7 @@ capture_versions = Table(
         f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
         name="a_capture_version_records_a_bounded_key",
     ),
-    UniqueConstraint(
-        "capture_id", "version_number", name="one_version_number_per_capture"
-    ),
+    UniqueConstraint("capture_id", "version_number", name="one_version_number_per_capture"),
     Index("capture_versions_by_capture", "capture_id", "version_number"),
 )
 
@@ -861,16 +859,35 @@ capture_submissions = Table(
     Column("client_created_at", DateTime(timezone=True)),
     Column("server_received_at", DateTime(timezone=True), nullable=False),
     Column("admission_result", Text, nullable=False),
+    # Both references are `DEFERRABLE INITIALLY DEFERRED`, and that is what makes
+    # the unique key above the *first* statement of an admission rather than the
+    # last. The alternative — insert the capture, the version and the receipt and
+    # then discover the key is taken — cannot be undone without a savepoint, so a
+    # replay would have to unwind rows it had already written. Inserting this row
+    # first under `ON CONFLICT DO NOTHING` means a replay writes nothing at all
+    # and a conflict writes nothing at all, which is exactly what `QC-AC-032`
+    # requires; the references are still checked, at commit, so nothing dangling
+    # can survive the transaction.
     Column(
         "version_id",
         Text,
-        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        ForeignKey(
+            f"{SCHEMA}.capture_versions.version_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         nullable=False,
     ),
     Column(
         "receipt_id",
         Text,
-        ForeignKey(f"{SCHEMA}.capture_receipts.receipt_id", ondelete="CASCADE"),
+        ForeignKey(
+            f"{SCHEMA}.capture_receipts.receipt_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         nullable=False,
     ),
     _is_identifier("submission_id", IdKind.SUBMISSION),

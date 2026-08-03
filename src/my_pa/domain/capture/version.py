@@ -203,7 +203,9 @@ class CaptureVersion:
             )
         if not isinstance(self.content, CaptureContent):
             raise EmptyCaptureError("a capture version must carry content")
-        if not isinstance(self.idempotency_key, str) or not self.idempotency_key:
+        if not isinstance(self.idempotency_key, str):
+            raise SupersessionError("a capture version records the key that admitted it")
+        if not self.idempotency_key:
             raise SupersessionError("a capture version records the key that admitted it")
         for moment in (self.server_received_at, self.accepted_at, self.recorded_at):
             ensure_utc(moment)

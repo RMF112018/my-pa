@@ -88,7 +88,15 @@ jobs:
           python -m pip install -e ".[dev]"
           python -m ruff check .
           python -m ruff format --check .
-          python -m mypy src
+          # `mypy` with no path argument, deliberately: an explicit target
+          # overrides `[tool.mypy] files` in `pyproject.toml`, so `mypy src`
+          # checked 93 files and left the 17 in `apps/` and `migrations/`
+          # type-checked by nothing in CI. Measured with a plant: a
+          # deliberate `-> str` returning `int` in `apps/cli/health.py` left
+          # `mypy src` reporting "Success: no issues found in 93 source
+          # files", and the same plant in `migrations/env.py` did too. Bare
+          # `mypy` caught both, at 110 source files. `D-64`.
+          python -m mypy
           python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"
 
       - name: Package governance candidate
@@ -225,7 +233,15 @@ jobs:
               raise AssertionError('an absent MY_PA_DATABASE_URL was accepted')
           print('contracts import and build at floor OK, version', my_pa.__version__)
           "
-          python -m mypy src
+          # `mypy` with no path argument, deliberately: an explicit target
+          # overrides `[tool.mypy] files` in `pyproject.toml`, so `mypy src`
+          # checked 93 files and left the 17 in `apps/` and `migrations/`
+          # type-checked by nothing in CI. Measured with a plant: a
+          # deliberate `-> str` returning `int` in `apps/cli/health.py` left
+          # `mypy src` reporting "Success: no issues found in 93 source
+          # files", and the same plant in `migrations/env.py` did too. Bare
+          # `mypy` caught both, at 110 source files. `D-64`.
+          python -m mypy
           python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"
 
   database-tier:

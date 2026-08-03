@@ -25,34 +25,50 @@ against a disposable database, and it is the one operation in this schema that
 an operator should never run against a database holding real decisions.
 
 **Standing rule: no Alembic revision may derive a closed-set constraint from a
-domain enum.** `capability_is_known` and `purpose_is_known` are written out below
-as frozen literals, and they used to be `_one_of("capability", Capability)` and
-`_one_of("purpose", Purpose)` read off the shared declaration. That is a
+domain enum.** All four closed-set constraints this revision emits —
+`capability_is_known`, `purpose_is_known`, `audit_outcome_is_known` and
+`denial_reason_is_known` — are written out below as frozen literals. They used
+to be `_one_of(...)` calls read off the shared declaration. That is a
 retroactive-DDL defect of the same class as `D-48`, and it was measured rather
 than argued: with a ninth `Capability` member present, a disposable database
 stopped at *this already-merged revision* received
 `capability IN (…, 'zzprobe.create')` where the baseline received the historical
-eight. A revision whose meaning changes when a later one is written is not a
-revision, and the harm is not hypothetical — a build that widens the enum without
-a migration passes every test, because every test constructs its database from
-scratch, and then fails in the field on the first audited request against a
-database that already exists.
+eight, and the independent reviewer reproduced the identical result for
+`denial_reason` with a planted `DenialReason` member. A revision whose meaning
+changes when a later one is written is not a revision, and the harm is not
+hypothetical — a build that widens the enum without a migration passes every
+test, because every test constructs its database from scratch, and then fails in
+the field on the first audited request against a database that already exists.
+
+The first pass at this freeze covered `capability` and `purpose` only, because
+those are the two enums WP-6 changed. That was the defect this rule exists to
+forbid, written into the file that states the rule: `outcome` and `denial_reason`
+are the same mechanism on the same table in the same revision, and a rule
+observed on half a file is a rule nothing enforces. All four are frozen, and
+`tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py` is the
+control that now enforces the rule mechanically across every revision rather than
+leaving it as prose here.
 
 The freeze is **meaning-preserving**. After it this revision emits DDL
 byte-identical to what it emitted on the day it merged, so no deployed schema
 moves and any database already at this revision is already in the post-edit
-state. `pg_get_constraintdef` for both constraints was captured before and after
-the edit and compared.
+state. This is checked at the whole-schema level rather than constraint by
+constraint: a dump of every schema, table, column, constraint, index, trigger,
+routine and view of a database stopped at this revision was taken on `main` and
+on this branch and compared for byte identity, because a per-constraint
+comparison cannot see a change the freeze made somewhere else.
 
 Widening happens forward, by an explicit `ALTER` in the revision that needs the
 new vocabulary — `1a4c9e77b2d5` is the first — which carries its own frozen
 literals for the same reason. What the freeze costs is the enum-to-CHECK
 coupling that used to guarantee the domain and the database could not drift;
 that guarantee is replaced by a checked claim, in
-`tests/schema/test_capture_schema_migration.py`, which asserts that head's
-`capability_is_known` admits exactly `{c.value for c in Capability}` and
-`purpose_is_known` exactly `{p.value for p in Purpose}`. The precedent for
-replacing a copy with a checked restatement is `tables.py:_IDENTIFIER_SUFFIX`.
+`tests/schema/test_capture_schema_migration.py`, which asserts that head admits
+exactly the domain's declaration for **all four** of these constraints —
+`Capability`, `Purpose`, `AuditOutcome` and `DenialReason` — and not only for the
+two WP-6 widened. Checking two of four would have left the coupling replaced by
+nothing on the other two. The precedent for replacing a copy with a checked
+restatement is `tables.py:_IDENTIFIER_SUFFIX`.
 
 Revision ID: 9c6b4a18ed72
 Revises: 8b3f5c17d904
@@ -87,18 +103,31 @@ _HISTORICAL_PURPOSE_CHECK: Final = (
     "'knowledge_search', 'security_validation', 'source_inspection', "
     "'status_observation')"
 )
+_HISTORICAL_OUTCOME_CHECK: Final = "outcome IN ('allowed', 'denied', 'failed')"
+_HISTORICAL_DENIAL_REASON_CHECK: Final = (
+    "denial_reason IN ('destination_not_eligible', 'operator_required', "
+    "'principal_may_not_hold_authority', 'principal_not_authenticated', "
+    "'purpose_not_permitted_for_capability', 'scope_not_authorized')"
+)
 
-#: The two constraints that were derived from a domain enum and are now frozen.
-#: Both, because freezing one and leaving the other is a live bug: `Purpose`
-#: carries the identical hazard, on the same table, in this same revision.
+#: Every constraint on this table that was derived from a domain enum, now
+#: frozen. All four, not the two WP-6 happened to widen: `AuditOutcome` and
+#: `DenialReason` carry the identical hazard on the same table in this same
+#: revision, and freezing the two that moved while leaving the two that did not
+#: is the "half a fix is a live bug" failure applied to the file that states the
+#: rule against it. `AuditOutcome` and `DenialReason` are unchanged since this
+#: revision merged, so writing their historical text out is meaning-preserving by
+#: inspection as well as by measurement.
 _FROZEN: Final[dict[str, str]] = {
     "capability_is_known": _HISTORICAL_CAPABILITY_CHECK,
     "purpose_is_known": _HISTORICAL_PURPOSE_CHECK,
+    "audit_outcome_is_known": _HISTORICAL_OUTCOME_CHECK,
+    "denial_reason_is_known": _HISTORICAL_DENIAL_REASON_CHECK,
 }
 
 
 def _historical_audit_events() -> Table:
-    """`audit_events` as this revision emitted it, with the two checks frozen.
+    """`audit_events` as this revision emitted it, with its four checks frozen.
 
     A copy into a throwaway `MetaData` rather than a second hand-written
     declaration. Everything except the two constraints stays declaration-driven,

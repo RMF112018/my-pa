@@ -8,8 +8,31 @@ each was chosen — is documented in [`../postgres/README.md`](../postgres/READM
 and defined by [`../compose/postgres.yml`](../compose/postgres.yml). This runbook
 does not repeat that; it covers the operations.
 
-All commands run from the repository root. Every command below was executed on
-2026-08-01 except where marked otherwise.
+All commands run from the repository root.
+
+**Provenance, corrected 2026-08-03: a date is not provenance, and this file is
+the proof.** Every command below was executed on 2026-08-01 against canonical
+`my_pa` except where marked otherwise, and until this correction that sentence
+was the whole of what this runbook said about its own currency.
+[`worker-operations.md`](worker-operations.md) states why that is not enough —
+several runbooks carry the same date string, so the date cannot tell a reader
+which transcripts were produced at which head — and this file demonstrated it:
+the `alembic current -v` transcript below read `Rev: 3a8e2cb16d59 (head)`,
+**contradicted twice in this same file** by the two transcripts marked
+*Re-measured 2026-08-03*, which read `6c4d3ea82f10`. It has now been
+re-executed. Where a transcript's currency matters, the marker names the date
+and the revision, not the date alone.
+
+| Transcripts | Run | Canonical `my_pa` was at | Repository head was at |
+|---|---|---|---|
+| the `alembic current -v` guard, the size-and-revision query, the `health.py` probe | re-executed or re-measured 2026-08-03 for WP-6 | `6c4d3ea82f10` | `1a4c9e77b2d5` |
+| everything else, including the restore rehearsal | executed 2026-08-01, **not re-executed** | `3a8e2cb16d59`, which is what the rehearsal transcript reports | before the `knowledge` schema existed |
+
+**Why the rest were not re-run.** They are backup, restore, start, stop and
+connect procedures against a database WP-6 does not migrate — canonical `my_pa`
+is deliberately not at application head, as the section below explains — so
+re-running them would produce new timings and prove nothing the carried
+transcripts do not. The restore rehearsal's figures are that run's.
 
 | | |
 | --- | --- |
@@ -50,10 +73,20 @@ connected to:
 .venv/bin/alembic current -v
 ```
 
+**Re-executed 2026-08-03** against canonical `my_pa`, which this command only
+reads:
+
 ```
 Current revision(s) for postgresql+psycopg://my_pa@localhost:5433/my_pa:
-Rev: 3a8e2cb16d59 (head)
+Rev: 6c4d3ea82f10
+Parent: 3a8e2cb16d59
 ```
+
+*What stood here read `Rev: 3a8e2cb16d59 (head)`, and it was wrong twice over:
+canonical `my_pa` has been at `6c4d3ea82f10` since 2026-08-01, and Alembic
+prints no `(head)` marker for it, because it is not the head — the chain ends at
+`1a4c9e77b2d5`. The same mislabel is corrected under the size query below; this
+was its second site and the sweep that found the first did not reach it.*
 
 If that line ends in `/my_pa`, you are pointed at the canonical database. Stop.
 
@@ -315,7 +348,8 @@ Verified end to end on 2026-08-01: a full dump of `my_pa` restored into a fresh
 `my_pa_restored` in **44.8 seconds**, exit 0, no errors. The restored database
 matched the original on every dimension checked — 494 base tables, 277 foreign
 keys with 0 `NOT VALID`, 1,511 indexes, extensions `pg_trgm`/`plpgsql`/`unaccent`,
-Alembic head `3a8e2cb16d59`, 3,263,870 domain rows, 2 migration runs, 398
+Alembic **revision** `3a8e2cb16d59` — the revision canonical `my_pa` was at on
+that date, and not a head then or now — 3,263,870 domain rows, 2 migration runs, 398
 `table_progress` rows, 8 `quarantine_records`, 3,228,581 `source_key_map` rows,
 collation `C.UTF-8`. The rehearsal database was dropped afterwards.
 

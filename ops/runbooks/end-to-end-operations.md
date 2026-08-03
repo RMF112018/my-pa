@@ -290,7 +290,14 @@ composition, and `apps/cli/invoke.py` composes a runtime per invocation. So each
 enrollment, and `authorize` reads the authorized scope from the enrollments that
 principal holds (`application/authorization.py`).
 
-Measured on this database. `sources.enroll` through `invoke.py` succeeded and
+Measured on the `08e7c81` run's `my_pa_end_to_end_runbook`, at head
+`af3d35efb9c0` — one of the **two** disposable databases this document spans, per
+the provenance table above, and not re-executed for WP-6. *Corrected 2026-08-03:
+this read "Measured on this database", singular, which is the exact claim the
+provenance table at the top of this file was added to retract.
+`../../docs/operations/mcv-limitations.md` quotes and corrects this sentence
+downstream; the downstream citation was fixed and this source sentence was left
+standing.* `sources.enroll` through `invoke.py` succeeded and
 wrote its enrollment; three later `invoke.py` calls to `sources.status` for that
 enrollment were each `denied`, `denial_reason scope_not_authorized`, under three
 **different** principal identifiers — while the same four capabilities through

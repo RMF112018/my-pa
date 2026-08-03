@@ -10,8 +10,9 @@ rather than declared and unreachable.
 
 **Five timestamps, none derived from another.**
 `docs/specs/quick-capture/20_TESTING_EVALUATION_AND_ACCEPTANCE.md:191` requires
-device, server, occurred, processed, and accepted times to remain distinct. Two of them are nullable — a transport may supply no device clock, and
-a note about no particular moment has no occurrence — and a nullable column here
+device, server, occurred, processed, and accepted times to remain distinct. Two
+of them are nullable — a transport may supply no device clock, and a note about
+no particular moment has no occurrence — and a nullable column here
 is honest absence. Defaulting `occurred_at` from `server_received_at` would
 invent a fact about the world from a fact about this process, which is the
 laundering `AGENTS.md` section 5 forbids; the difference between "the user did

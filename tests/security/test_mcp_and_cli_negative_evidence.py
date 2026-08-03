@@ -834,10 +834,17 @@ def test_neither_transport_writes_anything_sensitive_to_a_log(
     with caplog.at_level(logging.DEBUG), both(service, marked.principal) as transports:
         for transport in transports:
             for capability, payload in payloads.items():
-                transport.send(
+                answer = transport.send(
                     capability.value,
                     document(capability, marked.principal.principal_id, payload),
                 )
+                # The control for the scan below, for the family that sends the
+                # marker in its *input*. A capture that never ran puts nothing
+                # in a log, and the absence would read as redaction.
+                if capability in CAPTURE_CAPABILITIES:
+                    assert not answer.failed, (
+                        f"{transport.name} {capability.value} failed: {answer.rendered}"
+                    )
             transport.send(
                 Capability.KNOWLEDGE_SEARCH.value,
                 document(
@@ -851,6 +858,10 @@ def test_neither_transport_writes_anything_sensitive_to_a_log(
                 "sources.destroy",
                 document(Capability.SOURCES_LIST, marked.principal.principal_id, {}),
             )
+    assert caplog.records, (
+        "no log record was captured at all, so the absence of the marker from "
+        "the log is an absence from an empty log"
+    )
     assert_no_marker(caplog.text, marked_root, "the transport log")
     assert MARKER_CONTENT not in caplog.text
     assert MARKER_INJECTION not in caplog.text

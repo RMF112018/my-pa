@@ -46,6 +46,7 @@ from tests.conftest import (
     build_service,
     metadata_for,
     operator,
+    staged_capture,
     staged_search,
 )
 
@@ -156,6 +157,10 @@ def invoke(
 
 
 ALL_CAPABILITIES = list(Capability)
+
+#: The family whose claim is a zero — a capture reaches no source provider at
+#: all — and which therefore has no non-vacuity control of its own.
+CAPTURE_CAPABILITIES = frozenset(c for c in Capability if c.value.startswith("capture."))
 
 
 def test_the_service_offers_exactly_one_public_entry_point() -> None:
@@ -532,17 +537,51 @@ def test_the_source_provider_port_exposes_no_mutating_method() -> None:
 def test_no_capability_calls_anything_but_the_read_only_provider_methods(
     scene: Scene,
 ) -> None:
-    """Every capability, run once, against a provider that records what it did."""
+    """Every capability, run once, against a provider that records what it did.
+
+    **The capture commands are re-pointed at a staged capture, and the answers
+    are asserted, and neither is decoration.** `commands_for` mints capture
+    identifiers that name nothing, which is correct for the denial matrix above —
+    every test there refuses before a handler runs, so what the identifier names
+    is irrelevant. It is not correct here, where the purpose is permitted and the
+    handler is meant to run: `capture.revise` and `capture.read` answered
+    `not_found` and this test still passed. Measured: with all four `capture.*`
+    handlers raising on every call, this test passed unchanged.
+
+    That is the same defect the independent reviewer measured in
+    `tests/security/test_mcp_and_cli_negative_evidence.py`, at a second site
+    nobody had named — "only read-only methods were called" is satisfied for free
+    by a capability that never reached a method at all. The zero needs the
+    non-zero beside it, and for `capture.*` the non-zero is a successful answer.
+
+    Success is asserted for the capture family only. `knowledge.read` here names
+    a *minted* knowledge identifier and answers `not_found` by construction, and
+    the source capabilities have `assert scene.provider.calls` as their control —
+    reads demonstrably happened. Only `capture.*` claims a zero with no such
+    control, which is why only `capture.*` needs the answer checked.
+    """
     service = build_service(scene.world, scene.providers)
     scene.world.searches[scene.enrollment.enrollment_id] = staged_search(scene)
-    for capability, command in commands_for(scene).items():
-        invoke(
+    staged = staged_capture(scene)
+    commands = commands_for(scene) | {
+        Capability.CAPTURE_REVISE: ReviseCapture(
+            capture_id=staged.capture_id,
+            text="a synthetic note, revised",
+            idempotency_key="read-only-probe-capture-0001",
+        ),
+        Capability.CAPTURE_READ: ReadCapture(capture_id=staged.capture_id),
+    }
+    for capability, command in commands.items():
+        answer = invoke(
             service,
             scene.principal,
             capability,
             a_permitted_purpose(capability),
             command,
         )
+        if capability in CAPTURE_CAPABILITIES:
+            assert answer.error is None, f"{capability.value} failed: {answer.error}"
+            assert answer.result is not None, f"{capability.value} answered nothing"
     assert set(scene.provider.calls) <= {"list_children", "metadata", "fetch"}
     assert scene.provider.calls, "no capability touched the provider at all"
 
@@ -582,11 +621,20 @@ def test_a_capability_payload_mismatch_is_refused_and_audited(scene: Scene) -> N
 
 
 def test_a_mismatched_request_reaches_no_handler(scene: Scene) -> None:
-    """Auditing the refusal must not have turned it into an execution."""
+    """Auditing the refusal must not have turned it into an execution.
+
+    The refusal itself is asserted beside the zero. Without it the request could
+    have been refused for any reason at all, or answered, and the empty call log
+    would read the same — the shape the class sweep of this correction cycle
+    found at four other sites.
+    """
     service = build_service(scene.world, scene.providers)
-    service.invoke(
+    envelope = service.invoke(
         metadata_for(Capability.SOURCES_METADATA, Purpose.SOURCE_INSPECTION, scene.principal),
         commands_for(scene)[Capability.SOURCES_LIST],
         principal=scene.principal,
     )
+    assert envelope.result is None
+    assert envelope.error is not None
+    assert envelope.error.code is ErrorCode.INVALID_REQUEST
     assert scene.provider.calls == [], "a mismatched request touched the provider"

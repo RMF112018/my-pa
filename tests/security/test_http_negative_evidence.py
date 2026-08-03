@@ -653,11 +653,19 @@ def test_no_header_of_any_answer_names_anything(
     The framework and its version are not announced either: `server_header` is
     off in `apps/gateway.py` and in the harness that mirrors it, so a client
     cannot read what is serving it from a header.
+
+    **`200` is asserted per answer, and that is the non-vacuity control.** A
+    scan of an error envelope's headers proves nothing about the headers of an
+    answer that carried a result, and every capability here is one that should
+    succeed. The class sweep that produced this line measured the alternative:
+    with the capture handlers raising, four of twelve iterations scanned a `500`
+    and the test reported the property proved.
     """
     record = staged_record(marked)
     marked.world.searches[marked.enrollment.enrollment_id] = staged_search(marked)
     for capability, payload in payloads_for(marked, record).items():
         reply = wire.send(capability.value, document(capability, marked.principal, payload))
+        assert reply.status == 200, f"{capability.value} answered {reply.status}: {reply.body}"
         rendered = " ".join(f"{name}: {value}" for name, value in reply.headers.items())
         assert_clean(rendered, marked_root, f"{capability.value} headers")
         assert "server" not in reply.headers
@@ -682,7 +690,11 @@ def test_a_running_gateway_writes_nothing_sensitive_to_a_log(
         wire_for(build_service(marked.world, marked.providers), marked.principal) as client,
     ):
         for capability, payload in payloads_for(marked, record).items():
-            client.send(capability.value, document(capability, marked.principal, payload))
+            answer = client.send(capability.value, document(capability, marked.principal, payload))
+            # The control for the scan below. "Nothing sensitive is in the log"
+            # is satisfied for free by requests that never ran, and by a log
+            # capture that captured nothing. Both are asserted against.
+            assert answer.status == 200, f"{capability.value} answered {answer.status}"
         client.send(
             Capability.KNOWLEDGE_SEARCH.value,
             document(
@@ -694,6 +706,10 @@ def test_a_running_gateway_writes_nothing_sensitive_to_a_log(
         )
         client.send("capabilities.get", raw=f'{{"broken": "{MARKER_QUERY}"')
         client.send("sources.destroy", document(Capability.SOURCES_LIST, marked.principal, {}))
+    assert caplog.records, (
+        "no log record was captured at all, so the absence of the marker from "
+        "the log is an absence from an empty log"
+    )
     assert_no_marker(caplog.text, marked_root, "the gateway log")
     assert MARKER_CONTENT not in caplog.text
     assert MARKER_INJECTION not in caplog.text

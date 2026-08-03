@@ -19,11 +19,19 @@ while this preamble said each cited path was checked. A citation nothing checks
 reads exactly like one that passed.
 
 **What "demonstrated" means here.** The slice was measured end to end by WP-5A —
-9 `e2e` tests and 4 `recovery` tests, 13 of 2507 collected — and the operator
-sequence was executed and transcribed in
+9 `e2e` tests and 4 `recovery` tests, **13 of 2489 collected at `bcdbf6d`** — and
+the operator sequence was executed and transcribed in
 `ops/runbooks/end-to-end-operations.md`. Nothing below is derived from a design
 document. Where the evidence is a measurement rather than a test, the
 measurement is named.
+
+**Every count here is bound to the commit it was taken at, inline.** An unbound
+count is one that has already rotted and cannot be told from one that has not.
+This sentence read "13 of 2507 collected" until it was corrected: `2507` was the
+total at `81b4622`, an intermediate commit one before this document was written,
+and it was never the total anywhere a reader could check. The 9 and the 4 were
+right. Counts about the slice as WP-5A left it are bound to `bcdbf6d`; counts
+about a measurement taken for this document name the database and the date.
 
 ---
 

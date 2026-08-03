@@ -6,15 +6,17 @@ nowhere in it is documentation nobody is routed to, which is the same defect as
 documentation that does not exist, only harder to notice.
 
 **The scaffold READMEs are excluded by construction, and that is deliberate.**
-96 of this repository's READMEs carry `Status: SCAFFOLD_ONLY` and say, in those
-words, that their responsibility "is routed through
-`docs/00_REPOSITORY_SOURCE_INDEX.md` and the nearest owning index" — they
-delegate rather than assert, so routing each of them individually would be
-routing 96 pointers back to the router. They are also not stale: **27 of the 96
-sit beside real Python**, including `src/README.md` (93 modules) and
-`tests/README.md` (74), so a rule that treated "scaffold README beside real
-content" as a finding would flag the entire source tree. The marker is a
-repository-wide convention and this rule respects it.
+Counted at `bcdbf6d`, and bound to it because an unbound count cannot be told
+from one that has already rotted: **96 of this repository's 113 READMEs** carry
+`Status: SCAFFOLD_ONLY` and say, in those words, that their responsibility "is
+routed through `docs/00_REPOSITORY_SOURCE_INDEX.md` and the nearest owning
+index" — they delegate rather than assert, so routing each of them individually
+would be routing 96 pointers back to the router. They are also not stale: **27
+of the 96 sit beside real Python**, including `src/README.md` (93 modules) and
+`tests/README.md` (74 at `bcdbf6d`; this package's own four test files make it
+78), so a rule that treated "scaffold README beside real content" as a finding
+would flag the entire source tree. The marker is a repository-wide convention
+and this rule respects it.
 
 **What "routed" means here is the directory, not the file.** The index reaches
 `docs/architecture/` through `00_ARCHITECTURE_INDEX.md` and `docs/security/`
@@ -25,8 +27,8 @@ a stricter rule than the property is.
 
 **The universe this measured, and where the assignment was wrong.** WP-5B's
 brief and design both stated that `ops/runbooks/README.md` was the only
-violation. Enumerated at `bcdbf6d`: **17** non-scaffold READMEs, of which
-**11** were routed by nothing — `.ai/goals/`, `apps/cli/`, `evidence/`,
+violation. Enumerated at `bcdbf6d`: **17 of the 113** were non-scaffold, of
+which **11** were routed by nothing — `.ai/goals/`, `apps/cli/`, `evidence/`,
 `evidence/completion/`, `fixtures/mcv/`, `migrations/`, `migrations/versions/`,
 `ops/compose/`, `ops/postgres/`, `ops/runbooks/`, and
 `src/my_pa/infrastructure/database/`. Narrowing the rule until one of them

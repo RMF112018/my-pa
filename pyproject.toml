@@ -196,11 +196,11 @@ select = [
 #
 # **This is now what CI runs, and until `D-64` it was not.** Both workflow jobs
 # invoked `mypy src`, and an explicit path argument *overrides* this list — so
-# CI checked 93 files while a bare `mypy` checked 110, leaving the 17 in `apps/`
-# and `migrations/` type-checked by nothing. The first version of this comment
-# claimed the opposite ("so a bare `mypy` checks the same tree CI does"), which
-# was false when written. Both invocations are bare now, so the two agree by
-# construction rather than by assertion.
+# at `bcdbf6d` CI checked 93 files while a bare `mypy` checked 109, leaving the
+# 16 in `apps/` and `migrations/` type-checked by nothing. The first version of
+# this comment claimed the opposite ("so a bare `mypy` checks the same tree CI
+# does"), which was false when written. Both invocations are bare now, so the
+# two agree by construction rather than by a number anyone has to maintain.
 files = ["src", "migrations", "apps"]
 python_version = "3.12"
 strict = true

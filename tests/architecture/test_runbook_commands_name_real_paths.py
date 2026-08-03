@@ -49,9 +49,12 @@ TRACKED_ROOTS = (
 #: The fewest distinct paths this rule must find across all runbooks before it
 #: is deciding anything. A regex that stopped matching would otherwise report
 #: success over an empty set, which is the failure mode that let six planted
-#: violations through a guard in this campaign. Measured at the time of writing:
-#: **7** distinct paths across 5 runbooks and their index — the five programs
-#: under `apps/`, `fixtures/mcv/root`, and `ops/compose/postgres.yml`. The floor
+#: violations through a guard in this campaign. Measured over the same universe
+#: this rule walks, so it is re-derivable rather than a number to maintain:
+#: **7** distinct paths across the 5 runbooks and their index — the five
+#: programs those runbooks invoke (`apps/gateway.py`, `apps/worker.py`, and
+#: `health.py`, `invoke.py` and `sources.py` under `apps/cli/`),
+#: `fixtures/mcv/root`, and `ops/compose/postgres.yml`. The floor
 #: is set just below it rather than at a round number, so a pattern that broke
 #: would have to keep matching almost everything to escape.
 FEWEST_PATHS = 6

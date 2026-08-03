@@ -11,10 +11,16 @@ else.**
 
 Every command below was executed against a **disposable** database
 (`my_pa_end_to_end_runbook`, created empty and dropped for the purpose) on
-2026-08-03. Nothing here was run against the canonical `my_pa` database, and
-nothing here could be: step 1 measured that database at `6c4d3ea82f10` against a
-head of `af3d35efb9c0`, which is exactly the condition this sequence refuses to
-proceed from.
+2026-08-03, and **every transcript below is that database's output** — step 1's
+`revision none` is the disposable database before step 2 migrates it, not a
+reading of anything else.
+
+**Nothing here was run against the canonical `my_pa` database, and nothing here
+could be.** That is a different measurement and it is deliberately not in this
+document: the probe run against canonical `my_pa` is transcribed in
+[`postgres-operations.md`](postgres-operations.md), which recorded it at
+`6c4d3ea82f10` against a head of `af3d35efb9c0` — exactly the condition this
+sequence refuses to proceed from.
 
 All commands run from the repository root, with one variable exported for the
 whole sequence:

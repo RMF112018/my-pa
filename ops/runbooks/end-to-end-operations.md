@@ -9,11 +9,31 @@ is the part none of them can state alone, and it starts where an operator should
 start: **ask whether the database can serve this build before doing anything
 else.**
 
-Every command below was executed against a **disposable** database
-(`my_pa_end_to_end_runbook`, created empty and dropped for the purpose) on
-2026-08-03, and **every transcript below is that database's output** — step 1's
-`revision none` is the disposable database before step 2 migrates it, not a
-reading of anything else.
+**Provenance, corrected 2026-08-03: this document spans two runs at two heads,
+and the paragraph that stood here claimed one.** It said "every transcript below
+is that database's output", which is false as written — `that database` is
+singular, and there were two, both named `my_pa_end_to_end_runbook`.
+[`README.md`](README.md) requires each procedure to state which of its commands
+were **not** run and why, and this one did not.
+
+| Steps | Run | Head | Database |
+|---|---|---|---|
+| **1–2** | re-executed 2026-08-03 for WP-6 | `1a4c9e77b2d5` | a freshly created, empty `my_pa_end_to_end_runbook` |
+| **3–10** | **not re-executed**; carried unchanged from `08e7c81` | `af3d35efb9c0` | the `my_pa_end_to_end_runbook` of that run |
+
+**Why 3–10 were not re-run.** WP-6 moved the Alembic head, which is what steps 1
+and 2 report, so those two transcripts had to be replaced or they would have been
+wrong. Steps 3–10 walk a source from registration to `knowledge.read` and WP-6
+changes nothing on that path — it adds a capture plane that this sequence does not
+touch. Re-running them would have produced new opaque identifiers and new
+timestamps and proved nothing that the carried transcripts do not. The identifiers
+below (`src_d588df08…`, `obj_6fdbc462…`, `enr_c0b3f774…`, `kn_e0662a8a…`, and the
+two `worker-…` lease owners) are therefore artifacts of the `08e7c81` run, and the
+`2026-08-03T13:3x` timestamps inside those payloads are that run's, not this one's.
+
+Both runs used a **disposable** database created empty and dropped for the
+purpose. Step 1's `revision none` is the disposable database before step 2
+migrates it, not a reading of anything else.
 
 **Nothing here was run against the canonical `my_pa` database, and nothing here
 could be.** That is a different measurement and it is deliberately not in this

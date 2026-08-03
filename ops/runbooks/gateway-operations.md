@@ -11,7 +11,13 @@ because they are one composition and differ only in protocol.
 
 Every command below was executed against a **disposable** database
 (`my_pa_gateway_runbook_test`, created at head and dropped for the purpose) on
-2026-08-02. Nothing here was run against the canonical `my_pa` database.
+2026-08-02, **except where a transcript is marked otherwise** — one block, the
+`capabilities.get` call, was re-executed 2026-08-03 against a disposable database
+at head `1a4c9e77b2d5` and says so where it sits. *Scope clause added 2026-08-03:
+this sentence was an unqualified universal over a document that had since acquired
+a transcript from a different run at a different head, which is what
+[`README.md`](README.md) asks a procedure to disclose.* Nothing here was run
+against the canonical `my_pa` database.
 
 **Corrected 2026-08-03: the reason first given here was incomplete, and the true
 one is stronger.** It said pointing the gateway at canonical `my_pa` "would be

@@ -5,9 +5,27 @@ Protocol server on stdio, and the operator CLI.
 
 Every command below was executed against a **disposable** database
 (`my_pa_wp4b2b_runbook_test`, created at head and dropped for the purpose) on
-2026-08-02. Nothing here was run against the canonical `my_pa` database.
-Pointing either transport at it would be safe to read from and would write audit
-rows for requests nobody made, which is the reason not to.
+2026-08-02, **except where a transcript is marked otherwise** — three blocks
+(`tools/list`, `tools/call capabilities.get`, and `invoke.py capabilities.get`)
+were re-executed 2026-08-03 against a disposable database at head
+`1a4c9e77b2d5`, and a fourth marker on the `initialize` handshake records that
+that block was **left as recorded and not re-run**. Six blocks are carried
+unchanged from the 2026-08-02 run. *Scope clause added 2026-08-03: this sentence
+was an unqualified universal over a document holding transcripts from two runs at
+two heads — the widest instance of that defect in this directory, and the one
+nobody had named.*
+
+Nothing here was run against the canonical `my_pa` database. **Measured, and this
+is the real reason rather than the polite one:** canonical `my_pa` is at
+`6c4d3ea82f10` while the chain ends at `1a4c9e77b2d5`, so it holds no `knowledge`
+schema at all and neither transport could serve a request against it — the
+composition fails its readiness check rather than reading anything. Even if it
+could, it would write audit rows for requests nobody made. *Corrected 2026-08-03:
+this said only that pointing a transport at canonical `my_pa` "would be safe to
+read from and would write audit rows for requests nobody made".
+[`gateway-operations.md`](gateway-operations.md) announced that exact correction
+for its own copy of the sentence and the sibling was left uncorrected — an
+incomplete class sweep inside a package whose subject is class sweeps.*
 
 [`gateway-operations.md`](gateway-operations.md) covers the HTTP transport, the
 error-code-to-status table, and the connection pools. Everything it says about

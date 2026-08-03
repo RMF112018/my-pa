@@ -1147,8 +1147,10 @@ class ApplicationService:
             # Fixed rather than requested. `QC-AC-040` requires the default to be
             # private-local with cloud and training false, and a caller-selected
             # classification would be a caller widening its own processing
-            # eligibility — which `09_LOGICAL_DATA_MODEL.md` forbids in the same
-            # sentence that names the field.
+            # eligibility, which `docs/specs/quick-capture/09_LOGICAL_DATA_MODEL.md`
+            # forbids: `:56` names the field and defaults it to `private_local`,
+            # and `:73` states that "classification changes cannot silently widen
+            # processing eligibility". Two lines, not one sentence.
             classification=Classification.PRIVATE_LOCAL,
             processing_policy=ProcessingPolicy.LOCAL_ONLY,
             server_received_at=authorization.at,

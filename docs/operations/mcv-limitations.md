@@ -30,8 +30,13 @@ reads exactly like one that passed.
 **What "demonstrated" means here.** The slice was measured end to end by WP-5A —
 9 `e2e` tests and 4 `recovery` tests, **13 of 2489 collected at `bcdbf6d`** — and
 the operator sequence was executed and transcribed in
-`ops/runbooks/end-to-end-operations.md`. Nothing below is derived from a design
-document. Where the evidence is a measurement rather than a test, the
+`ops/runbooks/end-to-end-operations.md`. *Bound 2026-08-03: that runbook's
+transcripts span two runs — steps 1–2 at head `1a4c9e77b2d5`, steps 3–10 carried
+from `08e7c81` at head `af3d35efb9c0` — and its own provenance table says which
+is which. This document's rule at the top of the file, that every count is bound
+to the commit it was taken at, applies to a cited transcript too: an unbound
+citation into a mixed-provenance document inherits the ambiguity.* Nothing below
+is derived from a design document. Where the evidence is a measurement rather than a test, the
 measurement is named.
 
 **Every count here is bound to the commit it was taken at, inline.** An unbound
@@ -77,7 +82,9 @@ correlation input (`contracts/v1/envelope.py`, `application/service.py`), and
 `apps/cli/invoke.py` refuses a `--principal` option deliberately.
 
 Measured on disposable databases on 2026-08-03 and transcribed in
-`ops/runbooks/end-to-end-operations.md`:
+`ops/runbooks/end-to-end-operations.md` (plural deliberately — the runbook's own
+paragraph said "that database", singular, and there were two; see its provenance
+table):
 
 - **three CLI processes → three distinct principals.** `sources.enroll` through
   `apps/cli/invoke.py` was `allowed` and wrote its enrollment; three later

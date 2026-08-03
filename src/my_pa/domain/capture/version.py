@@ -8,9 +8,9 @@ rather than a stored fact that could disagree with the rows it summarises.
 Withdrawal and archive (ADR-003 clause 3) are out of scope here and are absent
 rather than declared and unreachable.
 
-**Five timestamps, none derived from another.** `docs/specs/quick-capture/20…:191`
-requires device, server, occurred, processed, and accepted times to remain
-distinct. Two of them are nullable — a transport may supply no device clock, and
+**Five timestamps, none derived from another.**
+`docs/specs/quick-capture/20_TESTING_EVALUATION_AND_ACCEPTANCE.md:191` requires
+device, server, occurred, processed, and accepted times to remain distinct. Two of them are nullable — a transport may supply no device clock, and
 a note about no particular moment has no occurrence — and a nullable column here
 is honest absence. Defaulting `occurred_at` from `server_received_at` would
 invent a fact about the world from a fact about this process, which is the

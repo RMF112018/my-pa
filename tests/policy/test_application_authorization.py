@@ -51,13 +51,17 @@ from tests.conftest import (
 
 from my_pa.application.commands import (
     Command,
+    CreateCapture,
     EnrollSource,
     FetchSource,
     GetCapabilities,
     GetSourceMetadata,
     GetSourceStatus,
+    ListCaptures,
     ListSources,
+    ReadCapture,
     ReadKnowledge,
+    ReviseCapture,
     SearchKnowledge,
 )
 from my_pa.application.service import ApplicationService
@@ -105,6 +109,21 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             knowledge_id=issue_identifier(IdKind.KNOWLEDGE),
             enrollment_id=scene.enrollment.enrollment_id,
         ),
+        # The capture commands name no source and no enrollment, because a
+        # capture belongs to neither. Their identifiers are minted rather than
+        # taken from the scene for the same reason the knowledge identifier
+        # above is: every test here refuses before a handler runs, so what the
+        # identifier names is irrelevant and its *shape* is not.
+        Capability.CAPTURE_CREATE: CreateCapture(
+            text="a synthetic note", idempotency_key="denial-probe-capture-0001"
+        ),
+        Capability.CAPTURE_REVISE: ReviseCapture(
+            capture_id=issue_identifier(IdKind.CAPTURE),
+            text="a synthetic note, revised",
+            idempotency_key="denial-probe-capture-0002",
+        ),
+        Capability.CAPTURE_READ: ReadCapture(capture_id=issue_identifier(IdKind.CAPTURE)),
+        Capability.CAPTURE_LIST: ListCaptures(),
     }
 
 
@@ -215,14 +234,32 @@ def test_every_capability_refuses_a_purpose_it_does_not_permit(
     assert scene.world.audit[-1].denial_reason is DenialReason.PURPOSE_NOT_PERMITTED_FOR_CAPABILITY
 
 
-#: Capabilities whose authority is a held scope. `capabilities.get` describes the
-#: interface and carries no scope at all; `sources.enroll` is the operation that
-#: *grants* scope, so requiring the scope to be held already would make it
-#: permanently unusable — `domain.policy.decision._scope_is_authorized` says so,
-#: and its authority is the operator-only check instead, which has its own row
-#: below. Both exclusions are derived from the domain rule rather than chosen.
+#: Capabilities whose authority is a held scope.
+#:
+#: `sources.enroll` is the operation that *grants* scope, so requiring the scope
+#: to be held already would make it permanently unusable —
+#: `domain.policy.decision._scope_is_authorized` says so, and its authority is
+#: the operator-only check instead, which has its own row below.
+#:
+#: The rest carry no source scope at all: `capabilities.get` describes the
+#: interface, and the four capture capabilities read and write a product-owned
+#: record that `ADR-003` makes a third authority class — it belongs to no
+#: configured source and to no enrollment. **This set widens as capture is
+#: added; it does not weaken**, because every excluded capability is excluded by
+#: a property the domain states, and the guard below re-derives every partition
+#: from `evaluate` rather than from this list.
 SCOPED_CAPABILITIES = [
-    c for c in Capability if c not in {Capability.CAPABILITIES_GET, Capability.SOURCES_ENROLL}
+    c
+    for c in Capability
+    if c
+    not in {
+        Capability.CAPABILITIES_GET,
+        Capability.SOURCES_ENROLL,
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.CAPTURE_READ,
+        Capability.CAPTURE_LIST,
+    }
 ]
 
 
@@ -267,16 +304,25 @@ def _decision(capability: Capability, requested: frozenset[str], held: frozenset
     ).allowed
 
 
-def test_the_two_capabilities_outside_the_scope_matrix_are_the_domains_own_two() -> None:
+def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None:
     """Guard the exclusions above, which would otherwise narrow the matrix silently.
 
     A capability dropped from `SCOPED_CAPABILITIES` for convenience would lose
-    its unknown-scope row and nothing would say so. The two that are excluded are
-    excluded because the domain treats them specially, and each is identified
-    here by the property that makes it special rather than by name.
+    its unknown-scope row and nothing would say so. Every excluded capability is
+    excluded because the domain treats it specially, and each partition below is
+    re-derived from `evaluate` rather than read off the list it is guarding —
+    which is what makes this a check on the domain rather than a restatement of
+    the exclusion.
     """
+    scopeless_capabilities = {
+        Capability.CAPABILITIES_GET,
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.CAPTURE_READ,
+        Capability.CAPTURE_LIST,
+    }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
-    assert excluded == {Capability.CAPABILITIES_GET, Capability.SOURCES_ENROLL}
+    assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}
 
     unheld = frozenset({issue_identifier(IdKind.SOURCE)})
     granting = {c for c in Capability if _decision(c, unheld, frozenset())}
@@ -285,8 +331,9 @@ def test_the_two_capabilities_outside_the_scope_matrix_are_the_domains_own_two()
     )
 
     scopeless = {c for c in Capability if _decision(c, frozenset(), frozenset())}
-    assert scopeless == {Capability.CAPABILITIES_GET}, (
-        "exactly one capability carries no source scope: the one that describes the interface"
+    assert scopeless == scopeless_capabilities, (
+        "the capabilities carrying no source scope are the interface description "
+        "and the capture plane, which belongs to no source"
     )
 
 

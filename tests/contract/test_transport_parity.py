@@ -58,6 +58,7 @@ from tests.conftest import (
     FakeProviders,
     Scene,
     build_service,
+    staged_capture,
     staged_record,
     staged_search,
 )
@@ -130,6 +131,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     would answer identically to one that did not if the request never carried
     them.
     """
+    capture = staged_capture(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -161,6 +163,26 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "enrollment_id": scene.enrollment.enrollment_id,
             "metadata_only": False,
         },
+        # The capture plane names no source and no enrollment: a capture is a
+        # product-owned record under `ADR-003` and belongs to neither. `capture`
+        # is staged before the world is copied per transport, so all three see
+        # the same stored chain and a revise is the same revise everywhere.
+        Capability.CAPTURE_CREATE: {
+            "text": "a synthetic parity note",
+            "idempotency_key": "parity-capture-0001",
+            "client_created_at": "2026-08-02T11:00:00Z",
+            "occurred_at": "2026-08-02T10:00:00Z",
+        },
+        Capability.CAPTURE_REVISE: {
+            "capture_id": capture.capture_id,
+            "text": "a synthetic parity note, revised",
+            "idempotency_key": "parity-capture-revise-0001",
+        },
+        Capability.CAPTURE_READ: {
+            "capture_id": capture.capture_id,
+            "version_id": capture.version_id,
+        },
+        Capability.CAPTURE_LIST: {"page_size": 10},
     }
 
 
@@ -284,7 +306,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 9, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 13, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

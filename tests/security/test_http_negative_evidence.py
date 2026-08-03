@@ -54,6 +54,7 @@ from tests.conftest import (
     build_provider,
     build_service,
     operator,
+    staged_capture,
     staged_search,
 )
 from tests.wire import Reply, Wire, serve
@@ -184,6 +185,14 @@ def wire(marked: Scene) -> Iterator[Wire]:
 
 
 def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dict[str, Any]]:
+    """One payload per capability, every one of them carrying the marker.
+
+    The capture payloads carry `MARKER_CONTENT` deliberately: a capture is the
+    one request in this build that *sends* content, so the redaction scans below
+    are checking a path that has the marker in its input rather than only in its
+    output.
+    """
+    capture = staged_capture(marked, text=MARKER_CONTENT)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -210,6 +219,17 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "knowledge_id": record.knowledge_id,
             "enrollment_id": marked.enrollment.enrollment_id,
         },
+        Capability.CAPTURE_CREATE: {
+            "text": MARKER_CONTENT,
+            "idempotency_key": "wire-capture-0001",
+        },
+        Capability.CAPTURE_REVISE: {
+            "capture_id": capture.capture_id,
+            "text": MARKER_CONTENT,
+            "idempotency_key": "wire-capture-revise-0001",
+        },
+        Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
+        Capability.CAPTURE_LIST: {},
     }
 
 
@@ -319,8 +339,24 @@ def test_an_identifier_the_provider_never_issued_is_denied_over_the_wire(
 # ---- unknown scope and purpose escalation -----------------------------------
 
 
+#: Capabilities whose authority is a held scope. The exclusions are the domain's
+#: own, `tests/policy/test_application_authorization.py` re-derives them from
+#: `evaluate` rather than from a list, and repeating that derivation here would
+#: be repeating a domain test through a transport. `capture.*` joins
+#: `capabilities.get` on the scopeless side: a capture is a product-owned record
+#: under `ADR-003` and belongs to no configured source.
 SCOPED_CAPABILITIES = [
-    c for c in Capability if c not in {Capability.CAPABILITIES_GET, Capability.SOURCES_ENROLL}
+    c
+    for c in Capability
+    if c
+    not in {
+        Capability.CAPABILITIES_GET,
+        Capability.SOURCES_ENROLL,
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.CAPTURE_READ,
+        Capability.CAPTURE_LIST,
+    }
 ]
 
 
@@ -375,9 +411,35 @@ def test_every_capability_refuses_a_purpose_it_does_not_permit_over_the_wire(
 
 MUTATING_NAMES = ("write", "create", "update", "delete", "remove", "rename", "move", "put")
 
+#: The capabilities the name check above does *not* apply to, and the reason it
+#: does not (`D-71`).
+#:
+#: The substring list is a **proxy** for ADR-003 clause 5 / `MB-AC-003` — no
+#: source mutation — and it is already an imprecise one: `sources.enroll` writes
+#: to the database and passes only because "enroll" is not on the list. The
+#: capture plane writes a *product-owned* record, which `ADR-003` makes a third
+#: authority class that is neither a source-system write nor a managed-document
+#: write, so `capture.create` is a name the proxy refuses and the property
+#: permits. The canonical package fixes that name in six places and it is not
+#: negotiable.
+#:
+#: **The exemption is exactly the capture family and nothing else**, so a future
+#: `knowledge.delete` or `sources.delete` is still caught here. And the property
+#: the proxy stands for is carried for `capture.*` by
+#: `test_no_capability_over_either_transport_calls_anything_but_a_read`, which
+#: drives every capability against a recording provider — a stronger claim than
+#: the name check, made about what actually ran. If that test stops covering
+#: `capture.*`, this exemption is a hole; the guard beside it is what says so.
+CAPTURE_CAPABILITIES = frozenset(c for c in Capability if c.value.startswith("capture."))
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
-    """One route, one method, and eight names — none of which mutates a source."""
+    """One route, one method, and no name that mutates a *source*.
+
+    The capture family is exempt from the name check and is not exempt from the
+    property; see `CAPTURE_CAPABILITIES`. The exemption is asserted to be
+    non-empty and to be exactly the capture family, so it cannot quietly grow.
+    """
     application = create_http_app(
         build_service(World(), FakeProviders({})),
         principal=operator(),
@@ -387,8 +449,17 @@ def test_the_transport_routes_no_mutating_capability() -> None:
     assert routes[0].methods == {"POST"}
 
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over HTTP"
-    for capability in _BUILDERS:
+    assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
+    checked = [c for c in _BUILDERS if c not in CAPTURE_CAPABILITIES]
+    assert len(checked) == len(Capability) - len(CAPTURE_CAPABILITIES)
+    for capability in checked:
         assert not any(verb in capability.value for verb in MUTATING_NAMES)
+    assert {c.value for c in CAPTURE_CAPABILITIES} == {
+        "capture.create",
+        "capture.revise",
+        "capture.read",
+        "capture.list",
+    }, "the exemption is exactly the capture family"
 
 
 @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"], ids=str)

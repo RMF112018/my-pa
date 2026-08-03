@@ -91,6 +91,15 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     ),
     "9c6b4a18ed72": frozenset({"audit_events"}),
     "af3d35efb9c0": frozenset({"enrollment_objects"}),
+    "1a4c9e77b2d5": frozenset(
+        {
+            "captures",
+            "capture_versions",
+            "capture_receipts",
+            "capture_submissions",
+            "capture_jobs",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

@@ -44,6 +44,7 @@ from tests.conftest import (
     build_service,
     metadata_for,
     operator,
+    staged_capture,
     staged_search,
 )
 from tests.wire import Wire, serve
@@ -53,14 +54,18 @@ from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
     Command,
+    CreateCapture,
     EnrollSource,
     FetchSource,
     GetCapabilities,
     GetSourceMetadata,
     GetSourceStatus,
+    ListCaptures,
     ListSources,
+    ReadCapture,
     ReadKnowledge,
     Representation,
+    ReviseCapture,
     SearchKnowledge,
 )
 from my_pa.application.service import ApplicationService
@@ -105,7 +110,13 @@ def staged_record(scene: Scene) -> KnowledgeRecord:
 
 
 def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict[str, Any]]:
-    """One well-formed JSON payload per capability, all inside `scene`'s scope."""
+    """One well-formed JSON payload per capability, all inside `scene`'s scope.
+
+    The capture payloads name no source and no enrollment, because a capture
+    belongs to neither. One is staged first so that `capture.revise` and
+    `capture.read` have a chain to append to and to read back.
+    """
+    capture = staged_capture(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id},
@@ -133,11 +144,29 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "knowledge_id": record.knowledge_id,
             "enrollment_id": scene.enrollment.enrollment_id,
         },
+        Capability.CAPTURE_CREATE: {
+            "text": "a synthetic note",
+            "idempotency_key": "http-capture-0001",
+        },
+        Capability.CAPTURE_REVISE: {
+            "capture_id": capture.capture_id,
+            "text": "a synthetic note, revised",
+            "idempotency_key": "http-capture-revise-0001",
+        },
+        Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
+        Capability.CAPTURE_LIST: {},
     }
 
 
-def commands_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, Command]:
-    """The same eight requests, written as commands rather than as JSON.
+def commands_for(
+    scene: Scene, record: KnowledgeRecord, capture_id: str
+) -> dict[Capability, Command]:
+    """The same requests, written as commands rather than as JSON.
+
+    `capture_id` is a parameter rather than staged here: the payload table and
+    this table have to name the *same* capture or the comparison below would be
+    between two different requests, and each staging its own would guarantee
+    they were.
 
     Written by hand rather than produced by `normalize`, which is the point: the
     normalisation test below compares the two, and a comparison against the
@@ -169,6 +198,17 @@ def commands_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, Comm
             knowledge_id=record.knowledge_id,
             enrollment_id=scene.enrollment.enrollment_id,
         ),
+        Capability.CAPTURE_CREATE: CreateCapture(
+            text="a synthetic note",
+            idempotency_key="http-capture-0001",
+        ),
+        Capability.CAPTURE_REVISE: ReviseCapture(
+            capture_id=capture_id,
+            text="a synthetic note, revised",
+            idempotency_key="http-capture-revise-0001",
+        ),
+        Capability.CAPTURE_READ: ReadCapture(capture_id=capture_id),
+        Capability.CAPTURE_LIST: ListCaptures(),
     }
 
 
@@ -280,9 +320,11 @@ def test_normalisation_builds_the_pair_a_hand_written_request_builds(
 ) -> None:
     """The one validation path, per capability (`SPEC-AC-001`, HTTP's half)."""
     scene, record = staged
-    document = document_for(capability, scene, payloads_for(scene, record)[capability])
+    payloads = payloads_for(scene, record)
+    document = document_for(capability, scene, payloads[capability])
+    capture_id = str(payloads[Capability.CAPTURE_READ]["capture_id"])
     metadata, command = normalize(capability.value, document)
-    assert command == commands_for(scene, record)[capability]
+    assert command == commands_for(scene, record, capture_id)[capability]
     assert metadata == metadata_for(capability, a_permitted_purpose(capability), scene.principal)
     assert metadata.requested_at == WHEN
 

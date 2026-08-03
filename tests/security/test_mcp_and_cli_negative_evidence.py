@@ -269,8 +269,24 @@ def test_an_identifier_the_provider_never_issued_is_denied_over_both_transports(
 # ---- unknown scope and purpose escalation ------------------------------------
 
 
+#: Capabilities whose authority is a held scope. The exclusions are the domain's
+#: own, `tests/policy/test_application_authorization.py` re-derives them from
+#: `evaluate` rather than from a list, and repeating that derivation here would
+#: be repeating a domain test through a transport. `capture.*` joins
+#: `capabilities.get` on the scopeless side: a capture is a product-owned record
+#: under `ADR-003` and belongs to no configured source.
 SCOPED_CAPABILITIES = [
-    c for c in Capability if c not in {Capability.CAPABILITIES_GET, Capability.SOURCES_ENROLL}
+    c
+    for c in Capability
+    if c
+    not in {
+        Capability.CAPABILITIES_GET,
+        Capability.SOURCES_ENROLL,
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.CAPTURE_READ,
+        Capability.CAPTURE_LIST,
+    }
 ]
 
 
@@ -419,15 +435,51 @@ def test_a_declared_principal_id_does_not_change_an_allowed_request_either(
 
 MUTATING_NAMES = ("write", "create", "update", "delete", "remove", "rename", "move", "put")
 
+#: The capabilities the name check above does *not* apply to, and the reason it
+#: does not (`D-71`).
+#:
+#: The substring list is a **proxy** for ADR-003 clause 5 / `MB-AC-003` — no
+#: source mutation — and it is already an imprecise one: `sources.enroll` writes
+#: to the database and passes only because "enroll" is not on the list. The
+#: capture plane writes a *product-owned* record, which `ADR-003` makes a third
+#: authority class that is neither a source-system write nor a managed-document
+#: write, so `capture.create` is a name the proxy refuses and the property
+#: permits. The canonical package fixes that name in six places and it is not
+#: negotiable.
+#:
+#: **The exemption is exactly the capture family and nothing else**, so a future
+#: `knowledge.delete` or `sources.delete` is still caught here. And the property
+#: the proxy stands for is carried for `capture.*` by
+#: `test_no_capability_over_either_transport_calls_anything_but_a_read`, which
+#: drives every capability against a recording provider — a stronger claim than
+#: the name check, made about what actually ran. If that test stops covering
+#: `capture.*`, this exemption is a hole; the guard beside it is what says so.
+CAPTURE_CAPABILITIES = frozenset(c for c in Capability if c.value.startswith("capture."))
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
-    """The tool list and the CLI's positional are eight names, none of which mutates."""
+    """The tool list and the CLI's positional, and no name that mutates a *source*.
+
+    The capture family is exempt from the name check and is not exempt from the
+    property; see `CAPTURE_CAPABILITIES`. The exemption is asserted to be
+    non-empty and to be exactly the capture family, so it cannot quietly grow
+    into a hole.
+    """
     from my_pa.adapters.normalization import _BUILDERS
 
     assert {tool.name for tool in TOOLS} == {c.value for c in Capability}
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over a transport"
-    for capability in Capability:
+    assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
+    checked = [c for c in Capability if c not in CAPTURE_CAPABILITIES]
+    assert len(checked) == len(Capability) - len(CAPTURE_CAPABILITIES)
+    for capability in checked:
         assert not any(verb in capability.value for verb in MUTATING_NAMES)
+    assert {c.value for c in CAPTURE_CAPABILITIES} == {
+        "capture.create",
+        "capture.revise",
+        "capture.read",
+        "capture.list",
+    }, "the exemption is exactly the capture family"
     # And the CLI routes by the same names: it declares no subcommand of its own
     # that could name an operation the capability set does not have.
     from my_pa.adapters.cli import build_parser
@@ -448,6 +500,11 @@ def test_no_capability_over_either_transport_calls_anything_but_a_read(
     record = staged_record(marked, text=MARKER_CONTENT)
     marked.world.searches[marked.enrollment.enrollment_id] = staged_search(marked)
     payloads = payloads_for(marked, record)
+    assert set(payloads) >= CAPTURE_CAPABILITIES, (
+        "the capture family is exempt from the name check above on the stated ground "
+        "that this test carries the property for it; a payload table that omitted "
+        "capture would make that exemption a hole"
+    )
     service = build_service(marked.world, marked.providers)
     with both(service, marked.principal) as transports:
         for transport in transports:
@@ -459,6 +516,27 @@ def test_no_capability_over_either_transport_calls_anything_but_a_read(
                 assert_clean(answer.rendered, marked_root, f"{transport.name} {capability.value}")
     assert set(marked.provider.calls) <= {"list_children", "metadata", "fetch"}
     assert marked.provider.calls, "no capability touched the provider at all"
+
+    # And the stronger claim, for the family the name check no longer covers: a
+    # capture path touches the source provider **not at all**. `ADR-003` clause 5
+    # makes a capture a product-owned record rather than a source read, so the
+    # honest statement about `capture.*` is not "only reads" but "no source".
+    # Cleared first so the count below is about the capture requests alone, and
+    # the non-empty assertion above is the control that says the log records
+    # anything in the first place.
+    marked.provider.calls.clear()
+    with both(service, marked.principal) as transports:
+        for transport in transports:
+            for capability in sorted(CAPTURE_CAPABILITIES, key=lambda c: c.value):
+                answer = transport.send(
+                    capability.value,
+                    document(capability, marked.principal.principal_id, payloads[capability]),
+                )
+                assert_clean(answer.rendered, marked_root, f"{transport.name} {capability.value}")
+    assert marked.provider.calls == [], (
+        "a capture capability reached the source provider; capture is a "
+        "product-owned record and reads no source"
+    )
 
 
 # ---- prompt and tool injection -----------------------------------------------

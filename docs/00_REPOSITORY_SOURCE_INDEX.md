@@ -45,7 +45,8 @@ Not mirrored, routed by identity only: the **Frontier NAS MCP Connector** featur
 
 Running the local candidate on one machine. A procedure under `ops/runbooks/` is written only after it has been executed; deployment, production activation, and destructive data operations remain operator-gated (`AGENTS.md` section 5).
 
-- [`ops/runbooks/README.md`](../ops/runbooks/README.md) — owning index for the operational runbooks: the database, the worker, the gateway, and the other two transports.
+- [`docs/operations/mcv-limitations.md`](operations/mcv-limitations.md) — what the read-only slice does **not** do, each limitation citing the test or measurement that bounds it. Read this before reading the runbooks as a statement of capability.
+- [`ops/runbooks/README.md`](../ops/runbooks/README.md) — owning index for the operational runbooks: the database, the worker, the gateway, the other two transports, and the end-to-end operator sequence.
 - [`apps/cli/README.md`](../apps/cli/README.md) — the four operator programs: the capability transport, the source configuration plane, the runtime probe, and the migration control plane.
 - [`ops/postgres/README.md`](../ops/postgres/README.md) — the PostgreSQL instance itself: image, tuning, locale, collation contract, cluster-creation settings, and reset procedure.
 - [`ops/compose/README.md`](../ops/compose/README.md) — the container definition the instance is started from.

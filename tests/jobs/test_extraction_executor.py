@@ -21,12 +21,23 @@ The stage each test builds is the production path in miniature and not a
 shortcut: `register_source`, then a provider bound to a `RegistryIdentity` that
 issues durable identifiers as it lists, then `accept_enrollment`, `record_scope`,
 and `enqueue_job`. Nothing here inserts a row the product would not have written.
+
+**One test runs the worker as a real process.** Every other test here drives
+`run_worker` in this interpreter, which is the right shape for a claim about the
+loop. `test_a_worker_process_killed_mid_extraction_leaves_its_lease_and_loses_nothing`
+spawns `apps/worker.py` and kills it, because a claim about what a *killed*
+worker leaves behind cannot be made about a function that returns — and because
+`apps/worker.py` runs in no other test at all.
 """
 
 from __future__ import annotations
 
 import io
 import os
+import signal
+import subprocess
+import sys
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -711,6 +722,234 @@ def test_an_expired_lease_lets_another_worker_finish_the_job(
     state, attempts, _ = _job_row(engine, staged.operation_id)
     assert state == "succeeded"
     assert attempts == 2, "the dead worker's attempt was not counted against the bound"
+
+
+#: How long a poll below may wait before it fails the test instead of the run.
+#: A hang detector, never a property: nothing here asserts that anything happened
+#: *within* a bound, only that a wait which never ends is reported as a hang and
+#: names which wait it was.
+_POLL_TIMEOUT_SECONDS = 30.0
+
+#: What the killed worker's corpus holds. Weighted deliberately toward the
+#: quarantine trigger, because `extractions` is idempotent by **constraint** and
+#: `quarantine_records` is not: a re-offered extraction writes no row whatever the
+#: planner does, so a quarantine committed before the kill is the only outcome a
+#: duplicate could actually land on. The eight readable files are what keeps the
+#: final coverage from being a single-outcome shape.
+_KILLED_READABLE = 8
+_KILLED_TRIGGERS = 32
+_KILLED_OBJECTS = _KILLED_READABLE + _KILLED_TRIGGERS
+
+
+def _lease_owner(engine: Engine, operation_id: str) -> str | None:
+    """The owner token on the job row, which `release_job` nulls and `SIGKILL` cannot."""
+    with engine.connect() as connection:
+        owner = connection.execute(
+            text("SELECT lease_owner FROM knowledge.jobs WHERE operation_id = :id"),
+            {"id": operation_id},
+        ).scalar_one()
+    return None if owner is None else str(owner)
+
+
+def _other_backend_states(engine: Engine) -> list[str]:
+    """Every backend of this database except the one asking, by state.
+
+    The same instrument `test_no_database_transaction_is_open_while_the_bytes_are_read`
+    uses, asked a different question.
+    """
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        return [
+            str(row[0])
+            for row in connection.execute(
+                text(
+                    "SELECT state FROM pg_stat_activity "
+                    "WHERE datname = current_database() AND pid <> pg_backend_pid()"
+                )
+            )
+        ]
+
+
+@pytest.mark.database
+@pytest.mark.recovery
+def test_a_worker_process_killed_mid_extraction_leaves_its_lease_and_loses_nothing(
+    engine: Engine, tmp_path: Path, disposable_database: str
+) -> None:
+    """A real `apps/worker.py` process, killed with outcomes committed and its lease held.
+
+    **The intersection this test exists for.** Its two siblings each hold one
+    half. `test_a_worker_killed_mid_extraction_loses_no_object` has partial
+    outcomes with a **released** lease, because the failure is raised inside the
+    process and `release_job` runs. `test_an_expired_lease_lets_another_worker_finish_the_job`
+    has an **abandoned** lease with **zero** outcomes, because its first worker
+    claims and does nothing. Neither has both, and both-at-once is where a defect
+    would live: an executor that re-offered already-committed objects on the
+    expiry path but not on the release path passes both of them and fails this.
+    It is also the only test in which `apps/worker.py` runs at all — its other
+    coverage reads `__code__.co_names`.
+
+    **The death is deterministic and the measurement is made while the subject is
+    frozen.** The classic race is parent reads the count, child commits, parent
+    signals. It is removed by ordering the stop *before* the measurement: the
+    child is `SIGSTOP`ped first, the server is then asked until no other backend
+    is executing anything, and only then is the committed count read. A stopped
+    process issues no further statement, and a backend that is not `active` has
+    nothing in flight, so the count cannot move. `SIGKILL` is delivered last,
+    while the child is still stopped, and runs no `finally`: the lease is not
+    released and the row stays `running` with `lease_owner` set.
+
+    **Why the poll waits for a committed *quarantine* rather than any outcome.**
+    See `_KILLED_TRIGGERS`. Waiting for any outcome would let a run in which the
+    first committed object happened to be an extraction arm no duplicate detector
+    at all, which is the hole the sibling test's own docstring records having
+    found by experiment. Waiting for a quarantine makes it structural: at most
+    `_KILLED_READABLE` objects can precede the first trigger, so the count at the
+    kill is bounded well below the corpus by construction rather than by luck.
+
+    Both waits below are bounded, and each fails **loud** naming itself. Neither
+    is a property: no assertion here says anything happened within a time.
+    """
+    # Belt and braces before a *process* is pointed at a database. The module
+    # fixture has already repointed `MY_PA_DATABASE_URL` to the disposable
+    # database, so `load_settings()` reports that one and comparing against it
+    # would compare a value with itself; the canonical name is what must be
+    # excluded, and it is excluded by name.
+    target = make_url(disposable_database).database
+    assert target is not None, disposable_database
+    assert target == DISPOSABLE_DATABASE, target
+    assert target.startswith("my_pa_"), target
+    assert target != "my_pa", "the child was about to be pointed at the canonical corpus"
+
+    corpus = _corpus(
+        tmp_path / "process-kill",
+        (
+            *(
+                (f"readable-{index:02d}.md", f"{NOTES} number {index}\n".encode())
+                for index in range(_KILLED_READABLE)
+            ),
+            *(
+                (f"mislabelled-{index:02d}.md", b"%PDF-1.7\ncalling itself markdown\n")
+                for index in range(_KILLED_TRIGGERS)
+            ),
+        ),
+    )
+    staged = _stage(engine, corpus, "process-kill")
+    assert len(staged.objects) == _KILLED_OBJECTS
+
+    child = subprocess.Popen(  # noqa: S603 - a fixed argument vector, no shell
+        [
+            sys.executable,
+            str(ROOT / "apps" / "worker.py"),
+            "run",
+            "--once",
+            "--lease-seconds",
+            "1",
+        ],
+        env={**os.environ, f"{ENV_PREFIX}DATABASE_URL": disposable_database},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        cwd=str(ROOT),
+    )
+    try:
+        deadline = time.monotonic() + _POLL_TIMEOUT_SECONDS
+        while _count(engine, "quarantine_records", staged.enrollment_id) < 1:
+            if time.monotonic() > deadline:
+                pytest.fail(
+                    "the worker process committed no quarantine within "
+                    f"{_POLL_TIMEOUT_SECONDS:.0f}s; the wait for a committed "
+                    "outcome expired, so nothing was killed mid-extraction"
+                )
+
+        os.kill(child.pid, signal.SIGSTOP)
+
+        deadline = time.monotonic() + _POLL_TIMEOUT_SECONDS
+        states = _other_backend_states(engine)
+        while "active" in states:
+            if time.monotonic() > deadline:
+                pytest.fail(
+                    "a backend of this database was still executing "
+                    f"{_POLL_TIMEOUT_SECONDS:.0f}s after the worker was stopped; "
+                    f"the wait for quiescence expired with states {states}"
+                )
+            states = _other_backend_states(engine)
+        assert states, "no other backend was connected, so the stop proved nothing"
+
+        committed = _count(engine, "extractions", staged.enrollment_id) + _count(
+            engine, "quarantine_records", staged.enrollment_id
+        )
+        assert 1 <= committed < _KILLED_OBJECTS, (
+            f"the worker had committed {committed} of {_KILLED_OBJECTS} outcomes "
+            "when it was stopped, so it was not killed *mid* extraction"
+        )
+
+        # Delivered to a stopped process, which is what makes the count above a
+        # fact about the state the kill lands in rather than a prediction of it.
+        os.kill(child.pid, signal.SIGKILL)
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=_POLL_TIMEOUT_SECONDS)
+
+    assert child.returncode == -signal.SIGKILL, (
+        f"the worker exited {child.returncode} rather than being killed; a "
+        "process that returned ran its own shutdown"
+    )
+
+    # What `SIGKILL` leaves and what `release_job` never would: it nulls both.
+    # Without this the test would pass on a build whose killed worker had somehow
+    # released, which is the other sibling's scenario and not this one.
+    state, attempts, _ = _job_row(engine, staged.operation_id)
+    assert state == "running", "the killed worker's job did not stay running"
+    assert attempts == 1
+    assert _lease_owner(engine, staged.operation_id) is not None, (
+        "the killed worker's lease was released, so recovery would go through "
+        "`release_job`'s path rather than `claim_job`'s expiry branch"
+    )
+
+    # The second worker is in-process and polls the *claim*, not the clock: the
+    # lease was taken for one second and expires on the server's own `now()`.
+    deadline = time.monotonic() + _POLL_TIMEOUT_SECONDS
+    while True:
+        second = _run(engine)
+        if second.claimed == 1:  # type: ignore[attr-defined]
+            break
+        if time.monotonic() > deadline:
+            pytest.fail(
+                "no worker reclaimed the killed job within "
+                f"{_POLL_TIMEOUT_SECONDS:.0f}s; the wait for the expired lease "
+                "expired, so `claim_job`'s recovery predicate never fired"
+            )
+        time.sleep(0.05)
+
+    assert second.completed == 1  # type: ignore[attr-defined]
+
+    counts = _coverage(engine, staged.enrollment_id)
+    assert counts.eligible == _KILLED_OBJECTS
+    assert counts.processed == _KILLED_READABLE, "extracted text was lost across the kill"
+    assert counts.quarantined == _KILLED_TRIGGERS, "a quarantine was lost across the kill"
+    assert counts.processed + counts.quarantined + counts.unsupported == _KILLED_OBJECTS
+    # Every object reached an outcome, and the state is still `partially_processed`
+    # because `processed != eligible`: a quarantine is covered and is not
+    # extracted. Asserted rather than left out, so a later reader does not read
+    # "no lost coverage" as "everything was read".
+    assert counts.state() is CoverageState.PARTIALLY_PROCESSED
+
+    with engine.connect() as connection:
+        duplicated = connection.execute(
+            text(
+                "SELECT count(*) FROM ("
+                "  SELECT source_object_id FROM knowledge.extractions WHERE enrollment_id = :id"
+                "  UNION ALL"
+                "  SELECT source_object_id FROM knowledge.quarantine_records"
+                "  WHERE enrollment_id = :id"
+                ") AS outcomes GROUP BY source_object_id HAVING count(*) > 1"
+            ),
+            {"id": staged.enrollment_id},
+        ).all()
+    assert duplicated == [], "an object reached two outcomes across the kill"
+
+    state, attempts, _ = _job_row(engine, staged.operation_id)
+    assert state == "succeeded"
+    assert attempts == 2, "the killed worker's attempt was not counted against the bound"
 
 
 # ---- the boundary the handler signature changed for ----------------------------

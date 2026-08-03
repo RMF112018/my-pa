@@ -21,3 +21,12 @@ class Purpose(StrEnum):
     KNOWLEDGE_READ = "knowledge_read"
     STATUS_OBSERVATION = "status_observation"
     SECURITY_VALIDATION = "security_validation"
+    # Two purposes for the capture plane rather than a reuse of the knowledge
+    # ones. The knowledge plane is the *extraction* plane, and a purpose that
+    # admitted both would let a `knowledge.read` request return raw
+    # user-authored capture text — the silent escalation this module exists to
+    # refuse. Authoring and review are separated for the same reason the eight
+    # existing purposes are near one-to-one with their capability: a purpose
+    # wide enough to cover writing and reading is a purpose that grants both.
+    CAPTURE_AUTHORING = "capture_authoring"
+    CAPTURE_REVIEW = "capture_review"

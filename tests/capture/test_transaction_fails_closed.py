@@ -2,7 +2,8 @@
 
 The criterion says an induced audit or receipt failure fails the whole request
 closed and no capture exists afterwards. The plan's *test* is right; the plan's
-*mechanism sentence* at `:572-573` was not, and `D-75` corrected it. The two
+*mechanism sentence* in section 12's WP-6 entry was not, and `D-75`
+corrected it. The two
 cases below are the two ends of that correction, and **they differ in what the
 audit table holds afterwards**:
 

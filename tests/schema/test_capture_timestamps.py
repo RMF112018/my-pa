@@ -1,8 +1,8 @@
 """`QC-AC-012`: five timestamps, stored separately, none defaulting from another.
 
-**Five, not three.** `mcv-completion-plan.md:582-583` paraphrased this criterion
-as `client_created_at`, `server_received_at` and `recorded_at`, silently
-dropping *occurred* and *accepted*.
+**Five, not three.** The plan's `QC-AC-012` bullet, in section 12's WP-6 entry,
+paraphrased this criterion as `client_created_at`, `server_received_at` and
+`recorded_at`, silently dropping *occurred* and *accepted*.
 `docs/specs/quick-capture/20_TESTING_EVALUATION_AND_ACCEPTANCE.md:191` requires
 "**device, server, occurred, processed, and accepted** timestamps remain
 distinct", and `D-75` rules that the spec governs and the plan is corrected.

@@ -1,7 +1,8 @@
 """`QC-AC-041`: capture text reaches no log, no audit row, no error payload, and no URL.
 
-The plan's paraphrase at `:591-592` named three sinks — logs, audit rows, error
-payloads. `docs/specs/quick-capture/20_TESTING_EVALUATION_AND_ACCEPTANCE.md:214`
+The plan's `QC-AC-041` paraphrase, in section 12's WP-6 entry, named three
+sinks — logs, audit rows, error payloads.
+`docs/specs/quick-capture/20_TESTING_EVALUATION_AND_ACCEPTANCE.md:214`
 names telemetry, **URL parameters**, and lock-screen notifications as well, and
 `D-75` rules that the spec governs. Of the three the plan omitted, **URL
 parameters is live for WP-6**: `capture.create` is reachable over HTTP, and a

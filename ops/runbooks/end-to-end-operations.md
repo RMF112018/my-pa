@@ -44,10 +44,14 @@ the configured database is not at the migration head and cannot serve this build
 ```
 
 `revision none` is an empty database, and it is the same `state` an operator gets
-for one several revisions behind. Both mean *this database cannot serve a
-capability*, and both are worth knowing before a process is started against it,
-because what the application says about the condition is `internal_error` — "the
-request could not be completed", which names nothing (`D-61`, `D-65`).
+for one several revisions behind. `not_at_head` is a statement about the **build**
+and not a diagnosis of any one capability: measured, a database before
+`9c6b4a18ed72`, which creates `knowledge.audit_events`, answers `internal_error`
+to every capability — "the request could not be completed", which names nothing —
+while `9c6b4a18ed72` itself, one revision behind head, serves `capabilities.get`
+and still fails the capability that enrolls a scope (`D-61`, `D-65`, and
+limitation 8 of `docs/operations/mcv-limitations.md`, which names both
+boundaries). An empty database is below both, so step 2 is not optional here.
 
 ## 2. Migrate to head
 
@@ -278,8 +282,11 @@ Consequences, stated rather than worked around:
 an operator reading this page: the corpus is four synthetic objects and nothing
 wider; there is no authentication mechanism and no principal beyond the local
 one; recovery is proven for a killed worker and an expired lease and for nothing
-else; and a database reachable but behind head answers `internal_error` from the
-application, which is why step 1 exists.
+else; and a database reachable but lacking `knowledge.audit_events`, which
+`9c6b4a18ed72` creates, answers `internal_error` from the application to every
+capability, while one revision short of head it answers `internal_error` to
+`sources.enroll` alone — which is why step 1 exists and why it checks head
+rather than reachability.
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy
 identities may appear only in explicit compatibility or evidence records.

@@ -168,9 +168,15 @@ was two migrations stale by the time anyone read it.
 `6c4d3ea82f10`; the chain ends at `af3d35efb9c0`, four revisions later, and it
 carries no `knowledge` schema. The four are the application's own tables, and
 this database is the migrated corpus rather than the application's store. The
-consequence is worth knowing before pointing anything at it: a reachable
-database behind head answers `internal_error` to every capability, which names
-nothing (`D-61`). Ask the probe rather than reading a transcript:
+consequence is worth knowing before pointing anything at it: `9c6b4a18ed72`
+creates `knowledge.audit_events`, canonical `my_pa` is three revisions before
+it, and every served request commits an audit row — so a request against this
+database answers `internal_error`, which names nothing. **That follows from
+this database's revision and not from "behind head" in general**: measured at
+`9c6b4a18ed72`, one revision behind head, `capabilities.get` and `sources.list`
+both answered exactly as they do at head, while `sources.enroll` on that same
+database answered `internal_error` (`D-61`). Behind head is not one condition.
+Ask the probe rather than reading a transcript:
 
 ```sh
 MY_PA_DATABASE_URL='postgresql+psycopg://my_pa@localhost:5433/my_pa' \

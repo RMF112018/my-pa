@@ -82,10 +82,19 @@ exits `0` only for the first:
 
 **The revision half is the part that earns the command** (`D-61`, `D-62`).
 Reachability alone would call the canonical `my_pa` database healthy while it
-cannot serve a single capability — it is several revisions behind head and has
-no `knowledge` schema, so a request through it answers `internal_error` and says
-nothing about why. Correcting that classification is out of scope and named by
-`D-65`; this command is how an operator finds out.
+cannot serve a single capability: it carries no `knowledge` schema, so it has no
+`knowledge.audit_events` for the audit row every served request commits, and a
+request through it answers `internal_error` and says nothing about why.
+Correcting that classification is out of scope and named by `D-65`; this command
+is how an operator finds out.
+
+**`not_at_head` is per-build, not per-capability.** At `9c6b4a18ed72`, one
+revision behind head `af3d35efb9c0`, `capabilities.get` serves and `sources.list`
+answers exactly as it does at head — so `not_at_head` is not a diagnosis that
+every capability fails. It is still the right refusal: at that same revision
+`sources.enroll` answers `internal_error`, because head creates
+`enrollment_objects`. Exiting `1` below head is an operational policy (`D-62`)
+that the measurement supports rather than a claim the measurement refutes.
 
 **It prints no URL, host, port, or database name, on any path.** The
 unreachable report states the fact rather than the driver's message, because the

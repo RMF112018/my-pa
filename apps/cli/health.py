@@ -10,19 +10,32 @@ are **distinguishable**:
     state  unreachable   no server answered                          exit 1
 
 **Why this exists, and why reachability alone would not have earned it.**
-`healthcheck` has been in `my_pa.infrastructure.database` since Phase 01 with no
-caller anywhere in `src/`, `apps/`, or `migrations/` — a working probe nothing
-could reach. But a probe that reported only reachability would call the canonical
-`my_pa` database **healthy** while it cannot serve a single capability: it is
-several revisions behind head and has no `knowledge` schema, so every request
-through `ApplicationService` fails inside the unit of work and the caller is told
-`internal_error` — "the request could not be completed", with nothing to say why.
-Reporting the database's revision against the migration head is what turns that
-into an answer an operator can act on. `D-61`, `D-62`.
+`healthcheck` had been in `my_pa.infrastructure.database` since Phase 01 with no
+caller anywhere in `src/`, `apps/`, or `migrations/` at `bcdbf6d` — a working
+probe nothing could reach. This file is that caller, so the claim is written in
+the past tense on purpose. But a probe that reported only reachability would call
+the canonical `my_pa` database **healthy** while it cannot serve a single
+capability: it carries no `knowledge` schema, so it has no
+`knowledge.audit_events` for the audit row every served request commits, every
+request through `ApplicationService` fails inside the unit of work, and the caller
+is told `internal_error` — "the request could not be completed", with nothing to
+say why. Reporting the database's revision against the migration head is what
+turns that into an answer an operator can act on. `D-61`, `D-62`.
+
+**`not_at_head` is per-build, not per-capability, and the difference is not
+academic.** Measured by stepping a disposable database through the whole chain:
+below `9c6b4a18ed72`, which creates `knowledge.audit_events`, *every* capability
+answers `internal_error`, because a request that cannot commit its audit row
+fails rather than being served unaudited. At `9c6b4a18ed72` itself — one revision
+behind head `af3d35efb9c0` — `capabilities.get` and `sources.list` answer exactly
+as they do at head, so this command's refusal there is **not** a claim that every
+capability fails. It is still correct: at that same revision `sources.enroll`
+answers `internal_error`, because head creates `enrollment_objects`. Exiting `1`
+below head is an operational policy (`D-62`) that the measurement supports.
 
 **It diagnoses that condition; it does not reclassify it.** Correcting the
-application's error taxonomy so a schema-behind-head request answers something
-better than `internal_error` is a separate change against
+application's error taxonomy so a request that cannot record its audit row
+answers something better than `internal_error` is a separate change against
 `my_pa.application.errors` and the three transports' negative-evidence matrices.
 `D-65` names it and defers it; this command is how an operator finds out, not the
 fix.

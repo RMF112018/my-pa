@@ -123,21 +123,59 @@ Evidence:
 `tests/jobs/test_extraction_executor.py::test_a_worker_process_killed_mid_extraction_leaves_its_lease_and_loses_nothing`,
 `tests/jobs/test_extraction_executor.py::test_an_expired_lease_lets_another_worker_finish_the_job`.
 
-## 8. A reachable database whose schema is behind head answers `internal_error`
+## 8. A database that cannot record an audit row answers `internal_error`
 
-Three states, measured: unreachable answers `unavailable`; reachable and at head
-serves; **reachable but not at head answers `internal_error`** — "the request
-could not be completed" — which tells an operator nothing about which of the
-three they are in. The unreachable case was classified correctly by WP-4B2a; the
-schema-drift case was not, and correcting the taxonomy is out of scope and
-deferred by `D-65`.
+Measured on 2026-08-03 against a disposable database (`my_pa_chain_probe`,
+created empty, stepped through all ten Alembic revisions and dropped), invoking
+`capabilities.get` and `sources.list` through `apps/cli/invoke.py` at every
+chain position:
 
-`apps/cli/health.py` **detects** the condition and names the database's revision
-against head. It does not reclassify what the application says.
+- unreachable answers `unavailable`;
+- an empty database and every revision from `5d75f23847c9` through
+  `8b3f5c17d904` answer `internal_error` to both — "the request could not be
+  completed", which tells an operator nothing about which state they are in;
+- `9c6b4a18ed72`, **one revision behind head** `af3d35efb9c0`, **serves both**:
+  `capabilities.get` exited `0` with the envelope it returns at head, differing
+  only in `completed_at`, `observed_at` and `correlation_id`, and `sources.list`
+  returned the same `denied` it returns at head. Six audit rows were written
+  while the database sat one revision behind head.
+
+**There are two boundaries, and neither of them is "not at head" on its own.**
+
+`9c6b4a18ed72` creates `knowledge.audit_events`. Every served request commits a
+row into it, and a request that cannot be audited fails rather than being served
+unaudited — so **below** that revision every capability answers `internal_error`,
+and canonical `my_pa` at `6c4d3ea82f10` is three revisions below it, which is why
+it answers `internal_error`.
+
+Head `af3d35efb9c0` creates `enrollment_objects`, and that boundary is
+per-capability. Measured on a second disposable database (`my_pa_chain_probe2`,
+dropped): at `9c6b4a18ed72`, `sources.enroll` through `apps/cli/invoke.py`
+answered `internal_error`, while the **same call at head** on the **same
+database** answered `created true` with `coverage.eligible 4`. So one revision
+behind head is a state in which some capabilities serve and at least one does
+not.
+
+**What this means for the phrase "not at head".** It is not a diagnosis — a
+database can be behind head and serve a capability. It is a correct statement
+about the build as a whole, because a capability of this build already fails one
+revision short. Both halves matter, and stating only the first is what made an
+earlier version of this limitation wrong.
+
+The unreachable case was classified correctly by WP-4B2a; the unrecordable-audit
+case was not, and correcting the taxonomy is out of scope and deferred by `D-65`.
+
+`apps/cli/health.py` **detects a database that is not at head** and names its
+revision against head. It refuses everything below head, which is wider than the
+audit-table boundary and is deliberate (`D-62`): it is an operational policy — a
+database behind head is not a state an operator should treat as good — and it is
+borne out by `sources.enroll` above. It is **not** a claim that every capability
+fails below head, and it does not reclassify what the application says.
 
 Evidence: `apps/cli/health.py`,
 `tests/contract/test_health_probe.py::test_the_three_states_are_mutually_distinguishable`,
-`src/my_pa/infrastructure/persistence/unit_of_work.py`.
+`src/my_pa/infrastructure/persistence/unit_of_work.py`,
+`tests/policy/test_audit_is_not_swallowed.py`, `migrations/versions/`.
 
 ## 9. Nothing here is deployed, packaged, supervised, or multi-user
 

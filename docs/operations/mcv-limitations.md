@@ -5,10 +5,18 @@ slightly below what has been demonstrated.
 
 **Every limitation below cites the evidence that bounds it**, and
 `tests/architecture/test_limitations_cite_evidence.py` parses this file and
-asserts each cited path exists and each cited test resolves to a real test
-function. That is what makes this document non-aspirational mechanically rather
-than by review: a limitation whose evidence is gone fails a test rather than
-quietly becoming a claim about nothing.
+applies three rules: each cited path exists, each cited test resolves to a real
+test function, and — the rule that makes the first two honest — **no citation
+naming a real repository artifact escapes both**. That is what makes this
+document non-aspirational mechanically rather than by review: a limitation whose
+evidence is gone fails a test rather than quietly becoming a claim about nothing.
+
+The third rule is there because the first two silently did not hold. At
+`83a7c6c` the classifier admitted only top-level *directories*, so the three
+repository-root files cited here — `PHASE-00-OPEN-DECISION-LEDGER.md`,
+`pyproject.toml` and `AGENTS.md` — matched no rule and were asserted by nothing,
+while this preamble said each cited path was checked. A citation nothing checks
+reads exactly like one that passed.
 
 **What "demonstrated" means here.** The slice was measured end to end by WP-5A —
 9 `e2e` tests and 4 `recovery` tests, 13 of 2507 collected — and the operator

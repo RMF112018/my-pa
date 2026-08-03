@@ -5,7 +5,7 @@ do. A limitations document is the easiest document in a repository to write
 aspirationally: nothing in it can be run, so nothing in it can be wrong in a way
 that shows. This is what makes it wrong in a way that shows.
 
-Two checks, and each catches a different failure:
+Three checks, and each catches a different failure:
 
 1. **Every cited path exists.** A limitation attributed to a module that has been
    renamed is a claim with nothing behind it, and it reads exactly like a claim
@@ -13,6 +13,13 @@ Two checks, and each catches a different failure:
 2. **Every cited test node id resolves to a real test function** in the file it
    names. This is the citation form that rots invisibly, because a renamed test
    leaves the document reading perfectly.
+3. **No citation names a real artifact that neither rule asserts.** Rules 1 and 2
+   classify by shape, so anything they do not recognise is not checked — and an
+   unchecked citation reads exactly like a checked one. Three did: `TRACKED_ROOTS`
+   admitted only top-level *directories*, so `PHASE-00-OPEN-DECISION-LEDGER.md`,
+   `pyproject.toml` and `AGENTS.md` matched nothing and were asserted by nothing,
+   while the document's preamble said every cited path was checked. Rule 3 is what
+   makes a blind spot fail instead of pass.
 
 **Why `ast` rather than `pytest --collect-only`.** Resolution is decided by
 parsing the named file and looking for a module-level `def` with that name whose
@@ -52,6 +59,21 @@ TRACKED_ROOTS = (
     "tests/",
 )
 
+#: Suffixes of repository-**root** files a citation may name.
+#:
+#: `TRACKED_ROOTS` admits only directories, so a citation of a file at the
+#: repository root — `pyproject.toml`, `AGENTS.md` — carried no prefix to match
+#: and escaped both rules silently. Three live citations sat in that gap.
+#:
+#: A closed suffix list rather than "any bare filename", because backticks are
+#: also prose here and `invoke.py` is written as shorthand for
+#: `apps/cli/invoke.py`; treating every dotted token as a path would flag it,
+#: `capabilities.get`, `knowledge.audit_events` and `127.0.0.1` alike. The list
+#: is deliberately narrow, and `uncovered_citations` is what stops it from
+#: being *quietly* narrow: a citation that names a real
+#: repository entry and matches nothing here fails rather than passing unchecked.
+ROOT_FILE_SUFFIXES = (".cfg", ".ini", ".md", ".toml", ".txt", ".yaml", ".yml")
+
 #: The fewest of each kind before this rule is deciding anything. A document
 #: that lost its citation formatting would parse to zero of both and would
 #: otherwise pass every check below.
@@ -62,9 +84,26 @@ FEWEST_TESTS = 5
 #: document, which is also how it renders them as code.
 _BACKTICKED = re.compile(r"`([^`\n]+)`")
 
-_PATHLIKE = re.compile(
+_UNDER_TRACKED_ROOT = re.compile(
     r"^(?:" + "|".join(re.escape(root) for root in TRACKED_ROOTS) + r")[\w./-]+$"
 )
+
+#: A file at the repository root: no separator, and one of the closed suffixes.
+_ROOT_FILE = re.compile(
+    r"^[\w.-]+(?:" + "|".join(re.escape(suffix) for suffix in ROOT_FILE_SUFFIXES) + r")$"
+)
+
+
+def _pathlike(token: str) -> bool:
+    """Whether `token` is written as a repository path rather than as prose.
+
+    Decided by shape alone and never by whether the named file happens to
+    exist, because a rule that classified by existence could not fail: a
+    citation of a renamed file would stop being a path and start being prose,
+    and the document would go green by rotting.
+    """
+    return bool(_UNDER_TRACKED_ROOT.match(token) or _ROOT_FILE.match(token))
+
 
 #: Every `## ` heading is one limitation. Numbered, so the count is visible.
 _LIMITATION = re.compile(r"^## \d+\. ", re.MULTILINE)
@@ -76,9 +115,7 @@ def _backticked(document: Path) -> list[str]:
 
 def cited_paths(document: Path) -> set[str]:
     """Every citation naming a repository path and no test."""
-    return {
-        token for token in _backticked(document) if "::" not in token and _PATHLIKE.match(token)
-    }
+    return {token for token in _backticked(document) if "::" not in token and _pathlike(token)}
 
 
 def cited_tests(document: Path) -> set[tuple[str, str]]:
@@ -88,9 +125,27 @@ def cited_tests(document: Path) -> set[tuple[str, str]]:
         if "::" not in token:
             continue
         path, _, name = token.partition("::")
-        if _PATHLIKE.match(path):
+        if _pathlike(path):
             found.add((path, name))
     return found
+
+
+def uncovered_citations(document: Path) -> set[str]:
+    """Citations that name a real repository entry and that no rule asserts.
+
+    The complement of the two rules above, and the reason a narrow classifier
+    is safe. `cited_paths` and `cited_tests` decide by shape; this decides by
+    the filesystem, and reports any token that denotes something real which
+    neither rule claimed. A citation shape the classifier does not know — a
+    root file with no suffix, say — surfaces here as a failure instead of
+    passing unchecked, which is exactly how the root-file gap survived.
+    """
+    asserted = cited_paths(document) | {f"{path}::{name}" for path, name in cited_tests(document)}
+    return {
+        token
+        for token in _backticked(document)
+        if token not in asserted and (ROOT / token.partition("::")[0]).exists()
+    }
 
 
 def resolves_to_a_test(module: Path, name: str) -> bool:
@@ -111,8 +166,8 @@ def resolves_to_a_test(module: Path, name: str) -> bool:
 
 
 def test_the_document_exists_and_states_limitations() -> None:
-    """Guard both rules: each is an existence test over a parsed set."""
-    assert LIMITATIONS.is_file(), f"{LIMITATIONS} is gone; the two rules below decide nothing"
+    """Guard all three rules: each is an existence test over a parsed set."""
+    assert LIMITATIONS.is_file(), f"{LIMITATIONS} is gone; the three rules below decide nothing"
 
     text = LIMITATIONS.read_text(encoding="utf-8")
     assert len(_LIMITATION.findall(text)) >= 8, "fewer than eight numbered limitations"
@@ -140,6 +195,24 @@ def test_every_cited_test_resolves_to_a_real_test_function() -> None:
     assert not unresolved, (
         f"{LIMITATIONS.relative_to(ROOT)} cites {unresolved}, which resolve to no test; "
         "a renamed test leaves a limitations document reading perfectly"
+    )
+
+
+def test_the_citation_universe_covers_every_shape_the_document_uses() -> None:
+    """No citation names a real artifact that neither rule asserts.
+
+    The third rule, and the one that makes the other two honest. Without it the
+    classifier's blind spots are silent by construction: a citation it does not
+    recognise is simply not checked, and reads exactly like one that passed.
+    Three did — `PHASE-00-OPEN-DECISION-LEDGER.md`, `pyproject.toml` and
+    `AGENTS.md`, all repository-root files, which `TRACKED_ROOTS` could not
+    match because it lists only directories.
+    """
+    uncovered = sorted(uncovered_citations(LIMITATIONS))
+    assert not uncovered, (
+        f"{LIMITATIONS.relative_to(ROOT)} cites {uncovered}, which name real "
+        "repository entries that neither rule asserts; widen the classifier "
+        "rather than leaving a citation shape unchecked"
     )
 
 
@@ -212,3 +285,75 @@ def test_the_path_rule_separates_paths_from_tests_and_from_prose(tmp_path: Path)
 
     assert cited_paths(planted) == {"apps/cli/health.py"}
     assert cited_tests(planted) == {("tests/contract/test_health_probe.py", "test_x")}
+
+
+@pytest.mark.parametrize(
+    ("citation", "is_path"),
+    [
+        ("pyproject.toml", True),
+        ("AGENTS.md", True),
+        ("PHASE-00-OPEN-DECISION-LEDGER.md", True),
+        ("pyproject-that-is-gone.toml", True),
+        ("invoke.py", False),
+        ("capabilities.get", False),
+        ("knowledge.audit_events", False),
+        ("truncation.is_truncated", False),
+        ("127.0.0.1", False),
+        ("my_pa", False),
+    ],
+    ids=[
+        "a root file that exists is a path",
+        "so is the second one that escaped",
+        "and the third",
+        "a root file that does not exist is still a path, or the rule cannot fail",
+        "a bare module name used as prose is not",
+        "nor is a capability name",
+        "nor is a qualified table name",
+        "nor is a field path",
+        "nor is a loopback address",
+        "nor is the namespace",
+    ],
+)
+def test_the_root_file_rule_separates_root_files_from_dotted_prose(
+    tmp_path: Path, citation: str, is_path: bool
+) -> None:
+    """The gap the guard had, and the false findings a looser fix would create.
+
+    The fourth case is the isolation that matters: a root-file citation is
+    classified by **shape**, so a renamed file stays a path citation and fails
+    `test_every_cited_path_exists`. A rule that classified by existence would
+    have reclassified it as prose and gone green, which is the failure this
+    whole file exists to prevent one layer up.
+
+    The dotted cases are the other end. `capabilities.get` and
+    `knowledge.audit_events` are real tokens in the real document, and a rule
+    that treated any dot as a file extension would report both as missing
+    files.
+    """
+    planted = tmp_path / "planted.md"
+    planted.write_text(f"Evidence: `{citation}`.\n", encoding="utf-8")
+
+    assert (cited_paths(planted) == {citation}) is is_path
+    assert cited_tests(planted) == set()
+
+
+def test_the_coverage_rule_reports_a_citation_shape_the_classifier_does_not_know(
+    tmp_path: Path,
+) -> None:
+    """`LICENSE` is real, is cited-shaped, and matches no rule — so it is reported.
+
+    The plant is a suffixless root file rather than an invented one, because
+    the point is that the classifier's *closed* suffix list has an edge and the
+    coverage rule is what keeps that edge loud. The green half is asserted in
+    the same test: a document citing only shapes the classifier knows reports
+    nothing, so this is not a rule that flags everything.
+    """
+    assert (ROOT / "LICENSE").is_file(), "the plant needs a suffixless root file"
+
+    planted = tmp_path / "planted.md"
+    planted.write_text("Evidence: `LICENSE`, `apps/cli/health.py`, `D-65`.\n", encoding="utf-8")
+    assert uncovered_citations(planted) == {"LICENSE"}
+
+    covered = tmp_path / "covered.md"
+    covered.write_text("Evidence: `apps/cli/health.py`, `pyproject.toml`, `D-65`.\n", "utf-8")
+    assert uncovered_citations(covered) == set()

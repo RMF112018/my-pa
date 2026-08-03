@@ -1,7 +1,16 @@
-# What the read-only slice does not do
+# What the slice does not do
 
-The limitations of the MCV read-only vertical slice as it stands, stated at or
+The limitations of the MCV vertical slice as it stands, stated at or
 slightly below what has been demonstrated.
+
+**This document was headed "the read-only slice" until 2026-08-03.** WP-6 added
+the user-authored capture plane, which writes — so the slice is no longer
+read-only and saying it was would be the first false claim on the page. What is
+still read-only is every path to a **source**: `ADR-003` makes a capture a
+product-owned record, a third authority class that is neither a source-system
+write nor a managed-document write, and it grants the read-only source-provider
+port no write method. Limitation 10 is where that is stated and now measured
+from two ends.
 
 **Every limitation below cites the evidence that bounds it**, and
 `tests/architecture/test_limitations_cite_evidence.py` parses this file and
@@ -50,35 +59,71 @@ exactly one principal, it is the process, and there is nothing to authenticate
 Evidence: `apps/gateway.py`, `src/my_pa/bootstrap/gateway.py`,
 `PHASE-00-OPEN-DECISION-LEDGER.md`.
 
-## 2. A principal does not survive its process, so the CLI cannot read back what it enrolled
+## 2. Ownership survives only as long as the serving process. **This blocks multi-principal operation.**
 
-`local_principal()` issues a fresh principal identifier per composition, and
-`apps/cli/invoke.py` composes a runtime per invocation. `authorize` reads the
-authorized scope from the enrollments the acting principal holds, so an
-enrollment created by one CLI invocation is held by an identifier that never
-exists again.
+**Corrected as a class on 2026-08-03 (`D-72`).** This limitation was headed "a
+principal does not survive its process, so the CLI cannot read back what it
+enrolled", which was written from the CLI case alone and named the narrowest
+instance of a general property. The honest statement is the general one: an
+identity in this build belongs to a *process*, not to a person, and everything
+scoped to it lasts exactly as long as that process does.
 
-Measured on a disposable database on 2026-08-03 and transcribed in
-`ops/runbooks/end-to-end-operations.md`: `sources.enroll` through
-`apps/cli/invoke.py` was `allowed` and wrote its enrollment; three later
-`invoke.py` calls to `sources.status` for that enrollment were each `denied`
-with `denial_reason scope_not_authorized`, under three different principal
-identifiers — while the same four capabilities through **one running gateway**
-recorded `allowed` four times under one identifier.
+`local_principal()` issues a fresh principal identifier per composition.
+`apps/cli/invoke.py` composes a runtime per invocation, so each invocation is a
+new principal; `apps/gateway.py` composes one per process, so a gateway holds one
+principal — **and mints a new one when it restarts**. Nothing persists an
+identity and nothing can be supplied one: the envelope's `principal_id` is
+correlation input (`contracts/v1/envelope.py`, `application/service.py`), and
+`apps/cli/invoke.py` refuses a `--principal` option deliberately.
 
-**The scoped capabilities are therefore usable from `apps/cli/invoke.py` only
-within a scope that same invocation enrolled, which no single invocation can
-do.** `capabilities.get` is the exception and works, because it carries no
-source scope. Through a running gateway or MCP server every capability works,
-because that process holds one principal for its lifetime.
+Measured on disposable databases on 2026-08-03 and transcribed in
+`ops/runbooks/end-to-end-operations.md`:
 
-This is not a defect any of the work packages so far may fix: whether a local
-principal has a durable identity is an authentication question and `P00-OD-010`
-is open. Recorded as `D-67` in `docs/plans/mcv-completion-plan.md`, which defers
-it to that decision rather than closing it here.
+- **three CLI processes → three distinct principals.** `sources.enroll` through
+  `apps/cli/invoke.py` was `allowed` and wrote its enrollment; three later
+  `invoke.py` calls to `sources.status` for that enrollment were each `denied`
+  with `denial_reason scope_not_authorized`, under three different identifiers.
+- **one gateway runtime → one principal across three reads**, which is why the
+  same four capabilities through one running gateway recorded `allowed` four
+  times under one identifier.
+- **a second composition is a second principal**, which is what a restart is.
+  `tests/capture/test_owner_is_not_authorization.py` composes two runtimes over
+  one database and asserts the two identifiers differ.
+
+Two consequences, and the second is the one that blocks.
+
+**Scoped capabilities are usable from `apps/cli/invoke.py` only within a scope
+that same invocation enrolled**, which no single invocation can do. The
+exceptions are the capabilities that carry no source scope at all —
+`capabilities.get` and, since WP-6, the four `capture.*` capabilities.
+
+**Captures carry no owner-scoped access control, and this build cannot give them
+one.** `ADR-003` clause 6 requires every stored version to bind its owning
+principal, and it does: `knowledge.capture_versions.owner_principal_id` is
+`NOT NULL` and records the principal that wrote each version. But `capture.read`,
+`capture.list` and `capture.revise` authorize on **capability and purpose alone**
+and never on owner equality (`D-72`). Under `P00-OD-010`-open, loopback-only,
+single-local-principal operation that enforces nothing a second principal could
+observe, and adding the check would make `QC-AC-013` unprovable across processes
+because the predecessor's owner never exists again. On a loopback single-operator
+build it is not a live exposure and `D-30` refuses ingress. **It becomes one the
+moment a second principal exists**, so this limitation is stated as *blocking* on
+multi-principal operation rather than as a note.
+
+**Invalidation trigger: operator resolution of `P00-OD-010`.** That decision
+supplies the authentication mechanism this defers to, and at that point the
+absence of owner-scoped access control on captures stops being a limitation and
+becomes a defect to close.
+
+This is not a defect any work package so far may fix: whether a local principal
+has a durable identity is an authentication question. Recorded as `D-67` and
+`D-72` in `docs/plans/mcv-completion-plan.md`, which defer it to that decision
+rather than closing it here.
 
 Evidence: `src/my_pa/bootstrap/gateway.py`,
 `src/my_pa/application/authorization.py`, `src/my_pa/domain/policy/decision.py`,
+`src/my_pa/infrastructure/persistence/tables.py`,
+`tests/capture/test_owner_is_not_authorization.py::test_a_capture_created_by_one_runtime_is_revised_and_read_by_another`,
 `ops/runbooks/end-to-end-operations.md`.
 
 ## 3. The corpus is four synthetic objects, and nothing has been proven wider
@@ -142,7 +187,8 @@ Evidence:
 ## 8. A database that cannot record an audit row answers `internal_error`
 
 Measured on 2026-08-03 against a disposable database (`my_pa_chain_probe`,
-created empty, stepped through all ten Alembic revisions and dropped), invoking
+created empty, stepped through all ten Alembic revisions that existed then —
+there are eleven since WP-6 — and dropped), invoking
 `capabilities.get` and `sources.list` through `apps/cli/invoke.py` at every
 chain position:
 
@@ -150,7 +196,8 @@ chain position:
 - an empty database and every revision from `5d75f23847c9` through
   `8b3f5c17d904` answer `internal_error` to both — "the request could not be
   completed", which tells an operator nothing about which state they are in;
-- `9c6b4a18ed72`, **one revision behind head** `af3d35efb9c0`, **serves both**:
+- `9c6b4a18ed72`, **one revision behind head** `af3d35efb9c0` when this was
+  measured and two behind `1a4c9e77b2d5` now, **serves both**:
   `capabilities.get` exited `0` with the envelope it returns at head, differing
   only in `completed_at`, `observed_at` and `correlation_id`, and `sources.list`
   returned the same `denied` it returns at head. Six audit rows were written
@@ -164,13 +211,24 @@ unaudited — so **below** that revision every capability answers `internal_erro
 and canonical `my_pa` at `6c4d3ea82f10` is three revisions below it, which is why
 it answers `internal_error`.
 
-Head `af3d35efb9c0` creates `enrollment_objects`, and that boundary is
+`af3d35efb9c0` creates `enrollment_objects`, and that boundary is
 per-capability. Measured on a second disposable database (`my_pa_chain_probe2`,
 dropped): at `9c6b4a18ed72`, `sources.enroll` through `apps/cli/invoke.py`
 answered `internal_error`, while the **same call at head** on the **same
-database** answered `created true` with `coverage.eligible 4`. So one revision
+database** answered `created true` with `coverage.eligible 4`. So a revision
 behind head is a state in which some capabilities serve and at least one does
 not.
+
+**WP-6 added a third boundary of the same shape, above the other two.** Head is
+now `1a4c9e77b2d5`, which creates the five capture tables *and* widens
+`audit_events`' `capability_is_known` constraint to admit a capture at all
+(`D-69`). A database stopped at `af3d35efb9c0` therefore serves everything it
+served before and answers `internal_error` to every `capture.*` request — for
+the audit-constraint reason, not for a missing-table one, and the difference is
+why `D-69` exists: a build that added the capability without a migration passes
+every test, because every test builds its database from scratch, and fails in the
+field on the first audited capture.
+`tests/schema/test_capture_schema_migration.py` is what holds that.
 
 **What this means for the phrase "not at head".** It is not a diagnosis — a
 database can be behind head and serve a capability. It is a correct statement
@@ -214,11 +272,51 @@ each read. The source-provider port has no write method, so "my-pa does not
 modify your files" is a property of the interface rather than of the
 implementations behind it.
 
+**This survived WP-6 unchanged, and it is worth saying why rather than leaving a
+reader to wonder.** WP-6 made the build write — a capture is stored, versioned,
+and receipted — but a capture is a **product-owned** record under `ADR-003`
+clause 5, a third authority class that is neither a source-system write nor a
+managed-document write. Two ends are checked rather than one: the port still
+declares exactly its four read operations, and the module that stores a capture
+imports no provider at all. A third check drives every `capture.*` capability
+over both transports against a recording provider and requires the provider to be
+neither called **nor looked up**.
+
 Stated here because it is a limitation an operator may be *looking* for, not
 only one they should be warned about.
 
 Evidence: `src/my_pa/contracts/ports.py`,
-`src/my_pa/infrastructure/providers/fixture.py`.
+`src/my_pa/infrastructure/providers/fixture.py`,
+`tests/architecture/test_capture_reaches_no_source.py::test_the_source_provider_port_declares_exactly_its_four_read_operations`,
+`tests/architecture/test_capture_reaches_no_source.py::test_the_capture_writer_imports_no_source_provider`,
+`tests/security/test_mcp_and_cli_negative_evidence.py::test_no_capability_over_either_transport_calls_anything_but_a_read`.
+
+## 11. Nothing consumes the capture outbox, and there is no remote capture transport
+
+A capture is stored durably and a row is written into `knowledge.capture_jobs`
+at the moment it is admitted — that is what durable-first means: a crash between
+accepting a capture and processing it loses the processing, not the record that
+it is owed. **Nothing claims that row.** No worker reads `capture_jobs`, no
+extraction runs over capture text, and no proposal or span exists. That is WP-7's
+work and it is named rather than implied.
+
+Nor is there a way to capture from anywhere but this machine. `D-30` refuses
+ingress and issues no credential, so the iOS Shortcut the canonical package
+describes has nothing to call. `RegisteredCaptureClient` and
+`CaptureDeliveryAttempt` are **deferred rather than built** (`D-74`): their
+defining fields are a revocable credential reference and a delivery record, and
+with `D-30`, `O-21` and `P00-OD-010` standing they could never be populated, so
+the tables are absent rather than permanently empty. `capture_submissions`
+carries no `registered_client_id` column for the same reason.
+
+What a capture therefore is today: text the operator types into a loopback
+process, stored immutably by version, retrievable by version, and queued for
+work no process does yet.
+
+Evidence: `src/my_pa/infrastructure/persistence/tables.py`,
+`src/my_pa/infrastructure/persistence/capture.py`,
+`docs/plans/mcv-completion-plan.md`,
+`tests/capture/test_idempotency.py::test_the_same_key_and_the_same_content_stores_once_and_returns_one_receipt`.
 
 ---
 

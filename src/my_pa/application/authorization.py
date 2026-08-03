@@ -4,7 +4,7 @@
 in transport or adapter conditionals". This module is what that sentence buys:
 every capability reaches `domain.policy.decision.evaluate` through `authorize`
 and through nothing else, so there is one answer to "may this happen" rather
-than eight of them that could drift.
+than twelve of them that could drift.
 
 **The authorized scope is read, never supplied.** `PolicyRequest.authorized_source_ids`
 comes from the enrollments the principal actually holds, loaded inside the same

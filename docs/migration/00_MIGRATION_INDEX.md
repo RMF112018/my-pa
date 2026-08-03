@@ -20,7 +20,7 @@ Read from the live database and `migration_control` on 2026-08-01.
 | | |
 | --- | --- |
 | Target | PostgreSQL 17.10, database `my_pa`, container `my-pa-postgres`, `127.0.0.1:5433` |
-| Alembic revision | `6c4d3ea82f10` — the canonical database's revision, and the sixth of the chain's ten. The repository head is now `af3d35efb9c0`; the four `knowledge` revisions above it — the schema, the extraction tables, the audit events table, and the enrolled object set — run only against disposable databases and have never been applied here. |
+| Alembic revision | `6c4d3ea82f10` — the canonical database's revision, and the sixth of the chain's eleven. The repository head is now `1a4c9e77b2d5`; the five `knowledge` revisions above it — the schema, the extraction tables, the audit events table, the enrolled object set, and the capture tables — run only against disposable databases and have never been applied here. |
 | Schemas | 9 — 8 domain plus `migration_control` |
 | Base tables | 494 = 484 domain + 9 control plane + `public.alembic_version` |
 | Rows migrated | 3,263,870 |

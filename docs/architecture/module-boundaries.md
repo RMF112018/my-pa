@@ -138,13 +138,21 @@ a README and nothing else.
 
 Two of the three are operator commands and one is a transport, and the split is
 the reason they sit together rather than a reason to separate them. `invoke.py`
-invokes one of the eight capabilities and therefore composes
+invokes one of the twelve capabilities and therefore composes
 `bootstrap.gateway.build_gateway_runtime`, exactly as the served transports do,
 so it cannot differ from them in a limit, a clock, or a principal.
 `migration.py` and `sources.py` invoke none, compose their own engine, and reach
 `infrastructure` directly. `D-42` records why source registration is one of the
-second kind: the capability set is closed at eight by the canonical contract, and
-a ninth member is what an operator command must not become.
+second kind: source registration is named by no canonical capability, and a
+capability for it is what an operator command must not become. That ruling
+stands; what does **not** stand is the reason it used to be given in, "the
+capability set is closed at eight by the canonical contract". `D-68` narrows
+`D-42`'s general premise for the capture family alone — `capture.create` is
+named by the canonical package in six places, and the other three are a
+repository decision under `ADR-003:107`, which reserves capability names to "an
+implementing work package and its pull request". The set is twelve, and it is
+closed against a ninth *source-registration* capability rather than against a
+ninth member.
 
 
 ## 4. Dependency rule
@@ -195,7 +203,7 @@ Owns transport-neutral public request/response/disclosure/error schemas and appl
 ### 5.3 `application`
 
 
-Owns the eight public capability use cases; request normalization; semantic validation; principal/purpose/scope authorization; enrollment normalization/idempotency; source and knowledge orchestration; disclosure construction; operation/cancellation/recovery coordination; transaction boundaries; and mapping internal failures to public errors.
+Owns the twelve public capability use cases; request normalization; semantic validation; principal/purpose/scope authorization; enrollment normalization/idempotency; capture admission, idempotent replay, and the durable-first save; source, knowledge, and capture orchestration; disclosure construction; operation/cancellation/recovery coordination; transaction boundaries; and mapping internal failures to public errors.
 
 
 It does not parse HTTP/MCP, execute SQL, open files, call provider SDKs, or embed process lifecycle.
@@ -319,6 +327,10 @@ Conformance requires denial of traversal/containment escape; denial of unknown/a
 | `sources.enroll` | enrollment command | policy, UoW, jobs/outbox, audit | operator CLI/authenticated operator transport |
 | `knowledge.search` | lexical search | policy, knowledge repository, audit | HTTP/MCP/CLI |
 | `knowledge.read` | knowledge read | policy, knowledge/provenance repository, audit | HTTP/MCP/CLI |
+| `capture.create` | capture admission | policy, UoW, capture repository, capture jobs/outbox, audit | HTTP/MCP/CLI |
+| `capture.revise` | capture supersession | policy, UoW, capture repository, capture jobs/outbox, audit | HTTP/MCP/CLI |
+| `capture.read` | capture version read | policy, capture repository, audit | HTTP/MCP/CLI |
+| `capture.list` | capture listing | policy, capture repository, audit | HTTP/MCP/CLI |
 
 
 ## 9. Future capability ownership
@@ -348,6 +360,14 @@ Normalize → authorize → check idempotency → persist enrollment, operation/
 
 
 Source bytes are read outside the DB transaction. Worker binds observed version, validates/extracts, then commits version-specific result, coverage, provenance, and audit idempotently. If version changed or lease is lost, result is rejected/quarantined.
+
+
+### Capture
+
+
+Normalize → authorize → admit under a unique idempotency key → persist the capture, its version, its submission, its receipt, and its queued processing job in one application transaction. A key already bound to byte-identical content returns the stored receipt and writes nothing; a key bound to different content is `conflict` and writes nothing.
+
+The redacted audit event is **not** in that transaction and this is the same `D-34` carve-out the enrollment paragraph above already lives under: the sink takes its own connection and commits before the handler runs, and the stored version keeps the audit *reference*. A failed audit fails the request closed and no capture exists afterwards; a failed work transaction leaves an audit event describing an authorization whose work never landed, which is the correct direction of the trade. `tests/capture/test_transaction_fails_closed.py` holds both ends.
 
 
 ### Search/read

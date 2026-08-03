@@ -12,10 +12,10 @@ over a socket: nothing in this file knows which capabilities those are.
 
 **Why the envelope is options and the payload is JSON.** The two halves of a
 request have two owners. The envelope is one fixed shape — `RequestMetadata`'s
-fields, the same for all eight capabilities — so it is presented as options,
-which is what a CLI is for. The payload is capability-specific, so eight sets of
-hand-written options would be eight statements of what `application.commands`
-already says, and the ninth capability would arrive with none. `--payload` is
+fields, the same for all twelve capabilities — so it is presented as options,
+which is what a CLI is for. The payload is capability-specific, so twelve sets of
+hand-written options would be twelve statements of what `application.commands`
+already says, and the thirteenth capability would arrive with none. `--payload` is
 JSON for the same reason `adapters/mcp/tools.py` derives its schemas: a second
 copy of a shape is a second thing to keep true.
 
@@ -72,7 +72,7 @@ EXIT_OK: Final = 0
 EXIT_FAILED: Final = 1
 
 #: Envelope options, and the `RequestMetadata` field each supplies. Written as a
-#: mapping so that assembling the document is one loop over it rather than eight
+#: mapping so that assembling the document is one loop over it rather than five
 #: assignments, and so `test_the_cli_offers_every_envelope_field` can compare it
 #: against the contract model instead of against a reader's memory.
 _ENVELOPE_OPTIONS: Mapping[str, str] = {

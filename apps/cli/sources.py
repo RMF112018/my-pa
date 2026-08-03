@@ -12,9 +12,12 @@ which have to exist before an enrollment can, and until this command existed
 else here is new: the two writers are the ones `infrastructure.persistence` has
 had since WP-3.
 
-**It is configuration, not a grant, and it is not a ninth capability.** The
-capability set is closed at eight (`domain/identity/operation.py`), and creating
-a source authorizes nobody to read anything: every read still requires an
+**It is configuration, not a grant, and it is not a capability.** The set is
+twelve since WP-6 (`domain/identity/operation.py`), and the reason source
+registration is not one of them is not the size of the set: `D-42` records that
+it is named by no canonical capability, and `D-68` narrows that ruling's general
+premise for the capture family alone. Creating a source authorizes nobody to
+read anything: every read still requires an
 enrollment, which requires `sources.enroll`, which is operator-only, goes through
 `authorize`, and writes a durable audit event. This command builds no
 `ApplicationService`, no `Principal`, and no `SourceProviders`, so it could not
@@ -23,9 +26,12 @@ list, fetch, search, read, or enroll even if somebody wanted it to.
 by reading this file rather than by trusting this paragraph.
 
 **It writes no audit event, and that is a decision rather than an omission.**
-`audit_events.capability` is constrained to the eight `Capability` values, so
-recording a registration would mean a ninth member — which is exactly what makes
-an operator command look like the capability it is not. The `sources` row is its
+`audit_events.capability` is constrained to the twelve `Capability` values, so
+recording a registration would mean a thirteenth member — which is exactly what
+makes an operator command look like the capability it is not. WP-6 widened that
+constraint by an explicit `ALTER` in its own revision rather than by re-deriving
+it from the enum (`D-69`), so the argument here is unchanged: adding a member is
+a deliberate migration, not a side effect of a name. The `sources` row is its
 own evidence: `configured_at` is `NOT NULL` with a server default, the row is
 unique on `(provider_kind, native_root)`, and `register_source` is idempotent, so
 "when was this configured" has one answer and re-running the command does not

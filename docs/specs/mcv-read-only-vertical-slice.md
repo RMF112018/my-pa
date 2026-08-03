@@ -284,6 +284,20 @@ Provider-native identities remain protected internal metadata and never appear p
 ## 9. Capability contracts
 
 
+**Corrected 2026-08-03 by WP-6.** The eight subsections below were the whole
+capability set when this document was written, and they no longer are: the build
+serves **twelve**. The four `capture.*` capabilities are deliberately **not**
+specified here, because this document is the *read-only* slice and a capture
+writes a product-owned record — `ADR-003` clause 5's third authority class,
+neither a source-system write nor a managed-document write. Their contracts are
+`src/my_pa/contracts/v1/capture.py` and `src/my_pa/application/commands.py`, and
+their acceptance criteria are the `QC-AC-` set in
+`docs/specs/quick-capture/20_TESTING_EVALUATION_AND_ACCEPTANCE.md` rather than
+the `SPEC-AC-` set in section 16. The eight below are unchanged and still
+correct; the sentence that had to change is `SPEC-AC-001`, which said "all
+eight" and now says which eight.
+
+
 ### 9.1 `capabilities.get`
 
 
@@ -523,7 +537,7 @@ Sensitive values are never labels/default logs. Debug mode cannot bypass redacti
 ### Phase 00
 
 
-- `SPEC-AC-001`: All eight capabilities define transport-neutral request/response/error/disclosure/authority semantics.
+- `SPEC-AC-001`: All eight capabilities **this document specifies** — section 9.1 through 9.8 — define transport-neutral request/response/error/disclosure/authority semantics. Corrected 2026-08-03: it read "all eight capabilities", which stopped being the whole set when WP-6 added the four `capture.*` capabilities. Those are outside this read-only document's scope (see the note at the head of section 9) and carry the `QC-AC-` criteria instead; the transport-neutrality property itself is unchanged and is enforced for **every** capability by `src/my_pa/adapters/normalization.py`, which all three transports call and none of them can bypass.
 - `SPEC-AC-002`: Unknown/ambiguous input, pagination, truncation, idempotency, opaque IDs, UTC, partial, quarantine explicit.
 - `SPEC-AC-003`: Source authority, provenance, classification, policy, audit, no-leak, cloud defaults explicit.
 - `SPEC-AC-004`: Scope excludes personal connectors, writes, vector/graph, public research, autonomous action, deployment, production.

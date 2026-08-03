@@ -17,7 +17,9 @@ Every command below was executed against a **disposable** database
 one is stronger.** It said pointing the gateway at canonical `my_pa` "would be
 safe to read from and would write audit rows for requests nobody made", which
 reads as politeness. Measured: canonical `my_pa` is at `6c4d3ea82f10` while the
-chain ends at `af3d35efb9c0` and it carries **no `knowledge` schema**, so it has
+chain ends at `1a4c9e77b2d5` (re-measured 2026-08-03; it was `af3d35efb9c0`
+until WP-6 added the capture revision) and it carries **no `knowledge` schema**,
+so it has
 no `knowledge.audit_events` to commit the audit row every served request writes
 — every request fails inside the unit of work and the caller is told
 `internal_error`, which explains nothing (`D-61`, `D-65`). Run
@@ -27,14 +29,17 @@ process at it; that is what it is for, and
 
 Everything below therefore describes a gateway over a database at head. **Head is
 not the narrowest state in which it answers *something*** — at `9c6b4a18ed72`,
-one revision behind head, `capabilities.get` serves and `sources.list` answers as
+now two revisions behind head and one behind it when this was measured,
+`capabilities.get` serves and `sources.list` answers as
 it does at head (`D-61`) — but it is the narrowest state in which it answers
-*everything*: at that same revision `sources.enroll` returns `internal_error`,
-because head creates `enrollment_objects`. Point this process at head.
+*everything*: at that same revision `sources.enroll` returns `internal_error`
+because `af3d35efb9c0` creates `enrollment_objects`, and every `capture.*`
+request does too, because `1a4c9e77b2d5` creates the capture tables and widens
+`audit_events.capability` to admit a capture at all. Point this process at head.
 
 ## What the gateway is, and what it does not yet do
 
-`apps/gateway.py` serves the eight public capabilities over HTTP on loopback.
+`apps/gateway.py` serves the twelve public capabilities over HTTP on loopback.
 One request is one call to `ApplicationService.invoke`, and the response body is
 the envelope that call produced — the transport maps and does not decide.
 
@@ -120,9 +125,29 @@ curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
        "payload":{}}'
 ```
 
-Observed: `200`, `content-type: application/json`, and an envelope whose
-`result.manifest` lists eight capabilities `available`, `application/pdf`
-`decision_gated`, and `readiness.state: ready`. No `server` header.
+**Re-executed 2026-08-03**, against a disposable database at head
+`1a4c9e77b2d5`, because WP-6 changed what this answers. Observed: `200`,
+`content-type: application/json`, and an envelope whose `result.manifest` lists
+**twelve** capabilities `available`, `application/pdf` `decision_gated`, and
+`readiness.state: ready`. No `server` header.
+
+```text
+HTTP/1.1 200 OK
+content-length: 2509
+content-type: application/json
+```
+
+```text
+result.manifest.capabilities        12, every one `available`
+result.manifest.content_types       text/markdown available, text/plain available,
+                                    application/pdf decision_gated
+result.readiness.state              ready
+result.readiness.implemented        12 of 12
+```
+
+It read "eight capabilities" until this run. The count came from the four
+`capture.*` capabilities WP-6 wired; nothing about the shape of the answer
+changed.
 
 **What `readiness.state` measures, since an operator will read it as a probe.**
 It counts wired handlers in the manifest, so its *derivation* is build-time. Its
@@ -131,7 +156,8 @@ dispatches, so a caller sees this value only from a database that was reachable
 and writable and could record the request's audit row. Measured (`D-61`):
 unreachable answers `unavailable`; a database before `9c6b4a18ed72`, which
 creates `knowledge.audit_events`, answers `internal_error`; and `9c6b4a18ed72`
-itself — one revision behind head — answers `ready`, the same as head, while
+itself — one revision behind head when that was measured, two behind
+`1a4c9e77b2d5` now — answers `ready`, the same as head, while
 `sources.enroll` on that same database answers `internal_error`. So this
 transcript is accurate and this envelope is a liveness signal, but it diagnoses
 nothing and it is **not** a head check: a `ready` here does not mean every

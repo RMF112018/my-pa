@@ -19,8 +19,8 @@ reading of anything else.
 could be.** That is a different measurement and it is deliberately not in this
 document: the probe run against canonical `my_pa` is transcribed in
 [`postgres-operations.md`](postgres-operations.md), which recorded it at
-`6c4d3ea82f10` against a head of `af3d35efb9c0` — exactly the condition this
-sequence refuses to proceed from.
+`6c4d3ea82f10` against a head of `1a4c9e77b2d5` — re-measured 2026-08-03, and
+exactly the condition this sequence refuses to proceed from.
 
 All commands run from the repository root, with one variable exported for the
 whole sequence:
@@ -38,14 +38,16 @@ supplies it, because an embedded one fails `scram-sha-256` from the host.
 .venv/bin/python apps/cli/health.py
 ```
 
-Observed against the freshly created, unmigrated database — exit `1`:
+**Re-executed 2026-08-03** against a freshly created, unmigrated
+`my_pa_end_to_end_runbook`, because WP-6 moved the head this reports. Observed —
+exit `1`:
 
 ```text
 state            not_at_head
 server_version   17.10 (Debian 17.10-1.pgdg13+1)
 extensions       plpgsql
 revision         none
-head             af3d35efb9c0
+head             1a4c9e77b2d5
 the configured database is not at the migration head and cannot serve this build
 ```
 
@@ -54,7 +56,8 @@ for one several revisions behind. `not_at_head` is a statement about the **build
 and not a diagnosis of any one capability: measured, a database before
 `9c6b4a18ed72`, which creates `knowledge.audit_events`, answers `internal_error`
 to every capability — "the request could not be completed", which names nothing —
-while `9c6b4a18ed72` itself, one revision behind head, serves `capabilities.get`
+while `9c6b4a18ed72` itself, one revision behind head when that was measured and
+two behind `1a4c9e77b2d5` now, serves `capabilities.get`
 and still fails the capability that enrolls a scope (`D-61`, `D-65`, and
 limitation 8 of `docs/operations/mcv-limitations.md`, which names both
 boundaries). An empty database is below both, so step 2 is not optional here.
@@ -65,15 +68,21 @@ boundaries). An empty database is below both, so step 2 is not optional here.
 .venv/bin/alembic upgrade head
 ```
 
-Then probe again. Exit `0`, which is the gate for everything below:
+Then probe again. **Re-executed 2026-08-03.** Exit `0`, which is the gate for
+everything below:
 
 ```text
 state            ready
 server_version   17.10 (Debian 17.10-1.pgdg13+1)
 extensions       pg_trgm, plpgsql, unaccent
-revision         af3d35efb9c0
-head             af3d35efb9c0
+revision         1a4c9e77b2d5
+head             1a4c9e77b2d5
 ```
+
+The eleventh revision, `1a4c9e77b2d5`, creates the five capture tables and the
+trigger that makes a stored capture version append-only, and widens
+`audit_events`' two closed-set constraints to the capture vocabulary by explicit
+`ALTER` (`D-69`).
 
 **Never run this against canonical `my_pa`.** `ops/runbooks/postgres-operations.md`
 states why and what an unset variable does; the canonical database is
@@ -275,7 +284,14 @@ Consequences, stated rather than worked around:
   which no single invocation can do. Through a running gateway or a running MCP
   server they work, because that process holds one principal for its lifetime.
 - `capabilities.get` is the exception and works from the CLI, because it carries
-  no source scope at all (`domain/policy/decision.py`).
+  no source scope at all (`domain/policy/decision.py`). **WP-6 added four more
+  exceptions**: `capture.create`, `capture.revise`, `capture.read` and
+  `capture.list` are scopeless for the same structural reason — a capture is a
+  product-owned record belonging to no configured source — so they too are
+  usable from `apps/cli/invoke.py`. What they do *not* get is continuity: each
+  invocation writes under a new principal, so `capture.list` from the CLI shows
+  captures that other processes own, which is `D-72` and limitation 2 of
+  `docs/operations/mcv-limitations.md` rather than a defect in this sequence.
 - This is not a defect this runbook may fix. Which identity a local principal
   has, and whether it survives a process, is an authentication question, and
   `P00-OD-010` is open and reserved to the operator (`D-30`). It is recorded in

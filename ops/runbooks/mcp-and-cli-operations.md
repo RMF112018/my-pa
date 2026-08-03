@@ -20,7 +20,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all eight capabilities.
+`tests/contract/test_transport_parity.py` holds it over all twelve capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -88,22 +88,39 @@ Only `tools` is declared. There are no resources, no prompts, no sampling, and
 no completion — those handlers are not registered, so a client asking for one
 gets a method-not-found from the SDK rather than an empty list from us.
 
+**Re-executed 2026-08-03 and left as recorded, with one difference named.** The
+`serverInfo` and the declared capability set came back identical. The
+`protocolVersion` did **not**: the installed SDK's client now names
+`2025-11-25` in its `initialize`, and the server answered with that. This
+transcript is a reply to an `initialize` naming `2025-06-18` and stays as it
+was, because rewriting it would record a *different* request's answer under the
+old request's heading. What is unchanged is the part this section is about —
+one declared capability, `tools`, and nothing else.
+
 ## The tool list
 
-`tools/list` returns eight tools whose names are the eight capability names.
-Observed:
+`tools/list` returns twelve tools whose names are the twelve capability names.
+
+**Re-executed 2026-08-03** — a real `stdio_client` spawning
+`.venv/bin/python apps/gateway.py mcp` as a child process, against a disposable
+database at head `1a4c9e77b2d5`. It said "eight tools" until this run, and the
+four that arrived are the reason the paragraph below is worth having. Observed,
+in the order the adapter emits them:
 
 ```text
-capabilities.get  sources.list  sources.metadata  sources.fetch
-sources.status    sources.enroll  knowledge.search  knowledge.read
+capabilities.get  sources.list      sources.metadata  sources.fetch
+sources.status    sources.enroll    knowledge.search  knowledge.read
+capture.create    capture.revise    capture.read      capture.list
 ```
 
 The list is **derived** rather than maintained: the names come from the
 capability enum, each tool's description is its command's own documented
 summary, and each tool's input schema is built from `RequestMetadata` plus the
 fields of the command that capability builds. Nothing about a capability is
-written down in the adapter — a ninth capability appears as a ninth tool with
-the correct schema and nobody edits a list.
+written down in the adapter — a new capability appears as a new tool with
+the correct schema and nobody edits a list. **That claim is now measured rather
+than asserted**: WP-6 added four capabilities and this list grew by four with no
+change to `adapters/mcp`, which is what the re-execution above shows.
 
 Observed description for `sources.list`:
 
@@ -124,8 +141,11 @@ Arguments are the same document the HTTP body carries. Observed for
 ```text
 isError: false
 one text content block: the response envelope's canonical JSON
-result.manifest.capabilities: 8, readiness.state: ready
+result.manifest.capabilities: 12, every one available, readiness.state: ready
 ```
+
+Re-executed 2026-08-03 in the same session as the tool list above. It recorded
+`8` until then.
 
 `isError` is a function of the envelope's own `error` field and of nothing else,
 so a refusal is a tool result rather than a protocol error, and the content
@@ -197,10 +217,12 @@ fields are one JSON object:
   --requested-at 2026-08-02T12:00:00Z
 ```
 
-Observed: exit `0`, and one line of canonical JSON on standard output — the
-response envelope, whose `result.manifest` lists eight capabilities `available`,
-`application/pdf` `decision_gated`, and `readiness.state: ready`. Standard error
-was empty.
+**Re-executed 2026-08-03** against a disposable database at head
+`1a4c9e77b2d5`. Observed: exit `0`, and one line of canonical JSON on standard
+output — the response envelope, whose `result.manifest` lists **twelve**
+capabilities `available`, `application/pdf` `decision_gated`, and
+`readiness.state: ready`. Standard error was empty, measured at zero bytes. It
+read "eight capabilities" until this run.
 
 The full option set is `--request-id`, `--purpose`, `--principal-id`,
 `--requested-at`, `--contract-version`, `--scope-source-id` and

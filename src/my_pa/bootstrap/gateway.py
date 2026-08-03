@@ -73,7 +73,7 @@ selected, because `P00-OD-010` is open and that choice is the operator's.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the eight capabilities.
+the twelve capabilities.
 
 The identifier is issued per process run, so an audit trail identifies a run
 rather than a person. A stable local identity is part of what `P00-OD-010`

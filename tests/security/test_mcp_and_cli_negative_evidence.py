@@ -525,6 +525,7 @@ def test_no_capability_over_either_transport_calls_anything_but_a_read(
     # the non-empty assertion above is the control that says the log records
     # anything in the first place.
     marked.provider.calls.clear()
+    marked.providers.lookups.clear()
     with both(service, marked.principal) as transports:
         for transport in transports:
             for capability in sorted(CAPTURE_CAPABILITIES, key=lambda c: c.value):
@@ -534,8 +535,13 @@ def test_no_capability_over_either_transport_calls_anything_but_a_read(
                 )
                 assert_clean(answer.rendered, marked_root, f"{transport.name} {capability.value}")
     assert marked.provider.calls == [], (
-        "a capture capability reached the source provider; capture is a "
+        "a capture capability called a source provider; capture is a "
         "product-owned record and reads no source"
+    )
+    assert marked.providers.lookups == [], (
+        "a capture capability resolved a source provider. Nothing was called on "
+        "it, which is why the assertion above stays green — and reaching for a "
+        "source at all is what ADR-003 clause 5 refuses"
     )
 
 

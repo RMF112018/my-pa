@@ -606,12 +606,22 @@ class RecordingProvider(SourceProvider):
 
 
 class FakeProviders(SourceProviders):
-    """The lookup from a source identity to the adapter serving it."""
+    """The lookup from a source identity to the adapter serving it.
+
+    `lookups` records every identifier a use case *asked* about, which is one
+    step earlier than `RecordingProvider.calls`. The distinction matters for the
+    capture plane: a capture path that resolved a provider and then called
+    nothing on it would leave `calls` empty and would still have reached for a
+    source, and `ADR-003` clause 5 is a claim about reaching rather than about
+    what was reached for.
+    """
 
     def __init__(self, providers: dict[str, SourceProvider] | None = None) -> None:
         self.providers: dict[str, SourceProvider] = providers or {}
+        self.lookups: list[str] = []
 
     def for_source(self, source_id: str) -> SourceProvider | None:
+        self.lookups.append(source_id)
         return self.providers.get(source_id)
 
 

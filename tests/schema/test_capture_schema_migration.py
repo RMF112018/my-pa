@@ -11,7 +11,7 @@ explicit `ALTER` here. What that costs is the coupling, and `tables.py:134-140`
 is the precedent for what replaces it: **a restatement is acceptable when it is
 a checked claim rather than a copy that can drift.** These are the checks.
 
-Four claims, separated because they fail for different reasons.
+Six claims, separated because they fail for different reasons.
 
 **The revision is in the chain.** Deliberately not "is the head", for the reason
 `test_audit_schema_migration.py:147-158` records: that property is true only
@@ -33,11 +33,20 @@ and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
 **Head admits exactly the domain's vocabulary.** The checked claim that replaces
-the coupling. It compares the stored constraint against
-`{c.value for c in Capability}` and `{p.value for p in Purpose}`, so a capability
-added without an `ALTER` — the failure `D-69` exists to prevent, and the one no
-existing test could catch because every test builds its database from scratch —
-fails here.
+the coupling — and it covers **all eleven** enum-backed closed sets the chain
+emits, not the two WP-6 widened. Checking `capability` and `purpose` alone, which
+is where the first pass left it, replaced the coupling on two constraints and
+replaced it with nothing on the other nine: `audit_outcome_is_known` and
+`denial_reason_is_known` sit on the same table in the same revision, and the
+independent reviewer measured a planted `DenialReason` member changing what that
+already-merged revision emits with nothing reddening anywhere. A member added
+without an `ALTER` — the failure `D-69` exists to prevent, and the one no other
+test could catch because every test builds its database from scratch — now fails
+here for any of them.
+
+**The two nullable error-code sets.** `jobs.last_error_code` and
+`capture_jobs.last_error_code` are `... IS NULL OR ... IN (…)`, so they need
+their own read; they track the eleven public `v1` codes.
 
 The database is disposable, created and dropped by its fixture, and never the
 configured one: `downgrade base` deletes schemas, and pointing that at the
@@ -60,9 +69,21 @@ from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.domain.audit.events import AuditOutcome
+from my_pa.domain.capture.submission import (
+    AdmissionResult,
+    CaptureMethod,
+    CaptureTransport,
+    TrustState,
+)
+from my_pa.domain.capture.version import ProcessingPolicy
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.policy.decision import DenialReason
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.tables import JobState
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -118,6 +139,25 @@ FROZEN_PURPOSES: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: The other two closed sets `9c6b4a18ed72` emits. Unchanged since it merged, so
+#: these are equal to the live enums today — which is exactly why they were the
+#: two the first pass at this freeze left derived, and why the strict-subset
+#: guard below cannot be extended to them. They are held by
+#: `test_no_revision_derives_a_closed_set_from_an_enum.py`, which reads the
+#: revision's frozen declaration structurally rather than by value.
+FROZEN_AUDIT_OUTCOMES: Final[frozenset[str]] = frozenset({"allowed", "denied", "failed"})
+
+FROZEN_DENIAL_REASONS: Final[frozenset[str]] = frozenset(
+    {
+        "destination_not_eligible",
+        "operator_required",
+        "principal_may_not_hold_authority",
+        "principal_not_authenticated",
+        "purpose_not_permitted_for_capability",
+        "scope_not_authorized",
+    }
+)
+
 #: The function and the trigger that make `capture_versions` append only.
 IMMUTABILITY_FUNCTION = "capture_versions_stay_as_written"
 IMMUTABILITY_TRIGGER = "capture_versions_are_append_only"
@@ -126,7 +166,50 @@ _CONSTRAINT = text(
     "SELECT pg_get_constraintdef(con.oid) FROM pg_constraint con "
     "JOIN pg_class rel ON rel.oid = con.conrelid "
     "JOIN pg_namespace n ON n.oid = rel.relnamespace "
-    "WHERE n.nspname = :schema AND rel.relname = 'audit_events' AND con.conname = :name"
+    "WHERE n.nspname = :schema AND rel.relname = :table AND con.conname = :name"
+)
+
+#: Every closed-set constraint this chain emits from a declaration that a domain
+#: enum also feeds, with the enum head must agree with. Checking two of these —
+#: which is where the first pass left it — replaced the enum-to-CHECK coupling on
+#: `capability` and `purpose` and replaced it with *nothing* on the other ten.
+#: `audit_outcome_is_known` and `denial_reason_is_known` were the two the
+#: independent reviewer measured as still live; the eight on the capture tables
+#: are this package's own, and are frozen in `1a4c9e77b2d5` for the same reason.
+#:
+#: The `last_error_code` constraints are excluded deliberately: their column is
+#: nullable, so `_admitted` cannot read a bare value set out of
+#: `last_error_code IS NULL OR last_error_code IN (…)` without also parsing the
+#: null branch. `test_the_public_error_codes_are_admitted_at_head` below covers
+#: them by asking the server directly instead.
+CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
+    ("audit_events", "capability_is_known", frozenset(c.value for c in Capability)),
+    ("audit_events", "purpose_is_known", frozenset(p.value for p in Purpose)),
+    ("audit_events", "audit_outcome_is_known", frozenset(o.value for o in AuditOutcome)),
+    ("audit_events", "denial_reason_is_known", frozenset(d.value for d in DenialReason)),
+    (
+        "capture_versions",
+        "capture_classification_is_known",
+        frozenset(c.value for c in Classification),
+    ),
+    (
+        "capture_versions",
+        "processing_policy_is_known",
+        frozenset(p.value for p in ProcessingPolicy),
+    ),
+    (
+        "capture_submissions",
+        "capture_transport_is_known",
+        frozenset(t.value for t in CaptureTransport),
+    ),
+    ("capture_submissions", "capture_method_is_known", frozenset(m.value for m in CaptureMethod)),
+    ("capture_submissions", "capture_trust_state_is_known", frozenset(t.value for t in TrustState)),
+    (
+        "capture_submissions",
+        "admission_result_is_known",
+        frozenset(a.value for a in AdmissionResult),
+    ),
+    ("capture_jobs", "capture_job_state_is_known", frozenset(s.value for s in JobState)),
 )
 
 
@@ -181,8 +264,8 @@ def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         maintenance.dispose()
 
 
-def _admitted(engine: Engine, constraint: str) -> frozenset[str]:
-    """The values one closed-set constraint on `audit_events` admits.
+def _admitted(engine: Engine, constraint: str, table: str = "audit_events") -> frozenset[str]:
+    """The values one closed-set constraint admits.
 
     Read out of the *server* rather than out of the revision, and parsed from
     `pg_get_constraintdef`, so this is what a row would actually be checked
@@ -190,7 +273,7 @@ def _admitted(engine: Engine, constraint: str) -> frozenset[str]:
     """
     with engine.connect() as connection:
         definition = connection.execute(
-            _CONSTRAINT, {"schema": SCHEMA, "name": constraint}
+            _CONSTRAINT, {"schema": SCHEMA, "table": table, "name": constraint}
         ).scalar_one()
     return frozenset(re.findall(r"'([^']+)'::text", str(definition)))
 
@@ -226,9 +309,17 @@ def test_stopping_at_the_audit_revision_emits_the_frozen_vocabulary(
 
         assert _admitted(engine, "capability_is_known") == FROZEN_CAPABILITIES
         assert _admitted(engine, "purpose_is_known") == FROZEN_PURPOSES
-        # The control: the capture tables do not exist yet, so the two sets above
-        # are the state of a database that stopped short of this package rather
-        # than one that ran it and was then narrowed.
+        # The other two closed sets on the same table, in the same revision.
+        # These are the ones the independent reviewer measured as still derived
+        # after the first pass at this freeze: a planted `DenialReason` member
+        # changed what an already-merged revision emitted, and nothing reddened.
+        # They are frozen literals now, and this is what says so against a
+        # server rather than against the file that wrote them.
+        assert _admitted(engine, "audit_outcome_is_known") == FROZEN_AUDIT_OUTCOMES
+        assert _admitted(engine, "denial_reason_is_known") == FROZEN_DENIAL_REASONS
+        # The control: the capture tables do not exist yet, so the four sets
+        # above are the state of a database that stopped short of this package
+        # rather than one that ran it and was then narrowed.
         assert not CAPTURE_TABLES & _tables(engine)
 
         command.downgrade(_config(), "base")
@@ -252,8 +343,43 @@ def test_head_admits_exactly_the_vocabulary_the_domain_declares(
     try:
         command.upgrade(_config(), "head")
 
-        assert _admitted(engine, "capability_is_known") == {c.value for c in Capability}
-        assert _admitted(engine, "purpose_is_known") == {p.value for p in Purpose}
+        for table, constraint, expected in CHECKED_VOCABULARY:
+            assert _admitted(engine, constraint, table) == expected, f"{table}.{constraint}"
+        # The control, in the same test: the four `audit_events` sets are not all
+        # equal to each other, so eleven passing equalities cannot be one
+        # equality repeated eleven times against a `_admitted` that returned the
+        # same thing every time.
+        assert len({values for _, _, values in CHECKED_VOCABULARY}) >= 8
+
+        command.downgrade(_config(), "base")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_the_public_error_codes_are_admitted_at_head(
+    disposable_database: str,
+) -> None:
+    """The two nullable closed sets, which `_admitted` cannot read plainly.
+
+    `jobs.last_error_code` and `capture_jobs.last_error_code` are constrained by
+    `... IS NULL OR ... IN (…)`, and both track `ErrorCode`. The capture one is
+    frozen in `1a4c9e77b2d5`; the `jobs` one is `D-81` allowlist row 5, still
+    derived and deliberately not edited here. Both must admit the eleven public
+    codes at head, and this asserts it against the server so that a twelfth code
+    added without a migration is caught rather than assumed.
+    """
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), "head")
+
+        codes = {code.value for code in ErrorCode}
+        assert len(codes) == 11
+        assert _admitted(engine, "last_error_code_is_a_public_error_code", "jobs") == codes
+        assert (
+            _admitted(engine, "capture_job_error_code_is_a_public_error_code", "capture_jobs")
+            == codes
+        )
 
         command.downgrade(_config(), "base")
     finally:

@@ -1,10 +1,10 @@
 """The `SourceProviders` lookup of a build whose sources are rows.
 
-`bootstrap.gateway` answers `None` for every source because nothing registers
-one, and says so rather than wiring a fixture root it would have invented. This
-is the other half of that sentence: once an operator has registered a source by
-exact path, the lookup that serves it is a read of `knowledge.sources` and not a
-constant.
+`bootstrap.gateway` used to answer `None` for every source, because nothing
+registered one and it would not wire a fixture root it had invented. This module
+is what replaced that: once an operator has registered a source by exact path,
+the lookup that serves it is a read of `knowledge.sources` and not a constant,
+and `None` now means only that no row names the source asked for.
 
 **There is no default root and no configured path anywhere in this module.** A
 source is served exactly when a row says so, and the row exists exactly when an

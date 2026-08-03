@@ -71,7 +71,7 @@ client's first read, before `initialize` has been answered.
 
 ```text
 serving     mcp on stdio as my-pa
-notice      no source provider is configured; sources.list, sources.metadata and sources.fetch answer 'unavailable' until a source is registered and a root authorized
+notice      sources.list, sources.metadata and sources.fetch answer 'unavailable' for every source no operator has registered; registration names the source's root by exact path, and this process configures none
 ```
 
 ## The handshake

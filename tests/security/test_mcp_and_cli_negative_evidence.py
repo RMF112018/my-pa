@@ -496,6 +496,30 @@ def test_no_capability_over_either_transport_calls_anything_but_a_read(
     The port has no mutating method to call — `tests/policy` asserts that from
     the surface — so this is the other end of the same claim: what actually ran
     was three read-only methods and nothing else.
+
+    **Every capture request is asserted to have succeeded**, and that is not
+    decoration. The independent reviewer measured this test with
+    `_capture_create` raising on every call: `capture.create` answered
+    `internal_error` four times and the test passed, because "no provider was
+    touched" is trivially true of a request that failed before reaching
+    anything. This test carries the replacement property for the name check
+    `D-71`/`D-80` narrowed, so a version of it that proves nothing about a broken
+    `capture.create` is the vacuous-guard shape `D-80` already records this exact
+    test nearly having. Three other modules assert `200`, so a broken
+    `capture.create` could not in fact have shipped — but the guarantee has to be
+    here, where the exemption rests.
+
+    **Success is asserted for the capture family only, and the asymmetry is the
+    point.** For a source capability the non-vacuity control is
+    `assert marked.provider.calls` — reads demonstrably happened, so "only reads"
+    is a claim about something that ran. For capture the claim is that the
+    provider was reached **zero** times, and a zero has no such control: it is
+    satisfied equally by "capture reads no source" and by "capture is broken".
+    That is exactly the shape the worker rules name — a zero is meaningless
+    without a non-zero beside it — and here the non-zero is the successful
+    answer. The scene deliberately holds two enrollments covering one scope, so
+    `sources.list` answers `ambiguous_request` by design; asserting blanket
+    success would assert the scene is something other than what it is.
     """
     record = staged_record(marked, text=MARKER_CONTENT)
     marked.world.searches[marked.enrollment.enrollment_id] = staged_search(marked)
@@ -509,11 +533,14 @@ def test_no_capability_over_either_transport_calls_anything_but_a_read(
     with both(service, marked.principal) as transports:
         for transport in transports:
             for capability, payload in payloads.items():
+                where = f"{transport.name} {capability.value}"
                 answer = transport.send(
                     capability.value,
                     document(capability, marked.principal.principal_id, payload),
                 )
-                assert_clean(answer.rendered, marked_root, f"{transport.name} {capability.value}")
+                if capability in CAPTURE_CAPABILITIES:
+                    assert not answer.failed, f"{where} failed: {answer.rendered}"
+                assert_clean(answer.rendered, marked_root, where)
     assert set(marked.provider.calls) <= {"list_children", "metadata", "fetch"}
     assert marked.provider.calls, "no capability touched the provider at all"
 
@@ -529,11 +556,16 @@ def test_no_capability_over_either_transport_calls_anything_but_a_read(
     with both(service, marked.principal) as transports:
         for transport in transports:
             for capability in sorted(CAPTURE_CAPABILITIES, key=lambda c: c.value):
+                where = f"{transport.name} {capability.value}"
                 answer = transport.send(
                     capability.value,
                     document(capability, marked.principal.principal_id, payloads[capability]),
                 )
-                assert_clean(answer.rendered, marked_root, f"{transport.name} {capability.value}")
+                # The assertion the reviewer measured as missing. Without it
+                # "capture touched no provider" is satisfied by capture not
+                # working, which is the opposite of what the exemption claims.
+                assert not answer.failed, f"{where} failed: {answer.rendered}"
+                assert_clean(answer.rendered, marked_root, where)
     assert marked.provider.calls == [], (
         "a capture capability called a source provider; capture is a "
         "product-owned record and reads no source"

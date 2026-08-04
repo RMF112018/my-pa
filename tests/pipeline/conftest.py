@@ -22,7 +22,7 @@ from __future__ import annotations
 import io
 import os
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -175,22 +175,3 @@ def drain(
         max_iterations=jobs,
         poll_seconds=0.01,
     )
-
-
-def failing_after(
-    stop_before: Callable[[], None], *, inner: JobHandler = process_capture_version
-) -> JobHandler:
-    """A handler that runs the real pipeline and then raises.
-
-    Used where the subject is what a *failure* leaves behind. `stop_before` is
-    called first so a test can decide the instant; the pipeline then runs, and
-    the raise happens after it — which is the only way to have both the rows the
-    pipeline wrote and an attempt that ended badly.
-    """
-
-    def handler(engine: Engine, job: object, owner: str) -> None:
-        stop_before()
-        inner(engine, job, owner)  # type: ignore[arg-type]
-        raise RuntimeError("the attempt failed after the pipeline ran")
-
-    return handler

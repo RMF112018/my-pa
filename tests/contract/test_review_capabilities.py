@@ -75,6 +75,39 @@ def test_review_decision_appends_and_a_stale_expected_version_conflicts(scene: S
     assert len(scene.world.review_decisions) == 1
 
 
+def test_acceptance_is_terminal_at_the_application_port(scene: Scene) -> None:
+    case = staged_review_case(scene)
+    accepted = _invoke(
+        scene,
+        Capability.REVIEW_DECIDE,
+        DecideReviewCase(
+            review_case_id=case.review_case_id,
+            expected_review_version=0,
+            disposition=Disposition.ACCEPT,
+        ),
+    )
+    assert accepted.error is None
+    assert accepted.result is not None
+    assertion_id = accepted.result["assertion_id"]
+    receipt_id = accepted.result["receipt_id"]
+
+    refused = _invoke(
+        scene,
+        Capability.REVIEW_DECIDE,
+        DecideReviewCase(
+            review_case_id=case.review_case_id,
+            expected_review_version=1,
+            disposition=Disposition.REJECT,
+        ),
+    )
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.CONFLICT
+    assert len(scene.world.review_decisions) == 1
+    decision = scene.world.review_decisions[0]
+    assert decision.assertion_id == assertion_id
+    assert decision.receipt_id == receipt_id
+
+
 def test_review_decide_distinguishes_absence_from_invalid_evidence(scene: Scene) -> None:
     answer = _invoke(
         scene,

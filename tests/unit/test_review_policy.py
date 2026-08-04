@@ -8,7 +8,12 @@ import pytest
 
 from my_pa.application.commands import DecideReviewCase
 from my_pa.application.errors import InvalidRequestError
-from my_pa.domain.capture.proposal import ProposalType, RiskClass
+from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.domain.capture.proposal import (
+    MAX_NORMALIZED_VALUE_CHARACTERS,
+    ProposalType,
+    RiskClass,
+)
 from my_pa.domain.capture.review import (
     ConsequentialClass,
     Disposition,
@@ -50,8 +55,13 @@ def test_low_risk_technical_enrichment_does_not_create_mandatory_review_burden()
     assert not routes_to_review(ProposalType.FOLLOW_UP, RiskClass.LOW)
 
 
-def test_direct_promotion_is_refused_before_any_store_is_read() -> None:
-    """No caller can turn a proposal canonical without an accepting decision."""
+def test_direct_promotion_global_guard_is_refused_before_any_store_is_read() -> None:
+    """No proposal can become canonical without an accepting decision.
+
+    Promotion accepts a proposal identifier, not a `ConsequentialClass`; the
+    class gate is exhaustively proved above, while this independent global guard
+    closes the only canonical writer before it can inspect any proposal class.
+    """
     with pytest.raises(ReviewRequiredError, match="requires a review disposition"):
         promote_proposal(
             None,  # type: ignore[arg-type] - refusal precedes persistence by contract
@@ -79,3 +89,85 @@ def test_only_correction_may_carry_a_corrected_value() -> None:
             disposition=Disposition.REJECT,
             corrected_value="synthetic correction",
         )
+
+
+def _port_correction(value: str) -> ReviewDecisionRequest:
+    return ReviewDecisionRequest(
+        review_case_id="rvw_wp8reviewcase01",
+        expected_review_version=0,
+        disposition=Disposition.CORRECT_AND_ACCEPT,
+        principal_id="prn_wp8principal001",
+        correlation_id="corr_wp8correlate01",
+        audit_id="audit_wp8audit00001",
+        policy_version="policy-v1",
+        decided_at=datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+        corrected_value=value,
+    )
+
+
+def test_corrected_value_bound_is_identical_at_command_and_port_boundaries() -> None:
+    maximum = "x" * MAX_NORMALIZED_VALUE_CHARACTERS
+    command = DecideReviewCase(
+        review_case_id="rvw_wp8reviewcase01",
+        expected_review_version=0,
+        disposition=Disposition.CORRECT_AND_ACCEPT,
+        corrected_value=maximum,
+    )
+    request = _port_correction(maximum)
+    assert command.corrected_value == request.corrected_value == maximum
+
+    too_long = "x" * (MAX_NORMALIZED_VALUE_CHARACTERS + 1)
+    with pytest.raises(InvalidRequestError):
+        DecideReviewCase(
+            review_case_id="rvw_wp8reviewcase01",
+            expected_review_version=0,
+            disposition=Disposition.CORRECT_AND_ACCEPT,
+            corrected_value=too_long,
+        )
+    with pytest.raises(ValueError, match="bounded"):
+        _port_correction(too_long)
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t\n"])
+def test_command_and_port_correction_refuse_blank_values(blank: str) -> None:
+    with pytest.raises(InvalidRequestError):
+        DecideReviewCase(
+            review_case_id="rvw_wp8reviewcase01",
+            expected_review_version=0,
+            disposition=Disposition.CORRECT_AND_ACCEPT,
+            corrected_value=blank,
+        )
+    with pytest.raises(ValueError, match="not blank"):
+        _port_correction(blank)
+
+
+def test_corrected_content_is_absent_from_representations_and_safe_errors() -> None:
+    marker = "PRIVATE-CORRECTION-MARKER"
+    allowed = marker + "x" * (MAX_NORMALIZED_VALUE_CHARACTERS - len(marker))
+    assert marker not in repr(
+        DecideReviewCase(
+            review_case_id="rvw_wp8reviewcase01",
+            expected_review_version=0,
+            disposition=Disposition.CORRECT_AND_ACCEPT,
+            corrected_value=allowed,
+        )
+    )
+    assert marker not in repr(_port_correction(allowed))
+
+    refused = marker + "x" * MAX_NORMALIZED_VALUE_CHARACTERS
+    failures: list[BaseException] = []
+    with pytest.raises(InvalidRequestError) as command_error:
+        DecideReviewCase(
+            review_case_id="rvw_wp8reviewcase01",
+            expected_review_version=0,
+            disposition=Disposition.CORRECT_AND_ACCEPT,
+            corrected_value=refused,
+        )
+    failures.append(command_error.value)
+    with pytest.raises(ValueError) as port_error:
+        _port_correction(refused)
+    failures.append(port_error.value)
+
+    for failure in failures:
+        rendered = f"{failure!r} {failure.args} {failure.__cause__} {failure.__context__}"
+        assert marker not in rendered

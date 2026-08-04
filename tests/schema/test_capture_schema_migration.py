@@ -693,11 +693,13 @@ def test_stopping_at_the_capture_revision_emits_the_twelve_it_merged_with(
         assert _admitted(engine, "capability_is_known") == admitted_at_head
         assert _tables(engine) >= PROPOSAL_TABLES
         # The two vocabularies differ by exactly the capability WP-7 added and
-        # the two `3c8f1e2a5b74` admits ahead of the domain, so the equality
-        # above is a measurement rather than a tautology.
+        # the two WP-8 capabilities widened by `3c8f1e2a5b74`, so the equality
+        # above is a measurement rather than a tautology. The schema-ahead gap
+        # is empty now that WP-8 has declared both names in the domain.
         assert admitted_at_head - CAPABILITIES_AT_THE_CAPTURE_REVISION == {
             "capture.search",
-            *CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN,
+            "review.decide",
+            "review.list",
         }
 
         command.downgrade(_config(), "base")

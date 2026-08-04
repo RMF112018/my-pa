@@ -62,6 +62,14 @@ from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.policy.decision import validate_policy_version
+from my_pa.domain.relationship.identity import (
+    IdentityCandidateSet,
+    IdentityObservation,
+    IdentityResolution,
+    ResolutionAction,
+    UnresolvedMention,
+)
+from my_pa.domain.relationship.profile import OrganizationProfile, PersonProfile
 from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.provider import SourceProvider
@@ -84,6 +92,7 @@ __all__ = [
     "Operation",
     "OperationQueue",
     "PortError",
+    "RelationshipRepository",
     "RepositoryFailureError",
     "ReviewDecisionRequest",
     "ReviewRepository",
@@ -93,6 +102,89 @@ __all__ = [
     "UnitOfWork",
     "UnknownScopeError",
 ]
+
+
+class RelationshipRepository(ABC):
+    """The governed identity writer and deterministic profile reader.
+
+    There is intentionally no `create_person`, `link_observation`, or `merge`
+    method. Canonical state enters only through `apply_resolution`, with the
+    exact accepted identity-review decision carried in the resolution value.
+    """
+
+    @abstractmethod
+    def record_observations(
+        self, domain: str, observations: tuple[IdentityObservation, ...]
+    ) -> int:
+        """Idempotently retain source rows as observations, never people."""
+
+    @abstractmethod
+    def open_identity_review(
+        self,
+        candidates: IdentityCandidateSet,
+        action: ResolutionAction,
+        *,
+        retained_person_id: str | None = None,
+        prior_person_id: str | None = None,
+    ) -> str:
+        """Open one review over an explicit candidate set."""
+
+    @abstractmethod
+    def decide_identity_review(
+        self,
+        review_case_id: str,
+        *,
+        disposition: str,
+        principal_id: str,
+        decided_at: datetime,
+    ) -> str:
+        """Append an accept, reject, or defer decision."""
+
+    @abstractmethod
+    def apply_resolution(self, resolution: IdentityResolution, *, display_name: str) -> None:
+        """Apply only the exact accepted review, preserving reversible lineage."""
+
+    @abstractmethod
+    def direct_merge(self, retained_person_id: str, prior_person_id: str) -> None:
+        """Always deny before persistence; present to make the denial test non-vacuous."""
+
+    @abstractmethod
+    def profile(self, person_id: str, *, expected_domains: tuple[str, ...]) -> PersonProfile | None:
+        """Build a cited profile and timeline over its exact observation set."""
+
+    @abstractmethod
+    def organization_profile(self, organization_id: str) -> OrganizationProfile | None:
+        """Read time-aware affiliations and their exact observations."""
+
+    @abstractmethod
+    def record_source_affiliation(
+        self,
+        *,
+        organization_id: str,
+        organization_name: str,
+        affiliation_id: str,
+        person_id: str,
+        observation_id: str,
+        role: str | None,
+        effective_from: datetime | None,
+        effective_to: datetime | None,
+    ) -> None:
+        """Create organization context only from a governed, linked observation."""
+
+    @abstractmethod
+    def record_unresolved_mention(self, mention: UnresolvedMention) -> None:
+        """Retain one source-bound unresolved identity without raw mention text."""
+
+    @abstractmethod
+    def attach_conversation_participant(
+        self,
+        conversation_id: str,
+        *,
+        person_id: str | None = None,
+        unresolved_mention_id: str | None = None,
+        observation_ids: tuple[str, ...] = (),
+    ) -> str:
+        """Attach exactly one resolved or unresolved target and exact support."""
 
 
 class PortError(Exception):

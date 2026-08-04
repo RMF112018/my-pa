@@ -271,6 +271,7 @@ RELATIONSHIP_TRIGGERS: Final[frozenset[str]] = frozenset(
         "identity_review_requires_candidates",
         "identity_resolution_requires_review",
         "identity_resolution_requires_exact_observations",
+        "zz_identity_corrections_require_complete_final_state",
         "canonical_person_requires_resolution",
         "person_merge_requires_resolution",
         "observation_link_requires_current_resolution",

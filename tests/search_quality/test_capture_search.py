@@ -98,6 +98,58 @@ def test_a_stemmed_variant_does_not_match_and_the_exact_word_does(engine: Engine
     )
 
 
+def test_a_capitalised_word_is_found_by_the_lower_case_query_the_index_matches(
+    engine: Engine,
+) -> None:
+    """The two halves of the predicate agree about case, and once they did not.
+
+    Measured on this server: `to_tsvector('simple','Buyout review') @@
+    websearch_to_tsquery('simple','buyout')` is true, because `simple`
+    lowercases every lexeme, while `strpos('Buyout review','buyout') > 0` is
+    false, because it compares bytes. The first version of the exact-substring
+    confirmation used the unfolded form, so a single-term query silently removed
+    a row the index had correctly matched — `QC-AC-050` false for every
+    capitalised word in a note, with no exception anywhere.
+
+    Both directions are asserted, because a confirmation that agreed by never
+    filtering anything would pass the first alone: the capitalised query finds
+    it too, and a word the note does not contain still finds nothing.
+
+    The server's own answers are asserted beside them, so this test says *why*
+    the two must agree rather than only that they do.
+    """
+    with engine.begin() as connection:
+        saved = save(connection, "Buyout review scheduled.")
+
+    with engine.connect() as connection:
+        indexed = connection.execute(
+            text("SELECT to_tsvector('simple', :body) @@ websearch_to_tsquery('simple', :needle)"),
+            {"body": "Buyout review scheduled.", "needle": "buyout"},
+        ).scalar_one()
+        literal = connection.execute(
+            text("SELECT strpos(:body, :needle) > 0"),
+            {"body": "Buyout review scheduled.", "needle": "buyout"},
+        ).scalar_one()
+    assert indexed is True and literal is False, (
+        "the indexed predicate and an unfolded `strpos` no longer disagree about "
+        "case, so the divergence this test guards has moved and needs re-measuring"
+    )
+
+    assert _find(engine, "buyout") == (saved.version_id,), (
+        "a capture whose text says `Buyout` was not found by `buyout`, which the "
+        "index does match. The exact-substring confirmation is removing a correct "
+        "row, which is a silent narrowing rather than an exactness"
+    )
+    assert _find(engine, "Buyout") == (saved.version_id,), (
+        "the capitalised query did not find it either, so the assertion above is "
+        "about a broken plane rather than about case folding"
+    )
+    assert _find(engine, "buyoutx") == (), (
+        "a word the note does not contain was found, so the confirmation filters "
+        "nothing and the agreement above is agreement by absence"
+    )
+
+
 def test_a_capture_whose_extraction_failed_is_still_searchable(
     engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:

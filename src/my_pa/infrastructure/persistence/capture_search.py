@@ -287,11 +287,32 @@ def _exact_confirmation(
     Returned as a tuple of zero or one conditions rather than as an `if` at the
     call site, so the statement below is one statement with one `where` however
     the query is shaped.
+
+    **Both sides are case-folded, and the first version of this was not.**
+    Measured on a live server: `to_tsvector('simple','Buyout review') @@
+    websearch_to_tsquery('simple','buyout')` is **true** — `simple` lowercases
+    every lexeme — while `strpos('Buyout review','buyout') > 0` is **false**,
+    because `strpos` compares bytes. A confirmation is only a confirmation if it
+    agrees with the predicate it confirms; that one *disagreed*, and it
+    disagreed in the direction that removes a correct match with no exception
+    anywhere. A capture whose text says `Buyout` was then unfindable by
+    `buyout`, which is the silent narrowing this whole plane exists to refuse
+    and which falsifies `QC-AC-050` for every capitalised word in a note.
+
+    Folding here rather than dropping the confirmation, because the confirmation
+    is what makes `RFI-0421` and `$12,500.00` exact at character granularity —
+    the parser splits both, so the indexed predicate matches them as adjacent
+    lexemes rather than as the literal string. `lower` on the column is not an
+    index concern: this condition runs after the indexed predicate has narrowed
+    the page, never instead of it.
     """
     if not _is_single_term(request):
         return ()
     return (
-        func.strpos(plane.text_column, bindparam("capture_search_needle", value=request.query.text))
+        func.strpos(
+            func.lower(plane.text_column),
+            func.lower(bindparam("capture_search_needle", value=request.query.text)),
+        )
         > 0,
     )
 

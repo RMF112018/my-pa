@@ -19,6 +19,8 @@ from my_pa.domain.relationship.profile import (
     OrganizationProfile,
     PersonProfile,
     ProfileIndicator,
+    ProfileIndicatorBasis,
+    ProfileIndicatorName,
     RelationshipFreshness,
     TimelineItem,
 )
@@ -39,6 +41,8 @@ __all__ = [
     "Person",
     "PersonProfile",
     "ProfileIndicator",
+    "ProfileIndicatorBasis",
+    "ProfileIndicatorName",
     "RelationshipFreshness",
     "TimelineItem",
     "UnresolvedMention",

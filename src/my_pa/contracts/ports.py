@@ -43,7 +43,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
 from types import TracebackType
@@ -51,6 +51,7 @@ from types import TracebackType
 from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
+from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
 from my_pa.domain.capture.review import Disposition, ReviewCase, ReviewDecision
 from my_pa.domain.capture.submission import CaptureKind, CaptureReceipt
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
@@ -438,7 +439,7 @@ class ReviewDecisionRequest:
     audit_id: str
     policy_version: str
     decided_at: datetime
-    corrected_value: str | None = None
+    corrected_value: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
@@ -454,6 +455,11 @@ class ReviewDecisionRequest:
         corrected = self.disposition is Disposition.CORRECT_AND_ACCEPT
         if corrected is not (self.corrected_value is not None):
             raise ValueError("a correction value belongs only to correct-and-accept")
+        if self.corrected_value is not None and (
+            not self.corrected_value.strip()
+            or len(self.corrected_value) > MAX_NORMALIZED_VALUE_CHARACTERS
+        ):
+            raise ValueError("a correction value is bounded and not blank")
 
 
 class ReviewRepository(ABC):

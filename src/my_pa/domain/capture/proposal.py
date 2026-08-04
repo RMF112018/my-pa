@@ -12,13 +12,13 @@ representable.
 `09_LOGICAL_DATA_MODEL.md:154`. The canonical set is the superset — it adds
 `needs_review` and `unresolved` — so taking it loses nothing, and
 `docs/plans/mcv-completion-plan.md:920` already rules canonical over
-quick-capture for state vocabularies. **This build can reach two of the nine**:
-`proposed`, and `invalidated` when a cited span no longer re-derives. The other
-seven need acceptance, review routing, or identity resolution, none of which
-exists here. They are declared rather than omitted because the set is the
-canonical vocabulary of one object, not a list of what this package happens to
-write, and a later package that reaches one of them must not have to widen a
-frozen constraint to say so.
+quick-capture for state vocabularies. **This build reaches eight of the nine**:
+`proposed` on derivation; `needs_review` on governed routing; `accepted` or
+`corrected_accepted` on promotion; `rejected`, `deferred`, or `unresolved` on a
+reachable review disposition; and `invalidated` when cited evidence no longer
+re-derives. `superseded` has no writer in this build. It remains declared because
+this is the canonical vocabulary of the object, not only the states this package
+happens to write.
 
 **One method, and the reason is `D-78`'s.** `09_LOGICAL_DATA_MODEL.md:157` names
 five (deterministic rule, resolver, local model, cloud model, hybrid). Four of
@@ -95,7 +95,7 @@ class ProposalType(StrEnum):
 
 
 class ProposalState(StrEnum):
-    """The canonical nine (`09_CANONICAL_…:94`). Two are reachable here."""
+    """The canonical nine (`09_CANONICAL_…:94`). Eight are reachable here."""
 
     PROPOSED = "proposed"
     NEEDS_REVIEW = "needs_review"

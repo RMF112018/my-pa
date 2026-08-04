@@ -14,6 +14,17 @@ still there. `D-55` is why the second half is not optional — "stage *k+1* wrot
 nothing" is satisfied by a pipeline that wrote nothing at all, so without the
 control the plant fails both ends of the bridge and distinguishes neither.
 
+**The criterion's "or accepted objects" clause is vacuous here, and that is
+disclosed rather than claimed** (`D-89`). `20_…:209` reads "Crash/lease recovery
+does not duplicate proposals **or accepted objects**", and no accepted object
+exists in this build — `Proposal.accepted_record_type` and `accepted_record_id`
+are the forward reference `09_…:162` names, nothing writes them, and nothing sets
+`ProposalState.ACCEPTED`. The lease proof below therefore covers proposals and is
+silent about the other half, which WP-8 makes falsifiable. Said here as well as
+in `tests/pipeline/test_stage_replay.py` because this criterion is proved across
+two modules and a disclosure present in one of them is the asymmetry a reader
+trusts wrongly.
+
 **`QC-AC-034`, "processing failure never loses the source capture".** The failure
 is injected inside `P-15`'s transaction, **after** the proposal `INSERT` and
 before the commit, because that is the only instant at which rows exist and are

@@ -372,10 +372,13 @@ class CaptureRepository(ABC):
     def search(self, request: CaptureSearchRequest) -> CaptureSearchOutcome:
         """One bounded page of capture versions whose stored text matched.
 
-        Exact at word granularity and, for a single-term query, at character
-        granularity: the plane is indexed with the `simple` text-search
-        configuration, which neither stems nor drops stop words, because
-        `QC-AC-050` asks for *exact* original text to be searchable. The cost —
+        Exact at word granularity always, and at character granularity where
+        the server reports the query as one contiguous run of text: the plane is
+        indexed with the `simple` text-search configuration, which neither stems
+        nor drops stop words, because `QC-AC-050` asks for *exact* original text
+        to be searchable. Which queries get the character-granularity pass is
+        decided by PostgreSQL and not by this contract, so a caller's quoting or
+        punctuation never removes a capture the index matched. The cost —
         `meetings` does not find `meeting` — is a limitation the caller is told
         about rather than a property it has to discover.
 

@@ -19,6 +19,21 @@ attempt rather than silently overwriting. That is the control on the idempotency
 key: without it, "no second row was written" would be satisfied by a pipeline
 that never runs twice at all.
 
+**One clause of the criterion is disclosed as vacuous rather than claimed**
+(`D-89`). The spec sentence is `20_…:209` — "Crash/lease recovery does not
+duplicate proposals **or accepted objects**" — and **no accepted object exists in
+this build**: `Proposal.accepted_record_type` and `accepted_record_id` are
+declared as the forward reference `09_…:162` names, nothing in `src/` ever writes
+them, and no path sets `ProposalState.ACCEPTED`. So that half of the sentence is
+discharged here by there being nothing to duplicate, which is an absence and not
+a proof. It is written down because a criterion whose second half is satisfied by
+emptiness reads as fully proven unless somebody says otherwise, and because the
+other two clauses this package discloses rather than claims — `QC-AC-011`'s
+accepted-derived-record half in `test_proposal_spans.py` and `QC-AC-002`'s
+indexing half in `test_save_does_not_wait.py` — are each disclosed where they are
+tested. An asymmetric disclosure is the one a reader trusts wrongly. WP-8 is the
+package that makes this half falsifiable.
+
 Synthetic fixtures throughout (`QC-AC-073`, `AGENTS.md` section 5).
 """
 

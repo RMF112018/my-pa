@@ -496,8 +496,12 @@ class _Captures(CaptureRepository):
         either. What this fake **cannot** prove is that the server's plane
         behaves the same way: the configuration, the functional index, and the
         `strpos` confirmation are properties of PostgreSQL, and
-        `tests/search_quality/test_capture_search.py` is where they are asserted
-        against one. This exists so the application layer's limitation
+        `tests/search_quality/test_capture_search.py` and
+        `tests/search_quality/test_exact_confirmation_matrix.py` are where they
+        are asserted against one — the second because the confirmation's
+        agreement with the predicate is a per-query-form property that no
+        example can stand in for. This exists so the application layer's
+        limitation
         arithmetic and its no-content answer are provable on FAST.
 
         The scope is the same two conditions `capture_text_in_scope` applies:

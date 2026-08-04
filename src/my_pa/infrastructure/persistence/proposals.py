@@ -457,11 +457,29 @@ def invalidate_proposal(
     evidence that it failed, which is the one repair `AGENTS.md` section 5 names
     outright; the constraint the schema carries states the same rule, so a
     hand-run statement that set the state without the reason is refused too.
+
+    The state predicate makes a repeated invalidation a zero-row idempotent
+    update rather than asking the server to admit `invalidated → invalidated`.
+    The reachable sources are `proposed` for direct validation and
+    `needs_review`, `rejected`, `deferred`, or `unresolved` when an accepting
+    review attempt discovers bad evidence. Accepted states are terminal,
+    `superseded` has no writer, and `invalidated` is already quarantined.
     """
     validate_identifier(proposal_id, IdKind.PROPOSAL)
     connection.execute(
         capture_proposals.update()
-        .where(capture_proposals.c.proposal_id == proposal_id)
+        .where(
+            capture_proposals.c.proposal_id == proposal_id,
+            capture_proposals.c.state.in_(
+                (
+                    ProposalState.PROPOSED.value,
+                    ProposalState.NEEDS_REVIEW.value,
+                    ProposalState.REJECTED.value,
+                    ProposalState.DEFERRED.value,
+                    ProposalState.UNRESOLVED.value,
+                )
+            ),
+        )
         .values(state=ProposalState.INVALIDATED.value, quarantine_reason=reason.value)
     )
 

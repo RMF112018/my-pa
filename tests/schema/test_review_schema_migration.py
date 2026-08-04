@@ -1,6 +1,6 @@
 """The review and promotion revision round-trips, and its triggers are real.
 
-`3c8f1e2a5b74` adds seven tables, three constraint triggers and five append-only
+`3c8f1e2a5b74` adds seven tables, three constraint triggers and five lineage
 triggers, and three of the eight sit on a table it does not create. Every claim
 below is read back from a live server rather than from the file that wrote it,
 because a migration is only what the database ends up holding.
@@ -13,12 +13,13 @@ function left behind fails `downgrade base` at a revision written before this on
 existed — the failure `1a4c9e77b2d5` had to add an explicit `DROP FUNCTION` for
 and `2b7e9f4c1a83` had to repeat.
 
-**Nothing is deleted, and that is not the same claim as nothing is written.**
+**Nothing is deleted, and immutable evidence is not updated.**
 `QC-AC-022` requires rejected and corrected proposals to retain lineage. The test
-for it asserts an `INSERT` still succeeds and an `UPDATE` still succeeds in the
-same transaction that finds the `DELETE` refused — otherwise "no row could be
-removed" would also be satisfied by a schema in which no row could be added, and
-the criterion would discharge over a table nothing can reach.
+for it asserts an `INSERT` still succeeds in the same database that finds a
+`DELETE` refused — otherwise "no row could be removed" would also be satisfied
+by a schema in which no row could be added. Proposals and assertions retain their
+governed `UPDATE` paths; review cases, decisions, and promotion receipts refuse
+`UPDATE OR DELETE` because they have no governed mutation path.
 
 **The gap this closes was live before this revision.** `capture_proposals`
 accepted `DELETE` and `capture_proposal_spans.proposal_id` cascades, so deleting
@@ -35,7 +36,7 @@ canonical `my_pa` database would destroy the migrated corpus.
 **The `S608` suppressions are structural, not a convenience.** Every
 interpolation into a statement below is one of this module's own `Final`
 constants — the schema name, a member of `REVIEW_TABLES` or `UNDELETABLE`, or a
-value of `TOUCHABLE_COLUMN`. No test value and no caller value reaches a
+value of `MUTABLE_COLUMN`. No test value and no caller value reaches a
 statement's text: every one of those is a bound parameter, which is why the
 identifiers the seeds write are passed as `:name` rather than formatted in. The
 same argument the revision itself makes for its `CREATE FUNCTION` text.
@@ -111,19 +112,20 @@ DEFERRED_TRIGGERS: Final[tuple[str, ...]] = (
     "an_accepted_proposal_names_a_real_assertion",
 )
 
-#: The five tables that retain lineage, each with a timestamp column an `UPDATE`
-#: can touch. The column is what makes "nothing is deleted" distinguishable from
-#: "nothing is written": every one of these tables still takes an `UPDATE`, which
-#: is the difference between this rule and `capture_versions`' immutability.
-TOUCHABLE_COLUMN: Final[dict[str, str]] = {
+#: The two lineage records with governed state transitions remain updateable.
+MUTABLE_COLUMN: Final[dict[str, str]] = {
     "capture_proposals": "created_at",
+    "capture_assertions": "accepted_at",
+}
+
+#: These three are immutable evidence: insert succeeds, update/delete refuse.
+IMMUTABLE: Final[dict[str, str]] = {
     "capture_review_cases": "opened_at",
     "capture_review_decisions": "decided_at",
-    "capture_assertions": "accepted_at",
     "capture_promotion_receipts": "issued_at",
 }
 
-UNDELETABLE: Final[tuple[str, ...]] = tuple(TOUCHABLE_COLUMN)
+UNDELETABLE: Final[tuple[str, ...]] = (*MUTABLE_COLUMN, *IMMUTABLE)
 
 _SUFFIX = "0000000000000001"
 
@@ -319,6 +321,51 @@ def _decision_request(
     )
 
 
+def _accepted_case_snapshot(connection: Connection, ids: dict[str, str]) -> tuple[object, ...]:
+    """Every row a refused post-acceptance decision must leave byte-for-byte alone."""
+    proposal = connection.execute(
+        text(
+            f"SELECT state, normalized_value, accepted_record_type, accepted_record_id "  # noqa: S608
+            f"FROM {SCHEMA}.capture_proposals WHERE proposal_id = :proposal_id"
+        ),
+        ids,
+    ).one()
+    decisions = connection.execute(
+        text(
+            f"SELECT decision_id, sequence, disposition, principal_id, correlation_id, "  # noqa: S608
+            f"audit_id, decided_at FROM {SCHEMA}.capture_review_decisions "
+            "WHERE review_case_id = :review_case_id ORDER BY sequence"
+        ),
+        ids,
+    ).all()
+    assertions = connection.execute(
+        text(
+            f"SELECT assertion_id, decision_id, state, normalized_value, accepted_at, "  # noqa: S608
+            f"revalidation_required_at FROM {SCHEMA}.capture_assertions "
+            "WHERE proposal_id = :proposal_id ORDER BY assertion_id"
+        ),
+        ids,
+    ).all()
+    assertion_spans = connection.execute(
+        text(
+            f"SELECT s.assertion_id, s.span_id FROM {SCHEMA}.capture_assertion_spans s "  # noqa: S608
+            f"JOIN {SCHEMA}.capture_assertions a ON a.assertion_id = s.assertion_id "
+            "WHERE a.proposal_id = :proposal_id ORDER BY s.assertion_id, s.span_id"
+        ),
+        ids,
+    ).all()
+    receipts = connection.execute(
+        text(
+            f"SELECT r.receipt_id, r.assertion_id, r.decision_id, r.policy_version, "  # noqa: S608
+            f"r.issued_at FROM {SCHEMA}.capture_promotion_receipts r "
+            f"JOIN {SCHEMA}.capture_assertions a ON a.assertion_id = r.assertion_id "
+            "WHERE a.proposal_id = :proposal_id ORDER BY r.receipt_id"
+        ),
+        ids,
+    ).all()
+    return proposal, tuple(decisions), tuple(assertions), tuple(assertion_spans), tuple(receipts)
+
+
 def test_the_review_revision_is_in_the_chain_on_the_proposal_revision() -> None:
     """Guards the rest of this module: an absent revision would create nothing.
 
@@ -374,8 +421,10 @@ def test_the_review_revision_runs_empty_to_head_and_head_to_empty(
             assert "CONSTRAINT TRIGGER" in triggers[name], name
             assert "DEFERRABLE INITIALLY DEFERRED" in triggers[name], name
         for table in UNDELETABLE:
-            definition = triggers[f"{table}_are_never_deleted"]
-            assert "BEFORE DELETE" in definition, table
+            name = f"{table}_stay_immutable" if table in IMMUTABLE else f"{table}_are_never_deleted"
+            definition = triggers[name]
+            assert "BEFORE" in definition and "DELETE" in definition, table
+            assert ("UPDATE" in definition) is (table in IMMUTABLE), table
             # The control: these are ordinary triggers, so "every trigger this
             # revision installs is deferred" is not what the loop above proved.
             assert "DEFERRABLE" not in definition, table
@@ -440,6 +489,51 @@ def test_downgrading_this_revision_leaves_the_chain_below_it_intact(
 
         command.upgrade(_config(), "head")
         assert _tables(engine) >= REVIEW_TABLES
+
+        command.downgrade(_config(), "base")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_prior_revision_with_existing_proposal_upgrades_to_head_without_rewrite(
+    disposable_database: str,
+) -> None:
+    """The forward migration preserves rows that predate the WP-8 triggers."""
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), PROPOSAL_REVISION)
+        with engine.begin() as connection:
+            ids = _seed_proposal(connection, ordinal=18)
+            before = connection.execute(
+                text(
+                    f"SELECT proposal_id, version_id, state, risk_class, created_at "  # noqa: S608
+                    f"FROM {SCHEMA}.capture_proposals WHERE proposal_id = :proposal_id"
+                ),
+                ids,
+            ).one()
+
+        command.upgrade(_config(), "head")
+
+        with engine.connect() as connection:
+            after = connection.execute(
+                text(
+                    f"SELECT proposal_id, version_id, state, risk_class, created_at "  # noqa: S608
+                    f"FROM {SCHEMA}.capture_proposals WHERE proposal_id = :proposal_id"
+                ),
+                ids,
+            ).one()
+        assert after == before
+
+        with pytest.raises(DBAPIError) as refused, engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"DELETE FROM {SCHEMA}.capture_proposals "  # noqa: S608
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                ids,
+            )
+        assert "retains lineage" in str(refused.value)
 
         command.downgrade(_config(), "base")
     finally:
@@ -554,8 +648,8 @@ def test_an_accepted_proposal_must_name_an_assertion_that_exists(
 
 
 @pytest.mark.database
-@pytest.mark.parametrize("table", UNDELETABLE)
-def test_lineage_cannot_be_deleted_although_it_can_still_be_written(
+@pytest.mark.parametrize("table", tuple(MUTABLE_COLUMN))
+def test_stateful_lineage_cannot_be_deleted_but_governed_updates_remain(
     disposable_database: str, table: str
 ) -> None:
     """`QC-AC-022`, and the control that stops it discharging over a dead table.
@@ -569,9 +663,8 @@ def test_lineage_cannot_be_deleted_although_it_can_still_be_written(
     through `capture_proposal_spans`' cascade.
 
     A third assertion names the boundary: `UPDATE` is deliberately still
-    permitted, because an assertion moves to `superseded` or
-    `revalidation_required` in place. `capture_versions` is the table where
-    `UPDATE` is refused too, and this is not that rule.
+    permitted for proposals and assertions because each has governed state
+    transitions, including an assertion moving to `revalidation_required`.
     """
     engine = create_database_engine(disposable_database)
     try:
@@ -597,13 +690,56 @@ def test_lineage_cannot_be_deleted_although_it_can_still_be_written(
         # deleted", which is narrower than `capture_versions`' immutability.
         with engine.begin() as connection:
             updated = connection.execute(
-                text(f"UPDATE {SCHEMA}.{table} SET {TOUCHABLE_COLUMN[table]} = now()")  # noqa: S608
+                text(f"UPDATE {SCHEMA}.{table} SET {MUTABLE_COLUMN[table]} = now()")  # noqa: S608
             ).rowcount
         assert updated == 2
 
         with engine.connect() as connection:
             after = connection.execute(text(f"SELECT count(*) FROM {SCHEMA}.{table}")).scalar_one()  # noqa: S608
         assert after == 2
+
+        command.downgrade(_config(), "base")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+@pytest.mark.parametrize("table", tuple(IMMUTABLE))
+def test_review_evidence_accepts_inserts_but_refuses_updates_and_deletes(
+    disposable_database: str, table: str
+) -> None:
+    """Review cases, decisions and receipts are immutable at the server.
+
+    Two complete promotion lineages are inserted successfully, so each refusal
+    is measured against a reachable, non-empty table and does not discharge
+    vacuously over a table that accepts no writes.
+    """
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), "head")
+        with engine.begin() as connection:
+            _seed_receipt(connection, _seed_promotion(connection, _seed_proposal(connection, 1), 1))
+
+        with pytest.raises(DBAPIError) as deleted, engine.begin() as connection:
+            connection.execute(text(f"DELETE FROM {SCHEMA}.{table}"))  # noqa: S608
+        assert "retains lineage" in str(deleted.value)
+
+        with engine.begin() as connection:
+            _seed_receipt(connection, _seed_promotion(connection, _seed_proposal(connection, 2), 2))
+
+        with pytest.raises(DBAPIError) as updated, engine.begin() as connection:
+            connection.execute(
+                text(f"UPDATE {SCHEMA}.{table} SET {IMMUTABLE[table]} = now()")  # noqa: S608
+            )
+        assert "retains lineage" in str(updated.value)
+
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text(f"SELECT count(*) FROM {SCHEMA}.{table}")  # noqa: S608
+                ).scalar_one()
+                == 2
+            )
 
         command.downgrade(_config(), "base")
     finally:
@@ -880,5 +1016,78 @@ def test_rejection_retains_lineage_and_a_stale_second_decision_is_refused(
                 ids,
             ).one()
             assert tuple(retained) == (ProposalState.REJECTED.value, 1, 1)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_acceptance_is_terminal_and_every_later_decision_preserves_canonical_rows(
+    disposable_database: str,
+) -> None:
+    """Accept and correct-and-accept close the review-decision lifecycle.
+
+    Every reachable later disposition is attempted with the current expected
+    version. The conflict is therefore the terminal-state rule, not optimistic
+    concurrency, and the complete proposal/decision/assertion/link/receipt
+    snapshot proves the refusal changed nothing.
+    """
+    engine = create_database_engine(disposable_database)
+    later_dispositions = (
+        Disposition.REJECT,
+        Disposition.DEFER,
+        Disposition.MARK_UNRESOLVED,
+        Disposition.ACCEPT,
+        Disposition.CORRECT_AND_ACCEPT,
+    )
+    try:
+        command.upgrade(_config(), "head")
+        with engine.begin() as connection:
+            ordinal = 40
+            for initial in (Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT):
+                for later in later_dispositions:
+                    ids = _seed_proposal(connection, ordinal=ordinal)
+                    ordinal += 1
+                    connection.execute(
+                        text(
+                            f"UPDATE {SCHEMA}.capture_spans SET quoted_text_sha256 = :digest "  # noqa: S608
+                            "WHERE span_id = :span_id"
+                        ),
+                        {"span_id": ids["span_id"], "digest": digest_of("x")},
+                    )
+                    review_case_id = open_review_case(connection, ids["proposal_id"])
+                    assert review_case_id is not None
+                    accepted = decide_review(
+                        connection,
+                        _decision_request(
+                            review_case_id,
+                            expected=0,
+                            disposition=initial,
+                            corrected_value=(
+                                "synthetic corrected value"
+                                if initial is Disposition.CORRECT_AND_ACCEPT
+                                else None
+                            ),
+                        ),
+                    )
+                    assert accepted is not None
+                    bound = {**ids, "review_case_id": review_case_id}
+                    before = _accepted_case_snapshot(connection, bound)
+
+                    with pytest.raises(ReviewConflictError, match="terminal"):
+                        decide_review(
+                            connection,
+                            _decision_request(
+                                review_case_id,
+                                expected=1,
+                                disposition=later,
+                                corrected_value=(
+                                    "a later synthetic correction"
+                                    if later is Disposition.CORRECT_AND_ACCEPT
+                                    else None
+                                ),
+                            ),
+                        )
+
+                    assert _accepted_case_snapshot(connection, bound) == before
     finally:
         engine.dispose()

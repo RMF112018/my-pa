@@ -242,8 +242,8 @@ CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
 
 PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
 
-#: The eight triggers `3c8f1e2a5b74` installs. Five of them sit on tables it does
-#: not create, which is what forward DDL is for: a trigger is not a `Table`
+#: The thirteen triggers `3c8f1e2a5b74` installs. Four sit on tables it does not
+#: create, which is what forward DDL is for: a trigger is not a `Table`
 #: attribute, so it changes nothing an already-merged revision emits.
 REVIEW_TRIGGERS: Final[frozenset[str]] = frozenset(
     {
@@ -251,9 +251,14 @@ REVIEW_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_span_link_leaves_its_assertion_cited",
         "an_accepted_proposal_names_a_real_assertion",
         "capture_proposals_are_never_deleted",
+        "capture_proposals_updates_are_governed",
+        "capture_spans_stay_immutable",
+        "capture_proposal_spans_stay_immutable",
         "capture_review_cases_stay_immutable",
         "capture_review_decisions_stay_immutable",
         "capture_assertions_are_never_deleted",
+        "capture_assertions_updates_are_governed",
+        "capture_assertion_spans_stay_immutable",
         "capture_promotion_receipts_stay_immutable",
     }
 )

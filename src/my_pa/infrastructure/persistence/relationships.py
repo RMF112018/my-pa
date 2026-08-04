@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from typing import cast
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
@@ -525,13 +525,70 @@ class SqlRelationshipRepository(RelationshipRepository):
     def profile(self, person_id: str, *, expected_domains: tuple[str, ...]) -> PersonProfile | None:
         validate_identifier(person_id, IdKind.PERSON)
         person = self._connection.execute(
-            select(relationship_people.c.display_name).where(
+            select(
+                relationship_people.c.display_name,
+                relationship_people.c.state_resolution_id,
+            ).where(
                 relationship_people.c.person_id == person_id,
                 relationship_people.c.superseded_by_person_id.is_(None),
             )
         ).one_or_none()
         if person is None:
             return None
+        state_is_current = self._connection.execute(
+            text(
+                """
+                SELECT EXISTS (
+                  SELECT 1
+                  FROM knowledge.relationship_identity_resolutions state
+                  WHERE state.resolution_id = :state_resolution_id
+                    AND state.retained_person_id = :person_id
+                    AND (
+                      (state.action = 'link_observation' AND NOT EXISTS (
+                        SELECT 1
+                        FROM knowledge.relationship_identity_resolutions correction
+                        WHERE correction.action = 'merge_person'
+                          AND correction.prior_person_id = :person_id
+                      ))
+                      OR
+                      (state.action = 'split_person'
+                       AND state.resolution_sequence = (
+                         SELECT max(latest.resolution_sequence)
+                         FROM knowledge.relationship_identity_resolutions latest
+                         WHERE (latest.retained_person_id = state.retained_person_id
+                                AND latest.prior_person_id = state.prior_person_id)
+                            OR (latest.retained_person_id = state.prior_person_id
+                                AND latest.prior_person_id = state.retained_person_id)
+                       ))
+                    )
+                ) AND NOT EXISTS (
+                  SELECT 1
+                  FROM knowledge.relationship_observation_links link
+                  JOIN knowledge.relationship_identity_resolutions receipt
+                    ON receipt.resolution_id = link.resolution_id
+                  WHERE link.person_id = :person_id
+                    AND (
+                      receipt.retained_person_id <> :person_id
+                      OR receipt.resolution_sequence <> (
+                        SELECT max(latest.resolution_sequence)
+                        FROM knowledge.relationship_identity_resolutions latest
+                        JOIN knowledge.relationship_resolution_observations latest_observation
+                          ON latest_observation.resolution_id = latest.resolution_id
+                        WHERE latest_observation.observation_id = link.observation_id
+                      )
+                    )
+                )
+                """
+            ),
+            {
+                "person_id": person_id,
+                "state_resolution_id": person.state_resolution_id,
+            },
+        ).scalar_one()
+        if not state_is_current:
+            raise IdentityResolutionError(
+                "a relationship profile requires current canonical resolution state"
+            )
         observations = self._connection.execute(
             select(
                 relationship_identity_observations.c.observation_id,

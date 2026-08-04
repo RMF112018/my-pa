@@ -12,7 +12,7 @@ to end, and nothing here is deployable.
 Implemented, and covered by the FAST tier unless noted:
 
 - `contracts/v1` — the public request and response envelope, disclosure, error, and capability shapes.
-- `domain/identity` — capability, purpose, principal, and operation binding, including all twelve capability names and their operator-only flags. WP-6 added the four `capture.*` names and the two capture purposes; `D-70` records why none of them is operator-only.
+- `domain/identity` — capability, purpose, principal, and operation binding, including all thirteen capability names and their operator-only flags. WP-6 added four `capture.*` names and the two capture purposes and WP-7 added `capture.search`, which reuses `capture_review` rather than taking a purpose of its own (`D-91`); `D-70` records why none of them is operator-only.
 - `domain/common`, `domain/policy`, `domain/audit` — identifiers, provenance, classification, coverage state, time, policy decisions, and audit events.
 - `domain/source` — the source registry, bounded enrollment with idempotency keys, and the read-only source-provider port.
 - `domain/capture` — the user-authored capture: its bounded content and digest, the immutable version and its five timestamps, the submission envelope, and the receipt. Product-owned and append-only under [ADR-003](docs/decisions/ADR-003-product-owned-user-authored-source-records.md); it grants the source-provider port no write method.
@@ -20,15 +20,15 @@ Implemented, and covered by the FAST tier unless noted:
 - `domain/search` — the lexical search query type.
 - `bootstrap/settings` — strict `MY_PA_` configuration that fails closed on unknown or invalid values. `MY_PA_DATABASE_URL` is required and has no default.
 - `infrastructure/database/engine` — the connection contract for the canonical database. Covered by the database tier only.
-- `infrastructure/persistence` — source registry, enrollment, job lease and retry, extraction and quarantine, lexical search over `knowledge.extractions`, and the capture plane: admission under a unique idempotency key, the immutable version chain, the receipt, and the capture outbox. The lease and retry functions are parameterised over the job plane, so there is one implementation of the lease rule and two tables it runs against (`D-76`, `D-77`). Covered by the database tier.
+- `infrastructure/persistence` — source registry, enrollment, job lease and retry, extraction and quarantine, lexical search over `knowledge.extractions`, the capture plane (admission under a unique idempotency key, the immutable version chain, the receipt, and the capture outbox), and WP-7's proposal plane: stage results keyed by the specification's own replay key, processing text with a reversible offset mapping, source spans, proposals and the spans they cite, deterministic classifications, and restricted entity mentions. The lease and retry functions are parameterised over the job plane, so there is one implementation of the lease rule and two tables it runs against (`D-76`, `D-77`). **Capture search is a second full-text plane**, over `knowledge.capture_versions.content` with the `simple` configuration rather than `english`, because `QC-AC-050` asks for *exact* text and `english` both stems and produces an empty index entry for a capture of nothing but stop words (`D-90`). It does not stem, and that cost is published as a limitation rather than left to be discovered. Covered by the database tier.
 - `infrastructure/providers/fixture.py` — a read-only fixture source provider that proves root containment, revalidates before read, and normalizes provider errors by errno.
-- `application` — the twelve capability use cases behind one entry point, one shared authorization and disclosure path, and the capability manifest and readiness report derived from that wiring rather than restated. It reaches persistence and providers only through the ports in `contracts/ports`.
-- `adapters/http` and `apps/gateway.py run` — the HTTP transport and its composition root. All twelve capabilities are reachable at `POST /v1/<capability>` on `127.0.0.1`, and the response body is the envelope the application produced. Starlette and uvicorn, not FastAPI; no credential is issued, read, or required, and there is no option to bind anywhere but loopback. [`ops/runbooks/gateway-operations.md`](ops/runbooks/gateway-operations.md) covers running it.
-- `adapters/mcp` and `apps/gateway.py mcp` — the same twelve capabilities over the Model Context Protocol, using the official `mcp` SDK on **stdio only**. The tool list is derived from the capability set and each tool's schema from the command it builds, so nothing about a capability is written down twice. No socket is opened and no credential is read; the SDK's network transports are never imported.
+- `application` — the thirteen capability use cases behind one entry point, one shared authorization and disclosure path, and the capability manifest and readiness report derived from that wiring rather than restated. It reaches persistence and providers only through the ports in `contracts/ports`.
+- `adapters/http` and `apps/gateway.py run` — the HTTP transport and its composition root. All thirteen capabilities are reachable at `POST /v1/<capability>` on `127.0.0.1`, and the response body is the envelope the application produced. Starlette and uvicorn, not FastAPI; no credential is issued, read, or required, and there is no option to bind anywhere but loopback. [`ops/runbooks/gateway-operations.md`](ops/runbooks/gateway-operations.md) covers running it.
+- `adapters/mcp` and `apps/gateway.py mcp` — the same thirteen capabilities over the Model Context Protocol, using the official `mcp` SDK on **stdio only**. The tool list is derived from the capability set and each tool's schema from the command it builds, so nothing about a capability is written down twice. No socket is opened and no credential is read; the SDK's network transports are never imported.
 - `adapters/cli` and `apps/cli/invoke.py` — the operator CLI, which invokes one capability and writes the envelope to standard output. It is not a privileged bypass: it composes the same runtime the gateway composes, is handed the same principal, and has no option that could change one.
 - `adapters/normalization.py` — the one place a request becomes a `(RequestMetadata, Command)` pair. All three transports call it and none of them can build either value, which is what makes `SPEC-AC-001` a structural property rather than three snapshots that agree today.
 - `infrastructure/migration` — legacy extract and load, the migration control plane, and redaction.
-- Eleven Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, views, the `knowledge` schema, the extraction tables, the audit events table, the enrolled object set, and the capture tables; head `1a4c9e77b2d5`. Applied and rolled back in the database tier; only SQL generation is checked by FAST. **No revision derives a closed-set constraint from a domain enum** (`D-69`): the audit vocabulary is a frozen literal in each revision and is widened by an explicit `ALTER` in the revision that widens it, so an already-merged revision goes on emitting the DDL it emitted on the day it merged.
+- Twelve Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, views, the `knowledge` schema, the extraction tables, the audit events table, the enrolled object set, the capture tables, and the proposal tables with the exact capture-search index; head `2b7e9f4c1a83`. Applied and rolled back in the database tier; only SQL generation is checked by FAST. **No revision derives a closed-set constraint from a domain enum** (`D-69`): the audit vocabulary is a frozen literal in each revision and is widened by an explicit `ALTER` in the revision that widens it, so an already-merged revision goes on emitting the DDL it emitted on the day it merged.
 - `.github/workflows/repository-checks.yml` — document and configuration validation, the FAST tier, a declared-dependency-floor tier, and a database tier run against a disposable PostgreSQL service. The workflow itself carries no test coverage.
 
 The migrated corpus holds 3,263,870 rows across 484 domain tables; 286 of those
@@ -44,6 +44,28 @@ should be able to find out when each stopped being true.
 - *"a source registered in production, and therefore anything for the gateway to read… nothing calls `register_source`."* `apps/cli/sources.py register` calls it, and `RegisteredSourceProviders` serves whichever roots the resulting `knowledge.sources` rows name. **`P00-OD-009` is untouched**: no root is configured anywhere in the tree, the command requires `--root` by exact path, and which roots are legitimate is still the operator's decision rather than a default.
 - *"an executor for the work the worker claims… there is no extraction executor wired to it."* `src/my_pa/infrastructure/jobs/extraction.py` is that executor, and `apps/worker.py` wires it. A claimed job now reads each enumerated object through its provider and records an extraction, an `unsupported` row, or a quarantine, one transaction per object.
 
+A fourth entry stood in the not-implemented list until WP-7 and is recorded the
+same way:
+
+- *"nothing consumes the capture outbox until WP-7"* was true of every commit
+  before this one. `apps/worker.py run --plane capture` consumes it:
+  `src/my_pa/infrastructure/jobs/capture_pipeline.py` runs nine stages over one
+  stored capture version — validate against the processing policy recorded at
+  save, normalise with a reversible offset mapping, detect language, segment
+  (including quoted and pasted regions), match deterministically, normalise
+  moments without resolving relative ones, confirm the text is searchable,
+  derive work-object proposals, and persist them with the spans they cite. One
+  transaction per stage, `hold_lease` first in each, so a worker whose lease was
+  taken writes nothing. **It reads no source, opens no socket, and calls no
+  model**; `P00-OD-006` is untouched. What WP-7 did **not** build is named
+  rather than implied: no `CaptureDomainAssignment` table (`D-94` — its only
+  deterministic input is a WP-8 context link), no accepted record and therefore
+  no discharge of `QC-AC-011`'s accepted-derived-record half, which WP-8 owes
+  (`D-89`), no alias table and therefore no person or organisation mentions
+  (`D-93`), no relative-date resolution, because a stage that reads a clock
+  cannot satisfy `QC-AC-035`'s replay clause, and no retry backoff, which
+  `release_job` still lacks against `11:216` on the shared job plane (`D-99`).
+
 A third entry stood beside them until WP-6 and is recorded the same way:
 
 - *"user-authored capture … exists beyond a scaffold README"* was in the
@@ -52,8 +74,9 @@ A third entry stood beside them until WP-6 and is recorded the same way:
   a save that commits the capture, its version, its submission, its receipt, and
   its queued processing job together or not at all. What WP-6 did **not** build
   is named rather than implied: no remote transport, no registered capture
-  client, no delivery attempt log (`D-74`), nothing consumes the capture outbox
-  until WP-7, and captures carry no owner-scoped access control (`D-72`, and
+  client, no delivery attempt log (`D-74`), nothing consumed the capture outbox
+  at that point — WP-7 does now, and the entry above says what it did and did
+  not build — and captures carry no owner-scoped access control (`D-72`, and
   [`docs/operations/mcv-limitations.md`](docs/operations/mcv-limitations.md)
   limitation 2 is where that is disclosed).
 

@@ -283,8 +283,13 @@ RELATIONSHIP_TRIGGERS: Final[frozenset[str]] = frozenset(
         "identity_review_cases_are_append_only",
         "identity_review_decisions_are_append_only",
         "resolution_observations_are_append_only",
+        "relationship_evidence_is_governed",
+        "relationship_evidence_observations_are_append_only",
         "relationship_aliases_match_observations",
         "conversation_support_matches_participant",
+        "conversation_participants_remain_supported",
+        "conversation_observations_remain_supported",
+        "observation_link_keeps_participants_supported",
     }
 )
 

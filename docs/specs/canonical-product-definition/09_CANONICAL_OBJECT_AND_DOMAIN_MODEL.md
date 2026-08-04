@@ -3,21 +3,24 @@ title: my-pa — Canonical Object and Domain Model
 artifact_id: MODEL-MYPA-CANONICAL-002
 artifact_type: Logical domain model
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
-version: 2.2
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z
+version: 2.3
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
-date: 2026-08-02
+date: 2026-08-04
 repository: RMF112018/my-pa
-repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
+repository_head: 195fa54206996dddd6c6e0b6da0872781aa4f5f0
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.1
-feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
-feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
+prior_version: 2.2
+feature_package_id: MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087
+feature_package_folder_id: 13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5
+feature_package_manifest_id: 1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J
+feature_package_publication_receipt_id: 1ATS9ONwZmA9Ar1_-sHaxCKcRUUwvoOqT
+integration_control_folder_id: 1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99
 ---
 
 # Canonical Object and Domain Model
@@ -171,3 +174,25 @@ Invariants:
 6. No last-write-wins conflict resolution is permitted.
 7. Provider observations are append-oriented evidence; reconciliation changes canonical state only through application policy.
 8. Recurring Tasks project one occurrence at a time in the MCV.
+
+## Apple source synchronization records
+
+The feature adds the following canonical concepts without creating provider-specific domain leakage:
+
+| Concept | Purpose |
+|---|---|
+| `NativeBridge` | One enrolled native macOS integration host and contract version |
+| `SourceAccount` | Stable my-pa identity bound to one provider-native Apple account identity |
+| `SourceBucket` | Smallest independently selectable/watchable mailbox, calendar, or contact collection |
+| `SyncProfile` | Versioned user-selected scope, limits, and default date policy |
+| `SyncRun` | Immutable baseline/backfill execution with frozen cutoff and range |
+| `SourceCheckpoint` | Per-bucket durable monotonic resume point and overlap policy |
+| `SourceObject` | Stable provider-neutral identity for a message, event/occurrence, contact, or membership |
+| `SourceVersion` | Immutable observed source revision with provenance and digest |
+| `WatcherRegistration` | Activation receipt binding a bucket, checkpoint, strategy, and freshness objective |
+
+Provider-native opaque identifiers are stored at the infrastructure boundary and mapped to stable my-pa IDs. Display labels are mutable metadata, not identity.
+
+Mail message identity and mailbox-membership edges are separate. Calendar series and occurrence identity are separate. Contact identity and group/container membership edges are separate. Source observations remain immutable; later changes append versions or membership observations.
+
+`SyncRun` states include configured/preflight/running/partial/failed/reconciling/completed. Bucket lifecycle states include `discovered`, `selected`, `verification_failed`, `ready_for_initial_sync`, `initial_sync_running`, `initial_sync_partial`, `initial_sync_failed`, `reconciling`, `watcher_pending`, `watching`, `paused`, `permission_denied`, `account_unavailable`, `bucket_unavailable`, and `reconfiguration_required`.

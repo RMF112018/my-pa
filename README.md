@@ -6,8 +6,9 @@
 
 The repository contains the Python package `my_pa` under `src/`, the Alembic
 schema history for the canonical database, and a migrated PostgreSQL corpus in
-that database. It is a local development candidate: no product workflow runs end
-to end, and nothing here is deployable.
+that database. It is a local development candidate: the bounded source and
+capture workflows run end to end over synthetic fixtures, but nothing here is
+deployable.
 
 Implemented, and covered by the FAST tier unless noted:
 
@@ -16,6 +17,7 @@ Implemented, and covered by the FAST tier unless noted:
 - `domain/common`, `domain/policy`, `domain/audit` — identifiers, provenance, classification, coverage state, time, policy decisions, and audit events.
 - `domain/source` — the source registry, bounded enrollment with idempotency keys, and the read-only source-provider port.
 - `domain/capture`, `domain/conversation` — the user-authored capture, immutable version, evidence-bound proposals and assertions, closed review policy, and explicit Conversation Log skeleton. Product-owned and append-only under [ADR-003](docs/decisions/ADR-003-product-owned-user-authored-source-records.md); none grants the source-provider port a write method or an external action.
+- `domain/relationship` and the internal relationship application/read-model path — governed person and organisation identity, unresolved mentions, reversible reviewed resolution, source-backed profiles, timelines, and conversation participants over synthetic personal-source fixtures. WP-9 adds no public capability or live connector.
 - `domain/extraction` — text and Markdown extraction outcomes, quarantine records, and coverage counts with stated limitations.
 - `domain/search` — the lexical search query type.
 - `bootstrap/settings` — strict `MY_PA_` configuration that fails closed on unknown or invalid values. `MY_PA_DATABASE_URL` is required and has no default.
@@ -28,7 +30,7 @@ Implemented, and covered by the FAST tier unless noted:
 - `adapters/cli` and `apps/cli/invoke.py` — the operator CLI, which invokes one capability and writes the envelope to standard output. It is not a privileged bypass: it composes the same runtime the gateway composes, is handed the same principal, and has no option that could change one.
 - `adapters/normalization.py` — the one place a request becomes a `(RequestMetadata, Command)` pair. All three transports call it and none of them can build either value, which is what makes `SPEC-AC-001` a structural property rather than three snapshots that agree today.
 - `infrastructure/migration` — legacy extract and load, the migration control plane, and redaction.
-- Thirteen Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, views, the `knowledge` schema, the extraction tables, the audit events table, the enrolled object set, the capture tables, the proposal tables with the exact capture-search index, and the review, promotion, context-link and conversation tables; head `3c8f1e2a5b74`. Applied and rolled back in the database tier; only SQL generation is checked by FAST. **No revision derives a closed-set constraint from a domain enum** (`D-69`): the audit vocabulary is a frozen literal in each revision and is widened by an explicit `ALTER` in the revision that widens it, so an already-merged revision goes on emitting the DDL it emitted on the day it merged.
+- Fourteen Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, views, the `knowledge` schema, the extraction tables, the audit events table, the enrolled object set, the capture tables, the proposal tables with the exact capture-search index, the review, promotion, context-link and conversation tables, and relationship identity and profiles; head `7f2a9d6c4e18`. Applied and rolled back in the database tier; only SQL generation is checked by FAST. **No revision derives a closed-set constraint from a domain enum** (`D-69`): the audit vocabulary is a frozen literal in each revision and is widened by an explicit `ALTER` in the revision that widens it, so an already-merged revision goes on emitting the DDL it emitted on the day it merged.
 - `.github/workflows/repository-checks.yml` — document and configuration validation, the FAST tier, a declared-dependency-floor tier, and a database tier run against a disposable PostgreSQL service. The workflow itself carries no test coverage.
 
 The migrated corpus holds 3,263,870 rows across 484 domain tables; 286 of those
@@ -82,7 +84,7 @@ A third entry stood beside them until WP-6 and is recorded the same way:
 
 Not implemented. None of the following exists beyond a scaffold README:
 
-- relationship identity and profiles, managed documents, GoodNotes ingestion, and Obsidian projection;
+- managed documents, GoodNotes ingestion, and Obsidian projection;
 - any frontend. The repository contains no JavaScript toolchain and no `package.json`.
 
 Accordingly, `capabilities.get` reports every capability `available` and
@@ -108,8 +110,9 @@ direct instruction, mirrored at [`docs/specs/canonical-product-definition/`](doc
 It settles what the product means; it grants no implementation authority, does
 not outrank repository policy, and did not change the plan — its own roadmap
 puts finishing WP-4 and WP-5 first, which is what this plan already sequenced.
-The thirty-nine operator decisions it carries remain open. Section 15 records the
-reconciliation and the instrument it rests on.
+The 58 operator decisions it carries remain open: 30 `OP`, 9 `MCP-OP`, 9
+`NAR-OP`, and 10 `NAPDCB-OP`. Section 15 records the reconciliation and the
+instrument it rests on.
 
 ## Approved architectural decisions
 

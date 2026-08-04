@@ -298,14 +298,16 @@ Evidence: `src/my_pa/contracts/ports.py`,
 `tests/architecture/test_capture_reaches_no_source.py::test_the_capture_writer_imports_no_source_provider`,
 `tests/security/test_mcp_and_cli_negative_evidence.py::test_no_capability_over_either_transport_calls_anything_but_a_read`.
 
-## 11. Nothing consumes the capture outbox, and there is no remote capture transport
+## 11. Capture processing is local and deterministic, and there is no remote capture transport
 
 A capture is stored durably and a row is written into `knowledge.capture_jobs`
 at the moment it is admitted — that is what durable-first means: a crash between
 accepting a capture and processing it loses the processing, not the record that
-it is owed. **Nothing claims that row.** No worker reads `capture_jobs`, no
-extraction runs over capture text, and no proposal or span exists. That is WP-7's
-work and it is named rather than implied.
+it is owed. The capture worker now claims that row and runs the nine deterministic
+WP-7 stages. It persists bounded proposals with exact evidence spans, and replay
+is checked against stored stage digests. It reads no source, opens no socket, and
+calls no model. Relative dates remain unresolved; no model-assisted extraction,
+identity resolution, summary generation, or retry backoff was added.
 
 Nor is there a way to capture from anywhere but this machine. `D-30` refuses
 ingress and issues no credential, so the iOS Shortcut the canonical package
@@ -317,13 +319,40 @@ the tables are absent rather than permanently empty. `capture_submissions`
 carries no `registered_client_id` column for the same reason.
 
 What a capture therefore is today: text the operator types into a loopback
-process, stored immutably by version, retrievable by version, and queued for
-work no process does yet.
+process, stored immutably by version, retrievable by version, searchable, and
+processed locally into noncanonical evidence-bound proposals. Consequential
+promotion still passes through WP-8 review; processing grants no external-action
+authority.
 
 Evidence: `src/my_pa/infrastructure/persistence/tables.py`,
 `src/my_pa/infrastructure/persistence/capture.py`,
+`src/my_pa/infrastructure/jobs/capture_pipeline.py`,
 `docs/plans/mcv-completion-plan.md`,
-`tests/capture/test_idempotency.py::test_the_same_key_and_the_same_content_stores_once_and_returns_one_receipt`.
+`tests/pipeline/test_proposal_spans.py::test_every_proposal_the_pipeline_persists_cites_a_span_that_re_derives`,
+`tests/pipeline/test_stage_replay.py::test_every_stage_replays_to_the_digest_it_stored`.
+
+## 12. Relationship identity and profiles are fixture-only read models
+
+WP-9 implements governed person and organisation identities, unresolved
+mentions, duplicate review, reversible merge/split, conversation participants,
+and source-backed profile and timeline reads. It does so only through the
+fixture personal-source provider and an internal application/read-model path;
+it adds no public capability and has not been exercised against live contacts,
+email, or calendar data.
+
+Profiles disclose coverage, unavailable domains, freshness, calculation basis,
+and time windows. They do not claim completeness. There is no automatic identity
+merge, relationship score, sensitive-trait inference, public research,
+commitment or briefing generation, Pulse surface, or relationship frontend.
+Authorizing a real connector still requires its exact account and scope plus the
+authentication and live-personal-data decisions the plan leaves open.
+
+Evidence: `src/my_pa/domain/relationship/`,
+`src/my_pa/application/relationships.py`,
+`src/my_pa/infrastructure/providers/personal_fixture.py`,
+`tests/relationship/test_relationship_domain.py::test_profile_coverage_fails_closed_unless_it_names_the_exact_observation_set`,
+`tests/provider_conformance/test_personal_fixture_provider.py::test_personal_source_port_and_adapter_expose_no_mutation_method`,
+`docs/plans/mcv-completion-plan.md`.
 
 ---
 

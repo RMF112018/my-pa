@@ -3,21 +3,24 @@ title: my-pa — Integrated MVP Definition
 artifact_id: MVP-MYPA-CANONICAL-002
 artifact_type: MVP definition
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
-version: 2.2
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z
+version: 2.3
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
-date: 2026-08-02
+date: 2026-08-04
 repository: RMF112018/my-pa
-repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
+repository_head: 195fa54206996dddd6c6e0b6da0872781aa4f5f0
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.1
-feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
-feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
+prior_version: 2.2
+feature_package_id: MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087
+feature_package_folder_id: 13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5
+feature_package_manifest_id: 1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J
+feature_package_publication_receipt_id: 1ATS9ONwZmA9Ar1_-sHaxCKcRUUwvoOqT
+integration_control_folder_id: 1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99
 ---
 
 # Integrated MVP Definition
@@ -136,3 +139,23 @@ The MCV includes an opt-in Native Apple Reminders execution projection after the
 10. fail-closed permission, list-loss, bridge-offline, backend-offline, and iCloud-delay behavior.
 
 The MCV excludes blanket import, intentional shared-list use, native recurrence-series synchronization, tags, attachments, subtasks, full-fidelity Reminders mirroring, direct Reminders database access, AppleScript mutation, automatic external deletion, automatic Commitment fulfillment, and any Calendar/Contacts/Notes/Mail/Messages mutation.
+
+## MCV addition — Apple Mail, Calendar & Contacts
+
+The Native Apple Personal Data Capture Bridge is included in the Minimum Viable Candidate as a conditional first-class source integration. The MCV is complete for this feature only when a user can, from the frontend:
+
+- verify the enrolled Mac and separate permissions;
+- discover and select reachable Apple accounts;
+- select exact mailboxes, calendars, and supported contact collections;
+- choose and review an initial synchronization start date;
+- run the frozen Mail, Calendar, and Contacts baselines;
+- see per-bucket progress, exclusions, and failures;
+- obtain verified reconciliation and watcher activation;
+- modify scope later using the same baseline-before-watcher rule;
+- pause, resume, retry, and recover permission or bucket drift without losing provenance.
+
+The MCV baseline is Mail from selected start through the frozen cutoff, Calendar from selected start through cutoff plus 90 days, and all current Contacts within selected collections. A rolling job maintains approximately 90 future Calendar days.
+
+The MCV excludes Apple source writes, Messages/Notes/Photos, unbounded historical import, unbounded attachments, blanket account adoption, NAS relay or SQLite, direct helper database access, cloud-hosted Mac operation, automatic external-model disclosure, and destructive removal of previously admitted evidence.
+
+The feature remains conditional on current macOS Mail feasibility, signed/notarized packaging, synthetic and dedicated-test-account validation, and operator authorization for exact live accounts, buckets, permissions, retention, and activation. Governing feature package: `MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087` / `13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5`.

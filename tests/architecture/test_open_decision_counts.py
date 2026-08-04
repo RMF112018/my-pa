@@ -16,14 +16,15 @@ still looked correct.
 
 Scope note: `D-nn` plan-register IDs, the canonical package's `OP-nn` and
 `CR-D-nnn`, the connector's `MCP-OP-nnn`, and Native Apple Reminders'
-`NAR-OP-nnn` are deliberately excluded. Section 14 tracks three ledgers — Phase
-00, Quick Capture, and Relationship Intelligence — and folding another package's
-internal decisions into its totals would misstate what the plan is accountable
-for. The exclusion is mechanical rather than maintained: `LEDGER_ID` cannot match
-any of those families, so a new one arriving in the plan's prose cannot silently
-join the counts. `NAR-OP-nnn` is named here because section 14 now asserts it is
-excluded "on the same grounds", and a claim the plan makes about this test's
-scope should be readable in this test's scope note.
+`NAR-OP-nnn`, and Apple Mail, Calendar & Contacts' `NAPDCB-OP-nnn` are
+deliberately excluded. Section 14 tracks three ledgers — Phase 00, Quick Capture,
+and Relationship Intelligence — and folding another package's internal decisions
+into its totals would misstate what the plan is accountable for. The exclusion is
+mechanical rather than maintained: `LEDGER_ID` cannot match any of those families,
+so a new one arriving in the plan's prose cannot silently join the counts.
+`NAR-OP-nnn` and `NAPDCB-OP-nnn` are named here because section 14 asserts the
+package families are excluded on the same grounds, and a claim the plan makes
+about this test's scope should be readable in this test's scope note.
 """
 
 from __future__ import annotations
@@ -35,10 +36,16 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 PLAN = ROOT / "docs" / "plans" / "mcv-completion-plan.md"
+README = ROOT / "README.md"
+SOURCE_INDEX = ROOT / "docs" / "00_REPOSITORY_SOURCE_INDEX.md"
+CANONICAL_LEDGER = (
+    ROOT / "docs" / "specs" / "canonical-product-definition" / "15_OPEN_OPERATOR_DECISIONS.md"
+)
 
 #: The three ledgers section 14 tracks. Ordered so the longer prefixes match
 #: first: `O-\d{2}` must not be tried against the `OD-004` inside `P00-OD-004`.
 LEDGER_ID = re.compile(r"\b(?:P00-OD-\d{3}|RI-OD-\d{3}|O-\d{2})\b")
+PACKAGE_ID = re.compile(r"^(?P<family>OP|MCP-OP|NAR-OP|NAPDCB-OP)-(?P<number>\d{2,3})$")
 
 #: Headings that open each of section 14's three groups.
 BLOCKING_HEADING = "### Blocking — "
@@ -234,3 +241,47 @@ def test_stated_ledger_split_matches_tables(stated_key: str, ledger: str) -> Non
         f"Section 14 states {stated} decisions from the {ledger} ledger but its "
         f"tables contain {derived}."
     )
+
+
+def _canonical_package_families() -> dict[str, list[tuple[str, int]]]:
+    families: dict[str, list[tuple[str, int]]] = {}
+    for line in CANONICAL_LEDGER.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("|") or line.startswith(("|---", "| ID")):
+            continue
+        decision_id = line.split("|", 2)[1].strip().strip("`")
+        match = PACKAGE_ID.fullmatch(decision_id)
+        if match is None:
+            continue
+        families.setdefault(match["family"], []).append((decision_id, int(match["number"])))
+    return families
+
+
+def test_canonical_package_decision_counts_and_ranges_are_derived() -> None:
+    families = _canonical_package_families()
+    assert set(families) == {"OP", "MCP-OP", "NAR-OP", "NAPDCB-OP"}
+
+    ranges: dict[str, str] = {}
+    counts: dict[str, int] = {}
+    for family, rows in families.items():
+        ids = [decision_id for decision_id, _number in rows]
+        numbers = [number for _decision_id, number in rows]
+        assert len(ids) == len(set(ids)), f"duplicate {family} decision ID"
+        assert numbers == list(range(1, max(numbers) + 1)), (
+            f"{family} decisions are not a contiguous range from 1: {numbers}"
+        )
+        counts[family] = len(numbers)
+        ranges[family] = f"`{ids[0]}` through `{ids[-1]}`"
+
+    total = sum(counts.values())
+    readme = " ".join(README.read_text(encoding="utf-8").split())
+    source_index = SOURCE_INDEX.read_text(encoding="utf-8")
+    plan = PLAN.read_text(encoding="utf-8")
+
+    assert f"The {total} operator decisions" in readme
+    for family, count in counts.items():
+        assert f"{count} `{family}`" in readme
+        assert ranges[family] in source_index
+        assert ranges[family] in plan
+    assert f"own {total} operator decisions" in source_index
+    assert plan.count(f"{total} operator decisions") >= 2
+    assert f"counts exclude all {total}" in plan

@@ -3,21 +3,24 @@ title: my-pa — Risks and Rejected Patterns
 artifact_id: RISKS-MYPA-CANONICAL-002
 artifact_type: Risk register
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z
+version: 2.3
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
-date: 2026-08-02
+date: 2026-08-04
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: 195fa54206996dddd6c6e0b6da0872781aa4f5f0
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.2
+feature_package_id: MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087
+feature_package_folder_id: 13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5
+feature_package_manifest_id: 1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J
+feature_package_publication_receipt_id: 1ATS9ONwZmA9Ar1_-sHaxCKcRUUwvoOqT
+integration_control_folder_id: 1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99
 ---
 
 # Risks and Rejected Patterns
@@ -81,3 +84,31 @@ Chat-first; generic dashboard; destination per object; mandatory metadata; separ
 - Direct filesystem, database, Cloudflare, OAuth-client, credential, shell, or host administration through product tools.
 - Declaring ChatGPT, Claude, Grok, mobile clients, or production ingress supported without direct current evidence.
 
+## Apple Mail, Calendar & Contacts risks
+
+| ID | Risk | Severity | Control |
+|---|---|---|---|
+| NAPDCB-R01 | Display labels mistaken for stable account identity | High | Bind opaque provider identity to stable my-pa ID; labels remain metadata |
+| NAPDCB-R02 | Watcher starts before baseline and creates gaps | Critical | Baseline/reconciliation/checkpoint/activation-receipt hard gate per bucket |
+| NAPDCB-R03 | Permission denial appears as empty source | High | Typed permission states; stop checkpoint advancement; visible remediation |
+| NAPDCB-R04 | Calendar recurrence/timezone errors | High | Preserve series/occurrence, timezone, all-day, cancellation, and overlap semantics |
+| NAPDCB-R05 | Mail automation is brittle or over-privileged | High | Current feasibility spike, bounded read-only adapter, TCC/sandbox evidence, fail closed |
+| NAPDCB-R06 | Contact duplication or lost group membership | Medium | Stable contact identity plus separate membership edges and reconciliation |
+| NAPDCB-R07 | Native helper bypasses application policy | Critical | No DB credentials; authenticated application admission only; contract tests |
+| NAPDCB-R08 | Spool leaks personal data | Critical | Protected directory, encryption where available, bounded retention, redacted logs, recovery tests |
+| NAPDCB-R09 | Source content prompt-injects models/tools | Critical | Content treated as data; no implicit authority; proposal/Review gates; external models disabled by default |
+| NAPDCB-R10 | Removal destroys historical evidence | High | Removal stops reads; purge is separate explicit retention action |
+| NAPDCB-R11 | Dynamic “all future buckets” broadens scope silently | High | Separate explicit option; default exact frozen selection |
+| NAPDCB-R12 | Legacy code/binaries are copied without provenance | High | Adapt behavior only; rebuild source, sign/notarize, synthetic tests; no opaque binary adoption |
+| NAPDCB-R13 | Product documentation is mistaken for live-access authority | Critical | `NOT_GRANTED` throughout; exact operator gates for TCC, accounts, activation, and risk |
+
+## Additional rejected patterns
+
+- Hard-coded `BF-Personal`, `Moss`, `iCloud`, user home paths, or plist arguments as canonical configuration.
+- Direct PostgreSQL access or credentials in the native helper.
+- NAS SCP, NAS SQLite, dual-write, or migration-loader reuse as the normal ingestion path.
+- Starting watchers merely because a process is installed or alive.
+- Last-write-wins checkpoints, checkpoint advancement before admission, or silent retry exhaustion.
+- Treating account disappearance, zero results, permission denial, and unsupported scope as equivalent.
+- Blanket import of all accounts, all historical mail, all attachments, or all future buckets without explicit scope.
+- Apple source mutation, unmanaged reminder adoption, Messages/Notes/Photos expansion, or cloud-hosted Mac operation in the MCV.

@@ -3,21 +3,24 @@ title: my-pa — Canonical Workflow Inventory
 artifact_id: WORKFLOWS-MYPA-CANONICAL-002
 artifact_type: Workflow inventory
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z
+version: 2.3
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
-date: 2026-08-02
+date: 2026-08-04
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: 195fa54206996dddd6c6e0b6da0872781aa4f5f0
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.2
+feature_package_id: MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087
+feature_package_folder_id: 13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5
+feature_package_manifest_id: 1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J
+feature_package_publication_receipt_id: 1ATS9ONwZmA9Ar1_-sHaxCKcRUUwvoOqT
+integration_control_folder_id: 1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99
 ---
 
 # Canonical Workflow Inventory
@@ -106,3 +109,44 @@ Managed artifact or proposed record contains consequential commitments, decision
 ## WF-28 Trace an MCP-originated read or write
 System > Connected Clients/Activity → select invocation → inspect actor, client profile, capability/schema, purpose, scope, policy version/decision, source or managed target, disclosure, audit event, idempotency/expected version, mutation receipt, and limitations → follow lineage into Library, Review, Situation, project, or relationship context.
 
+## Apple Mail, Calendar & Contacts workflows
+
+### WF-29 — Connect and discover Apple sources
+
+1. User opens System → Sources → Apple Mail, Calendar & Contacts.
+2. Product verifies the native bridge and permissions independently.
+3. Native adapters discover reachable accounts and buckets.
+4. UI groups results by Mail, Calendar, and Contacts and discloses unavailable or unsupported scope.
+5. User resolves any ambiguous account label to one exact discovered identity.
+
+### WF-30 — Configure and begin initial synchronization
+
+1. User selects accounts and exact mailboxes, calendars, and contact collections.
+2. User selects an initial sync start date.
+3. Product freezes a scope preview and performs immediate per-bucket preflight.
+4. User confirms **Begin Sync**.
+5. Product records the immutable cutoff and starts bounded baseline jobs.
+6. UI shows item outcomes, retriable failures, exclusions, and estimated/known coverage without leaking content into logs.
+
+### WF-31 — Reconcile and activate watchers
+
+1. Each bucket independently reaches source exhaustion or terminal exclusions.
+2. Product reconciles cursor continuity, admitted/duplicate/failure outcomes, spool residue, and checkpoint monotonicity.
+3. A durable checkpoint and activation receipt are committed.
+4. Only then does the bucket enter `watching`.
+5. Account health remains partial if sibling buckets failed.
+
+### WF-32 — Modify synchronized scope
+
+- Adding an account or bucket repeats discovery, preflight, baseline, reconciliation, and watcher activation.
+- Removing scope stops future reads and preserves prior evidence.
+- Moving the start date earlier creates an idempotent backfill.
+- Pausing retains checkpoints; resuming verifies identity and runs overlap reconciliation.
+
+### WF-33 — Recover permission or source drift
+
+1. A watcher detects permission denial, account disappearance, bucket remapping, checkpoint distrust, or bridge incompatibility.
+2. Affected buckets stop advancing and enter a precise degraded state.
+3. UI provides remediation or explicit remapping.
+4. Recovery revalidates scope, reconciles overlap, and issues a new activation receipt.
+5. Historical evidence is preserved throughout.

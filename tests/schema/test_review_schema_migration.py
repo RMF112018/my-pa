@@ -285,6 +285,8 @@ def _seed_promotion(
     cite_span: bool = True,
     disposition: Disposition = Disposition.ACCEPT,
     corrected_value: str | None = None,
+    assertion_type: str = "commitment",
+    assertion_version_id: str | None = None,
 ) -> dict[str, str]:
     """A review case, one decision, the assertion it accepted, and its span link.
 
@@ -322,10 +324,16 @@ def _seed_promotion(
         text(
             f"INSERT INTO {SCHEMA}.capture_assertions (assertion_id, version_id, proposal_id, "  # noqa: S608
             "decision_id, assertion_type, state, normalized_value, accepted_at) VALUES "
-            "(:assertion_id, :version_id, :proposal_id, :decision_id, 'commitment', 'accepted', "
+            "(:assertion_id, :assertion_version_id, :proposal_id, :decision_id, "
+            ":assertion_type, 'accepted', "
             ":corrected_value, now())"
         ),
-        {**promoted, "corrected_value": corrected_value},
+        {
+            **promoted,
+            "assertion_version_id": assertion_version_id or promoted["version_id"],
+            "assertion_type": assertion_type,
+            "corrected_value": corrected_value,
+        },
     )
     if cite_span:
         connection.execute(
@@ -655,10 +663,11 @@ def test_an_accepted_proposal_must_name_an_assertion_that_exists(
 
     `capture_proposals.accepted_record_id` carries no `ForeignKey`, because
     adding one to the shared declaration would change what already-merged
-    `2b7e9f4c1a83` emits. Three assertions, because a trigger that refused
-    everything would satisfy the first two on its own: the real assertion is
-    nameable, an identifier naming nothing is refused, and a type that is not
-    `assertion` is refused even when the identifier does exist.
+    `2b7e9f4c1a83` emits. The accepted assertion remains nameable when the same
+    transaction legitimately marks it for revalidation. Unknown, wrong-type,
+    wrong-proposal, wrong-version, wrong-assertion-type, and wrong-disposition
+    bindings are refused; the corrected-value mismatch is covered by the
+    governed-transition test below.
     """
     engine = create_database_engine(disposable_database)
     try:
@@ -674,15 +683,53 @@ def test_an_accepted_proposal_must_name_an_assertion_that_exists(
                 ),
                 promoted,
             )
-        with engine.connect() as connection:
-            named = connection.execute(
+            connection.execute(
                 text(
-                    f"SELECT accepted_record_id FROM {SCHEMA}.capture_proposals "  # noqa: S608
-                    "WHERE proposal_id = :proposal_id"
+                    f"UPDATE {SCHEMA}.capture_assertions "  # noqa: S608
+                    "SET state = 'revalidation_required', revalidation_required_at = now() "
+                    "WHERE assertion_id = :assertion_id"
                 ),
                 promoted,
-            ).scalar_one()
-        assert named == promoted["assertion_id"]
+            )
+        with engine.connect() as connection:
+            bound = connection.execute(
+                text(
+                    f"SELECT p.accepted_record_id, a.state "  # noqa: S608
+                    f"FROM {SCHEMA}.capture_proposals p "
+                    f"JOIN {SCHEMA}.capture_assertions a "
+                    "ON a.assertion_id = p.accepted_record_id "
+                    "WHERE p.proposal_id = :proposal_id"
+                ),
+                promoted,
+            ).one()
+        assert tuple(bound) == (
+            promoted["assertion_id"],
+            AssertionState.REVALIDATION_REQUIRED.value,
+        )
+
+        with engine.connect() as connection:
+            before_post_acceptance_mutation = _accepted_case_snapshot(
+                connection,
+                {**promoted, "review_case_id": promoted["review_case_id"]},
+            )
+        with pytest.raises(DBAPIError) as post_acceptance_mutation, engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.capture_assertions "  # noqa: S608
+                    "SET normalized_value = 'post-acceptance rewrite' "
+                    "WHERE assertion_id = :assertion_id"
+                ),
+                promoted,
+            )
+        assert "governed state transitions" in str(post_acceptance_mutation.value)
+        with engine.connect() as connection:
+            assert (
+                _accepted_case_snapshot(
+                    connection,
+                    {**promoted, "review_case_id": promoted["review_case_id"]},
+                )
+                == before_post_acceptance_mutation
+            )
 
         with pytest.raises(DBAPIError) as unknown, engine.begin() as connection:
             absent = _seed_proposal(connection, 2)
@@ -720,6 +767,59 @@ def test_an_accepted_proposal_must_name_an_assertion_that_exists(
                 {**target, "assertion_id": other["assertion_id"]},
             )
         assert "exact accepted assertion" in str(wrong_lineage.value)
+
+        with pytest.raises(DBAPIError) as wrong_version, engine.begin() as connection:
+            other_version = _seed_proposal(connection, 6)
+            target = _seed_proposal(connection, 7)
+            version_mismatch = _seed_promotion(
+                connection,
+                target,
+                7,
+                assertion_version_id=other_version["version_id"],
+            )
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.capture_proposals SET state = 'accepted', "  # noqa: S608
+                    "accepted_record_type = 'assertion', accepted_record_id = :assertion_id "
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                version_mismatch,
+            )
+        assert "exact accepted assertion" in str(wrong_version.value)
+
+        with pytest.raises(DBAPIError) as wrong_assertion_type, engine.begin() as connection:
+            type_mismatch = _seed_promotion(
+                connection,
+                _seed_proposal(connection, 8),
+                8,
+                assertion_type="task",
+            )
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.capture_proposals SET state = 'accepted', "  # noqa: S608
+                    "accepted_record_type = 'assertion', accepted_record_id = :assertion_id "
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                type_mismatch,
+            )
+        assert "exact accepted assertion" in str(wrong_assertion_type.value)
+
+        with pytest.raises(DBAPIError) as wrong_disposition, engine.begin() as connection:
+            disposition_mismatch = _seed_promotion(
+                connection,
+                _seed_proposal(connection, 9),
+                9,
+                disposition=Disposition.REJECT,
+            )
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.capture_proposals SET state = 'accepted', "  # noqa: S608
+                    "accepted_record_type = 'assertion', accepted_record_id = :assertion_id "
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                disposition_mismatch,
+            )
+        assert "exact accepted assertion" in str(wrong_disposition.value)
 
         command.downgrade(_config(), "base")
     finally:

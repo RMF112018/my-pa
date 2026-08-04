@@ -229,6 +229,34 @@ def test_the_document_is_routed_and_reachable_from_the_runbook() -> None:
     assert relative in runbook, f"{relative} is named by no runbook"
 
 
+def test_limitations_cannot_claim_capture_jobs_are_unconsumed_after_wp7() -> None:
+    pipeline = ROOT / "src" / "my_pa" / "infrastructure" / "jobs" / "capture_pipeline.py"
+    worker = (ROOT / "apps" / "worker.py").read_text(encoding="utf-8")
+    assert pipeline.is_file()
+    assert "capture" in worker
+
+    text = LIMITATIONS.read_text(encoding="utf-8")
+    section = text.split("## 11.", 1)[1].split("## 12.", 1)[0]
+    stale_claims = (
+        "Nothing claims that row",
+        "No worker reads `capture_jobs`",
+        "work no process does yet",
+    )
+    assert not [claim for claim in stale_claims if claim in section]
+    assert "capture worker now claims that row" in section
+    assert "evidence-bound proposals" in section
+
+
+def test_relationship_limitations_exist_when_relationship_models_exist() -> None:
+    relationship = ROOT / "src" / "my_pa" / "domain" / "relationship"
+    assert relationship.is_dir()
+    text = LIMITATIONS.read_text(encoding="utf-8")
+    section = text.split("## 12.", 1)[1]
+    assert "fixture-only read models" in section
+    assert "adds no public capability" in section
+    assert "live contacts" in section
+
+
 # ---- the plants ---------------------------------------------------------------
 
 _THIS = "tests/architecture/test_limitations_cite_evidence.py"

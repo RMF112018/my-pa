@@ -3,21 +3,24 @@ title: my-pa — Canonical Reconciliation Decision Log
 artifact_id: DECISIONS-MYPA-CANONICAL-002
 artifact_type: Decision log
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
-version: 2.2
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z
+version: 2.3
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
-date: 2026-08-02
+date: 2026-08-04
 repository: RMF112018/my-pa
-repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
+repository_head: 195fa54206996dddd6c6e0b6da0872781aa4f5f0
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.1
-feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
-feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
+prior_version: 2.2
+feature_package_id: MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087
+feature_package_folder_id: 13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5
+feature_package_manifest_id: 1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J
+feature_package_publication_receipt_id: 1ATS9ONwZmA9Ar1_-sHaxCKcRUUwvoOqT
+integration_control_folder_id: 1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99
 ---
 
 # Canonical Reconciliation Decision Log
@@ -88,3 +91,21 @@ Later operator decisions, canonical packages, ADRs, or owning feature revisions 
 - `MYPA-NAR-D-010`: AppleScript, Shortcut-based synchronization, direct Reminders database access, LaunchDaemon, MCP internal transport, and premature XPC are rejected for the MCV.
 - `MYPA-NAR-D-011`: The governing feature package is `MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001`, folder `1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq`.
 - `MYPA-NAR-D-012`: Product inclusion does not authorize repository mutation, EventKit permission, credentials, code signing, deployment, production activation, or risk acceptance.
+
+## Native Apple Personal Data Capture Bridge integration decisions
+
+- `MYPA-NAPDCB-D-001`: The user-facing feature name is **Apple Mail, Calendar & Contacts**; “Apple MCC” and “Moss Capture” are legacy aliases only.
+- `MYPA-NAPDCB-D-002`: The feature is included in the MCV as a conditional, first-class macOS source integration.
+- `MYPA-NAPDCB-D-003`: Accounts and buckets are discovered and user-configurable; no personal account label is hard-coded as canonical scope.
+- `MYPA-NAPDCB-D-004`: Typed account names are search/disambiguation aids and cannot activate unresolved scope.
+- `MYPA-NAPDCB-D-005`: Pressing Begin Sync freezes one configuration revision, start instant, cutoff, calendar horizon, and exact bucket identity set.
+- `MYPA-NAPDCB-D-006`: Mail baseline ends at the frozen cutoff; Calendar extends to cutoff plus 90 days; Contacts captures current selected collection membership without a historical cutoff.
+- `MYPA-NAPDCB-D-007`: Baseline completion, reconciliation, durable checkpoint, and activation receipt are mandatory before each bucket watcher becomes authoritative.
+- `MYPA-NAPDCB-D-008`: Apple data is source-authoritative and read-only; it is not Quick Capture, a managed-document write, or product-owned source content.
+- `MYPA-NAPDCB-D-009`: The native host uses protected spool plus authenticated application admission and holds no direct PostgreSQL credentials.
+- `MYPA-NAPDCB-D-010`: The legacy NAS/SCP/SQLite path, fixed plist configuration, hard-coded user paths, and precompiled unverified binaries are rejected as target architecture.
+- `MYPA-NAPDCB-D-011`: Adding scope requires a new baseline; removing scope stops future reads but does not silently delete historical evidence; earlier start dates create idempotent backfills.
+- `MYPA-NAPDCB-D-012`: Permission/source drift produces explicit degraded states and recovery; zero results cannot represent denied access.
+- `MYPA-NAPDCB-D-013`: Mail implementation remains subject to a current feasibility gate; Calendar and Contacts may proceed independently if Mail is blocked.
+- `MYPA-NAPDCB-D-014`: The governing feature package is `MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087`, folder `13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5`.
+- `MYPA-NAPDCB-D-015`: Product inclusion and package publication grant no implementation, live-access, credential, source-mutation, deployment, activation, disclosure, destructive-retention, or risk-acceptance authority.

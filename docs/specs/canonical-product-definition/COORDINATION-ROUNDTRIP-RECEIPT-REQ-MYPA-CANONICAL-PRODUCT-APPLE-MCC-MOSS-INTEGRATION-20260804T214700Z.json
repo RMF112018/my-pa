@@ -1,0 +1,117 @@
+{
+  "authority": {
+    "deployment": "NOT_GRANTED",
+    "destructive_retention": "NOT_GRANTED",
+    "external_model_disclosure": "NOT_GRANTED",
+    "implementation": "NOT_GRANTED",
+    "live_personal_data_access": "NOT_GRANTED",
+    "production_activation": "NOT_GRANTED",
+    "risk_acceptance": "NOT_GRANTED",
+    "source_mutation": "NOT_GRANTED",
+    "tcc_or_credential_mutation": "NOT_GRANTED",
+    "watcher_deployment": "NOT_GRANTED"
+  },
+  "classification": "CANONICAL_PRODUCT_PACKAGE_REVISION_CONTROL",
+  "control_folder": {
+    "drive_id": "1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99",
+    "parent_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+    "uniqueness": "VERIFIED_BY_DIRECT_FOLDER_LIST"
+  },
+  "coordination_request_id": "REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z",
+  "disposition": "MYPA_CANONICAL_PRODUCT_NATIVE_APPLE_CAPTURE_BRIDGE_INTEGRATION_COMPLETE",
+  "exact_identity": {
+    "branch": "main",
+    "canonical_folder_id": "1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq",
+    "canonical_package_id": "MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006",
+    "canonical_parent_id": "1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz",
+    "feature_folder_id": "13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5",
+    "feature_package_id": "MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087",
+    "head_sha": "195fa54206996dddd6c6e0b6da0872781aa4f5f0",
+    "package_version": "2.3",
+    "repository": "RMF112018/my-pa",
+    "tree_sha": "UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR"
+  },
+  "generated_at_utc": "2026-08-04T22:12:27Z",
+  "hash_scope": "stored_raw_bytes_for_all_bound artifacts; receipt self-hash verified by post-write raw readback and reported by the publishing context",
+  "invalidation_rule": "A later canonical artifact revision, Drive-ID or parent change, package-manifest mismatch, superseding feature decision, or repository implementation change not freshly authenticated invalidates reliance for the changed subject.",
+  "operator_only_next_action": "Explicitly authorize WP-12 planning or implementation against freshly authenticated repository truth when desired.",
+  "owning_index": {
+    "drive_id": "1i9r6pDI8jZQnD526_o_aFl8WWUliWX0h1ANLh_gtelE",
+    "name": "00_MYPA_INDEX.md",
+    "registered_heading": "Canonical Product Definition \u2014 Apple Mail, Calendar & Contacts integration \u2014 2026-08-04",
+    "registration_status": "VERIFIED",
+    "revision_id": "AIroW34B4G_SkwFJi_jTYeNGeyBSTSZFEw-_urhKpy7WWsibeyg_MVpJCOmUUMjPEFNtAmFElXyW30Urk12WhIvOswlDlC8iu2nB2sVC"
+  },
+  "package_verification": {
+    "artifact_count": 21,
+    "canonical_status": "CURRENT_CANONICAL_PRODUCT_DEFINITION",
+    "drive_ids_preserved": 21,
+    "manifest_matches_package": true,
+    "parent_bindings_verified": 21,
+    "raw_readbacks_match": 21,
+    "representation": "stored_raw_files",
+    "revised_count": 17,
+    "unchanged_count": 4
+  },
+  "publication_binding": {
+    "publication_receipt_drive_id": "1N-Jduf-hXcpH-kugP9HsxnqVsau4QONU",
+    "publication_receipt_sha256": "b6dc9d02471407a53cd5308b67903677aeb500e7c516bde9c9f407946d2cedab",
+    "publication_status": "COMPLETE"
+  },
+  "record_type": "COORDINATION_ROUNDTRIP_RECEIPT",
+  "request_response_binding": {
+    "complete_context_declaration": true,
+    "coordination_request_id_match": true,
+    "identity_binding_match": true,
+    "request": {
+      "bytes": 4250,
+      "drive_id": "1D3M4_tCbohJyV84l26P9s2IDDhqqlX1B",
+      "readback": "MATCH",
+      "sha256": "62de3c9868f9fe23e5312868318151a595c2df7646f41f237be1fa3f9abda458"
+    },
+    "response": {
+      "bytes": 6179,
+      "drive_id": "15-3x6eyUPEvs4WBdOcMUcUGC_z_O0UCE",
+      "readback": "MATCH",
+      "sha256": "7dc26f6899ca7788ff91b9e3b352f812aa35791b326e5dd758d20ca9f2492095"
+    }
+  },
+  "roundtrip_status": "COMPLETE",
+  "schema_version": 1,
+  "self_drive_id": "15th9q7BiMQpzZqi5YKedadBbeBH33KoW",
+  "supporting_artifacts": {
+    "artifact_disposition": {
+      "bytes": 12568,
+      "drive_id": "1vCigEEP3Rmj60-ukkLze37pU0BXmj7Lg",
+      "readback": "MATCH",
+      "sha256": "08f62eec99e8ae8b369e248c2fa1efa451c3bb34a965316dc8d2670d9676e15f"
+    },
+    "package_manifest": {
+      "bytes": 13899,
+      "drive_id": "1xxQG_fsUlTxX7VRXOCm8SSCjYF2xPV1j",
+      "readback": "MATCH",
+      "sha256": "d1b3f7a91fbe07d11f9100346f0ef65f0e3576d35dcf27708f585bb5e6ca038a"
+    },
+    "publication_receipt": {
+      "bytes": 5309,
+      "drive_id": "1N-Jduf-hXcpH-kugP9HsxnqVsau4QONU",
+      "readback": "MATCH",
+      "sha256": "b6dc9d02471407a53cd5308b67903677aeb500e7c516bde9c9f407946d2cedab"
+    },
+    "readback_verification": {
+      "bytes": 11873,
+      "drive_id": "1qFk2KVI217QxIM5X7FwYD533g_VZSUX5",
+      "readback": "MATCH",
+      "sha256": "a1e193d36d9436f6b473924e6182c5351fba2698301b20875d81763471f70bc4"
+    }
+  },
+  "verification": {
+    "canonical_package_readback_match": true,
+    "index_registration_verified": true,
+    "publication_receipt_verified": true,
+    "request_readback_match": true,
+    "response_readback_match": true,
+    "supporting_artifacts_readback_match": true,
+    "this_receipt_readback_expected": "MATCH_AFTER_WRITE"
+  }
+}

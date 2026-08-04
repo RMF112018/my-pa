@@ -3,21 +3,24 @@ title: my-pa — Source Authority and Provenance Model
 artifact_id: AUTH-MYPA-CANONICAL-002
 artifact_type: Source authority and provenance
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-MCP-INTEGRATION-20260802T095600Z
-version: 2.1
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z
+version: 2.3
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
-date: 2026-08-02
+date: 2026-08-04
 repository: RMF112018/my-pa
-repository_head: 9096fa4fbe64ff1cdabc07e53a3e68c52efc8575
+repository_head: 195fa54206996dddd6c6e0b6da0872781aa4f5f0
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.0
-feature_package_id: MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086
-feature_package_folder_id: 1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa
+prior_version: 2.2
+feature_package_id: MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087
+feature_package_folder_id: 13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5
+feature_package_manifest_id: 1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J
+feature_package_publication_receipt_id: 1ATS9ONwZmA9Ar1_-sHaxCKcRUUwvoOqT
+integration_control_folder_id: 1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99
 ---
 
 # Source Authority and Provenance Model
@@ -96,3 +99,12 @@ Version conflict fails explicitly. A source read with a changed fingerprint retu
 
 No connector capability mutates source bytes, names, locations, permissions, or metadata. The absence of source mutation is a capability boundary, not a configurable flag.
 
+## Apple source authority
+
+Apple Mail, Calendar, and Contacts are external source-authoritative systems. my-pa records what was observed, when, through which bridge/account/bucket, under which provider revision and configuration, with what digest, range, coverage basis, and limitations. It does not claim ownership of the source object and does not overwrite it.
+
+Required provenance includes bridge ID, source account and bucket IDs, provider-native opaque identity at the adapter boundary, source revision, authoritative source timestamps, observation time, admission time, configuration revision, sync run, checkpoint, adapter/contract version, content digest, and applicable exclusion or truncation markers.
+
+Source absence is an observation, not automatic deletion. Mailbox moves, calendar cancellation, contact group removal, permission loss, and account disappearance append evidence and affect freshness; they do not erase prior versions. Physical purge, if ever supported, is a separate retention decision and must preserve required audit/provenance records.
+
+Derived identities, relationship facts, commitments, tasks, decisions, and other assertions cite source versions or exact spans where available. Conflicting or ambiguous derivations remain proposals or enter Review. An imported source object never gains authority merely because it was observed through a trusted local bridge.

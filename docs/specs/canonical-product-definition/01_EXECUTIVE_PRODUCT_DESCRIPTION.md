@@ -3,21 +3,24 @@ title: my-pa — Canonical Product Description
 artifact_id: PRODUCT-MYPA-CANONICAL-DESCRIPTION-002
 artifact_type: Canonical product description
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
-version: 2.2
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z
+version: 2.3
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
-date: 2026-08-02
+date: 2026-08-04
 repository: RMF112018/my-pa
-repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
+repository_head: 195fa54206996dddd6c6e0b6da0872781aa4f5f0
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.1
-feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
-feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
+prior_version: 2.2
+feature_package_id: MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087
+feature_package_folder_id: 13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5
+feature_package_manifest_id: 1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J
+feature_package_publication_receipt_id: 1ATS9ONwZmA9Ar1_-sHaxCKcRUUwvoOqT
+integration_control_folder_id: 1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99
 ---
 
 # my-pa — Canonical Product Description
@@ -219,3 +222,15 @@ my-pa can project eligible accepted Tasks into Apple Reminders through the alway
 Apple Reminders does not become a competing task store. It is a familiar execution surface. A reminder completed on an Apple device can complete the mapped my-pa Task after reconciliation, audit, and receipt. That completion does not by itself prove that a related Commitment, project milestone, delivery, or other real-world condition was fulfilled.
 
 The MCV uses one dedicated iCloud list, a signed Swift/EventKit bridge on the always-on Mac, partial field projection, durable command and observation ledgers, idempotent reconciliation, and explicit conflict handling. Blanket import, shared-list workflows, native recurrence-series synchronization, attachments, tags, subtasks, AppleScript automation, and last-write-wins are excluded.
+
+## Native Apple personal-data source integration
+
+my-pa can observe selected Apple Mail, Calendar, and Contacts data from an enrolled Mac and convert it into durable, source-backed evidence for search, timelines, relationship context, meeting preparation, commitments, and later governed workflows. The user controls which reachable accounts and buckets are included from **System → Sources → Apple Mail, Calendar & Contacts**.
+
+First use is a guided scope transaction rather than a hidden watcher installation. The product verifies the native bridge and permissions, discovers actual accounts, resolves typed labels to stable identities, presents selectable mailboxes, calendars, and contact collections, captures a start date, freezes a cutoff, rechecks reachability, and shows the exact proposed scope before **Begin Sync**. Progress is visible by account and bucket; partial coverage and permission denial remain explicit.
+
+Mail is initially observed from the selected start through the frozen cutoff. Calendar is initially observed from the selected start through 90 days after that cutoff, including bounded recurring occurrences. Contacts are a current-state baseline for selected groups or containers. Watchers do not become active merely because a background process is running: each bucket must complete its baseline, reconcile coverage, commit a checkpoint, and produce an activation receipt.
+
+The integration is read-only at the Apple source boundary. Removing an account or bucket stops future observation but does not silently delete prior evidence. Adding scope later runs the same baseline-before-watcher sequence. Moving the start date earlier creates an idempotent historical backfill; moving it later does not erase already observed history.
+
+This capability strengthens the Evidence Operating System without changing its category or navigation. Apple source evidence can enrich Relationships and Situations, but extraction remains proposal-first and consequential promotion remains governed by Review. The detailed feature contract remains `MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087` in Drive folder `13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5`.

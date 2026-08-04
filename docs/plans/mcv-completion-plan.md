@@ -266,16 +266,20 @@ agent that did not author it.
     one-way creation and updates, `NAR-06` completion roundtrip, `NAR-07`
     conflicts and recovery, `NAR-08` security and operational proof.
     `D-39` records the historical sequencing provenance; WP-11 remains dependent
-    on WP-10, and nothing in it is built. Because WP-10 is now post-MCV, WP-11
-    cannot execute inside the pre-completion sequence and joins the disclosed
-    deferred set; `D-104` does not answer its active gates `NAR-OP-001` through
-    `NAR-OP-009` or authorize any part of it.
+    on WP-10, and nothing in it is built. `D-104` keeps WP-10 deferred until MCV
+    completion, so WP-11 remains dependency-blocked and its own pre-completion or
+    post-completion placement is unresolved. `D-104` does not answer its active
+    gates `NAR-OP-001` through `NAR-OP-009` or authorize any part of it.
+14. **WP-12 — Apple Mail, Calendar & Contacts.** Provisional only, sequenced
+    after WP-10 and WP-11 by the operator's 2026-08-04 clarification. Separate
+    operator authorization is required before implementation planning. It has
+    no pre-MCV or post-MCV disposition, and nothing in it is planned or built.
 
-Items 4 through 13 restate section 12's sequence table, which is the authoritative
+Items 4 through 14 restate section 12's sequence table, which is the authoritative
 one; `D-28` split WP-4, the Remote Quick Capture revision added WP-0R and
-WP-10, and the Native Apple Reminders revision added WP-11. Section 7 originally
-stopped at WP-5, and listing only half the merge order was how a reader ended up
-consulting two tables that disagreed.
+WP-10, the Native Apple Reminders revision added WP-11, and `D-105` records the
+provisional WP-12. Section 7 originally stopped at WP-5, and listing only half
+the merge order was how a reader ended up consulting two tables that disagreed.
 
 ## 8. Boundaries held throughout
 
@@ -311,7 +315,7 @@ claim left visible.
 | D-05 | Corpus claim accepted | Recomputed from the live database, not restated. Exact match. | Verified |
 | D-06 | PDF remains `unsupported` | `P00-OD-003` is `OPEN_OPERATOR`. Reporting `unsupported` is the specified behavior; silently skipping is forbidden. | Accepted |
 | D-07 | Corrected in place: this document first said "five revisions" | The count came from a truncated directory listing. Recounted from `migrations/versions/*.py`: six, chained `5d75f23847c9 → 1e6c0a94f3b7 → 4b9f0d27ac31 → 2f7d1ba05c48 → 3a8e2cb16d59 → 6c4d3ea82f10`, the last creating target views, and the head matching `alembic_version` in the live database. The mechanism, not just the number, is fixed: the count is now stated with the head revision beside it, so a future drift between the files and the database is visible rather than latent. | Corrected |
-| D-08 | Terminal disposition cannot be reached in this scope | Plan §11 requires GoodNotes, frontend, and relationship acceptance criteria that D-03 and D-04 defer. The eventual terminal disposition must name the deferred set and must not assert `MYPA_CURRENT_PRODUCT_SCOPE_COMPLETE`. **Updated 2026-08-04:** `D-104` completes the pre-completion implementation sequence through WP-9 and makes the repository ready for the operator's MCV-completion decision. It does not itself reach the terminal state, make deferred work complete, or declare the broader current product scope complete. | Pending operator MCV-completion decision under `AGENTS.md` section 1 |
+| D-08 | Terminal disposition cannot be reached in this scope | Plan §11 requires GoodNotes, frontend, and relationship acceptance criteria that D-03 and D-04 defer. The eventual terminal disposition must name the deferred set and must not assert `MYPA_CURRENT_PRODUCT_SCOPE_COMPLETE`. **Updated 2026-08-04:** the operator explicitly confirmed the MCV is not complete. `D-104` defers WP-10 until completion, while `D-105` provisionally sequences WP-12 after WP-10 and WP-11 without deciding whether those packages are pre-MCV or post-MCV. That boundary conflict remains open and prevents a completion-readiness claim. | MCV not complete; sequence boundary unresolved |
 
 ## 10. Carried forward
 
@@ -485,7 +489,8 @@ original rows above are what section 15's divergence 2 corrected.
 | WP-8 | Review cases, promotion, conversation events, corrections | WP-7 | No |
 | WP-9 | Relationship identity and read-only profiles | WP-4B, WP-8 | No |
 | WP-10 | PWA capture surface and offline recovery — **deferred until after MCV completion by `D-104`; active gates `D-09`, `O-04`, and `O-20` remain** | WP-8 | **Yes** |
-| WP-11 | Native Apple Reminders execution projection, internal sequence `NAR-00` policy amendment, `NAR-01` EventKit feasibility proof, `NAR-02` domain and contracts, `NAR-03` application services, `NAR-04` signed native bridge, `NAR-05` creation and updates, `NAR-06` completion roundtrip, `NAR-07` conflicts and recovery, `NAR-08` security and operational proof — **deferred with its WP-10 dependency; active gates `NAR-OP-001`–`NAR-OP-009` remain** | WP-10 | No |
+| WP-11 | Native Apple Reminders execution projection, internal sequence `NAR-00` policy amendment, `NAR-01` EventKit feasibility proof, `NAR-02` domain and contracts, `NAR-03` application services, `NAR-04` signed native bridge, `NAR-05` creation and updates, `NAR-06` completion roundtrip, `NAR-07` conflicts and recovery, `NAR-08` security and operational proof — **dependency-blocked by deferred WP-10; its completion-boundary placement is unresolved; active gates `NAR-OP-001`–`NAR-OP-009` remain** | WP-10 | No |
+| WP-12 | Apple Mail, Calendar & Contacts — **provisional only; implementation planning requires separate operator authorization; no pre-MCV or post-MCV disposition** | WP-10, WP-11 | To be decided |
 
 Two things about that table are worth stating rather than leaving to be inferred.
 
@@ -511,12 +516,14 @@ WP-0R through WP-9 are frontend-free and proceeded under `D-09`. **WP-10 is
 not**, and the operator directly deferred it until after MCV completion on
 2026-08-04 (`D-104`), superseding `D-32`'s assumed pre-completion sequencing.
 WP-11 remains frontend-free — its surface is a signed macOS bridge, not a web
-surface, so `D-09` does not reach it — but its declared WP-10 dependency now
-puts it outside the pre-completion sequence too. It also remains held by nine
-open operator decisions `NAR-OP-001` through `NAR-OP-009`, one of which is the
-EventKit permission grant and another the code-signing identity. See `D-39` and
-`D-104` for sequencing provenance; the active gates are the `NAR-OP-*` decisions
-named above. The remaining
+surface, so `D-09` does not reach it — but its declared WP-10 dependency makes
+its placement conflict with that deferral rather than proving a post-completion
+disposition. It also remains held by nine open operator decisions
+`NAR-OP-001` through `NAR-OP-009`, one of which is the EventKit permission grant
+and another the code-signing identity. WP-12 is provisional after WP-10 and
+WP-11, but planning it requires separate operator authorization and its MCV
+boundary is likewise unresolved. See `D-39`, `D-104`, and `D-105`; no package in
+that chain is silently reordered. The remaining
 frontend stages — Quick Capture `QC-05` through `QC-08`, and every responsive
 surface in the Relationship Intelligence specification — are not planned here
 and remain held.
@@ -1172,7 +1179,7 @@ managed-document write and grants the source-provider port nothing.
 | D-53 | `D-46`'s widening still lands, but its stated premise was wrong and the register must not carry the wrong reason | Widen the database-tier job to `-m "database or recovery or e2e"`, keep the markers on the tests, and leave the two FAST jobs excluding both. The premise recorded in `D-46` and repeated in three handoffs was that recovery and e2e tests "will never run in CI" unless the job is widened. Measured and independently confirmed: `-m database` selects **any** test carrying the `database` marker whatever else it also carries, every `recovery`-marked test carries both, and `-m "recovery and not database"` collects **0 of 2478**. The existing recovery tests therefore **did** execute in CI and the widening does not rescue them. It is still required for the two reasons that do hold: **`-m e2e` collected 0 of 2478**, so WP-4B3's criterion-7 end-to-end tests would run in no job unless they also happened to carry `database`; and the present safety is **contingent on every future recovery or e2e test also carrying `database`**, which nothing enforces. A decision that survives on a false premise is one measurement away from being discarded along with the premise. Invalidated by a mechanical guard asserting that every `recovery`- or `e2e`-marked test is selected by some CI job, which would make the widening redundant — no such guard exists. | Implemented by WP-4B3, with the corrected reason in the workflow's own comment |
 | D-54 | S6 additionally owns four items S5 surfaced that belonged to no ownership set | `README.md`'s two now-false claims, `docs/architecture/module-boundaries.md`'s "two programs", the missing `all_sources` reader in `infrastructure/persistence/registry.py`, and the absent `tests/jobs/README.md`. S5 refused to edit outside its ownership and reported instead, which is correct behaviour and is why these are visible at all. Three of the four are **stale claims created by this package's own change** — the exact defect class the campaign has recorded three times — and leaving them would ship a README that denies the executor the same commit adds. The `all_sources` gap is different in kind: the design's section 5.4 guard allowlist names a reader that does not exist, so S5's guard names a *table* instead, a documented workaround that must either be closed or explicitly justified rather than left silent. Invalidated by an owner other than S6 taking `docs/` and `registry.py`. | Implemented by WP-4B3; see the closing note of this section for what each item resolved to |
 | D-55 | The design's section 9 criterion-7 plant does not isolate end (b); it fails both ends | **The isolating pair is a plant on the executor's provider identity — which fails end (a) while end (b) still answers — plus a `sources.fetch` that succeeds and returns nothing, which fails end (b) while end (a) stays green.** The design and the S6 assignment both claimed that reverting `fixture._locate` to a per-instance map fails (b) while (a) passes. Measured on `500cf32`: `_locate` is the single resolution point for the executor **and** for `sources.fetch`, so the revert quarantines every object, coverage goes `(4, 0, 0, 4)`, and end (a) has nothing to read. No single-point reversion isolates end (b), because end (a) transits end (b)'s whole mechanism. This matters beyond bookkeeping: **either plant alone is green on a broken bridge**, so a reviewer accepting the design's stated pair would have accepted a vacuous proof of the criterion this package is most likely to be attacked on. The replacement pair was independently verified to isolate both ends. Invalidated by a change making `_locate` no longer the shared resolution point, which would restore the design's asymmetry. | Corrects the design's section 9; the replacement pair is what proves criterion 7 |
-| D-56 | No third canonical revision; the v2.2 mirror is current against Drive, verified by hash rather than by the `version:` field | Recomputed 2026-08-03 before WP-5 was scoped, because the package had been revised in place **twice** mid-campaign and the first revision went unnoticed across four merged pull requests. `rclone lsjson --recursive --hash` over Drive folder `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq` enumerated **47 entries — 42 files and 5 folders** — and every one of the **31** files mirrored at `../specs/canonical-product-definition/` compares **IDENTICAL** by SHA-256: 31 identical, 0 differing, 0 repository-only, 11 Drive-only, those eleven being the unmirrored members `D-44` already names. The latest `modifiedTime` across all **42** members is `2026-08-02T15:09:42.461Z`, earlier than WP-0R2's mirror, so nothing has been touched since. **State the universe with the number**: 31 mirrored files and 42 package members are two different denominators, and recomputing over the wrong one is the defect `D-44` records. The `D-44` guard cannot substitute for this check — it proves the mirror matches what the publisher *recorded*, not that the mirror is current against Drive. | Verified clean; re-run both checks before each package |
+| D-56 | The v2.2 mirror was current against Drive when checked on 2026-08-03 | Recomputed before WP-5 was scoped, because the package had been revised in place twice mid-campaign and the first revision went unnoticed across four merged pull requests. At that check all 31 mirrored files compared identical by SHA-256 and the newest canonical-package modification was `2026-08-02T15:09:42.461Z`. This was a time-bound verification, not a permanent "no later revision" assertion. The check fired again on 2026-08-04: version 2.3 changed 17 numbered artifacts and invalidated this row's current-state conclusion. `D-105` records the new reconciliation. | Historical verification; superseded by `D-105` |
 | D-57 | WP-5 splits into WP-5A and WP-5B, WP-5A first | WP-5A ships WP-5's **three stated acceptance criteria and nothing else**: the seven conditions of `../specs/mcv-read-only-vertical-slice.md` section 3 each demonstrated by one synthetic end-to-end test, recovery tests that kill a worker mid-extraction proving no duplicate and no lost coverage, and empty-to-head and head-to-empty migration against a disposable database. WP-5B ships the remaining in-scope items — health and readiness endpoints, console entry points and the ordered start and stop sequence, migration validation as a *gate*, the end-to-end operator runbook, the limitations document, and index and README staleness. `D-52`'s own test was applied rather than convenience. `D-52` refused to split WP-4B3 because the proposed first pull request satisfied **one of seven** criteria and **narrowed** criterion 3 — a prefix, not a split. This boundary differs in kind: WP-5A satisfies **all three** acceptance criteria outright and WP-5B **none**, so neither half leaves a criterion half-proven, which is the bar `D-43` and `D-52` set. The ordering is forced by the limitations rule: WP-5B's limitations document must state what the slice does **not** do, and a limitation may only be stated at or slightly below demonstrated capability — which is writable only after WP-5A measures it. **Citation corrected in place by WP-5B, and it was the `D-16` defect class again.** This clause cited "`AGENTS.md` section 15", which does not exist: `AGENTS.md` has **9** `##` sections, ending at "9. Mandatory stops", and the phrase appears nowhere in that file. The rule itself is real and its home is the campaign's operating brief, not repository policy. Left visible rather than silently repointed, because a register that corrected its own citations without saying so would be the instrument this plan uses to catch exactly this. The cost is named rather than hidden: `D-52` established that under the operator's one-worker cap **review is the dominant cost**, so this split spends two review cycles where one might have done, and that is accepted deliberately. | Split; WP-5A in delivery |
 | D-58 | `capabilities.get`'s `readiness` is a build-time property, not a runtime probe, and WP-5B must make that unmistakable rather than quietly widen what it measures | Measured at `6660dbb` from the modules, not from a report. `build_readiness_report` (`../../src/my_pa/application/capabilities.py:136`) derives its state by **counting wired handlers**, and `ApplicationService._capabilities_get` (`../../src/my_pa/application/service.py`) never opens a database connection, so with all eight handlers wired it answers `readiness.state: ready` **even when PostgreSQL is unreachable**. The function is honest about what it measures and its docstring says so. The hazard is where that value is read: `../../ops/runbooks/gateway-operations.md` presents `readiness.state: ready` as observed gateway output, which is exactly the position an operator reads a runtime probe. Meanwhile a real probe already exists and no transport can reach it — `healthcheck(engine)` (`../../src/my_pa/infrastructure/database/engine.py:56`) is exported from `my_pa.infrastructure.database` and has **zero callers** in `src/`, `apps/`, or `migrations/`. So the repository holds a working database probe nothing can call, beside a build-time report an operator would mistake for one. Adding a health or readiness route would be the **first non-`POST /v1/{capability}` route in the process** — `../../src/my_pa/adapters/http/app.py` declares exactly one `Route` — and would therefore sit outside the capability, authorization, and audit envelope every existing path transits. That is a design question for WP-5B to argue, not a wiring task. Recorded now so it is not rediscovered as a surprise; it is not a defect WP-4B3 created and it is not WP-5A's, which adds no production code. **SUPERSEDED by `D-61` on 2026-08-03, and the original text above is preserved deliberately.** Its central inference — that `capabilities.get` answers `readiness.state: ready` even when PostgreSQL is unreachable — was measured **false**: `ApplicationService._run` opens the unit of work before it dispatches, so an unreachable server answers `unavailable` and a reachable one that cannot commit the request's audit row answers `internal_error`. (This clause first read "a reachable one behind head", which `D-61` overgeneralised and which was re-measured and corrected in both rows on 2026-08-03; the boundary is `9c6b4a18ed72`, not head.) The row read one function without its caller, which is the same failure shape `D-41` corrected in `D-37`. Its disclosure half is withdrawn — the gateway runbook's transcript was taken against a disposable database at head and is accurate. What survives is the missing runtime probe, which `D-62` builds, and the observation that a health route would be the first non-`POST /v1/{capability}` route. | **Superseded by `D-61`**; preserved, not deleted. The probe it asked for is built; the premise it asked for it on was wrong |
 | D-59 | The WP-5A design is accepted, and six of the assignment's own ground-truth claims were wrong — one of them retires an acceptance criterion | The design at `wp5a-design/DESIGN.md` is adopted as direction. Its corrections matter more than its plan. **(A) WP-5's migration criterion is already satisfied at `6660dbb`, three times over** — `test_upgrade_from_empty_and_downgrade_back_to_empty` in `../../tests/schema/test_foundation_migration.py`, `test_the_audit_revision_runs_empty_to_head_and_head_to_empty` in `../../tests/schema/test_audit_schema_migration.py`, and `test_upgrade_from_empty_and_downgrade_back_to_empty` in `../../tests/schema/test_extraction_schema_migration.py` each run empty to head and back against a disposable database, and the second is named verbatim after the criterion. (Cited by test name rather than by the lines they stood on at `6660dbb` — 109, 274 and 375 — because WP-6 lengthened two of the three files and both numbers rotted inside this branch.) The claim that none did was drawn from `test_knowledge_schema_migration.py`'s docstring, which explains why *that file* targets a named revision rather than head; it was read as a statement about the whole suite. WP-5A therefore adds a residue assertion, not a fourth round trip. **(B) and (C) the hardest design question was already solved**: `../../tests/wire.py` runs a real uvicorn server on a real loopback socket and `../../tests/transports.py`'s `all_transports` takes an `ApplicationService`, so condition 6 needs no harness; and the connection-pool cycle the assignment feared was designed out by the two-engine composition at `../../src/my_pa/bootstrap/gateway.py`. **(D) at `6660dbb`, before this package, two of the six negative-evidence categories were proven nowhere over any transport, and `ambiguous_request` nowhere at all** — `SafeDetail.MULTIPLE_ENROLLMENTS_COVER_THE_SCOPE` is declared in `../../src/my_pa/application/errors.py`, raised in `service.py`, and named in no test at that head; a declared refusal that had never fired is the guard-that-cannot-fire shape this campaign has now recorded three times. **All three gaps are closed by the same commit that carries this row** — WP-5A's `ambiguous_request` test is the first thing ever to make that branch fire, and its cross-source test the first to exercise that guard. The row is written in the past tense deliberately: a register cell asserting a gap is open in the commit that closes it is the exact defect WP-4B3's review caught, and the implementer flagged this one rather than editing text it did not own, which is why it reads correctly now. **(E) the traversal mechanism named in the assignment was wrong and the truth is stronger**: `authorized_object` bounds the knowledge plane only and never guards the source capabilities, while `RegistryIdentity.locate`'s cross-source ownership test — whose own docstring names the defect it prevents — is structurally unreachable with the ephemeral identity and, at `6660dbb`, was exercised by no test at any tier. **(F) `D-56` and `D-57` were cited before these rows existed**, found by a first-cell parse that returned 84 rows ending at `D-55`; the design declined to invent them and the orchestrator supplied the text, the same sequence recorded beneath `D-55` for `D-36`. The design's sixteen non-vacuity plants each isolate one end of a property and name the other end that must stay green, answering `D-55` directly, and one of them is recorded as correctly staying **green** so that a later reader cannot over-claim what the process-kill test covers. | Accepted as direction |
@@ -1220,7 +1227,9 @@ managed-document write and grants the source-provider port nothing.
 | D-101 | **Resolve WP-8's six overlapping operator decisions as one fail-closed policy** | `O-15` and `RI-OD-011`: deterministic launch context is the only automatically accepted link; inferred links stay proposed. `O-16` and `RI-OD-012`: commitments, decisions, financial facts or amounts, critical dates, contradictions, and sensitive relationship conclusions always require review, regardless of confidence; low-risk technical enrichment alone may avoid mandatory review. `O-17`: an accepted record grants no external-action authority. `O-18`: explicit Conversation Log creates one skeletal event, while a conversation inferred from a Quick Note remains proposed. These are the recommendations already carried by the blocking table, now adopted under the operator authority delegated for WP-8 rather than silently assumed in code | Adopted and implemented in WP-8. Invalidated only by a later explicit operator policy revision, which must change the decision register, code, and tests together |
 | D-102 | **Conversation participants are deferred to WP-9; WP-8 does not add a permanently-empty participant table** | The WP-8 in-scope sentence named participant associations, but this build has no person/organization identity record and WP-7 deliberately restricted entity mentions to deterministic document/project identifiers and URLs. A participant row would therefore have no valid target or writer. Adding nullable free text would duplicate sensitive capture content and contradict the evidence-span rule; adding an unpopulatable table would violate `AGENTS.md` section 2. WP-8 still creates the explicit skeletal Conversation event required by `O-18`, with unknown participants represented by absence as the specification permits. WP-9 owns person identity and unresolved people mentions and is the first package able to populate participant associations honestly | Deferred, not implemented. Invalidated when WP-9 supplies the identity/mention target and a bounded writer |
 | D-103 | **The campaign briefing file named by the WP-8 execution directive is absent from repository history; execution uses the pasted operator directive plus repository authority** | A bounded repository/ref search found no `CAMPAIGN-BRIEF.md`. Its absence is a plan/reality discrepancy, not permission to invent its contents. The pasted directive supplies the campaign objective, operator delegation, single-worker constraint, exact-head review/merge gates, and prohibition on deployment. `AGENTS.md`, this plan's WP-8 section, ADR-003, and the mirrored Quick Capture specifications supply the implementation and acceptance criteria. The missing file therefore weakens provenance convenience but does not prevent safe acceptance mapping; exact implementation and review evidence remain bound to Git/CI and the governed external audit artifact | Recorded by WP-8. Invalidated if an authenticated byte-exact campaign brief is later recovered, at which point it must be reconciled rather than silently substituted |
-| D-104 | **WP-10 is deferred until MCV completion; WP-11 follows its dependency into the disclosed deferred set** | Direct operator instruction on 2026-08-04: “defer wp-10 until mcv is complete.” This explicitly overturns `D-32`'s assumed placement of WP-10 inside the pre-completion sequence without lifting active WP-10 gates `D-09` and `O-04` or deciding `O-20`. WP-11's published sequence and this plan both make WP-10 its prerequisite, so WP-11 cannot honestly run before completion while WP-10 is deferred; it is deferred with that dependency rather than silently reordered. Its active gates `NAR-OP-001`–`NAR-OP-009` remain open. WP-0R through WP-9 are merged, so the **pre-completion implementation sequence through WP-9 is complete** and the repository is ready for the operator's MCV-completion decision under `AGENTS.md` section 1. This instruction does not itself declare the MCV complete, assert `MYPA_CURRENT_PRODUCT_SCOPE_COMPLETE`, or authorize deployment. | Operator-directed; pre-completion implementation sequence ends at WP-9; MCV-completion decision pending |
+| D-104 | **WP-10 is deferred until MCV completion; WP-11 remains dependency-blocked on it** | Direct operator instruction on 2026-08-04: “defer wp-10 until mcv is complete.” This explicitly overturns `D-32`'s assumed placement of WP-10 inside the pre-completion sequence without lifting active WP-10 gates `D-09` and `O-04` or deciding `O-20`. WP-11's published sequence and this plan both make WP-10 its prerequisite, so WP-11 cannot run while WP-10 is deferred. The operator's later `D-105` clarification explicitly says the MCV is not complete and does not assign WP-11 to either side of the completion boundary. Its active gates `NAR-OP-001`–`NAR-OP-009` remain open. WP-0R through WP-9 are merged, but that fact is not a completion-readiness claim and does not resolve the sequence conflict, declare the MCV complete, assert `MYPA_CURRENT_PRODUCT_SCOPE_COMPLETE`, or authorize deployment. | Operator-directed; WP-10 deferred; WP-11 dependency-blocked; boundary unresolved |
+
+| D-105 | **Canonical version 2.3 is re-mirrored; Apple Mail, Calendar & Contacts yields provisional WP-12 with planning reserved to the operator** | `REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z` revised 17 of the canonical package's 21 numbered artifacts in place, preserved all 21 Drive identities and parent bindings, and took the package from 2.2 to 2.3. The publisher labels the Native Apple Personal Data Capture Bridge as conditional MCV scope and calls its sequence WP-12, but every canonical artifact and control receipt states `implementation: NOT_GRANTED`; live personal data, TCC/credentials, source mutation, deployment, production activation, external disclosure, destructive retention, and risk acceptance are also not granted. The operator then clarified that the MCV is explicitly not complete and that WP-12 is provisional after WP-10 and WP-11; separate operator authorization is required before WP-12 implementation planning. The operator assigned WP-12 no pre-MCV or post-MCV disposition. Because `D-104` still defers WP-10 until completion and WP-11 depends on WP-10, the resulting completion-boundary conflict is recorded rather than resolved by inference. Nothing in WP-12 is planned, implemented, or authorized. | Re-mirrored; WP-12 provisional / `OPERATOR_AUTHORIZATION_REQUIRED`; boundary unresolved; no implementation authority |
 
 **`D-36`'s citation shipped ahead of its row, and that is recorded rather than
 quietly closed.** WP-4B2b added the section 6 sentence attributing the second
@@ -1424,13 +1433,13 @@ resolved teaches a reader nothing about how it was resolved.
    do not fit behind it. `AGENTS.md` section 1 has since been amended to say the
    date passed and that the MCV runs until the operator declares it complete,
    which is honest but is not a date. On 2026-08-04 the operator directed that
-   WP-10 be deferred until after MCV completion. `D-104` therefore ends the
-   pre-completion implementation sequence at the now-merged WP-9 and carries
-   WP-11 into the deferred set through its explicit WP-10 dependency. The
-   **pre-completion implementation sequence through WP-9 is complete**, and the
-   repository is ready for an operator MCV-completion decision. It cannot report
-   the MCV complete unless the operator issues that declaration. No date or
-   declaration is inferred or drafted on the operator's behalf.
+   WP-10 be deferred until after MCV completion. The operator then explicitly
+   confirmed the MCV is not complete and provisionally placed WP-12 after WP-10
+   and WP-11 without assigning that chain to either side of the MCV boundary.
+   WP-11 still depends on deferred WP-10. The resulting sequence conflict is
+   open: WP-0R through WP-9 being merged is not evidence that the repository is
+   ready for a completion decision. No date, terminal disposition, or boundary
+   resolution is inferred or drafted on the operator's behalf.
 
 2. **Whether promoted scope is still MCV.** `AGENTS.md` section 1 describes the
    objective as "one complete, read-only vertical slice." Quick Capture is not
@@ -2020,3 +2029,69 @@ tested by hash rather than by version field**, since the last revision moved no
 version. An operator decision on `D-32`, `O-21`, or `O-22` invalidates the rows
 that depend on it. Publication of the missing readback evidence would strengthen
 defects 2 and 3 rather than invalidate anything.
+
+## 17. Reconciliation against canonical product definition version 2.3
+
+The condition in sections 15 and 16 fired again on 2026-08-04.
+`REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z`
+revised the same canonical package in place from version 2.2 to 2.3. Direct raw
+readback from canonical folder `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq` established
+the exact revision:
+
+- package `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, 21 numbered
+  artifacts, 17 revised and 4 unchanged;
+- 21 of 21 Drive IDs preserved, 21 of 21 parent bindings verified, and 21 of 21
+  stored-raw-byte readbacks matching;
+- manifest `18_PACKAGE_SOURCE_MANIFEST.json`, Drive ID
+  `1xxQG_fsUlTxX7VRXOCm8SSCjYF2xPV1j`, 13,899 bytes, SHA-256
+  `d1b3f7a91fbe07d11f9100346f0ef65f0e3576d35dcf27708f585bb5e6ca038a`;
+- publication repository basis `RMF112018/my-pa`, `main`,
+  `195fa54206996dddd6c6e0b6da0872781aa4f5f0`; the re-mirror occurs after the
+  documentation-only `D-104` merge at `7ae3917b7d95548883211aa64a12edf99351e59a`.
+
+The control folder is `1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99`. Following the
+existing Native Reminders policy, four raw control records are mirrored and the
+coordination request and response remain external:
+
+| Control artifact | Drive ID | Bytes | SHA-256 |
+|---|---|---:|---|
+| Canonical artifact disposition | `1vCigEEP3Rmj60-ukkLze37pU0BXmj7Lg` | 12,568 | `08f62eec99e8ae8b369e248c2fa1efa451c3bb34a965316dc8d2670d9676e15f` |
+| Publication receipt | `1N-Jduf-hXcpH-kugP9HsxnqVsau4QONU` | 5,309 | `b6dc9d02471407a53cd5308b67903677aeb500e7c516bde9c9f407946d2cedab` |
+| Readback verification | `1qFk2KVI217QxIM5X7FwYD533g_VZSUX5` | 11,873 | `a1e193d36d9436f6b473924e6182c5351fba2698301b20875d81763471f70bc4` |
+| Coordination roundtrip receipt | `15th9q7BiMQpzZqi5YKedadBbeBH33KoW` | 5,116 | `ce1b25b75d53cb355270c52011614233c5050ef501f9acc3cba2d221c9d6f8c0` |
+
+### Scope disposition
+
+Version 2.3 adds the Native Apple Personal Data Capture Bridge, user-facing
+**Apple Mail, Calendar & Contacts**, feature package
+`MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087`
+at Drive folder `13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5` (manifest Drive ID
+`1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J`, publication receipt Drive ID
+`1ATS9ONwZmA9Ar1_-sHaxCKcRUUwvoOqT`). The canonical roadmap calls its sequence
+WP-12 and the MVP definition calls it conditional MCV scope.
+
+Those product statements do not grant repository implementation authority.
+The package and all four controls say implementation, live personal-data
+access, TCC/credentials, source mutation, deployment, production activation,
+destructive retention, external disclosure, and risk acceptance are not
+granted. The operator has nevertheless identified the feature as provisional
+WP-12 after WP-10 and WP-11, while reserving implementation planning to a
+separate authorization. This does not activate WP-12 or decide whether it is
+pre-MCV or post-MCV. `D-104` still defers WP-10 until MCV completion, and WP-11
+still depends on WP-10, so the chain now exposes an unresolved completion-boundary
+conflict. `D-105` records that conflict without reordering the packages or
+inferring authority. Nothing in WP-12 is planned or built.
+
+The nine `NAPDCB-OP-001` through `NAPDCB-OP-009` decisions remain in the
+canonical package's own ledger. Like `NAR-OP-*`, they are excluded from section
+14's three-ledger counts and none is answered here.
+
+### Invalidation
+
+This reconciliation binds the 21 numbered artifacts and four selected controls
+to the exact raw hashes above. Any later canonical artifact revision, Drive-ID
+or parent change, manifest mismatch, superseding feature decision, or explicit
+operator scope/authority decision invalidates the affected statements and
+requires fresh raw readback and re-reconciliation. A green repository hash test
+proves only that the mirror matches these receipts; it does not prove Drive has
+not changed again.

@@ -30,6 +30,10 @@ from my_pa.contracts.v1.capabilities import Availability, ReadinessState
 
 ROOT = Path(__file__).resolve().parents[2]
 README = ROOT / "README.md"
+RELATIONSHIP_PACKAGE = ROOT / "src" / "my_pa" / "domain" / "relationship"
+SOURCE_INDEX = ROOT / "docs" / "00_REPOSITORY_SOURCE_INDEX.md"
+SPECS_INDEX = ROOT / "docs" / "specs" / "README.md"
+COMPLETION_PLAN = ROOT / "docs" / "plans" / "mcv-completion-plan.md"
 
 #: The paragraph that states what this build reports. Anchored on its opening
 #: word rather than on a line number, and read to the next blank line, so
@@ -95,3 +99,64 @@ def test_the_readme_names_the_readiness_state_the_build_reports() -> None:
     assert claimed == {readiness}, (
         f"The README says readiness is {sorted(claimed)}; it is {readiness!r}."
     )
+
+
+def _alembic_identity() -> tuple[int, str]:
+    revisions: dict[str, str | None] = {}
+    identifier = re.compile(r'^revision: str = "(?P<id>[0-9a-f]+)"', re.MULTILINE)
+    parent = re.compile(r'^down_revision: str \| None = "(?P<id>[0-9a-f]+)"', re.MULTILINE)
+    for path in sorted((ROOT / "migrations" / "versions").glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        found = identifier.search(text)
+        if found is None:
+            continue
+        below = parent.search(text)
+        revisions[found["id"]] = below["id"] if below else None
+    heads = set(revisions) - {value for value in revisions.values() if value is not None}
+    assert len(heads) == 1
+    return len(revisions), heads.pop()
+
+
+def test_readme_derives_the_current_alembic_count_and_head() -> None:
+    words = {
+        12: "Twelve",
+        13: "Thirteen",
+        14: "Fourteen",
+        15: "Fifteen",
+        16: "Sixteen",
+    }
+    count, head = _alembic_identity()
+    assert count in words, "extend the readable README count vocabulary"
+    readme = README.read_text(encoding="utf-8")
+    assert f"{words[count]} Alembic revisions" in readme
+    assert f"head `{head}`" in readme
+
+
+def test_relationships_are_not_listed_as_unimplemented_once_the_package_exists() -> None:
+    assert RELATIONSHIP_PACKAGE.is_dir()
+    readme = README.read_text(encoding="utf-8")
+    section = readme.split("Not implemented.", 1)[1].split("Accordingly,", 1)[0]
+    assert "relationship identity and profiles" not in section.lower()
+    assert "fixture" in readme.lower() and "wp-9" in readme.lower()
+
+
+def test_current_state_says_the_synthetic_workflow_runs_but_is_not_deployable() -> None:
+    current = " ".join(README.read_text(encoding="utf-8").split("## Current state", 1)[1].split())
+    assert "workflows run end to end over synthetic fixtures" in current
+    assert "nothing here is deployable" in current
+    assert "no product workflow runs end to end" not in current
+
+
+def test_wp12_stays_provisional_and_operator_authorized_without_boundary_inference() -> None:
+    documents = "\n".join(
+        path.read_text(encoding="utf-8") for path in (SOURCE_INDEX, SPECS_INDEX, COMPLETION_PLAN)
+    )
+    normalized = " ".join(documents.split()).lower()
+
+    assert "wp-12" in normalized
+    assert "provisional" in normalized
+    assert "separate operator authorization" in normalized
+    assert "no pre-mcv or post-mcv disposition" in normalized
+    assert "mcv is not complete" in normalized
+    assert "wp-12 is post-mcv" not in normalized
+    assert "no repository wp-12 exists" not in normalized

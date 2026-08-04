@@ -3,21 +3,24 @@ title: my-pa — Roadmap and Dependency Sequence
 artifact_id: ROADMAP-MYPA-CANONICAL-002
 artifact_type: Product roadmap
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
-version: 2.2
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z
+version: 2.3
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
-date: 2026-08-02
+date: 2026-08-04
 repository: RMF112018/my-pa
-repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
+repository_head: 195fa54206996dddd6c6e0b6da0872781aa4f5f0
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.1
-feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
-feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
+prior_version: 2.2
+feature_package_id: MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087
+feature_package_folder_id: 13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5
+feature_package_manifest_id: 1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J
+feature_package_publication_receipt_id: 1ATS9ONwZmA9Ar1_-sHaxCKcRUUwvoOqT
+integration_control_folder_id: 1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99
 ---
 
 # Roadmap and Dependency Sequence
@@ -124,3 +127,21 @@ Native Reminders is sequenced after the accepted Task and Review lifecycle and a
 9. **NAR-08 — security and operational proof:** revocation, background disablement, privacy, recovery, runbook, independent exact-head review.
 
 In the repository work-package sequence this is a later MCV package, recommended as `WP-11`, after the PWA capture/Review path. Product inclusion grants no implementation, signing, permission, credential, deployment, or production authority.
+
+## WP-12 — Native Apple Personal Data Capture Bridge
+
+This package assigns the next unallocated provisional product work package, **WP-12**, after the existing WP-10 and WP-11 sequence. The repository has merged WP-8 and WP-9, but this documentation revision does not authorize starting WP-10, WP-11, or WP-12 out of sequence.
+
+Recommended WP-12 sequence:
+
+1. **WP-12A — feasibility and exact repository plan:** authenticate current repository truth; prove current macOS Mail, EventKit, Contacts, TCC, sandbox, signing, and service-lifecycle options; submit one bounded plan.
+2. **WP-12B — contracts and persistence:** provider-neutral account/bucket/sync/checkpoint contracts, migrations, idempotency, provenance, audit, receipts, and synthetic fixtures.
+3. **WP-12C — application admission:** authenticated bridge registration, discovery, preflight, baseline, status, reconfiguration, and watcher-use cases; no helper database credentials.
+4. **WP-12D — native host and adapters:** signed Swift host, Mail/Calendar/Contacts read-only adapters, bounded protected spool, safe retry, packaging skeleton.
+5. **WP-12E — baseline and reconciliation:** frozen run windows, pagination, backfill, coverage disclosure, per-bucket checkpoints, crash recovery.
+6. **WP-12F — watchers and rolling horizon:** overlap reads, checkpoint advancement, Calendar future-window maintenance, source/permission drift handling.
+7. **WP-12G — frontend:** System source configuration, discovery, date/scope review, progress, remediation, pause/resume/backfill.
+8. **WP-12H — security and validation:** privacy tests, prompt-injection containment, synthetic/dedicated-account canaries, signing/notarization, recovery, independent exact-head review.
+9. **WP-12I — live activation decision:** exact accounts/buckets, permissions, retention, residual risk, and production activation remain operator-only.
+
+A failed feasibility result may narrow or block the Mail adapter without invalidating Calendar and Contacts. No implementation plan may substitute the legacy NAS/SCP/SQLite architecture or fixed account labels for the canonical target.

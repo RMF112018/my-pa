@@ -3,21 +3,24 @@ title: my-pa — Canonical Product Synthesis Specification
 artifact_id: SPEC-MYPA-CANONICAL-PRODUCT-002
 artifact_type: Canonical product specification
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
-version: 2.2
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z
+version: 2.3
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
-date: 2026-08-02
+date: 2026-08-04
 repository: RMF112018/my-pa
-repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
+repository_head: 195fa54206996dddd6c6e0b6da0872781aa4f5f0
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.1
-feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
-feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
+prior_version: 2.2
+feature_package_id: MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087
+feature_package_folder_id: 13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5
+feature_package_manifest_id: 1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J
+feature_package_publication_receipt_id: 1ATS9ONwZmA9Ar1_-sHaxCKcRUUwvoOqT
+integration_control_folder_id: 1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99
 ---
 
 # my-pa — Canonical Product Synthesis Specification
@@ -541,3 +544,61 @@ Commands are durable, idempotent, at-least-once, readback-verified, and reconcil
 ### MCV acceptance additions
 
 The MCV must prove: permission onboarding and revocation; dedicated list binding; idempotent create/update; exact mapping of supported fields; iPhone/Apple Watch completion roundtrip; Task completion without automatic Commitment fulfillment; same-field conflict detection; different-field merge; deletion without Task deletion; identifier recovery; startup and periodic reconciliation; offline command/observation preservation; sanitized reminder content; no unrelated-list access in normal operation; durable audit and action receipts; and no false claim that EventKit acceptance proves propagation to every Apple device.
+
+## Apple Mail, Calendar & Contacts source integration
+
+### Product contract
+
+The MCV SHALL provide an opt-in source integration named **Apple Mail, Calendar & Contacts**. “Apple MCC,” “Moss Capture,” `BF-Personal`, `Moss`, and `iCloud` are legacy labels or examples, not canonical identities or fixed configuration.
+
+The frontend SHALL allow users to discover, select, add, remove, pause, resume, and reconfigure Apple accounts and independently selectable buckets. Text entry MAY assist search and disambiguation but SHALL NOT activate scope unless it resolves to one exact provider-native identity. Default selection freezes exact bucket identities; an “all future buckets” rule, if offered, SHALL be a separate explicit choice.
+
+### Onboarding and preflight
+
+Before baseline synchronization, the system SHALL:
+
+1. verify the signed native bridge, supported contract version, and application admission endpoint;
+2. evaluate Mail, Calendar, and Contacts permissions independently;
+3. enumerate reachable provider accounts and bucket inventory;
+4. present mailboxes/folders, calendars, and supported contact groups, containers, or categories;
+5. collect one user-local start date and normalize it to an instant;
+6. display exact selected account and bucket identities, range semantics, content limits, and known exclusions;
+7. revalidate bridge, permission, account, bucket, spool, range, and admission health immediately before starting.
+
+One failed bucket SHALL NOT silently disappear from the scope. The preflight response SHALL distinguish reachable, unavailable, permission-denied, ambiguous, unsupported, and verification-failed selections.
+
+### Frozen initial synchronization
+
+Pressing **Begin Sync** SHALL create an immutable run identity containing configuration revision, bridge identity, user timezone, normalized start instant, `initial_sync_cutoff_utc`, calendar horizon, selected stable identities, content limits, and adapter/application contract versions.
+
+Mail SHALL include selected messages whose authoritative message date falls from the selected start through `initial_sync_cutoff_utc`, inclusive. Message identity SHALL be distinct from mailbox-membership observations so moves or multiple memberships do not create false independent messages.
+
+Calendar SHALL include events or bounded occurrences overlapping the selected start through `initial_sync_cutoff_utc + 90 days`. Series and occurrence identity, all-day semantics, source timezone, cancellations, detached occurrences, and source revisions SHALL be preserved. Creation time SHALL NOT substitute for occurrence time.
+
+Contacts SHALL enumerate all current members of selected supported collections. The MCV applies no historical date cutoff to Contacts. A contact present in multiple selected groups SHALL retain each membership edge without duplicating the source identity.
+
+### Admission, reconciliation, and watcher gate
+
+The native host SHALL write bounded protected spool entries atomically and submit normalized source envelopes through authenticated application-mediated admission. It SHALL NOT receive direct PostgreSQL credentials or write product tables itself.
+
+Baseline work SHALL be idempotent and restartable. A bucket watcher SHALL NOT activate until preflight passes, the frozen baseline reaches source exhaustion or records terminal exclusions, retriable spool entries are resolved, coverage is reconciled, a durable monotonic checkpoint is committed, and a watcher-activation receipt is stored.
+
+After activation, each watcher cycle SHALL verify permission/reachability, read with bounded overlap from the durable checkpoint, normalize, admit idempotently, reconcile overlap, and advance the checkpoint only after durable admission. Calendar SHALL maintain a rolling approximately 90-day future horizon.
+
+### Reconfiguration semantics
+
+Adding an account or bucket SHALL require a new baseline before its watcher activates. Removing scope SHALL stop future reads but preserve historical source observations and provenance by default. Moving the start date earlier SHALL create a bounded backfill for only the newly included interval. Moving it later SHALL NOT delete existing evidence. Permission revocation or source disappearance SHALL suspend affected work and surface a degraded state rather than report zero coverage.
+
+### Architecture and authority
+
+The target architecture is one signed/notarized native macOS integration host registered for the logged-in user, provider-specific read-only adapters, a protected bounded local spool, authenticated application admission, PostgreSQL source/object/version/evidence records, existing job and Review machinery, and first-party configuration/status UI.
+
+Apple source systems remain authoritative and read-only. Imported observations are neither product-owned Capture records nor managed-document writes. Model output and deterministic extraction remain derived claims with provenance. No observed message, event, contact field, prompt-like content, or model response grants external-action authority.
+
+### MCV exclusions
+
+The MCV excludes two-way Apple source mutation; Messages, Notes, and Photos; blanket unbounded history; unbounded attachments; direct Reminders database access; NAS/SCP/SQLite relay; direct helper database writes; cloud-hosted Mac operation; unmanaged source adoption; model training on private source content; and production activation without exact operator authority.
+
+### Acceptance
+
+The feature-level criteria `NAPDCB-AC-001` through `NAPDCB-AC-048` are incorporated by reference from `MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087`. Canonical acceptance additionally requires that package-level source authority, Review, provenance, privacy, and no-implicit-authority rules remain intact.

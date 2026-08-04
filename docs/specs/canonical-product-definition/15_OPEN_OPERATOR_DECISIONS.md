@@ -3,21 +3,24 @@ title: my-pa — Open Operator Decisions
 artifact_id: OPEN-DECISIONS-MYPA-CANONICAL-002
 artifact_type: Open operator decisions
 package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
-coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-NATIVE-REMINDERS-INTEGRATION-20260802T150100Z
-version: 2.2
+coordination_request_id: REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z
+version: 2.3
 status: CURRENT_CANONICAL_PRODUCT_DEFINITION
-date: 2026-08-02
+date: 2026-08-04
 repository: RMF112018/my-pa
-repository_head: f18e7e3ded45f82456fbfa722443b23a004de0b3
+repository_head: 195fa54206996dddd6c6e0b6da0872781aa4f5f0
 repository_tree: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
 canonical_parent_folder_id: 1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz
 package_folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
 implementation_authority: NOT_GRANTED
 repository_mutation: NOT_PERFORMED
 revision_action: REVISE
-prior_version: 2.1
-feature_package_id: MYPA-NATIVE-APPLE-REMINDERS-INTEGRATION-FEATURE-PACKAGE-20260802-001
-feature_package_folder_id: 1qDE49KcJ8GSqFlljukYgGlq3eikeTnWq
+prior_version: 2.2
+feature_package_id: MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087
+feature_package_folder_id: 13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5
+feature_package_manifest_id: 1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J
+feature_package_publication_receipt_id: 1ATS9ONwZmA9Ar1_-sHaxCKcRUUwvoOqT
+integration_control_folder_id: 1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99
 ---
 
 # Open Operator Decisions
@@ -89,3 +92,20 @@ The operator has admitted the feature to the canonical MCV. The following activa
 | NAR-OP-009 | Production activation and residual-risk acceptance | No activation before independent exact-head review and recovery canary | Production |
 
 Routine Swift types, EventKit wrapper structure, polling/debounce values, SQL schema details, and tests are implementation decisions unless evidence elevates them to operator risk.
+
+## Native Apple Personal Data Capture Bridge operator decisions
+
+| ID | Decision | Recommended default | Blocks |
+|---|---|---|---|
+| NAPDCB-OP-001 | Exact live Apple accounts and account labels | Select explicitly after discovery; no hard-coded defaults | Live scope |
+| NAPDCB-OP-002 | Exact Mail mailboxes, Calendars, and Contact collections | Least-privilege explicit bucket selection; dynamic future inclusion off | Baseline and watchers |
+| NAPDCB-OP-003 | Default/maximum initial sync start date and backfill policy | User-selected date with bounded operator-approved maximum history | Historical import |
+| NAPDCB-OP-004 | Mail access mechanism if a sandbox-compatible option is infeasible | Permit only a bounded read-only Apple Events/Scripting Bridge design after current proof | Mail implementation |
+| NAPDCB-OP-005 | Attachment/body limits and excluded content classes | Metadata and bounded text first; attachments opt-in and size/type bounded | Payload admission |
+| NAPDCB-OP-006 | Retention, source removal, and physical purge policy | Stop future reads while retaining provenance; purge separately authorized | Destructive retention |
+| NAPDCB-OP-007 | Code-signing/notarization identity and supported macOS range | Signed/notarized logged-in-user app; final floor set by target-Mac proof | Packaging |
+| NAPDCB-OP-008 | TCC permissions and dedicated live-test accounts | Grant only after synthetic and dedicated non-personal account validation | Live canary |
+| NAPDCB-OP-009 | External model eligibility for Apple source content | Disabled by default; separate minimized/redacted authorization | Model disclosure |
+| NAPDCB-OP-010 | Production activation and residual-risk acceptance | Independent exact-head review, recovery canary, and explicit activation decision | Production |
+
+Routine type names, SQL details, polling/debounce values, page sizes, retry intervals, and UI copy remain implementation decisions unless evidence elevates them to operator risk.

@@ -5,7 +5,7 @@ Owning index for versioned behavioral contracts in `RMF112018/my-pa`. Repository
 | Specification | Status |
 |---|---|
 | [`mcv-read-only-vertical-slice.md`](mcv-read-only-vertical-slice.md) | Present — proposed for repository review; amended 2026-08-02 for the promoted scope |
-| [`canonical-product-definition/`](canonical-product-definition/00_README.md) | Mirror — **ratified** canonical product definition, revised 2026-08-02 for Remote Quick Capture and again for Native Apple Reminders, implementation not authorized |
+| [`canonical-product-definition/`](canonical-product-definition/00_README.md) | Mirror — **ratified** canonical product definition, version 2.3 after the 2026-08-04 Apple Mail, Calendar & Contacts revision; implementation not authorized |
 | [`relationship-intelligence-v0.2.md`](relationship-intelligence-v0.2.md) | Mirror — proposed product specification, implementation not authorized |
 | [`quick-capture/`](quick-capture/00_README.md) | Mirror — proposed product specification, implementation not authorized |
 
@@ -17,7 +17,7 @@ New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy ide
 
 ## The ratified canonical product definition
 
-On 2026-08-02 the operator ratified a whole-product definition for `my-pa` **by direct instruction**. It is mirrored at [`canonical-product-definition/`](canonical-product-definition/00_README.md) as package `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, version 2.2.
+On 2026-08-02 the operator ratified a whole-product definition for `my-pa` **by direct instruction**. It is mirrored at [`canonical-product-definition/`](canonical-product-definition/00_README.md) as package `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`, now version 2.3 after the 2026-08-04 revision.
 
 The instrument is the operator's instruction, not the package. `CURRENT_CANONICAL_PRODUCT_DEFINITION` is a status the package declares about itself, and a self-declared status is not ratification — it is the same class of evidence the repository previously ruled insufficient for the predecessor. See [`../plans/mcv-completion-plan.md`](../plans/mcv-completion-plan.md) `D-19` and section 15.
 
@@ -37,18 +37,45 @@ Evidence strength improved across that supersession, which is worth stating beca
 
 The owning Quick Capture and Relationship Intelligence specifications below **remain current** where they are more detailed and not explicitly reconciled; the package says so directly. Ratification did not supersede them.
 
+### Version 2.3 raw re-mirror
+
+On 2026-08-04,
+`REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z`
+revised 17 of the 21 numbered artifacts in place and advanced the package from
+2.2 to 2.3. Direct raw-file readback verified 21/21 preserved Drive identities,
+21/21 parent bindings, and 21/21 byte matches against the new manifest and
+readback record. The 17 revised files are replaced byte-for-byte here; the four
+unchanged numbered files remain byte-identical.
+
+The selected v2.3 controls follow the Native Apple Reminders mirror policy:
+canonical disposition, publication receipt, readback verification, and
+coordination-roundtrip receipt are mirrored; the coordination request and
+response remain external. Their control folder is
+`1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99`.
+
+Version 2.3 adds a subordinate feature definition,
+`MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087`
+(Drive folder `13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5`), user-facing **Apple Mail,
+Calendar & Contacts**. It is indexed by identity only. Its inclusion in product
+meaning grants no repository implementation, live-personal-data, TCC,
+credential, source-mutation, deployment, production, disclosure, retention, or
+risk authority. The operator has identified it as a provisional WP-12 after
+WP-10 and WP-11, while reserving WP-12 implementation planning to a separate
+authorization. It has no pre-MCV or post-MCV disposition yet; that unresolved
+sequence boundary is recorded by `D-105` and section 17 of the completion plan.
+
 ### Provenance and how strongly it can be trusted
 
 | Field | Value |
 |---|---|
 | Package folder | `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`, parent `1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz` |
 | Representation | `stored_raw_bytes` (`text/markdown` and `application/json`) |
-| Retrieved | 2026-08-02 via `rclone copy --drive-root-folder-id` |
-| Repository head the package binds | `f18e7e3ded45f82456fbfa722443b23a004de0b3` since the version 2.2 revision, which moved this field off the `9096fa4fbe64ff1cdabc07e53a3e68c52efc8575` that was current `main` at ratification. `f18e7e3` is PR #26; `main` has merged PRs #27, #28, and #29 since, reaching `77ed807`, so the field is fresher than it was and still trails. |
-| Verification | **Two claims in sequence, deliberately not merged into one.** *At ratification:* all 21 numbered artifacts were re-hashed after being written here — byte-exact, zero mismatches, against each of three independent in-package sources: `CANONICAL-ARTIFACT-DISPOSITION-…json` (21 members), `READBACK-VERIFICATION-…json` (21 members), and `18_PACKAGE_SOURCE_MANIFEST.json` (20 — it does not hash itself, and says so in its own `self_member.result_hash_scope`). *Since the 2026-08-02 Remote Quick Capture revision:* the **13 unrevised** numbered artifacts still hold that verification, re-confirmed 13/13 against the disposition, 13/13 against the readback verification, and 12/12 against the manifest, which does not cover itself. The **8 revised** artifacts no longer match any of those three sources, and are not claimed to. They rest on a weaker basis — 8/8 against the RQC publication receipt, plus the prefix-append property — with one hash source and no independent readback. The two are kept apart because averaging them would let the stronger claim absorb the weaker one. See the RQC subsection below and [`../plans/mcv-completion-plan.md`](../plans/mcv-completion-plan.md) section 16. *Since the 2026-08-02 Native Apple Reminders revision to version 2.2:* the split above closed rather than widening. Every one of the 21 numbered artifacts now matches a published hash, recomputed here on 2026-08-02: **20/20** against the v2.2 `18_PACKAGE_SOURCE_MANIFEST.json`, whose `members` array carries a `result_sha256` for every numbered artifact but itself, and the manifest itself **1/1** against `manifest_sha256` in the v2.2 publication receipt. The ten revised artifacts are additionally covered three times over — **10/10** against the v2.2 publication receipt, **10/10** against `READBACK-VERIFICATION-…NATIVE-REMINDERS-…json`, and **10/10** against the v2.2 disposition. The weaker RQC position is stated above as the historical fact it is, not carried forward. |
-| Drive member count | 42 entries under the folder, confirmed by `rclone lsjson` against the folder ID and matching the retrieved set exactly: 31 files at the root, 5 in `RQC-INTEGRATION-20260802T114700Z` beside its 3 empty subfolders, and 6 in `NATIVE-REMINDERS-INTEGRATION-20260802T150100Z`. The 2026-08-02 Native Apple Reminders revision added no root file — it revised ten in place and added that one subfolder. Not attestable from the repository alone. |
+| Retrieved | 2026-08-04 by direct `rclone` stored-raw-file readback |
+| Repository head the package binds | `195fa54206996dddd6c6e0b6da0872781aa4f5f0`; current reconciliation base is `7ae3917b7d95548883211aa64a12edf99351e59a`, so the publisher's basis is evidence identity rather than a claim of current-head parity |
+| Verification | Version 2.3: 21 numbered artifacts, 17 revised and 4 unchanged; 21/21 Drive IDs preserved, 21/21 parent bindings verified, and 21/21 raw readbacks match. Manifest Drive ID `1xxQG_fsUlTxX7VRXOCm8SSCjYF2xPV1j`, 13,899 bytes, SHA-256 `d1b3f7a91fbe07d11f9100346f0ef65f0e3576d35dcf27708f585bb5e6ca038a`. Four mirrored control artifacts are independently pinned by repository tests. |
+| Drive member count | The canonical artifact universe is the 21 numbered direct children recorded by the manifest. The v2.3 control folder has 6 direct files, of which 4 are mirrored and 2 are coordination correspondence. Other subfolders under the same Drive folder contain campaign evidence and are not counted as canonical package members. |
 
-Thirty-one of the forty-two package members are mirrored here: the 21 numbered artifacts, the 3 MCP-integration control artifacts, the 3 RQC-integration control artifacts, and the 4 Native Apple Reminders control artifacts. The other **eleven remain in Drive**, and are listed individually rather than summarized, because the summary that stood here — "coordination correspondence for all four roundtrips, one superseded publication receipt" — accounted for only nine of them, and one of the two it dropped is load-bearing for the hash-coverage paragraph below:
+**Historical v2.2 inventory.** At version 2.2, thirty-one of forty-two then-counted package members were mirrored here: the 21 numbered artifacts, the 3 MCP-integration control artifacts, the 3 RQC-integration control artifacts, and the 4 Native Apple Reminders control artifacts. The other eleven remained in Drive:
 
 - the coordination **request** and **response** for each of the four roundtrips — Reconciliation, MCP-integration, RQC-integration, and Native Apple Reminders — eight files;
 - `COORDINATION-ROUNDTRIP-RECEIPT-…MCP-INTEGRATION-20260802T095600Z.json`, which publishes a SHA-256 for the MCP disposition, the MCP publication receipt, and the MCP readback, and is therefore in-package hash evidence for three mirrored members that the mirror itself does not hold;
@@ -57,11 +84,11 @@ Thirty-one of the forty-two package members are mirrored here: the 21 numbered a
 
 The three empty RQC evidence subfolders are also left behind; they are folders rather than files and so are not among the 42 members. Leaving correspondence in Drive follows the precedent set for `quick-capture/`, where governance correspondence was likewise left behind, and `../plans/mcv-completion-plan.md` `D-22`. The two coordination-roundtrip receipts left behind match no stated rule — they are receipts rather than correspondence — and their omission from this inventory is what let the hash-coverage count below be computed over the mirror instead of over the package.
 
-The `repository_head` row above is the head the package *declares*, and it still trails. The Remote Quick Capture revision left it at `9096fa4` while revising eight artifacts, which is one of the three defects `D-33` records. The Native Apple Reminders revision did move it, to `f18e7e3`, so that particular defect is not repeated — but `f18e7e3` still trails the `main` that mirrors the package by PRs #27, #28, and #29, so the field remains a declaration to read rather than a binding to rely on.
+At version 2.2 the declared `repository_head` was `f18e7e3`; version 2.3 moves it to `195fa542`. Both remain historical evidence identities rather than a binding to current repository state.
 
-Ten of the thirty-one mirrored members are control artifacts rather than specifications, and none of them is covered by `18_PACKAGE_SOURCE_MANIFEST.json`, which covers only the numbered ones. Their Drive-reported byte counts all match the retrieved bytes exactly: the three MCP-integration artifacts `CANONICAL-ARTIFACT-DISPOSITION-…json`, `PUBLICATION-RECEIPT-…json`, and `READBACK-VERIFICATION-…json` at 14,777, 4,079, and 7,869; the three RQC-integration ones at 3,356, 3,805, and 786; and the four Native Apple Reminders ones — `CANONICAL-ARTIFACT-DISPOSITION-…`, `PUBLICATION-RECEIPT-…`, `READBACK-VERIFICATION-…`, and `COORDINATION-ROUNDTRIP-RECEIPT-…NATIVE-REMINDERS-…json` — at 4,477, 4,330, 4,110, and 2,744.
+At version 2.2, ten of the thirty-one mirrored members were control artifacts rather than specifications. The four v2.3 controls add to that historical set and are hash-bound in the current table above and in architecture tests.
 
-**Their hash coverage is uneven, and recomputing it corrected a statement previously made here that it was uniformly absent — then had to be corrected a second time, because the first recount searched the wrong universe.** The question is which of the ten carries a published SHA-256 somewhere in the **42-member package**. The first recount answered it by sweeping only the **31 mirrored members** and reported five and five. Swept across all 42, recomputed on 2026-08-02, the split is **six hashed and four unhashed**, matching 6/6:
+**The historical v2.2 controls had uneven hash coverage.** Recomputed across that cycle's 42-member universe, the split was six hashed and four unhashed:
 
 - **All three MCP-integration control artifacts are hashed, two of them twice.** `PUBLICATION-RECEIPT-…MCP-INTEGRATION-…json` hashes the MCP disposition and the MCP readback. `COORDINATION-ROUNDTRIP-RECEIPT-…MCP-INTEGRATION-…json` hashes all three — disposition, publication receipt, and readback. That roundtrip receipt is a package member that is **not mirrored here**, which is exactly why a sweep bounded by the mirror could not see it and recorded the MCP publication receipt as unhashed.
 - **Three of the four Native Apple Reminders control artifacts are hashed.** The disposition, the publication receipt, and the readback are all hashed by `COORDINATION-ROUNDTRIP-RECEIPT-…NATIVE-REMINDERS-…json`, which is itself hashed by nothing.
@@ -74,16 +101,18 @@ The remedy therefore differs by artifact. For the four genuinely unhashed ones i
 
 A byte count is a weak check in a specific way that matters: a same-length substitution passes it. All ten are included because they are the provenance record for the twenty-one, and excluding the evidence while keeping the claim would be worse.
 
-The package required no redaction. It was scanned for filesystem paths, addresses, telephone numbers, connection strings, and credential-shaped material. Three matches were reviewed and are prose about how tokens and secrets must be handled, not secrets. That scan covered the package as it stood at ratification; the material added on 2026-08-02 — the eight RQC appended sections and the three RQC control artifacts, then the nine Native Apple Reminders appended sections, the rewritten `18_PACKAGE_SOURCE_MANIFEST.json`, and the four Native Apple Reminders control artifacts — was scanned the same way. The second scan returned fifteen candidate matches, every one of them a date or a package identifier read as a telephone number (`2026-08-02`, `…-20260802-001`, `…-20260802-006`), and no filesystem path, address, connection string, or credential-shaped value at all. So the claim covers the mirror as it now stands rather than only the part of it that is older.
+The package required no redaction at ratification or in the two 2026-08-02
+revision cycles. Version 2.3 is mirrored as publisher-authored product and
+control material, not runtime evidence; its own authority block grants no
+credential, TCC, live-data, deployment, disclosure, or activation action.
 
-### Two defects in the ratified package, disclosed rather than silently mirrored
+### Two historical package defects closed by version 2.3
 
-Mirroring is byte-exact, so these are reproduced here as authored and are noted rather than corrected:
-
-1. `00_README.md` contains an unsubstituted template placeholder, `{PACKAGE_CONTENTS_TABLE}`, where the contents table should be.
-2. `00_README.md` binds the repository at `b48b1b177046637297467e661dfb1da023d49bed` in its body while its own front matter, and `18_PACKAGE_SOURCE_MANIFEST.json`, bind a different commit. At ratification that was `9096fa4fbe64ff1cdabc07e53a3e68c52efc8575`, three merges ahead of `b48b1b1` — PRs #21, #22, and #23; since version 2.2 both say `f18e7e3ded45f82456fbfa722443b23a004de0b3`, while the body still says `b48b1b1`. Two revisions have now moved the front matter and left the body behind, so this is a persisting divergence rather than a one-off. The front-matter and manifest binding is the correct one, and is what this repository relies on.
-
-Both defects survive the version 2.2 revision — the placeholder is still unsubstituted and the body commit is still stale — rechecked here rather than assumed. Neither changes the package's meaning, and neither is load-bearing for anything below. They are recorded so that a reader who notices them knows they were seen.
+Versions through 2.2 carried an unsubstituted `{PACKAGE_CONTENTS_TABLE}` marker
+and a stale body-level repository binding. Version 2.3 removes the marker and
+aligns the body, front matter, and manifest on
+`195fa54206996dddd6c6e0b6da0872781aa4f5f0`. The defects are preserved here as
+history rather than stated as current limitations.
 
 ### The package was revised in place on 2026-08-02 for Remote Quick Capture
 

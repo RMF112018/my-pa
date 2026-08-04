@@ -28,32 +28,25 @@ What it does NOT do, and the distinction matters more than the check:
   never as "the mirror is up to date".
 - **It does not judge content.** Byte equality says nothing about whether the
   package is right, complete, or correctly cited. Neighbouring modules do that.
-- **It does not check the control artifacts, and that includes the receipts it
-  reads.** An artifact is bound here only if some `READBACK-VERIFICATION-*.json`
-  names it, and between them the two mirrored receipts name the 21 numbered
-  artifacts and nothing else. The other **10 of the 31 mirrored members are
-  compared to nothing** — the three canonical-artifact dispositions, the three
-  publication receipts, the two coordination-roundtrip receipts, and the two
-  readback verifications this module reads its own expectations out of. An edit
-  inside any of them — of any length — leaves every assertion below green. Two
-  independent reviewers demonstrated it on two different files, flipping
-  `NOT_GRANTED` to `GRANTED____` in a publication receipt and to `GRANTED` in a
-  disposition; both plants were reproduced here and the architecture tier stayed
-  at 847 passed each time. What holds those ten up
-  instead is recorded in `docs/specs/README.md`, and it is uneven: **six** carry
-  a published SHA-256 somewhere in the package that this module simply does not
-  read, and **four** carry no hash anywhere in the package and rest on a
-  Drive-reported byte count.
+- **Readback receipts bind the numbered package, while explicit constants bind
+  only the four selected v2.3 controls.** An artifact enters the generic binding
+  only if a `READBACK-VERIFICATION-*.json` names it. The v2.3 disposition,
+  publication receipt, readback, and coordination-roundtrip receipt are instead
+  pinned below to the independently verified size and SHA-256 from the direct
+  Drive readback. Earlier control cycles retain the historical gap described in
+  `docs/specs/README.md`: across the v2.2 42-member universe, six of ten mirrored
+  controls carry a published SHA-256 and four carry no hash anywhere in that
+  package and rest on a Drive-reported byte count.
 
-  That six/four split is scoped to the **42-member Drive package**, not to the
-  **31 mirrored members** — and the distinction is not pedantry, it is how the
-  number was got wrong. A previous revision of this docstring said five and
-  five, because the sweep behind it recomputed over the mirror while stating a
-  claim about the package. One of the six, the MCP publication receipt, is
-  hashed only by `COORDINATION-ROUNDTRIP-RECEIPT-…MCP-INTEGRATION-…json`, which
-  is a package member that is not mirrored, so a mirror-bounded sweep cannot see
-  it. Whenever a count appears near this module, say which of the two universes
-  it counts over.
+  That six/four historical split is scoped to the **42-member Drive package**,
+  not to the **31 mirrored members** — and the distinction is not pedantry, it
+  is how the number was got wrong. A previous revision of this docstring said
+  five and five, because the sweep behind it recomputed over the mirror while
+  stating a claim about the package. One of the six, the MCP publication receipt,
+  is hashed only by
+  `COORDINATION-ROUNDTRIP-RECEIPT-…MCP-INTEGRATION-…json`, which is a package
+  member that is not mirrored, so a mirror-bounded sweep cannot see it. Whenever
+  a count appears near this module, say which of the two universes it counts over.
 
   **Do not close the gap by checking those byte counts here.** A same-length edit
   passes a byte count, so that buys the appearance of coverage and none of the
@@ -68,13 +61,12 @@ What it does NOT do, and the distinction matters more than the check:
 
 Two constraints shape the implementation, both learned the hard way:
 
-- The package was revised in place twice on 2026-08-02 — RQC at ~11:49Z and
-  Native Reminders at ~15:04Z. The first left `version: 2.1` stale in the front
-  matter, so a version comparison could not see the revision and only a hash
-  could. The consequence for this test is that older receipts legitimately bind
-  superseded bytes: checking every artifact against every receipt naming it
-  fails ten ways for the right reason and none for a real one. Each artifact is
-  therefore bound to the *newest* receipt that names it.
+- The package was revised in place twice on 2026-08-02 and again on 2026-08-04.
+  The first revision left `version: 2.1` stale in the front matter, so a version
+  comparison could not see it and only a hash could. The consequence for this
+  test is that older receipts legitimately bind superseded bytes: checking every
+  artifact against every receipt naming it fails for revisions that did happen.
+  Each artifact is therefore bound to the *newest* receipt that names it.
 - A guard that silently checks nothing is worse than no guard. `D-26`'s
   confinement guard listed a package name that could never match and a whole
   tier stayed green over it. So an unrecognised receipt shape is a failure here,
@@ -95,6 +87,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 MIRROR = ROOT / "docs" / "specs" / "canonical-product-definition"
+ATTRIBUTES = ROOT / ".gitattributes"
+MIRROR_README = "00_README.md"
 
 #: Receipts are found by glob, never by a list. A future revision cycle mirrors
 #: another one and it must be picked up without this file being edited — the
@@ -103,7 +97,7 @@ MIRROR = ROOT / "docs" / "specs" / "canonical-product-definition"
 RECEIPT_GLOB = "READBACK-VERIFICATION-*.json"
 
 #: The field naming the moment the publisher read its own bytes back. The two
-#: mirrored cycles spell it differently; both are accepted, neither is guessed.
+#: mirrored cycles use these two spellings; both are accepted, neither is guessed.
 TIMESTAMP_FIELDS = ("verified_at", "verification_time")
 
 #: The field carrying the coordination request ID, whose trailing
@@ -170,7 +164,31 @@ class _Schema:
 SCHEMAS = (
     _Schema("members", "expected_sha256", "expected_bytes", "match", True, "readback_sha256"),
     _Schema("artifacts", "sha256", "bytes", "readback", "MATCH", None),
+    _Schema("records", "sha256", "bytes", "readback", "MATCH", None),
 )
+
+V23_REQUEST = "REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z"
+V23_CONTROL_FOLDER = "1PLw2r7MmNXKi2pZxaIRiXTNVg-itiZ99"
+V23_FEATURE_PACKAGE = "MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087"
+V23_FEATURE_FOLDER = "13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5"
+V23_CONTROLS = {
+    f"CANONICAL-ARTIFACT-DISPOSITION-{V23_REQUEST}.json": (
+        12_568,
+        "08f62eec99e8ae8b369e248c2fa1efa451c3bb34a965316dc8d2670d9676e15f",
+    ),
+    f"PUBLICATION-RECEIPT-{V23_REQUEST}.json": (
+        5_309,
+        "b6dc9d02471407a53cd5308b67903677aeb500e7c516bde9c9f407946d2cedab",
+    ),
+    f"READBACK-VERIFICATION-{V23_REQUEST}.json": (
+        11_873,
+        "a1e193d36d9436f6b473924e6182c5351fba2698301b20875d81763471f70bc4",
+    ),
+    f"COORDINATION-ROUNDTRIP-RECEIPT-{V23_REQUEST}.json": (
+        5_116,
+        "ce1b25b75d53cb355270c52011614233c5050ef501f9acc3cba2d221c9d6f8c0",
+    ),
+}
 
 
 def _pick(payload: dict[str, object], fields: tuple[str, ...]) -> object:
@@ -492,4 +510,60 @@ def test_recorded_hash_is_a_sha256(artifact: str, row: Recorded) -> None:
         "lower-case hex digits. The byte comparison would fail against every "
         "possible file, so this is a defect in the receipt rather than in the "
         "mirror."
+    )
+
+
+def test_v23_manifest_and_readback_bind_the_complete_numbered_package() -> None:
+    manifest = json.loads((MIRROR / "18_PACKAGE_SOURCE_MANIFEST.json").read_text("utf-8"))
+    readback = json.loads((MIRROR / f"READBACK-VERIFICATION-{V23_REQUEST}.json").read_text("utf-8"))
+
+    assert manifest["version"] == "2.3"
+    assert manifest["prior_version"] == "2.2"
+    assert manifest["coordination_request_id"] == V23_REQUEST
+    assert manifest["integration"]["integration_control_folder_id"] == V23_CONTROL_FOLDER
+    assert manifest["integration"]["feature_package_id"] == V23_FEATURE_PACKAGE
+    assert manifest["integration"]["feature_package_folder_id"] == V23_FEATURE_FOLDER
+    assert manifest["authority"]["implementation"] == "NOT_GRANTED"
+
+    records = readback["records"]
+    assert readback["package_version"] == "2.3"
+    assert readback["verified_count"] == len(records) == 21
+    assert readback["all_readbacks_match"] is True
+    assert {row["name"] for row in records} == set(BOUND_IDS)
+
+
+def test_publisher_markdown_hard_break_exception_is_exact_and_hash_governed() -> None:
+    exemption = "docs/specs/canonical-product-definition/00_README.md whitespace=-trailing-space"
+    whitespace_rules = [
+        line
+        for line in ATTRIBUTES.read_text(encoding="utf-8").splitlines()
+        if "whitespace=" in line
+    ]
+    assert whitespace_rules == [exemption]
+    assert MIRROR_README in BOUND_IDS
+
+    lines = (MIRROR / MIRROR_README).read_text(encoding="utf-8").splitlines()
+    trailing = {number: line for number, line in enumerate(lines, start=1) if line.endswith(" ")}
+    assert trailing == {
+        28: (
+            "Disposition: "
+            "`MYPA_CANONICAL_PRODUCT_NATIVE_APPLE_CAPTURE_BRIDGE_INTEGRATION_COMPLETE`  "
+        ),
+        29: "Package: `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`  ",
+        30: "Folder: `1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq`  ",
+        31: "Parent: `1Ss71vau8phz7dvXduy7ChIwtxcU3K8Rz`  ",
+        32: ("Repository: `RMF112018/my-pa@195fa54206996dddd6c6e0b6da0872781aa4f5f0`  "),
+    }
+
+
+@pytest.mark.parametrize(("artifact", "expected"), sorted(V23_CONTROLS.items()))
+def test_v23_control_bytes_match_the_published_identity(
+    artifact: str, expected: tuple[int, str]
+) -> None:
+    path = MIRROR / artifact
+    data = path.read_bytes()
+    expected_bytes, expected_sha256 = expected
+    assert (len(data), hashlib.sha256(data).hexdigest()) == (
+        expected_bytes,
+        expected_sha256,
     )

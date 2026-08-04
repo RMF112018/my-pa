@@ -549,6 +549,15 @@ class SqlRelationshipRepository(RelationshipRepository):
                         FROM knowledge.relationship_identity_resolutions correction
                         WHERE correction.action = 'merge_person'
                           AND correction.prior_person_id = :person_id
+                      ) AND NOT EXISTS (
+                        SELECT state_lineage.observation_id
+                        FROM knowledge.relationship_resolution_observations state_lineage
+                        WHERE state_lineage.resolution_id = state.resolution_id
+                        EXCEPT
+                        SELECT state_link.observation_id
+                        FROM knowledge.relationship_observation_links state_link
+                        WHERE state_link.person_id = :person_id
+                          AND state_link.resolution_id = state.resolution_id
                       ))
                       OR
                       (state.action = 'split_person'
@@ -575,6 +584,43 @@ class SqlRelationshipRepository(RelationshipRepository):
                         JOIN knowledge.relationship_resolution_observations latest_observation
                           ON latest_observation.resolution_id = latest.resolution_id
                         WHERE latest_observation.observation_id = link.observation_id
+                      )
+                    )
+                ) AND NOT EXISTS (
+                  SELECT 1
+                  FROM knowledge.relationship_observation_links link
+                  LEFT JOIN knowledge.relationship_resolution_observations lineage
+                    ON lineage.resolution_id = link.resolution_id
+                   AND lineage.observation_id = link.observation_id
+                  LEFT JOIN knowledge.relationship_identity_observations observation
+                    ON observation.observation_id = link.observation_id
+                  LEFT JOIN knowledge.relationship_evidence evidence
+                    ON evidence.evidence_id = 'source_' || link.observation_id
+                   AND evidence.person_id = :person_id
+                   AND evidence.authority = 'source_observation'
+                  LEFT JOIN knowledge.relationship_evidence_observations evidence_lineage
+                    ON evidence_lineage.evidence_id = evidence.evidence_id
+                   AND evidence_lineage.observation_id = link.observation_id
+                  LEFT JOIN knowledge.relationship_aliases alias
+                    ON alias.observation_id = link.observation_id
+                   AND alias.person_id = :person_id
+                   AND alias.value = observation.display_name
+                  WHERE link.person_id = :person_id
+                    AND (
+                      lineage.observation_id IS NULL
+                      OR evidence_lineage.observation_id IS NULL
+                      OR (
+                        observation.display_name IS NOT NULL
+                        AND length(trim(observation.display_name)) > 0
+                        AND alias.observation_id IS NULL
+                      )
+                      OR (
+                        (observation.display_name IS NULL
+                         OR length(trim(observation.display_name)) = 0)
+                        AND EXISTS (
+                          SELECT 1 FROM knowledge.relationship_aliases unexpected_alias
+                          WHERE unexpected_alias.observation_id = link.observation_id
+                        )
                       )
                     )
                 )
@@ -829,6 +875,8 @@ class SqlRelationshipRepository(RelationshipRepository):
             validate_identifier(person_id, IdKind.PERSON)
         if unresolved_mention_id is not None:
             validate_identifier(unresolved_mention_id, IdKind.UNRESOLVED_MENTION)
+        if not observation_ids:
+            raise IdentityResolutionError("conversation participant requires exact support")
         if len(observation_ids) > 200:
             raise IdentityResolutionError("conversation participant support is bounded")
         if len(observation_ids) != len(set(observation_ids)):

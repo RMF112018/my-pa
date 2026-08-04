@@ -898,7 +898,8 @@ give an explicit Conversation Log its skeletal event.
 Corresponds to Quick Capture stage `QC-04`.
 
 **In scope.** Review case model binding exact capture, version, proposal, spans,
-target object, and expected version; the six dispositions; promotion receipts;
+target object, and expected version; all seven dispositions, five reachable in
+this build; promotion receipts;
 `domain/conversation/` skeletal, proposed, accepted, superseded states;
 conversation participants including unresolved mention text; capture context
 links with deterministic, user-confirmed, and proposed authority states;
@@ -912,7 +913,10 @@ Notifications. Pulse or Today eligibility. Automatic promotion of anything.
 
 - `QC-AC-020` — commitments, decisions, amounts, critical dates, and sensitive
   relationship conclusions cannot reach canonical without a review disposition.
-  Prove by attempting each promotion directly and requiring denial.
+  Prove the closed consequential-class policy exhaustively, then call the only
+  canonical promotion writer without a decision and require denial before it
+  reads persistence. The writer accepts only a proposal identifier, not a
+  duplicated consequential-class input, so its no-decision guard is global.
 - `QC-AC-021` — no code path executes an external action from an accepted
   record. An architecture test, not a runtime one.
 - `QC-AC-022` — rejected and corrected proposals retain lineage; nothing is

@@ -6,9 +6,9 @@ Adds seven tables to the existing `knowledge` schema — `capture_review_cases`,
 `capture_conversations` — widens `audit_events.capability_is_known` to fifteen
 and `audit_events.purpose_is_known` to ten, installs the constraint triggers
 that make "every assertion cites at least one span" and "an accepted record
-names a real assertion" properties of the schema, and makes the five review and
-promotion tables undeletable. It creates no schema and reads nothing from the
-migrated legacy corpus.
+names a real assertion" properties of the schema, makes proposals and assertions
+undeletable, and makes review cases, decisions, and promotion receipts immutable.
+It creates no schema and reads nothing from the migrated legacy corpus.
 
 The tables are named explicitly rather than taken from the shared `MetaData`,
 for the reason `8b3f5c17d904`, `1a4c9e77b2d5` and `2b7e9f4c1a83` all state:
@@ -65,11 +65,12 @@ corrected proposals to retain lineage. Only `capture_versions` carried an
 append-only trigger before this revision; `capture_proposals` accepted `DELETE`,
 and `capture_proposal_spans.proposal_id` cascades, so deleting a proposal
 removed its evidence links silently. That is a pre-existing gap surfaced here
-rather than a defect this revision introduces, and it is closed in
-`1a4c9e77b2d5`'s shape: a `BEFORE DELETE` trigger raising `restrict_violation`.
-`UPDATE` is deliberately still permitted — an assertion moves to `superseded` or
-`revalidation_required` in place, and a review decision is appended rather than
-edited — so the rule is "nothing is deleted", not "nothing is written".
+rather than a defect this revision introduces. Proposals and assertions use
+`1a4c9e77b2d5`'s `BEFORE DELETE` shape because both have governed state changes;
+an assertion can move to `superseded` or `revalidation_required`. Review cases
+have no mutation path, and decisions and promotion receipts are immutable
+evidence, so those three refuse `UPDATE OR DELETE`. Every refusal raises
+`restrict_violation` at the server rather than relying on the current writer.
 
 The downgrade drops the seven tables, drops every trigger and each shared
 function — `RESTRICT`, not `CASCADE`, is what `7e5a1fb93d62` uses to drop the
@@ -213,20 +214,25 @@ _ACCEPTED_RECORD_TRIGGER: Final = "an_accepted_proposal_names_a_real_assertion"
 #: different DDL the day that constant changed.
 _ACCEPTED_RECORD_TYPE: Final = "assertion"
 
-#: The function the five append-only triggers share, and the tables it guards.
+#: The function the five lineage triggers share, and the tables they guard.
 #: `capture_proposals` is one of them and is not a table this revision creates:
 #: the trigger is forward DDL, so it changes nothing an earlier revision emits.
-_NO_DELETE_FUNCTION: Final = "review_lineage_stays_as_written"
-_NO_DELETE_TABLES: Final = (
+_LINEAGE_FUNCTION: Final = "review_lineage_stays_as_written"
+_DELETE_ONLY_TABLES: Final = (
     "capture_proposals",
+    "capture_assertions",
+)
+_IMMUTABLE_TABLES: Final = (
     "capture_review_cases",
     "capture_review_decisions",
-    "capture_assertions",
     "capture_promotion_receipts",
 )
+_LINEAGE_TABLES: Final = (*_DELETE_ONLY_TABLES, *_IMMUTABLE_TABLES)
 
 
-def _no_delete_trigger(table: str) -> str:
+def _lineage_trigger(table: str) -> str:
+    if table in _IMMUTABLE_TABLES:
+        return f"{table}_stay_immutable"
     return f"{table}_are_never_deleted"
 
 
@@ -371,17 +377,18 @@ def upgrade() -> None:
         f"EXECUTE FUNCTION {SCHEMA}.{_ACCEPTED_RECORD_FUNCTION}()"
     )
     op.execute(
-        f"CREATE FUNCTION {SCHEMA}.{_NO_DELETE_FUNCTION}() RETURNS trigger "
+        f"CREATE FUNCTION {SCHEMA}.{_LINEAGE_FUNCTION}() RETURNS trigger "
         "LANGUAGE plpgsql AS $$ BEGIN "
         "RAISE EXCEPTION 'knowledge.% retains lineage; % is refused', TG_TABLE_NAME, TG_OP "
         "USING ERRCODE = 'restrict_violation'; "
         "END; $$"
     )
-    for table in _NO_DELETE_TABLES:
+    for table in _LINEAGE_TABLES:
+        events = "UPDATE OR DELETE" if table in _IMMUTABLE_TABLES else "DELETE"
         op.execute(
-            f"CREATE TRIGGER {_no_delete_trigger(table)} "
-            f"BEFORE DELETE ON {SCHEMA}.{table} "
-            f"FOR EACH ROW EXECUTE FUNCTION {SCHEMA}.{_NO_DELETE_FUNCTION}()"
+            f"CREATE TRIGGER {_lineage_trigger(table)} "
+            f"BEFORE {events} ON {SCHEMA}.{table} "
+            f"FOR EACH ROW EXECUTE FUNCTION {SCHEMA}.{_LINEAGE_FUNCTION}()"
         )
 
 
@@ -390,8 +397,8 @@ def downgrade() -> None:
     # revision does not drop. The functions go with none of them, and
     # `7e5a1fb93d62` drops the schema with RESTRICT, so a function left behind
     # would fail the downgrade at a revision that has no idea this one existed.
-    for table in _NO_DELETE_TABLES:
-        op.execute(f"DROP TRIGGER IF EXISTS {_no_delete_trigger(table)} ON {SCHEMA}.{table}")
+    for table in _LINEAGE_TABLES:
+        op.execute(f"DROP TRIGGER IF EXISTS {_lineage_trigger(table)} ON {SCHEMA}.{table}")
     op.execute(f"DROP TRIGGER IF EXISTS {_ACCEPTED_RECORD_TRIGGER} ON {SCHEMA}.capture_proposals")
     op.execute(
         f"DROP TRIGGER IF EXISTS {_ASSERTION_LINK_TRIGGER} ON {SCHEMA}.capture_assertion_spans"
@@ -399,7 +406,7 @@ def downgrade() -> None:
     op.execute(f"DROP TRIGGER IF EXISTS {_ASSERTION_TRIGGER} ON {SCHEMA}.capture_assertions")
     frozen = _historical_wp8_tables()
     frozen[0].metadata.drop_all(op.get_bind(), tables=frozen)
-    op.execute(f"DROP FUNCTION IF EXISTS {SCHEMA}.{_NO_DELETE_FUNCTION}()")
+    op.execute(f"DROP FUNCTION IF EXISTS {SCHEMA}.{_LINEAGE_FUNCTION}()")
     op.execute(f"DROP FUNCTION IF EXISTS {SCHEMA}.{_ACCEPTED_RECORD_FUNCTION}()")
     op.execute(f"DROP FUNCTION IF EXISTS {SCHEMA}.{_SPAN_CARDINALITY_FUNCTION}()")
     _restate(_CAPABILITIES_BEFORE_THIS_REVISION, _PURPOSES_BEFORE_THIS_REVISION)

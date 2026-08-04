@@ -1,7 +1,7 @@
 """The review and promotion revision round-trips, and its triggers are real.
 
-`3c8f1e2a5b74` adds seven tables, three constraint triggers and five lineage
-triggers, and three of the eight sit on a table it does not create. Every claim
+`3c8f1e2a5b74` adds seven tables, three constraint triggers, governed-update
+triggers, and lineage triggers on every retained evidence table. Every claim
 below is read back from a live server rather than from the file that wrote it,
 because a migration is only what the database ends up holding.
 
@@ -13,13 +13,14 @@ function left behind fails `downgrade base` at a revision written before this on
 existed — the failure `1a4c9e77b2d5` had to add an explicit `DROP FUNCTION` for
 and `2b7e9f4c1a83` had to repeat.
 
-**Nothing is deleted, and immutable evidence is not updated.**
+**Exact evidence is immutable, and state updates are governed.**
 `QC-AC-022` requires rejected and corrected proposals to retain lineage. The test
 for it asserts an `INSERT` still succeeds in the same database that finds a
 `DELETE` refused — otherwise "no row could be removed" would also be satisfied
 by a schema in which no row could be added. Proposals and assertions retain their
 governed `UPDATE` paths; review cases, decisions, and promotion receipts refuse
-`UPDATE OR DELETE` because they have no governed mutation path.
+`UPDATE OR DELETE` because they have no governed mutation path. Spans and both
+span-link tables do the same, including when a parent FK declares a cascade.
 
 **The gap this closes was live before this revision.** `capture_proposals`
 accepted `DELETE` and `capture_proposal_spans.proposal_id` cascades, so deleting
@@ -27,8 +28,8 @@ a proposal silently removed the evidence links that are the lineage. That is a
 pre-existing hole surfaced here rather than a defect this package introduced, and
 the test that proves the trigger fires drops it and watches the `DELETE` succeed.
 
-**Every value here is synthetic.** No path exists, none is opened, and no capture
-text is written: the fixtures store the shortest content the constraints admit.
+**Every value here is synthetic.** No path exists or is opened, and the fixtures
+store only the shortest invented capture content the constraints admit.
 The database is disposable, created and dropped by its own fixture and never the
 configured one — `downgrade base` deletes schemas, and pointing that at the
 canonical `my_pa` database would destroy the migrated corpus.
@@ -36,7 +37,7 @@ canonical `my_pa` database would destroy the migrated corpus.
 **The `S608` suppressions are structural, not a convenience.** Every
 interpolation into a statement below is one of this module's own `Final`
 constants — the schema name, a member of `REVIEW_TABLES` or `UNDELETABLE`, or a
-value of `MUTABLE_COLUMN`. No test value and no caller value reaches a
+locally declared adversarial mutation. No caller value reaches a
 statement's text: every one of those is a bound parameter, which is why the
 identifiers the seeds write are passed as `:name` rather than formatted in. The
 same argument the revision itself makes for its `CREATE FUNCTION` text.
@@ -97,12 +98,13 @@ REVIEW_TABLES: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: The three functions and the eight triggers, restated for the same reason.
+#: The four functions, restated for the same reason.
 REVIEW_FUNCTIONS: Final[frozenset[str]] = frozenset(
     {
         "an_assertion_cites_a_span",
         "an_accepted_record_names_an_assertion",
         "review_lineage_stays_as_written",
+        "review_state_transition_is_governed",
     }
 )
 
@@ -112,11 +114,8 @@ DEFERRED_TRIGGERS: Final[tuple[str, ...]] = (
     "an_accepted_proposal_names_a_real_assertion",
 )
 
-#: The two lineage records with governed state transitions remain updateable.
-MUTABLE_COLUMN: Final[dict[str, str]] = {
-    "capture_proposals": "created_at",
-    "capture_assertions": "accepted_at",
-}
+#: These two parents are undeletable and accept only exact state transitions.
+GOVERNED: Final[tuple[str, ...]] = ("capture_proposals", "capture_assertions")
 
 #: These three are immutable evidence: insert succeeds, update/delete refuse.
 IMMUTABLE: Final[dict[str, str]] = {
@@ -125,7 +124,13 @@ IMMUTABLE: Final[dict[str, str]] = {
     "capture_promotion_receipts": "issued_at",
 }
 
-UNDELETABLE: Final[tuple[str, ...]] = (*MUTABLE_COLUMN, *IMMUTABLE)
+EXACT_LINEAGE: Final[dict[str, str]] = {
+    "capture_spans": "span_role",
+    "capture_proposal_spans": "span_id",
+    "capture_assertion_spans": "span_id",
+}
+
+UNDELETABLE: Final[tuple[str, ...]] = (*GOVERNED, *IMMUTABLE, *EXACT_LINEAGE)
 
 _SUFFIX = "0000000000000001"
 
@@ -177,7 +182,19 @@ def _tables(engine: Engine) -> set[str]:
         )
 
 
-def _seed_proposal(connection: Connection, ordinal: int = 1) -> dict[str, str]:
+def _row_snapshot(connection: Connection, table: str) -> tuple[tuple[object, ...], ...]:
+    """All columns in deterministic primary-key order for a post-refusal check."""
+    return tuple(
+        tuple(row)
+        for row in connection.execute(
+            text(f"SELECT * FROM {SCHEMA}.{table} ORDER BY 1, 2")  # noqa: S608
+        ).all()
+    )
+
+
+def _seed_proposal(
+    connection: Connection, ordinal: int = 1, *, span_count: int = 1
+) -> dict[str, str]:
     """One capture, version, span and proposal, with the link the trigger wants.
 
     Written with the shortest content the constraints admit. The proposal's span
@@ -193,6 +210,10 @@ def _seed_proposal(connection: Connection, ordinal: int = 1) -> dict[str, str]:
         "correlation_id": _identifier("corr", ordinal),
         "audit_id": _identifier("audit", ordinal),
     }
+    if span_count not in {1, 2}:
+        raise ValueError("the synthetic review fixture supports one or two spans")
+    if span_count == 2:
+        ids["second_span_id"] = _identifier("span", ordinal + 100)
     connection.execute(
         text(
             f"INSERT INTO {SCHEMA}.captures (capture_id, owner_principal_id) "  # noqa: S608
@@ -209,8 +230,18 @@ def _seed_proposal(connection: Connection, ordinal: int = 1) -> dict[str, str]:
             "'synthetic_test', 'local_only', :version_id, :correlation_id, :audit_id, now(), "
             "now(), now())"
         ),
-        {**ids, "digest": "0" * 64},
+        {**ids, "digest": digest_of("x")},
     )
+    if span_count == 2:
+        connection.execute(
+            text(
+                f"INSERT INTO {SCHEMA}.capture_spans (span_id, version_id, start_offset, "  # noqa: S608
+                "end_offset, offset_basis, line_start, column_start, line_end, column_end, "
+                "quoted_text_sha256, span_role) VALUES (:second_span_id, :version_id, 0, 1, "
+                "'unicode_code_point_v1', 1, 1, 1, 2, :digest, 'direct')"
+            ),
+            {**ids, "digest": digest_of("x")},
+        )
     connection.execute(
         text(
             f"INSERT INTO {SCHEMA}.capture_spans (span_id, version_id, start_offset, end_offset, "  # noqa: S608
@@ -218,7 +249,7 @@ def _seed_proposal(connection: Connection, ordinal: int = 1) -> dict[str, str]:
             "span_role) VALUES (:span_id, :version_id, 0, 1, 'unicode_code_point_v1', 1, 1, 1, 2, "
             ":digest, 'direct')"
         ),
-        {**ids, "digest": "0" * 64},
+        {**ids, "digest": digest_of("x")},
     )
     connection.execute(
         text(
@@ -235,11 +266,25 @@ def _seed_proposal(connection: Connection, ordinal: int = 1) -> dict[str, str]:
         ),
         ids,
     )
+    if span_count == 2:
+        connection.execute(
+            text(
+                f"INSERT INTO {SCHEMA}.capture_proposal_spans (proposal_id, span_id) "  # noqa: S608
+                "VALUES (:proposal_id, :second_span_id)"
+            ),
+            ids,
+        )
     return ids
 
 
 def _seed_promotion(
-    connection: Connection, ids: dict[str, str], ordinal: int = 1, *, cite_span: bool = True
+    connection: Connection,
+    ids: dict[str, str],
+    ordinal: int = 1,
+    *,
+    cite_span: bool = True,
+    disposition: Disposition = Disposition.ACCEPT,
+    corrected_value: str | None = None,
 ) -> dict[str, str]:
     """A review case, one decision, the assertion it accepted, and its span link.
 
@@ -248,6 +293,8 @@ def _seed_promotion(
     by a `NOT NULL` before the trigger ever ran, and the test would then pass for
     a reason it does not name.
     """
+    if (disposition is Disposition.CORRECT_AND_ACCEPT) is not (corrected_value is not None):
+        raise ValueError("the synthetic correction must match its accepting disposition")
     promoted = {
         **ids,
         "review_case_id": _identifier("rvw", ordinal),
@@ -266,18 +313,19 @@ def _seed_promotion(
         text(
             f"INSERT INTO {SCHEMA}.capture_review_decisions (decision_id, review_case_id, "  # noqa: S608
             "sequence, disposition, principal_id, correlation_id, audit_id, decided_at) VALUES "
-            "(:decision_id, :review_case_id, 1, 'accept', :principal_id, :correlation_id, "
+            "(:decision_id, :review_case_id, 1, :disposition, :principal_id, :correlation_id, "
             ":audit_id, now())"
         ),
-        promoted,
+        {**promoted, "disposition": disposition.value},
     )
     connection.execute(
         text(
             f"INSERT INTO {SCHEMA}.capture_assertions (assertion_id, version_id, proposal_id, "  # noqa: S608
-            "decision_id, assertion_type, state, accepted_at) VALUES (:assertion_id, :version_id, "
-            ":proposal_id, :decision_id, 'commitment', 'accepted', now())"
+            "decision_id, assertion_type, state, normalized_value, accepted_at) VALUES "
+            "(:assertion_id, :version_id, :proposal_id, :decision_id, 'commitment', 'accepted', "
+            ":corrected_value, now())"
         ),
-        promoted,
+        {**promoted, "corrected_value": corrected_value},
     )
     if cite_span:
         connection.execute(
@@ -287,6 +335,14 @@ def _seed_promotion(
             ),
             promoted,
         )
+        if "second_span_id" in promoted:
+            connection.execute(
+                text(
+                    f"INSERT INTO {SCHEMA}.capture_assertion_spans (assertion_id, span_id) "  # noqa: S608
+                    "VALUES (:assertion_id, :second_span_id)"
+                ),
+                promoted,
+            )
     return promoted
 
 
@@ -386,8 +442,8 @@ def test_the_review_revision_runs_empty_to_head_and_head_to_empty(
 ) -> None:
     """Reversible, and reversible including what a table drop does not take.
 
-    Three functions and eight triggers, five of them on tables this revision does
-    not drop. A trigger goes with its table and these five have no table to go
+    Four functions and the triggers on tables this revision owns and does not
+    own. A trigger goes with its table and the latter have no table to go
     with, so the downgrade has to name them; a function goes with nothing at all.
     """
     engine = create_database_engine(disposable_database)
@@ -422,11 +478,17 @@ def test_the_review_revision_runs_empty_to_head_and_head_to_empty(
             assert "DEFERRABLE INITIALLY DEFERRED" in triggers[name], name
         for table in UNDELETABLE:
             name = f"{table}_stay_immutable" if table in IMMUTABLE else f"{table}_are_never_deleted"
+            if table in EXACT_LINEAGE:
+                name = f"{table}_stay_immutable"
             definition = triggers[name]
             assert "BEFORE" in definition and "DELETE" in definition, table
-            assert ("UPDATE" in definition) is (table in IMMUTABLE), table
+            assert ("UPDATE" in definition) is (table in (*IMMUTABLE, *EXACT_LINEAGE)), table
             # The control: these are ordinary triggers, so "every trigger this
             # revision installs is deferred" is not what the loop above proved.
+            assert "DEFERRABLE" not in definition, table
+        for table in GOVERNED:
+            definition = triggers[f"{table}_updates_are_governed"]
+            assert "BEFORE UPDATE" in definition, table
             assert "DEFERRABLE" not in definition, table
 
         command.downgrade(_config(), "base")
@@ -507,7 +569,7 @@ def test_prior_revision_with_existing_proposal_upgrades_to_head_without_rewrite(
             ids = _seed_proposal(connection, ordinal=18)
             before = connection.execute(
                 text(
-                    f"SELECT proposal_id, version_id, state, risk_class, created_at "  # noqa: S608
+                    f"SELECT * "  # noqa: S608
                     f"FROM {SCHEMA}.capture_proposals WHERE proposal_id = :proposal_id"
                 ),
                 ids,
@@ -518,7 +580,7 @@ def test_prior_revision_with_existing_proposal_upgrades_to_head_without_rewrite(
         with engine.connect() as connection:
             after = connection.execute(
                 text(
-                    f"SELECT proposal_id, version_id, state, risk_class, created_at "  # noqa: S608
+                    f"SELECT * "  # noqa: S608
                     f"FROM {SCHEMA}.capture_proposals WHERE proposal_id = :proposal_id"
                 ),
                 ids,
@@ -603,11 +665,11 @@ def test_an_accepted_proposal_must_name_an_assertion_that_exists(
         command.upgrade(_config(), "head")
 
         with engine.begin() as connection:
-            ids = _seed_proposal(connection)
-            promoted = _seed_promotion(connection, ids)
+            promoted = _seed_promotion(connection, _seed_proposal(connection), 1)
             connection.execute(
                 text(
-                    f"UPDATE {SCHEMA}.capture_proposals SET accepted_record_type = 'assertion', "  # noqa: S608
+                    f"UPDATE {SCHEMA}.capture_proposals SET state = 'accepted', "  # noqa: S608
+                    "accepted_record_type = 'assertion', "
                     "accepted_record_id = :assertion_id WHERE proposal_id = :proposal_id"
                 ),
                 promoted,
@@ -623,24 +685,41 @@ def test_an_accepted_proposal_must_name_an_assertion_that_exists(
         assert named == promoted["assertion_id"]
 
         with pytest.raises(DBAPIError) as unknown, engine.begin() as connection:
+            absent = _seed_proposal(connection, 2)
             connection.execute(
                 text(
-                    f"UPDATE {SCHEMA}.capture_proposals SET accepted_record_type = 'assertion', "  # noqa: S608
+                    f"UPDATE {SCHEMA}.capture_proposals SET state = 'accepted', "  # noqa: S608
+                    "accepted_record_type = 'assertion', "
                     "accepted_record_id = :absent WHERE proposal_id = :proposal_id"
                 ),
-                {**promoted, "absent": _identifier("asrt", 7)},
+                {**absent, "absent": _identifier("asrt", 7)},
             )
-        assert "an accepted record that exists" in str(unknown.value)
+        assert "exact accepted assertion" in str(unknown.value)
 
         with pytest.raises(DBAPIError) as wrong_type, engine.begin() as connection:
+            wrong = _seed_promotion(connection, _seed_proposal(connection, 3), 3)
             connection.execute(
                 text(
-                    f"UPDATE {SCHEMA}.capture_proposals SET accepted_record_type = 'proposal', "  # noqa: S608
+                    f"UPDATE {SCHEMA}.capture_proposals SET state = 'accepted', "  # noqa: S608
+                    "accepted_record_type = 'proposal', "
                     "accepted_record_id = :assertion_id WHERE proposal_id = :proposal_id"
                 ),
-                promoted,
+                wrong,
             )
-        assert "an accepted record of one type" in str(wrong_type.value)
+        assert "governed state transitions" in str(wrong_type.value)
+
+        with pytest.raises(DBAPIError) as wrong_lineage, engine.begin() as connection:
+            other = _seed_promotion(connection, _seed_proposal(connection, 4), 4)
+            target = _seed_proposal(connection, 5)
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.capture_proposals SET state = 'accepted', "  # noqa: S608
+                    "accepted_record_type = 'assertion', accepted_record_id = :assertion_id "
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                {**target, "assertion_id": other["assertion_id"]},
+            )
+        assert "exact accepted assertion" in str(wrong_lineage.value)
 
         command.downgrade(_config(), "base")
     finally:
@@ -648,55 +727,348 @@ def test_an_accepted_proposal_must_name_an_assertion_that_exists(
 
 
 @pytest.mark.database
-@pytest.mark.parametrize("table", tuple(MUTABLE_COLUMN))
-def test_stateful_lineage_cannot_be_deleted_but_governed_updates_remain(
-    disposable_database: str, table: str
+def test_proposal_server_guard_allows_only_real_transition_shapes(
+    disposable_database: str,
 ) -> None:
-    """`QC-AC-022`, and the control that stops it discharging over a dead table.
+    """Real writer transitions pass; unrelated row deltas fail at the server."""
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), "head")
 
-    "Nothing can be deleted" and "nothing can be written" are satisfied by the
-    same empty result, so each parametrisation asserts both against a row that
-    exists: the `DELETE` is refused, and a second complete row is still
-    insertable afterwards. Five tables, and one of them — `capture_proposals` —
-    is a pre-existing gap this revision closes rather than a table it created:
-    before it, deleting a proposal succeeded and took its evidence links with it
-    through `capture_proposal_spans`' cascade.
+        with engine.begin() as connection:
+            routed = _seed_proposal(connection, 10)
+            review_case_id = open_review_case(connection, routed["proposal_id"])
+            assert review_case_id is not None
+            assert (
+                decide_review(
+                    connection,
+                    _decision_request(
+                        review_case_id,
+                        expected=0,
+                        disposition=Disposition.REJECT,
+                    ),
+                )
+                is not None
+            )
 
-    A third assertion names the boundary: `UPDATE` is deliberately still
-    permitted for proposals and assertions because each has governed state
-    transitions, including an assertion moving to `revalidation_required`.
-    """
+            for ordinal, prior_state in enumerate(
+                ("proposed", "needs_review", "rejected", "deferred", "unresolved"),
+                start=11,
+            ):
+                invalidated = _seed_proposal(connection, ordinal)
+                if prior_state == "needs_review":
+                    assert open_review_case(connection, invalidated["proposal_id"]) is not None
+                elif prior_state != "proposed":
+                    connection.execute(
+                        text(
+                            f"UPDATE {SCHEMA}.capture_proposals SET state = :prior_state "  # noqa: S608
+                            "WHERE proposal_id = :proposal_id"
+                        ),
+                        {**invalidated, "prior_state": prior_state},
+                    )
+                connection.execute(
+                    text(
+                        f"UPDATE {SCHEMA}.capture_proposals SET state = 'invalidated', "  # noqa: S608
+                        "quarantine_reason = 'span_text_does_not_re_derive' "
+                        "WHERE proposal_id = :proposal_id"
+                    ),
+                    invalidated,
+                )
+
+            accepted = _seed_promotion(connection, _seed_proposal(connection, 17), 17)
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.capture_proposals SET state = 'accepted', "  # noqa: S608
+                    "accepted_record_type = 'assertion', accepted_record_id = :assertion_id "
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                accepted,
+            )
+
+            corrected = _seed_promotion(
+                connection,
+                _seed_proposal(connection, 18),
+                18,
+                disposition=Disposition.CORRECT_AND_ACCEPT,
+                corrected_value="synthetic correction",
+            )
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.capture_proposals SET state = 'corrected_accepted', "  # noqa: S608
+                    "normalized_value = 'synthetic correction', "
+                    "accepted_record_type = 'assertion', accepted_record_id = :assertion_id "
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                corrected,
+            )
+
+        with engine.begin() as connection:
+            mismatch = _seed_promotion(
+                connection,
+                _seed_proposal(connection, 19),
+                19,
+                disposition=Disposition.CORRECT_AND_ACCEPT,
+                corrected_value="assertion correction",
+            )
+        with engine.connect() as connection:
+            before_mismatch = _row_snapshot(connection, "capture_proposals")
+        with pytest.raises(DBAPIError) as refused_mismatch, engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.capture_proposals SET state = 'corrected_accepted', "  # noqa: S608
+                    "normalized_value = 'different proposal correction', "
+                    "accepted_record_type = 'assertion', accepted_record_id = :assertion_id "
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                mismatch,
+            )
+        assert "exact accepted assertion" in str(refused_mismatch.value)
+        with engine.connect() as connection:
+            assert _row_snapshot(connection, "capture_proposals") == before_mismatch
+
+        mutations = (
+            "created_at = created_at + interval '1 second'",
+            "proposal_id = :replacement",
+            "version_id = :replacement",
+            "proposal_type = 'task'",
+            "risk_class = 'critical'",
+            "method = 'cloud_model'",
+            "method_version = 'v2'",
+            "schema_version = 'v2'",
+            "missing_required_fields = ARRAY['actor']",
+            "normalized_value = 'unauthorized rewrite'",
+            "accepted_record_type = 'assertion', accepted_record_id = :replacement",
+            "state = 'superseded'",
+            "state = 'invalidated', quarantine_reason = 'span_text_does_not_re_derive', "
+            "method_version = 'v2'",
+        )
+        for ordinal, mutation in enumerate(mutations, start=20):
+            with engine.begin() as connection:
+                ids = _seed_proposal(connection, ordinal)
+                case_id = open_review_case(connection, ids["proposal_id"])
+                assert case_id is not None
+            with engine.connect() as connection:
+                before = _row_snapshot(connection, "capture_proposals")
+            with pytest.raises(DBAPIError) as refused, engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f"UPDATE {SCHEMA}.capture_proposals SET {mutation} "  # noqa: S608
+                        "WHERE proposal_id = :proposal_id"
+                    ),
+                    {**ids, "replacement": _identifier("prop", ordinal + 200)},
+                )
+            assert "governed state transitions" in str(refused.value), mutation
+            with engine.connect() as connection:
+                assert _row_snapshot(connection, "capture_proposals") == before, mutation
+
+        with engine.connect() as connection:
+            before_accepted_rewrite = _row_snapshot(connection, "capture_proposals")
+        with pytest.raises(DBAPIError) as accepted_rewrite, engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.capture_proposals "  # noqa: S608
+                    "SET normalized_value = 'rewritten after acceptance' "
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                accepted,
+            )
+        assert "governed state transitions" in str(accepted_rewrite.value)
+        with engine.connect() as connection:
+            assert _row_snapshot(connection, "capture_proposals") == before_accepted_rewrite
+
+        command.downgrade(_config(), "base")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_assertion_server_guard_allows_only_revalidation_transition(
+    disposable_database: str,
+) -> None:
+    """Only accepted-to-revalidation-required plus its timestamp may change."""
     engine = create_database_engine(disposable_database)
     try:
         command.upgrade(_config(), "head")
         with engine.begin() as connection:
-            _seed_receipt(connection, _seed_promotion(connection, _seed_proposal(connection, 1), 1))
-
-        with engine.connect() as connection:
-            before = connection.execute(text(f"SELECT count(*) FROM {SCHEMA}.{table}")).scalar_one()  # noqa: S608
-        # Non-empty, so the refusal below is measured against a row that exists.
-        assert before == 1
-
-        with pytest.raises(DBAPIError) as refused, engine.begin() as connection:
-            connection.execute(text(f"DELETE FROM {SCHEMA}.{table}"))  # noqa: S608
-        assert "retains lineage" in str(refused.value)
-
-        # The first control: the table still takes rows, so the refusal is about
-        # deletion rather than about a table nothing can reach.
-        with engine.begin() as connection:
-            _seed_receipt(connection, _seed_promotion(connection, _seed_proposal(connection, 2), 2))
-
-        # The second: an existing row can still change. The rule is "nothing is
-        # deleted", which is narrower than `capture_versions`' immutability.
-        with engine.begin() as connection:
+            allowed = _seed_promotion(connection, _seed_proposal(connection, 50), 50)
             updated = connection.execute(
-                text(f"UPDATE {SCHEMA}.{table} SET {MUTABLE_COLUMN[table]} = now()")  # noqa: S608
+                text(
+                    f"UPDATE {SCHEMA}.capture_assertions "  # noqa: S608
+                    "SET state = 'revalidation_required', revalidation_required_at = now() "
+                    "WHERE assertion_id = :assertion_id"
+                ),
+                allowed,
             ).rowcount
-        assert updated == 2
+        assert updated == 1
+
+        mutations = (
+            "accepted_at = accepted_at + interval '1 second'",
+            "assertion_id = :replacement",
+            "version_id = :replacement",
+            "proposal_id = :replacement",
+            "decision_id = :replacement",
+            "assertion_type = 'task'",
+            "normalized_value = 'unauthorized rewrite'",
+            "superseded_by_assertion_id = :replacement",
+            "state = 'withdrawn'",
+            "revalidation_required_at = now()",
+            "state = 'revalidation_required', revalidation_required_at = now(), "
+            "accepted_at = accepted_at + interval '1 second'",
+        )
+        for ordinal, mutation in enumerate(mutations, start=51):
+            with engine.begin() as connection:
+                ids = _seed_promotion(
+                    connection,
+                    _seed_proposal(connection, ordinal),
+                    ordinal,
+                )
+            with engine.connect() as connection:
+                before = _row_snapshot(connection, "capture_assertions")
+            with pytest.raises(DBAPIError) as refused, engine.begin() as connection:
+                connection.execute(
+                    text(
+                        f"UPDATE {SCHEMA}.capture_assertions SET {mutation} "  # noqa: S608
+                        "WHERE assertion_id = :assertion_id"
+                    ),
+                    {**ids, "replacement": _identifier("asrt", ordinal + 200)},
+                )
+            assert "governed state transitions" in str(refused.value), mutation
+            with engine.connect() as connection:
+                assert _row_snapshot(connection, "capture_assertions") == before, mutation
+
+        command.downgrade(_config(), "base")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_two_span_proposal_and_assertion_lineage_cannot_be_rewritten_or_deleted(
+    disposable_database: str,
+) -> None:
+    """Two-span promotion succeeds, then every evidence row stays byte-exact."""
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), "head")
+        with engine.begin() as connection:
+            promoted = _seed_promotion(
+                connection,
+                _seed_proposal(connection, 70, span_count=2),
+                70,
+            )
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.capture_proposals SET state = 'accepted', "  # noqa: S608
+                    "accepted_record_type = 'assertion', accepted_record_id = :assertion_id "
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                promoted,
+            )
+            _seed_receipt(connection, promoted)
 
         with engine.connect() as connection:
-            after = connection.execute(text(f"SELECT count(*) FROM {SCHEMA}.{table}")).scalar_one()  # noqa: S608
-        assert after == 2
+            lineage_before = {
+                table: _row_snapshot(connection, table)
+                for table in (
+                    "capture_spans",
+                    "capture_proposal_spans",
+                    "capture_assertion_spans",
+                    "capture_proposals",
+                    "capture_assertions",
+                    "capture_review_decisions",
+                    "capture_promotion_receipts",
+                )
+            }
+
+        attempts = (
+            (
+                "capture_spans",
+                "UPDATE",
+                "UPDATE knowledge.capture_spans SET quoted_text_sha256 = repeat('1', 64) "
+                "WHERE span_id = :span_id",
+            ),
+            (
+                "capture_spans",
+                "DELETE",
+                "DELETE FROM knowledge.capture_spans WHERE span_id = :span_id",
+            ),
+            (
+                "capture_proposal_spans",
+                "UPDATE",
+                "UPDATE knowledge.capture_proposal_spans SET span_id = :replacement "
+                "WHERE proposal_id = :proposal_id AND span_id = :span_id",
+            ),
+            (
+                "capture_proposal_spans",
+                "DELETE",
+                "DELETE FROM knowledge.capture_proposal_spans "
+                "WHERE proposal_id = :proposal_id AND span_id = :span_id",
+            ),
+            (
+                "capture_assertion_spans",
+                "UPDATE",
+                "UPDATE knowledge.capture_assertion_spans SET span_id = :replacement "
+                "WHERE assertion_id = :assertion_id AND span_id = :span_id",
+            ),
+            (
+                "capture_assertion_spans",
+                "DELETE",
+                "DELETE FROM knowledge.capture_assertion_spans "
+                "WHERE assertion_id = :assertion_id AND span_id = :span_id",
+            ),
+            (
+                "capture_proposals",
+                "DELETE",
+                "DELETE FROM knowledge.capture_proposals WHERE proposal_id = :proposal_id",
+            ),
+            (
+                "capture_assertions",
+                "DELETE",
+                "DELETE FROM knowledge.capture_assertions WHERE assertion_id = :assertion_id",
+            ),
+        )
+        bindings = {
+            **promoted,
+            "replacement": _identifier("span", 999),
+        }
+        for table, operation, statement in attempts:
+            with pytest.raises(DBAPIError) as refused, engine.begin() as connection:
+                connection.execute(text(statement), bindings)
+            assert "retains lineage" in str(refused.value), (table, operation)
+
+        with engine.connect() as connection:
+            for table, before in lineage_before.items():
+                assert _row_snapshot(connection, table) == before, table
+            proposal = connection.execute(
+                text(
+                    f"SELECT state, accepted_record_type, accepted_record_id "  # noqa: S608
+                    f"FROM {SCHEMA}.capture_proposals WHERE proposal_id = :proposal_id"
+                ),
+                promoted,
+            ).one()
+            assertion = connection.execute(
+                text(
+                    f"SELECT state, proposal_id, decision_id FROM {SCHEMA}.capture_assertions "  # noqa: S608
+                    "WHERE assertion_id = :assertion_id"
+                ),
+                promoted,
+            ).one()
+            proposal_links = connection.execute(
+                text(
+                    f"SELECT count(*) FROM {SCHEMA}.capture_proposal_spans "  # noqa: S608
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                promoted,
+            ).scalar_one()
+            assertion_links = connection.execute(
+                text(
+                    f"SELECT count(*) FROM {SCHEMA}.capture_assertion_spans "  # noqa: S608
+                    "WHERE assertion_id = :assertion_id"
+                ),
+                promoted,
+            ).scalar_one()
+        assert tuple(proposal) == ("accepted", "assertion", promoted["assertion_id"])
+        assert tuple(assertion) == ("accepted", promoted["proposal_id"], promoted["decision_id"])
+        assert proposal_links == assertion_links == 2
 
         command.downgrade(_config(), "base")
     finally:
@@ -720,18 +1092,28 @@ def test_review_evidence_accepts_inserts_but_refuses_updates_and_deletes(
         with engine.begin() as connection:
             _seed_receipt(connection, _seed_promotion(connection, _seed_proposal(connection, 1), 1))
 
+        with engine.connect() as connection:
+            first = _row_snapshot(connection, table)
+
         with pytest.raises(DBAPIError) as deleted, engine.begin() as connection:
             connection.execute(text(f"DELETE FROM {SCHEMA}.{table}"))  # noqa: S608
         assert "retains lineage" in str(deleted.value)
+        with engine.connect() as connection:
+            assert _row_snapshot(connection, table) == first
 
         with engine.begin() as connection:
             _seed_receipt(connection, _seed_promotion(connection, _seed_proposal(connection, 2), 2))
+
+        with engine.connect() as connection:
+            before_update = _row_snapshot(connection, table)
 
         with pytest.raises(DBAPIError) as updated, engine.begin() as connection:
             connection.execute(
                 text(f"UPDATE {SCHEMA}.{table} SET {IMMUTABLE[table]} = now()")  # noqa: S608
             )
         assert "retains lineage" in str(updated.value)
+        with engine.connect() as connection:
+            assert _row_snapshot(connection, table) == before_update
 
         with engine.connect() as connection:
             assert (
@@ -882,13 +1264,6 @@ def test_an_acceptance_creates_one_assertion_receipt_and_revalidation_obligation
         command.upgrade(_config(), "head")
         with engine.begin() as connection:
             ids = _seed_proposal(connection, ordinal=31)
-            connection.execute(
-                text(
-                    f"UPDATE {SCHEMA}.capture_spans SET quoted_text_sha256 = :digest "  # noqa: S608
-                    "WHERE span_id = :span_id"
-                ),
-                {"span_id": ids["span_id"], "digest": digest_of("x")},
-            )
             review_case_id = open_review_case(connection, ids["proposal_id"])
             assert review_case_id is not None
             state = connection.execute(
@@ -1047,13 +1422,6 @@ def test_acceptance_is_terminal_and_every_later_decision_preserves_canonical_row
                 for later in later_dispositions:
                     ids = _seed_proposal(connection, ordinal=ordinal)
                     ordinal += 1
-                    connection.execute(
-                        text(
-                            f"UPDATE {SCHEMA}.capture_spans SET quoted_text_sha256 = :digest "  # noqa: S608
-                            "WHERE span_id = :span_id"
-                        ),
-                        {"span_id": ids["span_id"], "digest": digest_of("x")},
-                    )
                     review_case_id = open_review_case(connection, ids["proposal_id"])
                     assert review_case_id is not None
                     accepted = decide_review(

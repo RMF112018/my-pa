@@ -1229,7 +1229,7 @@ managed-document write and grants the source-provider port nothing.
 | D-103 | **The campaign briefing file named by the WP-8 execution directive is absent from repository history; execution uses the pasted operator directive plus repository authority** | A bounded repository/ref search found no `CAMPAIGN-BRIEF.md`. Its absence is a plan/reality discrepancy, not permission to invent its contents. The pasted directive supplies the campaign objective, operator delegation, single-worker constraint, exact-head review/merge gates, and prohibition on deployment. `AGENTS.md`, this plan's WP-8 section, ADR-003, and the mirrored Quick Capture specifications supply the implementation and acceptance criteria. The missing file therefore weakens provenance convenience but does not prevent safe acceptance mapping; exact implementation and review evidence remain bound to Git/CI and the governed external audit artifact | Recorded by WP-8. Invalidated if an authenticated byte-exact campaign brief is later recovered, at which point it must be reconciled rather than silently substituted |
 | D-104 | **WP-10 is deferred until MCV completion; WP-11 remains dependency-blocked on it** | Direct operator instruction on 2026-08-04: “defer wp-10 until mcv is complete.” This explicitly overturns `D-32`'s assumed placement of WP-10 inside the pre-completion sequence without lifting active WP-10 gates `D-09` and `O-04` or deciding `O-20`. WP-11's published sequence and this plan both make WP-10 its prerequisite, so WP-11 cannot run while WP-10 is deferred. The operator's later `D-105` clarification explicitly says the MCV is not complete and does not assign WP-11 to either side of the completion boundary. Its active gates `NAR-OP-001`–`NAR-OP-009` remain open. WP-0R through WP-9 are merged, but that fact is not a completion-readiness claim and does not resolve the sequence conflict, declare the MCV complete, assert `MYPA_CURRENT_PRODUCT_SCOPE_COMPLETE`, or authorize deployment. | Operator-directed; WP-10 deferred; WP-11 dependency-blocked; boundary unresolved |
 
-| D-105 | **Canonical version 2.3 is re-mirrored; Apple Mail, Calendar & Contacts yields provisional WP-12 with planning reserved to the operator** | `REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z` revised 17 of the canonical package's 21 numbered artifacts in place, preserved all 21 Drive identities and parent bindings, and took the package from 2.2 to 2.3. The publisher labels the Native Apple Personal Data Capture Bridge as conditional MCV scope and calls its sequence WP-12, but every canonical artifact and control receipt states `implementation: NOT_GRANTED`; live personal data, TCC/credentials, source mutation, deployment, production activation, external disclosure, destructive retention, and risk acceptance are also not granted. The operator then clarified that the MCV is explicitly not complete and that WP-12 is provisional after WP-10 and WP-11; separate operator authorization is required before WP-12 implementation planning. The operator assigned WP-12 no pre-MCV or post-MCV disposition. Because `D-104` still defers WP-10 until completion and WP-11 depends on WP-10, the resulting completion-boundary conflict is recorded rather than resolved by inference. Nothing in WP-12 is planned, implemented, or authorized. | Re-mirrored; WP-12 provisional / `OPERATOR_AUTHORIZATION_REQUIRED`; boundary unresolved; no implementation authority |
+| D-105 | **Canonical version 2.3 is re-mirrored; Apple Mail, Calendar & Contacts yields provisional WP-12 with planning reserved to the operator** | `REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z` revised 17 of the canonical package's 21 numbered artifacts in place, preserved all 21 Drive identities and parent bindings, and took the package from 2.2 to 2.3. The publisher labels the Native Apple Personal Data Capture Bridge as conditional MCV scope and calls its sequence WP-12. Authority evidence is layered rather than identical: the numbered canonical artifacts carry their own implementation-not-granted blocks; the disposition denies implementation, live access, source mutation, deployment, production, and risk acceptance; the readback asserts only that implementation authority was not granted; and the publication and roundtrip receipts carry the fuller denial list covering live personal data, TCC/credential mutation, source mutation, deployment/watchers, production activation, external-model disclosure, destructive retention, and risk acceptance. The operator then clarified that the MCV is explicitly not complete and that WP-12 is provisional after WP-10 and WP-11; separate operator authorization is required before WP-12 implementation planning. The operator assigned WP-12 no pre-MCV or post-MCV disposition. Because `D-104` still defers WP-10 until completion and WP-11 depends on WP-10, the resulting completion-boundary conflict is recorded rather than resolved by inference. Nothing in WP-12 is planned, implemented, or authorized. | Re-mirrored; WP-12 provisional / `OPERATOR_AUTHORIZATION_REQUIRED`; boundary unresolved; no implementation authority |
 
 **`D-36`'s citation shipped ahead of its row, and that is recorded rather than
 quietly closed.** WP-4B2b added the section 6 sentence attributing the second
@@ -1460,11 +1460,13 @@ resolved teaches a reader nothing about how it was resolved.
    whole-product definition and preserves it as source history. The instrument is
    the instruction, not the package's own self-declared status — `D-19` records
    why that distinction matters, and section 15 records the reconciliation in
-   full. Only this item is answered; the forty-eight operator decisions inside
-   the package — `OP-01` through `OP-30`, `MCP-OP-001` through `MCP-OP-009`, and
-   `NAR-OP-001` through `NAR-OP-009` — remain open and are not tracked here. The
-   figure was thirty-nine until the 2026-08-02 Native Apple Reminders revision
-   added the last nine; see the subsection below the five questions.
+   full. Only this item is answered; the 58 operator decisions inside the
+   package — `OP-01` through `OP-30`, `MCP-OP-001` through `MCP-OP-009`,
+   `NAR-OP-001` through `NAR-OP-009`, and `NAPDCB-OP-001` through
+   `NAPDCB-OP-010` — remain open and are not tracked here. The figure was 39
+   before the 2026-08-02 Native Apple Reminders revision, 48 after it added nine,
+   and 58 after the 2026-08-04 Apple Mail, Calendar & Contacts revision added ten;
+   see the subsection below the five questions.
 
    The part worth keeping is why the fear did not materialise. The concern was
    that ratification would make a broad vision's acceptance criteria binding and
@@ -1587,14 +1589,14 @@ exactly the evidence `D-17` refused for the predecessor, and treating it as
 sufficient here would have quietly lowered the standard this register set one
 pull request earlier.
 
-Two consequences follow. First, the forty-eight operator decisions inside the
-package remain open — `OP-01` through `OP-30`, the connector's `MCP-OP-001`
-through `MCP-OP-009`, and Native Apple Reminders' `NAR-OP-001` through
-`NAR-OP-009`, which the 2026-08-02 v2.2 revision added after this section was
-first written. Ratifying the definition did not answer any of them, and
-`OP-05` in particular still carries only a recommended default. Section 14's
-counts exclude all forty-eight, for the reason given in item 5: they belong to
-the package, not to the three ledgers this plan is accountable for.
+Two consequences follow. First, the 58 operator decisions inside the package
+remain open — `OP-01` through `OP-30`, the connector's `MCP-OP-001` through
+`MCP-OP-009`, Native Apple Reminders' `NAR-OP-001` through `NAR-OP-009`, and
+Apple Mail, Calendar & Contacts' `NAPDCB-OP-001` through `NAPDCB-OP-010`.
+Ratifying the definition did not answer any of them, and `OP-05` in particular
+still carries only a recommended default. Section 14's counts exclude all 58,
+for the reason given in item 5: they belong to the package, not to the three
+ledgers this plan is accountable for.
 Second, the only question section 14 marks answered is its own item 3, the
 ratification question itself. Nothing else was removed from the operator's queue.
 
@@ -2071,10 +2073,15 @@ at Drive folder `13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5` (manifest Drive ID
 WP-12 and the MVP definition calls it conditional MCV scope.
 
 Those product statements do not grant repository implementation authority.
-The package and all four controls say implementation, live personal-data
-access, TCC/credentials, source mutation, deployment, production activation,
-destructive retention, external disclosure, and risk acceptance are not
-granted. The operator has nevertheless identified the feature as provisional
+The authority evidence is precise but not uniform. The numbered canonical
+artifacts carry their own implementation-not-granted blocks. The disposition's
+narrower authority block denies implementation, live access, source mutation,
+deployment, production, and risk acceptance. The readback asserts only
+`implementation_authority_not_granted: true`. The publication and roundtrip
+receipts carry the fuller denial list for implementation, live personal data,
+TCC/credential mutation, source mutation, deployment/watchers, production
+activation, external-model disclosure, destructive retention, and risk
+acceptance. The operator has nevertheless identified the feature as provisional
 WP-12 after WP-10 and WP-11, while reserving implementation planning to a
 separate authorization. This does not activate WP-12 or decide whether it is
 pre-MCV or post-MCV. `D-104` still defers WP-10 until MCV completion, and WP-11
@@ -2082,7 +2089,7 @@ still depends on WP-10, so the chain now exposes an unresolved completion-bounda
 conflict. `D-105` records that conflict without reordering the packages or
 inferring authority. Nothing in WP-12 is planned or built.
 
-The nine `NAPDCB-OP-001` through `NAPDCB-OP-009` decisions remain in the
+The ten `NAPDCB-OP-001` through `NAPDCB-OP-010` decisions remain in the
 canonical package's own ledger. Like `NAR-OP-*`, they are excluded from section
 14's three-ledger counts and none is answered here.
 

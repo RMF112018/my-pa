@@ -89,7 +89,9 @@ from sqlalchemy import (
     Select,
     String,
     Table,
+    and_,
     bindparam,
+    case,
     column,
     func,
     literal_column,
@@ -473,8 +475,22 @@ def totals_statement(plane: SearchPlane = CAPTURE_VERSIONS) -> Select[Any]:
     found" for a scope that held something. The scoped count uses the same
     `capture_text_in_scope` the page does, so the two cannot disagree about
     which rows are in scope.
+
+    **`count(CASE …)` rather than `count(*) FILTER (WHERE …)`, and not by
+    preference.** `FunctionElement.filter` is untyped in SQLAlchemy's stubs at
+    the declared floor (`2.0.20`) and typed by `2.0.51`, so the `FILTER` form is
+    green on every local gate and fails `no-untyped-call` in the
+    `dependency-floor` job alone. `# type: ignore[no-untyped-call]` is not the
+    way out: `strict = true` enables `warn_unused_ignores`, so the ignore is
+    itself an error at the installed version — a red floor job traded for a red
+    `validate` job. The two aggregates are equivalent: `count(x)` counts
+    non-NULL `x`, and a `CASE` with no `ELSE` yields NULL when the condition is
+    FALSE *or* NULL, so both count exactly the rows the condition holds TRUE
+    for. `and_` is load-bearing — the predicate arrives as a tuple and `FILTER`
+    ANDs it, so anything less would widen the scope this count shares with the
+    page.
     """
-    scoped = func.count().filter(*capture_text_in_scope())
+    scoped = func.count(case((and_(*capture_text_in_scope()), 1)))
     return select(scoped.label("searchable"), func.count().label("stored")).select_from(plane.table)
 
 

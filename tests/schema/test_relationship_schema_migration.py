@@ -531,6 +531,348 @@ def test_accepted_merge_and_split_receipts_cannot_commit_without_exact_final_sta
 
 
 @pytest.mark.database
+@pytest.mark.parametrize("action", tuple(ResolutionAction), ids=lambda action: action.value)
+def test_every_accepted_resolution_action_requires_complete_final_state_at_commit(
+    relationship_engine: Engine,
+    action: ResolutionAction,
+) -> None:
+    observations = (_observation(185, "contacts"), _observation(186, "contacts"))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.record_observations("contacts", observations)
+        if action is ResolutionAction.LINK_OBSERVATION:
+            candidate = IdentityCandidateSet(
+                candidate_set_id=_id("dups", 185),
+                person_ids=(),
+                observation_ids=(observations[0].observation_id,),
+                created_at=WHEN,
+            )
+            review_id = repository.open_identity_review(candidate, action)
+            decision_id = repository.decide_identity_review(
+                review_id,
+                disposition="accept",
+                principal_id=_id("prn", 1),
+                decided_at=WHEN,
+            )
+            resolution = IdentityResolution(
+                resolution_id=_id("ires", 185),
+                action=action,
+                review_case_id=review_id,
+                decision_id=decision_id,
+                retained_person_id=_id("per", 185),
+                prior_person_id=None,
+                observation_ids=(observations[0].observation_id,),
+                decided_at=WHEN,
+            )
+        else:
+            first = _link_person(repository, person_ordinal=185, observations=(observations[0],))
+            second = _link_person(repository, person_ordinal=186, observations=(observations[1],))
+            resolution = _accepted_correction(
+                repository,
+                ordinal=187,
+                action=action,
+                retained_person_id=first,
+                prior_person_id=second,
+                observation_ids=(observations[1].observation_id,),
+            )
+    with relationship_engine.connect() as connection:
+        before = _relationship_state_snapshot(connection)
+
+    with pytest.raises(DBAPIError), relationship_engine.begin() as connection:
+        if action is ResolutionAction.LINK_OBSERVATION:
+            connection.execute(
+                insert(relationship_people).values(
+                    person_id=resolution.retained_person_id,
+                    display_name="Unapplied accepted identity",
+                    created_at=WHEN,
+                )
+            )
+        connection.execute(
+            insert(relationship_identity_resolutions).values(
+                resolution_id=resolution.resolution_id,
+                action=resolution.action.value,
+                review_case_id=resolution.review_case_id,
+                decision_id=resolution.decision_id,
+                retained_person_id=resolution.retained_person_id,
+                prior_person_id=resolution.prior_person_id,
+                decided_at=resolution.decided_at,
+            )
+        )
+        connection.execute(
+            insert(relationship_resolution_observations).values(
+                resolution_id=resolution.resolution_id,
+                observation_id=resolution.observation_ids[0],
+            )
+        )
+
+    with relationship_engine.connect() as connection:
+        assert _relationship_state_snapshot(connection) == before
+
+
+@pytest.mark.database
+@pytest.mark.parametrize(
+    "omission",
+    (
+        "person_state",
+        "observation_link",
+        "evidence",
+        "evidence_lineage",
+        "alias",
+        "wrong_receipt_owner",
+    ),
+)
+def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
+    relationship_engine: Engine,
+    omission: str,
+) -> None:
+    observation = _observation(188, "contacts")
+    person_id = _id("per", 188)
+    resolution_id = _id("ires", 188)
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.record_observations("contacts", (observation,))
+        candidate = IdentityCandidateSet(
+            candidate_set_id=_id("dups", 188),
+            person_ids=(),
+            observation_ids=(observation.observation_id,),
+            created_at=WHEN,
+        )
+        review_id = repository.open_identity_review(candidate, ResolutionAction.LINK_OBSERVATION)
+        decision_id = repository.decide_identity_review(
+            review_id,
+            disposition="accept",
+            principal_id=_id("prn", 1),
+            decided_at=WHEN,
+        )
+        if omission == "wrong_receipt_owner":
+            competing_candidate = IdentityCandidateSet(
+                candidate_set_id=_id("dups", 190),
+                person_ids=(),
+                observation_ids=(observation.observation_id,),
+                created_at=WHEN,
+            )
+            competing_review_id = repository.open_identity_review(
+                competing_candidate, ResolutionAction.LINK_OBSERVATION
+            )
+            competing_decision_id = repository.decide_identity_review(
+                competing_review_id,
+                disposition="accept",
+                principal_id=_id("prn", 1),
+                decided_at=WHEN,
+            )
+    with relationship_engine.connect() as connection:
+        before = _relationship_state_snapshot(connection)
+
+    with pytest.raises(DBAPIError), relationship_engine.begin() as connection:
+        connection.execute(
+            insert(relationship_people).values(
+                person_id=person_id,
+                display_name="Incomplete accepted identity",
+                created_at=WHEN,
+            )
+        )
+        connection.execute(
+            insert(relationship_identity_resolutions).values(
+                resolution_id=resolution_id,
+                action="link_observation",
+                review_case_id=review_id,
+                decision_id=decision_id,
+                retained_person_id=person_id,
+                prior_person_id=None,
+                decided_at=WHEN,
+            )
+        )
+        if omission != "person_state":
+            connection.execute(
+                update(relationship_people)
+                .where(relationship_people.c.person_id == person_id)
+                .values(state_resolution_id=resolution_id)
+            )
+        connection.execute(
+            insert(relationship_resolution_observations).values(
+                resolution_id=resolution_id,
+                observation_id=observation.observation_id,
+            )
+        )
+        if omission not in {"observation_link", "wrong_receipt_owner"}:
+            connection.execute(
+                insert(relationship_observation_links).values(
+                    observation_id=observation.observation_id,
+                    person_id=person_id,
+                    resolution_id=resolution_id,
+                )
+            )
+            if omission != "alias":
+                connection.execute(
+                    insert(relationship_aliases).values(
+                        alias_id=_id("alias", 188),
+                        person_id=person_id,
+                        observation_id=observation.observation_id,
+                        value=observation.display_name,
+                    )
+                )
+        if omission not in {"evidence", "wrong_receipt_owner"}:
+            evidence_id = f"source_{observation.observation_id}"
+            connection.execute(
+                insert(relationship_evidence).values(
+                    evidence_id=evidence_id,
+                    person_id=person_id,
+                    authority="source_observation",
+                    recorded_at=WHEN,
+                )
+            )
+            if omission != "evidence_lineage":
+                connection.execute(
+                    insert(relationship_evidence_observations).values(
+                        evidence_id=evidence_id,
+                        observation_id=observation.observation_id,
+                    )
+                )
+        if omission == "wrong_receipt_owner":
+            competing_person_id = _id("per", 190)
+            competing_resolution_id = _id("ires", 190)
+            connection.execute(
+                insert(relationship_people).values(
+                    person_id=competing_person_id,
+                    display_name="Competing accepted identity",
+                    created_at=WHEN,
+                )
+            )
+            connection.execute(
+                insert(relationship_identity_resolutions).values(
+                    resolution_id=competing_resolution_id,
+                    action="link_observation",
+                    review_case_id=competing_review_id,
+                    decision_id=competing_decision_id,
+                    retained_person_id=competing_person_id,
+                    prior_person_id=None,
+                    decided_at=WHEN,
+                )
+            )
+            connection.execute(
+                update(relationship_people)
+                .where(relationship_people.c.person_id == competing_person_id)
+                .values(state_resolution_id=competing_resolution_id)
+            )
+            connection.execute(
+                insert(relationship_resolution_observations).values(
+                    resolution_id=competing_resolution_id,
+                    observation_id=observation.observation_id,
+                )
+            )
+            connection.execute(
+                insert(relationship_observation_links).values(
+                    observation_id=observation.observation_id,
+                    person_id=competing_person_id,
+                    resolution_id=competing_resolution_id,
+                )
+            )
+            connection.execute(
+                insert(relationship_aliases).values(
+                    alias_id=_id("alias", 190),
+                    person_id=competing_person_id,
+                    observation_id=observation.observation_id,
+                    value=observation.display_name,
+                )
+            )
+            evidence_id = f"source_{observation.observation_id}"
+            connection.execute(
+                insert(relationship_evidence).values(
+                    evidence_id=evidence_id,
+                    person_id=competing_person_id,
+                    authority="source_observation",
+                    recorded_at=WHEN,
+                )
+            )
+            connection.execute(
+                insert(relationship_evidence_observations).values(
+                    evidence_id=evidence_id,
+                    observation_id=observation.observation_id,
+                )
+            )
+
+    with relationship_engine.connect() as connection:
+        assert _relationship_state_snapshot(connection) == before
+
+
+@pytest.mark.database
+def test_governed_link_is_idempotent_and_profile_fails_closed_if_receipt_link_is_missing(
+    relationship_engine: Engine,
+) -> None:
+    observation = _observation(189, "contacts")
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.record_observations("contacts", (observation,))
+        candidate = IdentityCandidateSet(
+            candidate_set_id=_id("dups", 189),
+            person_ids=(),
+            observation_ids=(observation.observation_id,),
+            created_at=WHEN,
+        )
+        review_id = repository.open_identity_review(candidate, ResolutionAction.LINK_OBSERVATION)
+        decision_id = repository.decide_identity_review(
+            review_id,
+            disposition="accept",
+            principal_id=_id("prn", 1),
+            decided_at=WHEN,
+        )
+        resolution = IdentityResolution(
+            resolution_id=_id("ires", 189),
+            action=ResolutionAction.LINK_OBSERVATION,
+            review_case_id=review_id,
+            decision_id=decision_id,
+            retained_person_id=_id("per", 189),
+            prior_person_id=None,
+            observation_ids=(observation.observation_id,),
+            decided_at=WHEN,
+        )
+        repository.apply_resolution(resolution, display_name="Synthetic Person 189")
+        before_retry = _relationship_state_snapshot(connection)
+        repository.apply_resolution(resolution, display_name="Synthetic Person 189")
+        assert _relationship_state_snapshot(connection) == before_retry
+        assert repository.profile(resolution.retained_person_id, expected_domains=("contacts",))
+
+    with relationship_engine.connect() as connection:
+        before_delete = _relationship_state_snapshot(connection)
+    with (
+        pytest.raises(DBAPIError, match="current observation links cannot be deleted"),
+        relationship_engine.begin() as connection,
+    ):
+        connection.execute(
+            relationship_observation_links.delete().where(
+                relationship_observation_links.c.observation_id == observation.observation_id
+            )
+        )
+    with relationship_engine.connect() as connection:
+        assert _relationship_state_snapshot(connection) == before_delete
+
+    # Exercise the read-side fail-closed guard without weakening committed
+    # production state: the trigger change and stale plant are both rolled back.
+    with relationship_engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(
+                text(
+                    "ALTER TABLE knowledge.relationship_observation_links "
+                    "DISABLE TRIGGER observation_link_requires_current_resolution"
+                )
+            )
+            connection.execute(
+                relationship_observation_links.delete().where(
+                    relationship_observation_links.c.observation_id == observation.observation_id
+                )
+            )
+            with pytest.raises(IdentityResolutionError, match="current canonical resolution state"):
+                SqlRelationshipRepository(connection).profile(
+                    resolution.retained_person_id, expected_domains=("contacts",)
+                )
+        finally:
+            transaction.rollback()
+    with relationship_engine.connect() as connection:
+        assert _relationship_state_snapshot(connection) == before_delete
+
+
+@pytest.mark.database
 def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
     relationship_engine: Engine,
 ) -> None:
@@ -665,20 +1007,33 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
             == 8
         )
 
-    for statement, parameters in (
+    for statement, parameters, message in (
         (
             "UPDATE knowledge.relationship_aliases SET value = 'invented alias' "
             "WHERE observation_id = :observation",
             {"observation": observations[2].observation_id},
+            "alias provenance is immutable",
         ),
         (
             "UPDATE knowledge.relationship_aliases SET person_id = :person "
             "WHERE observation_id = :observation",
             {"person": first, "observation": observations[2].observation_id},
+            "exact current observation",
+        ),
+        (
+            "UPDATE knowledge.relationship_aliases SET alias_id = :alias "
+            "WHERE observation_id = :observation",
+            {"alias": _id("alias", 99), "observation": observations[2].observation_id},
+            "alias provenance is immutable",
+        ),
+        (
+            "DELETE FROM knowledge.relationship_aliases WHERE observation_id = :observation",
+            {"observation": observations[2].observation_id},
+            "source-bound aliases cannot be deleted",
         ),
     ):
         with (
-            pytest.raises(DBAPIError, match="exact current observation"),
+            pytest.raises(DBAPIError, match=message),
             relationship_engine.begin() as connection,
         ):
             connection.execute(text(statement), parameters)
@@ -752,6 +1107,8 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
                     "'knowledge.relationship_resolution_observations'::regclass, "
                     "'knowledge.relationship_evidence'::regclass, "
                     "'knowledge.relationship_evidence_observations'::regclass, "
+                    "'knowledge.relationship_affiliations'::regclass, "
+                    "'knowledge.relationship_aliases'::regclass, "
                     "'knowledge.relationship_conversation_participants'::regclass, "
                     "'knowledge.relationship_conversation_observations'::regclass, "
                     "'knowledge.relationship_observation_links'::regclass) "
@@ -773,6 +1130,10 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
             "resolution_observations_are_append_only",
             "relationship_evidence_is_governed",
             "relationship_evidence_observations_are_append_only",
+            "relationship_affiliations_match_observations",
+            "relationship_aliases_match_observations",
+            "conversation_participant_changes_are_governed",
+            "conversation_support_matches_participant",
             "conversation_participants_remain_supported",
             "conversation_observations_remain_supported",
             "observation_link_keeps_participants_supported",
@@ -1152,11 +1513,15 @@ def test_database_denies_stale_participant_and_evidence_rewrites_with_rollback(
         repository.record_observations("contacts", observations)
         first = _link_person(repository, person_ordinal=131, observations=(observations[0],))
         second = _link_person(repository, person_ordinal=132, observations=(observations[1],))
+        conversation_id = _create_conversation(connection, 131)
+        empty_support_conversation_id = _create_conversation(connection, 132)
         participant_id = repository.attach_conversation_participant(
-            _create_conversation(connection, 131),
+            conversation_id,
             person_id=first,
             observation_ids=(observations[0].observation_id,),
         )
+        with pytest.raises(IdentityResolutionError, match="requires exact support"):
+            repository.attach_conversation_participant(conversation_id, person_id=first)
         evidence_id = f"source_{observations[0].observation_id}"
 
     def snapshot(connection: Connection) -> tuple[object, ...]:
@@ -1170,12 +1535,49 @@ def test_database_denies_stale_participant_and_evidence_rewrites_with_rollback(
     with relationship_engine.connect() as connection:
         before = snapshot(connection)
 
+    with (
+        pytest.raises(DBAPIError, match="participant support is stale"),
+        relationship_engine.begin() as connection,
+    ):
+        connection.execute(
+            insert(relationship_conversation_participants).values(
+                participant_id=_id("cpart", 132),
+                conversation_id=empty_support_conversation_id,
+                person_id=second,
+                unresolved_mention_id=None,
+            )
+        )
+
     plants = (
         (
             "UPDATE knowledge.relationship_conversation_participants "
             "SET person_id = :second WHERE participant_id = :participant",
             {"second": second, "participant": participant_id},
-            "participant support is stale",
+            "exact current resolution",
+        ),
+        (
+            "UPDATE knowledge.relationship_conversation_participants "
+            "SET conversation_id = :conversation WHERE participant_id = :participant",
+            {"conversation": empty_support_conversation_id, "participant": participant_id},
+            "participant provenance is immutable",
+        ),
+        (
+            "DELETE FROM knowledge.relationship_conversation_participants "
+            "WHERE participant_id = :participant",
+            {"participant": participant_id},
+            "conversation participants cannot be deleted",
+        ),
+        (
+            "UPDATE knowledge.relationship_conversation_observations "
+            "SET observation_id = :other WHERE participant_id = :participant",
+            {"other": observations[1].observation_id, "participant": participant_id},
+            "participant support is append-only",
+        ),
+        (
+            "DELETE FROM knowledge.relationship_conversation_observations "
+            "WHERE participant_id = :participant",
+            {"participant": participant_id},
+            "participant support cannot be deleted",
         ),
         (
             "UPDATE knowledge.relationship_evidence SET authority = 'model_inference' "
@@ -1404,6 +1806,13 @@ def test_timeline_uses_only_explicit_conversation_support(relationship_engine: E
                 effective_from=None,
                 effective_to=None,
             )
+        affiliation_before_plants = tuple(
+            connection.execute(
+                select(relationship_affiliations).order_by(
+                    relationship_affiliations.c.affiliation_id
+                )
+            )
+        )
         participant_columns = {
             row.column_name
             for row in connection.execute(
@@ -1426,6 +1835,40 @@ def test_timeline_uses_only_explicit_conversation_support(relationship_engine: E
                 person_id=person_id,
                 observation_ids=tuple(_id("iobs", index) for index in range(200, 401)),
             )
+
+    affiliation_plants = (
+        (
+            "UPDATE knowledge.relationship_affiliations SET role = 'Invented Role' "
+            "WHERE affiliation_id = :id",
+            {"id": _id("aff", 40)},
+            "affiliation provenance is immutable",
+        ),
+        (
+            "UPDATE knowledge.relationship_affiliations SET person_id = :person "
+            "WHERE affiliation_id = :id",
+            {"id": _id("aff", 40), "person": _id("per", 999)},
+            "exact current ownership",
+        ),
+        (
+            "DELETE FROM knowledge.relationship_affiliations WHERE affiliation_id = :id",
+            {"id": _id("aff", 40)},
+            "source-bound affiliations cannot be deleted",
+        ),
+    )
+    for statement, parameters, message in affiliation_plants:
+        with pytest.raises(DBAPIError, match=message), relationship_engine.begin() as connection:
+            connection.execute(text(statement), parameters)
+    with relationship_engine.connect() as connection:
+        assert (
+            tuple(
+                connection.execute(
+                    select(relationship_affiliations).order_by(
+                        relationship_affiliations.c.affiliation_id
+                    )
+                )
+            )
+            == affiliation_before_plants
+        )
 
     with relationship_engine.connect() as connection:
         organization_count = connection.execute(

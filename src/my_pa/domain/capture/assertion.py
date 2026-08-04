@@ -10,19 +10,16 @@ over an empty set until now, because nothing in `src/` wrote an accepted record.
 That is the `Assertion` row of the canonical state patterns, and it is not the
 `Identity` row on the line below it, which carries a different six.
 
-Five are reachable in this build: `accepted` on promotion, `superseded` when a
-later assertion replaces this one, `revalidation_required` when a capture edit
-moves a span an accepted record cites (ADR-003 clause 8, and
-`docs/specs/quick-capture/10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md:107`),
-`contradicted` when a second assertion asserts the opposite, and `withdrawn`
-when the reviewer takes the acceptance back. `proposed` and `stale` are not:
-a proposal that has not been accepted is a `Proposal` and has its own table and
-its own `proposed` state, so an assertion in `proposed` would be the same claim
-recorded twice under two authorities; and `stale` needs a freshness horizon,
-which no specification in this repository sets and no operator decision has
-chosen. They are declared rather than omitted for `ProposalState`'s reason —
-the set is the canonical vocabulary of one object rather than a list of what
-this package happens to write.
+Two are reachable in this build: `accepted` on promotion and
+`revalidation_required` when a capture edit moves a span an accepted record
+cites (ADR-003 clause 8, and
+`docs/specs/quick-capture/10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md:107`). No
+writer supersedes, contradicts, or withdraws an assertion in this build, and
+acceptance is terminal for its review case. `proposed` is also unwritten because
+an unaccepted candidate is a `Proposal`, while `stale` needs a freshness horizon
+that no specification or operator decision sets. The other five states remain
+declared because this is the canonical vocabulary of the object, not a claim
+that this package can write them.
 
 **A corrected accept does not overwrite the proposal.** The corrected value is
 this record's `normalized_value` while the proposal keeps its own and moves to
@@ -57,7 +54,7 @@ ACCEPTED_RECORD_TYPE: Final = "assertion"
 
 
 class AssertionState(StrEnum):
-    """The canonical seven. Five are reachable here; see the module docstring."""
+    """The canonical seven. Two are reachable here; see the module docstring."""
 
     PROPOSED = "proposed"
     ACCEPTED = "accepted"

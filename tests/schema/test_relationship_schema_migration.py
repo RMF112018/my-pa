@@ -26,6 +26,7 @@ from my_pa.domain.relationship.identity import (
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.relationships import SqlRelationshipRepository
 from my_pa.infrastructure.persistence.tables import (
+    relationship_affiliations,
     relationship_aliases,
     relationship_conversation_observations,
     relationship_conversation_participants,
@@ -137,6 +138,30 @@ def _identity_evidence_snapshot(
         relationship_identity_review_cases,
         relationship_identity_review_decisions,
         relationship_resolution_observations,
+    )
+    return {
+        table.name: tuple(
+            tuple(row)
+            for row in connection.execute(select(table).order_by(*table.primary_key.columns))
+        )
+        for table in tables
+    }
+
+
+def _relationship_state_snapshot(
+    connection: Connection,
+) -> dict[str, tuple[tuple[object, ...], ...]]:
+    tables = (
+        relationship_people,
+        relationship_identity_resolutions,
+        relationship_resolution_observations,
+        relationship_observation_links,
+        relationship_aliases,
+        relationship_affiliations,
+        relationship_evidence,
+        relationship_evidence_observations,
+        relationship_conversation_participants,
+        relationship_conversation_observations,
     )
     return {
         table.name: tuple(
@@ -411,6 +436,101 @@ def test_merge_review_requires_exact_distinct_candidate_people(
 
 
 @pytest.mark.database
+def test_accepted_merge_and_split_receipts_cannot_commit_without_exact_final_state(
+    relationship_engine: Engine,
+) -> None:
+    observations = (_observation(181, "contacts"), _observation(182, "contacts"))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.record_observations("contacts", observations)
+        first = _link_person(repository, person_ordinal=181, observations=(observations[0],))
+        second = _link_person(repository, person_ordinal=182, observations=(observations[1],))
+        raw_merge = _accepted_correction(
+            repository,
+            ordinal=183,
+            action=ResolutionAction.MERGE_PERSON,
+            retained_person_id=first,
+            prior_person_id=second,
+            observation_ids=(observations[1].observation_id,),
+        )
+    with relationship_engine.connect() as connection:
+        before_raw_merge = _relationship_state_snapshot(connection)
+
+    with (
+        pytest.raises(DBAPIError, match="exact final person state"),
+        relationship_engine.begin() as connection,
+    ):
+        connection.execute(
+            insert(relationship_identity_resolutions).values(
+                resolution_id=raw_merge.resolution_id,
+                action=raw_merge.action.value,
+                review_case_id=raw_merge.review_case_id,
+                decision_id=raw_merge.decision_id,
+                retained_person_id=raw_merge.retained_person_id,
+                prior_person_id=raw_merge.prior_person_id,
+                decided_at=raw_merge.decided_at,
+            )
+        )
+        connection.execute(
+            insert(relationship_resolution_observations).values(
+                resolution_id=raw_merge.resolution_id,
+                observation_id=observations[1].observation_id,
+            )
+        )
+        with pytest.raises(IdentityResolutionError, match="current canonical resolution state"):
+            SqlRelationshipRepository(connection).profile(second, expected_domains=("contacts",))
+    with relationship_engine.connect() as connection:
+        assert _relationship_state_snapshot(connection) == before_raw_merge
+
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.apply_resolution(raw_merge, display_name="unused")
+        repository.apply_resolution(raw_merge, display_name="unused")
+        assert repository.profile(first, expected_domains=("contacts",)) is not None
+        raw_split = _accepted_correction(
+            repository,
+            ordinal=184,
+            action=ResolutionAction.SPLIT_PERSON,
+            retained_person_id=second,
+            prior_person_id=first,
+            observation_ids=(observations[1].observation_id,),
+        )
+    with relationship_engine.connect() as connection:
+        before_raw_split = _relationship_state_snapshot(connection)
+
+    with (
+        pytest.raises(DBAPIError, match="exact final person state"),
+        relationship_engine.begin() as connection,
+    ):
+        connection.execute(
+            insert(relationship_identity_resolutions).values(
+                resolution_id=raw_split.resolution_id,
+                action=raw_split.action.value,
+                review_case_id=raw_split.review_case_id,
+                decision_id=raw_split.decision_id,
+                retained_person_id=raw_split.retained_person_id,
+                prior_person_id=raw_split.prior_person_id,
+                decided_at=raw_split.decided_at,
+            )
+        )
+        connection.execute(
+            insert(relationship_resolution_observations).values(
+                resolution_id=raw_split.resolution_id,
+                observation_id=observations[1].observation_id,
+            )
+        )
+    with relationship_engine.connect() as connection:
+        assert _relationship_state_snapshot(connection) == before_raw_split
+
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.apply_resolution(raw_split, display_name="unused")
+        repository.apply_resolution(raw_split, display_name="unused")
+        assert repository.profile(first, expected_domains=("contacts",)) is not None
+        assert repository.profile(second, expected_domains=("contacts",)) is not None
+
+
+@pytest.mark.database
 def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
     relationship_engine: Engine,
 ) -> None:
@@ -628,6 +748,7 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
                     "'knowledge.relationship_duplicate_members'::regclass, "
                     "'knowledge.relationship_identity_review_cases'::regclass, "
                     "'knowledge.relationship_identity_review_decisions'::regclass, "
+                    "'knowledge.relationship_identity_resolutions'::regclass, "
                     "'knowledge.relationship_resolution_observations'::regclass, "
                     "'knowledge.relationship_evidence'::regclass, "
                     "'knowledge.relationship_evidence_observations'::regclass, "
@@ -645,6 +766,10 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
             "identity_candidate_members_are_append_only",
             "identity_review_cases_are_append_only",
             "identity_review_decisions_are_append_only",
+            "identity_resolution_requires_review",
+            "identity_resolution_requires_exact_observations",
+            "identity_resolutions_are_append_only",
+            "zz_identity_corrections_require_complete_final_state",
             "resolution_observations_are_append_only",
             "relationship_evidence_is_governed",
             "relationship_evidence_observations_are_append_only",

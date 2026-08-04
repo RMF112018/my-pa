@@ -38,6 +38,7 @@ from enum import StrEnum
 from typing import ClassVar
 
 from my_pa.application.errors import InvalidRequestError, SafeDetail
+from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
@@ -551,7 +552,10 @@ class DecideReviewCase:
         corrected = self.disposition is Disposition.CORRECT_AND_ACCEPT
         if corrected is not (self.corrected_value is not None):
             raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
-        if self.corrected_value is not None and not self.corrected_value.strip():
+        if self.corrected_value is not None and (
+            not self.corrected_value.strip()
+            or len(self.corrected_value) > MAX_NORMALIZED_VALUE_CHARACTERS
+        ):
             raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
 
 

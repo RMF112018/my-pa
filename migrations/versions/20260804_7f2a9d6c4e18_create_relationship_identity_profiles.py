@@ -322,6 +322,136 @@ def upgrade() -> None:
           DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
           EXECUTE FUNCTION knowledge.identity_resolution_has_exact_observations();
 
+        CREATE FUNCTION knowledge.identity_correction_has_complete_final_state()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.action = 'link_observation' THEN
+            RETURN NULL;
+          END IF;
+
+          IF NEW.resolution_sequence <> (
+            SELECT max(latest.resolution_sequence)
+            FROM knowledge.relationship_identity_resolutions latest
+            WHERE (latest.retained_person_id = NEW.retained_person_id
+                   AND latest.prior_person_id = NEW.prior_person_id)
+               OR (latest.retained_person_id = NEW.prior_person_id
+                   AND latest.prior_person_id = NEW.retained_person_id)
+          ) THEN
+            -- A later inverse correction in this transaction owns the final
+            -- state; its deferred event validates the settled pair exactly.
+            RETURN NULL;
+          END IF;
+
+          IF NOT EXISTS (
+            SELECT 1 FROM knowledge.relationship_people retained
+            WHERE retained.person_id = NEW.retained_person_id
+              AND retained.superseded_by_person_id IS NULL
+          ) OR NOT EXISTS (
+            SELECT 1 FROM knowledge.relationship_people prior
+            WHERE prior.person_id = NEW.prior_person_id
+              AND prior.superseded_by_person_id IS NOT DISTINCT FROM
+                CASE WHEN NEW.action = 'merge_person' THEN NEW.retained_person_id ELSE NULL END
+              AND (
+                (NEW.action = 'merge_person'
+                 AND prior.state_resolution_id = NEW.resolution_id)
+                OR
+                (NEW.action = 'split_person'
+                 AND EXISTS (
+                   SELECT 1 FROM knowledge.relationship_people retained
+                   WHERE retained.person_id = NEW.retained_person_id
+                     AND retained.state_resolution_id = NEW.resolution_id
+                 ))
+              )
+          ) THEN
+            RAISE EXCEPTION 'identity correction requires its exact final person state'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+
+          IF EXISTS (
+            SELECT ro.observation_id
+            FROM knowledge.relationship_resolution_observations ro
+            LEFT JOIN knowledge.relationship_observation_links l
+              ON l.observation_id = ro.observation_id
+             AND l.person_id = NEW.retained_person_id
+             AND l.resolution_id = NEW.resolution_id
+            WHERE ro.resolution_id = NEW.resolution_id
+              AND l.observation_id IS NULL
+          ) OR EXISTS (
+            SELECT l.observation_id
+            FROM knowledge.relationship_observation_links l
+            WHERE l.resolution_id = NEW.resolution_id
+              AND NOT EXISTS (
+                SELECT 1 FROM knowledge.relationship_resolution_observations ro
+                WHERE ro.resolution_id = NEW.resolution_id
+                  AND ro.observation_id = l.observation_id
+              )
+          ) OR (
+            NEW.action = 'merge_person' AND EXISTS (
+              SELECT 1 FROM knowledge.relationship_observation_links l
+              WHERE l.person_id = NEW.prior_person_id
+            )
+          ) OR (
+            NEW.action = 'split_person' AND EXISTS (
+              (SELECT l.observation_id
+               FROM knowledge.relationship_observation_links l
+               WHERE l.person_id = NEW.retained_person_id)
+              EXCEPT
+              (SELECT ro.observation_id
+               FROM knowledge.relationship_resolution_observations ro
+               WHERE ro.resolution_id = NEW.resolution_id)
+            )
+          ) THEN
+            RAISE EXCEPTION 'identity correction requires its exact final observation links'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+
+          IF EXISTS (
+            SELECT 1
+            FROM knowledge.relationship_evidence_observations eo
+            JOIN knowledge.relationship_evidence e ON e.evidence_id = eo.evidence_id
+            LEFT JOIN knowledge.relationship_observation_links l
+              ON l.observation_id = eo.observation_id
+             AND l.person_id = e.person_id
+            WHERE l.observation_id IS NULL
+          ) OR EXISTS (
+            SELECT 1
+            FROM knowledge.relationship_observation_links l
+            JOIN knowledge.relationship_identity_observations o
+              ON o.observation_id = l.observation_id
+            LEFT JOIN knowledge.relationship_aliases a ON a.observation_id = l.observation_id
+             AND a.person_id = l.person_id AND a.value = o.display_name
+            WHERE o.display_name IS NOT NULL
+              AND length(trim(o.display_name)) > 0
+              AND a.observation_id IS NULL
+          ) OR EXISTS (
+            SELECT 1
+            FROM knowledge.relationship_affiliations a
+            LEFT JOIN knowledge.relationship_observation_links l
+              ON l.observation_id = a.observation_id
+             AND l.person_id = a.person_id
+            WHERE l.observation_id IS NULL
+          ) OR EXISTS (
+            SELECT 1
+            FROM knowledge.relationship_conversation_participants p
+            JOIN knowledge.relationship_conversation_observations co
+              ON co.participant_id = p.participant_id
+            LEFT JOIN knowledge.relationship_observation_links l
+              ON l.observation_id = co.observation_id
+             AND l.person_id = p.person_id
+            WHERE p.person_id IS NOT NULL AND l.observation_id IS NULL
+          ) THEN
+            RAISE EXCEPTION 'identity correction requires exact final dependent ownership'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          RETURN NULL;
+        END; $$;
+        -- The zz prefix makes the exact-reviewed-observation constraint fire
+        -- first and preserve its more specific denial on malformed receipts.
+        CREATE CONSTRAINT TRIGGER zz_identity_corrections_require_complete_final_state
+          AFTER INSERT ON knowledge.relationship_identity_resolutions
+          DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+          EXECUTE FUNCTION knowledge.identity_correction_has_complete_final_state();
+
         CREATE FUNCTION knowledge.canonical_person_is_reviewed() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
@@ -692,6 +822,9 @@ def downgrade() -> None:
         DROP TRIGGER identity_resolution_requires_exact_observations
           ON knowledge.relationship_identity_resolutions;
         DROP FUNCTION knowledge.identity_resolution_has_exact_observations();
+        DROP TRIGGER zz_identity_corrections_require_complete_final_state
+          ON knowledge.relationship_identity_resolutions;
+        DROP FUNCTION knowledge.identity_correction_has_complete_final_state();
         DROP TABLE knowledge.relationship_conversation_observations;
         DROP TABLE knowledge.relationship_conversation_participants;
         DROP TABLE knowledge.relationship_evidence_observations;

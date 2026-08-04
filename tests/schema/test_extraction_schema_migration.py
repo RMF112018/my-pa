@@ -123,6 +123,27 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "capture_conversations",
         }
     ),
+    "7f2a9d6c4e18": frozenset(
+        {
+            "relationship_people",
+            "relationship_organizations",
+            "relationship_identity_observations",
+            "relationship_unresolved_mentions",
+            "relationship_duplicate_sets",
+            "relationship_duplicate_members",
+            "relationship_identity_review_cases",
+            "relationship_identity_review_decisions",
+            "relationship_identity_resolutions",
+            "relationship_resolution_observations",
+            "relationship_observation_links",
+            "relationship_aliases",
+            "relationship_affiliations",
+            "relationship_evidence",
+            "relationship_evidence_observations",
+            "relationship_conversation_participants",
+            "relationship_conversation_observations",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

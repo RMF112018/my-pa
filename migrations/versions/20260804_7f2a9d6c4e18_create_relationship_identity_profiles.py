@@ -326,44 +326,92 @@ def upgrade() -> None:
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
           IF NEW.action = 'link_observation' THEN
-            RETURN NULL;
-          END IF;
-
-          IF NEW.resolution_sequence <> (
+            IF EXISTS (
+              SELECT 1
+              FROM knowledge.relationship_identity_resolutions later
+              WHERE later.resolution_sequence > NEW.resolution_sequence
+                AND later.action IN ('merge_person', 'split_person')
+                AND (later.retained_person_id = NEW.retained_person_id
+                     OR later.prior_person_id = NEW.retained_person_id)
+                AND later.resolution_sequence = (
+                  SELECT max(terminal.resolution_sequence)
+                  FROM knowledge.relationship_identity_resolutions terminal
+                  WHERE terminal.action IN ('merge_person', 'split_person')
+                    AND (terminal.retained_person_id = NEW.retained_person_id
+                         OR terminal.prior_person_id = NEW.retained_person_id)
+                )
+                AND NOT EXISTS (
+                  (SELECT linked.observation_id
+                   FROM knowledge.relationship_resolution_observations linked
+                   WHERE linked.resolution_id = NEW.resolution_id)
+                  EXCEPT
+                  (SELECT corrected.observation_id
+                   FROM knowledge.relationship_resolution_observations corrected
+                   WHERE corrected.resolution_id = later.resolution_id)
+                )
+                AND NOT EXISTS (
+                  (SELECT corrected.observation_id
+                   FROM knowledge.relationship_resolution_observations corrected
+                   WHERE corrected.resolution_id = later.resolution_id)
+                  EXCEPT
+                  (SELECT linked.observation_id
+                   FROM knowledge.relationship_resolution_observations linked
+                   WHERE linked.resolution_id = NEW.resolution_id)
+                )
+            ) THEN
+              -- A later governed correction in this transaction validates the
+              -- settled identity, links, evidence, aliases, and dependents.
+              RETURN NULL;
+            END IF;
+            IF NOT EXISTS (
+              SELECT 1 FROM knowledge.relationship_people retained
+              WHERE retained.person_id = NEW.retained_person_id
+                AND retained.superseded_by_person_id IS NULL
+                AND retained.state_resolution_id = NEW.resolution_id
+            ) THEN
+              RAISE EXCEPTION 'identity link requires its exact final person state'
+                USING ERRCODE = 'restrict_violation';
+            END IF;
+          ELSIF NEW.action IN ('merge_person', 'split_person') THEN
+            IF NEW.resolution_sequence <> (
             SELECT max(latest.resolution_sequence)
             FROM knowledge.relationship_identity_resolutions latest
             WHERE (latest.retained_person_id = NEW.retained_person_id
                    AND latest.prior_person_id = NEW.prior_person_id)
                OR (latest.retained_person_id = NEW.prior_person_id
                    AND latest.prior_person_id = NEW.retained_person_id)
-          ) THEN
-            -- A later inverse correction in this transaction owns the final
-            -- state; its deferred event validates the settled pair exactly.
-            RETURN NULL;
-          END IF;
+            ) THEN
+              -- A later inverse correction in this transaction owns the final
+              -- state; its deferred event validates the settled pair exactly.
+              RETURN NULL;
+            END IF;
 
-          IF NOT EXISTS (
-            SELECT 1 FROM knowledge.relationship_people retained
-            WHERE retained.person_id = NEW.retained_person_id
-              AND retained.superseded_by_person_id IS NULL
-          ) OR NOT EXISTS (
-            SELECT 1 FROM knowledge.relationship_people prior
-            WHERE prior.person_id = NEW.prior_person_id
-              AND prior.superseded_by_person_id IS NOT DISTINCT FROM
-                CASE WHEN NEW.action = 'merge_person' THEN NEW.retained_person_id ELSE NULL END
-              AND (
-                (NEW.action = 'merge_person'
-                 AND prior.state_resolution_id = NEW.resolution_id)
-                OR
-                (NEW.action = 'split_person'
-                 AND EXISTS (
-                   SELECT 1 FROM knowledge.relationship_people retained
-                   WHERE retained.person_id = NEW.retained_person_id
-                     AND retained.state_resolution_id = NEW.resolution_id
-                 ))
-              )
-          ) THEN
-            RAISE EXCEPTION 'identity correction requires its exact final person state'
+            IF NOT EXISTS (
+              SELECT 1 FROM knowledge.relationship_people retained
+              WHERE retained.person_id = NEW.retained_person_id
+                AND retained.superseded_by_person_id IS NULL
+            ) OR NOT EXISTS (
+              SELECT 1 FROM knowledge.relationship_people prior
+              WHERE prior.person_id = NEW.prior_person_id
+                AND prior.superseded_by_person_id IS NOT DISTINCT FROM
+                  CASE WHEN NEW.action = 'merge_person' THEN NEW.retained_person_id ELSE NULL END
+                AND (
+                  (NEW.action = 'merge_person'
+                   AND prior.state_resolution_id = NEW.resolution_id)
+                  OR
+                  (NEW.action = 'split_person'
+                   AND EXISTS (
+                     SELECT 1 FROM knowledge.relationship_people retained
+                     WHERE retained.person_id = NEW.retained_person_id
+                       AND retained.state_resolution_id = NEW.resolution_id
+                   ))
+                )
+            ) THEN
+              RAISE EXCEPTION 'identity correction requires its exact final person state'
+                USING ERRCODE = 'restrict_violation';
+            END IF;
+          ELSE
+            RAISE EXCEPTION 'identity resolution action has no final-state validator'
               USING ERRCODE = 'restrict_violation';
           END IF;
 
@@ -385,6 +433,16 @@ def upgrade() -> None:
                 WHERE ro.resolution_id = NEW.resolution_id
                   AND ro.observation_id = l.observation_id
               )
+          ) OR (
+            NEW.action = 'link_observation' AND EXISTS (
+              (SELECT l.observation_id
+               FROM knowledge.relationship_observation_links l
+               WHERE l.person_id = NEW.retained_person_id)
+              EXCEPT
+              (SELECT ro.observation_id
+               FROM knowledge.relationship_resolution_observations ro
+               WHERE ro.resolution_id = NEW.resolution_id)
+            )
           ) OR (
             NEW.action = 'merge_person' AND EXISTS (
               SELECT 1 FROM knowledge.relationship_observation_links l
@@ -425,6 +483,15 @@ def upgrade() -> None:
               AND a.observation_id IS NULL
           ) OR EXISTS (
             SELECT 1
+            FROM knowledge.relationship_observation_links l
+            JOIN knowledge.relationship_identity_observations o
+              ON o.observation_id = l.observation_id
+            JOIN knowledge.relationship_aliases a
+              ON a.observation_id = l.observation_id
+             AND a.person_id = l.person_id
+            WHERE o.display_name IS NULL OR length(trim(o.display_name)) = 0
+          ) OR EXISTS (
+            SELECT 1
             FROM knowledge.relationship_affiliations a
             LEFT JOIN knowledge.relationship_observation_links l
               ON l.observation_id = a.observation_id
@@ -441,6 +508,23 @@ def upgrade() -> None:
             WHERE p.person_id IS NOT NULL AND l.observation_id IS NULL
           ) THEN
             RAISE EXCEPTION 'identity correction requires exact final dependent ownership'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+
+          IF NEW.action = 'link_observation' AND EXISTS (
+            SELECT ro.observation_id
+            FROM knowledge.relationship_resolution_observations ro
+            LEFT JOIN knowledge.relationship_evidence expected
+              ON expected.evidence_id = 'source_' || ro.observation_id
+             AND expected.person_id = NEW.retained_person_id
+             AND expected.authority = 'source_observation'
+            LEFT JOIN knowledge.relationship_evidence_observations lineage
+              ON lineage.evidence_id = expected.evidence_id
+             AND lineage.observation_id = ro.observation_id
+            WHERE ro.resolution_id = NEW.resolution_id
+              AND lineage.observation_id IS NULL
+          ) THEN
+            RAISE EXCEPTION 'identity link requires exact source-observation evidence'
               USING ERRCODE = 'restrict_violation';
           END IF;
           RETURN NULL;
@@ -530,6 +614,10 @@ def upgrade() -> None:
         CREATE FUNCTION knowledge.observation_link_is_current_resolution() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'current observation links cannot be deleted'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
           IF NOT EXISTS (
             SELECT 1
             FROM knowledge.relationship_identity_resolutions r
@@ -552,7 +640,7 @@ def upgrade() -> None:
           RETURN NEW;
         END; $$;
         CREATE TRIGGER observation_link_requires_current_resolution
-          BEFORE INSERT OR UPDATE ON knowledge.relationship_observation_links
+          BEFORE INSERT OR UPDATE OR DELETE ON knowledge.relationship_observation_links
           FOR EACH ROW EXECUTE FUNCTION knowledge.observation_link_is_current_resolution();
 
         CREATE FUNCTION knowledge.identity_resolution_stays_append_only() RETURNS trigger
@@ -665,6 +753,18 @@ def upgrade() -> None:
         CREATE FUNCTION knowledge.relationship_alias_matches_observation() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'source-bound aliases cannot be deleted'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF TG_OP = 'UPDATE' AND (
+            NEW.alias_id IS DISTINCT FROM OLD.alias_id
+            OR NEW.observation_id IS DISTINCT FROM OLD.observation_id
+            OR NEW.value IS DISTINCT FROM OLD.value
+          ) THEN
+            RAISE EXCEPTION 'source-bound alias provenance is immutable'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
           IF NOT EXISTS (
             SELECT 1
             FROM knowledge.relationship_identity_observations o
@@ -682,13 +782,54 @@ def upgrade() -> None:
           RETURN NEW;
         END; $$;
         CREATE TRIGGER relationship_aliases_match_observations
-          BEFORE INSERT OR UPDATE ON knowledge.relationship_aliases
+          BEFORE INSERT OR UPDATE OR DELETE ON knowledge.relationship_aliases
           FOR EACH ROW EXECUTE FUNCTION knowledge.relationship_alias_matches_observation();
+
+        CREATE FUNCTION knowledge.relationship_affiliation_matches_observation()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'source-bound affiliations cannot be deleted'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF TG_OP = 'UPDATE' AND (
+            NEW.affiliation_id IS DISTINCT FROM OLD.affiliation_id
+            OR NEW.organization_id IS DISTINCT FROM OLD.organization_id
+            OR NEW.observation_id IS DISTINCT FROM OLD.observation_id
+            OR NEW.role IS DISTINCT FROM OLD.role
+            OR NEW.effective_from IS DISTINCT FROM OLD.effective_from
+            OR NEW.effective_to IS DISTINCT FROM OLD.effective_to
+          ) THEN
+            RAISE EXCEPTION 'source-bound affiliation provenance is immutable'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM knowledge.relationship_observation_links l
+            WHERE l.observation_id = NEW.observation_id
+              AND l.person_id = NEW.person_id
+          ) THEN
+            RAISE EXCEPTION 'a source-bound affiliation requires exact current ownership'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          RETURN NEW;
+        END; $$;
+        CREATE TRIGGER relationship_affiliations_match_observations
+          BEFORE INSERT OR UPDATE OR DELETE ON knowledge.relationship_affiliations
+          FOR EACH ROW
+          EXECUTE FUNCTION knowledge.relationship_affiliation_matches_observation();
 
         CREATE FUNCTION knowledge.conversation_support_matches_participant() RETURNS trigger
         LANGUAGE plpgsql AS $$
         DECLARE participant record;
         BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'conversation participant support cannot be deleted'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF TG_OP = 'UPDATE' THEN
+            RAISE EXCEPTION 'conversation participant support is append-only'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
           SELECT * INTO participant
           FROM knowledge.relationship_conversation_participants p
           WHERE p.participant_id = NEW.participant_id;
@@ -715,13 +856,69 @@ def upgrade() -> None:
           RETURN NEW;
         END; $$;
         CREATE TRIGGER conversation_support_matches_participant
-          BEFORE INSERT OR UPDATE ON knowledge.relationship_conversation_observations
+          BEFORE INSERT OR UPDATE OR DELETE
+          ON knowledge.relationship_conversation_observations
           FOR EACH ROW EXECUTE FUNCTION knowledge.conversation_support_matches_participant();
+
+        CREATE FUNCTION knowledge.conversation_participant_change_is_governed()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'conversation participants cannot be deleted'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF NEW.participant_id IS DISTINCT FROM OLD.participant_id
+             OR NEW.conversation_id IS DISTINCT FROM OLD.conversation_id
+             OR NEW.unresolved_mention_id IS DISTINCT FROM OLD.unresolved_mention_id THEN
+            RAISE EXCEPTION 'conversation participant provenance is immutable'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF NEW.person_id IS NOT DISTINCT FROM OLD.person_id THEN
+            RETURN NEW;
+          END IF;
+          IF OLD.person_id IS NULL OR NEW.person_id IS NULL OR NOT EXISTS (
+            SELECT 1
+            FROM knowledge.relationship_identity_resolutions r
+            WHERE r.action IN ('merge_person', 'split_person')
+              AND r.prior_person_id = OLD.person_id
+              AND r.retained_person_id = NEW.person_id
+              AND EXISTS (
+                SELECT 1 FROM knowledge.relationship_conversation_observations co
+                WHERE co.participant_id = OLD.participant_id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM knowledge.relationship_conversation_observations co
+                LEFT JOIN knowledge.relationship_observation_links l
+                  ON l.observation_id = co.observation_id
+                 AND l.person_id = NEW.person_id
+                 AND l.resolution_id = r.resolution_id
+                WHERE co.participant_id = OLD.participant_id
+                  AND l.observation_id IS NULL
+              )
+          ) THEN
+            RAISE EXCEPTION
+              'conversation participant reassignment requires its exact current resolution'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          RETURN NEW;
+        END; $$;
+        CREATE TRIGGER conversation_participant_changes_are_governed
+          BEFORE UPDATE OR DELETE ON knowledge.relationship_conversation_participants
+          FOR EACH ROW
+          EXECUTE FUNCTION knowledge.conversation_participant_change_is_governed();
 
         CREATE FUNCTION knowledge.conversation_participant_state_is_valid() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
           IF EXISTS (
+            SELECT 1
+            FROM knowledge.relationship_conversation_participants p
+            WHERE NOT EXISTS (
+              SELECT 1 FROM knowledge.relationship_conversation_observations co
+              WHERE co.participant_id = p.participant_id
+            )
+          ) OR EXISTS (
             SELECT 1
             FROM knowledge.relationship_conversation_participants p
             JOIN knowledge.relationship_conversation_observations co
@@ -770,6 +967,9 @@ def downgrade() -> None:
         DROP TRIGGER conversation_support_matches_participant
           ON knowledge.relationship_conversation_observations;
         DROP FUNCTION knowledge.conversation_support_matches_participant();
+        DROP TRIGGER conversation_participant_changes_are_governed
+          ON knowledge.relationship_conversation_participants;
+        DROP FUNCTION knowledge.conversation_participant_change_is_governed();
         DROP TRIGGER conversation_participants_remain_supported
           ON knowledge.relationship_conversation_participants;
         DROP TRIGGER conversation_observations_remain_supported
@@ -777,6 +977,9 @@ def downgrade() -> None:
         DROP TRIGGER observation_link_keeps_participants_supported
           ON knowledge.relationship_observation_links;
         DROP FUNCTION knowledge.conversation_participant_state_is_valid();
+        DROP TRIGGER relationship_affiliations_match_observations
+          ON knowledge.relationship_affiliations;
+        DROP FUNCTION knowledge.relationship_affiliation_matches_observation();
         DROP TRIGGER relationship_aliases_match_observations
           ON knowledge.relationship_aliases;
         DROP FUNCTION knowledge.relationship_alias_matches_observation();

@@ -251,10 +251,10 @@ REVIEW_TRIGGERS: Final[frozenset[str]] = frozenset(
         "a_span_link_leaves_its_assertion_cited",
         "an_accepted_proposal_names_a_real_assertion",
         "capture_proposals_are_never_deleted",
-        "capture_review_cases_are_never_deleted",
-        "capture_review_decisions_are_never_deleted",
+        "capture_review_cases_stay_immutable",
+        "capture_review_decisions_stay_immutable",
         "capture_assertions_are_never_deleted",
-        "capture_promotion_receipts_are_never_deleted",
+        "capture_promotion_receipts_stay_immutable",
     }
 )
 

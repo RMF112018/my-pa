@@ -193,6 +193,7 @@ _UNAVAILABLE_ERRNOS: Final[frozenset[int]] = frozenset(
 #: still listed and still has metadata, so nothing is silently skipped and
 #: nothing is coerced into a type it is not (`INV-PKL-007`).
 MEDIA_TYPES: Final[dict[str, str]] = {
+    ".json": "application/json",
     ".md": "text/markdown",
     ".pdf": "application/pdf",
     ".txt": "text/plain",

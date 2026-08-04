@@ -680,20 +680,23 @@ def test_non_exact_terminal_correction_handoffs_are_atomic(
     with relationship_engine.connect() as connection:
         before = _relationship_state_snapshot(connection)
 
-    with pytest.raises(DBAPIError), relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
-        if plant in {"subset", "superset"}:
-            repository.apply_resolution(earlier, display_name="unused")
-            repository.apply_resolution(later, display_name="unused")
-        elif plant == "stale_link":
-            repository.apply_resolution(earlier, display_name="unused")
-            repository.apply_resolution(later, display_name="unused")
+    if plant == "stale_link":
+        with (
+            pytest.raises(
+                DBAPIError,
+                match="every current observation link requires its latest accepted resolution",
+            ),
+            relationship_engine.begin() as connection,
+        ):
+            repository = SqlRelationshipRepository(connection)
             connection.execute(
                 text(
                     "ALTER TABLE knowledge.relationship_observation_links "
                     "DISABLE TRIGGER observation_link_requires_current_resolution"
                 )
             )
+            repository.apply_resolution(earlier, display_name="unused")
+            repository.apply_resolution(later, display_name="unused")
             connection.execute(
                 update(relationship_observation_links)
                 .where(
@@ -710,14 +713,22 @@ def test_non_exact_terminal_correction_handoffs_are_atomic(
             )
             with pytest.raises(IdentityResolutionError, match="current canonical resolution state"):
                 repository.profile(first, expected_domains=("contacts",))
-        elif plant == "same_action":
-            _insert_raw_resolution(connection, earlier)
-            repository.apply_resolution(later, display_name="unused")
-            with pytest.raises(IdentityResolutionError, match="current canonical resolution state"):
-                repository.profile(second, expected_domains=("contacts",))
-        else:
-            _insert_raw_resolution(connection, earlier)
-            _insert_raw_resolution(connection, later)
+    else:
+        with pytest.raises(DBAPIError), relationship_engine.begin() as connection:
+            repository = SqlRelationshipRepository(connection)
+            if plant in {"subset", "superset"}:
+                repository.apply_resolution(earlier, display_name="unused")
+                repository.apply_resolution(later, display_name="unused")
+            elif plant == "same_action":
+                _insert_raw_resolution(connection, earlier)
+                repository.apply_resolution(later, display_name="unused")
+                with pytest.raises(
+                    IdentityResolutionError, match="current canonical resolution state"
+                ):
+                    repository.profile(second, expected_domains=("contacts",))
+            else:
+                _insert_raw_resolution(connection, earlier)
+                _insert_raw_resolution(connection, later)
 
     with relationship_engine.connect() as connection:
         assert _relationship_state_snapshot(connection) == before

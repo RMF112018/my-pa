@@ -104,6 +104,13 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "capture_receipts",
         "capture_submissions",
         "capture_jobs",
+        "capture_processing_text",
+        "capture_stage_results",
+        "capture_spans",
+        "capture_proposals",
+        "capture_proposal_spans",
+        "capture_classifications",
+        "capture_entity_mentions",
     }
 )
 

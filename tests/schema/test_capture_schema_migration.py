@@ -72,6 +72,17 @@ from sqlalchemy.engine import make_url
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
+from my_pa.domain.capture.classification import CaptureLabel, EntityType, ResolutionState
+from my_pa.domain.capture.pipeline import PipelineStage, ProcessingState
+from my_pa.domain.capture.proposal import (
+    ProposalField,
+    ProposalMethod,
+    ProposalQuarantineReason,
+    ProposalState,
+    ProposalType,
+    RiskClass,
+)
+from my_pa.domain.capture.span import OffsetBasis, SpanRole
 from my_pa.domain.capture.submission import (
     AdmissionResult,
     CaptureMethod,
@@ -84,6 +95,7 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.capture_search import SEARCH_CONFIG, SEARCH_INDEX
 from my_pa.infrastructure.persistence.tables import JobState
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -91,6 +103,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = "knowledge"
 
 CAPTURE_REVISION = "1a4c9e77b2d5"
+PROPOSAL_REVISION = "2b7e9f4c1a83"
 ENROLLMENT_OBJECTS_REVISION = "af3d35efb9c0"
 AUDIT_REVISION = "9c6b4a18ed72"
 
@@ -108,6 +121,41 @@ CAPTURE_TABLES: Final[frozenset[str]] = frozenset(
         "capture_receipts",
         "capture_submissions",
         "capture_jobs",
+    }
+)
+
+#: The seven tables `2b7e9f4c1a83` creates, restated for the same reason the
+#: five above are: a table added to that revision has to be acknowledged here.
+PROPOSAL_TABLES: Final[frozenset[str]] = frozenset(
+    {
+        "capture_processing_text",
+        "capture_stage_results",
+        "capture_spans",
+        "capture_proposals",
+        "capture_proposal_spans",
+        "capture_classifications",
+        "capture_entity_mentions",
+    }
+)
+
+#: The capability vocabulary `1a4c9e77b2d5` emitted on the day it merged, and
+#: which it must still emit now that `2b7e9f4c1a83` has widened head past it.
+#: Written out rather than derived, exactly as `FROZEN_CAPABILITIES` is: a test
+#: that read the revision's own literal would pass however that literal changed.
+CAPABILITIES_AT_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset(
+    {
+        "capabilities.get",
+        "capture.create",
+        "capture.list",
+        "capture.read",
+        "capture.revise",
+        "knowledge.read",
+        "knowledge.search",
+        "sources.enroll",
+        "sources.fetch",
+        "sources.list",
+        "sources.metadata",
+        "sources.status",
     }
 )
 
@@ -211,6 +259,47 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
         frozenset(a.value for a in AdmissionResult),
     ),
     ("capture_jobs", "capture_job_state_is_known", frozenset(s.value for s in JobState)),
+    # The thirteen `2b7e9f4c1a83` freezes, on the same terms and for the same
+    # reason: each is restated as a literal inside that revision, so the
+    # enum-to-CHECK coupling it broke is replaced by this claim rather than by
+    # nothing.
+    ("capture_stage_results", "capture_stage_is_known", frozenset(s.value for s in PipelineStage)),
+    (
+        "capture_stage_results",
+        "capture_processing_state_is_known",
+        frozenset(s.value for s in ProcessingState),
+    ),
+    ("capture_spans", "span_offset_basis_is_known", frozenset(b.value for b in OffsetBasis)),
+    ("capture_spans", "span_role_is_known", frozenset(r.value for r in SpanRole)),
+    ("capture_proposals", "proposal_type_is_known", frozenset(t.value for t in ProposalType)),
+    ("capture_proposals", "proposal_state_is_known", frozenset(s.value for s in ProposalState)),
+    ("capture_proposals", "proposal_risk_class_is_known", frozenset(r.value for r in RiskClass)),
+    ("capture_proposals", "proposal_method_is_known", frozenset(m.value for m in ProposalMethod)),
+    (
+        "capture_proposals",
+        "proposal_quarantine_reason_is_known",
+        frozenset(r.value for r in ProposalQuarantineReason),
+    ),
+    (
+        "capture_proposals",
+        "a_missing_required_field_is_a_required_field",
+        frozenset(f.value for f in ProposalField),
+    ),
+    (
+        "capture_classifications",
+        "capture_label_is_known",
+        frozenset(label.value for label in CaptureLabel),
+    ),
+    (
+        "capture_entity_mentions",
+        "mention_entity_type_is_known",
+        frozenset(e.value for e in EntityType),
+    ),
+    (
+        "capture_entity_mentions",
+        "mention_resolution_state_is_known",
+        frozenset(r.value for r in ResolutionState),
+    ),
 )
 
 
@@ -465,5 +554,161 @@ def test_downgrading_this_revision_restores_the_previous_vocabulary(
         assert _tables(engine) >= CAPTURE_TABLES
 
         command.downgrade(_config(), "base")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_stopping_at_the_capture_revision_emits_the_twelve_it_merged_with(
+    disposable_database: str,
+) -> None:
+    """`D-91`, as an assertion against a server rather than as an argument.
+
+    A database taken to `1a4c9e77b2d5` and no further receives the twelve
+    capabilities that revision emitted when it merged, not the thirteen the
+    domain declares now — and head receives thirteen. Both halves are here
+    because either alone is satisfied by a chain that never widened anything:
+    the first by a freeze that also froze head, and the second by a revision
+    that re-derived from the enum.
+
+    **This is the assertion that catches a capability added without an `ALTER`,
+    and no other test can.** Every test builds its database from scratch, so a
+    thirteenth member with no forward `ALTER` leaves every one of them green and
+    is refused by the stored twelve-value constraint on the first audited
+    request in the field.
+    """
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), CAPTURE_REVISION)
+        assert _admitted(engine, "capability_is_known") == CAPABILITIES_AT_THE_CAPTURE_REVISION
+        assert not PROPOSAL_TABLES & _tables(engine)
+
+        command.upgrade(_config(), "head")
+        assert _admitted(engine, "capability_is_known") == {c.value for c in Capability}
+        assert _tables(engine) >= PROPOSAL_TABLES
+        # The two vocabularies differ by exactly the capability this package
+        # added, so the equality above is a measurement rather than a tautology.
+        assert {c.value for c in Capability} - CAPABILITIES_AT_THE_CAPTURE_REVISION == {
+            "capture.search"
+        }
+
+        command.downgrade(_config(), "base")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_head_indexes_capture_text_with_the_configuration_the_predicate_uses(
+    disposable_database: str,
+) -> None:
+    """The index and the predicate are one decision recorded in two files.
+
+    PostgreSQL matches a functional index by expression tree, so a mismatch
+    between the configuration the revision wrote and the one
+    `persistence.capture_search` compiles **breaks silently**: the query drops
+    to a sequential scan and still returns correct rows. Reading the stored
+    definition back is what makes the equality checked.
+
+    The control is the second assertion: the extraction plane's index is built
+    over `english`, so "the definition names a configuration" is not satisfied
+    by every index in the schema.
+    """
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), "head")
+        with engine.connect() as connection:
+            definitions = dict(
+                connection.execute(
+                    text(
+                        "SELECT i.relname, pg_get_indexdef(x.indexrelid) FROM pg_index x "
+                        "JOIN pg_class i ON i.oid = x.indexrelid "
+                        "JOIN pg_class c ON c.oid = x.indrelid "
+                        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE n.nspname = :schema"
+                    ),
+                    {"schema": SCHEMA},
+                ).all()
+            )
+        capture_index = definitions[SEARCH_INDEX]
+        assert f"to_tsvector('{SEARCH_CONFIG}'::regconfig, content)" in capture_index
+        assert "USING gin" in capture_index
+        assert f"'{SEARCH_CONFIG}'::regconfig" not in definitions["extractions_full_text"]
+
+        command.downgrade(_config(), "base")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
+    disposable_database: str,
+) -> None:
+    """`D-98`, both halves: the trigger is deferred, and its function reverses.
+
+    `7e5a1fb93d62` drops the schema with `RESTRICT`, so a `CREATE FUNCTION` this
+    revision leaves behind fails `downgrade base` at a revision written before
+    it existed — the failure `1a4c9e77b2d5` had to add an explicit `DROP
+    FUNCTION` for. Two triggers share one function here, so there are two
+    dependencies to drop and one function to drop after them.
+
+    `DEFERRABLE INITIALLY DEFERRED` is asserted from the stored definition, not
+    from the file: a constraint trigger checked per statement would refuse the
+    proposal insert that precedes its own link rows, so the deferral is what
+    makes the rule expressible at all.
+    """
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), "head")
+        with engine.connect() as connection:
+            triggers = dict(
+                connection.execute(
+                    text(
+                        "SELECT t.tgname, pg_get_triggerdef(t.oid, true) FROM pg_trigger t "
+                        "JOIN pg_class c ON c.oid = t.tgrelid "
+                        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE NOT t.tgisinternal AND n.nspname = :schema"
+                    ),
+                    {"schema": SCHEMA},
+                ).all()
+            )
+        assert set(triggers) == {
+            IMMUTABILITY_TRIGGER,
+            "a_proposal_cites_at_least_one_span",
+            "a_span_link_leaves_its_proposal_cited",
+        }
+        for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
+            assert "CONSTRAINT TRIGGER" in triggers[name]
+            assert "DEFERRABLE INITIALLY DEFERRED" in triggers[name]
+        # The control: the immutability trigger is not deferred, so the two
+        # assertions above are about these triggers rather than about every
+        # trigger the schema carries.
+        assert "DEFERRABLE" not in triggers[IMMUTABILITY_TRIGGER]
+
+        command.downgrade(_config(), "base")
+
+        with engine.connect() as connection:
+            relations = set(
+                connection.execute(
+                    text(
+                        "SELECT n.nspname || '.' || c.relname FROM pg_class c "
+                        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                        "WHERE n.nspname NOT LIKE 'pg\\_%' "
+                        "AND n.nspname <> 'information_schema' "
+                        "AND c.relkind IN ('r', 'v', 'm', 'p', 'f', 'S')"
+                    )
+                ).scalars()
+            )
+            routines = set(
+                connection.execute(
+                    text(
+                        "SELECT n.nspname || '.' || p.proname FROM pg_proc p "
+                        "JOIN pg_namespace n ON n.oid = p.pronamespace "
+                        "WHERE n.nspname NOT LIKE 'pg\\_%' "
+                        "AND n.nspname <> 'information_schema'"
+                    )
+                ).scalars()
+            )
+        assert relations == {"public.alembic_version"}
+        assert routines == set()
     finally:
         engine.dispose()

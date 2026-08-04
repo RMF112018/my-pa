@@ -111,6 +111,13 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "capture_proposal_spans",
         "capture_classifications",
         "capture_entity_mentions",
+        "capture_review_cases",
+        "capture_review_decisions",
+        "capture_assertions",
+        "capture_assertion_spans",
+        "capture_promotion_receipts",
+        "capture_context_links",
+        "capture_conversations",
     }
 )
 

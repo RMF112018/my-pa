@@ -56,6 +56,18 @@ class Capability(StrEnum):
     # (`docs/specs/quick-capture/18_PROPOSED_API_AND_CONTRACT_PACKAGE.md:334`),
     # and two segments of `noun.verb` is the rule the four above follow.
     CAPTURE_SEARCH = "capture.search"
+    # `review.list` and `review.decide` are the fourteenth and fifteenth, and
+    # `3c8f1e2a5b74` already carries the forward `ALTER` that admits them — the
+    # freeze is written before the members, because a member with no `ALTER`
+    # leaves every test green and is refused by the stored constraint on the
+    # first audited operation in the field. They are not declared here yet, and
+    # the reason is a coupling this enum does not advertise: `adapters/mcp/tools`
+    # builds its tool list at import from `Capability` and indexes
+    # `application.commands.Command` by each member's `capability`, so a member
+    # with no command raises `KeyError` at import and takes the whole package
+    # with it. The member, its command and its handler are one indivisible
+    # change. `tests/schema/test_capture_schema_migration.py` names exactly what
+    # is missing and reddens when it arrives.
 
 
 #: Capabilities restricted to an authenticated operator principal.
@@ -72,6 +84,16 @@ class Capability(StrEnum):
 #: principal under the same purpose, so restricting the *search* over them while
 #: leaving the *read* of them open would restrict nothing and would tell a
 #: caller that finding a capture is a more privileged act than opening it.
+#:
+#: `review.list` and `review.decide` are decided the same way and reach the same
+#: answer, and neither belongs here when it arrives. Deciding a review is the
+#: most consequential capture-plane act there is, but it grants no authority: it
+#: promotes the principal's own proposal about the principal's own capture.
+#: Enrollment is operator-only because it *widens* the scope a later request is
+#: evaluated against, and a review disposition widens nothing. Under
+#: `P00-OD-010` there is one local principal in any case, so making it
+#: operator-only would restrict nobody while implying an authority boundary this
+#: build cannot draw.
 _OPERATOR_ONLY: frozenset[Capability] = frozenset({Capability.SOURCES_ENROLL})
 
 _PERMITTED_PURPOSES: Mapping[Capability, frozenset[Purpose]] = MappingProxyType(
@@ -98,6 +120,9 @@ _PERMITTED_PURPOSES: Mapping[Capability, frozenset[Purpose]] = MappingProxyType(
         # would separate nothing — it would map to exactly one capability — while
         # costing another frozen-constraint `ALTER` on `purpose_is_known`.
         Capability.CAPTURE_SEARCH: frozenset({Purpose.CAPTURE_REVIEW}),
+        # `review.list` maps to `CAPTURE_REVIEW` and `review.decide` to a purpose
+        # of its own; both land with the capabilities themselves, for the reason
+        # the enum above records.
     }
 )
 

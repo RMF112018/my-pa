@@ -41,6 +41,11 @@ def test_contract_prefixes_are_stable() -> None:
         "prop",
         "ccls",
         "men",
+        "rvw",
+        "rdec",
+        "asrt",
+        "clink",
+        "conv",
     }
 
 

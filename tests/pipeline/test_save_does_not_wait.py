@@ -40,12 +40,19 @@ from my_pa.infrastructure.persistence.capture_search import search_captures
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, job_for
 from my_pa.infrastructure.persistence.tables import (
     JobState,
+    capture_assertion_spans,
+    capture_assertions,
     capture_classifications,
+    capture_context_links,
+    capture_conversations,
     capture_entity_mentions,
     capture_processing_text,
+    capture_promotion_receipts,
     capture_proposal_spans,
     capture_proposals,
     capture_receipts,
+    capture_review_cases,
+    capture_review_decisions,
     capture_spans,
     capture_stage_results,
     capture_submissions,
@@ -66,9 +73,19 @@ SAVE_COMMITS: tuple[Table, ...] = (
     capture_submissions,
 )
 
-#: What the pipeline commits, and what the save therefore must not. Every table
-#: WP-7 added, listed so that a table added later and forgotten here is a table
-#: this test stops covering — which is why the count is asserted too.
+#: Every `capture_*` table the save does not own, and which it therefore must
+#: commit nothing to. Listed so that a table added later and forgotten here is a
+#: table this test stops covering — which is why the set is derived and compared
+#: below rather than only iterated.
+#:
+#: The seven WP-7 added are what the *pipeline* commits. The seven WP-8 added are
+#: not written by the pipeline either: a review case, a decision, an assertion
+#: and a promotion receipt are written by a review disposition, and a context
+#: link and a conversation event by the create that seeded them. The claim this
+#: list serves is the same for all fourteen and is the one `QC-AC-002` makes —
+#: **the save transaction commits none of them** — so narrowing the list to
+#: "what the pipeline writes" would drop seven tables from a guarantee that
+#: covers them.
 PIPELINE_COMMITS: tuple[Table, ...] = (
     capture_processing_text,
     capture_stage_results,
@@ -77,6 +94,13 @@ PIPELINE_COMMITS: tuple[Table, ...] = (
     capture_proposal_spans,
     capture_classifications,
     capture_entity_mentions,
+    capture_review_cases,
+    capture_review_decisions,
+    capture_assertions,
+    capture_assertion_spans,
+    capture_promotion_receipts,
+    capture_context_links,
+    capture_conversations,
 )
 
 

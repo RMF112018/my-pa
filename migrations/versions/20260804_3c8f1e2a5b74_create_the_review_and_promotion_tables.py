@@ -381,7 +381,10 @@ def upgrade() -> None:
         "                 AND a.proposal_id = NEW.proposal_id "
         "                 AND a.version_id = NEW.version_id "
         "                 AND a.assertion_type = NEW.proposal_type "
-        "                 AND a.state = 'accepted' "
+        # `revalidation_required` is the sole governed post-acceptance state.
+        # A deferred proposal check observes the assertion's state at commit,
+        # so both states must retain the same exact accepted-record binding.
+        "                 AND a.state IN ('accepted', 'revalidation_required') "
         "                 AND a.superseded_by_assertion_id IS NULL "
         "                 AND a.accepted_at IS NOT DISTINCT FROM d.decided_at "
         "                 AND c.proposal_id = NEW.proposal_id "

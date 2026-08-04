@@ -111,6 +111,12 @@ SYNCHRONOUS_CAPTURE_METADATA: tuple[Table, ...] = (
     capture_conversations,
 )
 
+#: The first persisted evidence that a pipeline stage has begun. Locking only
+#: this table makes an accidental inline worker wait at its first observable
+#: downstream boundary without locking `capture_spans` or `capture_review_cases`,
+#: which are nullable FK targets of the synchronous context-link insert.
+INLINE_PIPELINE_BOUNDARY: Table = capture_stage_results
+
 
 def test_the_save_transaction_commits_no_downstream_output(engine: Engine) -> None:
     """The full downstream set, not the proposal half of it.
@@ -171,12 +177,15 @@ def test_explicit_conversation_and_context_commit_atomically_without_enrichment(
             size_bytes=1,
         )
 
-    locked = ", ".join(f"knowledge.{table.name}" for table in DOWNSTREAM_OUTPUTS)
     with engine.connect() as blocker, blocker.begin():
-        blocker.execute(text(f"LOCK TABLE {locked} IN ACCESS EXCLUSIVE MODE"))
+        blocker.execute(
+            text(f"LOCK TABLE knowledge.{INLINE_PIPELINE_BOUNDARY.name} IN ACCESS EXCLUSIVE MODE")
+        )
         with engine.begin() as connection:
-            # Any accidental dependency on downstream persistence now becomes a
-            # bounded database refusal rather than an unreliable timing sample.
+            # An inline worker must record a stage result before it can persist
+            # stage output. The lock therefore turns that first observable
+            # asynchronous boundary into a bounded refusal while leaving the
+            # synchronous context/conversation FK graph entirely unlocked.
             connection.execute(text("SET LOCAL statement_timeout = '1000ms'"))
             saved = save(
                 connection,

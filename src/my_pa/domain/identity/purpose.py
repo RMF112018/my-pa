@@ -42,3 +42,4 @@ class Purpose(StrEnum):
     # `review.decide` capability it serves, because a purpose no capability
     # permits is denied for everything and reads as a mistake rather than as a
     # decision.
+    REVIEW_DISPOSITION = "review_disposition"

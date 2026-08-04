@@ -2,11 +2,11 @@
 
 **`ConversationState` — all five of
 `docs/specs/quick-capture/09_LOGICAL_DATA_MODEL.md:211`**, including `archived`.
-`skeletal` and `superseded` are reachable now: an explicit Conversation Log
-seeds a skeletal event, and a later event replaces it. `proposed` needs a
-conversation inferred from a Quick Note, which needs inference this build does
-not perform; `accepted` needs a review disposition to promote the inference; and
-`archived` needs a retention rule, which `O-10` has not decided. All five are
+`skeletal` is reachable now: an explicit Conversation Log seeds it. `proposed`
+needs a conversation inferred from a Quick Note, which this build does not
+perform; `accepted` needs review of such an inference; `superseded` needs a
+later conversation writer; and `archived` needs a retention rule, which `O-10`
+has not decided. All five are
 declared because the set is the specification's vocabulary of one object, and a
 later package that reaches one must not have to widen a frozen constraint to say
 so.
@@ -40,7 +40,7 @@ __all__ = ["ConversationChannel", "ConversationState"]
 
 
 class ConversationState(StrEnum):
-    """The five the specification names. Two are reachable; see the module docstring."""
+    """The five the specification names. One is reachable; see the module docstring."""
 
     SKELETAL = "skeletal"
     PROPOSED = "proposed"

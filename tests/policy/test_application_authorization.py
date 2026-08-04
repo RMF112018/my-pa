@@ -53,12 +53,14 @@ from tests.conftest import (
 from my_pa.application.commands import (
     Command,
     CreateCapture,
+    DecideReviewCase,
     EnrollSource,
     FetchSource,
     GetCapabilities,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListReviewCases,
     ListSources,
     ReadCapture,
     ReadKnowledge,
@@ -70,6 +72,7 @@ from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
@@ -127,6 +130,12 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.CAPTURE_READ: ReadCapture(capture_id=issue_identifier(IdKind.CAPTURE)),
         Capability.CAPTURE_LIST: ListCaptures(),
         Capability.CAPTURE_SEARCH: SearchCaptures(query="synthetic"),
+        Capability.REVIEW_LIST: ListReviewCases(),
+        Capability.REVIEW_DECIDE: DecideReviewCase(
+            review_case_id=issue_identifier(IdKind.REVIEW_CASE),
+            expected_review_version=0,
+            disposition=Disposition.REJECT,
+        ),
     }
 
 
@@ -267,6 +276,8 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.REVIEW_LIST,
+        Capability.REVIEW_DECIDE,
     }
 ]
 
@@ -329,6 +340,8 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.REVIEW_LIST,
+        Capability.REVIEW_DECIDE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

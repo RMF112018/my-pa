@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with thirteen capabilities and nine
+emits what it emitted on the day it merged, with fifteen capabilities and ten
 purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -238,11 +238,9 @@ IMMUTABILITY_TRIGGER = "capture_versions_are_append_only"
 #: wider than the constraint is the failure `D-69` exists to prevent, and the
 #: equality in `CHECKED_VOCABULARY` still catches it, because a member added with
 #: no `ALTER` would be in the left side and not the right.
-CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset(
-    {"review.decide", "review.list"}
-)
+CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
 
-PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset({"review_disposition"})
+PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
 
 #: The eight triggers `3c8f1e2a5b74` installs. Five of them sit on tables it does
 #: not create, which is what forward DDL is for: a trigger is not a `Table`
@@ -423,30 +421,15 @@ def test_the_frozen_vocabulary_is_a_strict_subset_of_the_domains() -> None:
     assert len(FROZEN_PURPOSES) == 7
 
 
-def test_the_schema_admits_three_names_the_domain_has_not_declared_yet() -> None:
-    """The `D-81` gap, named so that closing it has to be deliberate.
+def test_the_schema_ahead_gap_closed_when_wp8_declared_its_three_names() -> None:
+    """The `D-81` ordering gap is empty now that WP-8 declares all three names.
 
-    `3c8f1e2a5b74` carries the forward `ALTER` for `review.list`,
-    `review.decide` and `review_disposition` before those members exist, which is
-    the safe half of `D-81`'s ordering rule. This asserts the gap is exactly
-    those three and no others, so:
-
-    - declaring any of them reddens **here**, and whoever declares them empties
-      these constants and restores the plain equality in `CHECKED_VOCABULARY`;
-    - a *fourth* name appearing in either constant reddens the first assertion,
-      so this cannot become a general excuse for schema-ahead-of-domain drift;
-    - the dangerous direction is untouched. A member added to `Capability` with
-      no `ALTER` is in the domain and not in the constraint, which
-      `test_head_admits_exactly_the_vocabulary_the_domain_declares` still fails
-      on, because that equality adds the gap to the domain rather than removing
-      the domain from the constraint.
+    `3c8f1e2a5b74` carried the forward `ALTER` first. Emptying these constants
+    restores plain head equality; a later schema-ahead change must deliberately
+    reopen and explain the gap rather than inheriting WP-8's exception.
     """
-    assert not CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN & {c.value for c in Capability}
-    assert not PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN & {p.value for p in Purpose}
-    assert len(CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN) == 2
-    assert len(PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN) == 1
-    # The control: the two constants are not simply unread. Every other name in
-    # both enums *is* declared, so the emptiness above is a measurement.
+    assert frozenset() == CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+    assert frozenset() == PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN
     assert {c.value for c in Capability} and {p.value for p in Purpose}
 
 

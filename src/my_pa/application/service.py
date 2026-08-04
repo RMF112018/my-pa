@@ -117,12 +117,14 @@ from my_pa.application.capabilities import build_capability_manifest, build_read
 from my_pa.application.commands import (
     Command,
     CreateCapture,
+    DecideReviewCase,
     EnrollSource,
     FetchSource,
     GetCapabilities,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListReviewCases,
     ListSources,
     ReadCapture,
     ReadKnowledge,
@@ -154,6 +156,7 @@ from my_pa.contracts.ports import (
     CaptureSearchRequest,
     EvidenceUnavailableError,
     PortError,
+    ReviewDecisionRequest,
     SearchOutcome,
     UnitOfWork,
     UnknownScopeError,
@@ -170,6 +173,12 @@ from my_pa.domain.capture.errors import (
     CaptureError,
     EmptyCaptureError,
 )
+from my_pa.domain.capture.review import (
+    ReviewConflictError,
+    ReviewNotFoundError,
+    ReviewUnsupportedError,
+)
+from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
@@ -1017,6 +1026,9 @@ class ApplicationService:
             idempotency_key=command.idempotency_key,
             client_created_at=command.client_created_at,
             occurred_at=command.occurred_at,
+            capture_kind=command.capture_kind,
+            context_source_object_id=command.context_source_object_id,
+            context_source_version_id=command.context_source_version_id,
         )
 
     def _capture_revise(
@@ -1043,6 +1055,9 @@ class ApplicationService:
             idempotency_key=command.idempotency_key,
             client_created_at=command.client_created_at,
             occurred_at=command.occurred_at,
+            capture_kind=CaptureKind.QUICK_NOTE,
+            context_source_object_id=None,
+            context_source_version_id=None,
         )
 
     def _capture_read(
@@ -1196,6 +1211,106 @@ class ApplicationService:
             ),
         )
 
+    def _review_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListReviewCases
+    ) -> _Result:
+        """List review cases without capture or normalized-value content."""
+        page_size = self._page_size(command.page_size)
+        with _translated():
+            found = unit_of_work.reviews.cases(limit=page_size + 1)
+        truncated = len(found) > page_size
+        return _Result(
+            payload={
+                "review_cases": [
+                    {
+                        "review_case_id": case.review_case_id,
+                        "proposal_id": case.proposal_id,
+                        "capture_id": case.capture_id,
+                        "version_id": case.version_id,
+                        "proposal_type": case.proposal_type.value,
+                        "proposal_state": case.proposal_state.value,
+                        "risk_class": case.risk_class.value,
+                        "opened_at": format_rfc3339(case.opened_at),
+                        "review_version": case.review_version,
+                        "latest_disposition": (
+                            None
+                            if case.latest_disposition is None
+                            else case.latest_disposition.value
+                        ),
+                    }
+                    for case in found[:page_size]
+                ]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=("review_policy",),
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                ),
+                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
+            ),
+        )
+
+    def _review_decide(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: DecideReviewCase
+    ) -> _Result:
+        """Append one disposition and, for acceptance, its assertion and receipt."""
+        decision = None
+        conflict = False
+        missing = False
+        unsupported = False
+        with _translated():
+            try:
+                decision = unit_of_work.reviews.decide(
+                    ReviewDecisionRequest(
+                        review_case_id=command.review_case_id,
+                        expected_review_version=command.expected_review_version,
+                        disposition=command.disposition,
+                        principal_id=authorization.principal.principal_id,
+                        correlation_id=authorization.correlation_id,
+                        audit_id=authorization.audit_id,
+                        policy_version=authorization.decision.policy_version,
+                        decided_at=self._clock(),
+                        corrected_value=command.corrected_value,
+                    )
+                )
+            except ReviewConflictError:
+                conflict = True
+            except ReviewNotFoundError:
+                missing = True
+            except ReviewUnsupportedError:
+                unsupported = True
+        if conflict:
+            raise ConflictError(SafeDetail.EXPECTED_REVIEW_VERSION)
+        if unsupported:
+            raise UnsupportedError(SafeDetail.DISPOSITION)
+        if missing:
+            raise NotFoundError(SafeDetail.REVIEW_CASE_ID)
+        if decision is None:
+            return _Result(
+                payload={"review_case_id": command.review_case_id, "result": "invalidated"},
+                disclosure=unenrolled_disclosure(
+                    authorization.at,
+                    trust_basis=("review_policy", "source_span_validation"),
+                ),
+            )
+        return _Result(
+            payload={
+                "review_case_id": decision.review_case_id,
+                "decision_id": decision.decision_id,
+                "review_version": decision.sequence,
+                "disposition": decision.disposition.value,
+                "proposal_state": decision.proposal_state.value,
+                "assertion_id": decision.assertion_id,
+                "receipt_id": decision.receipt_id,
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=("review_policy", "reviewed_promotion"),
+            ),
+        )
+
     def _admit(
         self,
         unit_of_work: UnitOfWork,
@@ -1206,6 +1321,9 @@ class ApplicationService:
         idempotency_key: str,
         client_created_at: datetime | None,
         occurred_at: datetime | None,
+        capture_kind: CaptureKind,
+        context_source_object_id: str | None,
+        context_source_version_id: str | None,
     ) -> _Result:
         """The one write path both `capture.create` and `capture.revise` take.
 
@@ -1249,6 +1367,9 @@ class ApplicationService:
             accepted_at=self._clock(),
             client_created_at=client_created_at,
             occurred_at=occurred_at,
+            capture_kind=capture_kind,
+            context_source_object_id=context_source_object_id,
+            context_source_version_id=context_source_version_id,
         )
         admission: CaptureAdmission | None = None
         conflict: ApplicationError | None = None
@@ -1596,5 +1717,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CAPTURE_READ: ApplicationService._capture_read,
         Capability.CAPTURE_LIST: ApplicationService._capture_list,
         Capability.CAPTURE_SEARCH: ApplicationService._capture_search,
+        Capability.REVIEW_LIST: ApplicationService._review_list,
+        Capability.REVIEW_DECIDE: ApplicationService._review_decide,
     }
 )

@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
@@ -57,7 +58,17 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.domain.capture.assertion import AssertionState
+from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.capture.review import Disposition, ReviewConflictError
+from my_pa.domain.capture.version import digest_of
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.review import (
+    decide_review,
+    mark_changed_assertions_for_revalidation,
+    open_review_case,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -285,6 +296,26 @@ def _seed_receipt(connection: Connection, promoted: dict[str, str]) -> None:
             "'policy-v1')"
         ),
         promoted,
+    )
+
+
+def _decision_request(
+    review_case_id: str,
+    *,
+    expected: int,
+    disposition: Disposition,
+    corrected_value: str | None = None,
+) -> ReviewDecisionRequest:
+    return ReviewDecisionRequest(
+        review_case_id=review_case_id,
+        expected_review_version=expected,
+        disposition=disposition,
+        principal_id=_identifier("prn", 90),
+        correlation_id=_identifier("corr", 90),
+        audit_id=_identifier("audit", 90),
+        policy_version="policy-v1",
+        decided_at=datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+        corrected_value=corrected_value,
     )
 
 
@@ -701,5 +732,153 @@ def test_the_frozen_literals_are_what_the_server_stores(
         assert len({stored[name] for name in stored if name.endswith("_is_known")}) >= 6
 
         command.downgrade(_config(), "base")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_an_acceptance_creates_one_assertion_receipt_and_revalidation_obligation(
+    disposable_database: str,
+) -> None:
+    """QC-AC-020 and ADR-003 clause 8 through the real persistence functions."""
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), "head")
+        with engine.begin() as connection:
+            ids = _seed_proposal(connection, ordinal=31)
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.capture_spans SET quoted_text_sha256 = :digest "  # noqa: S608
+                    "WHERE span_id = :span_id"
+                ),
+                {"span_id": ids["span_id"], "digest": digest_of("x")},
+            )
+            review_case_id = open_review_case(connection, ids["proposal_id"])
+            assert review_case_id is not None
+            state = connection.execute(
+                text(
+                    f"SELECT state FROM {SCHEMA}.capture_proposals "  # noqa: S608
+                    "WHERE proposal_id = :proposal_id"
+                ),
+                ids,
+            ).scalar_one()
+            assert state == ProposalState.NEEDS_REVIEW.value
+
+            decision = decide_review(
+                connection,
+                _decision_request(
+                    review_case_id,
+                    expected=0,
+                    disposition=Disposition.CORRECT_AND_ACCEPT,
+                    corrected_value="synthetic corrected commitment",
+                ),
+            )
+            assert decision is not None
+            assert decision.assertion_id is not None
+            assert decision.receipt_id is not None
+            persisted = connection.execute(
+                text(
+                    f"SELECT a.state, a.normalized_value, r.policy_version "  # noqa: S608
+                    f"FROM {SCHEMA}.capture_assertions a "
+                    f"JOIN {SCHEMA}.capture_promotion_receipts r "
+                    "ON r.assertion_id = a.assertion_id WHERE a.assertion_id = :assertion_id"
+                ),
+                {"assertion_id": decision.assertion_id},
+            ).one()
+            assert tuple(persisted) == (
+                AssertionState.ACCEPTED.value,
+                "synthetic corrected commitment",
+                "policy-v1",
+            )
+
+            unchanged = mark_changed_assertions_for_revalidation(
+                connection,
+                prior_version_id=ids["version_id"],
+                successor_content="x",
+                at=datetime(2026, 8, 4, 12, 1, tzinfo=UTC),
+            )
+            assert unchanged == 0
+            second_version_id = _identifier("capver", 33)
+            connection.execute(
+                text(
+                    f"INSERT INTO {SCHEMA}.capture_versions "  # noqa: S608
+                    "(version_id, capture_id, version_number, supersedes_version_id, content, "
+                    "content_sha256, owner_principal_id, classification, processing_policy, "
+                    "idempotency_key, correlation_id, audit_id, server_received_at, "
+                    "accepted_at, recorded_at) VALUES (:version_id, :capture_id, 2, "
+                    ":prior_version_id, 'x', :digest, :principal_id, 'synthetic_test', "
+                    "'local_only', :version_id, :correlation_id, :audit_id, now(), now(), now())"
+                ),
+                {
+                    **ids,
+                    "version_id": second_version_id,
+                    "prior_version_id": ids["version_id"],
+                    "digest": digest_of("x"),
+                },
+            )
+            changed = mark_changed_assertions_for_revalidation(
+                connection,
+                prior_version_id=second_version_id,
+                successor_content="y",
+                at=datetime(2026, 8, 4, 12, 2, tzinfo=UTC),
+            )
+            assert changed == 1
+            assertion_state = connection.execute(
+                text(
+                    f"SELECT state FROM {SCHEMA}.capture_assertions "  # noqa: S608
+                    "WHERE assertion_id = :assertion_id"
+                ),
+                {"assertion_id": decision.assertion_id},
+            ).scalar_one()
+            assert assertion_state == AssertionState.REVALIDATION_REQUIRED.value
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_rejection_retains_lineage_and_a_stale_second_decision_is_refused(
+    disposable_database: str,
+) -> None:
+    """QC-AC-022 plus optimistic concurrency against stored decision sequence."""
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), "head")
+        with engine.begin() as connection:
+            ids = _seed_proposal(connection, ordinal=32)
+            review_case_id = open_review_case(connection, ids["proposal_id"])
+            assert review_case_id is not None
+            rejected = decide_review(
+                connection,
+                _decision_request(
+                    review_case_id,
+                    expected=0,
+                    disposition=Disposition.REJECT,
+                ),
+            )
+            assert rejected is not None
+            assert rejected.proposal_state is ProposalState.REJECTED
+            with pytest.raises(ReviewConflictError, match="stale"):
+                decide_review(
+                    connection,
+                    _decision_request(
+                        review_case_id,
+                        expected=0,
+                        disposition=Disposition.DEFER,
+                    ),
+                )
+
+            retained = connection.execute(
+                text(
+                    f"SELECT p.state, count(ps.span_id), count(d.decision_id) "  # noqa: S608
+                    f"FROM {SCHEMA}.capture_proposals p "
+                    f"JOIN {SCHEMA}.capture_proposal_spans ps ON ps.proposal_id = p.proposal_id "
+                    f"JOIN {SCHEMA}.capture_review_cases c ON c.proposal_id = p.proposal_id "
+                    f"JOIN {SCHEMA}.capture_review_decisions d "
+                    "ON d.review_case_id = c.review_case_id "
+                    "WHERE p.proposal_id = :proposal_id GROUP BY p.state"
+                ),
+                ids,
+            ).one()
+            assert tuple(retained) == (ProposalState.REJECTED.value, 1, 1)
     finally:
         engine.dispose()

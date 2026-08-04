@@ -124,6 +124,7 @@ from my_pa.infrastructure.persistence.proposals import (
     record_stage_result,
     stage_result_for,
 )
+from my_pa.infrastructure.persistence.review import open_review_case
 from my_pa.infrastructure.persistence.tables import capture_versions
 
 __all__ = [
@@ -1100,7 +1101,7 @@ def _write_proposals(
             span_role=SpanRole.DIRECT,
         )
         span_id = record_span(connection, span, processing_text_id=processing_text_id)
-        record_proposal(
+        proposal_id = record_proposal(
             connection,
             Proposal(
                 proposal_id=issue_identifier(IdKind.PROPOSAL),
@@ -1116,6 +1117,7 @@ def _write_proposals(
             ),
             (span_id,),
         )
+        open_review_case(connection, proposal_id)
         written += 1
     return written
 

@@ -20,9 +20,9 @@ follows for the same reason.
 which five — `mentioned`, `about`, `resulted_in`, `supports`, `contradicts` —
 require inference over the capture's text. `launch_context` is the one a
 deterministic writer can record, because it is a fact about how the capture was
-started rather than a claim about what it says. `O-15` is the open operator
-decision here; this module implements the specification's recommendation and the
-plan discloses the decision as unresolved.
+started rather than a claim about what it says. WP-8 resolves `O-15` and
+`RI-OD-011`: deterministic launch context is the only automatically accepted
+link, and inferred links remain proposed.
 
 **`ContextLinkAuthority` — all five, and `superseded` is load-bearing.**
 `docs/specs/quick-capture/09_LOGICAL_DATA_MODEL.md:117` gives the five, and
@@ -60,7 +60,7 @@ class ContextLinkRole(StrEnum):
 
 
 class ContextLinkAuthority(StrEnum):
-    """How firmly the link is held. All five are reachable once review cases exist."""
+    """How firmly the link is held; this build writes deterministic links only."""
 
     DETERMINISTIC = "deterministic"
     USER_CONFIRMED = "user_confirmed"

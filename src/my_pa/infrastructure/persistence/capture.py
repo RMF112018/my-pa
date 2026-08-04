@@ -46,9 +46,11 @@ from my_pa.contracts.ports import (
     CaptureSummary,
     UnknownScopeError,
 )
+from my_pa.domain.capture.context import ContextLinkAuthority, ContextLinkRole, ContextLinkTarget
 from my_pa.domain.capture.errors import CaptureConflictError
 from my_pa.domain.capture.submission import (
     AdmissionResult,
+    CaptureKind,
     CaptureMethod,
     CaptureReceipt,
     CaptureTransport,
@@ -57,14 +59,19 @@ from my_pa.domain.capture.submission import (
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.conversation.event import ConversationChannel, ConversationState
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import conflicting_row
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, enqueue_job
+from my_pa.infrastructure.persistence.review import mark_changed_assertions_for_revalidation
 from my_pa.infrastructure.persistence.tables import (
+    capture_context_links,
+    capture_conversations,
     capture_receipts,
     capture_submissions,
     capture_versions,
     captures,
+    source_object_versions,
 )
 
 __all__ = [
@@ -179,7 +186,8 @@ def admit_capture(connection: Connection, request: CaptureAdmissionRequest) -> C
     `QC-AC-032`'s "fails closed" as a property of the transaction rather than of
     a cleanup path.
     """
-    digest = request.content.digest
+    content_digest = request.content.digest
+    payload_digest = request.payload_digest
     submission_id = issue_identifier(IdKind.SUBMISSION)
     version_id = issue_identifier(IdKind.CAPTURE_VERSION)
     receipt_id = issue_identifier(IdKind.RECEIPT)
@@ -195,7 +203,7 @@ def admit_capture(connection: Connection, request: CaptureAdmissionRequest) -> C
             transport=CaptureTransport.LOCAL.value,
             capture_method=CaptureMethod.TYPED_TEXT.value,
             trust_state=TrustState.LOCAL_PRINCIPAL.value,
-            payload_sha256=digest,
+            payload_sha256=payload_digest,
             client_created_at=request.client_created_at,
             server_received_at=request.server_received_at,
             admission_result=AdmissionResult.ACCEPTED.value,
@@ -207,9 +215,30 @@ def admit_capture(connection: Connection, request: CaptureAdmissionRequest) -> C
     ).one_or_none()
 
     if admitted is None:
-        return _replay(connection, request.idempotency_key, digest)
+        return _replay(connection, request.idempotency_key, payload_digest)
 
-    _chain(connection, request, version_id=version_id, digest=digest)
+    capture_id, prior = _chain(connection, request, version_id=version_id, digest=content_digest)
+    if request.capture_id is None and request.capture_kind is CaptureKind.CONVERSATION_LOG:
+        connection.execute(
+            capture_conversations.insert().values(
+                conversation_id=issue_identifier(IdKind.CONVERSATION),
+                capture_id=capture_id,
+                version_id=version_id,
+                event_state=ConversationState.SKELETAL.value,
+                channel=ConversationChannel.UNKNOWN.value,
+                occurred_at_start=request.occurred_at,
+                recorded_at=request.accepted_at,
+            )
+        )
+    if request.capture_id is None and request.context_source_object_id is not None:
+        _record_launch_context(connection, request, capture_id)
+    if prior is not None:
+        mark_changed_assertions_for_revalidation(
+            connection,
+            prior_version_id=prior.version_id,
+            successor_content=request.content.text,
+            at=request.accepted_at,
+        )
     connection.execute(
         capture_receipts.insert().values(
             receipt_id=receipt_id,
@@ -252,7 +281,7 @@ def _chain(
     *,
     version_id: str,
     digest: str,
-) -> str:
+) -> tuple[str, _Head | None]:
     """Insert the version, starting a chain or appending to one. Returns the capture.
 
     A create issues a new `cap_…` and writes version one, which supersedes
@@ -268,7 +297,7 @@ def _chain(
                 owner_principal_id=request.principal_id,
             )
         )
-        version_number, supersedes = 1, None
+        version_number, supersedes, prior = 1, None, None
     else:
         capture_id = validate_identifier(request.capture_id, IdKind.CAPTURE)
         head = _head(connection, capture_id)
@@ -278,7 +307,7 @@ def _chain(
             # answer names no identifier, so a caller cannot use the refusal to
             # learn whether a capture it may not see exists.
             raise UnknownScopeError("the request names no stored capture")
-        version_number, supersedes = head.version_number + 1, head.version_id
+        version_number, supersedes, prior = head.version_number + 1, head.version_id, head
 
     connection.execute(
         capture_versions.insert().values(
@@ -305,7 +334,39 @@ def _chain(
             recorded_at=func.now(),
         )
     )
-    return capture_id
+    return capture_id, prior
+
+
+def _record_launch_context(
+    connection: Connection, request: CaptureAdmissionRequest, capture_id: str
+) -> None:
+    """Validate an exact current observed version, then record its launch link."""
+    object_id = request.context_source_object_id
+    version_id = request.context_source_version_id
+    if object_id is None or version_id is None:  # pragma: no cover - request invariant
+        raise ValueError("a launch context names both object and version")
+    latest = connection.execute(
+        select(source_object_versions.c.version_id)
+        .where(source_object_versions.c.source_object_id == object_id)
+        .order_by(
+            source_object_versions.c.observed_at.desc(),
+            source_object_versions.c.version_id.desc(),
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if latest is None or str(latest) != version_id:
+        raise UnknownScopeError("the launch context does not name the current observed version")
+    connection.execute(
+        capture_context_links.insert().values(
+            capture_context_link_id=issue_identifier(IdKind.CONTEXT_LINK),
+            capture_id=capture_id,
+            target_type=ContextLinkTarget.SOURCE_OBJECT.value,
+            target_id=object_id,
+            link_role=ContextLinkRole.LAUNCH_CONTEXT.value,
+            authority_state=ContextLinkAuthority.DETERMINISTIC.value,
+            accepted_at=request.accepted_at,
+        )
+    )
 
 
 def capture_version(

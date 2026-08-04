@@ -32,17 +32,34 @@ provenance nobody can check. The set is the instrument's own vocabulary of one
 act, and a later package that reaches one of them must not have to widen a
 frozen constraint to say so.
 
-`O-16` (review thresholds by risk and consequence) and `O-17` remain open
-operator decisions. This module implements the specification's recommendation
-and the plan discloses that the decisions are unresolved; a green test is not an
-operator resolution.
+`O-16` and `RI-OD-012` are resolved by WP-8: every consequential class below
+requires review regardless of confidence. `O-17` is also resolved: a disposition
+creates only canonical product-owned records and receipts, never an external
+action. The port and architecture test make that absence structural.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 
-__all__ = ["Disposition"]
+from my_pa.domain.capture.proposal import ProposalState, ProposalType, RiskClass
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.common.time import ensure_utc
+
+__all__ = [
+    "ConsequentialClass",
+    "Disposition",
+    "ReviewCase",
+    "ReviewConflictError",
+    "ReviewDecision",
+    "ReviewError",
+    "ReviewNotFoundError",
+    "ReviewRequiredError",
+    "ReviewUnsupportedError",
+    "requires_review",
+]
 
 
 class Disposition(StrEnum):
@@ -55,3 +72,108 @@ class Disposition(StrEnum):
     MARK_UNRESOLVED = "mark_unresolved"
     REPROCESS = "reprocess"
     ESCALATE = "escalate"
+
+
+class ConsequentialClass(StrEnum):
+    """The seven classes QC-AC-020 makes review-gated."""
+
+    COMMITMENT = "commitment"
+    DECISION = "decision"
+    CRITICAL_DATE = "critical_date"
+    FINANCIAL_FACT = "financial_fact"
+    IDENTITY_MERGE = "identity_merge"
+    CONTRADICTION = "contradiction"
+    SENSITIVE_RELATIONSHIP_CONCLUSION = "sensitive_relationship_conclusion"
+
+
+def requires_review(subject: ConsequentialClass) -> bool:
+    """Return the closed policy answer for a consequential class.
+
+    Deliberately total and deliberately always true. Confidence and a low
+    extractor risk label cannot weaken consequence.
+    """
+    if not isinstance(subject, ConsequentialClass):
+        raise TypeError("review policy accepts one consequential class")
+    return True
+
+
+class ReviewError(Exception):
+    """A review transition was refused without carrying capture content."""
+
+
+class ReviewConflictError(ReviewError):
+    """The expected review sequence or current proposal state is stale."""
+
+
+class ReviewRequiredError(ReviewError):
+    """Canonical promotion was attempted without an applicable disposition."""
+
+
+class ReviewNotFoundError(ReviewError):
+    """A request named no stored review case."""
+
+
+class ReviewUnsupportedError(ReviewError):
+    """A declared disposition has no eligible route in this build."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewCase:
+    """One consequential proposal awaiting or retaining a disposition."""
+
+    review_case_id: str
+    proposal_id: str
+    capture_id: str
+    version_id: str
+    proposal_type: ProposalType
+    proposal_state: ProposalState
+    risk_class: RiskClass
+    opened_at: datetime
+    review_version: int = 0
+    latest_disposition: Disposition | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
+        validate_identifier(self.proposal_id, IdKind.PROPOSAL)
+        validate_identifier(self.capture_id, IdKind.CAPTURE)
+        validate_identifier(self.version_id, IdKind.CAPTURE_VERSION)
+        ensure_utc(self.opened_at)
+        if self.review_version < 0:
+            raise ReviewError("a review version is not negative")
+        if (self.review_version == 0) is not (self.latest_disposition is None):
+            raise ReviewError("an undecided case has version zero and no disposition")
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewDecision:
+    """An appended review decision and any canonical result it produced."""
+
+    decision_id: str
+    review_case_id: str
+    sequence: int
+    disposition: Disposition
+    principal_id: str
+    correlation_id: str
+    audit_id: str
+    decided_at: datetime
+    proposal_state: ProposalState
+    assertion_id: str | None = None
+    receipt_id: str | None = None
+    normalized_value: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        for value, kind in (
+            (self.decision_id, IdKind.REVIEW_DECISION),
+            (self.review_case_id, IdKind.REVIEW_CASE),
+            (self.principal_id, IdKind.PRINCIPAL),
+            (self.correlation_id, IdKind.CORRELATION),
+            (self.audit_id, IdKind.AUDIT),
+        ):
+            validate_identifier(value, kind)
+        if self.assertion_id is not None:
+            validate_identifier(self.assertion_id, IdKind.ASSERTION)
+        if self.receipt_id is not None:
+            validate_identifier(self.receipt_id, IdKind.RECEIPT)
+        if self.sequence < 1:
+            raise ReviewError("review decisions are numbered from one")
+        ensure_utc(self.decided_at)

@@ -36,10 +36,16 @@ three of whose kinds nothing can write is the permanently-empty-column defect.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import Final
 
-__all__ = ["ACCEPTED_RECORD_TYPE", "AssertionState"]
+from my_pa.domain.capture.proposal import ProposalType
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.common.time import ensure_utc
+
+__all__ = ["ACCEPTED_RECORD_TYPE", "Assertion", "AssertionState", "PromotionReceipt"]
 
 #: What `capture_proposals.accepted_record_type` holds when an acceptance names
 #: an assertion. A bare string rather than a one-member enum: a closed set of one
@@ -60,3 +66,44 @@ class AssertionState(StrEnum):
     SUPERSEDED = "superseded"
     WITHDRAWN = "withdrawn"
     REVALIDATION_REQUIRED = "revalidation_required"
+
+
+@dataclass(frozen=True, slots=True)
+class Assertion:
+    """A canonical claim promoted from exactly one reviewed proposal."""
+
+    assertion_id: str
+    version_id: str
+    proposal_id: str
+    decision_id: str
+    assertion_type: ProposalType
+    state: AssertionState
+    accepted_at: datetime
+    normalized_value: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        for value, kind in (
+            (self.assertion_id, IdKind.ASSERTION),
+            (self.version_id, IdKind.CAPTURE_VERSION),
+            (self.proposal_id, IdKind.PROPOSAL),
+            (self.decision_id, IdKind.REVIEW_DECISION),
+        ):
+            validate_identifier(value, kind)
+        ensure_utc(self.accepted_at)
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionReceipt:
+    """Safe evidence that one reviewed proposal became an assertion."""
+
+    receipt_id: str
+    assertion_id: str
+    decision_id: str
+    policy_version: str
+    issued_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.receipt_id, IdKind.RECEIPT)
+        validate_identifier(self.assertion_id, IdKind.ASSERTION)
+        validate_identifier(self.decision_id, IdKind.REVIEW_DECISION)
+        ensure_utc(self.issued_at)

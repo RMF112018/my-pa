@@ -45,7 +45,7 @@ request does too, because `1a4c9e77b2d5` creates the capture tables and widens
 
 ## What the gateway is, and what it does not yet do
 
-`apps/gateway.py` serves the thirteen public capabilities over HTTP on loopback.
+`apps/gateway.py` serves the fifteen public capabilities over HTTP on loopback.
 One request is one call to `ApplicationService.invoke`, and the response body is
 the envelope that call produced — the transport maps and does not decide.
 

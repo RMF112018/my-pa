@@ -60,14 +60,10 @@ class Capability(StrEnum):
     # `3c8f1e2a5b74` already carries the forward `ALTER` that admits them — the
     # freeze is written before the members, because a member with no `ALTER`
     # leaves every test green and is refused by the stored constraint on the
-    # first audited operation in the field. They are not declared here yet, and
-    # the reason is a coupling this enum does not advertise: `adapters/mcp/tools`
-    # builds its tool list at import from `Capability` and indexes
-    # `application.commands.Command` by each member's `capability`, so a member
-    # with no command raises `KeyError` at import and takes the whole package
-    # with it. The member, its command and its handler are one indivisible
-    # change. `tests/schema/test_capture_schema_migration.py` names exactly what
-    # is missing and reddens when it arrives.
+    # first audited operation in the field. The members, commands, and handlers
+    # land together because `adapters/mcp/tools` derives its tool set at import.
+    REVIEW_LIST = "review.list"
+    REVIEW_DECIDE = "review.decide"
 
 
 #: Capabilities restricted to an authenticated operator principal.
@@ -123,6 +119,8 @@ _PERMITTED_PURPOSES: Mapping[Capability, frozenset[Purpose]] = MappingProxyType(
         # `review.list` maps to `CAPTURE_REVIEW` and `review.decide` to a purpose
         # of its own; both land with the capabilities themselves, for the reason
         # the enum above records.
+        Capability.REVIEW_LIST: frozenset({Purpose.CAPTURE_REVIEW}),
+        Capability.REVIEW_DECIDE: frozenset({Purpose.REVIEW_DISPOSITION}),
     }
 )
 

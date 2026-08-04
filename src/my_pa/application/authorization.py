@@ -51,12 +51,14 @@ from datetime import datetime
 from my_pa.application.commands import (
     Command,
     CreateCapture,
+    DecideReviewCase,
     EnrollSource,
     FetchSource,
     GetCapabilities,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListReviewCases,
     ListSources,
     ReadCapture,
     ReadKnowledge,
@@ -145,13 +147,19 @@ def _requested_scope(
         # nothing to say the mapping was never made.
         case (
             GetCapabilities()
-            | CreateCapture()
             | ReviseCapture()
             | ReadCapture()
             | ListCaptures()
             | SearchCaptures()
+            | ListReviewCases()
+            | DecideReviewCase()
         ):
             return frozenset()
+        case CreateCapture():
+            if command.context_source_object_id is None:
+                return frozenset()
+            source_id = unit_of_work.sources.source_of_object(command.context_source_object_id)
+            return frozenset() if source_id is None else frozenset({source_id})
         case ListSources() | GetSourceMetadata() | FetchSource() | EnrollSource():
             return frozenset({command.source_id})
         case SearchKnowledge() | ReadKnowledge():

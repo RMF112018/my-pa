@@ -38,6 +38,8 @@ from enum import StrEnum
 from typing import ClassVar
 
 from my_pa.application.errors import InvalidRequestError, SafeDetail
+from my_pa.domain.capture.review import Disposition
+from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
 from my_pa.domain.identity.operation import Capability
@@ -45,12 +47,14 @@ from my_pa.domain.identity.operation import Capability
 __all__ = [
     "Command",
     "CreateCapture",
+    "DecideReviewCase",
     "EnrollSource",
     "FetchSource",
     "GetCapabilities",
     "GetSourceMetadata",
     "GetSourceStatus",
     "ListCaptures",
+    "ListReviewCases",
     "ListSources",
     "ReadCapture",
     "ReadKnowledge",
@@ -371,6 +375,9 @@ class CreateCapture:
 
     text: str = field(repr=False)
     idempotency_key: str
+    capture_kind: CaptureKind = CaptureKind.QUICK_NOTE
+    context_source_object_id: str | None = None
+    context_source_version_id: str | None = None
     client_created_at: datetime | None = None
     occurred_at: datetime | None = None
 
@@ -380,6 +387,27 @@ class CreateCapture:
             raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
         if not self.idempotency_key:
             raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        if not isinstance(self.capture_kind, CaptureKind):
+            raise InvalidRequestError(SafeDetail.CAPTURE_KIND)
+        if (self.context_source_object_id is None) is not (self.context_source_version_id is None):
+            raise InvalidRequestError(
+                SafeDetail.CONTEXT_SOURCE_OBJECT_ID,
+                SafeDetail.CONTEXT_SOURCE_VERSION_ID,
+            )
+        if self.context_source_object_id is not None:
+            context_version_id = self.context_source_version_id
+            if context_version_id is None:  # narrowed from the paired-field invariant above
+                raise InvalidRequestError(SafeDetail.CONTEXT_SOURCE_VERSION_ID)
+            _identifier(
+                self.context_source_object_id,
+                IdKind.SOURCE_OBJECT,
+                SafeDetail.CONTEXT_SOURCE_OBJECT_ID,
+            )
+            _identifier(
+                context_version_id,
+                IdKind.VERSION,
+                SafeDetail.CONTEXT_SOURCE_VERSION_ID,
+            )
         _moment(self.client_created_at, SafeDetail.CLIENT_CREATED_AT)
         _moment(self.occurred_at, SafeDetail.OCCURRED_AT)
 
@@ -491,6 +519,42 @@ class SearchCaptures:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
 
 
+@dataclass(frozen=True, slots=True)
+class ListReviewCases:
+    """`review.list`: one bounded page of consequential proposal cases."""
+
+    capability: ClassVar[Capability] = Capability.REVIEW_LIST
+
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class DecideReviewCase:
+    """`review.decide`: append one disposition under optimistic concurrency."""
+
+    capability: ClassVar[Capability] = Capability.REVIEW_DECIDE
+
+    review_case_id: str
+    expected_review_version: int
+    disposition: Disposition
+    corrected_value: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.review_case_id, IdKind.REVIEW_CASE, SafeDetail.REVIEW_CASE_ID)
+        if type(self.expected_review_version) is not int or self.expected_review_version < 0:
+            raise InvalidRequestError(SafeDetail.EXPECTED_REVIEW_VERSION)
+        if not isinstance(self.disposition, Disposition):
+            raise InvalidRequestError(SafeDetail.DISPOSITION)
+        corrected = self.disposition is Disposition.CORRECT_AND_ACCEPT
+        if corrected is not (self.corrected_value is not None):
+            raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+        if self.corrected_value is not None and not self.corrected_value.strip():
+            raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+
+
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
 type Command = (
@@ -507,4 +571,6 @@ type Command = (
     | ReadCapture
     | ListCaptures
     | SearchCaptures
+    | ListReviewCases
+    | DecideReviewCase
 )

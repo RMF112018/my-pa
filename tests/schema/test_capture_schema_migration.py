@@ -263,6 +263,31 @@ REVIEW_TRIGGERS: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: The triggers the relationship-identity revision adds above this one. This is
+#: explicit so a new trigger cannot disappear into a value derived from the
+#: migration under test.
+RELATIONSHIP_TRIGGERS: Final[frozenset[str]] = frozenset(
+    {
+        "identity_review_requires_candidates",
+        "identity_resolution_requires_review",
+        "identity_resolution_requires_exact_observations",
+        "canonical_person_requires_resolution",
+        "person_merge_requires_resolution",
+        "observation_link_requires_current_resolution",
+        "identity_resolutions_are_append_only",
+        "relationship_organizations_are_append_only",
+        "identity_observations_are_append_only",
+        "unresolved_mentions_are_append_only",
+        "identity_candidate_sets_are_append_only",
+        "identity_candidate_members_are_append_only",
+        "identity_review_cases_are_append_only",
+        "identity_review_decisions_are_append_only",
+        "resolution_observations_are_append_only",
+        "relationship_aliases_match_observations",
+        "conversation_support_matches_participant",
+    }
+)
+
 _CONSTRAINT = text(
     "SELECT pg_get_constraintdef(con.oid) FROM pg_constraint con "
     "JOIN pg_class rel ON rel.oid = con.conrelid "
@@ -791,6 +816,7 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "a_proposal_cites_at_least_one_span",
             "a_span_link_leaves_its_proposal_cited",
             *REVIEW_TRIGGERS,
+            *RELATIONSHIP_TRIGGERS,
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

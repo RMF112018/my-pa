@@ -373,16 +373,55 @@ def upgrade() -> None:
                 USING ERRCODE = 'restrict_violation';
             END IF;
           ELSIF NEW.action IN ('merge_person', 'split_person') THEN
-            IF NEW.resolution_sequence <> (
-            SELECT max(latest.resolution_sequence)
-            FROM knowledge.relationship_identity_resolutions latest
-            WHERE (latest.retained_person_id = NEW.retained_person_id
-                   AND latest.prior_person_id = NEW.prior_person_id)
-               OR (latest.retained_person_id = NEW.prior_person_id
-                   AND latest.prior_person_id = NEW.retained_person_id)
+            IF EXISTS (
+              SELECT 1
+              FROM knowledge.relationship_identity_resolutions later
+              WHERE later.resolution_sequence > NEW.resolution_sequence
+                AND later.action = CASE
+                  WHEN NEW.action = 'merge_person' THEN 'split_person'
+                  ELSE 'merge_person'
+                END
+                AND later.retained_person_id = NEW.prior_person_id
+                AND later.prior_person_id = NEW.retained_person_id
+                AND later.resolution_sequence = (
+                  SELECT max(terminal.resolution_sequence)
+                  FROM knowledge.relationship_identity_resolutions terminal
+                  WHERE (terminal.retained_person_id = NEW.retained_person_id
+                         AND terminal.prior_person_id = NEW.prior_person_id)
+                     OR (terminal.retained_person_id = NEW.prior_person_id
+                         AND terminal.prior_person_id = NEW.retained_person_id)
+                )
+                AND NOT EXISTS (
+                  (SELECT earlier_ro.observation_id
+                   FROM knowledge.relationship_resolution_observations earlier_ro
+                   WHERE earlier_ro.resolution_id = NEW.resolution_id)
+                  EXCEPT
+                  (SELECT later_ro.observation_id
+                   FROM knowledge.relationship_resolution_observations later_ro
+                   WHERE later_ro.resolution_id = later.resolution_id)
+                )
+                AND NOT EXISTS (
+                  (SELECT later_ro.observation_id
+                   FROM knowledge.relationship_resolution_observations later_ro
+                   WHERE later_ro.resolution_id = later.resolution_id)
+                  EXCEPT
+                  (SELECT earlier_ro.observation_id
+                   FROM knowledge.relationship_resolution_observations earlier_ro
+                   WHERE earlier_ro.resolution_id = NEW.resolution_id)
+                )
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM knowledge.relationship_resolution_observations named
+                  LEFT JOIN knowledge.relationship_observation_links current_link
+                    ON current_link.observation_id = named.observation_id
+                   AND current_link.person_id = later.retained_person_id
+                   AND current_link.resolution_id = later.resolution_id
+                  WHERE named.resolution_id IN (NEW.resolution_id, later.resolution_id)
+                    AND current_link.observation_id IS NULL
+                )
             ) THEN
-              -- A later inverse correction in this transaction owns the final
-              -- state; its deferred event validates the settled pair exactly.
+              -- Only an exact inverse correction over the same reviewed
+              -- observations may own the terminal state for this pair.
               RETURN NULL;
             END IF;
 
@@ -525,6 +564,31 @@ def upgrade() -> None:
               AND lineage.observation_id IS NULL
           ) THEN
             RAISE EXCEPTION 'identity link requires exact source-observation evidence'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+
+          IF EXISTS (
+            SELECT 1
+            FROM knowledge.relationship_observation_links current_link
+            WHERE NOT EXISTS (
+              SELECT 1
+              FROM knowledge.relationship_identity_resolutions current_resolution
+              JOIN knowledge.relationship_resolution_observations current_lineage
+                ON current_lineage.resolution_id = current_resolution.resolution_id
+              WHERE current_resolution.resolution_id = current_link.resolution_id
+                AND current_resolution.retained_person_id = current_link.person_id
+                AND current_lineage.observation_id = current_link.observation_id
+                AND current_resolution.resolution_sequence = (
+                  SELECT max(latest.resolution_sequence)
+                  FROM knowledge.relationship_identity_resolutions latest
+                  JOIN knowledge.relationship_resolution_observations latest_lineage
+                    ON latest_lineage.resolution_id = latest.resolution_id
+                  WHERE latest_lineage.observation_id = current_link.observation_id
+                )
+            )
+          ) THEN
+            RAISE EXCEPTION
+              'every current observation link requires its latest accepted resolution'
               USING ERRCODE = 'restrict_violation';
           END IF;
           RETURN NULL;

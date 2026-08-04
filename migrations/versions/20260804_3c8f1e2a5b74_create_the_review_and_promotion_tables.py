@@ -60,17 +60,17 @@ DEFERRED` constraint trigger created here is not a `Table` attribute, so it
 cannot enter that copy — and it is stronger than the foreign key would have
 been, because it also refuses an `accepted_record_type` that is not `assertion`.
 
-**Why five tables cannot be deleted from.** `QC-AC-022` requires rejected and
-corrected proposals to retain lineage. Only `capture_versions` carried an
-append-only trigger before this revision; `capture_proposals` accepted `DELETE`,
-and `capture_proposal_spans.proposal_id` cascades, so deleting a proposal
-removed its evidence links silently. That is a pre-existing gap surfaced here
-rather than a defect this revision introduces. Proposals and assertions use
-`1a4c9e77b2d5`'s `BEFORE DELETE` shape because both have governed state changes;
-an assertion can move to `superseded` or `revalidation_required`. Review cases
-have no mutation path, and decisions and promotion receipts are immutable
-evidence, so those three refuse `UPDATE OR DELETE`. Every refusal raises
-`restrict_violation` at the server rather than relying on the current writer.
+**Why lineage cannot be rewritten.** `QC-AC-022` requires rejected and corrected
+proposals to retain their exact evidence. Only `capture_versions` carried an
+append-only trigger before this revision; proposal/assertion parents, spans, and
+their link rows could otherwise be deleted or rebound through direct SQL or an
+FK cascade. The span evidence table and both link tables therefore refuse
+`UPDATE OR DELETE`, while proposals and assertions refuse deletion and admit
+only the state-and-companion-column transitions the application actually writes.
+Proposal review routing, disposition, acceptance, and invalidation are distinct
+allowed row shapes; assertion revalidation is the sole assertion update. Review
+cases, decisions, and promotion receipts remain wholly immutable. Every refusal
+raises `restrict_violation` at the server rather than trusting the current writer.
 
 The downgrade drops the seven tables, drops every trigger and each shared
 function — `RESTRICT`, not `CASCADE`, is what `7e5a1fb93d62` uses to drop the
@@ -214,26 +214,37 @@ _ACCEPTED_RECORD_TRIGGER: Final = "an_accepted_proposal_names_a_real_assertion"
 #: different DDL the day that constant changed.
 _ACCEPTED_RECORD_TYPE: Final = "assertion"
 
-#: The function the five lineage triggers share, and the tables they guard.
+#: The function the lineage triggers share, and the tables they guard.
 #: `capture_proposals` is one of them and is not a table this revision creates:
 #: the trigger is forward DDL, so it changes nothing an earlier revision emits.
 _LINEAGE_FUNCTION: Final = "review_lineage_stays_as_written"
-_DELETE_ONLY_TABLES: Final = (
+_GOVERNED_TABLES: Final = (
     "capture_proposals",
     "capture_assertions",
 )
 _IMMUTABLE_TABLES: Final = (
+    "capture_spans",
+    "capture_proposal_spans",
+    "capture_assertion_spans",
     "capture_review_cases",
     "capture_review_decisions",
     "capture_promotion_receipts",
 )
-_LINEAGE_TABLES: Final = (*_DELETE_ONLY_TABLES, *_IMMUTABLE_TABLES)
+_LINEAGE_TABLES: Final = (*_GOVERNED_TABLES, *_IMMUTABLE_TABLES)
+
+#: Proposal and assertion updates are admitted by one server function only when
+#: their complete OLD/NEW row shape is one of the application's real writers.
+_GOVERNED_UPDATE_FUNCTION: Final = "review_state_transition_is_governed"
 
 
 def _lineage_trigger(table: str) -> str:
     if table in _IMMUTABLE_TABLES:
         return f"{table}_stay_immutable"
     return f"{table}_are_never_deleted"
+
+
+def _governed_update_trigger(table: str) -> str:
+    return f"{table}_updates_are_governed"
 
 
 def _historical_wp8_tables() -> list[Table]:
@@ -361,10 +372,25 @@ def upgrade() -> None:
         "    'knowledge.capture_proposals names an accepted record of one type' "
         "    USING ERRCODE = 'restrict_violation'; "
         "END IF; "
-        f"IF NOT EXISTS (SELECT 1 FROM {SCHEMA}.capture_assertions "
-        "               WHERE assertion_id = NEW.accepted_record_id) THEN "
+        f"IF NOT EXISTS (SELECT 1 FROM {SCHEMA}.capture_assertions a "
+        f"               JOIN {SCHEMA}.capture_review_decisions d "
+        "                 ON d.decision_id = a.decision_id "
+        f"               JOIN {SCHEMA}.capture_review_cases c "
+        "                 ON c.review_case_id = d.review_case_id "
+        "               WHERE a.assertion_id = NEW.accepted_record_id "
+        "                 AND a.proposal_id = NEW.proposal_id "
+        "                 AND a.version_id = NEW.version_id "
+        "                 AND a.assertion_type = NEW.proposal_type "
+        "                 AND a.state = 'accepted' "
+        "                 AND a.superseded_by_assertion_id IS NULL "
+        "                 AND a.accepted_at IS NOT DISTINCT FROM d.decided_at "
+        "                 AND c.proposal_id = NEW.proposal_id "
+        "                 AND a.normalized_value IS NOT DISTINCT FROM NEW.normalized_value "
+        "                 AND ((NEW.state = 'accepted' AND d.disposition = 'accept') "
+        "                   OR (NEW.state = 'corrected_accepted' "
+        "                       AND d.disposition = 'correct_and_accept'))) THEN "
         "  RAISE EXCEPTION "
-        "    'knowledge.capture_proposals names an accepted record that exists' "
+        "    'knowledge.capture_proposals names its exact accepted assertion' "
         "    USING ERRCODE = 'restrict_violation'; "
         "END IF; "
         "RETURN NULL; "
@@ -376,6 +402,79 @@ def upgrade() -> None:
         "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW "
         f"EXECUTE FUNCTION {SCHEMA}.{_ACCEPTED_RECORD_FUNCTION}()"
     )
+    op.execute(
+        f"CREATE FUNCTION {SCHEMA}.{_GOVERNED_UPDATE_FUNCTION}() RETURNS trigger "
+        "LANGUAGE plpgsql AS $$ "
+        "DECLARE allowed boolean := false; "
+        "BEGIN "
+        "IF TG_TABLE_NAME = 'capture_proposals' THEN "
+        "  allowed := "
+        "    NEW.proposal_id IS NOT DISTINCT FROM OLD.proposal_id "
+        "    AND NEW.version_id IS NOT DISTINCT FROM OLD.version_id "
+        "    AND NEW.proposal_type IS NOT DISTINCT FROM OLD.proposal_type "
+        "    AND NEW.risk_class IS NOT DISTINCT FROM OLD.risk_class "
+        "    AND NEW.method IS NOT DISTINCT FROM OLD.method "
+        "    AND NEW.method_version IS NOT DISTINCT FROM OLD.method_version "
+        "    AND NEW.schema_version IS NOT DISTINCT FROM OLD.schema_version "
+        "    AND NEW.missing_required_fields IS NOT DISTINCT FROM OLD.missing_required_fields "
+        "    AND NEW.created_at IS NOT DISTINCT FROM OLD.created_at "
+        "    AND ("
+        "      (OLD.state = 'proposed' AND NEW.state = 'needs_review' "
+        "       AND NEW.normalized_value IS NOT DISTINCT FROM OLD.normalized_value "
+        "       AND NEW.quarantine_reason IS NOT DISTINCT FROM OLD.quarantine_reason "
+        "       AND NEW.accepted_record_type IS NOT DISTINCT FROM OLD.accepted_record_type "
+        "       AND NEW.accepted_record_id IS NOT DISTINCT FROM OLD.accepted_record_id) "
+        "      OR (OLD.state IN ('proposed', 'needs_review') "
+        "          AND NEW.state IN ('rejected', 'deferred', 'unresolved') "
+        "          AND NEW.normalized_value IS NOT DISTINCT FROM OLD.normalized_value "
+        "          AND NEW.quarantine_reason IS NOT DISTINCT FROM OLD.quarantine_reason "
+        "          AND NEW.accepted_record_type IS NOT DISTINCT FROM OLD.accepted_record_type "
+        "          AND NEW.accepted_record_id IS NOT DISTINCT FROM OLD.accepted_record_id) "
+        "      OR (OLD.state IN ('proposed', 'needs_review') "
+        "          AND NEW.state IN ('accepted', 'corrected_accepted') "
+        "          AND NEW.quarantine_reason IS NOT DISTINCT FROM OLD.quarantine_reason "
+        "          AND NEW.accepted_record_type = 'assertion' "
+        "          AND OLD.accepted_record_type IS NULL "
+        "          AND NEW.accepted_record_id IS NOT NULL "
+        "          AND OLD.accepted_record_id IS NULL "
+        "          AND (NEW.state = 'corrected_accepted' "
+        "               OR NEW.normalized_value IS NOT DISTINCT FROM OLD.normalized_value)) "
+        "      OR (OLD.state IN ('proposed', 'needs_review', 'rejected', 'deferred', 'unresolved') "
+        "          AND NEW.state = 'invalidated' "
+        "          AND OLD.quarantine_reason IS NULL "
+        "          AND NEW.quarantine_reason IS NOT NULL "
+        "          AND NEW.normalized_value IS NOT DISTINCT FROM OLD.normalized_value "
+        "          AND NEW.accepted_record_type IS NOT DISTINCT FROM OLD.accepted_record_type "
+        "          AND NEW.accepted_record_id IS NOT DISTINCT FROM OLD.accepted_record_id)"
+        "    ); "
+        "ELSIF TG_TABLE_NAME = 'capture_assertions' THEN "
+        "  allowed := OLD.state = 'accepted' "
+        "    AND NEW.state = 'revalidation_required' "
+        "    AND OLD.revalidation_required_at IS NULL "
+        "    AND NEW.revalidation_required_at IS NOT NULL "
+        "    AND NEW.assertion_id IS NOT DISTINCT FROM OLD.assertion_id "
+        "    AND NEW.version_id IS NOT DISTINCT FROM OLD.version_id "
+        "    AND NEW.proposal_id IS NOT DISTINCT FROM OLD.proposal_id "
+        "    AND NEW.decision_id IS NOT DISTINCT FROM OLD.decision_id "
+        "    AND NEW.assertion_type IS NOT DISTINCT FROM OLD.assertion_type "
+        "    AND NEW.normalized_value IS NOT DISTINCT FROM OLD.normalized_value "
+        "    AND NEW.superseded_by_assertion_id "
+        "        IS NOT DISTINCT FROM OLD.superseded_by_assertion_id "
+        "    AND NEW.accepted_at IS NOT DISTINCT FROM OLD.accepted_at; "
+        "END IF; "
+        "IF allowed IS NOT TRUE THEN "
+        "  RAISE EXCEPTION 'knowledge.% permits only governed state transitions', TG_TABLE_NAME "
+        "    USING ERRCODE = 'restrict_violation'; "
+        "END IF; "
+        "RETURN NEW; "
+        "END; $$"
+    )
+    for table in _GOVERNED_TABLES:
+        op.execute(
+            f"CREATE TRIGGER {_governed_update_trigger(table)} "
+            f"BEFORE UPDATE ON {SCHEMA}.{table} FOR EACH ROW "
+            f"EXECUTE FUNCTION {SCHEMA}.{_GOVERNED_UPDATE_FUNCTION}()"
+        )
     op.execute(
         f"CREATE FUNCTION {SCHEMA}.{_LINEAGE_FUNCTION}() RETURNS trigger "
         "LANGUAGE plpgsql AS $$ BEGIN "
@@ -393,12 +492,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Each trigger goes with its table, and three of the eight sit on tables this
-    # revision does not drop. The functions go with none of them, and
+    # Each trigger goes with its table, and four sit on tables this revision does
+    # not drop. The functions go with none of them, and
     # `7e5a1fb93d62` drops the schema with RESTRICT, so a function left behind
     # would fail the downgrade at a revision that has no idea this one existed.
     for table in _LINEAGE_TABLES:
         op.execute(f"DROP TRIGGER IF EXISTS {_lineage_trigger(table)} ON {SCHEMA}.{table}")
+    for table in _GOVERNED_TABLES:
+        op.execute(f"DROP TRIGGER IF EXISTS {_governed_update_trigger(table)} ON {SCHEMA}.{table}")
     op.execute(f"DROP TRIGGER IF EXISTS {_ACCEPTED_RECORD_TRIGGER} ON {SCHEMA}.capture_proposals")
     op.execute(
         f"DROP TRIGGER IF EXISTS {_ASSERTION_LINK_TRIGGER} ON {SCHEMA}.capture_assertion_spans"
@@ -407,6 +508,7 @@ def downgrade() -> None:
     frozen = _historical_wp8_tables()
     frozen[0].metadata.drop_all(op.get_bind(), tables=frozen)
     op.execute(f"DROP FUNCTION IF EXISTS {SCHEMA}.{_LINEAGE_FUNCTION}()")
+    op.execute(f"DROP FUNCTION IF EXISTS {SCHEMA}.{_GOVERNED_UPDATE_FUNCTION}()")
     op.execute(f"DROP FUNCTION IF EXISTS {SCHEMA}.{_ACCEPTED_RECORD_FUNCTION}()")
     op.execute(f"DROP FUNCTION IF EXISTS {SCHEMA}.{_SPAN_CARDINALITY_FUNCTION}()")
     _restate(_CAPABILITIES_BEFORE_THIS_REVISION, _PURPOSES_BEFORE_THIS_REVISION)

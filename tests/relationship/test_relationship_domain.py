@@ -21,6 +21,8 @@ from my_pa.domain.relationship.profile import (
     CoverageDomain,
     PersonProfile,
     ProfileIndicator,
+    ProfileIndicatorBasis,
+    ProfileIndicatorName,
     RelationshipFreshness,
 )
 from my_pa.infrastructure.persistence.tables import METADATA
@@ -91,11 +93,44 @@ def test_successful_zero_result_is_explicit_and_does_not_claim_freshness() -> No
 
 
 def test_indicator_requires_a_basis_and_time_window() -> None:
-    with pytest.raises(ValueError, match="calculation basis"):
+    with pytest.raises(ValueError, match="closed observable calculation basis"):
         ProfileIndicator(
-            name="interaction_count",
+            name=ProfileIndicatorName.INTERACTION_COUNT,
             value=2,
-            calculation_basis="",
+            calculation_basis="",  # type: ignore[arg-type]
+            window_start=WHEN,
+            window_end=WHEN,
+        )
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("relationship_health_score", 95),
+        ("affinity_index", 8),
+        ("protected_religion", "synthetic-faith"),
+    ],
+)
+def test_indicator_generic_channel_rejects_scores_and_sensitive_traits(
+    name: str, value: object
+) -> None:
+    with pytest.raises(ValueError, match="closed semantic name"):
+        ProfileIndicator(
+            name=name,  # type: ignore[arg-type]
+            value=value,  # type: ignore[arg-type]
+            calculation_basis=ProfileIndicatorBasis.SOURCE_OBSERVATION_COUNT,
+            window_start=WHEN,
+            window_end=WHEN,
+        )
+
+
+@pytest.mark.parametrize("value", [-1, 2_147_483_648, True, "3", "protected_religion"])
+def test_interaction_count_has_a_typed_bounded_value(value: object) -> None:
+    with pytest.raises(ValueError, match="bounded non-negative integer"):
+        ProfileIndicator(
+            name=ProfileIndicatorName.INTERACTION_COUNT,
+            value=value,  # type: ignore[arg-type]
+            calculation_basis=ProfileIndicatorBasis.SOURCE_OBSERVATION_COUNT,
             window_start=WHEN,
             window_end=WHEN,
         )

@@ -72,6 +72,23 @@ leave a lease held until it expired, which is precisely the abandonment the
 shutdown is supposed to avoid. The bound on how long a stop takes is therefore
 one job, which is what the lease already bounds.
 
+**One loop, two planes** (`D-76`, `D-77`). `persistence.jobs` was already
+parameterised over a `JobPlane` — one lease rule, two tables — but this loop was
+not, so `claim_job` here resolved to `ENROLLMENT_JOBS` and the capture plane had
+a writer and no reader. WP-7 adds the `plane` argument rather than a second loop,
+because every sentence above is a statement about the lease protocol and the
+lease protocol is the thing the two planes share. What differs between them is
+which table the claim reads and what the handler does with `subject_id` — an
+`enr_…` on one and a `capver_…` on the other, which is exactly what
+`JobPlane.subject_kind` records. A second loop would be the "same persistence
+twice" objection `D-41` names, answered here the way `D-77` answered it: by
+sharing the code, not the table.
+
+The default stays `ENROLLMENT_JOBS`, so nothing that already called this changed
+behaviour. That is a compatibility default and not a preference: `apps/worker.py`
+names its plane explicitly, and a caller that omits it is asking for the plane
+this loop has always run.
+
 **Nothing here logs.** The run returns counts and the job plane holds the
 states; both are readable without a logging framework, and a log line about a
 job is one more place an identifier could be joined to something it should not
@@ -90,6 +107,8 @@ from sqlalchemy import Engine
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.infrastructure.persistence.jobs import (
+    ENROLLMENT_JOBS,
+    JobPlane,
     LeasedJob,
     claim_job,
     complete_job,
@@ -202,7 +221,9 @@ def issue_worker_owner() -> str:
     return f"worker-{secrets.token_hex(_OWNER_BYTES)}"
 
 
-def _execute(engine: Engine, job: LeasedJob, *, owner: str, handler: JobHandler) -> str:
+def _execute(
+    engine: Engine, job: LeasedJob, *, owner: str, handler: JobHandler, plane: JobPlane
+) -> str:
     """Run one claimed job to an end, and report which end it reached.
 
     Returns `"completed"`, `"released"`, or `"lost"`. The two failure paths are
@@ -221,7 +242,7 @@ def _execute(engine: Engine, job: LeasedJob, *, owner: str, handler: JobHandler)
     try:
         handler(engine, job, owner)
         with engine.begin() as connection:
-            if not complete_job(connection, job.operation_id, owner=owner):
+            if not complete_job(connection, job.operation_id, owner=owner, plane=plane):
                 # The lease went while we were working. There is nothing to
                 # discard here any more — the handler committed as it went, and
                 # `hold_lease` is what stopped it once the lease was gone — so
@@ -244,7 +265,9 @@ def _execute(engine: Engine, job: LeasedJob, *, owner: str, handler: JobHandler)
     if failure is None:  # pragma: no cover - the branches above are exhaustive
         failure = ErrorCode.INTERNAL_ERROR
     with engine.begin() as connection:
-        outcome = release_job(connection, job.operation_id, owner=owner, error_code=failure)
+        outcome = release_job(
+            connection, job.operation_id, owner=owner, error_code=failure, plane=plane
+        )
     # `None` means the update matched no row, which is the same discovery
     # `complete_job` makes: the lease is no longer ours and nothing was written.
     return "released" if outcome is not None else "lost"
@@ -256,6 +279,7 @@ def run_worker(
     owner: str,
     handler: JobHandler,
     stop: threading.Event,
+    plane: JobPlane = ENROLLMENT_JOBS,
     max_iterations: int | None = None,
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
     poll_seconds: float = DEFAULT_POLL_SECONDS,
@@ -270,6 +294,12 @@ def run_worker(
     returns to the top. When `max_iterations` is set, an idle iteration does not
     wait at all: a bounded run asked to do at most *n* iterations should not
     spend *n* whole `poll_seconds` waits discovering there is nothing to do.
+
+    `plane` chooses which job table the claim, the completion, and the release
+    run against. One worker process serves one plane: a loop that claimed from
+    both would have to decide which handler a claimed job belongs to, and the
+    only thing that could tell it is the table the job came out of — which is
+    the argument, so it may as well be the argument.
     """
     if not 1 <= lease_seconds <= MAX_LEASE_SECONDS:
         raise ValueError(f"lease_seconds must be between 1 and {MAX_LEASE_SECONDS}")
@@ -289,7 +319,7 @@ def run_worker(
         with engine.begin() as connection:
             # Committed on leaving this block, so the lease is visible to every
             # other worker before any work begins.
-            job = claim_job(connection, owner=owner, lease_seconds=lease_seconds)
+            job = claim_job(connection, owner=owner, lease_seconds=lease_seconds, plane=plane)
 
         if job is None:
             idle += 1
@@ -304,7 +334,7 @@ def run_worker(
         # What a handler had already committed stays committed and is skipped by
         # the attempt that follows; the module docstring says why that is
         # convergence rather than a partial write.
-        match _execute(engine, job, owner=owner, handler=handler):
+        match _execute(engine, job, owner=owner, handler=handler, plane=plane):
             case "completed":
                 completed += 1
             case "released":

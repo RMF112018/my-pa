@@ -78,11 +78,22 @@ class PipelineError(CaptureError):
 
 
 class PipelineStage(StrEnum):
-    """The stages this build runs, in the order it runs them.
+    """The stages this build runs, declared in the specification's `P-` order.
 
     Named for what each does rather than by its `P-` number, because the numbers
     are the specification's index and a stored row outlives a renumbering. The
     mapping is in this module's docstring and in each member's comment.
+
+    **Declaration order is not run order**, and the difference is deliberate
+    rather than an oversight. `INDEX_CAPTURE_TEXT` is `P-16` and is declared
+    last, but it runs *before* `PERSIST_PROPOSALS`, because `11_…:191` indexes
+    the original capture text "immediately" and `QC-AC-050` requires it to be
+    searchable "independently of enrichment success" — an act sequenced after
+    proposal persistence is an act that never happens for the one capture the
+    criterion is about. The order the pipeline actually runs is
+    `infrastructure.jobs.capture_pipeline.PIPELINE_ORDER`, which is the single
+    statement of it; this enum is the vocabulary, and a vocabulary that also
+    claimed to be a schedule would be two facts in one place.
     """
 
     #: `P-01`. Confirms the version, verifies its stored hash, applies the

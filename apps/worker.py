@@ -2,6 +2,7 @@
 
     .venv/bin/python apps/worker.py run
     .venv/bin/python apps/worker.py run --once
+    .venv/bin/python apps/worker.py run --plane capture
     .venv/bin/python apps/worker.py run --max-iterations 20 --lease-seconds 60
 
 This is the only place in the worker that chooses an implementation
@@ -20,13 +21,28 @@ another worker to wait out; a second signal is left to Python's default handling
 because an operator asking twice is asking for the process to go now and this
 script should not be the thing that refuses.
 
-**What this worker executes.** `infrastructure.jobs.extraction.extract_enrollment`
-is the handler, and one claimed job is one enrollment's outstanding objects:
-for each, the provider its source is configured with is asked to describe and
-read it, `domain.extraction.text` decides what came back, and the outcome is
-stored. Work commits per object, so a worker that is killed or loses its lease
-part-way leaves the objects it had already recorded and the next attempt starts
-from the ones that have no outcome yet.
+**What this worker executes, and on which plane.** One process serves one plane,
+named by `--plane`, and each plane's handler travels with it in `_PLANES`.
+
+* `enrollment` (the default) runs `infrastructure.jobs.extraction.extract_enrollment`.
+  One claimed job is one enrollment's outstanding objects: for each, the provider
+  its source is configured with is asked to describe and read it,
+  `domain.extraction.text` decides what came back, and the outcome is stored.
+  Work commits per object, so a worker that is killed or loses its lease part-way
+  leaves the objects it had already recorded and the next attempt starts from the
+  ones that have no outcome yet.
+* `capture` runs `infrastructure.jobs.capture_pipeline.process_capture_version`.
+  One claimed job is one stored capture version, and the nine stages run over it
+  in their own transactions — validate, normalize, detect language, segment,
+  match deterministically, normalize moments, confirm the text is searchable,
+  derive work-object proposals, and persist them with the spans they cite. **It
+  reads no source, opens no socket, and calls no model.** Everything it works
+  from is text already in the database, which is why WP-7 needed no new
+  configuration and no new credential.
+
+Two planes and one loop: `run_worker` is parameterised over the plane
+(`D-76`, `D-77`), so the lease protocol has one implementation and two tables it
+runs against. Running both planes means running the command twice.
 
 **What it still does not do, stated rather than left as an absence.** PDFs are
 recorded as `unsupported` and counted; nothing here extracts them, because
@@ -48,17 +64,34 @@ import argparse
 import signal
 import sys
 import threading
-from types import FrameType
+from collections.abc import Mapping
+from types import FrameType, MappingProxyType
 
 from my_pa.bootstrap.settings import load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.jobs.capture_pipeline import process_capture_version
 from my_pa.infrastructure.jobs.extraction import extract_enrollment
 from my_pa.infrastructure.jobs.worker import (
     DEFAULT_LEASE_SECONDS,
     DEFAULT_POLL_SECONDS,
+    JobHandler,
     WorkerRun,
     issue_worker_owner,
     run_worker,
+)
+from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, ENROLLMENT_JOBS, JobPlane
+
+#: The two planes this process can serve, and the handler each one's work needs.
+#: A mapping rather than an `if`, so that a third plane arrives as a row here and
+#: `--plane`'s `choices` cannot disagree with what `_run` can dispatch. The
+#: handler travels with the plane because the pairing is not a preference: a
+#: `capver_…` claimed off `knowledge.jobs` would be a subject of the wrong kind,
+#: and `JobPlane.subject_kind` is what refuses one.
+_PLANES: Mapping[str, tuple[JobPlane, JobHandler]] = MappingProxyType(
+    {
+        "enrollment": (ENROLLMENT_JOBS, extract_enrollment),
+        "capture": (CAPTURE_JOBS, process_capture_version),
+    }
 )
 
 #: The signals an operator stops this process with. `SIGHUP` is deliberately
@@ -80,9 +113,10 @@ def _install_stop_handlers(stop: threading.Event) -> None:
         signal.signal(number, _request_stop)
 
 
-def _report(owner: str, run: WorkerRun) -> None:
+def _report(owner: str, plane: str, run: WorkerRun) -> None:
     """Print what the run did. Counts, an owner token, and nothing else."""
     print(f"owner        {owner}")
+    print(f"plane        {plane}")
     print(f"iterations   {run.iterations}")
     print(f"claimed      {run.claimed}")
     print(f"completed    {run.completed}")
@@ -94,6 +128,7 @@ def _report(owner: str, run: WorkerRun) -> None:
 def _run(args: argparse.Namespace) -> int:
     settings = load_settings()
     engine = create_database_engine(settings.database_url)
+    plane, handler = _PLANES[args.plane]
     owner = issue_worker_owner()
     stop = threading.Event()
     _install_stop_handlers(stop)
@@ -101,15 +136,16 @@ def _run(args: argparse.Namespace) -> int:
         run = run_worker(
             engine,
             owner=owner,
-            handler=extract_enrollment,
+            handler=handler,
             stop=stop,
+            plane=plane,
             max_iterations=1 if args.once else args.max_iterations,
             lease_seconds=args.lease_seconds,
             poll_seconds=args.poll_seconds,
         )
     finally:
         engine.dispose()
-    _report(owner, run)
+    _report(owner, args.plane, run)
     return 0
 
 
@@ -125,6 +161,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="stop after this many iterations; omit to run until signalled",
+    )
+    run.add_argument(
+        "--plane",
+        choices=sorted(_PLANES),
+        default="enrollment",
+        help="which job plane to claim from; one process serves one plane",
     )
     run.add_argument("--lease-seconds", type=int, default=DEFAULT_LEASE_SECONDS)
     run.add_argument("--poll-seconds", type=float, default=DEFAULT_POLL_SECONDS)

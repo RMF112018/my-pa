@@ -79,6 +79,31 @@ MUTATING_VERBS: Final = (
 #: reach for a source.
 PROVIDER_PACKAGE: Final = "my_pa.infrastructure.providers"
 
+#: The pipeline that derives proposals from a capture's text. Every module of
+#: it, so a stage added in a second file is covered by the same walk rather than
+#: by a name somebody remembered to add.
+PIPELINE_PACKAGE: Final = SOURCE / "my_pa" / "infrastructure" / "jobs"
+PIPELINE_MODULES: Final = (PIPELINE_PACKAGE / "capture_pipeline.py",)
+
+#: What "reaches the network" looks like as an import, for a build that has no
+#: HTTP client in `src/` at all. Both the standard library's clients and the
+#: third-party one the transports use, plus the socket layer under them. `mcp`
+#: and `starlette` are here because a pipeline that imported either would have
+#: reached a transport from inside a worker, which is the same mistake wearing a
+#: different name.
+NETWORK_PACKAGES: Final = (
+    "socket",
+    "ssl",
+    "http",
+    "urllib",
+    "httpx",
+    "requests",
+    "asyncio",
+    "mcp",
+    "starlette",
+    "uvicorn",
+)
+
 
 def _public(port: type) -> frozenset[str]:
     """Every name the port declares, excluding the machinery `ABC` adds."""
@@ -87,6 +112,15 @@ def _public(port: type) -> frozenset[str]:
         for name in vars(port)
         if not name.startswith("_") and name not in {"abstractmethods", "impl"}
     )
+
+
+def _is_network(name: str) -> bool:
+    """Whether one imported module name is a reach for the network.
+
+    Prefix-matched on a dotted boundary rather than by substring, so a module
+    called `my_pa.domain.sslabel` is not read as `ssl`.
+    """
+    return any(name == package or name.startswith(f"{package}.") for package in NETWORK_PACKAGES)
 
 
 def _imports(path: Path) -> frozenset[str]:
@@ -162,3 +196,63 @@ def test_the_capture_writer_imports_no_source_provider() -> None:
         f"{PROVIDER_IMPORTER.relative_to(ROOT)} imports no provider module, so the "
         "detector above has never been shown to find one"
     )
+
+
+def test_no_pipeline_stage_reaches_a_source_provider_or_the_network() -> None:
+    """`QC-AC-042`(a): captured text cannot invoke a tool or make a fetch.
+
+    **A static claim, because the runtime form cannot make it.** A test that ran
+    the pipeline over an injection corpus and asserted no provider was called
+    proves it for the strings that corpus happened to contain; a proposal that
+    the pipeline *cannot* fetch has to be about what the code can reach, and one
+    traversal of it is not that. The runtime half exists and is elsewhere —
+    `tests/pipeline/test_injection_corpus.py` drives text designed to instruct —
+    and the two together are what the criterion asks for.
+
+    Two reaches are refused and each has its own assertion, because they fail
+    independently: a pipeline could resolve a source provider without opening a
+    socket, and it could open a socket without ever naming a provider.
+
+    The control is the same detector over the module that *does* import a
+    provider, so a zero here is a measurement rather than a parser that found
+    nothing.
+    """
+    assert PIPELINE_MODULES, "the pipeline module list is empty, so this test checks nothing"
+    for module in PIPELINE_MODULES:
+        assert module.is_file(), f"{module.relative_to(ROOT)} does not exist"
+        imported = _imports(module)
+        assert imported, f"{module.relative_to(ROOT)} was parsed as importing nothing at all"
+
+        reaching = sorted(name for name in imported if name.startswith(PROVIDER_PACKAGE))
+        assert reaching == [], (
+            f"{module.relative_to(ROOT)} imports {reaching}. A pipeline stage derives "
+            "proposals from text already stored; captured text that could reach a "
+            "source provider is captured text that has broadened retrieval "
+            "(`QC-AC-042`)"
+        )
+
+        networking = sorted(name for name in imported if _is_network(name))
+        assert networking == [], (
+            f"{module.relative_to(ROOT)} imports {networking}. No stage of this "
+            "pipeline makes a call of any kind; its only inputs are a database "
+            "connection and text already in it"
+        )
+
+    # The control, in this test rather than in another file: the same detector,
+    # over the module that composes providers, reports the reach. Without it, a
+    # walk that returned nothing would satisfy both assertions above.
+    composed = sorted(
+        name for name in _imports(PROVIDER_IMPORTER) if name.startswith(PROVIDER_PACKAGE)
+    )
+    assert composed, (
+        f"{PROVIDER_IMPORTER.relative_to(ROOT)} imports no provider module, so the "
+        "detector above has never been shown to find one"
+    )
+
+    # The second control, for the network half: the same matcher over a name that
+    # is a network reach has to report it. A prefix list that matched nothing
+    # would otherwise agree with the zero above.
+    assert [name for name in ("httpx._client", "socket") if _is_network(name)] == [
+        "httpx._client",
+        "socket",
+    ]

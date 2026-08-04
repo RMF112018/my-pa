@@ -480,6 +480,58 @@ def upgrade() -> None:
           FOR EACH ROW EXECUTE FUNCTION
             knowledge.relationship_identity_evidence_stays_append_only();
 
+        CREATE FUNCTION knowledge.relationship_evidence_change_is_governed() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'relationship evidence is append-only'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF NEW.evidence_id IS DISTINCT FROM OLD.evidence_id
+             OR NEW.authority IS DISTINCT FROM OLD.authority
+             OR NEW.effective_at IS DISTINCT FROM OLD.effective_at
+             OR NEW.recorded_at IS DISTINCT FROM OLD.recorded_at THEN
+            RAISE EXCEPTION 'relationship evidence provenance is immutable'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          IF NEW.person_id IS NOT DISTINCT FROM OLD.person_id THEN
+            RETURN NEW;
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1
+            FROM knowledge.relationship_identity_resolutions r
+            WHERE r.action IN ('merge_person', 'split_person')
+              AND r.prior_person_id = OLD.person_id
+              AND r.retained_person_id = NEW.person_id
+              AND EXISTS (
+                SELECT 1 FROM knowledge.relationship_evidence_observations eo
+                WHERE eo.evidence_id = OLD.evidence_id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM knowledge.relationship_evidence_observations eo
+                LEFT JOIN knowledge.relationship_observation_links l
+                  ON l.observation_id = eo.observation_id
+                 AND l.resolution_id = r.resolution_id
+                 AND l.person_id = NEW.person_id
+                WHERE eo.evidence_id = OLD.evidence_id
+                  AND l.observation_id IS NULL
+              )
+          ) THEN
+            RAISE EXCEPTION
+              'relationship evidence reassignment requires its exact current resolution'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          RETURN NEW;
+        END; $$;
+        CREATE TRIGGER relationship_evidence_is_governed
+          BEFORE UPDATE OR DELETE ON knowledge.relationship_evidence
+          FOR EACH ROW EXECUTE FUNCTION knowledge.relationship_evidence_change_is_governed();
+        CREATE TRIGGER relationship_evidence_observations_are_append_only
+          BEFORE UPDATE OR DELETE ON knowledge.relationship_evidence_observations
+          FOR EACH ROW EXECUTE FUNCTION
+            knowledge.relationship_identity_evidence_stays_append_only();
+
         CREATE FUNCTION knowledge.relationship_alias_matches_observation() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
@@ -535,6 +587,49 @@ def upgrade() -> None:
         CREATE TRIGGER conversation_support_matches_participant
           BEFORE INSERT OR UPDATE ON knowledge.relationship_conversation_observations
           FOR EACH ROW EXECUTE FUNCTION knowledge.conversation_support_matches_participant();
+
+        CREATE FUNCTION knowledge.conversation_participant_state_is_valid() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1
+            FROM knowledge.relationship_conversation_participants p
+            JOIN knowledge.relationship_conversation_observations co
+              ON co.participant_id = p.participant_id
+            LEFT JOIN knowledge.relationship_observation_links l
+              ON l.observation_id = co.observation_id
+             AND l.person_id = p.person_id
+            WHERE p.person_id IS NOT NULL AND l.observation_id IS NULL
+          ) OR EXISTS (
+            SELECT 1
+            FROM knowledge.relationship_conversation_participants p
+            JOIN knowledge.relationship_conversation_observations co
+              ON co.participant_id = p.participant_id
+            JOIN knowledge.relationship_unresolved_mentions m
+              ON m.unresolved_mention_id = p.unresolved_mention_id
+            LEFT JOIN knowledge.relationship_identity_observations o
+              ON o.observation_id = co.observation_id
+             AND o.source_object_id = m.source_object_id
+             AND o.source_version = m.source_version
+            WHERE p.unresolved_mention_id IS NOT NULL AND o.observation_id IS NULL
+          ) THEN
+            RAISE EXCEPTION 'conversation participant support is stale after identity correction'
+              USING ERRCODE = 'restrict_violation';
+          END IF;
+          RETURN NULL;
+        END; $$;
+        CREATE CONSTRAINT TRIGGER conversation_participants_remain_supported
+          AFTER INSERT OR UPDATE ON knowledge.relationship_conversation_participants
+          DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+          EXECUTE FUNCTION knowledge.conversation_participant_state_is_valid();
+        CREATE CONSTRAINT TRIGGER conversation_observations_remain_supported
+          AFTER INSERT OR UPDATE OR DELETE ON knowledge.relationship_conversation_observations
+          DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+          EXECUTE FUNCTION knowledge.conversation_participant_state_is_valid();
+        CREATE CONSTRAINT TRIGGER observation_link_keeps_participants_supported
+          AFTER INSERT OR UPDATE OR DELETE ON knowledge.relationship_observation_links
+          DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+          EXECUTE FUNCTION knowledge.conversation_participant_state_is_valid();
         """
     )
 
@@ -545,6 +640,13 @@ def downgrade() -> None:
         DROP TRIGGER conversation_support_matches_participant
           ON knowledge.relationship_conversation_observations;
         DROP FUNCTION knowledge.conversation_support_matches_participant();
+        DROP TRIGGER conversation_participants_remain_supported
+          ON knowledge.relationship_conversation_participants;
+        DROP TRIGGER conversation_observations_remain_supported
+          ON knowledge.relationship_conversation_observations;
+        DROP TRIGGER observation_link_keeps_participants_supported
+          ON knowledge.relationship_observation_links;
+        DROP FUNCTION knowledge.conversation_participant_state_is_valid();
         DROP TRIGGER relationship_aliases_match_observations
           ON knowledge.relationship_aliases;
         DROP FUNCTION knowledge.relationship_alias_matches_observation();
@@ -573,6 +675,11 @@ def downgrade() -> None:
           ON knowledge.relationship_identity_review_decisions;
         DROP TRIGGER resolution_observations_are_append_only
           ON knowledge.relationship_resolution_observations;
+        DROP TRIGGER relationship_evidence_is_governed
+          ON knowledge.relationship_evidence;
+        DROP FUNCTION knowledge.relationship_evidence_change_is_governed();
+        DROP TRIGGER relationship_evidence_observations_are_append_only
+          ON knowledge.relationship_evidence_observations;
         DROP FUNCTION knowledge.relationship_identity_evidence_stays_append_only();
         DROP TRIGGER canonical_person_requires_resolution ON knowledge.relationship_people;
         DROP FUNCTION knowledge.canonical_person_is_reviewed();

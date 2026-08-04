@@ -701,7 +701,7 @@ def test_non_exact_terminal_correction_handoffs_are_atomic(
                 update(relationship_observation_links)
                 .where(
                     relationship_observation_links.c.observation_id
-                    == observations[1].observation_id
+                    == observations[0].observation_id
                 )
                 .values(person_id=first, resolution_id=earlier.resolution_id)
             )

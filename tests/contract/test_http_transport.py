@@ -66,6 +66,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     Representation,
     ReviseCapture,
+    SearchCaptures,
     SearchKnowledge,
 )
 from my_pa.application.service import ApplicationService
@@ -155,6 +156,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         },
         Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
         Capability.CAPTURE_LIST: {},
+        Capability.CAPTURE_SEARCH: {"query": "synthetic"},
     }
 
 
@@ -209,6 +211,7 @@ def commands_for(
         ),
         Capability.CAPTURE_READ: ReadCapture(capture_id=capture_id),
         Capability.CAPTURE_LIST: ListCaptures(),
+        Capability.CAPTURE_SEARCH: SearchCaptures(query="synthetic"),
     }
 
 

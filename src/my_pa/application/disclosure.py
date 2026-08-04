@@ -83,6 +83,27 @@ class Limitation(StrEnum):
     SCOPE_NOT_FULLY_EXTRACTED = "scope_not_fully_extracted"
     #: A result label is derived from a media type; no title is stored.
     LABEL_IS_MEDIA_TYPE_ONLY = "result_label_is_media_type_only"
+    #: Capture search matches words as written and does not stem them, so
+    #: `meetings` does not find `meeting`. **`D-90`'s stated cost, published
+    #: rather than left for a caller to discover.** The capture plane is indexed
+    #: with the `simple` text-search configuration precisely because
+    #: `QC-AC-050` asks for *exact* original text to be searchable, and `english`
+    #: fails that in two measured ways — it stems, and it produces an empty index
+    #: entry for a capture of nothing but stop words. Exactness is what was
+    #: bought; the absence of stemming is what it cost, and a limitation is
+    #: where a cost that a caller can act on belongs.
+    CAPTURE_SEARCH_DOES_NOT_STEM = "capture_search_matches_words_as_written"
+    #: Some stored capture versions were outside the searched scope — a revised
+    #: capture's superseded predecessor, or a version no receipt names. It is
+    #: still readable through `capture.read`, which is `QC-AC-010`'s
+    #: "independently retrievable"; it is not *found*. Emitted from the two
+    #: counts the search itself measured, never from a constant.
+    CAPTURE_SEARCH_EXCLUDES_SUPERSEDED = "capture_search_covers_current_versions_only"
+
+    # A truncated capture-search page emits `LISTING_HAS_NO_CONTINUATION` rather
+    # than a token of its own. The fact is identical — this build issues no
+    # continuation cursor — and a further token restating it per capability
+    # would give one absence more than one name.
 
     # `AUDIT_IS_NOT_DURABLE` was published here on every disclosure until
     # WP-4B2a. It said "audit events are emitted but no durable audit store

@@ -48,6 +48,9 @@ from my_pa.contracts.ports import (
     CaptureAdmission,
     CaptureAdmissionRequest,
     CaptureRepository,
+    CaptureSearchMatch,
+    CaptureSearchOutcome,
+    CaptureSearchRequest,
     CaptureSummary,
     EnrollmentRepository,
     KnowledgeRecord,
@@ -483,6 +486,58 @@ class _Captures(CaptureRepository):
             )
         summaries.sort(key=lambda s: (s.created_at, s.capture_id), reverse=True)
         return tuple(summaries[:limit])
+
+    def search(self, request: CaptureSearchRequest) -> CaptureSearchOutcome:
+        """Exact match over the versions this world holds.
+
+        A whole-word containment test over the stored text, which is what the
+        `simple` text-search configuration does at word granularity — no
+        stemming and no stop-word removal, so `run` does not find `running` here
+        either. What this fake **cannot** prove is that the server's plane
+        behaves the same way: the configuration, the functional index, and the
+        `strpos` confirmation are properties of PostgreSQL, and
+        `tests/search_quality/test_capture_search.py` is where they are asserted
+        against one. This exists so the application layer's limitation
+        arithmetic and its no-content answer are provable on FAST.
+
+        The scope is the same two conditions `capture_text_in_scope` applies:
+        not superseded, and acknowledged by a receipt. Reproduced rather than
+        approximated, for the reason the idempotency rule above is.
+        """
+        self._world.fail("capture_search")
+        superseded = {
+            version.supersedes_version_id
+            for version in self._world.capture_versions
+            if version.supersedes_version_id is not None
+        }
+        acknowledged = {receipt.version_id for receipt in self._world.capture_receipts.values()}
+        in_scope = [
+            version
+            for version in self._world.capture_versions
+            if version.version_id not in superseded and version.version_id in acknowledged
+        ]
+        terms = request.query.text.split()
+        found = [
+            version
+            for version in in_scope
+            if terms and all(term in version.content.text.lower().split() for term in terms)
+        ]
+        found.sort(key=lambda version: (version.recorded_at, version.version_id), reverse=True)
+        return CaptureSearchOutcome(
+            matches=tuple(
+                CaptureSearchMatch(
+                    capture_id=version.capture_id,
+                    version_id=version.version_id,
+                    version_number=version.version_number,
+                    character_count=version.content.character_count,
+                    recorded_at=version.recorded_at,
+                )
+                for version in found[: request.limit]
+            ),
+            searchable_versions=len(in_scope),
+            stored_versions=len(self._world.capture_versions),
+            truncated=len(found) > request.limit,
+        )
 
     def _head(self, capture_id: str) -> CaptureVersion | None:
         """The greatest version number the capture holds, derived not stored."""

@@ -230,6 +230,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         },
         Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
         Capability.CAPTURE_LIST: {},
+        Capability.CAPTURE_SEARCH: {"query": "synthetic"},
     }
 
 
@@ -356,6 +357,7 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_REVISE,
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
+        Capability.CAPTURE_SEARCH,
     }
 ]
 
@@ -459,6 +461,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         "capture.revise",
         "capture.read",
         "capture.list",
+        "capture.search",
     }, "the exemption is exactly the capture family"
 
 

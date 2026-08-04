@@ -128,6 +128,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     Representation,
     ReviseCapture,
+    SearchCaptures,
     SearchKnowledge,
 )
 from my_pa.application.disclosure import Limitation, disclosure_for, unenrolled_disclosure
@@ -149,6 +150,8 @@ from my_pa.contracts.ports import (
     Acceptance,
     CaptureAdmission,
     CaptureAdmissionRequest,
+    CaptureSearchOutcome,
+    CaptureSearchRequest,
     EvidenceUnavailableError,
     PortError,
     SearchOutcome,
@@ -1104,6 +1107,95 @@ class ApplicationService:
             ),
         )
 
+    def _capture_search(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchCaptures
+    ) -> _Result:
+        """Exact lexical search over stored capture text.
+
+        **No enrollment is resolved, and that is the whole difference from
+        `_knowledge_search`.** `capture.search` is in `_SCOPELESS` because a
+        capture belongs to no configured source and no enrollment; asking
+        `authorization.covering(...)` here would be asking for a grant that
+        cannot exist, and inventing one would be the fabricated authority
+        `_enumerate`'s own docstring refuses.
+
+        **Authorization is capability plus purpose and never owner equality**
+        (`D-72`, `D-67`). Nothing here filters by who wrote a capture, and
+        `capture_text_in_scope` has no owner condition either, so the two ends
+        agree by construction rather than by a comment.
+
+        **The answer carries no capture text.** `CaptureSearchMatch` has no
+        field one could go in — identifiers, a version number, a character
+        count, a time — so a search cannot become a second read of content that
+        `capture.read` audits under its own capability (`QC-AC-041`). A caller
+        therefore cannot see *why* a capture matched, which is a limitation the
+        envelope states rather than an omission it hides.
+
+        **Every limitation here is derived from what this search measured.** The
+        no-stemming token is the price of the `simple` configuration `D-90`
+        chose and is unconditional because the property is; the superseded token
+        is emitted only when the two counts the same statement snapshot produced
+        actually differ. Neither is built from the query and neither is built
+        from any capture's content — which is `QC-AC-042`'s disclosure half:
+        captured text cannot suppress a limitation, inflate a count, or alter a
+        freshness label, because no path exists from content to any of them.
+        """
+        page_size = self._page_size(command.page_size)
+        request: CaptureSearchRequest | None = None
+        failure: ApplicationError | None = None
+        try:
+            request = CaptureSearchRequest(query=SearchQuery(command.query), limit=page_size)
+        except EmptySearchQueryError:
+            # The query normalized to terms but yielded no lexemes — a different
+            # answer from "the search found nothing", which section 9.7 forbids
+            # collapsing it into. Caught before `SearchQueryError` because it is
+            # a subclass of it and would otherwise be reported as a malformed
+            # query rather than an empty one.
+            failure = InvalidRequestError(SafeDetail.QUERY)
+        except SearchQueryError:
+            failure = InvalidRequestError(SafeDetail.QUERY)
+        if failure is not None:
+            raise failure
+        if request is None:  # pragma: no cover - the branches above are exhaustive
+            raise InternalError()
+
+        outcome: CaptureSearchOutcome | None = None
+        with _translated():
+            outcome = unit_of_work.captures.search(request)
+        if outcome is None:  # pragma: no cover - `_translated` raises or the call returns
+            raise InternalError()
+
+        limitations: tuple[Limitation, ...] = (Limitation.CAPTURE_SEARCH_DOES_NOT_STEM,)
+        if outcome.searchable_versions != outcome.stored_versions:
+            limitations = (*limitations, Limitation.CAPTURE_SEARCH_EXCLUDES_SUPERSEDED)
+        if outcome.truncated:
+            limitations = (*limitations, Limitation.LISTING_HAS_NO_CONTINUATION)
+        return _Result(
+            payload={
+                "matches": [
+                    {
+                        "capture_id": match.capture_id,
+                        "version_id": match.version_id,
+                        "version_number": match.version_number,
+                        "character_count": match.character_count,
+                        "recorded_at": format_rfc3339(match.recorded_at),
+                    }
+                    for match in outcome.matches
+                ],
+                "searchable_versions": outcome.searchable_versions,
+                "stored_versions": outcome.stored_versions,
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CAPTURE_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=outcome.truncated,
+                    reason="page_size_reached" if outcome.truncated else None,
+                ),
+                extra_limitations=limitations,
+            ),
+        )
+
     def _admit(
         self,
         unit_of_work: UnitOfWork,
@@ -1503,5 +1595,6 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CAPTURE_REVISE: ApplicationService._capture_revise,
         Capability.CAPTURE_READ: ApplicationService._capture_read,
         Capability.CAPTURE_LIST: ApplicationService._capture_list,
+        Capability.CAPTURE_SEARCH: ApplicationService._capture_search,
     }
 )

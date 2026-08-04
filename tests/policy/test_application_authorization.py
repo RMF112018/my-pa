@@ -63,6 +63,7 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadKnowledge,
     ReviseCapture,
+    SearchCaptures,
     SearchKnowledge,
 )
 from my_pa.application.service import ApplicationService
@@ -125,6 +126,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         ),
         Capability.CAPTURE_READ: ReadCapture(capture_id=issue_identifier(IdKind.CAPTURE)),
         Capability.CAPTURE_LIST: ListCaptures(),
+        Capability.CAPTURE_SEARCH: SearchCaptures(query="synthetic"),
     }
 
 
@@ -264,6 +266,7 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_REVISE,
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
+        Capability.CAPTURE_SEARCH,
     }
 ]
 
@@ -325,6 +328,7 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CAPTURE_REVISE,
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
+        Capability.CAPTURE_SEARCH,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

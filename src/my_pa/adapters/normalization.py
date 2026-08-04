@@ -67,6 +67,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     Representation,
     ReviseCapture,
+    SearchCaptures,
     SearchKnowledge,
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail
@@ -263,6 +264,10 @@ def _list_captures(payload: Mapping[str, Any]) -> Command:
     return ListCaptures(**payload)
 
 
+def _search_captures(payload: Mapping[str, Any]) -> Command:
+    return SearchCaptures(**payload)
+
+
 #: One builder per capability. A mapping rather than a `match`, so that
 #: `test_every_capability_has_exactly_one_builder` can compare its keys against
 #: `Capability` and a further capability cannot be unreachable over a transport
@@ -281,6 +286,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CAPTURE_REVISE: _revise_capture,
         Capability.CAPTURE_READ: _read_capture,
         Capability.CAPTURE_LIST: _list_captures,
+        Capability.CAPTURE_SEARCH: _search_captures,
     }
 )
 

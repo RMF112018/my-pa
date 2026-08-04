@@ -81,6 +81,7 @@ from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.capture.errors import CaptureConflictError
 from my_pa.domain.capture.proposal import ProposalState, ProposalType, RiskClass
 from my_pa.domain.capture.review import (
+    Disposition,
     ReviewCase,
     ReviewConflictError,
     ReviewDecision,
@@ -581,6 +582,14 @@ class _Reviews(ReviewRepository):
         )
         if case is None:
             raise ReviewNotFoundError("the request names no stored review case")
+        if any(
+            decision.review_case_id == request.review_case_id
+            and decision.disposition in {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}
+            and decision.assertion_id is not None
+            and decision.receipt_id is not None
+            for decision in self._world.review_decisions
+        ):
+            raise ReviewConflictError("an accepted review case is terminal")
         current = sum(
             decision.review_case_id == request.review_case_id
             for decision in self._world.review_decisions

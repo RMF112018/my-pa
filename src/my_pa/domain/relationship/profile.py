@@ -18,6 +18,8 @@ __all__ = [
     "OrganizationProfile",
     "PersonProfile",
     "ProfileIndicator",
+    "ProfileIndicatorBasis",
+    "ProfileIndicatorName",
     "RelationshipFreshness",
     "TimelineItem",
 ]
@@ -38,6 +40,18 @@ class RelationshipFreshness(StrEnum):
     UNKNOWN = "unknown"
     STALE = "stale"
     UNAVAILABLE = "unavailable"
+
+
+class ProfileIndicatorName(StrEnum):
+    """Closed WP-9 indicator vocabulary; composite or trait scores have no channel."""
+
+    INTERACTION_COUNT = "interaction_count"
+
+
+class ProfileIndicatorBasis(StrEnum):
+    """Closed, observable calculation bases admitted by the WP-9 read model."""
+
+    SOURCE_OBSERVATION_COUNT = "source_observation_count"
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,15 +121,23 @@ class EvidenceItem:
 
 @dataclass(frozen=True, slots=True)
 class ProfileIndicator:
-    name: str
-    value: int | str
-    calculation_basis: str
+    name: ProfileIndicatorName
+    value: int
+    calculation_basis: ProfileIndicatorBasis
     window_start: datetime
     window_end: datetime
 
     def __post_init__(self) -> None:
-        if not self.name.strip() or not self.calculation_basis.strip():
-            raise ValueError("an indicator names its calculation basis")
+        if not isinstance(self.name, ProfileIndicatorName):
+            raise ValueError("an indicator has a closed semantic name")
+        if not isinstance(self.calculation_basis, ProfileIndicatorBasis):
+            raise ValueError("an indicator has a closed observable calculation basis")
+        if type(self.value) is not int or not 0 <= self.value <= 2_147_483_647:
+            raise ValueError("an interaction count is a bounded non-negative integer")
+        if self.name is not ProfileIndicatorName.INTERACTION_COUNT:
+            raise ValueError("an indicator name is admitted by the WP-9 vocabulary")
+        if self.calculation_basis is not ProfileIndicatorBasis.SOURCE_OBSERVATION_COUNT:
+            raise ValueError("an indicator basis is admitted by the WP-9 vocabulary")
         ensure_utc(self.window_start)
         ensure_utc(self.window_end)
         if self.window_end < self.window_start:

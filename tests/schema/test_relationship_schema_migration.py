@@ -705,12 +705,6 @@ def test_non_exact_terminal_correction_handoffs_are_atomic(
                 )
                 .values(person_id=first, resolution_id=earlier.resolution_id)
             )
-            connection.execute(
-                text(
-                    "ALTER TABLE knowledge.relationship_observation_links "
-                    "ENABLE TRIGGER observation_link_requires_current_resolution"
-                )
-            )
             with pytest.raises(IdentityResolutionError, match="current canonical resolution state"):
                 repository.profile(first, expected_domains=("contacts",))
     else:
@@ -732,6 +726,12 @@ def test_non_exact_terminal_correction_handoffs_are_atomic(
 
     with relationship_engine.connect() as connection:
         assert _relationship_state_snapshot(connection) == before
+        assert connection.execute(
+            text(
+                "SELECT tgenabled FROM pg_trigger "
+                "WHERE tgname = 'observation_link_requires_current_resolution'"
+            )
+        ).scalar_one() == "O"
 
 
 @pytest.mark.database

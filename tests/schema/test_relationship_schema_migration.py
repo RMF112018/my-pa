@@ -251,6 +251,30 @@ def _accepted_correction(
     )
 
 
+def _insert_raw_resolution(connection: Connection, resolution: IdentityResolution) -> None:
+    connection.execute(
+        insert(relationship_identity_resolutions).values(
+            resolution_id=resolution.resolution_id,
+            action=resolution.action.value,
+            review_case_id=resolution.review_case_id,
+            decision_id=resolution.decision_id,
+            retained_person_id=resolution.retained_person_id,
+            prior_person_id=resolution.prior_person_id,
+            decided_at=resolution.decided_at,
+        )
+    )
+    connection.execute(
+        insert(relationship_resolution_observations),
+        [
+            {
+                "resolution_id": resolution.resolution_id,
+                "observation_id": observation_id,
+            }
+            for observation_id in resolution.observation_ids
+        ],
+    )
+
+
 @pytest.mark.database
 def test_direct_merge_is_denied_before_any_write(relationship_engine: Engine) -> None:
     with relationship_engine.begin() as connection:
@@ -528,6 +552,175 @@ def test_accepted_merge_and_split_receipts_cannot_commit_without_exact_final_sta
         repository.apply_resolution(raw_split, display_name="unused")
         assert repository.profile(first, expected_domains=("contacts",)) is not None
         assert repository.profile(second, expected_domains=("contacts",)) is not None
+
+
+@pytest.mark.database
+def test_exact_inverse_correction_handoff_commits_and_replays_idempotently(
+    relationship_engine: Engine,
+) -> None:
+    observations = (_observation(191, "contacts"), _observation(192, "contacts"))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.record_observations("contacts", observations)
+        first = _link_person(repository, person_ordinal=191, observations=(observations[0],))
+        second = _link_person(repository, person_ordinal=192, observations=(observations[1],))
+        merge = _accepted_correction(
+            repository,
+            ordinal=193,
+            action=ResolutionAction.MERGE_PERSON,
+            retained_person_id=first,
+            prior_person_id=second,
+            observation_ids=(observations[1].observation_id,),
+        )
+        split = _accepted_correction(
+            repository,
+            ordinal=194,
+            action=ResolutionAction.SPLIT_PERSON,
+            retained_person_id=second,
+            prior_person_id=first,
+            observation_ids=(observations[1].observation_id,),
+        )
+        repository.apply_resolution(merge, display_name="unused")
+        repository.apply_resolution(merge, display_name="unused")
+        repository.apply_resolution(split, display_name="unused")
+        repository.apply_resolution(split, display_name="unused")
+
+    with relationship_engine.connect() as connection:
+        links = {
+            str(row.observation_id): (str(row.person_id), str(row.resolution_id))
+            for row in connection.execute(select(relationship_observation_links))
+        }
+        assert links == {
+            observations[0].observation_id: (first, _id("ires", 191)),
+            observations[1].observation_id: (second, split.resolution_id),
+        }
+        repository = SqlRelationshipRepository(connection)
+        assert repository.profile(first, expected_domains=("contacts",)) is not None
+        assert repository.profile(second, expected_domains=("contacts",)) is not None
+
+
+@pytest.mark.database
+@pytest.mark.parametrize(
+    "plant",
+    (
+        "same_action",
+        "wrong_direction",
+        "subset",
+        "superset",
+        "different_pair",
+        "stale_link",
+    ),
+)
+def test_non_exact_terminal_correction_handoffs_are_atomic(
+    relationship_engine: Engine,
+    plant: str,
+) -> None:
+    base = {
+        "same_action": 201,
+        "wrong_direction": 211,
+        "subset": 221,
+        "superset": 231,
+        "different_pair": 241,
+        "stale_link": 251,
+    }[plant]
+    observations = tuple(_observation(base + index, "contacts") for index in range(4))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.record_observations("contacts", observations)
+        first = _link_person(repository, person_ordinal=base, observations=(observations[0],))
+        second_observations = (
+            (observations[1], observations[2]) if plant == "subset" else (observations[1],)
+        )
+        second = _link_person(repository, person_ordinal=base + 1, observations=second_observations)
+        third = _link_person(repository, person_ordinal=base + 2, observations=(observations[3],))
+        earlier_observations = tuple(row.observation_id for row in second_observations)
+        earlier = _accepted_correction(
+            repository,
+            ordinal=base + 4,
+            action=ResolutionAction.MERGE_PERSON,
+            retained_person_id=first,
+            prior_person_id=second,
+            observation_ids=earlier_observations,
+        )
+        if plant == "same_action":
+            later_action = ResolutionAction.MERGE_PERSON
+            later_retained, later_prior = second, first
+            later_observations = (observations[0].observation_id,)
+        elif plant == "wrong_direction":
+            later_action = ResolutionAction.SPLIT_PERSON
+            later_retained, later_prior = first, second
+            later_observations = earlier_observations
+        elif plant == "subset":
+            later_action = ResolutionAction.SPLIT_PERSON
+            later_retained, later_prior = second, first
+            later_observations = (observations[1].observation_id,)
+        elif plant == "superset":
+            later_action = ResolutionAction.SPLIT_PERSON
+            later_retained, later_prior = second, first
+            later_observations = (
+                observations[0].observation_id,
+                observations[1].observation_id,
+            )
+        elif plant == "different_pair":
+            later_action = ResolutionAction.MERGE_PERSON
+            later_retained, later_prior = first, third
+            later_observations = (observations[3].observation_id,)
+        else:
+            later_action = ResolutionAction.SPLIT_PERSON
+            later_retained, later_prior = second, first
+            later_observations = earlier_observations
+        later = _accepted_correction(
+            repository,
+            ordinal=base + 5,
+            action=later_action,
+            retained_person_id=later_retained,
+            prior_person_id=later_prior,
+            observation_ids=later_observations,
+        )
+    with relationship_engine.connect() as connection:
+        before = _relationship_state_snapshot(connection)
+
+    with pytest.raises(DBAPIError), relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        if plant in {"subset", "superset"}:
+            repository.apply_resolution(earlier, display_name="unused")
+            repository.apply_resolution(later, display_name="unused")
+        elif plant == "stale_link":
+            repository.apply_resolution(earlier, display_name="unused")
+            repository.apply_resolution(later, display_name="unused")
+            connection.execute(
+                text(
+                    "ALTER TABLE knowledge.relationship_observation_links "
+                    "DISABLE TRIGGER observation_link_requires_current_resolution"
+                )
+            )
+            connection.execute(
+                update(relationship_observation_links)
+                .where(
+                    relationship_observation_links.c.observation_id
+                    == observations[1].observation_id
+                )
+                .values(person_id=first, resolution_id=earlier.resolution_id)
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE knowledge.relationship_observation_links "
+                    "ENABLE TRIGGER observation_link_requires_current_resolution"
+                )
+            )
+            with pytest.raises(IdentityResolutionError, match="current canonical resolution state"):
+                repository.profile(first, expected_domains=("contacts",))
+        elif plant == "same_action":
+            _insert_raw_resolution(connection, earlier)
+            repository.apply_resolution(later, display_name="unused")
+            with pytest.raises(IdentityResolutionError, match="current canonical resolution state"):
+                repository.profile(second, expected_domains=("contacts",))
+        else:
+            _insert_raw_resolution(connection, earlier)
+            _insert_raw_resolution(connection, later)
+
+    with relationship_engine.connect() as connection:
+        assert _relationship_state_snapshot(connection) == before
 
 
 @pytest.mark.database

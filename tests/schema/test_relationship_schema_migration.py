@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, func, insert, select, text
+from sqlalchemy import Engine, func, insert, select, text, update
 from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.exc import DBAPIError
 
@@ -31,6 +31,8 @@ from my_pa.infrastructure.persistence.tables import (
     relationship_conversation_participants,
     relationship_duplicate_members,
     relationship_duplicate_sets,
+    relationship_evidence,
+    relationship_evidence_observations,
     relationship_identity_observations,
     relationship_identity_resolutions,
     relationship_identity_review_cases,
@@ -143,6 +145,85 @@ def _identity_evidence_snapshot(
         )
         for table in tables
     }
+
+
+def _create_conversation(connection: Connection, ordinal: int) -> str:
+    ids = {
+        "capture": _id("cap", ordinal),
+        "version": _id("capver", ordinal),
+        "conversation": _id("conv", ordinal),
+        "principal": _id("prn", 1),
+        "correlation": _id("corr", ordinal),
+        "audit": _id("audit", ordinal),
+    }
+    connection.execute(
+        text(
+            "INSERT INTO knowledge.captures (capture_id, owner_principal_id) "
+            "VALUES (:capture, :principal)"
+        ),
+        ids,
+    )
+    connection.execute(
+        text(
+            "INSERT INTO knowledge.capture_versions "
+            "(version_id, capture_id, version_number, content, content_sha256, "
+            "owner_principal_id, classification, processing_policy, idempotency_key, "
+            "correlation_id, audit_id, server_received_at, accepted_at, recorded_at) "
+            "VALUES (:version, :capture, 1, 'x', "
+            "'2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881', "
+            ":principal, 'synthetic_test', 'local_only', :version, :correlation, :audit, "
+            "now(), now(), now())"
+        ),
+        ids,
+    )
+    connection.execute(
+        text(
+            "INSERT INTO knowledge.capture_conversations "
+            "(conversation_id, capture_id, version_id, event_state, channel, recorded_at) "
+            "VALUES (:conversation, :capture, :version, 'skeletal', 'unknown', now())"
+        ),
+        ids,
+    )
+    return ids["conversation"]
+
+
+def _accepted_correction(
+    repository: SqlRelationshipRepository,
+    *,
+    ordinal: int,
+    action: ResolutionAction,
+    retained_person_id: str,
+    prior_person_id: str,
+    observation_ids: tuple[str, ...],
+) -> IdentityResolution:
+    candidates = DuplicateCandidateSet(
+        candidate_set_id=_id("dups", ordinal),
+        person_ids=(retained_person_id, prior_person_id),
+        observation_ids=observation_ids,
+        created_at=WHEN,
+    )
+    review_id = repository.open_identity_review(
+        candidates,
+        action,
+        retained_person_id=retained_person_id,
+        prior_person_id=prior_person_id,
+    )
+    decision_id = repository.decide_identity_review(
+        review_id,
+        disposition="accept",
+        principal_id=_id("prn", 1),
+        decided_at=WHEN,
+    )
+    return IdentityResolution(
+        resolution_id=_id("ires", ordinal),
+        action=action,
+        review_case_id=review_id,
+        decision_id=decision_id,
+        retained_person_id=retained_person_id,
+        prior_person_id=prior_person_id,
+        observation_ids=observation_ids,
+        decided_at=WHEN,
+    )
 
 
 @pytest.mark.database
@@ -547,7 +628,12 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
                     "'knowledge.relationship_duplicate_members'::regclass, "
                     "'knowledge.relationship_identity_review_cases'::regclass, "
                     "'knowledge.relationship_identity_review_decisions'::regclass, "
-                    "'knowledge.relationship_resolution_observations'::regclass) "
+                    "'knowledge.relationship_resolution_observations'::regclass, "
+                    "'knowledge.relationship_evidence'::regclass, "
+                    "'knowledge.relationship_evidence_observations'::regclass, "
+                    "'knowledge.relationship_conversation_participants'::regclass, "
+                    "'knowledge.relationship_conversation_observations'::regclass, "
+                    "'knowledge.relationship_observation_links'::regclass) "
                     "AND NOT tgisinternal AND tgenabled <> 'D'"
                 )
             ).scalars()
@@ -560,6 +646,11 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
             "identity_review_cases_are_append_only",
             "identity_review_decisions_are_append_only",
             "resolution_observations_are_append_only",
+            "relationship_evidence_is_governed",
+            "relationship_evidence_observations_are_append_only",
+            "conversation_participants_remain_supported",
+            "conversation_observations_remain_supported",
+            "observation_link_keeps_participants_supported",
         } <= active_triggers
 
     evidence_plants = (
@@ -677,6 +768,338 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
         )
         assert before == after == 4
         assert aliases_after_retry == aliases_before_retry
+
+
+@pytest.mark.database
+def test_merge_and_split_atomically_move_supported_participants_and_evidence(
+    relationship_engine: Engine,
+) -> None:
+    observations = tuple(_observation(index, "contacts") for index in range(101, 105))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.record_observations("contacts", observations)
+        first = _link_person(repository, person_ordinal=101, observations=observations[:2])
+        second = _link_person(repository, person_ordinal=102, observations=observations[2:])
+        conversation_id = _create_conversation(connection, 101)
+        participant_id = repository.attach_conversation_participant(
+            conversation_id,
+            person_id=second,
+            observation_ids=(observations[2].observation_id,),
+        )
+        merge = _accepted_correction(
+            repository,
+            ordinal=103,
+            action=ResolutionAction.MERGE_PERSON,
+            retained_person_id=first,
+            prior_person_id=second,
+            observation_ids=tuple(row.observation_id for row in observations[2:]),
+        )
+        repository.apply_resolution(merge, display_name="unused")
+        assert (
+            connection.execute(
+                select(relationship_conversation_participants.c.person_id).where(
+                    relationship_conversation_participants.c.participant_id == participant_id
+                )
+            ).scalar_one()
+            == first
+        )
+        assert set(
+            connection.execute(
+                select(relationship_evidence.c.person_id).where(
+                    relationship_evidence.c.evidence_id.in_(
+                        tuple(f"source_{row.observation_id}" for row in observations[2:])
+                    )
+                )
+            ).scalars()
+        ) == {first}
+
+        split = _accepted_correction(
+            repository,
+            ordinal=104,
+            action=ResolutionAction.SPLIT_PERSON,
+            retained_person_id=second,
+            prior_person_id=first,
+            observation_ids=tuple(row.observation_id for row in observations[2:]),
+        )
+        repository.apply_resolution(split, display_name="unused")
+        assert (
+            connection.execute(
+                select(relationship_conversation_participants.c.person_id).where(
+                    relationship_conversation_participants.c.participant_id == participant_id
+                )
+            ).scalar_one()
+            == second
+        )
+        assert set(
+            connection.execute(
+                select(relationship_evidence.c.person_id).where(
+                    relationship_evidence.c.evidence_id.in_(
+                        tuple(f"source_{row.observation_id}" for row in observations[2:])
+                    )
+                )
+            ).scalars()
+        ) == {second}
+        assert tuple(
+            connection.execute(
+                select(relationship_conversation_observations.c.observation_id).where(
+                    relationship_conversation_observations.c.participant_id == participant_id
+                )
+            ).scalars()
+        ) == (observations[2].observation_id,)
+
+    moved_evidence_ids = tuple(f"source_{row.observation_id}" for row in observations[2:])
+    with relationship_engine.connect() as connection:
+        evidence_after_split = tuple(
+            connection.execute(
+                select(relationship_evidence)
+                .where(relationship_evidence.c.evidence_id.in_(moved_evidence_ids))
+                .order_by(relationship_evidence.c.evidence_id)
+            )
+        )
+    with (
+        pytest.raises(DBAPIError, match="exact current resolution"),
+        relationship_engine.begin() as connection,
+    ):
+        connection.execute(
+            update(relationship_evidence)
+            .where(relationship_evidence.c.evidence_id.in_(moved_evidence_ids))
+            .values(person_id=first)
+        )
+    with relationship_engine.connect() as connection:
+        assert (
+            tuple(
+                connection.execute(
+                    select(relationship_evidence)
+                    .where(relationship_evidence.c.evidence_id.in_(moved_evidence_ids))
+                    .order_by(relationship_evidence.c.evidence_id)
+                )
+            )
+            == evidence_after_split
+        )
+
+
+@pytest.mark.database
+def test_merge_denies_ambiguous_participant_support_without_writes(
+    relationship_engine: Engine,
+) -> None:
+    observations = tuple(_observation(index, "contacts") for index in range(111, 114))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.record_observations("contacts", observations)
+        first = _link_person(repository, person_ordinal=111, observations=(observations[0],))
+        second = _link_person(repository, person_ordinal=112, observations=observations[1:])
+        repository.attach_conversation_participant(
+            _create_conversation(connection, 111),
+            person_id=second,
+            observation_ids=tuple(row.observation_id for row in observations[1:]),
+        )
+        merge = _accepted_correction(
+            repository,
+            ordinal=113,
+            action=ResolutionAction.MERGE_PERSON,
+            retained_person_id=first,
+            prior_person_id=second,
+            observation_ids=(observations[1].observation_id,),
+        )
+        before = (
+            tuple(connection.execute(select(relationship_identity_resolutions))),
+            tuple(connection.execute(select(relationship_observation_links))),
+            tuple(connection.execute(select(relationship_conversation_participants))),
+            tuple(connection.execute(select(relationship_evidence))),
+        )
+        with pytest.raises(IdentityResolutionError, match="ambiguous conversation support"):
+            repository.apply_resolution(merge, display_name="unused")
+        after = (
+            tuple(connection.execute(select(relationship_identity_resolutions))),
+            tuple(connection.execute(select(relationship_observation_links))),
+            tuple(connection.execute(select(relationship_conversation_participants))),
+            tuple(connection.execute(select(relationship_evidence))),
+        )
+        assert after == before
+
+
+@pytest.mark.database
+def test_merge_refuses_conversation_participant_collision_without_writes(
+    relationship_engine: Engine,
+) -> None:
+    observations = tuple(_observation(index, "contacts") for index in range(115, 117))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.record_observations("contacts", observations)
+        first = _link_person(repository, person_ordinal=115, observations=(observations[0],))
+        second = _link_person(repository, person_ordinal=116, observations=(observations[1],))
+        conversation_id = _create_conversation(connection, 115)
+        repository.attach_conversation_participant(
+            conversation_id,
+            person_id=first,
+            observation_ids=(observations[0].observation_id,),
+        )
+        repository.attach_conversation_participant(
+            conversation_id,
+            person_id=second,
+            observation_ids=(observations[1].observation_id,),
+        )
+        merge = _accepted_correction(
+            repository,
+            ordinal=117,
+            action=ResolutionAction.MERGE_PERSON,
+            retained_person_id=first,
+            prior_person_id=second,
+            observation_ids=(observations[1].observation_id,),
+        )
+        before = (
+            tuple(connection.execute(select(relationship_identity_resolutions))),
+            tuple(connection.execute(select(relationship_observation_links))),
+            tuple(connection.execute(select(relationship_conversation_participants))),
+        )
+        with pytest.raises(IdentityResolutionError, match="collapse distinct"):
+            repository.apply_resolution(merge, display_name="unused")
+        after = (
+            tuple(connection.execute(select(relationship_identity_resolutions))),
+            tuple(connection.execute(select(relationship_observation_links))),
+            tuple(connection.execute(select(relationship_conversation_participants))),
+        )
+        assert after == before
+
+
+@pytest.mark.database
+def test_split_denies_ambiguous_participant_support_without_writes(
+    relationship_engine: Engine,
+) -> None:
+    observations = tuple(_observation(index, "contacts") for index in range(121, 123))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.record_observations("contacts", observations)
+        first = _link_person(repository, person_ordinal=121, observations=(observations[0],))
+        second = _link_person(repository, person_ordinal=122, observations=(observations[1],))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.apply_resolution(
+            _accepted_correction(
+                repository,
+                ordinal=123,
+                action=ResolutionAction.MERGE_PERSON,
+                retained_person_id=first,
+                prior_person_id=second,
+                observation_ids=(observations[1].observation_id,),
+            ),
+            display_name="unused",
+        )
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.attach_conversation_participant(
+            _create_conversation(connection, 121),
+            person_id=first,
+            observation_ids=tuple(row.observation_id for row in observations),
+        )
+        split = _accepted_correction(
+            repository,
+            ordinal=124,
+            action=ResolutionAction.SPLIT_PERSON,
+            retained_person_id=second,
+            prior_person_id=first,
+            observation_ids=(observations[1].observation_id,),
+        )
+        before = (
+            tuple(connection.execute(select(relationship_identity_resolutions))),
+            tuple(connection.execute(select(relationship_observation_links))),
+            tuple(connection.execute(select(relationship_conversation_participants))),
+            tuple(connection.execute(select(relationship_evidence))),
+        )
+        with pytest.raises(IdentityResolutionError, match="ambiguous conversation support"):
+            repository.apply_resolution(split, display_name="unused")
+        after = (
+            tuple(connection.execute(select(relationship_identity_resolutions))),
+            tuple(connection.execute(select(relationship_observation_links))),
+            tuple(connection.execute(select(relationship_conversation_participants))),
+            tuple(connection.execute(select(relationship_evidence))),
+        )
+        assert after == before
+
+
+@pytest.mark.database
+def test_database_denies_stale_participant_and_evidence_rewrites_with_rollback(
+    relationship_engine: Engine,
+) -> None:
+    observations = tuple(_observation(index, "contacts") for index in range(131, 133))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection)
+        repository.record_observations("contacts", observations)
+        first = _link_person(repository, person_ordinal=131, observations=(observations[0],))
+        second = _link_person(repository, person_ordinal=132, observations=(observations[1],))
+        participant_id = repository.attach_conversation_participant(
+            _create_conversation(connection, 131),
+            person_id=first,
+            observation_ids=(observations[0].observation_id,),
+        )
+        evidence_id = f"source_{observations[0].observation_id}"
+
+    def snapshot(connection: Connection) -> tuple[object, ...]:
+        return (
+            tuple(connection.execute(select(relationship_conversation_participants))),
+            tuple(connection.execute(select(relationship_conversation_observations))),
+            tuple(connection.execute(select(relationship_evidence))),
+            tuple(connection.execute(select(relationship_evidence_observations))),
+        )
+
+    with relationship_engine.connect() as connection:
+        before = snapshot(connection)
+
+    plants = (
+        (
+            "UPDATE knowledge.relationship_conversation_participants "
+            "SET person_id = :second WHERE participant_id = :participant",
+            {"second": second, "participant": participant_id},
+            "participant support is stale",
+        ),
+        (
+            "UPDATE knowledge.relationship_evidence SET authority = 'model_inference' "
+            "WHERE evidence_id = :evidence",
+            {"evidence": evidence_id},
+            "provenance is immutable",
+        ),
+        (
+            "UPDATE knowledge.relationship_evidence SET effective_at = now() "
+            "WHERE evidence_id = :evidence",
+            {"evidence": evidence_id},
+            "provenance is immutable",
+        ),
+        (
+            "UPDATE knowledge.relationship_evidence SET recorded_at = recorded_at + "
+            "interval '1 second' WHERE evidence_id = :evidence",
+            {"evidence": evidence_id},
+            "provenance is immutable",
+        ),
+        (
+            "UPDATE knowledge.relationship_evidence SET person_id = :second "
+            "WHERE evidence_id = :evidence",
+            {"second": second, "evidence": evidence_id},
+            "exact current resolution",
+        ),
+        (
+            "DELETE FROM knowledge.relationship_evidence WHERE evidence_id = :evidence",
+            {"evidence": evidence_id},
+            "evidence is append-only",
+        ),
+        (
+            "UPDATE knowledge.relationship_evidence_observations SET observation_id = :other "
+            "WHERE evidence_id = :evidence",
+            {"other": observations[1].observation_id, "evidence": evidence_id},
+            "identity evidence is append-only",
+        ),
+        (
+            "DELETE FROM knowledge.relationship_evidence_observations "
+            "WHERE evidence_id = :evidence",
+            {"evidence": evidence_id},
+            "identity evidence is append-only",
+        ),
+    )
+    for statement, parameters, message in plants:
+        with pytest.raises(DBAPIError, match=message), relationship_engine.begin() as connection:
+            connection.execute(text(statement), parameters)
+
+    with relationship_engine.connect() as connection:
+        assert snapshot(connection) == before
 
 
 @pytest.mark.database

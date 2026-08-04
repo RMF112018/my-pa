@@ -564,18 +564,17 @@ def test_stopping_at_the_capture_revision_emits_the_twelve_it_merged_with(
 ) -> None:
     """`D-91`, as an assertion against a server rather than as an argument.
 
-    A database taken to `1a4c9e77b2d5` and no further receives the twelve
-    capabilities that revision emitted when it merged, not the thirteen the
-    domain declares now — and head receives thirteen. Both halves are here
+    A database taken to `1a4c9e77b2d5` and no further receives the capability
+    vocabulary that revision emitted on the day it merged, not the one the
+    domain declares now — and head receives the current one. Both halves are here
     because either alone is satisfied by a chain that never widened anything:
     the first by a freeze that also froze head, and the second by a revision
     that re-derived from the enum.
 
     **This is the assertion that catches a capability added without an `ALTER`,
     and no other test can.** Every test builds its database from scratch, so a
-    thirteenth member with no forward `ALTER` leaves every one of them green and
-    is refused by the stored twelve-value constraint on the first audited
-    request in the field.
+    further member with no forward `ALTER` leaves every one of them green and is
+    refused by the stored constraint on the first audited request in the field.
     """
     engine = create_database_engine(disposable_database)
     try:

@@ -62,6 +62,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     MetaData,
@@ -131,6 +132,8 @@ from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
+from my_pa.domain.relationship.identity import ResolutionAction
+from my_pa.domain.relationship.profile import EvidenceAuthority
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
     MAX_ENROLLMENT_DEPTH,
@@ -1851,4 +1854,409 @@ capture_conversations = Table(
         name="a_conversation_ends_after_it_starts",
     ),
     Index("capture_conversations_by_capture", "capture_id", "recorded_at"),
+)
+
+# WP-9 relationship identity. Source rows remain in `relationship_identity_observations`;
+# the only link to a canonical person is the separate, review-bound resolution table.
+relationship_people = Table(
+    "relationship_people",
+    METADATA,
+    Column("person_id", Text, primary_key=True),
+    Column("display_name", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column(
+        "superseded_by_person_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_people.person_id"),
+        unique=True,
+    ),
+    Column("state_resolution_id", Text, unique=True),
+    _is_identifier("person_id", IdKind.PERSON),
+    CheckConstraint("length(trim(display_name)) > 0", name="a_person_name_is_not_blank"),
+)
+
+relationship_organizations = Table(
+    "relationship_organizations",
+    METADATA,
+    Column("organization_id", Text, primary_key=True),
+    Column("display_name", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("organization_id", IdKind.ORGANIZATION),
+    CheckConstraint("length(trim(display_name)) > 0", name="an_organization_name_is_not_blank"),
+)
+
+relationship_identity_observations = Table(
+    "relationship_identity_observations",
+    METADATA,
+    Column("observation_id", Text, primary_key=True),
+    Column("source_id", Text, nullable=False),
+    Column("source_object_id", Text, nullable=False),
+    Column("source_version", Text, nullable=False),
+    Column("source_domain", Text, nullable=False),
+    Column("display_name", Text),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("observation_id", IdKind.IDENTITY_OBSERVATION),
+    _is_identifier("source_id", IdKind.SOURCE),
+    _is_identifier("source_object_id", IdKind.SOURCE_OBJECT),
+    CheckConstraint(
+        "source_domain IN ('calendar', 'contacts', 'email')",
+        name="an_identity_observation_has_a_fixture_domain",
+    ),
+    CheckConstraint(
+        "length(source_version) BETWEEN 1 AND 72",
+        name="an_identity_source_version_is_bounded",
+    ),
+    UniqueConstraint(
+        "source_id",
+        "source_object_id",
+        "source_version",
+        name="an_observed_source_version_is_recorded_once",
+    ),
+)
+
+relationship_unresolved_mentions = Table(
+    "relationship_unresolved_mentions",
+    METADATA,
+    Column("unresolved_mention_id", Text, primary_key=True),
+    Column("source_object_id", Text, nullable=False),
+    Column("source_version", Text, nullable=False),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("unresolved_mention_id", IdKind.UNRESOLVED_MENTION),
+    _is_identifier("source_object_id", IdKind.SOURCE_OBJECT),
+    CheckConstraint(
+        "length(source_version) BETWEEN 1 AND 72",
+        name="an_unresolved_source_version_is_bounded",
+    ),
+)
+
+relationship_duplicate_sets = Table(
+    "relationship_duplicate_sets",
+    METADATA,
+    Column("duplicate_set_id", Text, primary_key=True),
+    Column("candidate_kind", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("duplicate_set_id", IdKind.DUPLICATE_SET),
+    CheckConstraint(
+        "candidate_kind IN ('identity_resolution', 'duplicate')",
+        name="identity_candidate_set_kind_is_known",
+    ),
+)
+
+relationship_duplicate_members = Table(
+    "relationship_duplicate_members",
+    METADATA,
+    Column(
+        "duplicate_set_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_duplicate_sets.duplicate_set_id"),
+        nullable=False,
+    ),
+    Column(
+        "person_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_people.person_id"),
+    ),
+    Column(
+        "observation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_observations.observation_id"),
+    ),
+    CheckConstraint(
+        "(person_id IS NULL) <> (observation_id IS NULL)",
+        name="a_duplicate_member_names_one_candidate_kind",
+    ),
+    UniqueConstraint(
+        "duplicate_set_id", "person_id", name="a_person_occurs_once_in_a_duplicate_set"
+    ),
+    UniqueConstraint(
+        "duplicate_set_id",
+        "observation_id",
+        name="an_observation_occurs_once_in_a_duplicate_set",
+    ),
+)
+
+relationship_identity_review_cases = Table(
+    "relationship_identity_review_cases",
+    METADATA,
+    Column("review_case_id", Text, primary_key=True),
+    Column(
+        "duplicate_set_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_duplicate_sets.duplicate_set_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("requested_action", Text, nullable=False),
+    Column("retained_person_id", Text, ForeignKey(f"{SCHEMA}.relationship_people.person_id")),
+    Column("prior_person_id", Text, ForeignKey(f"{SCHEMA}.relationship_people.person_id")),
+    Column("opened_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("review_case_id", IdKind.REVIEW_CASE),
+    _one_of("requested_action", ResolutionAction, name="identity_review_action_is_known"),
+    CheckConstraint(
+        "(requested_action IN ('merge_person', 'split_person')) = "
+        "(retained_person_id IS NOT NULL AND prior_person_id IS NOT NULL)",
+        name="a_merge_or_split_review_names_both_people",
+    ),
+    CheckConstraint(
+        "retained_person_id IS NULL OR retained_person_id <> prior_person_id",
+        name="an_identity_review_names_distinct_people",
+    ),
+)
+
+relationship_identity_review_decisions = Table(
+    "relationship_identity_review_decisions",
+    METADATA,
+    Column("decision_id", Text, primary_key=True),
+    Column(
+        "review_case_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_review_cases.review_case_id"),
+        nullable=False,
+    ),
+    Column("sequence", Integer, nullable=False),
+    Column("disposition", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("decided_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("decision_id", IdKind.REVIEW_DECISION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "disposition IN ('accept', 'reject', 'defer')",
+        name="identity_review_disposition_is_known",
+    ),
+    CheckConstraint("sequence >= 1", name="identity_review_decisions_start_at_one"),
+    UniqueConstraint("review_case_id", "sequence", name="one_identity_decision_per_sequence"),
+)
+
+relationship_identity_resolutions = Table(
+    "relationship_identity_resolutions",
+    METADATA,
+    Column("resolution_id", Text, primary_key=True),
+    Column("resolution_sequence", BigInteger, Identity(), nullable=False, unique=True),
+    Column("action", Text, nullable=False),
+    Column(
+        "review_case_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_review_cases.review_case_id"),
+        nullable=False,
+    ),
+    Column(
+        "decision_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_review_decisions.decision_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "retained_person_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_people.person_id"),
+        nullable=False,
+    ),
+    Column(
+        "prior_person_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_people.person_id"),
+    ),
+    Column("decided_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("resolution_id", IdKind.IDENTITY_RESOLUTION),
+    _one_of("action", ResolutionAction, name="identity_resolution_action_is_known"),
+    CheckConstraint(
+        "(action = 'link_observation') = (prior_person_id IS NULL)",
+        name="a_merge_or_split_retains_both_people",
+    ),
+    CheckConstraint(
+        "prior_person_id IS NULL OR retained_person_id <> prior_person_id",
+        name="an_identity_resolution_names_distinct_people",
+    ),
+)
+
+relationship_resolution_observations = Table(
+    "relationship_resolution_observations",
+    METADATA,
+    Column(
+        "resolution_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_resolutions.resolution_id"),
+        nullable=False,
+    ),
+    Column(
+        "observation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_observations.observation_id"),
+        nullable=False,
+    ),
+    PrimaryKeyConstraint("resolution_id", "observation_id"),
+)
+
+relationship_observation_links = Table(
+    "relationship_observation_links",
+    METADATA,
+    Column(
+        "observation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_observations.observation_id"),
+        primary_key=True,
+    ),
+    Column(
+        "person_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_people.person_id"),
+        nullable=False,
+    ),
+    Column(
+        "resolution_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_resolutions.resolution_id"),
+        nullable=False,
+    ),
+)
+
+# Added after both declarations so SQLAlchemy can represent the intentionally
+# deferred logical cycle: a person is inserted, its resolution is inserted, and
+# the person is then bound to that exact state receipt in one transaction.
+relationship_people.c.state_resolution_id.append_foreign_key(
+    ForeignKey(f"{SCHEMA}.relationship_identity_resolutions.resolution_id")
+)
+
+relationship_aliases = Table(
+    "relationship_aliases",
+    METADATA,
+    Column("alias_id", Text, primary_key=True),
+    Column(
+        "person_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_people.person_id"),
+        nullable=False,
+    ),
+    Column(
+        "observation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_observations.observation_id"),
+        nullable=False,
+    ),
+    Column("value", Text, nullable=False),
+    _is_identifier("alias_id", IdKind.ALIAS),
+    UniqueConstraint("observation_id", name="one_source_bound_alias_per_observation"),
+    CheckConstraint("length(trim(value)) > 0", name="an_alias_is_not_blank"),
+)
+
+relationship_affiliations = Table(
+    "relationship_affiliations",
+    METADATA,
+    Column("affiliation_id", Text, primary_key=True),
+    Column(
+        "person_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_people.person_id"),
+        nullable=False,
+    ),
+    Column(
+        "organization_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_organizations.organization_id"),
+        nullable=False,
+    ),
+    Column(
+        "observation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_observations.observation_id"),
+        nullable=False,
+    ),
+    Column("role", Text),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    _is_identifier("affiliation_id", IdKind.AFFILIATION),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="an_affiliation_ends_after_it_starts",
+    ),
+)
+
+relationship_evidence = Table(
+    "relationship_evidence",
+    METADATA,
+    Column("evidence_id", Text, primary_key=True),
+    Column(
+        "person_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_people.person_id"),
+        nullable=False,
+    ),
+    Column("authority", Text, nullable=False),
+    Column("effective_at", DateTime(timezone=True)),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _one_of("authority", EvidenceAuthority, name="relationship_evidence_authority_is_known"),
+)
+
+relationship_evidence_observations = Table(
+    "relationship_evidence_observations",
+    METADATA,
+    Column(
+        "evidence_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_evidence.evidence_id"),
+        nullable=False,
+    ),
+    Column(
+        "observation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_observations.observation_id"),
+        nullable=False,
+    ),
+    PrimaryKeyConstraint("evidence_id", "observation_id"),
+)
+
+relationship_conversation_participants = Table(
+    "relationship_conversation_participants",
+    METADATA,
+    Column("participant_id", Text, primary_key=True),
+    Column(
+        "conversation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_conversations.conversation_id"),
+        nullable=False,
+    ),
+    Column("person_id", Text, ForeignKey(f"{SCHEMA}.relationship_people.person_id")),
+    Column(
+        "unresolved_mention_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_unresolved_mentions.unresolved_mention_id"),
+    ),
+    CheckConstraint(
+        "(person_id IS NULL) <> (unresolved_mention_id IS NULL)",
+        name="a_conversation_participant_names_one_identity_target",
+    ),
+    _is_identifier("participant_id", IdKind.CONVERSATION_PARTICIPANT),
+    Index(
+        "a_conversation_names_a_person_once",
+        "conversation_id",
+        "person_id",
+        unique=True,
+        postgresql_where=text("person_id IS NOT NULL"),
+    ),
+    Index(
+        "a_conversation_names_an_unresolved_mention_once",
+        "conversation_id",
+        "unresolved_mention_id",
+        unique=True,
+        postgresql_where=text("unresolved_mention_id IS NOT NULL"),
+    ),
+)
+
+relationship_conversation_observations = Table(
+    "relationship_conversation_observations",
+    METADATA,
+    Column(
+        "participant_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_conversation_participants.participant_id"),
+        nullable=False,
+    ),
+    Column(
+        "observation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_identity_observations.observation_id"),
+        nullable=False,
+    ),
+    PrimaryKeyConstraint("participant_id", "observation_id"),
 )

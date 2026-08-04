@@ -227,6 +227,9 @@ def test_a_span_whose_quoted_hash_does_not_re_derive_quarantines_its_proposal(
     with engine.begin() as connection:
         for reason, proposal_id in faulty.items():
             invalidate_proposal(connection, proposal_id, reason)
+            # A retry sees an already-quarantined proposal and is a zero-row
+            # update, not an `invalidated -> invalidated` state transition.
+            invalidate_proposal(connection, proposal_id, reason)
 
     with engine.connect() as connection:
         presentable = presentable_proposals(connection, first.version_id)

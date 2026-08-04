@@ -32,7 +32,12 @@ counts that limitation is built from; the envelope is assembled above it.
 **The exact-substring confirmation** covers the residue `simple` still splits.
 `RFI-0421` and `$12,500.00` are both broken into lexemes by the parser, so the
 `@@` predicate matches them as adjacent lexemes rather than as the literal
-string, and a document reading `RFI 0421` matches a query for `RFI-0421`. A
+string, and a document reading `12 500.00` matches a query for `$12,500.00`.
+**Measured, because the example this docstring first carried was false**: the
+money pair matches, but `RFI 0421` does *not* match a query for `RFI-0421`,
+because `websearch_to_tsquery` keeps the hyphen in the second lexeme
+(`'rfi' <-> '-0421'`) while the spaced document yields `'rfi','0421'`. The rule
+is real; that illustration of it was not. A
 query the server reports as one contiguous run of text is therefore confirmed
 with `strpos(content, …) > 0` over the candidate rows, which is exact at
 character granularity. It is a confirmation and never a substitute: `strpos`
@@ -407,8 +412,8 @@ def _exact_confirmation(
       what the query's literal content is, which is `_NEEDLE_SQL`.
 
     The confirmation still exists, and still removes rows, because the parser
-    splits `RFI-0421` and `$12,500.00` into adjacent lexemes and the indexed
-    predicate therefore matches a document that says `RFI 0421`. That removal is
+    splits `$12,500.00` into adjacent lexemes and the indexed predicate
+    therefore matches a document that says `12 500.00`. That removal is
     the whole purpose and is asserted as such in
     `tests/search_quality/test_exact_confirmation_matrix.py`. `lower` on the
     column is not an index concern: this condition runs after the indexed

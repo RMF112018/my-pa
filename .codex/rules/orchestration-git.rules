@@ -1,0 +1,93 @@
+# Standing execution policy for the designated my-pa orchestration agent.
+# Repository authority and extreme-risk boundaries remain governed by AGENTS.md.
+
+# Routine local lifecycle operations.
+prefix_rule(
+    pattern = ["git", ["status", "diff", "show", "log", "rev-parse", "fetch"]],
+    decision = "allow",
+    justification = "Routine read-only repository inspection is standing-authorized.",
+)
+
+prefix_rule(
+    pattern = ["git", "add"],
+    decision = "allow",
+    justification = "The designated orchestration agent may stage in-scope files.",
+)
+
+prefix_rule(
+    pattern = ["git", "commit"],
+    decision = "allow",
+    justification = "The designated orchestration agent may create bounded work commits.",
+)
+
+prefix_rule(
+    pattern = ["git", ["branch", "switch", "worktree", "rebase", "merge"]],
+    decision = "allow",
+    justification = "Routine feature-branch integration and cleanup are standing-authorized.",
+)
+
+prefix_rule(
+    pattern = ["git", "pull", "--ff-only"],
+    decision = "allow",
+    justification = "Fast-forward synchronization is standing-authorized.",
+)
+
+# Feature branches are pushed through HEAD so the rule does not authorize a
+# named protected branch. Force options remain prohibited below.
+prefix_rule(
+    pattern = ["git", "push", "origin", "HEAD"],
+    decision = "allow",
+    justification = "Pushing the checked-out bounded feature branch is standing-authorized.",
+)
+
+# Routine GitHub lifecycle operations. Exact-head review and merge conditions
+# remain mandatory under AGENTS.md section 8.1.
+prefix_rule(
+    pattern = ["gh", "pr", ["create", "view", "list", "status", "checks", "edit", "comment", "review", "ready", "merge", "close"]],
+    decision = "allow",
+    justification = "Routine pull-request lifecycle work is standing-authorized.",
+)
+
+prefix_rule(
+    pattern = ["gh", "run", ["list", "view", "watch", "rerun"]],
+    decision = "allow",
+    justification = "CI inspection and bounded reruns are standing-authorized.",
+)
+
+prefix_rule(
+    pattern = ["gh", "issue", ["create", "view", "list", "edit", "comment", "close", "reopen"]],
+    decision = "allow",
+    justification = "Routine issue lifecycle work is standing-authorized.",
+)
+
+# Extreme-risk and policy-bypassing operations remain unavailable without a
+# separate, exact operator authorization and a corresponding policy update.
+prefix_rule(
+    pattern = ["git", "push", "origin", "main"],
+    decision = "forbidden",
+    justification = "Push a reviewed feature branch and merge through an eligible pull request.",
+)
+
+prefix_rule(
+    pattern = ["git", "push", ["--force", "-f"]],
+    decision = "forbidden",
+    justification = "Force-push is not part of standing orchestration authority.",
+)
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "forbidden",
+    justification = "Use a bounded, recoverable correction that preserves user work.",
+)
+
+prefix_rule(
+    pattern = ["git", "clean", ["-f", "-fd", "-fdx", "-fx"]],
+    decision = "forbidden",
+    justification = "Do not irreversibly remove untracked workspace content.",
+)
+
+prefix_rule(
+    pattern = ["gh", "release"],
+    decision = "forbidden",
+    justification = "Release publication is not part of standing orchestration authority.",
+)

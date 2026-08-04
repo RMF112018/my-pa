@@ -170,10 +170,12 @@ def test_the_cli_reaches_nothing_http_would_deny(capability: Capability, scene: 
     record = staged_record(scene, text="quarterly revenue review")
     request = document(capability, stranger.principal_id, payloads_for(scene, record)[capability])
 
-    over_cli = CliTransport(build_service(scene.world, scene.providers), stranger).send(
+    cli_world = deepcopy(scene.world)
+    http_world = deepcopy(scene.world)
+    over_cli = CliTransport(build_service(cli_world, scene.providers), stranger).send(
         capability.value, request
     )
-    with http_transport(build_service(scene.world, scene.providers), stranger) as gateway:
+    with http_transport(build_service(http_world, scene.providers), stranger) as gateway:
         over_http = gateway.send(capability.value, request)
 
     assert over_cli.failed == over_http.failed, capability.value

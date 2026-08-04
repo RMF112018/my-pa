@@ -112,6 +112,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "capture_entity_mentions",
         }
     ),
+    "3c8f1e2a5b74": frozenset(
+        {
+            "capture_review_cases",
+            "capture_review_decisions",
+            "capture_assertions",
+            "capture_assertion_spans",
+            "capture_promotion_receipts",
+            "capture_context_links",
+            "capture_conversations",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

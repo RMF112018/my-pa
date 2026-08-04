@@ -51,6 +51,7 @@ __all__ = [
     "MAX_IDEMPOTENCY_KEY_CHARACTERS",
     "MAX_REQUEST_ID_CHARACTERS",
     "AdmissionResult",
+    "CaptureKind",
     "CaptureMethod",
     "CaptureReceipt",
     "CaptureSubmission",
@@ -76,6 +77,17 @@ class CaptureMethod(StrEnum):
     """How the content was produced by the person who wrote it."""
 
     TYPED_TEXT = "typed_text"
+
+
+class CaptureKind(StrEnum):
+    """The explicit source class selected by the author.
+
+    A conversation log may seed a skeletal Conversation. A quick note never
+    does so merely because its text looks conversational.
+    """
+
+    QUICK_NOTE = "quick_note"
+    CONVERSATION_LOG = "conversation_log"
 
 
 class TrustState(StrEnum):

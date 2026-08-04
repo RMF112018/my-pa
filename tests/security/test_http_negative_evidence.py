@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes thirteen capability names and none of them mutates a source,
+  ends: the transport routes fifteen capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -55,6 +55,7 @@ from tests.conftest import (
     build_service,
     operator,
     staged_capture,
+    staged_review_case,
     staged_search,
 )
 from tests.wire import Reply, Wire, serve
@@ -193,6 +194,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     output.
     """
     capture = staged_capture(marked, text=MARKER_CONTENT)
+    review_case = staged_review_case(marked, capture)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -231,6 +233,12 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
         Capability.CAPTURE_LIST: {},
         Capability.CAPTURE_SEARCH: {"query": "synthetic"},
+        Capability.REVIEW_LIST: {},
+        Capability.REVIEW_DECIDE: {
+            "review_case_id": review_case.review_case_id,
+            "expected_review_version": 0,
+            "disposition": "reject",
+        },
     }
 
 
@@ -358,6 +366,8 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.REVIEW_LIST,
+        Capability.REVIEW_DECIDE,
     }
 ]
 

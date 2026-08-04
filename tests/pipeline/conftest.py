@@ -35,6 +35,7 @@ from sqlalchemy.engine import Connection, make_url
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import CaptureAdmissionRequest
+from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.capture.version import CaptureContent, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
@@ -119,7 +120,15 @@ class Saved:
     text: str
 
 
-def save(connection: Connection, note: str, *, key: str | None = None) -> Saved:
+def save(
+    connection: Connection,
+    note: str,
+    *,
+    key: str | None = None,
+    capture_kind: CaptureKind = CaptureKind.QUICK_NOTE,
+    context_source_object_id: str | None = None,
+    context_source_version_id: str | None = None,
+) -> Saved:
     """Store one capture through the production admit path.
 
     The `capture_jobs` row is written by `admit_capture` itself and is read back
@@ -141,6 +150,9 @@ def save(connection: Connection, note: str, *, key: str | None = None) -> Saved:
         accepted_at=WHEN,
         client_created_at=None,
         occurred_at=None,
+        capture_kind=capture_kind,
+        context_source_object_id=context_source_object_id,
+        context_source_version_id=context_source_version_id,
     )
     admission = admit_capture(connection, request)
     receipt = admission.receipt

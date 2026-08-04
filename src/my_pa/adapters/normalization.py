@@ -56,12 +56,14 @@ from typing import Any, Final
 from my_pa.application.commands import (
     Command,
     CreateCapture,
+    DecideReviewCase,
     EnrollSource,
     FetchSource,
     GetCapabilities,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListReviewCases,
     ListSources,
     ReadCapture,
     ReadKnowledge,
@@ -72,6 +74,8 @@ from my_pa.application.commands import (
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.contracts.v1.envelope import RequestMetadata
+from my_pa.domain.capture.review import Disposition
+from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 
@@ -249,7 +253,14 @@ def _moments(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _create_capture(payload: Mapping[str, Any]) -> Command:
-    return CreateCapture(**_moments(payload))
+    converted = _moments(payload)
+    named = converted.get("capture_kind")
+    if isinstance(named, str):
+        try:
+            converted["capture_kind"] = CaptureKind(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.CAPTURE_KIND) from None
+    return CreateCapture(**converted)
 
 
 def _revise_capture(payload: Mapping[str, Any]) -> Command:
@@ -266,6 +277,21 @@ def _list_captures(payload: Mapping[str, Any]) -> Command:
 
 def _search_captures(payload: Mapping[str, Any]) -> Command:
     return SearchCaptures(**payload)
+
+
+def _list_review_cases(payload: Mapping[str, Any]) -> Command:
+    return ListReviewCases(**payload)
+
+
+def _decide_review_case(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    named = converted.get("disposition")
+    if isinstance(named, str):
+        try:
+            converted["disposition"] = Disposition(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.DISPOSITION) from None
+    return DecideReviewCase(**converted)
 
 
 #: One builder per capability. A mapping rather than a `match`, so that
@@ -287,6 +313,8 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CAPTURE_READ: _read_capture,
         Capability.CAPTURE_LIST: _list_captures,
         Capability.CAPTURE_SEARCH: _search_captures,
+        Capability.REVIEW_LIST: _list_review_cases,
+        Capability.REVIEW_DECIDE: _decide_review_case,
     }
 )
 
@@ -296,7 +324,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the thirteen names nothing.
+    not one of the fifteen names nothing.
     """
     try:
         return Capability(capability)

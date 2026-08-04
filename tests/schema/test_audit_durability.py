@@ -59,6 +59,7 @@ from my_pa.contracts.ports import (
     KnowledgeRecord,
     KnowledgeRepository,
     OperationQueue,
+    ReviewRepository,
     SearchOutcome,
     SourceProviders,
     SourceRepository,
@@ -232,6 +233,10 @@ class _FailsAfterTheWork(UnitOfWork):
     @property
     def captures(self) -> CaptureRepository:
         return self._inner.captures
+
+    @property
+    def reviews(self) -> ReviewRepository:
+        return self._inner.reviews
 
     @property
     def audit(self) -> AuditSink:

@@ -55,6 +55,17 @@ class IdKind(StrEnum):
     PROPOSAL = "prop"
     CAPTURE_CLASSIFICATION = "ccls"
     CAPTURE_ENTITY_MENTION = "men"
+    #: The capture *review and promotion* plane: what a reviewer decided and
+    #: what the product now holds as canonical. Each is its own prefix, on the
+    #: same argument the processing plane makes — a stored reference has to say
+    #: which record it names, and `capture_proposals.accepted_record_id` in
+    #: particular carries no foreign key, so its prefix is the only thing in the
+    #: value that says what it points at.
+    REVIEW_CASE = "rvw"
+    REVIEW_DECISION = "rdec"
+    ASSERTION = "asrt"
+    CONTEXT_LINK = "clink"
+    CONVERSATION = "conv"
     OPERATION = "op"
     KNOWLEDGE = "kn"
     AUDIT = "audit"

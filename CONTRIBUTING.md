@@ -37,7 +37,7 @@ Use the pull-request template. Explain:
 - architecture, privacy, dependency, migration, or operational impact;
 - deferred work and operator-only actions.
 
-Keep the PR single-purpose. Request review against the exact head. The operator controls merge, branch cleanup, deployment, destructive operations, credential mutation, and risk acceptance. Squash merge is the default.
+Keep the PR single-purpose. Request review against the exact head. Under `AGENTS.md` section 8.1, the designated orchestration agent has standing operator-equivalent authority for routine branch, commit, push, pull-request, eligible squash-merge, and cleanup operations. Independent exact-head review remains mandatory. The operator retains only the extreme-risk actions enumerated in `AGENTS.md` section 8.2, including production activation, destructive or irreversible operations, credential mutation, live personal-data access, material risk acceptance, and policy amendment. Squash merge is the default.
 
 ## Documentation and decisions
 

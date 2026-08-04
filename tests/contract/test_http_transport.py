@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the thirteen capabilities is addressable over HTTP
+**Reachability.** Every one of the fifteen capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a fourteenth capability added to the domain arrives as a failing row instead
+here, so a sixteenth capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -45,6 +45,7 @@ from tests.conftest import (
     metadata_for,
     operator,
     staged_capture,
+    staged_review_case,
     staged_search,
 )
 from tests.wire import Wire, serve
@@ -55,12 +56,14 @@ from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
     Command,
     CreateCapture,
+    DecideReviewCase,
     EnrollSource,
     FetchSource,
     GetCapabilities,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListReviewCases,
     ListSources,
     ReadCapture,
     ReadKnowledge,
@@ -73,6 +76,7 @@ from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.identity.operation import Capability, permitted_purposes
@@ -118,6 +122,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     `capture.read` have a chain to append to and to read back.
     """
     capture = staged_capture(scene)
+    review_case = staged_review_case(scene, capture)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id},
@@ -157,6 +162,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
         Capability.CAPTURE_LIST: {},
         Capability.CAPTURE_SEARCH: {"query": "synthetic"},
+        Capability.REVIEW_LIST: {},
+        Capability.REVIEW_DECIDE: {
+            "review_case_id": review_case.review_case_id,
+            "expected_review_version": 0,
+            "disposition": "reject",
+        },
     }
 
 
@@ -212,6 +223,12 @@ def commands_for(
         Capability.CAPTURE_READ: ReadCapture(capture_id=capture_id),
         Capability.CAPTURE_LIST: ListCaptures(),
         Capability.CAPTURE_SEARCH: SearchCaptures(query="synthetic"),
+        Capability.REVIEW_LIST: ListReviewCases(),
+        Capability.REVIEW_DECIDE: DecideReviewCase(
+            review_case_id=staged_review_case(scene).review_case_id,
+            expected_review_version=0,
+            disposition=Disposition.REJECT,
+        ),
     }
 
 

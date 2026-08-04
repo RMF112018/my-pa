@@ -70,6 +70,8 @@ from my_pa.contracts.ports import (
     Operation,
     OperationQueue,
     RepositoryFailureError,
+    ReviewDecisionRequest,
+    ReviewRepository,
     SearchOutcome,
     SourceProviders,
     SourceRepository,
@@ -77,6 +79,7 @@ from my_pa.contracts.ports import (
     UnknownScopeError,
 )
 from my_pa.contracts.v1.status import SourceStatusState
+from my_pa.domain.capture.review import ReviewCase, ReviewDecision
 from my_pa.domain.capture.version import CaptureVersion
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
@@ -107,6 +110,7 @@ from my_pa.infrastructure.persistence.registry import (
     get_source,
     source_of_object,
 )
+from my_pa.infrastructure.persistence.review import decide_review, review_cases
 from my_pa.infrastructure.persistence.search import (
     SearchInternalError,
     SearchUnavailableError,
@@ -286,6 +290,19 @@ class _Captures(CaptureRepository):
         fault rather than an answer about the caller's request.
         """
         return _read(lambda: search_captures(self._connection, request))
+
+
+class _Reviews(ReviewRepository):
+    """The governed review and promotion plane."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def cases(self, *, limit: int) -> tuple[ReviewCase, ...]:
+        return _read(lambda: review_cases(self._connection, limit=limit))
+
+    def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
+        return _read(lambda: decide_review(self._connection, request))
 
 
 class _Knowledge(KnowledgeRepository):
@@ -484,6 +501,10 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def captures(self) -> CaptureRepository:
         return _Captures(self._open)
+
+    @property
+    def reviews(self) -> ReviewRepository:
+        return _Reviews(self._open)
 
     @property
     def audit(self) -> AuditSink:

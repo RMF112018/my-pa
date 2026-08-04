@@ -8,7 +8,7 @@ retry in the same tables, and would put application code on the write path of
 migration governance state. Two planes with different lifetimes, different
 writers, and different authority do not share a schema.
 
-Ten concerns, twenty-two tables, and nothing else. There is no scheduler, no
+Ten concerns, twenty-nine tables, and nothing else. There is no scheduler, no
 priority column, and no soft-delete flag: each of those would be a mechanism with
 no caller, and `AGENTS.md` section 2 rules them out until one exists.
 `audit_events` is not the "audit mirror" an earlier revision of this paragraph
@@ -75,11 +75,17 @@ from sqlalchemy import (
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
+from my_pa.domain.capture.assertion import AssertionState
 from my_pa.domain.capture.classification import (
     MAX_SCHEME_CHARACTERS,
     CaptureLabel,
     EntityType,
     ResolutionState,
+)
+from my_pa.domain.capture.context import (
+    ContextLinkAuthority,
+    ContextLinkRole,
+    ContextLinkTarget,
 )
 from my_pa.domain.capture.pipeline import (
     MAX_PIPELINE_VERSION_CHARACTERS,
@@ -96,6 +102,7 @@ from my_pa.domain.capture.proposal import (
     ProposalType,
     RiskClass,
 )
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.span import (
     MAX_MAPPING_VERSION_CHARACTERS,
     OffsetBasis,
@@ -117,6 +124,7 @@ from my_pa.domain.capture.version import (
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
+from my_pa.domain.conversation.event import ConversationChannel, ConversationState
 from my_pa.domain.extraction.coverage import LimitationReason
 from my_pa.domain.extraction.quarantine import QuarantineReason, QuarantineReviewState
 from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
@@ -1463,4 +1471,384 @@ capture_entity_mentions = Table(
     UniqueConstraint(
         "version_id", "span_id", "entity_type", name="one_mention_per_span_per_entity_type"
     ),
+)
+
+#: `ReviewCase`: one proposal held back from canonical until someone decides
+#: (`12_REVIEW_AND_PROMOTION_POLICY.md:112-125`).
+#:
+#: **`proposal_id` is `UNIQUE`**, and that is what makes a re-review a second
+#: *decision* rather than a second case. Two cases for one proposal would give
+#: "what was decided about this proposal" two answers with nothing to choose
+#: between them, which is the argument `capture_versions.supersedes_version_id`
+#: makes for its own uniqueness.
+#:
+#: **There is no `risk_class` and no `authority_class` column.**
+#: `12_REVIEW_AND_PROMOTION_POLICY.md:95-100` gives four classes and four
+#: default routings, and the four class names are the ones `RiskClass` already
+#: carries — so an `authority_class` would be a second enum with the same values
+#: as an existing one, which the `D-81` guard keys by value and could not tell
+#: apart from it. Reusing `RiskClass` for such a column instead only moves the
+#: problem: the proposal this case names already carries `risk_class`, and
+#: `proposal_id` is `UNIQUE`, so either column would be a second statement of a
+#: fact one join away. It is the rule `capture_processing_text` follows in
+#: refusing a `transformations` column.
+#:
+#: **There is no `allowed_dispositions` column**, although
+#: `12_REVIEW_AND_PROMOTION_POLICY.md:124` lists one among a review case's
+#: contents: the allowed set is a rule, and a stored copy of a rule is a second
+#: place it can be stated and the only place it can be wrong.
+#:
+#: **And no provenance columns.** `method`, `method_version` and `schema_version`
+#: are on the proposal already.
+#:
+#: `capture_id` and `version_id` *are* carried, although the proposal determines
+#: both. `12_REVIEW_AND_PROMOTION_POLICY.md:115` requires a case to bind the
+#: exact capture and version and `:118` the expected version, and the same
+#: redundancy is already accepted at `capture_classifications` and
+#: `capture_entity_mentions`, which carry `version_id` beside a `span_id` that
+#: determines it.
+capture_review_cases = Table(
+    "capture_review_cases",
+    METADATA,
+    Column("review_case_id", Text, primary_key=True),
+    Column(
+        "proposal_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_proposals.proposal_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "capture_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.captures.capture_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("opened_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("review_case_id", IdKind.REVIEW_CASE),
+    Index("capture_review_cases_by_capture", "capture_id", "opened_at"),
+)
+
+#: `ReviewDecision`: what was decided, by whom, and in what order.
+#:
+#: **Append only, and there is no `state` column to drift.** The case's current
+#: disposition is the row with the greatest `sequence`, which is a read of the
+#: rows themselves and so cannot disagree with them — the argument `captures`
+#: makes for having no `current_version_id`. `UNIQUE(review_case_id, sequence)`
+#: is what makes "the greatest" a single row under concurrent write rather than
+#: a race two writers can both win.
+#:
+#: **`audit_id` is a reference and not a foreign key**, on the terms
+#: `capture_versions` states: the audit event committed on its own connection
+#: before this transaction opened, and a constraint would make the audit's
+#: durability depend on the durability of the work it exists to outlive.
+capture_review_decisions = Table(
+    "capture_review_decisions",
+    METADATA,
+    Column("decision_id", Text, primary_key=True),
+    Column(
+        "review_case_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_review_cases.review_case_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("sequence", Integer, nullable=False),
+    Column("disposition", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("decided_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("decision_id", IdKind.REVIEW_DECISION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _one_of("disposition", Disposition, name="review_disposition_is_known"),
+    CheckConstraint("sequence >= 1", name="review_decisions_are_numbered_from_one"),
+    UniqueConstraint(
+        "review_case_id", "sequence", name="one_decision_per_sequence_per_review_case"
+    ),
+)
+
+#: `Assertion`: the canonical record an accepted proposal becomes
+#: (`09_CANONICAL_OBJECT_AND_DOMAIN_MODEL.md:95`).
+#:
+#: **`proposal_id` is `UNIQUE`**: one proposal is accepted once, and a second
+#: assertion for it would be a second promotion of one act. That is the rule
+#: `capture_receipts.version_id` states for acceptance of a version.
+#:
+#: **`normalized_value` is the assertion's own, not the proposal's.** A
+#: corrected accept writes the corrected value here while the proposal keeps what
+#: it derived and moves to `corrected_accepted`, so nothing is updated in place
+#: and the lineage `QC-AC-022` protects survives. There is no separate correction
+#: table; see `domain.capture.assertion`.
+#:
+#: **`superseded_by_assertion_id` is `UNIQUE`** for the reason
+#: `capture_versions.supersedes_version_id` is: without it two assertions could
+#: name the same predecessor and the chain would fork.
+#:
+#: **Every assertion cites at least one span**, and that is a deferred constraint
+#: trigger rather than a counter column here, exactly as it is for a proposal: a
+#: counter would be a second statement of a fact `capture_assertion_spans`
+#: already holds and would need an `UPDATE` path to maintain.
+capture_assertions = Table(
+    "capture_assertions",
+    METADATA,
+    Column("assertion_id", Text, primary_key=True),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "proposal_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_proposals.proposal_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "decision_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_review_decisions.decision_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("assertion_type", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("normalized_value", Text),
+    Column(
+        "superseded_by_assertion_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_assertions.assertion_id", ondelete="CASCADE"),
+        unique=True,
+    ),
+    Column("accepted_at", DateTime(timezone=True), nullable=False),
+    Column("revalidation_required_at", DateTime(timezone=True)),
+    _is_identifier("assertion_id", IdKind.ASSERTION),
+    # The assertion's type is the proposal's type carried forward, so it is
+    # constrained against the same vocabulary rather than a parallel one.
+    _one_of("assertion_type", ProposalType, name="assertion_type_is_known"),
+    _one_of("state", AssertionState, name="assertion_state_is_known"),
+    # The rule ADR-003 clause 8 states, where a hand-run statement meets it too.
+    # An assertion in `revalidation_required` with no timestamp records that
+    # evidence moved without recording when, and any other state with one
+    # attributes a re-validation to a record that was never asked for one.
+    CheckConstraint(
+        f"(state = '{AssertionState.REVALIDATION_REQUIRED.value}') "
+        "= (revalidation_required_at IS NOT NULL)",
+        name="a_revalidating_assertion_records_when_it_was_asked",
+    ),
+    CheckConstraint(
+        f"normalized_value IS NULL OR length(normalized_value) "
+        f"BETWEEN 1 AND {MAX_NORMALIZED_VALUE_CHARACTERS}",
+        name="an_asserted_value_is_bounded",
+    ),
+    Index("capture_assertions_by_version", "version_id", "state"),
+)
+
+#: The `[1..n]` between an assertion and the spans it rests on, mirroring
+#: `capture_proposal_spans`.
+#:
+#: The composite primary key is the upper half: an assertion cites one span once.
+#: The lower half — *at least* one — is a `DEFERRABLE INITIALLY DEFERRED`
+#: constraint trigger installed by the revision, because PostgreSQL evaluates a
+#: check against one row of one table and the row that must be refused is an
+#: assertion whose *other* table holds nothing.
+capture_assertion_spans = Table(
+    "capture_assertion_spans",
+    METADATA,
+    Column(
+        "assertion_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_assertions.assertion_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "span_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_spans.span_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("linked_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    PrimaryKeyConstraint("assertion_id", "span_id", name="an_assertion_cites_a_span_once"),
+    Index("capture_assertion_spans_by_span", "span_id"),
+)
+
+#: One row per promotion: safe evidence that one proposal became canonical.
+#:
+#: **A separate table from `capture_receipts`**, and not a widening of it.
+#: That table's `version_id` is `UNIQUE` because a version is accepted once; a
+#: promotion is a different act on a different object, and relaxing the existing
+#: column would retroactively change what an already-merged revision emits.
+#:
+#: Carries no content and no summary of what was promoted — the assertion holds
+#: that, once. `policy_version` is the same bounded token `audit_events` records,
+#: so an operator can say which policy admitted the promotion.
+capture_promotion_receipts = Table(
+    "capture_promotion_receipts",
+    METADATA,
+    Column("receipt_id", Text, primary_key=True),
+    Column(
+        "assertion_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_assertions.assertion_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "decision_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_review_decisions.decision_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("policy_version", Text, nullable=False),
+    Column("issued_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("receipt_id", IdKind.RECEIPT),
+    _matches(
+        "policy_version",
+        POLICY_VERSION_PATTERN.pattern,
+        name="promotion_policy_version_is_a_known_shape",
+    ),
+)
+
+#: `CaptureContextLink`: what a capture was launched from
+#: (`09_LOGICAL_DATA_MODEL.md:106-124`).
+#:
+#: **Bound to the capture and not to the version**, which is where this differs
+#: from `capture_classifications`: `09_LOGICAL_DATA_MODEL.md:113` names
+#: `capture_id`, and the context a capture was started from does not change when
+#: its text is revised.
+#:
+#: **`target_id` is constrained to a source object's identifier shape.**
+#: `target_type` admits one value, so the kind is decided, and giving the column
+#: `_is_identifier` is what stops a path, a host, or a query string being stored
+#: as a target — the `INV-PKL-005` guard every other identifier column has and
+#: `capture_proposals.accepted_record_id` conspicuously lacks.
+#:
+#: **The partial unique index is `09_LOGICAL_DATA_MODEL.md:124`'s "unique active
+#: link"**, and it is narrower than that sentence's "per capture/target/role/
+#: authority": including the authority state would admit a `proposed` link and a
+#: `deterministic` link to the same target at once. See `domain.capture.context`.
+capture_context_links = Table(
+    "capture_context_links",
+    METADATA,
+    Column("capture_context_link_id", Text, primary_key=True),
+    Column(
+        "capture_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.captures.capture_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("target_type", Text, nullable=False),
+    Column("target_id", Text, nullable=False),
+    Column("link_role", Text, nullable=False),
+    Column("authority_state", Text, nullable=False),
+    Column(
+        "evidence_span_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_spans.span_id", ondelete="CASCADE"),
+    ),
+    Column(
+        "review_case_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_review_cases.review_case_id", ondelete="CASCADE"),
+    ),
+    Column(
+        "superseded_by_link_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_context_links.capture_context_link_id", ondelete="CASCADE"),
+        unique=True,
+    ),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("accepted_at", DateTime(timezone=True)),
+    Column("superseded_at", DateTime(timezone=True)),
+    _is_identifier("capture_context_link_id", IdKind.CONTEXT_LINK),
+    _is_identifier("target_id", IdKind.SOURCE_OBJECT),
+    _one_of("target_type", ContextLinkTarget, name="context_link_target_type_is_known"),
+    _one_of("link_role", ContextLinkRole, name="context_link_role_is_known"),
+    _one_of("authority_state", ContextLinkAuthority, name="context_link_authority_state_is_known"),
+    # The rule the partial index below depends on: a link is superseded exactly
+    # while it records when it was. Without it a row could claim the superseded
+    # authority and still occupy the active slot.
+    CheckConstraint(
+        f"(authority_state = '{ContextLinkAuthority.SUPERSEDED.value}') "
+        "= (superseded_at IS NOT NULL)",
+        name="a_superseded_link_records_when_it_was",
+    ),
+    Index(
+        "one_active_context_link_per_capture_target_and_role",
+        "capture_id",
+        "target_id",
+        "link_role",
+        unique=True,
+        postgresql_where=text("superseded_at IS NULL"),
+    ),
+)
+
+#: `Conversation`: the event an explicit Conversation Log seeds
+#: (`09_LOGICAL_DATA_MODEL.md:202-224`).
+#:
+#: **The presence of this row is the capture's mode**, which is why there is no
+#: `capture_kind` column on `captures`. See `domain.conversation`.
+#:
+#: **`version_id` is `UNIQUE`**: one conversation event per capture version, so a
+#: replayed create cannot seed a second skeletal event for the same text.
+#:
+#: **No `accepted_summary` and no `summary_authority_state`**
+#: (`09_LOGICAL_DATA_MODEL.md:218-219`): a summary needs a model and
+#: `P00-OD-006` is open, so the columns are absent rather than declared and
+#: unreachable. `channel` defaults to `unknown` because
+#: `09_LOGICAL_DATA_MODEL.md:224` requires a skeletal event to be seedable with
+#: an unknown channel.
+capture_conversations = Table(
+    "capture_conversations",
+    METADATA,
+    Column("conversation_id", Text, primary_key=True),
+    Column(
+        "capture_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.captures.capture_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("event_state", Text, nullable=False),
+    Column(
+        "channel",
+        Text,
+        nullable=False,
+        server_default=ConversationChannel.UNKNOWN.value,
+    ),
+    Column("occurred_at_start", DateTime(timezone=True)),
+    Column("occurred_at_end", DateTime(timezone=True)),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column(
+        "superseded_by_conversation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_conversations.conversation_id", ondelete="CASCADE"),
+        unique=True,
+    ),
+    _is_identifier("conversation_id", IdKind.CONVERSATION),
+    _one_of("event_state", ConversationState, name="conversation_event_state_is_known"),
+    _one_of("channel", ConversationChannel, name="conversation_channel_is_known"),
+    # An end with no start is a duration with no anchor, and an end before its
+    # start is not a conversation. Both are nullable because a Conversation Log
+    # may be seeded before either is known.
+    CheckConstraint(
+        "occurred_at_end IS NULL OR "
+        "(occurred_at_start IS NOT NULL AND occurred_at_end >= occurred_at_start)",
+        name="a_conversation_ends_after_it_starts",
+    ),
+    Index("capture_conversations_by_capture", "capture_id", "recorded_at"),
 )

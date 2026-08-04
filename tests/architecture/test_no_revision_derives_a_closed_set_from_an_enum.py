@@ -50,7 +50,7 @@ which a later revision could derive freely simply by being written differently.
 
 **What it does NOT detect, stated because a control described as closing a class
 it does not close is the overclaim this campaign keeps catching (`D-86`).** This
-module reads a constraint whose admitted vocabulary is a whole closed *set*. Six
+module reads a constraint whose admitted vocabulary is a whole closed *set*. Nine
 constraints instead embed a single enum **value**, and every one of them is
 outside this guard's coverage:
 
@@ -67,7 +67,17 @@ outside this guard's coverage:
   than left for a later sweep to find, because `D-86`'s second half is
   "implemented, not promised". It sits inside `2b7e9f4c1a83`, whose closed sets
   are frozen, so the *set* is safe; the embedded single value is not, on exactly
-  the terms the six above are not.
+  the terms the six above are not;
+- `a_revalidating_assertion_records_when_it_was_asked`, from
+  `AssertionState.REVALIDATION_REQUIRED`, and
+  `a_superseded_link_records_when_it_was`, from
+  `ContextLinkAuthority.SUPERSEDED` — the eighth and ninth, added by WP-8 and
+  counted here for the same reason the seventh was. Both sit inside
+  `3c8f1e2a5b74`, whose closed sets are frozen.
+
+The list is maintained by counting, not by memory: a revision adding a
+constraint that embeds one enum value adds a line here, and the number in the
+paragraph above moves with it.
 
 The reviewer measured the gap rather than inferring it: renaming
 `AuditOutcome.DENIED` moves the DDL an already-merged revision emits and this
@@ -112,7 +122,7 @@ from types import ModuleType
 from typing import Final
 
 import pytest
-from sqlalchemy import CheckConstraint, Table
+from sqlalchemy import CheckConstraint, MetaData, Table
 
 import my_pa
 
@@ -130,6 +140,7 @@ _EMISSION_CALLABLES: Final = (
     "_historical_audit_events",
     "_historical_capture_tables",
     "_historical_wp7_tables",
+    "_historical_wp8_tables",
 )
 _EMISSION_LIST: Final = "_TABLES"
 
@@ -384,6 +395,57 @@ FROZEN: Final[dict[str, dict[str, tuple[str, ...]]]] = {
         "mention_entity_type_is_known": ("document", "project", "url"),
         "mention_resolution_state_is_known": ("unresolved",),
     },
+    "3c8f1e2a5b74": {
+        "review_disposition_is_known": (
+            "accept",
+            "correct_and_accept",
+            "defer",
+            "escalate",
+            "mark_unresolved",
+            "reject",
+            "reprocess",
+        ),
+        # Not `ProposalType`'s constraint under another name: this one is on
+        # `capture_assertions` and is emitted by this revision, and it happens to
+        # admit the same seven because an assertion carries its proposal's type
+        # forward. Both are frozen, in the revision that emits each, so neither
+        # tracks the enum.
+        "assertion_type_is_known": (
+            "commitment",
+            "decision",
+            "follow_up",
+            "issue",
+            "open_question",
+            "risk",
+            "task",
+        ),
+        "assertion_state_is_known": (
+            "accepted",
+            "contradicted",
+            "proposed",
+            "revalidation_required",
+            "stale",
+            "superseded",
+            "withdrawn",
+        ),
+        "context_link_target_type_is_known": ("source_object",),
+        "context_link_role_is_known": ("launch_context",),
+        "context_link_authority_state_is_known": (
+            "deterministic",
+            "proposed",
+            "rejected",
+            "superseded",
+            "user_confirmed",
+        ),
+        "conversation_event_state_is_known": (
+            "accepted",
+            "archived",
+            "proposed",
+            "skeletal",
+            "superseded",
+        ),
+        "conversation_channel_is_known": ("unknown",),
+    },
 }
 
 
@@ -424,12 +486,37 @@ def _emitted(module: ModuleType) -> list[Table] | None:
 
     `None` is the raw-SQL revisions of the migration target, which read `.sql`
     files and cannot derive from a Python enum at all.
+
+    **A revision that declares `_FROZEN` may not fall through to `_TABLES`**, and
+    that refusal is the whole of ledger item 1. Every freezing revision in this
+    chain also holds a module-level `_TABLES` list of the *live* declarations —
+    the input its `_historical_*` callable copies — so deleting the callable's
+    name from `_EMISSION_CALLABLES`, or renaming the callable, left this function
+    returning those live tables instead. The constraints on them still agreed
+    with the domain, so `test_a_frozen_revision_emits_its_recorded_vocabulary`
+    passed, `_derived_sites` saw a frozen name and excused it, and all eleven
+    tests here stayed green while the guard read the declaration it exists to
+    stop reading. The step that makes this module real for a new revision was
+    therefore a silent no-op if forgotten, in the module whose subject is checks
+    that silently stop checking.
+
+    Raising rather than returning `None` is deliberate: `None` is a legitimate
+    answer that `test_every_revision_declares_its_emission_readably` `continue`s
+    past for the raw-SQL revisions, so a missing entry would have gone on being
+    invisible in a second way.
     """
     for name in _EMISSION_CALLABLES:
         emitter = getattr(module, name, None)
         if callable(emitter):
             produced = emitter()
             return list(produced) if isinstance(produced, list) else [produced]
+    if isinstance(getattr(module, "_FROZEN", None), dict):
+        raise AssertionError(
+            f"{module.__name__} declares _FROZEN but exposes no emission callable this "
+            f"module knows; add its name to _EMISSION_CALLABLES {_EMISSION_CALLABLES}. "
+            f"Falling through to {_EMISSION_LIST} would read the live declaration the "
+            "freeze exists to stop reading, and would do it without failing."
+        )
     declared = getattr(module, _EMISSION_LIST, None)
     if isinstance(declared, list):
         return declared
@@ -494,8 +581,8 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 12
-    assert len({revision for revision, _ in revisions}) == 12
+    assert len(revisions) == 13
+    assert len({revision for revision, _ in revisions}) == 13
     assert {"9c6b4a18ed72", "1a4c9e77b2d5", "2b7e9f4c1a83", "7e5a1fb93d62", "8b3f5c17d904"} <= {
         revision for revision, _ in revisions
     }
@@ -586,6 +673,51 @@ def test_a_frozen_revision_emits_its_recorded_vocabulary(revision: str) -> None:
     }
     for name, expected in FROZEN[revision].items():
         assert emitted[name] == tuple(sorted(expected)), name
+
+
+def _module(**namespace: object) -> ModuleType:
+    """A stand-in revision, so the rule below is exercised on a real lookup."""
+    module = ModuleType("_revision_synthetic")
+    for name, value in namespace.items():
+        setattr(module, name, value)
+    return module
+
+
+def test_a_freezing_revision_may_not_fall_through_to_the_live_declaration() -> None:
+    """Ledger item 1, closed, with the control that says the refusal is narrow.
+
+    The defect: `_EMISSION_CALLABLES` is a name list, and a revision whose
+    callable is not in it falls back to `_TABLES` — which every freezing revision
+    in this chain also holds, pointing at the *live* declarations its callable
+    copies. So the entry that makes this module read a freeze at all could be
+    forgotten, and nothing anywhere would say so. `2b7e9f4c1a83` names the hazard
+    in its own docstring and could not enforce it.
+
+    Three cases, because a rule that refused everything would be no better than
+    one that refused nothing:
+
+    - a freezing revision this module cannot read raises, naming the fix;
+    - the same revision with a recognised callable is read from the callable, so
+      the refusal is about the lookup and not about `_FROZEN` existing;
+    - a revision with no `_FROZEN` still falls back to `_TABLES`, which is the
+      legitimate case the fallback was written for and which the raise must not
+      take with it.
+    """
+    live = Table("live", MetaData(), CheckConstraint("a IN ('x')", name="a_is_known"))
+    frozen_copy = Table("frozen", MetaData(), CheckConstraint("a IN ('y')", name="a_is_known"))
+
+    with pytest.raises(AssertionError, match="_EMISSION_CALLABLES"):
+        _emitted(_module(_FROZEN={"live": {"a_is_known": "a IN ('y')"}}, _TABLES=[live]))
+
+    readable = _module(
+        _FROZEN={"live": {"a_is_known": "a IN ('y')"}},
+        _TABLES=[live],
+        _historical_wp8_tables=lambda: [frozen_copy],
+    )
+    assert _emitted(readable) == [frozen_copy]
+
+    assert _emitted(_module(_TABLES=[live])) == [live]
+    assert _emitted(_module()) is None
 
 
 @pytest.mark.parametrize("revision", sorted(FROZEN))

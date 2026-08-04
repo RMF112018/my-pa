@@ -34,7 +34,7 @@ Everything is synthetic: no real path, no real person, no live source.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
@@ -58,6 +58,8 @@ from my_pa.contracts.ports import (
     Operation,
     OperationQueue,
     PortError,
+    ReviewDecisionRequest,
+    ReviewRepository,
     SearchOutcome,
     SourceProviders,
     SourceRepository,
@@ -77,6 +79,15 @@ from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.capture.errors import CaptureConflictError
+from my_pa.domain.capture.proposal import ProposalState, ProposalType, RiskClass
+from my_pa.domain.capture.review import (
+    Disposition,
+    ReviewCase,
+    ReviewConflictError,
+    ReviewDecision,
+    ReviewNotFoundError,
+    ReviewUnsupportedError,
+)
 from my_pa.domain.capture.submission import CaptureReceipt
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
@@ -151,6 +162,8 @@ class World:
     capture_versions: list[CaptureVersion] = field(default_factory=list)
     capture_receipts: dict[str, CaptureReceipt] = field(default_factory=dict)
     capture_keys: dict[str, tuple[str, str]] = field(default_factory=dict)
+    review_cases: list[ReviewCase] = field(default_factory=list)
+    review_decisions: list[ReviewDecision] = field(default_factory=list)
     audit: list[AuditEvent] = field(default_factory=list)
     commits: int = 0
     rollbacks: int = 0
@@ -397,7 +410,7 @@ class _Captures(CaptureRepository):
         held = self._world.capture_keys.get(request.idempotency_key)
         if held is not None:
             digest, receipt_id = held
-            if digest != request.content.digest:
+            if digest != request.payload_digest:
                 raise CaptureConflictError("the idempotency key is bound to different content")
             return CaptureAdmission(receipt=self._world.capture_receipts[receipt_id], created=False)
 
@@ -446,7 +459,7 @@ class _Captures(CaptureRepository):
         )
         self._world.capture_receipts[receipt.receipt_id] = receipt
         self._world.capture_keys[request.idempotency_key] = (
-            request.content.digest,
+            request.payload_digest,
             receipt.receipt_id,
         )
         return CaptureAdmission(receipt=receipt, created=True)
@@ -549,6 +562,75 @@ class _Captures(CaptureRepository):
         return max(held, key=lambda v: v.version_number) if held else None
 
 
+class _Reviews(ReviewRepository):
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def cases(self, *, limit: int) -> tuple[ReviewCase, ...]:
+        self._world.fail("review_cases")
+        return tuple(self._world.review_cases[:limit])
+
+    def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
+        self._world.fail("review_decide")
+        case = next(
+            (
+                item
+                for item in self._world.review_cases
+                if item.review_case_id == request.review_case_id
+            ),
+            None,
+        )
+        if case is None:
+            raise ReviewNotFoundError("the request names no stored review case")
+        if any(
+            decision.review_case_id == request.review_case_id
+            and decision.disposition in {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}
+            and decision.assertion_id is not None
+            and decision.receipt_id is not None
+            for decision in self._world.review_decisions
+        ):
+            raise ReviewConflictError("an accepted review case is terminal")
+        current = sum(
+            decision.review_case_id == request.review_case_id
+            for decision in self._world.review_decisions
+        )
+        if current != request.expected_review_version:
+            raise ReviewConflictError("the expected review version is stale")
+        state = {
+            "accept": ProposalState.ACCEPTED,
+            "correct_and_accept": ProposalState.CORRECTED_ACCEPTED,
+            "reject": ProposalState.REJECTED,
+            "defer": ProposalState.DEFERRED,
+            "mark_unresolved": ProposalState.UNRESOLVED,
+        }.get(request.disposition.value)
+        if state is None:
+            raise ReviewUnsupportedError("the disposition has no route")
+        accepted = state in {ProposalState.ACCEPTED, ProposalState.CORRECTED_ACCEPTED}
+        decision = ReviewDecision(
+            decision_id=issue_identifier(IdKind.REVIEW_DECISION),
+            review_case_id=request.review_case_id,
+            sequence=current + 1,
+            disposition=request.disposition,
+            principal_id=request.principal_id,
+            correlation_id=request.correlation_id,
+            audit_id=request.audit_id,
+            decided_at=request.decided_at,
+            proposal_state=state,
+            assertion_id=issue_identifier(IdKind.ASSERTION) if accepted else None,
+            receipt_id=issue_identifier(IdKind.RECEIPT) if accepted else None,
+            normalized_value=request.corrected_value,
+        )
+        self._world.review_decisions.append(decision)
+        index = self._world.review_cases.index(case)
+        self._world.review_cases[index] = replace(
+            case,
+            proposal_state=state,
+            review_version=decision.sequence,
+            latest_disposition=request.disposition,
+        )
+        return decision
+
+
 class _Audit(AuditSink):
     """The audit port, over a `World`.
 
@@ -629,6 +711,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def captures(self) -> CaptureRepository:
         return _Captures(self._world)
+
+    @property
+    def reviews(self) -> ReviewRepository:
+        return _Reviews(self._world)
 
     @property
     def audit(self) -> AuditSink:
@@ -869,6 +955,25 @@ def staged_capture(scene: Scene, *, text: str = "a synthetic note") -> CaptureVe
     )
     assert stored is not None
     return stored
+
+
+def staged_review_case(scene: Scene, capture: CaptureVersion | None = None) -> ReviewCase:
+    """One open consequential case, using identifiers every review command accepts."""
+    if scene.world.review_cases:
+        return scene.world.review_cases[0]
+    version = capture or staged_capture(scene)
+    case = ReviewCase(
+        review_case_id=issue_identifier(IdKind.REVIEW_CASE),
+        proposal_id=issue_identifier(IdKind.PROPOSAL),
+        capture_id=version.capture_id,
+        version_id=version.version_id,
+        proposal_type=ProposalType.COMMITMENT,
+        proposal_state=ProposalState.NEEDS_REVIEW,
+        risk_class=RiskClass.MODERATE,
+        opened_at=WHEN,
+    )
+    scene.world.review_cases.append(case)
+    return case
 
 
 @pytest.fixture

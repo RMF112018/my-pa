@@ -142,11 +142,12 @@ def evaluate(request: PolicyRequest) -> PolicyDecision:
 _SCOPELESS: frozenset[Capability] = frozenset(
     {
         Capability.CAPABILITIES_GET,
-        Capability.CAPTURE_CREATE,
         Capability.CAPTURE_REVISE,
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.REVIEW_LIST,
+        Capability.REVIEW_DECIDE,
     }
 )
 
@@ -159,6 +160,10 @@ def _scope_is_authorized(request: PolicyRequest) -> bool:
     """
     if request.capability in _SCOPELESS:
         return not request.requested_source_ids
+    if request.capability is Capability.CAPTURE_CREATE:
+        return not request.requested_source_ids or (
+            request.requested_source_ids <= request.authorized_source_ids
+        )
     if not request.requested_source_ids:
         return False
     if request.capability is Capability.SOURCES_ENROLL:

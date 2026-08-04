@@ -162,24 +162,53 @@ A normal MCV change uses:
 3. a focused pull request using the repository template;
 4. proportionate automated checks;
 5. review against the exact head;
-6. squash merge and branch cleanup by the operator, or by a delegated orchestration agent under section 8.1.
+6. squash merge and branch cleanup by the operator or the designated orchestration agent under section 8.1.
 
-Do not push directly to protected `main`. Do not self-approve, accept risk, deploy, or activate production. Merge only under section 8.1 or explicit operator instruction. Later commits invalidate prior exact-head review.
+Do not push directly to protected `main`. Merge only under section 8.1 or explicit operator instruction. Later commits invalidate prior exact-head review.
 
-### 8.1 Delegated merge authority
+### 8.1 Standing orchestration authority
 
-The operator may delegate squash merge and branch cleanup to one orchestration agent. The delegation is bounded by the conditions that make it safe and confers nothing else. The current designation is recorded in the pull request that establishes it.
+The operator grants the single designated orchestration agent standing authority to act as the operator's delivery representative for routine, bounded repository and GitHub lifecycle work. This delegation exists to keep the operator out of ordinary execution loops and remains effective for the current MCV campaign until the operator withdraws it or the objective moves outside the accepted MCV scope.
+
+Within an accepted objective, the designated orchestration agent may, without additional operator confirmation:
+
+- create, switch, update, and remove bounded work branches and worktrees;
+- stage files, create commits, amend unreviewed commits, rebase or synchronize a feature branch, and resolve routine conflicts;
+- push feature branches and tags that do not publish a release or activate production;
+- create, edit, label, and close issues and pull requests; request reviews; respond to findings; and manage ordinary repository metadata;
+- authorize and direct one worker agent at a time, including approval of the worker's routine repository operations;
+- run local and CI validation against synthetic or explicitly eligible data and use verified isolated test databases;
+- decide routine technical, architectural, sequencing, corrective, and recovery matters within the accepted objective;
+- accept bounded, reversible implementation risk that does not meet the extreme-risk definition in section 8.2;
+- squash merge an eligible pull request and clean up its feature branch and worktree when every merge condition below is satisfied.
 
 A delegated merge is permitted only when all of the following hold:
 
 - the exact head has passed an independent review by a context that did not author the change, that had authority to block, and that was not instructed toward an outcome;
 - that review is against the current head, since a later commit invalidates it and this permission with it;
 - the applicable test tier passes, and its result is stated rather than assumed;
-- the change carries no operator-only action.
+- the change carries no extreme-risk action reserved by section 8.2.
 
-The delegated agent may not approve its own change, act as its own reviewer, or widen this delegation. Risk acceptance, deployment, production activation, credential mutation, destructive data operations, live personal-data access, and amendment of this policy remain operator-only.
+The designated orchestration agent may approve routine lifecycle actions and worker requests on the operator's behalf, but may not treat its own implementation review as the required independent exact-head review. It may not widen this delegation or delegate final campaign accountability.
 
-The operator may withdraw the delegation at any time, and it does not survive a change of objective. A merge performed under it names the reviewing context and the reviewed head, so the authority a merge rested on stays legible afterwards.
+The operator may withdraw the delegation at any time. A merge performed under it names the reviewing context and reviewed head, so the authority supporting the merge remains legible.
+
+### 8.2 Extreme-risk actions reserved to the operator
+
+Only the operator may authorize:
+
+- irreversible destruction, deletion, retirement, or corruption of canonical or irreplaceable data;
+- disclosure or external transfer of personal, confidential, privileged, regulated, or credential-bearing data outside an already authorized boundary;
+- production deployment or activation, destructive production migration, or externally consequential cutover;
+- acceptance of material security, privacy, legal, compliance, financial, contractual, or operational risk;
+- expenditure, procurement, subscription, or financial commitment outside an already approved mechanism and amount;
+- bypassing or weakening repository governance, acceptance criteria, security controls, or independent-review requirements;
+- action when exact repository, branch, commit, environment, target-system, or data-source identity cannot be established;
+- a choice between materially different product outcomes when evidence cannot establish operator intent;
+- an irreversible action whose blast radius cannot be reliably bounded or recovered;
+- credential creation, disclosure, rotation, or mutation; live personal-data access; source-system mutation; or amendment of this policy.
+
+Absence of an item from this reserved list does not by itself authorize work outside the accepted objective. Conversely, routine Git and GitHub lifecycle operations listed in section 8.1 are expressly authorized and must not be escalated merely because a tool classifies them as state-changing.
 
 Use ADRs only for durable, cross-cutting, difficult-to-reverse decisions. Ordinary implementation choices belong in code, tests, issues, and pull requests. Update documentation only when behavior, contracts, architecture, operations, or developer workflow materially changes.
 

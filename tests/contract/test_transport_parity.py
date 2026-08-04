@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-thirteen capabilities. There are two ways to prove that and only one of them stays
+fifteen capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -26,7 +26,7 @@ way to see what a transport *built* rather than what it returned — and compare
 as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
-**And the answers, over all thirteen capabilities and eight refusals.** Each
+**And the answers, over all fifteen capabilities and ten refusals.** Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
 `sources.enroll` alone would make the second and third callers idempotent
@@ -60,6 +60,7 @@ from tests.conftest import (
     build_service,
     staged_capture,
     staged_record,
+    staged_review_case,
     staged_search,
 )
 from tests.transports import CLI_OPTIONS, CLI_SCOPE_OPTIONS, TRANSPORTS, Answer
@@ -72,6 +73,7 @@ from my_pa.application.commands import Command
 from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
 from my_pa.domain.common.identifiers import (
     IdKind,
     InvalidIdentifierError,
@@ -94,6 +96,7 @@ ADAPTERS = PACKAGE / "adapters"
 NORMALIZE_SITES = (cli_module, http_module, mcp_module)
 
 TRANSPORT_NAMES = frozenset({"http", "mcp", "cli"})
+CORRECTED_VALUE_MARKER = "PRIVATE-CORRECTED-VALUE-MARKER"
 
 
 def a_permitted_purpose(capability: Capability) -> Purpose:
@@ -132,6 +135,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     them.
     """
     capture = staged_capture(scene)
+    review_case = staged_review_case(scene, capture)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -184,6 +188,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         },
         Capability.CAPTURE_LIST: {"page_size": 10},
         Capability.CAPTURE_SEARCH: {"query": "synthetic", "page_size": 10},
+        Capability.REVIEW_LIST: {"page_size": 10},
+        Capability.REVIEW_DECIDE: {
+            "review_case_id": review_case.review_case_id,
+            "expected_review_version": 0,
+            "disposition": "reject",
+        },
     }
 
 
@@ -307,7 +317,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 14, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 16, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -735,6 +745,11 @@ REFUSALS: tuple[tuple[str, str, ErrorCode], ...] = (
         ErrorCode.INVALID_REQUEST,
     ),
     ("a page size of zero", Capability.SOURCES_LIST.value, ErrorCode.INVALID_REQUEST),
+    (
+        "an oversized corrected review value",
+        Capability.REVIEW_DECIDE.value,
+        ErrorCode.INVALID_REQUEST,
+    ),
     ("a scope the principal does not hold", Capability.SOURCES_LIST.value, ErrorCode.DENIED),
 )
 
@@ -772,6 +787,16 @@ def refusal_requests(scene: Scene) -> dict[str, dict[str, Any] | None]:
         "a page size of zero": document(
             Capability.SOURCES_LIST, principal_id, {"source_id": source_id, "page_size": 0}
         ),
+        "an oversized corrected review value": document(
+            Capability.REVIEW_DECIDE,
+            principal_id,
+            {
+                "review_case_id": staged_review_case(scene).review_case_id,
+                "expected_review_version": 0,
+                "disposition": "correct_and_accept",
+                "corrected_value": CORRECTED_VALUE_MARKER + "x" * MAX_NORMALIZED_VALUE_CHARACTERS,
+            },
+        ),
         "a scope the principal does not hold": document(
             Capability.SOURCES_LIST, principal_id, {"source_id": issue_identifier(IdKind.SOURCE)}
         ),
@@ -790,7 +815,30 @@ def test_every_refusal_is_the_same_refusal_over_all_three_transports(
     for transport, answer in answers.items():
         error = answer.document.get("error") or answer.document
         assert error["code"] == code.value, f"{transport} answered {error['code']} for {name}"
+        if name == "an oversized corrected review value":
+            assert CORRECTED_VALUE_MARKER not in answer.rendered
+            assert CORRECTED_VALUE_MARKER not in json.dumps(answer.document)
     assert_same_answer(answers, request, name)
+
+
+def test_largest_corrected_review_value_is_accepted_with_transport_parity(
+    staged: tuple[Scene, KnowledgeRecord],
+) -> None:
+    scene, _record = staged
+    case = staged_review_case(scene)
+    request = document(
+        Capability.REVIEW_DECIDE,
+        scene.principal.principal_id,
+        {
+            "review_case_id": case.review_case_id,
+            "expected_review_version": 0,
+            "disposition": "correct_and_accept",
+            "corrected_value": "x" * MAX_NORMALIZED_VALUE_CHARACTERS,
+        },
+    )
+    answers = answers_for(scene, Capability.REVIEW_DECIDE.value, request)
+    assert all(not answer.failed for answer in answers.values()), answers
+    assert_same_answer(answers, request, "largest corrected review value")
 
 
 # ---- the one request ceiling -------------------------------------------------
@@ -940,7 +988,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: thirteen capabilities answered from an empty world prove little."""
+    """Guard the matrix: fifteen capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

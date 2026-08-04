@@ -86,6 +86,7 @@ from my_pa.contracts.ports import (
     EnrollmentRepository,
     KnowledgeRepository,
     OperationQueue,
+    ReviewRepository,
     SourceProviders,
     SourceRepository,
     UnitOfWork,
@@ -198,6 +199,10 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def captures(self) -> CaptureRepository:
         return self._inner.captures
+
+    @property
+    def reviews(self) -> ReviewRepository:
+        return self._inner.reviews
 
     @property
     def audit(self) -> AuditSink:

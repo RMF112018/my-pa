@@ -28,16 +28,17 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with thirteen capabilities and nine
+emits what it emitted on the day it merged, with fifteen capabilities and ten
 purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
 **Head admits exactly the domain's vocabulary.** The checked claim that replaces
-the coupling — and it covers **all eleven** enum-backed closed sets the chain
-emits, not the two WP-6 widened. Checking `capability` and `purpose` alone, which
+the coupling — and it covers **every** enum-backed closed set the chain emits,
+not the two WP-6 widened; `CHECKED_VOCABULARY` is that list and a revision that
+freezes a set adds to it. Checking `capability` and `purpose` alone, which
 is where the first pass left it, replaced the coupling on two constraints and
-replaced it with nothing on the other nine: `audit_outcome_is_known` and
+replaced it with nothing on the rest: `audit_outcome_is_known` and
 `denial_reason_is_known` sit on the same table in the same revision, and the
 independent reviewer measured a planted `DenialReason` member changing what that
 already-merged revision emits with nothing reddening anywhere. A member added
@@ -72,7 +73,13 @@ from sqlalchemy.engine import make_url
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
+from my_pa.domain.capture.assertion import AssertionState
 from my_pa.domain.capture.classification import CaptureLabel, EntityType, ResolutionState
+from my_pa.domain.capture.context import (
+    ContextLinkAuthority,
+    ContextLinkRole,
+    ContextLinkTarget,
+)
 from my_pa.domain.capture.pipeline import PipelineStage, ProcessingState
 from my_pa.domain.capture.proposal import (
     ProposalField,
@@ -82,6 +89,7 @@ from my_pa.domain.capture.proposal import (
     ProposalType,
     RiskClass,
 )
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.span import OffsetBasis, SpanRole
 from my_pa.domain.capture.submission import (
     AdmissionResult,
@@ -91,6 +99,7 @@ from my_pa.domain.capture.submission import (
 )
 from my_pa.domain.capture.version import ProcessingPolicy
 from my_pa.domain.common.classification import Classification
+from my_pa.domain.conversation.event import ConversationChannel, ConversationState
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import DenialReason
@@ -211,6 +220,49 @@ FROZEN_DENIAL_REASONS: Final[frozenset[str]] = frozenset(
 IMMUTABILITY_FUNCTION = "capture_versions_stay_as_written"
 IMMUTABILITY_TRIGGER = "capture_versions_are_append_only"
 
+#: What `3c8f1e2a5b74` admits that the domain has not declared yet, and it is a
+#: disclosed gap rather than a mistake.
+#:
+#: `D-81`'s rule is that the forward `ALTER` is written **before** the member,
+#: because a member with no `ALTER` leaves every test green — every test builds
+#: its database from scratch — and is refused by the stored constraint on the
+#: first audited operation in the field. That revision therefore carries
+#: `review.list`, `review.decide` and `review_disposition` already. The members
+#: themselves cannot be declared in the same change: `adapters/mcp/tools` builds
+#: its tool list at import from `Capability` and indexes `application.commands`
+#: by each member's `capability`, so a member with no command raises `KeyError`
+#: at import. The member, its command and its handler are one indivisible change.
+#:
+#: The gap is one-directional and the assertion below says so. A constraint
+#: **wider** than the domain refuses nothing the product can write; a domain
+#: wider than the constraint is the failure `D-69` exists to prevent, and the
+#: equality in `CHECKED_VOCABULARY` still catches it, because a member added with
+#: no `ALTER` would be in the left side and not the right.
+CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
+
+PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
+
+#: The thirteen triggers `3c8f1e2a5b74` installs. Four sit on tables it does not
+#: create, which is what forward DDL is for: a trigger is not a `Table`
+#: attribute, so it changes nothing an already-merged revision emits.
+REVIEW_TRIGGERS: Final[frozenset[str]] = frozenset(
+    {
+        "an_assertion_cites_at_least_one_span",
+        "a_span_link_leaves_its_assertion_cited",
+        "an_accepted_proposal_names_a_real_assertion",
+        "capture_proposals_are_never_deleted",
+        "capture_proposals_updates_are_governed",
+        "capture_spans_stay_immutable",
+        "capture_proposal_spans_stay_immutable",
+        "capture_review_cases_stay_immutable",
+        "capture_review_decisions_stay_immutable",
+        "capture_assertions_are_never_deleted",
+        "capture_assertions_updates_are_governed",
+        "capture_assertion_spans_stay_immutable",
+        "capture_promotion_receipts_stay_immutable",
+    }
+)
+
 _CONSTRAINT = text(
     "SELECT pg_get_constraintdef(con.oid) FROM pg_constraint con "
     "JOIN pg_class rel ON rel.oid = con.conrelid "
@@ -232,8 +284,16 @@ _CONSTRAINT = text(
 #: null branch. `test_the_public_error_codes_are_admitted_at_head` below covers
 #: them by asking the server directly instead.
 CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
-    ("audit_events", "capability_is_known", frozenset(c.value for c in Capability)),
-    ("audit_events", "purpose_is_known", frozenset(p.value for p in Purpose)),
+    (
+        "audit_events",
+        "capability_is_known",
+        frozenset(c.value for c in Capability) | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN,
+    ),
+    (
+        "audit_events",
+        "purpose_is_known",
+        frozenset(p.value for p in Purpose) | PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN,
+    ),
     ("audit_events", "audit_outcome_is_known", frozenset(o.value for o in AuditOutcome)),
     ("audit_events", "denial_reason_is_known", frozenset(d.value for d in DenialReason)),
     (
@@ -300,6 +360,43 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
         "mention_resolution_state_is_known",
         frozenset(r.value for r in ResolutionState),
     ),
+    # The eight `3c8f1e2a5b74` freezes, on the same terms as the thirteen above.
+    # `assertion_type_is_known` admits the same seven as `proposal_type_is_known`
+    # and is a different constraint on a different table in a different revision:
+    # an assertion carries its proposal's type forward, and both are frozen where
+    # they are emitted, so neither tracks `ProposalType`.
+    (
+        "capture_review_decisions",
+        "review_disposition_is_known",
+        frozenset(d.value for d in Disposition),
+    ),
+    ("capture_assertions", "assertion_type_is_known", frozenset(t.value for t in ProposalType)),
+    ("capture_assertions", "assertion_state_is_known", frozenset(s.value for s in AssertionState)),
+    (
+        "capture_context_links",
+        "context_link_target_type_is_known",
+        frozenset(t.value for t in ContextLinkTarget),
+    ),
+    (
+        "capture_context_links",
+        "context_link_role_is_known",
+        frozenset(r.value for r in ContextLinkRole),
+    ),
+    (
+        "capture_context_links",
+        "context_link_authority_state_is_known",
+        frozenset(a.value for a in ContextLinkAuthority),
+    ),
+    (
+        "capture_conversations",
+        "conversation_event_state_is_known",
+        frozenset(s.value for s in ConversationState),
+    ),
+    (
+        "capture_conversations",
+        "conversation_channel_is_known",
+        frozenset(c.value for c in ConversationChannel),
+    ),
 )
 
 
@@ -327,6 +424,18 @@ def test_the_frozen_vocabulary_is_a_strict_subset_of_the_domains() -> None:
     assert {p.value for p in Purpose} > FROZEN_PURPOSES
     assert len(FROZEN_CAPABILITIES) == 8
     assert len(FROZEN_PURPOSES) == 7
+
+
+def test_the_schema_ahead_gap_closed_when_wp8_declared_its_three_names() -> None:
+    """The `D-81` ordering gap is empty now that WP-8 declares all three names.
+
+    `3c8f1e2a5b74` carried the forward `ALTER` first. Emptying these constants
+    restores plain head equality; a later schema-ahead change must deliberately
+    reopen and explain the gap rather than inheriting WP-8's exception.
+    """
+    assert frozenset() == CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+    assert frozenset() == PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN
+    assert {c.value for c in Capability} and {p.value for p in Purpose}
 
 
 @pytest.fixture
@@ -539,7 +648,9 @@ def test_downgrading_this_revision_restores_the_previous_vocabulary(
     engine = create_database_engine(disposable_database)
     try:
         command.upgrade(_config(), "head")
-        assert _admitted(engine, "capability_is_known") == {c.value for c in Capability}
+        assert _admitted(engine, "capability_is_known") == (
+            {c.value for c in Capability} | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+        )
 
         command.downgrade(_config(), ENROLLMENT_OBJECTS_REVISION)
 
@@ -583,12 +694,17 @@ def test_stopping_at_the_capture_revision_emits_the_twelve_it_merged_with(
         assert not PROPOSAL_TABLES & _tables(engine)
 
         command.upgrade(_config(), "head")
-        assert _admitted(engine, "capability_is_known") == {c.value for c in Capability}
+        admitted_at_head = {c.value for c in Capability} | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+        assert _admitted(engine, "capability_is_known") == admitted_at_head
         assert _tables(engine) >= PROPOSAL_TABLES
-        # The two vocabularies differ by exactly the capability this package
-        # added, so the equality above is a measurement rather than a tautology.
-        assert {c.value for c in Capability} - CAPABILITIES_AT_THE_CAPTURE_REVISION == {
-            "capture.search"
+        # The two vocabularies differ by exactly the capability WP-7 added and
+        # the two WP-8 capabilities widened by `3c8f1e2a5b74`, so the equality
+        # above is a measurement rather than a tautology. The schema-ahead gap
+        # is empty now that WP-8 has declared both names in the domain.
+        assert admitted_at_head - CAPABILITIES_AT_THE_CAPTURE_REVISION == {
+            "capture.search",
+            "review.decide",
+            "review.list",
         }
 
         command.downgrade(_config(), "base")
@@ -674,6 +790,7 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             IMMUTABILITY_TRIGGER,
             "a_proposal_cites_at_least_one_span",
             "a_span_link_leaves_its_proposal_cited",
+            *REVIEW_TRIGGERS,
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

@@ -1,4 +1,4 @@
-"""The ports the thirteen capability use cases call, and nothing else.
+"""The ports the fifteen capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -40,22 +40,28 @@ that holds source content, and it is bounded by the caller before it is built.
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from hashlib import sha256
 from types import TracebackType
 
 from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
-from my_pa.domain.capture.submission import CaptureReceipt
+from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
+from my_pa.domain.capture.review import Disposition, ReviewCase, ReviewDecision
+from my_pa.domain.capture.submission import CaptureKind, CaptureReceipt
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import Provenance
+from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
+from my_pa.domain.policy.decision import validate_policy_version
 from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.provider import SourceProvider
@@ -79,6 +85,8 @@ __all__ = [
     "OperationQueue",
     "PortError",
     "RepositoryFailureError",
+    "ReviewDecisionRequest",
+    "ReviewRepository",
     "SearchOutcome",
     "SourceProviders",
     "SourceRepository",
@@ -210,6 +218,36 @@ class CaptureAdmissionRequest:
     accepted_at: datetime
     client_created_at: datetime | None = None
     occurred_at: datetime | None = None
+    capture_kind: CaptureKind = CaptureKind.QUICK_NOTE
+    context_source_object_id: str | None = None
+    context_source_version_id: str | None = None
+
+    @property
+    def payload_digest(self) -> str:
+        """Digest every material admission input without copying source text."""
+        canonical = json.dumps(
+            {
+                "content_sha256": self.content.digest,
+                "capture_kind": self.capture_kind.value,
+                "context_source_object_id": self.context_source_object_id,
+                "context_source_version_id": self.context_source_version_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return sha256(canonical).hexdigest()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.capture_kind, CaptureKind):
+            raise ValueError("an admission names one capture kind")
+        if (self.context_source_object_id is None) is not (self.context_source_version_id is None):
+            raise ValueError("a launch context names both object and version")
+        if self.context_source_object_id is not None:
+            context_version_id = self.context_source_version_id
+            if context_version_id is None:  # narrowed from the paired-field invariant above
+                raise ValueError("a launch context names both object and version")
+            validate_identifier(self.context_source_object_id, IdKind.SOURCE_OBJECT)
+            validate_identifier(context_version_id, IdKind.VERSION)
 
 
 @dataclass(frozen=True, slots=True)
@@ -387,6 +425,53 @@ class CaptureRepository(ABC):
         whose processing failed is searchable on the same terms as one whose
         processing succeeded.
         """
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewDecisionRequest:
+    """Everything one review transition needs inside a single transaction."""
+
+    review_case_id: str
+    expected_review_version: int
+    disposition: Disposition
+    principal_id: str
+    correlation_id: str
+    audit_id: str
+    policy_version: str
+    decided_at: datetime
+    corrected_value: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.correlation_id, IdKind.CORRELATION)
+        validate_identifier(self.audit_id, IdKind.AUDIT)
+        validate_policy_version(self.policy_version)
+        ensure_utc(self.decided_at)
+        if type(self.expected_review_version) is not int or self.expected_review_version < 0:
+            raise ValueError("the expected review version is a non-negative integer")
+        if not isinstance(self.disposition, Disposition):
+            raise ValueError("a review request names one disposition")
+        corrected = self.disposition is Disposition.CORRECT_AND_ACCEPT
+        if corrected is not (self.corrected_value is not None):
+            raise ValueError("a correction value belongs only to correct-and-accept")
+        if self.corrected_value is not None and (
+            not self.corrected_value.strip()
+            or len(self.corrected_value) > MAX_NORMALIZED_VALUE_CHARACTERS
+        ):
+            raise ValueError("a correction value is bounded and not blank")
+
+
+class ReviewRepository(ABC):
+    """Review cases and the only port capable of canonical promotion."""
+
+    @abstractmethod
+    def cases(self, *, limit: int) -> tuple[ReviewCase, ...]:
+        """One bounded page, oldest case first."""
+
+    @abstractmethod
+    def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
+        """Append a disposition; return `None` when evidence was invalidated."""
 
 
 class SourceRepository(ABC):
@@ -629,6 +714,11 @@ class UnitOfWork(ABC):
         are written on the connection this unit of work owns, so a failure
         anywhere in the request leaves none of them.
         """
+
+    @property
+    @abstractmethod
+    def reviews(self) -> ReviewRepository:
+        """The review and promotion plane, inside this transaction."""
 
     @property
     @abstractmethod

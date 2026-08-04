@@ -118,6 +118,23 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "capture_promotion_receipts",
         "capture_context_links",
         "capture_conversations",
+        "relationship_people",
+        "relationship_organizations",
+        "relationship_identity_observations",
+        "relationship_unresolved_mentions",
+        "relationship_duplicate_sets",
+        "relationship_duplicate_members",
+        "relationship_identity_review_cases",
+        "relationship_identity_review_decisions",
+        "relationship_identity_resolutions",
+        "relationship_resolution_observations",
+        "relationship_observation_links",
+        "relationship_aliases",
+        "relationship_affiliations",
+        "relationship_evidence",
+        "relationship_evidence_observations",
+        "relationship_conversation_participants",
+        "relationship_conversation_observations",
     }
 )
 

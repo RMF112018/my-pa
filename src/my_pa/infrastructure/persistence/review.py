@@ -179,6 +179,28 @@ def decide_review(connection: Connection, request: ReviewDecisionRequest) -> Rev
     ).one_or_none()
     if case is None:
         raise ReviewNotFoundError("the request names no stored review case")
+    accepted_receipt = connection.execute(
+        select(capture_promotion_receipts.c.receipt_id)
+        .join(
+            capture_assertions,
+            capture_assertions.c.assertion_id == capture_promotion_receipts.c.assertion_id,
+        )
+        .join(
+            capture_review_decisions,
+            capture_review_decisions.c.decision_id == capture_promotion_receipts.c.decision_id,
+        )
+        .where(
+            capture_review_decisions.c.review_case_id == request.review_case_id,
+            capture_review_decisions.c.disposition.in_(
+                (Disposition.ACCEPT.value, Disposition.CORRECT_AND_ACCEPT.value)
+            ),
+            capture_assertions.c.proposal_id == case.proposal_id,
+            capture_assertions.c.decision_id == capture_review_decisions.c.decision_id,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if accepted_receipt is not None:
+        raise ReviewConflictError("an accepted review case is terminal")
     current = int(
         connection.execute(
             select(func.count())

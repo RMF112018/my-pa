@@ -32,10 +32,18 @@ counts that limitation is built from; the envelope is assembled above it.
 **The exact-substring confirmation** covers the residue `simple` still splits.
 `RFI-0421` and `$12,500.00` are both broken into lexemes by the parser, so the
 `@@` predicate matches them as adjacent lexemes rather than as the literal
-string. A single-term query is therefore confirmed with `strpos(content, …) > 0`
-over the candidate rows, which is exact at character granularity. It is a
-confirmation and never a substitute: `strpos` cannot use the index, so it runs
-*after* the indexed predicate has narrowed the page and never instead of it.
+string, and a document reading `RFI 0421` matches a query for `RFI-0421`. A
+query the server reports as one contiguous run of text is therefore confirmed
+with `strpos(content, …) > 0` over the candidate rows, which is exact at
+character granularity. It is a confirmation and never a substitute: `strpos`
+cannot use the index, so it runs *after* the indexed predicate has narrowed the
+page and never instead of it.
+
+**What the confirmation tests, and what decides it, are both read from
+PostgreSQL** — see `_NEEDLE_SQL`. Neither the syntax the query text carries nor
+the punctuation the parser discards is decided here, because deciding either
+here is how this filter came to remove correct rows twice. What it *cannot* see
+is stated in `_exact_confirmation` and in the matrix that guards it.
 
 **The index and the predicate must stay equal as expressions.**
 `knowledge.capture_versions` has no `tsvector` column and no trigger maintaining
@@ -70,7 +78,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Final
 
-from sqlalchemy import Column, ColumnElement, Select, Table, bindparam, func, literal_column, select
+from sqlalchemy import (
+    Column,
+    ColumnElement,
+    Select,
+    String,
+    Table,
+    bindparam,
+    column,
+    func,
+    literal_column,
+    select,
+    text,
+)
 from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.engine import Connection, CursorResult
 from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
@@ -136,6 +156,18 @@ class CaptureSearchInternalError(Exception):
     """
 
 
+def _checked_configuration(name: str) -> str:
+    """`name`, if it is one this module may compile into SQL.
+
+    The one place the closed set is enforced, because two callers now write the
+    name into statement text — the predicate below and the confirmation's needle
+    — and a second copy of the check is a second place it can be forgotten.
+    """
+    if name not in INDEXED_CONFIGURATIONS:
+        raise ValueError("unsupported text-search configuration")
+    return name
+
+
 def _configuration(name: str) -> ColumnElement[Any]:
     """The named configuration as a SQL literal, if it is an indexed one.
 
@@ -147,9 +179,7 @@ def _configuration(name: str) -> ColumnElement[Any]:
     a name into SQL is safe here because the name came out of a closed set — not
     because of what `SEARCH_CONFIG` currently is.
     """
-    if name not in INDEXED_CONFIGURATIONS:
-        raise ValueError("unsupported text-search configuration")
-    return literal_column(f"'{name}'", REGCONFIG)
+    return literal_column(f"'{_checked_configuration(name)}'", REGCONFIG)
 
 
 _CONFIG: Final = _configuration(SEARCH_CONFIG)
@@ -266,52 +296,128 @@ def _tsquery(request: CaptureSearchRequest) -> ColumnElement[Any]:
     )
 
 
-def _is_single_term(request: CaptureSearchRequest) -> bool:
-    """Whether the query is one term, and so eligible for exact confirmation.
+#: The needle the exact confirmation tests for, or `NULL` where no character-
+#: granularity test is meaningful. **Everything this decides is decided by
+#: PostgreSQL**, and that is the point: the first two versions of the
+#: confirmation asked Python questions about the *raw* query text, and the raw
+#: text is not what the predicate means by the query.
+#:
+#: Two steps, both server-side.
+#:
+#: 1. **Trim the query to its literal content.** `websearch_to_tsquery` treats
+#:    a double quote as syntax and a trailing full stop as nothing at all, so
+#:    neither belongs in a substring test. What may be trimmed is not a
+#:    character class written here — it is whatever the configuration's *own*
+#:    parser reports as a `blank` token at the query's first or last position,
+#:    read from `pg_ts_config` and `ts_token_type` rather than typed. Consecutive
+#:    blanks arrive as one token, so first and last are the whole of each run.
+#: 2. **Refuse the test unless the trimmed literal means what the query means.**
+#:    `phraseto_tsquery` reads its whole argument as one adjacent run;
+#:    `websearch_to_tsquery` produces `&`, `|` or `!` the moment the caller asked
+#:    for something a contiguous substring cannot express. The two are equal
+#:    exactly when the query *is* one run of text — which is exactly when a
+#:    substring test is the right question — so the eligibility rule is an
+#:    equality between two of the server's own parsers rather than a list of
+#:    syntax elements somebody remembered.
+#:
+#: `NULL` is returned rather than a flag because the call site folds it with
+#: `coalesce(…, '')` and `strpos(anything, '') = 1`, so an ineligible query
+#: yields one statement with one always-true condition rather than a second
+#: statement shape.
+_NEEDLE_SQL: Final = """(
+  SELECT CASE
+           WHEN websearch_to_tsquery({configuration}, source.raw)
+                = phraseto_tsquery({configuration}, trimmed.needle)
+           THEN trimmed.needle
+         END
+    FROM (SELECT CAST(:capture_search_literal AS text) AS raw) AS source
+    CROSS JOIN LATERAL (
+      SELECT parser.prsname AS name,
+             (SELECT kind.tokid FROM ts_token_type(parser.prsname) AS kind
+               WHERE kind.alias = 'blank') AS blank
+        FROM pg_ts_parser AS parser
+        JOIN pg_ts_config AS configured ON configured.cfgparser = parser.oid
+       WHERE configured.oid = CAST({configuration} AS regconfig)
+    ) AS grammar
+    CROSS JOIN LATERAL (
+      SELECT COALESCE(MAX(CASE WHEN token.ord = 1 AND token.tokid = grammar.blank
+                               THEN length(token.token) END), 0) AS lead,
+             COALESCE(MAX(CASE WHEN token.ord = counted.total AND token.ord > 1
+                                AND token.tokid = grammar.blank
+                               THEN length(token.token) END), 0) AS trail
+        FROM ts_parse(grammar.name, source.raw)
+             WITH ORDINALITY AS token(tokid, token, ord)
+        CROSS JOIN (SELECT count(*) AS total
+                      FROM ts_parse(grammar.name, source.raw)) AS counted
+    ) AS ends
+    CROSS JOIN LATERAL (
+      SELECT substring(source.raw
+                       FROM CAST(1 + ends.lead AS int)
+                       FOR CAST(length(source.raw) - ends.lead - ends.trail AS int)) AS needle
+    ) AS trimmed
+)"""
 
-    A multi-term query is a set of words that may sit anywhere in the document,
-    so a literal substring test over the whole query would refuse documents that
-    match it correctly. A single term is the case where the parser's splitting
-    is the only thing between the caller and an exact answer, and it is the case
-    `RFI-0421` and `$12,500.00` were measured in.
+
+def _confirmation_needle(
+    request: CaptureSearchRequest, plane: SearchPlane = CAPTURE_VERSIONS
+) -> ColumnElement[Any]:
+    """`_NEEDLE_SQL` as a scalar subquery, with the query text bound.
+
+    A scalar subquery and not an inline expression, so the server evaluates it
+    once as an initialisation plan rather than once per candidate row: nothing
+    in it depends on the row.
     """
-    text = request.query.text
-    return bool(text) and " " not in text and not text.startswith("-")
+    configuration = f"'{_checked_configuration(plane.configuration)}'"
+    return (
+        text(_NEEDLE_SQL.format(configuration=configuration))
+        .bindparams(bindparam("capture_search_literal", value=request.query.text))
+        .columns(column("needle", String))
+        .scalar_subquery()
+    )
 
 
 def _exact_confirmation(
     request: CaptureSearchRequest, plane: SearchPlane = CAPTURE_VERSIONS
 ) -> tuple[ColumnElement[bool], ...]:
-    """The character-granularity confirmation, where it applies.
+    """The character-granularity confirmation, on the query's literal content.
 
-    Returned as a tuple of zero or one conditions rather than as an `if` at the
-    call site, so the statement below is one statement with one `where` however
-    the query is shaped.
+    One condition, always, so the statement below is one statement with one
+    `where` however the query is shaped. Where the confirmation does not apply
+    the needle is `NULL`, `coalesce` makes it the empty string, and
+    `strpos(anything, '') = 1` — an always-true condition rather than an absent
+    one.
 
-    **Both sides are case-folded, and the first version of this was not.**
-    Measured on a live server: `to_tsvector('simple','Buyout review') @@
-    websearch_to_tsquery('simple','buyout')` is **true** — `simple` lowercases
-    every lexeme — while `strpos('Buyout review','buyout') > 0` is **false**,
-    because `strpos` compares bytes. A confirmation is only a confirmation if it
-    agrees with the predicate it confirms; that one *disagreed*, and it
-    disagreed in the direction that removes a correct match with no exception
-    anywhere. A capture whose text says `Buyout` was then unfindable by
-    `buyout`, which is the silent narrowing this whole plane exists to refuse
-    and which falsifies `QC-AC-050` for every capitalised word in a note.
+    **This confirmation has now been wrong twice, in the same direction, and the
+    direction is what matters.** Both times it removed a row the indexed
+    predicate had correctly matched, and a removed row is an absence: there is
+    no exception, no limitation token, and nothing in the answer that
+    distinguishes "no capture says that" from "a capture says exactly that and
+    this filter dropped it". Both times the cause was the same — **the
+    confirmation and the predicate disagreed about what the query text means**:
 
-    Folding here rather than dropping the confirmation, because the confirmation
-    is what makes `RFI-0421` and `$12,500.00` exact at character granularity —
-    the parser splits both, so the indexed predicate matches them as adjacent
-    lexemes rather than as the literal string. `lower` on the column is not an
-    index concern: this condition runs after the indexed predicate has narrowed
-    the page, never instead of it.
+    * **Case.** `to_tsvector('simple','Buyout review') @@
+      websearch_to_tsquery('simple','buyout')` is true, because `simple`
+      lowercases every lexeme, while `strpos('Buyout review','buyout') > 0` is
+      false, because `strpos` compares bytes. Closed by folding both sides.
+    * **Syntax.** The predicate reads `"buyout"` as the lexeme `buyout` and
+      `buyout.` as the lexeme `buyout`, while a test against the *raw* text
+      hunted the quotes and the full stop as content. Measured over query forms
+      generated from the server's own character classification, **328 of 402**
+      index-matching cells were dropped this way. Closed by asking the server
+      what the query's literal content is, which is `_NEEDLE_SQL`.
+
+    The confirmation still exists, and still removes rows, because the parser
+    splits `RFI-0421` and `$12,500.00` into adjacent lexemes and the indexed
+    predicate therefore matches a document that says `RFI 0421`. That removal is
+    the whole purpose and is asserted as such in
+    `tests/search_quality/test_exact_confirmation_matrix.py`. `lower` on the
+    column is not an index concern: this condition runs after the indexed
+    predicate has narrowed the page, never instead of it.
     """
-    if not _is_single_term(request):
-        return ()
     return (
         func.strpos(
             func.lower(plane.text_column),
-            func.lower(bindparam("capture_search_needle", value=request.query.text)),
+            func.lower(func.coalesce(_confirmation_needle(request, plane), "")),
         )
         > 0,
     )

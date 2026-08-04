@@ -55,7 +55,7 @@ the defect and never the value.
 nobody to read anything: every read still requires an enrollment, which requires
 the operator-only `sources.enroll`, which is authorized and audited. This program
 builds no application service and no principal, and it writes no audit event —
-`audit_events.capability` is closed to the twelve capabilities, and a further
+`audit_events.capability` is closed to the thirteen capabilities, and a further
 member for source registration is exactly what an operator command must not
 become. (It read "the eight" until WP-6 added the four `capture.*` capabilities;
 the count moved, the argument did not.)

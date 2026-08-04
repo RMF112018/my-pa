@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the twelve capabilities is addressable over HTTP
+**Reachability.** Every one of the thirteen capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a thirteenth capability added to the domain arrives as a failing row instead
+here, so a fourteenth capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -66,6 +66,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     Representation,
     ReviseCapture,
+    SearchCaptures,
     SearchKnowledge,
 )
 from my_pa.application.service import ApplicationService
@@ -155,6 +156,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         },
         Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
         Capability.CAPTURE_LIST: {},
+        Capability.CAPTURE_SEARCH: {"query": "synthetic"},
     }
 
 
@@ -209,6 +211,7 @@ def commands_for(
         ),
         Capability.CAPTURE_READ: ReadCapture(capture_id=capture_id),
         Capability.CAPTURE_LIST: ListCaptures(),
+        Capability.CAPTURE_SEARCH: SearchCaptures(query="synthetic"),
     }
 
 

@@ -56,6 +56,7 @@ __all__ = [
     "ReadKnowledge",
     "Representation",
     "ReviseCapture",
+    "SearchCaptures",
     "SearchKnowledge",
 ]
 
@@ -455,6 +456,41 @@ class ListCaptures:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
 
 
+@dataclass(frozen=True, slots=True)
+class SearchCaptures:
+    """`capture.search`: exact lexical search over stored capture text.
+
+    **No enrollment, and the absence is structural.** A capture belongs to no
+    configured source and no enrollment — which is why the four capture
+    capabilities sit in `domain.policy.decision._SCOPELESS` — so a field naming
+    one here would be a scope this plane cannot hold and a grant nobody issued.
+    `SearchKnowledge` requires one because the extraction plane's every row is
+    keyed to an enrollment; this plane's rows are keyed to nothing but
+    themselves.
+
+    **No cursor either**, for the reason `ListCaptures` has none: this build
+    issues no continuation token, truncation is disclosed rather than paged
+    around, and a `SearchCursor` binds to an enrollment identifier and a
+    `kn_…` that a capture has neither of.
+
+    The query stays a bare string here and becomes a `SearchQuery` in the
+    handler, exactly as `SearchKnowledge` does it: normalization and the refusal
+    of control characters belong to the domain, and holding a normalized query
+    in a command would put the one sensitive string in this system into a value
+    a transport constructs. `repr=False` for the same reason.
+    """
+
+    capability: ClassVar[Capability] = Capability.CAPTURE_SEARCH
+
+    query: str = field(repr=False)
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, str):
+            raise InvalidRequestError(SafeDetail.QUERY)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
 type Command = (
@@ -470,4 +506,5 @@ type Command = (
     | ReviseCapture
     | ReadCapture
     | ListCaptures
+    | SearchCaptures
 )

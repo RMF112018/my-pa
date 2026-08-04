@@ -35,6 +35,12 @@ def test_contract_prefixes_are_stable() -> None:
         "capver",
         "rcpt",
         "sub",
+        "ptext",
+        "stage",
+        "span",
+        "prop",
+        "ccls",
+        "men",
     }
 
 

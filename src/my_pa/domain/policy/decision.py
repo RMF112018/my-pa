@@ -124,11 +124,16 @@ def evaluate(request: PolicyRequest) -> PolicyDecision:
 #: Capabilities that carry no source scope at all, and for which naming one is
 #: therefore a contradiction rather than a request.
 #:
-#: `capabilities.get` describes the interface itself. The four capture
+#: `capabilities.get` describes the interface itself. The five capture
 #: capabilities read and write a product-owned record, which `ADR-003` makes a
 #: third authority class: a capture belongs to no configured source and no
 #: enrollment, so requiring one would make them permanently unusable in exactly
 #: the way requiring a held scope would make `sources.enroll` unusable.
+#:
+#: `capture.search` is the fifth, and it is scopeless for the same reason and
+#: not for convenience: the plane it searches is `knowledge.capture_versions`,
+#: whose rows carry no `enrollment_id` and no `source_id` at all. A source scope
+#: on it would name something the searched rows cannot be filtered by.
 #:
 #: **This set widening is what an added capability most easily gets wrong.** An
 #: unlisted capability falls to the rule below, which denies an empty requested
@@ -141,6 +146,7 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.CAPTURE_REVISE,
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
+        Capability.CAPTURE_SEARCH,
     }
 )
 

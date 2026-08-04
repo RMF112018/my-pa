@@ -61,6 +61,7 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadKnowledge,
     ReviseCapture,
+    SearchCaptures,
     SearchKnowledge,
 )
 from my_pa.contracts.ports import UnitOfWork
@@ -142,7 +143,14 @@ def _requested_scope(
         # one, and `domain.policy.decision._SCOPELESS` is where it is read that
         # way — a capability missing from that set is denied here instead, with
         # nothing to say the mapping was never made.
-        case GetCapabilities() | CreateCapture() | ReviseCapture() | ReadCapture() | ListCaptures():
+        case (
+            GetCapabilities()
+            | CreateCapture()
+            | ReviseCapture()
+            | ReadCapture()
+            | ListCaptures()
+            | SearchCaptures()
+        ):
             return frozenset()
         case ListSources() | GetSourceMetadata() | FetchSource() | EnrollSource():
             return frozenset({command.source_id})

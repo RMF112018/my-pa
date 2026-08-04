@@ -133,12 +133,21 @@ _ORDINAL_UNITS = (
 )
 
 
-def _cardinals(limit: int = 99) -> dict[str, int]:
+def _cardinals(limit: int = 999) -> dict[str, int]:
     """English cardinals, built rather than listed.
 
     Built, so that a readable but wrong figure fails on the *comparison*. A
     hand-listed map would reject an unexpected word as unparseable, which looks
     like a failure and proves the comparison never ran.
+
+    **The limit was 99 and had to move, and the reason is worth recording.**
+    `src/my_pa` crossed a hundred modules in WP-7, and section 3's own derived
+    claim then had no spelling this map could read. That did not fail loudly:
+    "one hundred and three" contains "three", so the longest-match scan below
+    read the claim as **3** and reported the tree as holding 103 against a
+    stated 3 — a wrong answer rather than a refusal, which is the shape of
+    defect every rule in this module exists to refuse. Hundreds are built the
+    same way tens are, so the next boundary announces itself the same way.
     """
     words = {word: value for value, word in enumerate(_UNITS) if value <= limit}
     for base, tens_word in _TENS.items():
@@ -148,6 +157,15 @@ def _cardinals(limit: int = 99) -> dict[str, int]:
         for unit in range(1, 10):
             if base + unit <= limit:
                 words[f"{tens_word}-{_UNITS[unit]}"] = base + unit
+    below_a_hundred = dict(words)
+    for hundreds in range(1, 10):
+        if hundreds * 100 > limit:
+            break
+        prefix = f"{_UNITS[hundreds]} hundred"
+        words[prefix] = hundreds * 100
+        for word, value in below_a_hundred.items():
+            if value and hundreds * 100 + value <= limit:
+                words[f"{prefix} and {word}"] = hundreds * 100 + value
     return words
 
 
@@ -573,9 +591,13 @@ def test_section_3_states_the_module_counts_it_says_it_derives() -> None:
     stale across the six packages that followed, which is the whole argument for
     a rule instead of a recomputation.
     """
+    # Up to four words per figure, because a count above ninety-nine is spelled
+    # with spaces in it — "one hundred and three". A single-word capture read
+    # that as "three" and compared 3 against 103, which is a wrong answer rather
+    # than the unreadable-word refusal the assertion below is written for.
     match = re.search(
-        r"(?P<modules>[A-Za-z-]+) Python modules under `src/my_pa` and\s+"
-        r"(?P<tests>[a-z-]+) test modules",
+        r"(?P<modules>(?:[A-Za-z-]+ ){0,3}[A-Za-z-]+) Python modules under `src/my_pa` and\s+"
+        r"(?P<tests>(?:[A-Za-z-]+ ){0,3}[A-Za-z-]+) test modules",
         plan_current_state_text(),
     )
     assert match is not None, (

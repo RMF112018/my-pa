@@ -65,6 +65,8 @@ from my_pa.infrastructure.jobs.worker import (
 from my_pa.infrastructure.persistence.enrollment import accept_enrollment
 from my_pa.infrastructure.persistence.extraction import record_limitation
 from my_pa.infrastructure.persistence.jobs import (
+    ENROLLMENT_JOBS,
+    JobPlane,
     LeasedJob,
     claim_job,
     complete_job,
@@ -619,9 +621,13 @@ def test_a_signal_between_the_claim_and_the_work_still_finishes_the_claimed_job(
     real_claim = claim_job
 
     def claim_then_signal(
-        connection: Connection, *, owner: str, lease_seconds: int
+        connection: Connection, *, owner: str, lease_seconds: int, plane: JobPlane = ENROLLMENT_JOBS
     ) -> LeasedJob | None:
-        job = real_claim(connection, owner=owner, lease_seconds=lease_seconds)
+        # `plane` is accepted and passed through rather than dropped: WP-7 gave
+        # the loop a second job plane, so a seam that swallowed the argument
+        # would silently claim from the enrollment plane whatever the caller
+        # asked for — the same shape of defect this test is about.
+        job = real_claim(connection, owner=owner, lease_seconds=lease_seconds, plane=plane)
         if job is not None:
             # As if SIGTERM arrived in the instant after the claim committed.
             stop.set()

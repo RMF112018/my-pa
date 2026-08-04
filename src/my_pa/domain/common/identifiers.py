@@ -44,6 +44,17 @@ class IdKind(StrEnum):
     CAPTURE_VERSION = "capver"
     RECEIPT = "rcpt"
     SUBMISSION = "sub"
+    #: The capture *processing* plane: what the pipeline derived from a stored
+    #: version. Each is its own prefix rather than a shared `derived_` one,
+    #: because an audit row or a stored reference has to say which record it
+    #: names, and a single prefix would make a proposal and the span it cites
+    #: indistinguishable to a reader of either.
+    PROCESSING_TEXT = "ptext"
+    STAGE_RESULT = "stage"
+    SPAN = "span"
+    PROPOSAL = "prop"
+    CAPTURE_CLASSIFICATION = "ccls"
+    CAPTURE_ENTITY_MENTION = "men"
     OPERATION = "op"
     KNOWLEDGE = "kn"
     AUDIT = "audit"

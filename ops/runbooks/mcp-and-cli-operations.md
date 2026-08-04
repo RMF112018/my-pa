@@ -38,7 +38,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all twelve capabilities.
+`tests/contract/test_transport_parity.py` holds it over all thirteen capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -117,7 +117,7 @@ one declared capability, `tools`, and nothing else.
 
 ## The tool list
 
-`tools/list` returns twelve tools whose names are the twelve capability names.
+`tools/list` returns thirteen tools whose names are the thirteen capability names.
 
 **Re-executed 2026-08-03** — a real `stdio_client` spawning
 `.venv/bin/python apps/gateway.py mcp` as a child process, against a disposable

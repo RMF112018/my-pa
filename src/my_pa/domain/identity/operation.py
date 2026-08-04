@@ -46,6 +46,16 @@ class Capability(StrEnum):
     CAPTURE_REVISE = "capture.revise"
     CAPTURE_READ = "capture.read"
     CAPTURE_LIST = "capture.list"
+    # The thirteenth, and it is a capability rather than a widening of
+    # `knowledge.search` (`D-91`). `domain.identity.purpose` already argues why:
+    # the knowledge plane is the *extraction* plane, and one grant spanning both
+    # would let a `knowledge.read`-shaped request return raw user-authored
+    # capture text. There is also no scope to share — `knowledge.search` is
+    # scoped by enrollment and a capture belongs to none. The word `search`
+    # bound to the capture noun is the canonical package's own
+    # (`docs/specs/quick-capture/18_PROPOSED_API_AND_CONTRACT_PACKAGE.md:334`),
+    # and two segments of `noun.verb` is the rule the four above follow.
+    CAPTURE_SEARCH = "capture.search"
 
 
 #: Capabilities restricted to an authenticated operator principal.
@@ -56,6 +66,12 @@ class Capability(StrEnum):
 #: creates content the principal already owns and grants nothing. Making capture
 #: operator-only would also contradict the canonical direction of travel, where a
 #: non-operator device client holds a permitted capture capability.
+#:
+#: `capture.search` is decided on the same terms and reaches the same answer: it
+#: reads rows `capture.read` and `capture.list` already return to the same
+#: principal under the same purpose, so restricting the *search* over them while
+#: leaving the *read* of them open would restrict nothing and would tell a
+#: caller that finding a capture is a more privileged act than opening it.
 _OPERATOR_ONLY: frozenset[Capability] = frozenset({Capability.SOURCES_ENROLL})
 
 _PERMITTED_PURPOSES: Mapping[Capability, frozenset[Purpose]] = MappingProxyType(
@@ -76,6 +92,12 @@ _PERMITTED_PURPOSES: Mapping[Capability, frozenset[Purpose]] = MappingProxyType(
         Capability.CAPTURE_REVISE: frozenset({Purpose.CAPTURE_AUTHORING}),
         Capability.CAPTURE_READ: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CAPTURE_LIST: frozenset({Purpose.CAPTURE_REVIEW}),
+        # `CAPTURE_REVIEW` reused rather than a `capture_search` purpose added
+        # (`D-91`). Searching captures is a read of the same rows under the same
+        # authority as `capture.read` and `capture.list`, so a purpose of its own
+        # would separate nothing — it would map to exactly one capability — while
+        # costing another frozen-constraint `ALTER` on `purpose_is_known`.
+        Capability.CAPTURE_SEARCH: frozenset({Purpose.CAPTURE_REVIEW}),
     }
 )
 

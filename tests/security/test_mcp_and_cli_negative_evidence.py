@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route twelve capability names and none of them mutates a source, and every
+  surface route thirteen capability names and none of them mutates a source, and every
   capability driven over both transports is shown to have called only the three
   read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -286,6 +286,7 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_REVISE,
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
+        Capability.CAPTURE_SEARCH,
     }
 ]
 
@@ -479,6 +480,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         "capture.revise",
         "capture.read",
         "capture.list",
+        "capture.search",
     }, "the exemption is exactly the capture family"
     # And the CLI routes by the same names: it declares no subcommand of its own
     # that could name an operation the capability set does not have.

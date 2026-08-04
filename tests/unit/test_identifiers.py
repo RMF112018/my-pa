@@ -46,6 +46,17 @@ def test_contract_prefixes_are_stable() -> None:
         "asrt",
         "clink",
         "conv",
+        "per",
+        "org",
+        "iobs",
+        "alias",
+        "aff",
+        "umen",
+        "dups",
+        "ires",
+        "cov",
+        "tli",
+        "cpart",
     }
 
 

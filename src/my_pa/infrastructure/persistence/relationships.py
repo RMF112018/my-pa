@@ -334,6 +334,56 @@ class SqlRelationshipRepository(RelationshipRepository):
                 "identity resolution must match the reviewed observation set"
             )
 
+        participant_ids_to_rebind: tuple[str, ...] = ()
+        if resolution.action in {ResolutionAction.MERGE_PERSON, ResolutionAction.SPLIT_PERSON}:
+            if resolution.prior_person_id is None:  # guarded by the domain model
+                raise IdentityResolutionError("an identity correction names its prior person")
+            participant_support_rows = self._connection.execute(
+                select(
+                    relationship_conversation_participants.c.participant_id,
+                    relationship_conversation_participants.c.conversation_id,
+                    relationship_conversation_observations.c.observation_id,
+                )
+                .join(
+                    relationship_conversation_observations,
+                    relationship_conversation_observations.c.participant_id
+                    == relationship_conversation_participants.c.participant_id,
+                )
+                .where(
+                    relationship_conversation_participants.c.person_id == resolution.prior_person_id
+                )
+            ).all()
+            support_by_participant: dict[str, tuple[str, set[str]]] = {}
+            for row in participant_support_rows:
+                participant_id = str(row.participant_id)
+                conversation_id = str(row.conversation_id)
+                participant_entry = support_by_participant.setdefault(
+                    participant_id, (conversation_id, set())
+                )
+                participant_entry[1].add(str(row.observation_id))
+            affected = set(resolution.observation_ids)
+            participants_to_rebind: list[str] = []
+            for participant_id, (conversation_id, support) in support_by_participant.items():
+                if not support.intersection(affected):
+                    continue
+                if not support.issubset(affected):
+                    raise IdentityResolutionError(
+                        "identity correction cannot leave ambiguous conversation support"
+                    )
+                collision = self._connection.execute(
+                    select(relationship_conversation_participants.c.participant_id).where(
+                        relationship_conversation_participants.c.conversation_id == conversation_id,
+                        relationship_conversation_participants.c.person_id
+                        == resolution.retained_person_id,
+                    )
+                ).scalar_one_or_none()
+                if collision is not None:
+                    raise IdentityResolutionError(
+                        "identity correction cannot collapse distinct conversation participants"
+                    )
+                participants_to_rebind.append(participant_id)
+            participant_ids_to_rebind = tuple(sorted(participants_to_rebind))
+
         if resolution.action is ResolutionAction.LINK_OBSERVATION:
             self._connection.execute(
                 insert(relationship_people).values(
@@ -434,6 +484,16 @@ class SqlRelationshipRepository(RelationshipRepository):
                 .where(relationship_aliases.c.observation_id.in_(resolution.observation_ids))
                 .values(person_id=resolution.retained_person_id)
             )
+            if participant_ids_to_rebind:
+                self._connection.execute(
+                    update(relationship_conversation_participants)
+                    .where(
+                        relationship_conversation_participants.c.participant_id.in_(
+                            participant_ids_to_rebind
+                        )
+                    )
+                    .values(person_id=resolution.retained_person_id)
+                )
         if resolution.action is ResolutionAction.MERGE_PERSON:
             if resolution.prior_person_id is None:  # domain construction already refuses this
                 raise IdentityResolutionError("a merge names its prior person")

@@ -1,0 +1,394 @@
+"""Exact lexical search over user-authored capture text.
+
+A **second** plane, beside the extraction plane in `persistence.search`, and the
+reason is not convenience. `knowledge.extractions.enrollment_id` is `NOT NULL`
+with a foreign key created by an already-merged revision, and a capture has no
+enrollment; relaxing that column is `D-76` on the identical column shape and was
+already refused, while synthesising an enrollment per capture would fabricate a
+grant that `extracted_text_in_scope`'s `authorized_object` condition would then
+be satisfied by. `domain.identity.purpose` gives the other half of the argument:
+one grant spanning both planes would let a knowledge-shaped request return raw
+user-authored capture text.
+
+**`simple`, not `english`, and it is measured rather than stylistic** (`D-90`).
+`QC-AC-050` asks for *exact* original text to be searchable, and `english` fails
+that in two ways that were measured on a live server:
+
+- it stems, so `to_tsvector('english', '…running…')` stores `run` and a query
+  for `run` matches a capture that never contains the word;
+- it discards stop words, so `to_tsvector('english', 'a the of and')` is
+  **empty** — a capture of nothing but stop words is saved, satisfies
+  `a_capture_version_carries_text`, and is then unfindable by any query **with
+  no exception anywhere**, which is the silent failure this plane exists to
+  refuse.
+
+`simple` keeps stop words and does not stem, so it is exact at word
+granularity. **The cost is real and is disclosed rather than smoothed over**: a
+search for `meetings` does not find `meeting`. That is the price of exactness,
+it is the price the criterion asks for, and it belongs in the disclosure
+envelope as a limitation rather than in a comment. This module publishes the
+counts that limitation is built from; the envelope is assembled above it.
+
+**The exact-substring confirmation** covers the residue `simple` still splits.
+`RFI-0421` and `$12,500.00` are both broken into lexemes by the parser, so the
+`@@` predicate matches them as adjacent lexemes rather than as the literal
+string. A single-term query is therefore confirmed with `strpos(content, …) > 0`
+over the candidate rows, which is exact at character granularity. It is a
+confirmation and never a substitute: `strpos` cannot use the index, so it runs
+*after* the indexed predicate has narrowed the page and never instead of it.
+
+**The index and the predicate must stay equal as expressions.**
+`knowledge.capture_versions` has no `tsvector` column and no trigger maintaining
+one. What it has is a functional GIN index over the same expression this module
+builds, created by revision `2b7e9f4c1a83`:
+
+    CREATE INDEX capture_versions_full_text ON knowledge.capture_versions
+      USING gin (to_tsvector('simple', content));
+
+PostgreSQL matches a functional index by expression tree, so that index and the
+predicate below are one decision recorded in two files. A divergence — a
+different configuration, most likely — **breaks silently**: the query drops back
+to a sequential scan and still returns correct rows.
+`tests/schema/test_capture_schema_migration.py` reads the index's stored
+definition back against this module's configuration, so the equality is checked
+rather than assumed.
+
+**One predicate function and one statement builder** (`D-90`). `coverage_for`
+and `match_statement` on the extraction plane diverged for six review rounds
+because two predicate lists were *asserted equal* rather than *built once*.
+Here `capture_text_in_scope` is written once and splatted by both the page
+statement and the totals statement, and both are built by functions
+parameterised over a `SearchPlane` — agreement by construction rather than by
+comparison. The extraction plane is **not** instantiated as a second
+`SearchPlane` here: `persistence.search` owns its own builder, with a join, a
+rank, a headline and a keyset cursor that this plane has none of, and unifying
+the two is a change to a merged module rather than a part of this package.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Final
+
+from sqlalchemy import Column, ColumnElement, Select, Table, bindparam, func, literal_column, select
+from sqlalchemy.dialects.postgresql import REGCONFIG
+from sqlalchemy.engine import Connection, CursorResult
+from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
+
+from my_pa.contracts.ports import (
+    CaptureSearchMatch,
+    CaptureSearchOutcome,
+    CaptureSearchRequest,
+)
+from my_pa.infrastructure.persistence.tables import capture_receipts, capture_versions
+
+__all__ = [
+    "CAPTURE_VERSIONS",
+    "INDEXED_CONFIGURATIONS",
+    "SEARCH_CONFIG",
+    "SEARCH_INDEX",
+    "CaptureSearchUnavailableError",
+    "SearchPlane",
+    "capture_text_in_scope",
+    "document_vector",
+    "match_statement",
+    "search_captures",
+    "totals_statement",
+]
+
+#: The text-search configuration, on both sides of the match. Named explicitly
+#: rather than left to `default_text_search_config` for the two reasons
+#: `persistence.search` gives: the two-argument `to_tsvector` is `IMMUTABLE` and
+#: therefore indexable where the one-argument form is only `STABLE`, and a
+#: session setting would let the same query mean different things to two
+#: connections.
+SEARCH_CONFIG: Final = "simple"
+
+#: Every text-search configuration this module may compile into a statement.
+#: Closed and checked rather than trusted, because `_configuration` interpolates
+#: the name into SQL text. A configuration belongs here only once
+#: `knowledge.capture_versions` carries a functional index over it — an
+#: unindexed one is not a syntax error, it is the silent sequential scan the
+#: module docstring describes.
+INDEXED_CONFIGURATIONS: Final = frozenset({SEARCH_CONFIG})
+
+#: The index revision `2b7e9f4c1a83` creates. Named here so the schema test can
+#: ask the server for its definition and compare it against this module rather
+#: than against the revision that wrote it.
+SEARCH_INDEX: Final = "capture_versions_full_text"
+
+
+class CaptureSearchUnavailableError(Exception):
+    """The capture index could not be read.
+
+    Carries no statement, no parameter, and no driver detail, for the reason
+    `persistence.search` states at length: SQLAlchemy renders bound parameters
+    into `DBAPIError` messages unless the engine hides them, and the bound
+    parameter here is the caller's query text.
+    """
+
+
+class CaptureSearchInternalError(Exception):
+    """The capture search failed for a reason that is this system's fault.
+
+    Separated from unavailability because telling a caller to retry a missing
+    column would be a lie with a retry budget attached.
+    """
+
+
+def _configuration(name: str) -> ColumnElement[Any]:
+    """The named configuration as a SQL literal, if it is an indexed one.
+
+    A literal and not a bound parameter, and the distinction is the difference
+    between using the functional index and not using it: bound, the predicate
+    compiles to `to_tsvector($1, content)`, and matching that against an index
+    over `to_tsvector('simple', content)` then depends on the server folding the
+    parameter while planning, which it does not do under a generic plan. Writing
+    a name into SQL is safe here because the name came out of a closed set — not
+    because of what `SEARCH_CONFIG` currently is.
+    """
+    if name not in INDEXED_CONFIGURATIONS:
+        raise ValueError("unsupported text-search configuration")
+    return literal_column(f"'{name}'", REGCONFIG)
+
+
+_CONFIG: Final = _configuration(SEARCH_CONFIG)
+
+
+def _superseded_version_ids() -> Select[Any]:
+    """The versions some later version supersedes, as a subquery.
+
+    `supersedes_version_id` is `UNIQUE`, so a chain is a line and this is
+    exactly the set of versions that are not the head of their capture.
+    """
+    return select(capture_versions.c.supersedes_version_id).where(
+        capture_versions.c.supersedes_version_id.is_not(None)
+    )
+
+
+def _acknowledged_version_ids() -> Select[Any]:
+    """The versions a receipt was issued for, as a subquery."""
+    return select(capture_receipts.c.version_id)
+
+
+def capture_text_in_scope() -> tuple[ColumnElement[bool], ...]:
+    """Which rows of `capture_versions` hold text a capture search may return.
+
+    One list, used by the page statement and by the totals beside it. When
+    evaluated against one statement snapshot the two apply the same conditions
+    because they are built from this call and not because two lists were
+    compared and found to agree — the divergence that stood for six review
+    rounds on the extraction plane and was false for two of six conditions.
+
+    The two, and what each decides:
+
+    * **Not superseded.** A revised capture's earlier version is history, and
+      returning it as a match would present text the user replaced as text the
+      user holds. It is still readable by `capture.read`, which is
+      `QC-AC-010`'s "independently retrievable"; it is not *found*.
+      `test_a_revised_capture_is_found_at_its_current_version_only` is what
+      fails if this goes.
+    * **Acknowledged.** A version with no receipt was never acknowledged to the
+      caller that wrote it. Search is a read of what the product told someone it
+      had kept, so a row that no receipt names is not in scope — and because
+      both are written in one transaction, the only way to produce one is to
+      write it past the writer, which is exactly the fault injection the
+      quarantine tests use.
+
+    **There is no owner condition, and its absence is structural** (`D-72`,
+    `D-67`). Capture authorization is capability plus purpose; identity in this
+    build is process-scoped, so owner equality would make the capability
+    unusable across two processes while enforcing a distinction a
+    single-local-principal deployment cannot make.
+    `tests/capture/test_owner_is_not_authorization.py` fails the moment someone
+    adds one here.
+
+    **There is no processing-policy condition either.** `local_only` is the only
+    value the column can hold, so a condition on it could never exclude a row —
+    a condition nothing can exercise, which the extraction plane's own predicate
+    docstring rules out. The policy is read where it decides something, which is
+    `P-01`.
+    """
+    return (
+        capture_versions.c.version_id.not_in(_superseded_version_ids()),
+        capture_versions.c.version_id.in_(_acknowledged_version_ids()),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SearchPlane:
+    """One searchable text column, and everything a statement over it needs.
+
+    The shape `D-76`/`D-77` established for `JobPlane`: one implementation, and
+    the plane says which table it runs against. What differs between planes is
+    the table, the column, the configuration its index was built over, and the
+    scope predicate; what does not differ is the statement, which is why the
+    statement is written once below.
+    """
+
+    table: Table
+    text_column: Column[str]
+    configuration: str
+    index_name: str
+
+
+#: The capture plane. The only instance, and the module docstring says why the
+#: extraction plane is not a second one.
+CAPTURE_VERSIONS: Final = SearchPlane(
+    table=capture_versions,
+    text_column=capture_versions.c.content,
+    configuration=SEARCH_CONFIG,
+    index_name=SEARCH_INDEX,
+)
+
+
+def document_vector(plane: SearchPlane = CAPTURE_VERSIONS) -> ColumnElement[Any]:
+    """The indexed side of the match.
+
+    The same expression the plane's functional index is built over — the same
+    tree, which is what PostgreSQL matches an index by, and not the same
+    characters, which it does not.
+    """
+    return func.to_tsvector(_configuration(plane.configuration), plane.text_column)
+
+
+def _tsquery(request: CaptureSearchRequest) -> ColumnElement[Any]:
+    """The parsed query, as one bound parameter and one named configuration.
+
+    `websearch_to_tsquery` for the reason `persistence.search` measured: it
+    understands a small, closed web-search syntax — a quoted phrase, `or`, and a
+    leading `-` — and every `tsquery` operator a caller writes arrives as
+    ordinary text. The query is a `bindparam` and nothing else touches it.
+    """
+    return func.websearch_to_tsquery(
+        _configuration(CAPTURE_VERSIONS.configuration),
+        bindparam("capture_search_text", value=request.query.text),
+    )
+
+
+def _is_single_term(request: CaptureSearchRequest) -> bool:
+    """Whether the query is one term, and so eligible for exact confirmation.
+
+    A multi-term query is a set of words that may sit anywhere in the document,
+    so a literal substring test over the whole query would refuse documents that
+    match it correctly. A single term is the case where the parser's splitting
+    is the only thing between the caller and an exact answer, and it is the case
+    `RFI-0421` and `$12,500.00` were measured in.
+    """
+    text = request.query.text
+    return bool(text) and " " not in text and not text.startswith("-")
+
+
+def _exact_confirmation(
+    request: CaptureSearchRequest, plane: SearchPlane = CAPTURE_VERSIONS
+) -> tuple[ColumnElement[bool], ...]:
+    """The character-granularity confirmation, where it applies.
+
+    Returned as a tuple of zero or one conditions rather than as an `if` at the
+    call site, so the statement below is one statement with one `where` however
+    the query is shaped.
+    """
+    if not _is_single_term(request):
+        return ()
+    return (
+        func.strpos(plane.text_column, bindparam("capture_search_needle", value=request.query.text))
+        > 0,
+    )
+
+
+def match_statement(
+    request: CaptureSearchRequest, plane: SearchPlane = CAPTURE_VERSIONS
+) -> Select[Any]:
+    """One bounded page of capture versions whose text matches `request`.
+
+    Public, and the reason is a test rather than a caller: building a statement
+    and running it are separate acts, and separating them lets a security test
+    compile *this* statement and inspect the SQL that will actually be sent. A
+    test that rebuilt an equivalent statement of its own would prove something
+    about the test.
+
+    **No snippet and no rank.** A snippet is capture content, and this answer is
+    deliberately incapable of carrying any: identifiers, a version number, and a
+    character count. `capture.read` is how a caller obtains the text, under its
+    own capability and its own audit event. Ordering is newest-first by recorded
+    time, which needs no score. The consequence — a caller cannot tell *why* a
+    capture matched from the answer alone — is a limitation the envelope
+    carries, not a silence.
+    """
+    return (
+        select(
+            plane.table.c.capture_id,
+            plane.table.c.version_id,
+            plane.table.c.version_number,
+            func.length(plane.text_column).label("character_count"),
+            plane.table.c.recorded_at,
+        )
+        .where(
+            *capture_text_in_scope(),
+            document_vector(plane).bool_op("@@")(_tsquery(request)),
+            *_exact_confirmation(request, plane),
+        )
+        .order_by(plane.table.c.recorded_at.desc(), plane.table.c.version_id.desc())
+        .limit(request.limit + 1)
+    )
+
+
+def totals_statement(plane: SearchPlane = CAPTURE_VERSIONS) -> Select[Any]:
+    """How many versions the scope holds, and how many exist at all.
+
+    Two counts in one statement and one snapshot, because a page beside a
+    coverage figure read from a second snapshot is how a search reports "nothing
+    found" for a scope that held something. The scoped count uses the same
+    `capture_text_in_scope` the page does, so the two cannot disagree about
+    which rows are in scope.
+    """
+    scoped = func.count().filter(*capture_text_in_scope())
+    return select(scoped.label("searchable"), func.count().label("stored")).select_from(plane.table)
+
+
+def _execute(connection: Connection, statement: Select[Any]) -> CursorResult[Any]:
+    """Run `statement`, converting any store failure into a bare typed error.
+
+    The `raise` statements are outside the `except` block on purpose: `raise …
+    from None` clears `__cause__` and leaves the original in `__context__`,
+    where a rendered traceback shows a `DBAPIError` whose message can contain
+    the bound query text.
+    """
+    unavailable = False
+    try:
+        return connection.execute(statement)
+    except (OperationalError, InterfaceError):
+        unavailable = True
+    except SQLAlchemyError:
+        unavailable = False
+    if unavailable:
+        raise CaptureSearchUnavailableError("the capture index could not be read")
+    raise CaptureSearchInternalError("the capture search could not be completed")
+
+
+def search_captures(connection: Connection, request: CaptureSearchRequest) -> CaptureSearchOutcome:
+    """One page of capture matches, with the counts a disclosure is built from.
+
+    `truncated` is decided by asking for one row more than the page holds, which
+    is how `capture.list` decides it too: a page that happens to be exactly full
+    is not a truncated one, and a count-then-page would answer from two
+    snapshots.
+    """
+    rows = list(_execute(connection, match_statement(request)).all())
+    truncated = len(rows) > request.limit
+    totals = _execute(connection, totals_statement()).one()
+    return CaptureSearchOutcome(
+        matches=tuple(
+            CaptureSearchMatch(
+                capture_id=str(row.capture_id),
+                version_id=str(row.version_id),
+                version_number=int(row.version_number),
+                character_count=int(row.character_count),
+                recorded_at=row.recorded_at,
+            )
+            for row in rows[: request.limit]
+        ),
+        searchable_versions=int(totals.searchable),
+        stored_versions=int(totals.stored),
+        truncated=truncated,
+    )

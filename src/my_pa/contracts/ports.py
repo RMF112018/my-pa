@@ -56,7 +56,7 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
-from my_pa.domain.search.query import SearchMatch, SearchRequest
+from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.provider import SourceProvider
 from my_pa.domain.source.registry import ConfiguredSource
@@ -67,6 +67,9 @@ __all__ = [
     "CaptureAdmission",
     "CaptureAdmissionRequest",
     "CaptureRepository",
+    "CaptureSearchMatch",
+    "CaptureSearchOutcome",
+    "CaptureSearchRequest",
     "CaptureSummary",
     "EnrollmentRepository",
     "EvidenceUnavailableError",
@@ -245,8 +248,81 @@ class CaptureSummary:
         validate_identifier(self.latest_version_id, IdKind.CAPTURE_VERSION)
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureSearchRequest:
+    """One `capture.search` request, bounded on construction.
+
+    **No cursor**, and that is the same call `capture.list` makes: a bounded
+    page whose truncation is disclosed, rather than a keyset cursor whose
+    binding would have to carry a scope a capture does not have. `SearchCursor`
+    binds to an enrollment identifier and a `kn_…`, and a capture plane has
+    neither.
+
+    `query` is a `SearchQuery`, so the text is normalized once, bounded once,
+    and redacts itself in every rendering — the one sensitive string this plane
+    carries.
+    """
+
+    query: SearchQuery
+    limit: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, SearchQuery):
+            raise ValueError("a capture search carries a normalized SearchQuery")
+        if isinstance(self.limit, bool) or self.limit < 1:
+            raise ValueError("a capture search page holds at least one capture")
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureSearchMatch:
+    """One capture version whose stored text matched.
+
+    **No text and no snippet, and neither model has a field one could go in.**
+    `QC-AC-041` keeps capture content out of the answers a caller sees most
+    often, and a search result is one of those; the caller obtains the text
+    through `capture.read`, under its own capability and its own audit event.
+    `character_count` is the size of what matched, which is a count rather than
+    the content.
+    """
+
+    capture_id: str
+    version_id: str
+    version_number: int
+    character_count: int
+    recorded_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.capture_id, IdKind.CAPTURE)
+        validate_identifier(self.version_id, IdKind.CAPTURE_VERSION)
+        if self.version_number < 1:
+            raise ValueError("version numbers start at one")
+        if self.character_count < 1:
+            raise ValueError("a stored capture version carries text")
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureSearchOutcome:
+    """One page of capture matches and the counts a disclosure is built from.
+
+    The two counts are read in the page's own snapshot: `searchable_versions` is
+    how many versions the search could have returned and `stored_versions` is
+    how many exist. Their difference is what a caller is owed when a revised
+    capture's earlier version did not match because it is no longer current —
+    an absence with a reason, rather than an absence.
+    """
+
+    matches: tuple[CaptureSearchMatch, ...]
+    searchable_versions: int
+    stored_versions: int
+    truncated: bool
+
+    def __post_init__(self) -> None:
+        if self.searchable_versions < 0 or self.stored_versions < self.searchable_versions:
+            raise ValueError("a scope cannot hold more versions than the store does")
+
+
 class CaptureRepository(ABC):
-    """The capture plane, as the four operations the capabilities need.
+    """The capture plane, as the five operations the capabilities need.
 
     **No update and no delete, and their absence is the port's contribution to
     `QC-AC-010`.** A method that changed a stored version could not be added here
@@ -291,6 +367,23 @@ class CaptureRepository(ABC):
     @abstractmethod
     def captures(self, *, limit: int) -> tuple[CaptureSummary, ...]:
         """One bounded page of captures, newest first."""
+
+    @abstractmethod
+    def search(self, request: CaptureSearchRequest) -> CaptureSearchOutcome:
+        """One bounded page of capture versions whose stored text matched.
+
+        Exact at word granularity and, for a single-term query, at character
+        granularity: the plane is indexed with the `simple` text-search
+        configuration, which neither stems nor drops stop words, because
+        `QC-AC-050` asks for *exact* original text to be searchable. The cost —
+        `meetings` does not find `meeting` — is a limitation the caller is told
+        about rather than a property it has to discover.
+
+        Independent of enrichment: the index is over
+        `capture_versions.content`, which is written by the save, so a capture
+        whose processing failed is searchable on the same terms as one whose
+        processing succeeded.
+        """
 
 
 class SourceRepository(ABC):

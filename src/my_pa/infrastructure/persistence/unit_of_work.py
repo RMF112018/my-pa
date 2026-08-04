@@ -60,6 +60,8 @@ from my_pa.contracts.ports import (
     CaptureAdmission,
     CaptureAdmissionRequest,
     CaptureRepository,
+    CaptureSearchOutcome,
+    CaptureSearchRequest,
     CaptureSummary,
     EnrollmentRepository,
     EvidenceUnavailableError,
@@ -87,6 +89,7 @@ from my_pa.infrastructure.persistence.capture import (
     capture_page,
     capture_version,
 )
+from my_pa.infrastructure.persistence.capture_search import search_captures
 from my_pa.infrastructure.persistence.enrollment import (
     accept_enrollment,
     enrollments_for_principal,
@@ -242,9 +245,14 @@ class _Operations(OperationQueue):
 class _Captures(CaptureRepository):
     """The capture plane, over `persistence.capture`.
 
-    Three methods and no fourth. There is no `update` and no `delete` here
+    Four methods and no fifth. There is no `update` and no `delete` here
     because there is none in the module below it and none the server would
     accept: `capture_versions` carries a trigger that refuses both.
+
+    `search` reaches a second module, `persistence.capture_search`, rather than
+    `persistence.capture`: the capture plane's lexical index is its own concern
+    with its own configuration and its own scope predicate, and the module that
+    writes a capture has no reason to hold either.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -267,6 +275,17 @@ class _Captures(CaptureRepository):
 
     def captures(self, *, limit: int) -> tuple[CaptureSummary, ...]:
         return _read(lambda: capture_page(self._connection, limit=limit))
+
+    def search(self, request: CaptureSearchRequest) -> CaptureSearchOutcome:
+        """One page of exact matches over stored capture text.
+
+        `_read` translates the store's own failures into the port's vocabulary,
+        which is what keeps `application` free of a SQLAlchemy import; the two
+        errors `capture_search` raises are its own classes for the same reason
+        `persistence.search`'s are, and both are unavailability or an internal
+        fault rather than an answer about the caller's request.
+        """
+        return _read(lambda: search_captures(self._connection, request))
 
 
 class _Knowledge(KnowledgeRepository):

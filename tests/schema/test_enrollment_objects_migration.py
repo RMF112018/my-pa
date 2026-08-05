@@ -140,6 +140,13 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "native_admission_authorities",
         "native_preflight_observations",
         "native_source_review_routes",
+        "situations",
+        "frames",
+        "traces",
+        "projects",
+        "project_situations",
+        "relationship_events",
+        "pulse_items",
     }
 )
 

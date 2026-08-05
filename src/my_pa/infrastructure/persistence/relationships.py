@@ -61,8 +61,10 @@ def _alias_id(observation_id: str) -> str:
 
 
 class SqlRelationshipRepository(RelationshipRepository):
-    def __init__(self, connection: Connection) -> None:
+    def __init__(self, connection: Connection, *, principal_id: str) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
         self._connection = connection
+        self._principal_id = principal_id
 
     def record_observations(
         self, domain: str, observations: tuple[IdentityObservation, ...]
@@ -103,6 +105,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                     source_domain=domain,
                     display_name=row.display_name,
                     observed_at=row.observed_at,
+                    principal_id=self._principal_id,
                 )
             )
             count += 1
@@ -136,12 +139,15 @@ class SqlRelationshipRepository(RelationshipRepository):
                     else "identity_resolution"
                 ),
                 created_at=candidates.created_at,
+                principal_id=self._principal_id,
             )
         )
         for person_id in candidates.person_ids:
             self._connection.execute(
                 insert(relationship_duplicate_members).values(
-                    duplicate_set_id=candidates.candidate_set_id, person_id=person_id
+                    duplicate_set_id=candidates.candidate_set_id,
+                    person_id=person_id,
+                    principal_id=self._principal_id,
                 )
             )
         for observation_id in candidates.observation_ids:
@@ -149,6 +155,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                 insert(relationship_duplicate_members).values(
                     duplicate_set_id=candidates.candidate_set_id,
                     observation_id=observation_id,
+                    principal_id=self._principal_id,
                 )
             )
         review_case_id = issue_identifier(IdKind.REVIEW_CASE)
@@ -159,6 +166,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                 requested_action=action.value,
                 retained_person_id=retained_person_id,
                 prior_person_id=prior_person_id,
+                principal_id=self._principal_id,
             )
         )
         return review_case_id
@@ -390,6 +398,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                     person_id=resolution.retained_person_id,
                     display_name=display_name,
                     created_at=resolution.decided_at,
+                    principal_id=self._principal_id,
                 )
             )
         self._connection.execute(
@@ -401,6 +410,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                 retained_person_id=resolution.retained_person_id,
                 prior_person_id=resolution.prior_person_id,
                 decided_at=resolution.decided_at,
+                principal_id=self._principal_id,
             )
         )
         if resolution.action is ResolutionAction.LINK_OBSERVATION:
@@ -414,6 +424,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                 insert(relationship_resolution_observations).values(
                     resolution_id=resolution.resolution_id,
                     observation_id=observation_id,
+                    principal_id=self._principal_id,
                 )
             )
             self._connection.execute(
@@ -422,6 +433,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                     observation_id=observation_id,
                     person_id=resolution.retained_person_id,
                     resolution_id=resolution.resolution_id,
+                    principal_id=self._principal_id,
                 )
                 .on_conflict_do_update(
                     index_elements=[relationship_observation_links.c.observation_id],
@@ -447,6 +459,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                             person_id=resolution.retained_person_id,
                             observation_id=observation_id,
                             value=alias_value,
+                            principal_id=self._principal_id,
                         )
                     )
                 evidence_id = f"source_{observation_id}"
@@ -457,12 +470,17 @@ class SqlRelationshipRepository(RelationshipRepository):
                         person_id=resolution.retained_person_id,
                         authority=EvidenceAuthority.SOURCE_OBSERVATION.value,
                         recorded_at=resolution.decided_at,
+                        principal_id=self._principal_id,
                     )
                     .on_conflict_do_nothing(index_elements=[relationship_evidence.c.evidence_id])
                 )
                 self._connection.execute(
                     pg_insert(relationship_evidence_observations)
-                    .values(evidence_id=evidence_id, observation_id=observation_id)
+                    .values(
+                        evidence_id=evidence_id,
+                        observation_id=observation_id,
+                        principal_id=self._principal_id,
+                    )
                     .on_conflict_do_nothing()
                 )
         if resolution.action in {ResolutionAction.MERGE_PERSON, ResolutionAction.SPLIT_PERSON}:
@@ -530,6 +548,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                 relationship_people.c.state_resolution_id,
             ).where(
                 relationship_people.c.person_id == person_id,
+                relationship_people.c.principal_id == self._principal_id,
                 relationship_people.c.superseded_by_person_id.is_(None),
             )
         ).one_or_none()
@@ -745,7 +764,8 @@ class SqlRelationshipRepository(RelationshipRepository):
         validate_identifier(organization_id, IdKind.ORGANIZATION)
         organization = self._connection.execute(
             select(relationship_organizations.c.display_name).where(
-                relationship_organizations.c.organization_id == organization_id
+                relationship_organizations.c.organization_id == organization_id,
+                relationship_organizations.c.principal_id == self._principal_id,
             )
         ).one_or_none()
         if organization is None:
@@ -807,7 +827,8 @@ class SqlRelationshipRepository(RelationshipRepository):
             )
         existing_name = self._connection.execute(
             select(relationship_organizations.c.display_name).where(
-                relationship_organizations.c.organization_id == organization_id
+                relationship_organizations.c.organization_id == organization_id,
+                relationship_organizations.c.principal_id == self._principal_id,
             )
         ).scalar_one_or_none()
         if existing_name is not None and existing_name != organization_name:
@@ -817,7 +838,9 @@ class SqlRelationshipRepository(RelationshipRepository):
         if existing_name is None:
             self._connection.execute(
                 insert(relationship_organizations).values(
-                    organization_id=organization_id, display_name=organization_name
+                    organization_id=organization_id,
+                    display_name=organization_name,
+                    principal_id=self._principal_id,
                 )
             )
         self._connection.execute(
@@ -829,6 +852,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                 role=role,
                 effective_from=effective_from,
                 effective_to=effective_to,
+                principal_id=self._principal_id,
             )
         )
 
@@ -857,6 +881,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                 source_object_id=mention.source_object_id,
                 source_version=mention.source_version,
                 observed_at=mention.observed_at,
+                principal_id=self._principal_id,
             )
         )
 
@@ -933,12 +958,17 @@ class SqlRelationshipRepository(RelationshipRepository):
                 conversation_id=conversation_id,
                 person_id=person_id,
                 unresolved_mention_id=unresolved_mention_id,
+                principal_id=self._principal_id,
             )
         )
         for observation_id in observation_ids:
             self._connection.execute(
                 pg_insert(relationship_conversation_observations)
-                .values(participant_id=participant_id, observation_id=observation_id)
+                .values(
+                    participant_id=participant_id,
+                    observation_id=observation_id,
+                    principal_id=self._principal_id,
+                )
                 .on_conflict_do_nothing()
             )
         return participant_id

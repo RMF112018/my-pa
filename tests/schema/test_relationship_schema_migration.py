@@ -261,6 +261,7 @@ def _insert_raw_resolution(connection: Connection, resolution: IdentityResolutio
             retained_person_id=resolution.retained_person_id,
             prior_person_id=resolution.prior_person_id,
             decided_at=resolution.decided_at,
+            principal_id=_id("prn", 1),
         )
     )
     connection.execute(
@@ -269,6 +270,7 @@ def _insert_raw_resolution(connection: Connection, resolution: IdentityResolutio
             {
                 "resolution_id": resolution.resolution_id,
                 "observation_id": observation_id,
+                "principal_id": _id("prn", 1),
             }
             for observation_id in resolution.observation_ids
         ],
@@ -278,7 +280,7 @@ def _insert_raw_resolution(connection: Connection, resolution: IdentityResolutio
 @pytest.mark.database
 def test_direct_merge_is_denied_before_any_write(relationship_engine: Engine) -> None:
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         before = connection.execute(
             select(func.count()).select_from(relationship_identity_resolutions)
         ).scalar_one()
@@ -304,7 +306,7 @@ def test_observed_source_version_cannot_be_silently_rebound(
         display_name="Conflicting Synthetic Person",
     )
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         assert repository.record_observations("contacts", (original,)) == 1
         assert repository.record_observations("contacts", (original,)) == 0
         before = connection.execute(select(relationship_identity_observations)).all()
@@ -328,7 +330,10 @@ def test_database_refuses_direct_canonical_person_insert_without_review(
     ):
         connection.execute(
             insert(relationship_people).values(
-                person_id=_id("per", 99), display_name="Synthetic Bypass", created_at=WHEN
+                person_id=_id("per", 99),
+                display_name="Synthetic Bypass",
+                created_at=WHEN,
+                principal_id=_id("prn", 1),
             )
         )
     with relationship_engine.connect() as connection:
@@ -344,7 +349,7 @@ def test_rejected_identity_review_cannot_persist_a_resolution(
 ) -> None:
     observations = (_observation(1, "contacts"), _observation(2, "email"))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", (observations[0],))
         repository.record_observations("email", (observations[1],))
         first = _link_person(repository, person_ordinal=1, observations=(observations[0],))
@@ -354,7 +359,7 @@ def test_rejected_identity_review_cannot_persist_a_resolution(
         pytest.raises(DBAPIError, match="exact accepted review"),
         relationship_engine.begin() as connection,
     ):
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         review_id = repository.open_identity_review(
             DuplicateCandidateSet(
                 candidate_set_id=_id("dups", 22),
@@ -381,6 +386,7 @@ def test_rejected_identity_review_cannot_persist_a_resolution(
                 retained_person_id=first,
                 prior_person_id=second,
                 decided_at=WHEN,
+                principal_id=_id("prn", 1),
             )
         )
 
@@ -391,7 +397,7 @@ def test_merge_review_requires_exact_distinct_candidate_people(
 ) -> None:
     observations = tuple(_observation(index, "contacts") for index in range(73, 76))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", observations)
         people = tuple(
             _link_person(repository, person_ordinal=index, observations=(observation,))
@@ -433,13 +439,18 @@ def test_merge_review_requires_exact_distinct_candidate_people(
     ):
         connection.execute(
             insert(relationship_duplicate_sets).values(
-                duplicate_set_id=_id("dups", 77), candidate_kind="duplicate", created_at=WHEN
+                duplicate_set_id=_id("dups", 77),
+                candidate_kind="duplicate",
+                created_at=WHEN,
+                principal_id=_id("prn", 1),
             )
         )
         for person_id in (people[0], people[2]):
             connection.execute(
                 insert(relationship_duplicate_members).values(
-                    duplicate_set_id=_id("dups", 77), person_id=person_id
+                    duplicate_set_id=_id("dups", 77),
+                    person_id=person_id,
+                    principal_id=_id("prn", 1),
                 )
             )
         connection.execute(
@@ -449,6 +460,7 @@ def test_merge_review_requires_exact_distinct_candidate_people(
                 requested_action="merge_person",
                 retained_person_id=people[0],
                 prior_person_id=people[1],
+                principal_id=_id("prn", 1),
             )
         )
     with relationship_engine.connect() as connection:
@@ -465,7 +477,7 @@ def test_accepted_merge_and_split_receipts_cannot_commit_without_exact_final_sta
 ) -> None:
     observations = (_observation(181, "contacts"), _observation(182, "contacts"))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", observations)
         first = _link_person(repository, person_ordinal=181, observations=(observations[0],))
         second = _link_person(repository, person_ordinal=182, observations=(observations[1],))
@@ -493,21 +505,25 @@ def test_accepted_merge_and_split_receipts_cannot_commit_without_exact_final_sta
                 retained_person_id=raw_merge.retained_person_id,
                 prior_person_id=raw_merge.prior_person_id,
                 decided_at=raw_merge.decided_at,
+                principal_id=_id("prn", 1),
             )
         )
         connection.execute(
             insert(relationship_resolution_observations).values(
                 resolution_id=raw_merge.resolution_id,
                 observation_id=observations[1].observation_id,
+                principal_id=_id("prn", 1),
             )
         )
         with pytest.raises(IdentityResolutionError, match="current canonical resolution state"):
-            SqlRelationshipRepository(connection).profile(second, expected_domains=("contacts",))
+            SqlRelationshipRepository(connection, principal_id=_id("prn", 1)).profile(
+                second, expected_domains=("contacts",)
+            )
     with relationship_engine.connect() as connection:
         assert _relationship_state_snapshot(connection) == before_raw_merge
 
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.apply_resolution(raw_merge, display_name="unused")
         repository.apply_resolution(raw_merge, display_name="unused")
         assert repository.profile(first, expected_domains=("contacts",)) is not None
@@ -535,19 +551,21 @@ def test_accepted_merge_and_split_receipts_cannot_commit_without_exact_final_sta
                 retained_person_id=raw_split.retained_person_id,
                 prior_person_id=raw_split.prior_person_id,
                 decided_at=raw_split.decided_at,
+                principal_id=_id("prn", 1),
             )
         )
         connection.execute(
             insert(relationship_resolution_observations).values(
                 resolution_id=raw_split.resolution_id,
                 observation_id=observations[1].observation_id,
+                principal_id=_id("prn", 1),
             )
         )
     with relationship_engine.connect() as connection:
         assert _relationship_state_snapshot(connection) == before_raw_split
 
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.apply_resolution(raw_split, display_name="unused")
         repository.apply_resolution(raw_split, display_name="unused")
         assert repository.profile(first, expected_domains=("contacts",)) is not None
@@ -560,7 +578,7 @@ def test_exact_inverse_correction_handoff_commits_and_replays_idempotently(
 ) -> None:
     observations = (_observation(191, "contacts"), _observation(192, "contacts"))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", observations)
         first = _link_person(repository, person_ordinal=191, observations=(observations[0],))
         second = _link_person(repository, person_ordinal=192, observations=(observations[1],))
@@ -594,7 +612,7 @@ def test_exact_inverse_correction_handoff_commits_and_replays_idempotently(
             observations[0].observation_id: (first, _id("ires", 191)),
             observations[1].observation_id: (second, split.resolution_id),
         }
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         assert repository.profile(first, expected_domains=("contacts",)) is not None
         assert repository.profile(second, expected_domains=("contacts",)) is not None
 
@@ -625,7 +643,7 @@ def test_non_exact_terminal_correction_handoffs_are_atomic(
     }[plant]
     observations = tuple(_observation(base + index, "contacts") for index in range(4))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", observations)
         first = _link_person(repository, person_ordinal=base, observations=(observations[0],))
         second_observations = (
@@ -688,7 +706,7 @@ def test_non_exact_terminal_correction_handoffs_are_atomic(
             ),
             relationship_engine.begin() as connection,
         ):
-            repository = SqlRelationshipRepository(connection)
+            repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
             connection.execute(
                 text(
                     "ALTER TABLE knowledge.relationship_observation_links "
@@ -709,7 +727,7 @@ def test_non_exact_terminal_correction_handoffs_are_atomic(
                 repository.profile(first, expected_domains=("contacts",))
     else:
         with pytest.raises(DBAPIError), relationship_engine.begin() as connection:
-            repository = SqlRelationshipRepository(connection)
+            repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
             if plant in {"subset", "superset"}:
                 repository.apply_resolution(earlier, display_name="unused")
                 repository.apply_resolution(later, display_name="unused")
@@ -745,7 +763,7 @@ def test_every_accepted_resolution_action_requires_complete_final_state_at_commi
 ) -> None:
     observations = (_observation(185, "contacts"), _observation(186, "contacts"))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", observations)
         if action is ResolutionAction.LINK_OBSERVATION:
             candidate = IdentityCandidateSet(
@@ -792,6 +810,7 @@ def test_every_accepted_resolution_action_requires_complete_final_state_at_commi
                     person_id=resolution.retained_person_id,
                     display_name="Unapplied accepted identity",
                     created_at=WHEN,
+                    principal_id=_id("prn", 1),
                 )
             )
         connection.execute(
@@ -803,12 +822,14 @@ def test_every_accepted_resolution_action_requires_complete_final_state_at_commi
                 retained_person_id=resolution.retained_person_id,
                 prior_person_id=resolution.prior_person_id,
                 decided_at=resolution.decided_at,
+                principal_id=_id("prn", 1),
             )
         )
         connection.execute(
             insert(relationship_resolution_observations).values(
                 resolution_id=resolution.resolution_id,
                 observation_id=resolution.observation_ids[0],
+                principal_id=_id("prn", 1),
             )
         )
 
@@ -836,7 +857,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
     person_id = _id("per", 188)
     resolution_id = _id("ires", 188)
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", (observation,))
         candidate = IdentityCandidateSet(
             candidate_set_id=_id("dups", 188),
@@ -876,6 +897,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                 person_id=person_id,
                 display_name="Incomplete accepted identity",
                 created_at=WHEN,
+                principal_id=_id("prn", 1),
             )
         )
         connection.execute(
@@ -887,6 +909,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                 retained_person_id=person_id,
                 prior_person_id=None,
                 decided_at=WHEN,
+                principal_id=_id("prn", 1),
             )
         )
         if omission != "person_state":
@@ -899,6 +922,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
             insert(relationship_resolution_observations).values(
                 resolution_id=resolution_id,
                 observation_id=observation.observation_id,
+                principal_id=_id("prn", 1),
             )
         )
         if omission not in {"observation_link", "wrong_receipt_owner"}:
@@ -907,6 +931,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                     observation_id=observation.observation_id,
                     person_id=person_id,
                     resolution_id=resolution_id,
+                    principal_id=_id("prn", 1),
                 )
             )
             if omission != "alias":
@@ -916,6 +941,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                         person_id=person_id,
                         observation_id=observation.observation_id,
                         value=observation.display_name,
+                        principal_id=_id("prn", 1),
                     )
                 )
         if omission not in {"evidence", "wrong_receipt_owner"}:
@@ -926,6 +952,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                     person_id=person_id,
                     authority="source_observation",
                     recorded_at=WHEN,
+                    principal_id=_id("prn", 1),
                 )
             )
             if omission != "evidence_lineage":
@@ -933,6 +960,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                     insert(relationship_evidence_observations).values(
                         evidence_id=evidence_id,
                         observation_id=observation.observation_id,
+                        principal_id=_id("prn", 1),
                     )
                 )
         if omission == "wrong_receipt_owner":
@@ -943,6 +971,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                     person_id=competing_person_id,
                     display_name="Competing accepted identity",
                     created_at=WHEN,
+                    principal_id=_id("prn", 1),
                 )
             )
             connection.execute(
@@ -954,6 +983,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                     retained_person_id=competing_person_id,
                     prior_person_id=None,
                     decided_at=WHEN,
+                    principal_id=_id("prn", 1),
                 )
             )
             connection.execute(
@@ -965,6 +995,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                 insert(relationship_resolution_observations).values(
                     resolution_id=competing_resolution_id,
                     observation_id=observation.observation_id,
+                    principal_id=_id("prn", 1),
                 )
             )
             connection.execute(
@@ -972,6 +1003,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                     observation_id=observation.observation_id,
                     person_id=competing_person_id,
                     resolution_id=competing_resolution_id,
+                    principal_id=_id("prn", 1),
                 )
             )
             connection.execute(
@@ -980,6 +1012,7 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                     person_id=competing_person_id,
                     observation_id=observation.observation_id,
                     value=observation.display_name,
+                    principal_id=_id("prn", 1),
                 )
             )
             evidence_id = f"source_{observation.observation_id}"
@@ -989,12 +1022,14 @@ def test_accepted_link_receipt_cannot_commit_with_incomplete_final_state(
                     person_id=competing_person_id,
                     authority="source_observation",
                     recorded_at=WHEN,
+                    principal_id=_id("prn", 1),
                 )
             )
             connection.execute(
                 insert(relationship_evidence_observations).values(
                     evidence_id=evidence_id,
                     observation_id=observation.observation_id,
+                    principal_id=_id("prn", 1),
                 )
             )
 
@@ -1008,7 +1043,7 @@ def test_governed_link_is_idempotent_and_profile_fails_closed_if_receipt_link_is
 ) -> None:
     observation = _observation(189, "contacts")
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", (observation,))
         candidate = IdentityCandidateSet(
             candidate_set_id=_id("dups", 189),
@@ -1070,7 +1105,7 @@ def test_governed_link_is_idempotent_and_profile_fails_closed_if_receipt_link_is
                 )
             )
             with pytest.raises(IdentityResolutionError, match="current canonical resolution state"):
-                SqlRelationshipRepository(connection).profile(
+                SqlRelationshipRepository(connection, principal_id=_id("prn", 1)).profile(
                     resolution.retained_person_id, expected_domains=("contacts",)
                 )
         finally:
@@ -1087,7 +1122,7 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
         _observation(index, "contacts" if index % 2 else "email") for index in range(1, 5)
     )
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         for index, observation in enumerate(observations, start=1):
             repository.record_observations("contacts" if index % 2 else "email", (observation,))
         first = _link_person(repository, person_ordinal=1, observations=observations[:2])
@@ -1105,7 +1140,7 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
         }
 
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         merge_set = DuplicateCandidateSet(
             candidate_set_id=_id("dups", 30),
             person_ids=(first, second),
@@ -1144,7 +1179,7 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
         assert {str(row.person_id) for row in connection.execute(select(relationship_aliases))} == {
             first
         }
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         split_set = DuplicateCandidateSet(
             candidate_set_id=_id("dups", 31),
             person_ids=(first, second),
@@ -1283,7 +1318,7 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
         assert unchanged[observations[2].observation_id] == second
 
     with relationship_engine.begin() as connection:
-        SqlRelationshipRepository(connection).record_unresolved_mention(
+        SqlRelationshipRepository(connection, principal_id=_id("prn", 1)).record_unresolved_mention(
             UnresolvedMention(
                 unresolved_mention_id=_id("umen", 31),
                 source_object_id=observations[0].source_object_id,
@@ -1429,7 +1464,7 @@ def test_merge_then_governed_split_restores_exact_links_and_keeps_lineage(
     # A byte-identical retry while its state is still current returns the same
     # receipt without appending lineage. The split is current here.
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         before = connection.execute(
             select(func.count()).select_from(relationship_identity_resolutions)
         ).scalar_one()
@@ -1469,7 +1504,7 @@ def test_merge_and_split_atomically_move_supported_participants_and_evidence(
 ) -> None:
     observations = tuple(_observation(index, "contacts") for index in range(101, 105))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", observations)
         first = _link_person(repository, person_ordinal=101, observations=observations[:2])
         second = _link_person(repository, person_ordinal=102, observations=observations[2:])
@@ -1577,7 +1612,7 @@ def test_merge_denies_ambiguous_participant_support_without_writes(
 ) -> None:
     observations = tuple(_observation(index, "contacts") for index in range(111, 114))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", observations)
         first = _link_person(repository, person_ordinal=111, observations=(observations[0],))
         second = _link_person(repository, person_ordinal=112, observations=observations[1:])
@@ -1617,7 +1652,7 @@ def test_merge_refuses_conversation_participant_collision_without_writes(
 ) -> None:
     observations = tuple(_observation(index, "contacts") for index in range(115, 117))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", observations)
         first = _link_person(repository, person_ordinal=115, observations=(observations[0],))
         second = _link_person(repository, person_ordinal=116, observations=(observations[1],))
@@ -1661,12 +1696,12 @@ def test_split_denies_ambiguous_participant_support_without_writes(
 ) -> None:
     observations = tuple(_observation(index, "contacts") for index in range(121, 123))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", observations)
         first = _link_person(repository, person_ordinal=121, observations=(observations[0],))
         second = _link_person(repository, person_ordinal=122, observations=(observations[1],))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.apply_resolution(
             _accepted_correction(
                 repository,
@@ -1679,7 +1714,7 @@ def test_split_denies_ambiguous_participant_support_without_writes(
             display_name="unused",
         )
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.attach_conversation_participant(
             _create_conversation(connection, 121),
             person_id=first,
@@ -1716,7 +1751,7 @@ def test_database_denies_stale_participant_and_evidence_rewrites_with_rollback(
 ) -> None:
     observations = tuple(_observation(index, "contacts") for index in range(131, 133))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", observations)
         first = _link_person(repository, person_ordinal=131, observations=(observations[0],))
         second = _link_person(repository, person_ordinal=132, observations=(observations[1],))
@@ -1752,6 +1787,7 @@ def test_database_denies_stale_participant_and_evidence_rewrites_with_rollback(
                 conversation_id=empty_support_conversation_id,
                 person_id=second,
                 unresolved_mention_id=None,
+                principal_id=_id("prn", 1),
             )
         )
 
@@ -1842,7 +1878,7 @@ def test_database_refuses_an_unreviewed_observation_planted_in_a_resolution(
 ) -> None:
     observations = tuple(_observation(index, "contacts") for index in range(61, 64))
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", observations)
         first = _link_person(repository, person_ordinal=61, observations=(observations[0],))
         second = _link_person(repository, person_ordinal=62, observations=(observations[1],))
@@ -1875,12 +1911,14 @@ def test_database_refuses_an_unreviewed_observation_planted_in_a_resolution(
                 retained_person_id=first,
                 prior_person_id=second,
                 decided_at=WHEN,
+                principal_id=_id("prn", 1),
             )
         )
         connection.execute(
             insert(relationship_resolution_observations).values(
                 resolution_id=_id("ires", 63),
                 observation_id=observations[2].observation_id,
+                principal_id=_id("prn", 1),
             )
         )
 
@@ -1893,7 +1931,7 @@ def test_timeline_uses_only_explicit_conversation_support(relationship_engine: E
         _observation(43, "contacts"),
     )
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", (observations[0],))
         repository.record_observations("email", (observations[1],))
         repository.record_observations("contacts", (observations[2],))
@@ -2035,6 +2073,7 @@ def test_timeline_uses_only_explicit_conversation_support(relationship_engine: E
             "conversation_id",
             "person_id",
             "unresolved_mention_id",
+            "principal_id",
         }
         with pytest.raises(IdentityResolutionError, match="support is bounded"):
             repository.attach_conversation_participant(
@@ -2144,6 +2183,7 @@ def test_timeline_uses_only_explicit_conversation_support(relationship_engine: E
                 insert(relationship_conversation_observations).values(
                     participant_id=participant_id,
                     observation_id=observation_id,
+                    principal_id=_id("prn", 1),
                 )
             )
     with relationship_engine.connect() as connection:
@@ -2179,6 +2219,7 @@ def test_timeline_uses_only_explicit_conversation_support(relationship_engine: E
                     participant_id=_id("cpart", ordinal),
                     conversation_id=ids["conversation"],
                     **duplicate_values,
+                    principal_id=_id("prn", 1),
                 )
             )
     with relationship_engine.connect() as connection:
@@ -2196,7 +2237,7 @@ def test_single_observation_can_become_a_person_only_through_review(
 ) -> None:
     observation = _observation(51, "contacts")
     with relationship_engine.begin() as connection:
-        repository = SqlRelationshipRepository(connection)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
         repository.record_observations("contacts", (observation,))
         candidates = IdentityCandidateSet(
             candidate_set_id=_id("dups", 51),

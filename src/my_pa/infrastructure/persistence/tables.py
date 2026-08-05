@@ -1922,8 +1922,11 @@ relationship_people = Table(
         unique=True,
     ),
     Column("state_resolution_id", Text, unique=True),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("person_id", IdKind.PERSON),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     CheckConstraint("length(trim(display_name)) > 0", name="a_person_name_is_not_blank"),
+    Index("relationship_people_by_principal", "principal_id"),
 )
 
 relationship_organizations = Table(
@@ -1932,8 +1935,11 @@ relationship_organizations = Table(
     Column("organization_id", Text, primary_key=True),
     Column("display_name", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("organization_id", IdKind.ORGANIZATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     CheckConstraint("length(trim(display_name)) > 0", name="an_organization_name_is_not_blank"),
+    Index("relationship_organizations_by_principal", "principal_id"),
 )
 
 relationship_identity_observations = Table(
@@ -1963,6 +1969,9 @@ relationship_identity_observations = Table(
         "source_version",
         name="an_observed_source_version_is_recorded_once",
     ),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_identity_observations_by_principal", "principal_id"),
 )
 
 relationship_unresolved_mentions = Table(
@@ -1978,6 +1987,9 @@ relationship_unresolved_mentions = Table(
         "length(source_version) BETWEEN 1 AND 72",
         name="an_unresolved_source_version_is_bounded",
     ),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_unresolved_mentions_by_principal", "principal_id"),
 )
 
 relationship_duplicate_sets = Table(
@@ -1991,6 +2003,9 @@ relationship_duplicate_sets = Table(
         "candidate_kind IN ('identity_resolution', 'duplicate')",
         name="identity_candidate_set_kind_is_known",
     ),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_duplicate_sets_by_principal", "principal_id"),
 )
 
 relationship_duplicate_members = Table(
@@ -2024,6 +2039,9 @@ relationship_duplicate_members = Table(
         "observation_id",
         name="an_observation_occurs_once_in_a_duplicate_set",
     ),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_duplicate_members_by_principal", "principal_id"),
 )
 
 relationship_identity_review_cases = Table(
@@ -2052,6 +2070,9 @@ relationship_identity_review_cases = Table(
         "retained_person_id IS NULL OR retained_person_id <> prior_person_id",
         name="an_identity_review_names_distinct_people",
     ),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_identity_review_cases_by_principal", "principal_id"),
 )
 
 relationship_identity_review_decisions = Table(
@@ -2076,6 +2097,7 @@ relationship_identity_review_decisions = Table(
     ),
     CheckConstraint("sequence >= 1", name="identity_review_decisions_start_at_one"),
     UniqueConstraint("review_case_id", "sequence", name="one_identity_decision_per_sequence"),
+    Index("relationship_identity_review_decisions_by_principal", "principal_id"),
 )
 
 relationship_identity_resolutions = Table(
@@ -2119,6 +2141,9 @@ relationship_identity_resolutions = Table(
         "prior_person_id IS NULL OR retained_person_id <> prior_person_id",
         name="an_identity_resolution_names_distinct_people",
     ),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_identity_resolutions_by_principal", "principal_id"),
 )
 
 relationship_resolution_observations = Table(
@@ -2136,7 +2161,10 @@ relationship_resolution_observations = Table(
         ForeignKey(f"{SCHEMA}.relationship_identity_observations.observation_id"),
         nullable=False,
     ),
+    Column("principal_id", Text, nullable=False),
     PrimaryKeyConstraint("resolution_id", "observation_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_resolution_observations_by_principal", "principal_id"),
 )
 
 relationship_observation_links = Table(
@@ -2160,6 +2188,9 @@ relationship_observation_links = Table(
         ForeignKey(f"{SCHEMA}.relationship_identity_resolutions.resolution_id"),
         nullable=False,
     ),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_observation_links_by_principal", "principal_id"),
 )
 
 # Added after both declarations so SQLAlchemy can represent the intentionally
@@ -2186,9 +2217,12 @@ relationship_aliases = Table(
         nullable=False,
     ),
     Column("value", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("alias_id", IdKind.ALIAS),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     UniqueConstraint("observation_id", name="one_source_bound_alias_per_observation"),
     CheckConstraint("length(trim(value)) > 0", name="an_alias_is_not_blank"),
+    Index("relationship_aliases_by_principal", "principal_id"),
 )
 
 relationship_affiliations = Table(
@@ -2216,11 +2250,14 @@ relationship_affiliations = Table(
     Column("role", Text),
     Column("effective_from", DateTime(timezone=True)),
     Column("effective_to", DateTime(timezone=True)),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("affiliation_id", IdKind.AFFILIATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     CheckConstraint(
         "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
         name="an_affiliation_ends_after_it_starts",
     ),
+    Index("relationship_affiliations_by_principal", "principal_id"),
 )
 
 relationship_evidence = Table(
@@ -2236,7 +2273,10 @@ relationship_evidence = Table(
     Column("authority", Text, nullable=False),
     Column("effective_at", DateTime(timezone=True)),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _one_of("authority", EvidenceAuthority, name="relationship_evidence_authority_is_known"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_evidence_by_principal", "principal_id"),
 )
 
 relationship_evidence_observations = Table(
@@ -2254,7 +2294,10 @@ relationship_evidence_observations = Table(
         ForeignKey(f"{SCHEMA}.relationship_identity_observations.observation_id"),
         nullable=False,
     ),
+    Column("principal_id", Text, nullable=False),
     PrimaryKeyConstraint("evidence_id", "observation_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_evidence_observations_by_principal", "principal_id"),
 )
 
 relationship_conversation_participants = Table(
@@ -2277,7 +2320,10 @@ relationship_conversation_participants = Table(
         "(person_id IS NULL) <> (unresolved_mention_id IS NULL)",
         name="a_conversation_participant_names_one_identity_target",
     ),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("participant_id", IdKind.CONVERSATION_PARTICIPANT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_conversation_participants_by_principal", "principal_id"),
     Index(
         "a_conversation_names_a_person_once",
         "conversation_id",
@@ -2309,7 +2355,10 @@ relationship_conversation_observations = Table(
         ForeignKey(f"{SCHEMA}.relationship_identity_observations.observation_id"),
         nullable=False,
     ),
+    Column("principal_id", Text, nullable=False),
     PrimaryKeyConstraint("participant_id", "observation_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    Index("relationship_conversation_observations_by_principal", "principal_id"),
 )
 
 # WP-12 provider-neutral source evidence and native control plane. Provider

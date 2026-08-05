@@ -1,6 +1,9 @@
+import Foundation
+
 /// The frozen identifier for the first source-host protocol boundary.
 public enum NativeSourceProtocolV1 {
     public static let identifier = "my-pa.native-source.v1"
+    public static let supportedIdentifiers = [identifier]
 }
 
 /// Source categories supported by protocol v1. These are product categories,
@@ -16,10 +19,33 @@ public struct NativeSourceOpaqueID: RawRepresentable, Codable, Hashable, Sendabl
     public let rawValue: String
 
     public init?(rawValue: String) {
-        guard !rawValue.isEmpty, !rawValue.contains(where: { $0.isWhitespace }) else {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._:")
+        guard !rawValue.isEmpty,
+              rawValue.utf8.count <= 200,
+              rawValue.first?.isLetter == true || rawValue.first?.isNumber == true,
+              rawValue.last?.isLetter == true || rawValue.last?.isNumber == true,
+              rawValue.unicodeScalars.allSatisfy(allowed.contains)
+        else {
             return nil
         }
         self.rawValue = rawValue
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        guard let value = Self(rawValue: rawValue) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid opaque identifier"
+            )
+        }
+        self = value
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 
@@ -82,6 +108,23 @@ public struct NativeDiscoverySnapshot: Codable, Hashable, Sendable {
         self.accounts = accounts
         self.buckets = buckets
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case protocolVersion, kind, accounts, buckets
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let protocolVersion = try values.decode(String.self, forKey: .protocolVersion)
+        guard protocolVersion == NativeSourceProtocolV1.identifier else {
+            throw NativeSourceContractError.unsupportedVersion
+        }
+        try self.init(
+            kind: values.decode(NativeSourceKind.self, forKey: .kind),
+            accounts: values.decode([NativeSourceAccount].self, forKey: .accounts),
+            buckets: values.decode([NativeSourceBucket].self, forKey: .buckets)
+        )
+    }
 }
 
 /// An inclusive, source-neutral UTC interval represented without importing a
@@ -97,6 +140,18 @@ public struct NativeTimeRange: Codable, Hashable, Sendable {
         self.startUnixMilliseconds = startUnixMilliseconds
         self.endUnixMilliseconds = endUnixMilliseconds
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case startUnixMilliseconds, endUnixMilliseconds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            startUnixMilliseconds: values.decode(Int64.self, forKey: .startUnixMilliseconds),
+            endUnixMilliseconds: values.decode(Int64.self, forKey: .endUnixMilliseconds)
+        )
+    }
 }
 
 public struct NativeReadCursor: RawRepresentable, Codable, Hashable, Sendable {
@@ -108,6 +163,37 @@ public struct NativeReadCursor: RawRepresentable, Codable, Hashable, Sendable {
         }
         self.rawValue = rawValue
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        guard let value = Self(rawValue: rawValue) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid read cursor"
+            )
+        }
+        self = value
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+/// Stable, content-free failure vocabulary shared by synthetic host envelopes.
+public enum NativeProviderFailure: String, Codable, CaseIterable, Error, Sendable {
+    case permissionDenied = "permission_denied"
+    case accountUnavailable = "account_unavailable"
+    case bucketUnavailable = "bucket_unavailable"
+    case transientUnavailable = "transient_unavailable"
+    case invalidCursor = "invalid_cursor"
+    case unsupportedVersion = "unsupported_version"
+    case malformedRequest = "malformed_request"
+    case capacityExceeded = "capacity_exceeded"
+    case payloadTooLarge = "payload_too_large"
+    case integrityFailure = "integrity_failure"
 }
 
 public struct NativeReadRequest: Codable, Hashable, Sendable {
@@ -129,6 +215,20 @@ public struct NativeReadRequest: Codable, Hashable, Sendable {
         self.timeRange = timeRange
         self.cursor = cursor
         self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case bucketID, timeRange, cursor, limit
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            bucketID: values.decode(NativeSourceOpaqueID.self, forKey: .bucketID),
+            timeRange: values.decodeIfPresent(NativeTimeRange.self, forKey: .timeRange),
+            cursor: values.decodeIfPresent(NativeReadCursor.self, forKey: .cursor),
+            limit: values.decode(Int.self, forKey: .limit)
+        )
     }
 }
 
@@ -177,4 +277,10 @@ public enum NativeSourceContractError: Error, Equatable, Sendable {
     case unknownBucket
     case missingSyntheticPage
     case duplicateSyntheticPage
+    case duplicateIdentity
+    case nonCanonicalOrder
+    case unsupportedVersion
+    case inconsistentEnvelope
+    case invalidRecurrence
+    case recurrenceLimitExceeded
 }

@@ -98,6 +98,20 @@ class IdKind(StrEnum):
     AUDIT = "audit"
     PRINCIPAL = "prn"
     CORRELATION = "corr"
+    #: The R5 relationship / project *continuity* plane (WP-06). Each surface is
+    #: its own prefix on the same argument the capture planes make — a stored
+    #: reference or an audit row has to say which record it names, and a shared
+    #: prefix would make a Situation and the Project that groups it, or a Trace
+    #: and the relationship event it reconstructed, indistinguishable to a reader
+    #: of either. `PROJECT_SITUATION` names the link row itself so that a
+    #: reference to the binding is not confused with a reference to either end.
+    SITUATION = "sit"
+    FRAME = "frm"
+    TRACE = "trc"
+    PROJECT = "prj"
+    PROJECT_SITUATION = "psit"
+    RELATIONSHIP_EVENT = "revt"
+    PULSE = "puls"
 
 
 class InvalidIdentifierError(ValueError):

@@ -76,6 +76,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
@@ -142,8 +143,15 @@ from my_pa.domain.native_sources import (
     WatcherSimulationState,
 )
 from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
+from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.relationship.identity import ResolutionAction
 from my_pa.domain.relationship.profile import EvidenceAuthority
+from my_pa.domain.situation.situation import (
+    FrameState,
+    ProjectState,
+    PulseItemType,
+    SituationState,
+)
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
     MAX_ENROLLMENT_DEPTH,
@@ -2863,4 +2871,229 @@ native_live_activation_gates = Table(
     _is_identifier("gate_id", IdKind.NATIVE_LIVE_GATE),
     _one_of("state", LiveActivationGateState, name="native_live_gate_state_is_known"),
     UniqueConstraint("bucket_id", name="one_native_live_gate_per_bucket"),
+)
+
+# ---------------------------------------------------------------------------
+# WP-06 (R5): the relationship / project continuity surface.
+#
+# These seven tables are the runtime declarations for the surface migration
+# `d2e3f4a5b6c7` creates with frozen literals. Every table carries
+# `principal_id` (NOT NULL, opaque-identifier CHECK, principal-first index)
+# because Today/Pulse and the relationship/project briefing read them and each
+# read must be strictly principal-scoped — the partition is present from the
+# first row (invariant 11: `principal_id` is a mandatory predicate on every read
+# path). `frames` and `project_situations` carry `principal_id` explicitly even
+# though they inherit it from their parent, so a query can enforce the partition
+# without joining back — the same reasoning the WP-05 review span tables used.
+# The declarations mirror the revision's DDL so the applied schema matches what
+# `to_metadata` builds (the schema-parity invariant).
+# ---------------------------------------------------------------------------
+
+#: `Situation`: a purposeful operational context that *references* one or more
+#: objects (via `object_refs`) but does not own them. `object_refs` is a JSONB
+#: array of opaque object identifiers, not foreign keys — a Situation points at
+#: objects across planes without taking ownership of their lifetime. The closed
+#: CHECK ties `closed_at` to the terminal `state`: a closed Situation records
+#: when it closed, and an open one has no closing time.
+situations = Table(
+    "situations",
+    METADATA,
+    Column("situation_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("description", Text),
+    Column("state", Text, nullable=False, server_default=text("'open'")),
+    Column("object_refs", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True)),
+    Column("outcome", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("situation_id", IdKind.SITUATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("length(trim(title)) > 0", name="a_situation_title_is_not_blank"),
+    _one_of("state", SituationState, name="a_situation_state_is_known"),
+    CheckConstraint(
+        "(state = 'closed') = (closed_at IS NOT NULL)",
+        name="a_closed_situation_records_when_it_closed",
+    ),
+    Index("situations_by_principal", "principal_id"),
+    Index("situations_by_principal_state", "principal_id", "state"),
+)
+
+#: `Frame`: the current or saved view *within* a Situation of what matters — the
+#: evidence, alternatives, obligations, uncertainty, and the next authority
+#: point. `situation_id` is a foreign key to the Situation the Frame frames;
+#: `principal_id` is carried explicitly so the partition holds without the join.
+frames = Table(
+    "frames",
+    METADATA,
+    Column("frame_id", Text, primary_key=True),
+    Column(
+        "situation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.situations.situation_id"),
+        nullable=False,
+    ),
+    Column("principal_id", Text, nullable=False),
+    Column("label", Text, nullable=False),
+    Column("evidence_refs", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("alternatives", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("obligations", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("uncertainty", Text),
+    Column("next_authority", Text),
+    Column("state", Text, nullable=False, server_default=text("'current'")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("frame_id", IdKind.FRAME),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("length(trim(label)) > 0", name="a_frame_label_is_not_blank"),
+    _one_of("state", FrameState, name="a_frame_state_is_known"),
+    Index("frames_by_principal", "principal_id"),
+    Index("frames_by_principal_situation", "principal_id", "situation_id"),
+)
+
+#: `Trace`: a derived, source-linked temporal reconstruction for one object over
+#: a time range, recording the source events it reconstructed (`source_events`)
+#: and the gaps it exposed (`gaps`). A Trace is a projection, never source
+#: evidence. The range CHECK admits an open-ended or unanchored range but never
+#: one that ends before it starts.
+traces = Table(
+    "traces",
+    METADATA,
+    Column("trace_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("object_id", Text, nullable=False),
+    Column("object_type", Text, nullable=False),
+    Column("time_range_start", DateTime(timezone=True)),
+    Column("time_range_end", DateTime(timezone=True)),
+    Column("source_events", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("gaps", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("trace_id", IdKind.TRACE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("length(trim(object_type)) > 0", name="a_trace_object_type_is_not_blank"),
+    CheckConstraint(
+        "time_range_end IS NULL OR time_range_start IS NULL OR time_range_end >= time_range_start",
+        name="a_trace_range_ends_after_it_starts",
+    ),
+    Index("traces_by_principal", "principal_id"),
+    Index("traces_by_principal_object", "principal_id", "object_id"),
+)
+
+#: `Project`: a durable work context with participants that groups Situations.
+#: `participants` is a JSONB array of person/identity references. The closed
+#: CHECK ties `closed_at` to the terminal `state`, as `situations` does.
+projects = Table(
+    "projects",
+    METADATA,
+    Column("project_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("name", Text, nullable=False),
+    Column("description", Text),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("participants", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("length(trim(name)) > 0", name="a_project_name_is_not_blank"),
+    _one_of("state", ProjectState, name="a_project_state_is_known"),
+    CheckConstraint(
+        "(state = 'closed') = (closed_at IS NOT NULL)",
+        name="a_closed_project_records_when_it_closed",
+    ),
+    Index("projects_by_principal", "principal_id"),
+    Index("projects_by_principal_state", "principal_id", "state"),
+)
+
+#: `project_situations`: the link table binding a Project to the Situations it
+#: contains, unique per (project, situation) so a Situation links to a Project
+#: at most once. `principal_id` is carried explicitly for the same partition
+#: reason the span tables carry it.
+project_situations = Table(
+    "project_situations",
+    METADATA,
+    Column("project_situation_id", Text, primary_key=True),
+    Column(
+        "project_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.projects.project_id"),
+        nullable=False,
+    ),
+    Column(
+        "situation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.situations.situation_id"),
+        nullable=False,
+    ),
+    Column("principal_id", Text, nullable=False),
+    Column("linked_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("project_situation_id", IdKind.PROJECT_SITUATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    UniqueConstraint("project_id", "situation_id", name="a_situation_links_to_a_project_once"),
+    Index("project_situations_by_principal", "principal_id"),
+)
+
+#: `relationship_events`: a time/context-aware association event on a Person's
+#: relationship timeline. `accepted` gates whether Today/Pulse may read the
+#: event, so an unaccepted (proposed) event never surfaces as an accepted
+#: timeline fact (invariant 5: no timeline entry presents a proposal as
+#: accepted). The principal-and-accepted index serves the accepted-only read.
+relationship_events = Table(
+    "relationship_events",
+    METADATA,
+    Column("event_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column(
+        "person_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_people.person_id"),
+        nullable=False,
+    ),
+    Column("event_type", Text, nullable=False),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("context", Text),
+    Column("accepted", Boolean, nullable=False, server_default=text("false")),
+    Column("source_ref", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("event_id", IdKind.RELATIONSHIP_EVENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("event_type", RelationshipEventType, name="a_relationship_event_type_is_known"),
+    Index("relationship_events_by_principal", "principal_id"),
+    Index("relationship_events_by_principal_person", "principal_id", "person_id"),
+    Index("relationship_events_by_principal_accepted", "principal_id", "accepted"),
+)
+
+#: `pulse_items`: derived attention recommendations with a reason, a
+#: consequence, and a next step. `accepted_only` defaults TRUE and the
+#: `pulse_reads_only_accepted_records` CHECK pins it TRUE, encoding the WP-06
+#: acceptance criterion "Today/Pulse read only accepted records": a Pulse item
+#: is generated only from accepted state, and the schema refuses to store one
+#: that claims otherwise. `priority` is a bounded 1..10 rank.
+pulse_items = Table(
+    "pulse_items",
+    METADATA,
+    Column("pulse_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("item_type", Text, nullable=False),
+    Column("item_ref", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("consequence", Text),
+    Column("next_step", Text),
+    Column("priority", Integer, nullable=False, server_default=text("5")),
+    Column("accepted_only", Boolean, nullable=False, server_default=text("true")),
+    Column("generated_at", DateTime(timezone=True), nullable=False),
+    Column("dismissed_at", DateTime(timezone=True)),
+    _is_identifier("pulse_id", IdKind.PULSE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("item_type", PulseItemType, name="a_pulse_item_type_is_known"),
+    CheckConstraint("length(trim(item_ref)) > 0", name="a_pulse_item_ref_is_not_blank"),
+    CheckConstraint("length(trim(reason)) > 0", name="a_pulse_reason_is_not_blank"),
+    CheckConstraint("priority BETWEEN 1 AND 10", name="a_pulse_priority_is_bounded"),
+    CheckConstraint("accepted_only IS TRUE", name="pulse_reads_only_accepted_records"),
+    Index("pulse_items_by_principal", "principal_id"),
+    Index("pulse_items_by_principal_dismissed", "principal_id", "dismissed_at"),
 )

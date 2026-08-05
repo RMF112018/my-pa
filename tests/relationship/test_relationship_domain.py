@@ -148,6 +148,19 @@ def test_unresolved_source_binding_is_bounded_without_storing_raw_mention_text()
 
 
 EXPECTED_MODEL_FIELDS = {
+    "my_pa.domain.relationship.event.RelationshipEvent": frozenset(
+        {
+            "event_id",
+            "principal_id",
+            "person_id",
+            "event_type",
+            "occurred_at",
+            "created_at",
+            "context",
+            "accepted",
+            "source_ref",
+        }
+    ),
     "my_pa.domain.relationship.identity.Affiliation": frozenset(
         {
             "affiliation_id",
@@ -242,6 +255,19 @@ EXPECTED_MODEL_FIELDS = {
 }
 
 EXPECTED_TABLE_COLUMNS = {
+    "relationship_events": frozenset(
+        {
+            "event_id",
+            "principal_id",
+            "person_id",
+            "event_type",
+            "occurred_at",
+            "created_at",
+            "context",
+            "accepted",
+            "source_ref",
+        }
+    ),
     "relationship_affiliations": frozenset(
         {
             "affiliation_id",
@@ -350,8 +376,8 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith("relationship_")
     }
-    assert len(actual_model_fields) == 16
-    assert len(actual_table_columns) == 17
+    assert len(actual_model_fields) == 17
+    assert len(actual_table_columns) == 18
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

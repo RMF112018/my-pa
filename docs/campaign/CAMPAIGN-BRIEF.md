@@ -5,12 +5,12 @@ product_package_version: "4.0"
 product_package_sha256: 60e886e9dd19c6d39929990cd939ab1eb8c9c11eea8b0fb8faffac971516d6a4
 repository: RMF112018/my-pa
 remote: https://github.com/RMF112018/my-pa.git
-main_head: 88e8d8193095afa8d903db08324a588a5786908b
-main_tree: 418c466b020db1819b575f3206dbbdaf71db7f0a
+main_head: 21ff8dc228be84530fb598c2a81f037aafb2d9b0
+main_tree: 62052cbdd084f5ca8ea9997ef80defd61f88ffe0
 active_goal_id: GOAL-MYPA-MOSS-MCV-MVP-V4
-active_work_item_id: WP-01-R0A-IDENTITY-FOUNDATION
+active_work_item_id: WP-02-R0-R1-FOUNDATION-FRONTEND-SHELL
 active_authorization_id: PROMPT-MYPA-MOSS-FULL-IMPLEMENTATION-MANAGER-20260805-001
-lifecycle_state: WP01_IMPLEMENTED_PR_OPEN_AWAITING_REVIEW
+lifecycle_state: WP02_IMPLEMENTED_PR_OPEN_AWAITING_REVIEW
 completed_work_packages:
   - id: WP-00
     name: Campaign Formation and Ratification
@@ -19,6 +19,20 @@ completed_work_packages:
       - docs/campaign/REPOSITORY-TRUTH-REPORT-20260805.md
       - docs/campaign/WORK-PACKAGE-MAP.md
       - docs/campaign/CAMPAIGN-BRIEF.md
+  - id: WP-01
+    name: R0A Identity Foundation
+    merged_as: 21ff8dc228be84530fb598c2a81f037aafb2d9b0
+    merge_method: "squash (PR 45, all three CI checks green)"
+    post_merge_validation: >
+      FAST tier 3003 passed; database tier 479 passed (one local-only
+      Postgres teardown privilege, resolved by GRANT pg_signal_backend,
+      not a repository defect). Branch feat/wp-01-r0a-identity-foundation
+      deleted remotely and locally.
+    artifacts:
+      - migrations/versions/20260805_c4a7e2d81b53_create_identity_user_accounts.py
+      - src/my_pa/domain/identity/
+      - tests/security/test_principal_claims_validation.py
+      - tests/security/test_cross_principal_isolation.py
 current_acceptance_baseline: MU-AC-01..MU-AC-05 (19_ACCEPTANCE_CRITERIA_CROSSWALK.md)
 active_decisions:
   - id: CD-01
@@ -43,6 +57,13 @@ active_decisions:
       The Moss home tenant ID is injected as configuration into the identity
       service (constructor argument; synthetic value in tests). No live tenant
       value is committed.
+  - id: CD-05
+    decision: >
+      WP-02 frontend is a Next.js App Router PWA under `web/` (ADR-004,
+      PKL-MYPA-D-WP02-001) with a synthetic identity provider; identity
+      derives only from validated Entra-shaped claims, sessions are
+      HMAC-signed HttpOnly cookies, and caller-supplied identity fields
+      are rejected at client wrapper, middleware, and every route.
 open_findings: []
 blocked_actions:
   - production deployment or activation
@@ -52,13 +73,13 @@ blocked_actions:
 operator_only_decisions:
   - MCV completion date (AGENTS.md section 1, open ledger)
   - live tenant activation and app registration for R0A+
-next_work_package: WP-02-R0-R1-FOUNDATION-FRONTEND-SHELL
+next_work_package: WP-03-R2-CAPTURE
 required_sources:
   - /docs/campaign/WORK-PACKAGE-MAP.md
   - product package documents 02, 07, 09, 12, 13, 17, 18, 19
 invalidations:
-  - Any commit to main after 88e8d8193095afa8d903db08324a588a5786908b
-    invalidates the head identity recorded here; re-authenticate before WP-02.
+  - Any commit to main after 21ff8dc228be84530fb598c2a81f037aafb2d9b0
+    invalidates the head identity recorded here; re-authenticate before WP-03.
 artifact_references:
   ratification: docs/campaign/RATIFICATION-MYPA-MOSS-V4-20260805.md
   truth_report: docs/campaign/REPOSITORY-TRUTH-REPORT-20260805.md

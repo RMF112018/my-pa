@@ -16,6 +16,7 @@
 - [`docs/decisions/ADR-001-modular-monolith-two-processes.md`](decisions/ADR-001-modular-monolith-two-processes.md) — modular monolith with gateway and worker processes.
 - [`docs/decisions/ADR-002-database-identity-and-compatibility-alias.md`](decisions/ADR-002-database-identity-and-compatibility-alias.md) — logical database identity and deferred physical alias.
 - [`docs/decisions/ADR-003-product-owned-user-authored-source-records.md`](decisions/ADR-003-product-owned-user-authored-source-records.md) — the third authority class: records the user creates inside `my-pa`, append-only, and not a managed-document write.
+- [`docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md`](decisions/ADR-004-mossaic-frontend-nextjs-app-router.md) — Next.js App Router PWA as the MossAIc frontend, with a synthetic identity provider until a real Entra registration exists.
 - [`docs/architecture/system-context.md`](architecture/system-context.md) — actors, external systems, trust and authority boundaries.
 - [`docs/architecture/module-boundaries.md`](architecture/module-boundaries.md) — module ownership, dependency direction, and split triggers.
 - [`docs/architecture/data-authority.md`](architecture/data-authority.md) — data ownership, authority, lifecycle, and disclosure.
@@ -38,6 +39,11 @@ Current authority correction to the historical final sentences in the canonical-
 Not mirrored, routed by identity only: the **Frontier NAS MCP Connector** feature package (`MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086`, Drive folder `1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa`). It became canonical product scope on 2026-08-02 but drives no planned work package; see `docs/plans/mcv-completion-plan.md` `D-22`.
 
 Also indexed by identity only: the **Native Apple Personal Data Capture Bridge**, user-facing **Apple Mail, Calendar & Contacts** (`MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087`, Drive folder `13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5`). It is active only for bounded synthetic repository implementation under `AUTH-WP12-20260804-OPERATOR-001`; live personal data, TCC, credentials, signing, activation, source mutation, deployment, production, destruction, and risk acceptance remain unauthorized. See `docs/plans/mcv-completion-plan.md` `D-105` through `D-107`.
+
+## Frontend
+
+- [`web/README.md`](../web/README.md) — the MossAIc Next.js progressive web app: five-destination shell, synthetic Entra-shaped identity boundary, Capture/Reveal affordances against stub routes, and PWA install surface. WP-02 (R1); no live sources, credentials, or personal data.
+- [`web/src/contracts/README.md`](../web/src/contracts/README.md) — canonical TypeScript contract mirror and its parity rules against the Python contracts and domain vocabulary.
 
 ## Plans
 

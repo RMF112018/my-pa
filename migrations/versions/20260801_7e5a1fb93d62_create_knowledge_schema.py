@@ -13,8 +13,9 @@ only objects that did not exist before it, and its downgrade cannot touch the
 migrated corpus even if it is run against a loaded database.
 
 The tables are declared once, in `my_pa.infrastructure.persistence.tables`, and
-created from that declaration here, so the schema this revision applies and the
-schema the writers assume cannot drift.
+copied into revision-local metadata here. Closed-set checks are replaced with
+the literals this revision originally emitted, so later vocabulary expansion
+cannot rewrite migration history.
 
 The five are named explicitly rather than taken as "whatever is in the shared
 `MetaData`". `METADATA` is shared with every later revision that declares a table
@@ -35,10 +36,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from alembic import op
-from sqlalchemy import Table
+from sqlalchemy import CheckConstraint, MetaData, Table
 
 from my_pa.infrastructure.persistence.tables import (
-    METADATA,
     SCHEMA,
     enrollments,
     jobs,
@@ -57,14 +57,49 @@ depends_on: str | Sequence[str] | None = None
 #: reverses that on drop — but membership is.
 _TABLES: list[Table] = [sources, source_objects, source_object_versions, enrollments, jobs]
 
+_FROZEN: dict[str, dict[str, str]] = {
+    "sources": {
+        "provider_kind_is_known": "provider_kind IN ('fixture')",
+        "classification_is_known": (
+            "classification IN ('private_local', 'restricted_local', 'synthetic_test')"
+        ),
+    },
+    "source_objects": {"kind_is_known": "kind IN ('container', 'file')"},
+    "jobs": {
+        "state_is_known": "state IN ('failed', 'queued', 'running', 'succeeded')",
+        "last_error_code_is_a_public_error_code": (
+            "last_error_code IS NULL OR last_error_code IN ('invalid_request', "
+            "'ambiguous_request', 'denied', 'unavailable', 'unsupported', 'not_found', "
+            "'conflict', 'rate_limited', 'quarantined', 'cancelled', 'internal_error')"
+        ),
+    },
+}
+
+
+def _historical_knowledge_tables() -> list[Table]:
+    """Return the five declarations with their original closed sets frozen."""
+    frozen = MetaData(schema=SCHEMA)
+    copies = [table.to_metadata(frozen) for table in _TABLES]
+    for copy in copies:
+        replacements = _FROZEN.get(copy.name, {})
+        for constraint in [
+            candidate for candidate in copy.constraints if candidate.name in replacements
+        ]:
+            copy.constraints.discard(constraint)
+        for name, expression in replacements.items():
+            copy.append_constraint(CheckConstraint(expression, name=name))
+    return copies
+
 
 def upgrade() -> None:
     op.execute(f'CREATE SCHEMA IF NOT EXISTS "{SCHEMA}"')
-    METADATA.create_all(op.get_bind(), tables=_TABLES)
+    frozen = _historical_knowledge_tables()
+    frozen[0].metadata.create_all(op.get_bind(), tables=frozen)
 
 
 def downgrade() -> None:
-    METADATA.drop_all(op.get_bind(), tables=_TABLES)
+    frozen = _historical_knowledge_tables()
+    frozen[0].metadata.drop_all(op.get_bind(), tables=frozen)
     # RESTRICT, not CASCADE: reaching this point with anything still in the
     # schema means a later revision left an object behind, and failing loudly is
     # better than silently deleting whatever it is.

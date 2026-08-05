@@ -55,6 +55,9 @@ private struct SyntheticCatalog: Sendable {
         }) else {
             throw NativeSourceContractError.missingSyntheticPage
         }
+        guard fixture.page.records.count <= request.limit else {
+            throw NativeSourceContractError.inconsistentEnvelope
+        }
         return fixture.page
     }
 }

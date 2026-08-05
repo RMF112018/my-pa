@@ -20,15 +20,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from my_pa.application.commands import (
-    AddProjectCommand,
-    OpenSituationCommand,
-    RecordRelationshipEventCommand,
-)
-from my_pa.application.situation_service import SituationService
-from my_pa.domain.relationship.event import RelationshipEventType
-from my_pa.domain.situation.situation import PulseItemType
-
 from tests.situation.conftest import (
     PERSON_ONE,
     PRINCIPAL_A,
@@ -38,6 +29,15 @@ from tests.situation.conftest import (
     InMemoryRelationshipEventRepository,
     InMemorySituationRepository,
 )
+
+from my_pa.application.commands import (
+    AddProjectCommand,
+    OpenSituationCommand,
+    RecordRelationshipEventCommand,
+)
+from my_pa.application.situation_service import SituationService
+from my_pa.domain.relationship.event import RelationshipEventType
+from my_pa.domain.situation.situation import PulseItemType
 
 WHEN = datetime(2026, 8, 5, 12, tzinfo=UTC)
 

@@ -117,7 +117,9 @@ def upgrade() -> None:
     )
 
     # Assertion spans: inherit principal from assertion
-    op.execute("ALTER TABLE knowledge.capture_assertion_spans ADD COLUMN principal_id TEXT NOT NULL")
+    op.execute(
+        "ALTER TABLE knowledge.capture_assertion_spans ADD COLUMN principal_id TEXT NOT NULL"
+    )
     op.execute(
         f"ALTER TABLE knowledge.capture_assertion_spans "
         f"ADD CONSTRAINT {_PRINCIPAL_CHECK_NAME} CHECK ({_PRINCIPAL_CHECK})"
@@ -130,7 +132,9 @@ def upgrade() -> None:
     )
 
     # Promotion receipts: one Principal promotes one proposal
-    op.execute("ALTER TABLE knowledge.capture_promotion_receipts ADD COLUMN principal_id TEXT NOT NULL")
+    op.execute(
+        "ALTER TABLE knowledge.capture_promotion_receipts ADD COLUMN principal_id TEXT NOT NULL"
+    )
     op.execute(
         f"ALTER TABLE knowledge.capture_promotion_receipts "
         f"ADD CONSTRAINT {_PRINCIPAL_CHECK_NAME} CHECK ({_PRINCIPAL_CHECK})"
@@ -148,19 +152,41 @@ def downgrade() -> None:
     # Drop indexes and columns in reverse order. Only the indexes this revision
     # created are dropped; `capture_assertions_by_version` is historical and
     # remains.
-    op.drop_index("capture_promotion_receipts_by_principal", table_name="capture_promotion_receipts", schema="knowledge")
-    op.execute(f"ALTER TABLE knowledge.capture_promotion_receipts DROP CONSTRAINT {_PRINCIPAL_CHECK_NAME}")
+    op.drop_index(
+        "capture_promotion_receipts_by_principal",
+        table_name="capture_promotion_receipts",
+        schema="knowledge",
+    )
+    op.execute(
+        f"ALTER TABLE knowledge.capture_promotion_receipts DROP CONSTRAINT {_PRINCIPAL_CHECK_NAME}"
+    )
     op.execute("ALTER TABLE knowledge.capture_promotion_receipts DROP COLUMN principal_id")
 
-    op.drop_index("capture_assertion_spans_by_principal", table_name="capture_assertion_spans", schema="knowledge")
-    op.execute(f"ALTER TABLE knowledge.capture_assertion_spans DROP CONSTRAINT {_PRINCIPAL_CHECK_NAME}")
+    op.drop_index(
+        "capture_assertion_spans_by_principal",
+        table_name="capture_assertion_spans",
+        schema="knowledge",
+    )
+    op.execute(
+        f"ALTER TABLE knowledge.capture_assertion_spans DROP CONSTRAINT {_PRINCIPAL_CHECK_NAME}"
+    )
     op.execute("ALTER TABLE knowledge.capture_assertion_spans DROP COLUMN principal_id")
 
-    op.drop_index("capture_assertions_by_principal_version", table_name="capture_assertions", schema="knowledge")
-    op.drop_index("capture_assertions_by_principal", table_name="capture_assertions", schema="knowledge")
+    op.drop_index(
+        "capture_assertions_by_principal_version",
+        table_name="capture_assertions",
+        schema="knowledge",
+    )
+    op.drop_index(
+        "capture_assertions_by_principal", table_name="capture_assertions", schema="knowledge"
+    )
     op.execute(f"ALTER TABLE knowledge.capture_assertions DROP CONSTRAINT {_PRINCIPAL_CHECK_NAME}")
     op.execute("ALTER TABLE knowledge.capture_assertions DROP COLUMN principal_id")
 
-    op.drop_index("capture_review_cases_by_principal", table_name="capture_review_cases", schema="knowledge")
-    op.execute(f"ALTER TABLE knowledge.capture_review_cases DROP CONSTRAINT {_PRINCIPAL_CHECK_NAME}")
+    op.drop_index(
+        "capture_review_cases_by_principal", table_name="capture_review_cases", schema="knowledge"
+    )
+    op.execute(
+        f"ALTER TABLE knowledge.capture_review_cases DROP CONSTRAINT {_PRINCIPAL_CHECK_NAME}"
+    )
     op.execute("ALTER TABLE knowledge.capture_review_cases DROP COLUMN principal_id")

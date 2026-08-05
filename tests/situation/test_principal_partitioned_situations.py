@@ -17,6 +17,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from tests.situation.conftest import (
+    PERSON_ONE,
+    PRINCIPAL_A,
+    InMemoryFrameRepository,
+    InMemoryProjectRepository,
+    InMemoryRelationshipEventRepository,
+    InMemorySituationRepository,
+    InMemoryTraceRepository,
+)
 
 from my_pa.application.commands import (
     AddProjectCommand,
@@ -29,17 +38,6 @@ from my_pa.application.commands import (
 from my_pa.application.situation_service import SituationService
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.situation.situation import PulseItem, PulseItemType, SituationState
-
-from tests.situation.conftest import (
-    PERSON_ONE,
-    PRINCIPAL_A,
-    InMemoryFrameRepository,
-    InMemoryProjectRepository,
-    InMemoryPulseRepository,
-    InMemoryRelationshipEventRepository,
-    InMemorySituationRepository,
-    InMemoryTraceRepository,
-)
 
 WHEN = datetime(2026, 8, 5, 12, tzinfo=UTC)
 

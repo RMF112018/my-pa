@@ -50,7 +50,6 @@ PRINCIPAL_A: Final = "prn_aaaa0001aaaa0001aaaa0001"
 PRINCIPAL_B: Final = "prn_bbbb0002bbbb0002bbbb0002"
 
 
-
 def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"))
 

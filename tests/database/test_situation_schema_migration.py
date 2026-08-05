@@ -148,7 +148,7 @@ def test_all_new_r5_tables_exist(disposable_database: str) -> None:
     try:
         command.upgrade(_config(), "head")
         present = _tables(engine)
-        assert R5_TABLES <= present
+        assert present >= R5_TABLES
         assert R5_TABLES & present == R5_TABLES
     finally:
         engine.dispose()

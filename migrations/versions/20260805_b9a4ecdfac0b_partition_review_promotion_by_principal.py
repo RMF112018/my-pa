@@ -65,21 +65,27 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+# The exact CHECK the live declaration emits for a principal identifier column:
+# `_is_identifier("principal_id", IdKind.PRINCIPAL)` in tables.py expands to
+# `principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'` named
+# `principal_id_is_an_opaque_identifier`. This forward ALTER reproduces that
+# name and that regex verbatim so the applied schema is byte-for-byte the shape
+# `to_metadata` would build from the live declaration — the invariant the
+# schema-parity tests assert. The literal is inlined (not imported from
+# `tables.py`) because a merged migration must keep meaning the same thing even
+# if the declaration is later edited (`D-48`); the parity tests are what keep the
+# two in lock-step.
+_PRINCIPAL_CHECK = "principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'"
+_PRINCIPAL_CHECK_NAME = "principal_id_is_an_opaque_identifier"
+
+
 def upgrade() -> None:
     """Add principal_id to review cases, assertions, assertion spans, and promotion receipts."""
     # Review cases: one Principal opens one review case
+    op.execute("ALTER TABLE knowledge.capture_review_cases ADD COLUMN principal_id TEXT NOT NULL")
     op.execute(
-        """
-        ALTER TABLE knowledge.capture_review_cases
-        ADD COLUMN principal_id TEXT NOT NULL
-        """
-    )
-    op.execute(
-        """
-        ALTER TABLE knowledge.capture_review_cases
-        ADD CONSTRAINT review_case_principal_id_is_identifier
-        CHECK (principal_id ~ '^prn_[0-9a-f]{32}$')
-        """
+        f"ALTER TABLE knowledge.capture_review_cases "
+        f"ADD CONSTRAINT {_PRINCIPAL_CHECK_NAME} CHECK ({_PRINCIPAL_CHECK})"
     )
     op.create_index(
         "capture_review_cases_by_principal",
@@ -89,18 +95,10 @@ def upgrade() -> None:
     )
 
     # Assertions: one Principal accepts one proposal
+    op.execute("ALTER TABLE knowledge.capture_assertions ADD COLUMN principal_id TEXT NOT NULL")
     op.execute(
-        """
-        ALTER TABLE knowledge.capture_assertions
-        ADD COLUMN principal_id TEXT NOT NULL
-        """
-    )
-    op.execute(
-        """
-        ALTER TABLE knowledge.capture_assertions
-        ADD CONSTRAINT assertion_principal_id_is_identifier
-        CHECK (principal_id ~ '^prn_[0-9a-f]{32}$')
-        """
+        f"ALTER TABLE knowledge.capture_assertions "
+        f"ADD CONSTRAINT {_PRINCIPAL_CHECK_NAME} CHECK ({_PRINCIPAL_CHECK})"
     )
     op.create_index(
         "capture_assertions_by_principal",
@@ -108,26 +106,21 @@ def upgrade() -> None:
         ["principal_id", "assertion_id"],
         schema="knowledge",
     )
+    # A distinct principal-first composite; the historical
+    # `capture_assertions_by_version (version_id, state)` created by
+    # `3c8f1e2a5b74` is left untouched so this revision only ever *adds*.
     op.create_index(
-        "capture_assertions_by_version",
+        "capture_assertions_by_principal_version",
         "capture_assertions",
-        ["principal_id", "version_id"],
+        ["principal_id", "version_id", "state"],
         schema="knowledge",
     )
 
     # Assertion spans: inherit principal from assertion
+    op.execute("ALTER TABLE knowledge.capture_assertion_spans ADD COLUMN principal_id TEXT NOT NULL")
     op.execute(
-        """
-        ALTER TABLE knowledge.capture_assertion_spans
-        ADD COLUMN principal_id TEXT NOT NULL
-        """
-    )
-    op.execute(
-        """
-        ALTER TABLE knowledge.capture_assertion_spans
-        ADD CONSTRAINT assertion_span_principal_id_is_identifier
-        CHECK (principal_id ~ '^prn_[0-9a-f]{32}$')
-        """
+        f"ALTER TABLE knowledge.capture_assertion_spans "
+        f"ADD CONSTRAINT {_PRINCIPAL_CHECK_NAME} CHECK ({_PRINCIPAL_CHECK})"
     )
     op.create_index(
         "capture_assertion_spans_by_principal",
@@ -137,18 +130,10 @@ def upgrade() -> None:
     )
 
     # Promotion receipts: one Principal promotes one proposal
+    op.execute("ALTER TABLE knowledge.capture_promotion_receipts ADD COLUMN principal_id TEXT NOT NULL")
     op.execute(
-        """
-        ALTER TABLE knowledge.capture_promotion_receipts
-        ADD COLUMN principal_id TEXT NOT NULL
-        """
-    )
-    op.execute(
-        """
-        ALTER TABLE knowledge.capture_promotion_receipts
-        ADD CONSTRAINT promotion_receipt_principal_id_is_identifier
-        CHECK (principal_id ~ '^prn_[0-9a-f]{32}$')
-        """
+        f"ALTER TABLE knowledge.capture_promotion_receipts "
+        f"ADD CONSTRAINT {_PRINCIPAL_CHECK_NAME} CHECK ({_PRINCIPAL_CHECK})"
     )
     op.create_index(
         "capture_promotion_receipts_by_principal",
@@ -160,20 +145,22 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Remove principal_id from review, assertion, and promotion tables."""
-    # Drop indexes and columns in reverse order
+    # Drop indexes and columns in reverse order. Only the indexes this revision
+    # created are dropped; `capture_assertions_by_version` is historical and
+    # remains.
     op.drop_index("capture_promotion_receipts_by_principal", table_name="capture_promotion_receipts", schema="knowledge")
-    op.execute("ALTER TABLE knowledge.capture_promotion_receipts DROP CONSTRAINT promotion_receipt_principal_id_is_identifier")
+    op.execute(f"ALTER TABLE knowledge.capture_promotion_receipts DROP CONSTRAINT {_PRINCIPAL_CHECK_NAME}")
     op.execute("ALTER TABLE knowledge.capture_promotion_receipts DROP COLUMN principal_id")
 
     op.drop_index("capture_assertion_spans_by_principal", table_name="capture_assertion_spans", schema="knowledge")
-    op.execute("ALTER TABLE knowledge.capture_assertion_spans DROP CONSTRAINT assertion_span_principal_id_is_identifier")
+    op.execute(f"ALTER TABLE knowledge.capture_assertion_spans DROP CONSTRAINT {_PRINCIPAL_CHECK_NAME}")
     op.execute("ALTER TABLE knowledge.capture_assertion_spans DROP COLUMN principal_id")
 
-    op.drop_index("capture_assertions_by_version", table_name="capture_assertions", schema="knowledge")
+    op.drop_index("capture_assertions_by_principal_version", table_name="capture_assertions", schema="knowledge")
     op.drop_index("capture_assertions_by_principal", table_name="capture_assertions", schema="knowledge")
-    op.execute("ALTER TABLE knowledge.capture_assertions DROP CONSTRAINT assertion_principal_id_is_identifier")
+    op.execute(f"ALTER TABLE knowledge.capture_assertions DROP CONSTRAINT {_PRINCIPAL_CHECK_NAME}")
     op.execute("ALTER TABLE knowledge.capture_assertions DROP COLUMN principal_id")
 
     op.drop_index("capture_review_cases_by_principal", table_name="capture_review_cases", schema="knowledge")
-    op.execute("ALTER TABLE knowledge.capture_review_cases DROP CONSTRAINT review_case_principal_id_is_identifier")
+    op.execute(f"ALTER TABLE knowledge.capture_review_cases DROP CONSTRAINT {_PRINCIPAL_CHECK_NAME}")
     op.execute("ALTER TABLE knowledge.capture_review_cases DROP COLUMN principal_id")

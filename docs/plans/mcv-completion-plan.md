@@ -39,7 +39,7 @@ Drive mirrors are review surfaces rather than a competing ledger.
 | Database container | `my-pa-postgres`, `postgres:17.10`, healthy | `docker ps` |
 | Database binding | `127.0.0.1:5433 -> 5432`, loopback only | `docker ps` port map |
 | Logical database | `my_pa` | `select current_database()` |
-| Alembic head | `e7f3a9c2d514` in the repository, eighteen revisions; the canonical database remains at `6c4d3ea82f10` because every revision above it builds the `knowledge` schema, which runs only against disposable databases | `migrations/versions/*.py`, `select * from alembic_version` |
+| Alembic head | `b9a4ecdfac0b` in the repository, nineteen revisions; the canonical database remains at `6c4d3ea82f10` because every revision above it builds the `knowledge` schema, which runs only against disposable databases | `migrations/versions/*.py`, `select * from alembic_version` |
 | Extensions | `pg_trgm`, `unaccent`, `plpgsql` | `select extname from pg_extension` |
 
 ## 2. Verified corpus claim
@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-One hundred and thirty Python modules under `src/my_pa` and one hundred and seventeen test modules —
+One hundred and thirty Python modules under `src/my_pa` and one hundred and eighteen test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -89,7 +89,7 @@ section disagrees with the tree.
 | `domain/source`, `domain/extraction`, `domain/search` — registry, bounded enrollment, provider port, extraction outcomes, quarantine, coverage, search query | Implemented and tested |
 | `infrastructure/persistence` — registry, enrollment, jobs, extraction, quarantine, coverage, lexical search | Implemented; covered by the database tier |
 | `infrastructure/providers/fixture.py` — read-only fixture source provider | Implemented and tested |
-| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, the enrolled object set, relationship identity and profiles, native-source control plane, identity user accounts and scope grants, per-Principal capture partitioning | Implemented, eighteen revisions, head `e7f3a9c2d514` |
+| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, the enrolled object set, relationship identity and profiles, native-source control plane, identity user accounts and scope grants, per-Principal capture partitioning, per-Principal review/promotion partitioning | Implemented, nineteen revisions, head `b9a4ecdfac0b` |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
 All fifteen capability names, their operator-only flags, and their permitted

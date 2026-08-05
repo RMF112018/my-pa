@@ -1228,7 +1228,9 @@ class ApplicationService:
         """List review cases without capture or normalized-value content."""
         page_size = self._page_size(command.page_size)
         with _translated():
-            found = unit_of_work.reviews.cases(limit=page_size + 1)
+            found = unit_of_work.reviews.cases(
+                limit=page_size + 1, principal_id=authorization.principal.principal_id
+            )
         truncated = len(found) > page_size
         return _Result(
             payload={

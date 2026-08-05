@@ -1682,7 +1682,14 @@ capture_assertions = Table(
         name="an_asserted_value_is_bounded",
     ),
     Index("capture_assertions_by_principal", "principal_id", "assertion_id"),
-    Index("capture_assertions_by_version", "principal_id", "version_id", "state"),
+    # The historical index, kept exactly as `3c8f1e2a5b74` emitted it so the
+    # freeze in that revision stays purely subtractive (`D-48`).
+    Index("capture_assertions_by_version", "version_id", "state"),
+    # The principal-first composite that makes a per-owner "assertions in this
+    # version, by state" read an index scan rather than a filter over the whole
+    # version. Added by `b9a4ecdfac0b`; a distinct name so the freeze only ever
+    # *drops* WP-05 additions and never has to reshape a historical index.
+    Index("capture_assertions_by_principal_version", "principal_id", "version_id", "state"),
 )
 
 #: The `[1..n]` between an assertion and the spans it rests on, mirroring

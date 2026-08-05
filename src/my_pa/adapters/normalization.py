@@ -72,11 +72,11 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchKnowledge,
 )
-from my_pa.application.errors import InvalidRequestError, SafeDetail
+from my_pa.application.errors import InvalidRequestError, SafeDetail, UnsupportedError
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureKind
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 
 __all__ = ["MAX_REQUEST_BYTES", "PAYLOAD_KEY", "normalize"]
@@ -294,10 +294,11 @@ def _decide_review_case(payload: Mapping[str, Any]) -> Command:
     return DecideReviewCase(**converted)
 
 
-#: One builder per capability. A mapping rather than a `match`, so that
-#: `test_every_capability_has_exactly_one_builder` can compare its keys against
-#: `Capability` and a further capability cannot be unreachable over a transport
-#: while the manifest publishes it.
+#: One builder per command owned by these legacy transports. WP-12C adds a
+#: distinct authenticated native-host boundary; its capabilities are valid
+#: audit vocabulary but remain intentionally absent here until WP-12G owns the
+#: gateway/UI route. The Command union and this mapping stay equal, so absence
+#: is explicit rather than a half-wired route.
 _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = MappingProxyType(
     {
         Capability.CAPABILITIES_GET: _get_capabilities,
@@ -329,7 +330,12 @@ def _named(capability: str) -> Capability:
     try:
         return Capability(capability)
     except ValueError:
-        pass
+        try:
+            NativeSourceCapability(capability)
+        except ValueError:
+            pass
+        else:
+            raise UnsupportedError() from None
     raise InvalidRequestError()
 
 
@@ -361,7 +367,11 @@ def _command(capability: Capability, payload: Mapping[str, Any]) -> Command:
     command does not have, or omitted one it requires, or was not an object at
     all. All three are `invalid_request`, and none of them may escape as a crash.
     """
-    build = _BUILDERS[capability]
+    build = _BUILDERS.get(capability)
+    if build is None:
+        # A known capability with no command on this transport is unsupported,
+        # not malformed and never an internal KeyError.
+        raise UnsupportedError()
     try:
         return build(payload)
     except TypeError:

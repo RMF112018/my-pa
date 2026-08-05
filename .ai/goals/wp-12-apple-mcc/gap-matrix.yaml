@@ -1,6 +1,6 @@
 schema_version: 2
 goal_id: WP-12-APPLE-MCC
-current_status: NOT_IMPLEMENTED
+current_status: IN_PROGRESS
 slice_order: [A, B, D, C, E, F, G, H]
 criteria:
   - id: NAPDCB-AC-001
@@ -15,13 +15,14 @@ criteria:
     blocking_dependencies: [B-schema-contracts, D-synthetic-host, C-use-cases, E-baseline, F-watcher-simulation]
   - id: NAPDCB-AC-002
     requirement: Verify bridge identity, version, reachability and permissions independently.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [A, B, D]
     components: [native-host/versioned-protocol, domain/native_sources/bridge, application/native_sources/preflight]
     tests: [bridge-attestation-contract, permission-state-matrix, synthetic-host-application-integration]
     tier: PR
     evidence: {method: native_host_to_application_contract_test, artifact: bridge-verification-junit.xml}
+    implementation_evidence: [native/apple-source-host/Tests/AppleSourceHostFixtureExport/main.swift, tests/unit/test_wp12_slice_c_application.py]
     blocking_dependencies: [A-protocol-freeze, B-bridge-persistence, D-synthetic-host-integrated]
   - id: NAPDCB-AC-003
     requirement: Enumerate reachable accounts from the Mac.
@@ -35,13 +36,14 @@ criteria:
     blocking_dependencies: [A-adapter-protocol, B-account-identity]
   - id: NAPDCB-AC-004
     requirement: Typed names activate exact discovered identity only.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_FAST
     slice: C
     foundation_slices: [B, D]
     components: [domain/native_sources/identity_resolution, application/native_sources/configure]
     tests: [identity-ambiguity-matrix]
     tier: FAST
     evidence: {method: exhaustive_domain_and_application_matrix, artifact: identity-ambiguity-junit.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py]
     blocking_dependencies: [B-stable-identities, D-discovery-envelope]
   - id: NAPDCB-AC-005
     requirement: Bind account to opaque stable identity, not display label.
@@ -75,13 +77,14 @@ criteria:
     blocking_dependencies: [A-configuration-contract]
   - id: NAPDCB-AC-008
     requirement: Reverify every selected bucket immediately before sync.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B, D]
     components: [native-host/preflight, application/native_sources/preflight, persistence/native_source_buckets]
     tests: [preflight-all-buckets, preflight-drift, synthetic-preflight-integration]
     tier: PR
     evidence: {method: integrated_synthetic_host_preflight_with_drift_plant, artifact: preflight-integration.xml}
+    implementation_evidence: [native/apple-source-host/Tests/AppleSourceHostFixtureExport/main.swift, tests/unit/test_wp12_slice_c_application.py]
     blocking_dependencies: [B-bucket-revisions, D-native-preflight-integrated]
   - id: NAPDCB-AC-009
     requirement: Start date uses configured local timezone.
@@ -175,13 +178,14 @@ criteria:
     blocking_dependencies: [B-cursor-schema, D-paged-adapter, C-admission]
   - id: NAPDCB-AC-018
     requirement: Duplicate admission creates no duplicate immutable version.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B, D]
     components: [application/native_sources/admit, persistence/source_object_versions]
     tests: [admission-idempotency-concurrency, synthetic-envelope-replay]
     tier: PR
     evidence: {method: concurrent_isolated_database_replay, artifact: admission-idempotency.xml}
+    implementation_evidence: [native/apple-source-host/Tests/AppleSourceHostFixtureExport/main.swift, tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [B-idempotency-constraints, D-versioned-envelope]
   - id: NAPDCB-AC-019
     requirement: Interrupted baseline resumes from durable state.
@@ -205,23 +209,25 @@ criteria:
     blocking_dependencies: [B-checkpoint-constraints, C-admission-receipts]
   - id: NAPDCB-AC-021
     requirement: Progress reports counts and state without content.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_FAST
     slice: C
     foundation_slices: [B]
     components: [application/native_sources/status, contracts/v1/native_sources]
     tests: [progress-redaction-structural]
     tier: FAST
     evidence: {method: closed_response_shape_and_sentinel_corpus, artifact: progress-redaction.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/architecture/test_wp12_slice_c_boundaries.py]
     blocking_dependencies: [B-run-and-count-model]
   - id: NAPDCB-AC-022
     requirement: Zero records, denial and unavailability are distinguishable.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B, D]
     components: [domain/native_sources/coverage, application/native_sources/status]
     tests: [coverage-state-truth-table, synthetic-unavailable-integration]
     tier: PR
     evidence: {method: exhaustive_state_matrix_with_synthetic_host, artifact: coverage-state.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [B-coverage-states, D-provider-failure-vocabulary]
   - id: NAPDCB-AC-023
     requirement: Every bucket reconciles before watcher activation.
@@ -316,13 +322,14 @@ criteria:
     blocking_dependencies: [B-config-revisions, C-configure-command, E-baseline]
   - id: NAPDCB-AC-032
     requirement: Removing scope stops access without default evidence deletion.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B]
     components: [application/native_sources/disable, persistence/native_configuration_revisions]
     tests: [scope-removal-retention]
     tier: PR
     evidence: {method: isolated_database_before_after_snapshot, artifact: scope-removal.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [B-config-and-evidence-schema]
   - id: NAPDCB-AC-033
     requirement: Earlier start performs idempotent backfill.
@@ -366,13 +373,14 @@ criteria:
     blocking_dependencies: [D-preflight-adapter, C-resume-command, E-checkpoint]
   - id: NAPDCB-AC-037
     requirement: Configuration changes are revisioned and audited without content.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B]
     components: [application/native_sources/configure, application/authorization, persistence/native_configuration_revisions, persistence/audit]
     tests: [configuration-history-redaction, configuration-audit-fail-closed]
     tier: PR
     evidence: {method: application_to_database_audit_integration_with_sentinel_corpus, artifact: configuration-audit.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [B-config-revision-schema, C-authorization-and-audit-integration]
   - id: NAPDCB-AC-038
     requirement: Native host has no PostgreSQL credentials or direct writes.
@@ -416,13 +424,14 @@ criteria:
     blocking_dependencies: [A-spool-contract]
   - id: NAPDCB-AC-042
     requirement: Admission authenticates bridge and exact bucket scope.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [A, B, D]
     components: [native-host/admission-client, application/native_sources/admit, application/authorization]
     tests: [admission-auth-replay-scope-matrix, synthetic-host-admission-integration]
     tier: PR
     evidence: {method: integrated_versioned_host_application_negative_matrix, artifact: admission-auth.xml}
+    implementation_evidence: [native/apple-source-host/Tests/AppleSourceHostFixtureExport/main.swift, tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [A-authentication-contract, B-exact-scope-schema, D-integrated-synthetic-host]
   - id: NAPDCB-AC-043
     requirement: Provider metadata does not define canonical domain records.
@@ -436,23 +445,25 @@ criteria:
     blocking_dependencies: [A-envelope-contract]
   - id: NAPDCB-AC-044
     requirement: Evidence persists independently of enrichment success.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B, D]
     components: [application/native_sources/admit, persistence/source_version_evidence, infrastructure/jobs]
     tests: [persist-before-enrich-failure]
     tier: PR
     evidence: {method: transaction_and_worker_failure_snapshot, artifact: evidence-before-enrich.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [B-evidence-schema, D-versioned-envelope]
   - id: NAPDCB-AC-045
     requirement: Consequential derived records require governed Review.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B]
     components: [application/native_sources/enrichment_route, persistence/proposals, persistence/review]
     tests: [apple-proposal-review-policy]
     tier: PR
     evidence: {method: application_policy_and_database_lineage_test, artifact: apple-review-policy.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/architecture/test_wp12_slice_c_boundaries.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [B-source-evidence-binding, existing-review-plane]
   - id: NAPDCB-AC-046
     requirement: Automated tests use no live personal data or credentials.

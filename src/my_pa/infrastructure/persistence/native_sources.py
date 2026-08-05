@@ -9,18 +9,34 @@ operation per bucket.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
 
-from sqlalchemy import Connection, func, insert, select, text, update
+from sqlalchemy import Connection, Engine, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from my_pa.contracts.v1.base import canonical_json
+from my_pa.contracts.v1.native_sources import (
+    NativeAdmissionEnvelope,
+    NativeBucketProgress,
+    NativeCoverageState,
+    NativePreflightState,
+    NativeProviderFailure,
+)
+from my_pa.contracts.v1.native_sources import (
+    NativeSourceKind as ContractNativeSourceKind,
+)
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.identity.operation import NativeSourceCapability
 from my_pa.domain.native_sources import (
     ContactMembership,
+    ExactBucketSelection,
     LiveActivationGate,
+    NativeAdmissionAuthority,
+    NativeAdmissionAuthorityError,
     NativeBridge,
     NativeCheckpoint,
     NativeConfigurationRevision,
@@ -33,7 +49,12 @@ from my_pa.domain.native_sources import (
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import conflicting_row
+from my_pa.infrastructure.persistence.registry import observe_object
+from my_pa.infrastructure.persistence.review import open_review_case
 from my_pa.infrastructure.persistence.tables import (
+    audit_events,
+    capture_proposals,
+    native_admission_authorities,
     native_bridge_observations,
     native_bridges,
     native_bucket_runs,
@@ -41,9 +62,11 @@ from my_pa.infrastructure.persistence.tables import (
     native_configuration_buckets,
     native_configuration_revisions,
     native_live_activation_gates,
+    native_preflight_observations,
     native_simulation_receipts,
     native_source_accounts,
     native_source_buckets,
+    native_source_review_routes,
     native_sync_jobs,
     native_sync_runs,
     native_watcher_simulations,
@@ -54,8 +77,12 @@ from my_pa.infrastructure.persistence.tables import (
 
 __all__ = [
     "CheckpointConflictError",
+    "NativeBucketBindingRecord",
+    "NativeConfigurationSnapshotRecord",
     "NativeJobLease",
     "NativePersistenceConflictError",
+    "SqlNativeReviewProposalRouter",
+    "SqlNativeSourceControlStore",
     "SqlNativeSourceRepository",
 ]
 
@@ -76,6 +103,26 @@ class NativeJobLease:
     range_end: datetime
     lease_owner: str
     lease_expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class NativeBucketBindingRecord:
+    bucket_id: str
+    account_id: str
+    source_id: str
+    bridge_id: str
+    kind: ContractNativeSourceKind
+    account_label: str
+    bucket_label: str
+    account_locator: str
+    bucket_locator: str
+    selectable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class NativeConfigurationSnapshotRecord:
+    configuration: NativeConfigurationRevision
+    active: bool = True
 
 
 class SqlNativeSourceRepository:
@@ -332,6 +379,25 @@ class SqlNativeSourceRepository:
         validate_identifier(version_id, IdKind.VERSION)
         if kind not in {ObjectKind.MAIL_MESSAGE, ObjectKind.CALENDAR_EVENT, ObjectKind.CONTACT}:
             raise ValueError("source evidence requires a native evidence kind")
+        evidence_id, _ = self._record_evidence_with_created(
+            version_id=version_id,
+            kind=kind,
+            payload=payload,
+            recorded_at=recorded_at,
+        )
+        return evidence_id
+
+    def _record_evidence_with_created(
+        self,
+        *,
+        version_id: str,
+        kind: ObjectKind,
+        payload: bytes,
+        recorded_at: datetime,
+    ) -> tuple[str, bool]:
+        validate_identifier(version_id, IdKind.VERSION)
+        if kind not in {ObjectKind.MAIL_MESSAGE, ObjectKind.CALENDAR_EVENT, ObjectKind.CONTACT}:
+            raise ValueError("source evidence requires a native evidence kind")
         digest = sha256(payload).hexdigest()
         statement = (
             pg_insert(source_version_evidence)
@@ -349,7 +415,7 @@ class SqlNativeSourceRepository:
         )
         inserted = self._connection.execute(statement).scalar_one_or_none()
         if inserted is not None:
-            return str(inserted)
+            return str(inserted), True
         existing = self._connection.execute(
             select(source_version_evidence.c.evidence_id).where(
                 source_version_evidence.c.version_id == version_id,
@@ -357,7 +423,7 @@ class SqlNativeSourceRepository:
                 source_version_evidence.c.payload_sha256 == digest,
             )
         ).scalar_one_or_none()
-        return str(conflicting_row(existing, "knowledge.source_version_evidence"))
+        return str(conflicting_row(existing, "knowledge.source_version_evidence")), False
 
     def record_observation(
         self,
@@ -370,13 +436,15 @@ class SqlNativeSourceRepository:
     ) -> None:
         validate_identifier(observation_id, IdKind.SOURCE_OBSERVATION)
         self._connection.execute(
-            insert(source_observations).values(
+            pg_insert(source_observations)
+            .values(
                 observation_id=observation_id,
                 source_object_id=source_object_id,
                 version_id=version_id,
                 bucket_id=bucket_id,
                 observed_at=ensure_utc(observed_at),
             )
+            .on_conflict_do_nothing(constraint="source_version_observation_is_idempotent")
         )
 
     def record_membership(self, membership: ContactMembership) -> str:
@@ -573,3 +641,668 @@ class SqlNativeSourceRepository:
                 recorded_at=gate.recorded_at,
             )
         )
+
+
+class SqlNativeSourceControlStore:
+    """Engine-backed C store whose admission transaction commits before enrichment."""
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    @staticmethod
+    def _lock_configuration(connection: Connection, configuration_id: str) -> None:
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:configuration_id, 0))"),
+            {"configuration_id": configuration_id},
+        )
+
+    def bridge_protocol(self, bridge_id: str) -> str | None:
+        validate_identifier(bridge_id, IdKind.NATIVE_BRIDGE)
+        with self._engine.connect() as connection:
+            value = connection.execute(
+                select(native_bridges.c.protocol_version).where(
+                    native_bridges.c.bridge_id == bridge_id
+                )
+            ).scalar_one_or_none()
+        return None if value is None else str(value)
+
+    def bucket_bindings(self, bucket_ids: tuple[str, ...]) -> tuple[NativeBucketBindingRecord, ...]:
+        for bucket_id in bucket_ids:
+            validate_identifier(bucket_id, IdKind.NATIVE_BUCKET)
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                select(
+                    native_source_buckets.c.bucket_id,
+                    native_source_accounts.c.account_id,
+                    native_source_accounts.c.source_id,
+                    native_source_accounts.c.bridge_id,
+                    native_source_buckets.c.source_kind,
+                    native_source_accounts.c.label,
+                    native_source_buckets.c.label,
+                    native_source_accounts.c.private_locator,
+                    native_source_buckets.c.private_locator,
+                    native_source_buckets.c.selectable,
+                )
+                .join(
+                    native_source_accounts,
+                    native_source_accounts.c.account_id == native_source_buckets.c.account_id,
+                )
+                .where(native_source_buckets.c.bucket_id.in_(bucket_ids))
+                .order_by(native_source_buckets.c.bucket_id)
+            ).all()
+        return tuple(
+            NativeBucketBindingRecord(
+                bucket_id=str(row[0]),
+                account_id=str(row[1]),
+                source_id=str(row[2]),
+                bridge_id=str(row[3]),
+                kind=ContractNativeSourceKind(str(row[4])),
+                account_label=str(row[5]),
+                bucket_label=str(row[6]),
+                account_locator=str(row[7]),
+                bucket_locator=str(row[8]),
+                selectable=bool(row[9]),
+            )
+            for row in rows
+        )
+
+    def visible_locator_pairs(
+        self, bridge_id: str, source_ids: frozenset[str]
+    ) -> frozenset[tuple[str, str]]:
+        validate_identifier(bridge_id, IdKind.NATIVE_BRIDGE)
+        for source_id in source_ids:
+            validate_identifier(source_id, IdKind.SOURCE)
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                select(
+                    native_source_accounts.c.private_locator,
+                    native_source_buckets.c.private_locator,
+                )
+                .join(
+                    native_source_buckets,
+                    native_source_buckets.c.account_id == native_source_accounts.c.account_id,
+                )
+                .where(
+                    native_source_accounts.c.bridge_id == bridge_id,
+                    native_source_accounts.c.source_id.in_(source_ids),
+                )
+            ).all()
+        return frozenset((str(row[0]), str(row[1])) for row in rows)
+
+    def append_configuration(
+        self,
+        configuration: NativeConfigurationRevision,
+        *,
+        expected_prior_revision: int,
+        preflight: tuple[NativeBucketProgress, ...] = (),
+    ) -> None:
+        if expected_prior_revision < 0 or configuration.revision != expected_prior_revision + 1:
+            raise NativePersistenceConflictError(
+                "a native configuration revision must follow its expected predecessor"
+            )
+        with self._engine.begin() as connection:
+            self._lock_configuration(connection, configuration.configuration_id)
+            latest = connection.execute(
+                select(func.max(native_configuration_revisions.c.revision)).where(
+                    native_configuration_revisions.c.configuration_id
+                    == configuration.configuration_id
+                )
+            ).scalar_one()
+            actual_prior = 0 if latest is None else int(latest)
+            if actual_prior != expected_prior_revision:
+                raise NativePersistenceConflictError(
+                    "the native configuration expected revision is stale"
+                )
+            SqlNativeSourceRepository(connection).append_configuration(configuration)
+            self._record_preflight_rows(
+                connection,
+                configuration.configuration_id,
+                configuration.revision,
+                preflight,
+                observed_at=configuration.created_at,
+            )
+
+    @staticmethod
+    def _record_preflight_rows(
+        connection: Connection,
+        configuration_id: str,
+        configuration_revision: int,
+        results: tuple[NativeBucketProgress, ...],
+        *,
+        observed_at: datetime,
+    ) -> None:
+        for result in results:
+            if result.state not in {state.value for state in NativePreflightState}:
+                raise ValueError("native preflight state is not durable vocabulary")
+            connection.execute(
+                insert(native_preflight_observations).values(
+                    observation_id=issue_identifier(IdKind.SOURCE_OBSERVATION),
+                    configuration_id=configuration_id,
+                    configuration_revision=configuration_revision,
+                    bucket_id=result.bucket_id,
+                    state=result.state,
+                    failure=None if result.failure is None else result.failure.value,
+                    observed_at=ensure_utc(observed_at),
+                )
+            )
+
+    def record_preflight(
+        self,
+        configuration_id: str,
+        configuration_revision: int,
+        results: tuple[NativeBucketProgress, ...],
+        *,
+        observed_at: datetime,
+    ) -> None:
+        with self._engine.begin() as connection:
+            self._lock_configuration(connection, configuration_id)
+            self._record_preflight_rows(
+                connection,
+                configuration_id,
+                configuration_revision,
+                results,
+                observed_at=observed_at,
+            )
+
+    def issue_sync_authority(
+        self,
+        configuration: NativeConfigurationRevision,
+        binding: NativeBucketBindingRecord,
+        *,
+        audit_id: str,
+        request_id: str,
+        issued_at: datetime,
+        expires_at: datetime,
+    ) -> NativeAdmissionAuthority:
+        authority_id = issue_identifier(IdKind.NATIVE_AUTHORITY)
+        authority = NativeAdmissionAuthority(
+            authority_id=authority_id,
+            configuration_id=configuration.configuration_id,
+            configuration_revision=configuration.revision,
+            bridge_id=configuration.bridge_id,
+            bucket_id=binding.bucket_id,
+            source_id=binding.source_id,
+            audit_id=audit_id,
+            envelope_id=authority_id,
+            request_id=request_id,
+            issued_at=issued_at,
+            expires_at=expires_at,
+        )
+        with self._engine.begin() as connection:
+            self._lock_configuration(connection, configuration.configuration_id)
+            latest = connection.execute(
+                select(func.max(native_configuration_revisions.c.revision)).where(
+                    native_configuration_revisions.c.configuration_id
+                    == configuration.configuration_id
+                )
+            ).scalar_one()
+            allowed_audit = connection.execute(
+                select(audit_events.c.audit_id).where(
+                    audit_events.c.audit_id == audit_id,
+                    audit_events.c.capability == NativeSourceCapability.SYNC.value,
+                    audit_events.c.outcome == "allowed",
+                )
+            ).scalar_one_or_none()
+            selected = connection.execute(
+                select(native_source_accounts.c.source_id, native_source_accounts.c.bridge_id)
+                .select_from(
+                    native_configuration_buckets.join(
+                        native_source_buckets,
+                        native_source_buckets.c.bucket_id
+                        == native_configuration_buckets.c.bucket_id,
+                    ).join(
+                        native_source_accounts,
+                        native_source_accounts.c.account_id == native_source_buckets.c.account_id,
+                    )
+                )
+                .where(
+                    native_configuration_buckets.c.configuration_id
+                    == configuration.configuration_id,
+                    native_configuration_buckets.c.revision == configuration.revision,
+                    native_configuration_buckets.c.bucket_id == binding.bucket_id,
+                )
+            ).one_or_none()
+            if (
+                latest != configuration.revision
+                or allowed_audit is None
+                or selected is None
+                or str(selected.source_id) != binding.source_id
+                or str(selected.bridge_id) != configuration.bridge_id
+            ):
+                raise NativeAdmissionAuthorityError("native authority issuance scope is stale")
+            connection.execute(
+                insert(native_admission_authorities).values(
+                    authority_id=authority.authority_id,
+                    audit_id=authority.audit_id,
+                    configuration_id=authority.configuration_id,
+                    configuration_revision=authority.configuration_revision,
+                    bridge_id=authority.bridge_id,
+                    bucket_id=authority.bucket_id,
+                    source_id=authority.source_id,
+                    host_instance_id=authority.bridge_id,
+                    envelope_id=authority.envelope_id,
+                    request_id=authority.request_id,
+                    issued_at=authority.issued_at,
+                    expires_at=authority.expires_at,
+                )
+            )
+        return authority
+
+    def latest_configuration(
+        self, configuration_id: str
+    ) -> NativeConfigurationSnapshotRecord | None:
+        validate_identifier(configuration_id, IdKind.NATIVE_CONFIGURATION)
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                select(
+                    native_configuration_revisions.c.configuration_id,
+                    native_configuration_revisions.c.revision,
+                    native_configuration_revisions.c.bridge_id,
+                    native_configuration_revisions.c.timezone_name,
+                    native_configuration_revisions.c.start_date,
+                    native_configuration_revisions.c.cutoff_at,
+                    native_configuration_revisions.c.created_at,
+                )
+                .where(native_configuration_revisions.c.configuration_id == configuration_id)
+                .order_by(native_configuration_revisions.c.revision.desc())
+                .limit(1)
+            ).one_or_none()
+            if row is None:
+                return None
+            bucket_ids = tuple(
+                str(value)
+                for value in connection.execute(
+                    select(native_configuration_buckets.c.bucket_id)
+                    .where(
+                        native_configuration_buckets.c.configuration_id == configuration_id,
+                        native_configuration_buckets.c.revision == row.revision,
+                    )
+                    .order_by(native_configuration_buckets.c.bucket_id)
+                ).scalars()
+            )
+        return NativeConfigurationSnapshotRecord(
+            NativeConfigurationRevision(
+                configuration_id=str(row.configuration_id),
+                revision=int(row.revision),
+                bridge_id=str(row.bridge_id),
+                timezone_name=str(row.timezone_name),
+                start_date=row.start_date,
+                cutoff_at=row.cutoff_at,
+                selection=ExactBucketSelection(bucket_ids),
+                created_at=row.created_at,
+            )
+        )
+
+    def progress(self, configuration_id: str) -> tuple[NativeBucketProgress, ...]:
+        snapshot = self.latest_configuration(configuration_id)
+        if snapshot is None:
+            return ()
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                select(
+                    native_configuration_buckets.c.bucket_id,
+                    func.count(func.distinct(source_observations.c.version_id)).label("admitted"),
+                    func.coalesce(func.sum(native_bucket_runs.c.item_count), 0).label("measured"),
+                    func.count(func.distinct(native_bucket_runs.c.bucket_run_id)).label(
+                        "run_count"
+                    ),
+                )
+                .outerjoin(
+                    source_observations,
+                    source_observations.c.bucket_id == native_configuration_buckets.c.bucket_id,
+                )
+                .outerjoin(
+                    native_bucket_runs,
+                    native_bucket_runs.c.bucket_id == native_configuration_buckets.c.bucket_id,
+                )
+                .where(
+                    native_configuration_buckets.c.configuration_id == configuration_id,
+                    native_configuration_buckets.c.revision == snapshot.configuration.revision,
+                )
+                .group_by(native_configuration_buckets.c.bucket_id)
+                .order_by(native_configuration_buckets.c.bucket_id)
+            ).all()
+            latest_preflight: dict[str, tuple[str, str | None]] = {}
+            for row in rows:
+                observed = connection.execute(
+                    select(
+                        native_preflight_observations.c.state,
+                        native_preflight_observations.c.failure,
+                    )
+                    .where(
+                        native_preflight_observations.c.configuration_id == configuration_id,
+                        native_preflight_observations.c.configuration_revision
+                        == snapshot.configuration.revision,
+                        native_preflight_observations.c.bucket_id == row.bucket_id,
+                    )
+                    .order_by(
+                        native_preflight_observations.c.observed_at.desc(),
+                        native_preflight_observations.c.observation_id.desc(),
+                    )
+                    .limit(1)
+                ).one_or_none()
+                if observed is not None:
+                    latest_preflight[str(row.bucket_id)] = (
+                        str(observed.state),
+                        None if observed.failure is None else str(observed.failure),
+                    )
+        progress: list[NativeBucketProgress] = []
+        for row in rows:
+            admitted = int(row.admitted)
+            measured = int(row.measured)
+            run_count = int(row.run_count)
+            observed_state, observed_failure = latest_preflight.get(
+                str(row.bucket_id), ("reachable", None)
+            )
+            coverage = (
+                NativeCoverageState.PERMISSION_DENIED
+                if observed_state == NativePreflightState.PERMISSION_DENIED.value
+                else NativeCoverageState.UNAVAILABLE
+                if observed_state
+                in {
+                    NativePreflightState.UNAVAILABLE.value,
+                    NativePreflightState.IDENTITY_DRIFT.value,
+                }
+                else NativeCoverageState.EVIDENCE_PRESENT
+                if admitted
+                else NativeCoverageState.EMPTY
+                if run_count and measured == 0
+                else NativeCoverageState.NOT_MEASURED
+            )
+            progress.append(
+                NativeBucketProgress(
+                    bucket_id=str(row.bucket_id),
+                    state=observed_state
+                    if observed_state != "reachable"
+                    else (
+                        "complete"
+                        if coverage is not NativeCoverageState.NOT_MEASURED
+                        else "pending"
+                    ),
+                    coverage=coverage,
+                    admitted_count=admitted,
+                    failed_count=(
+                        1
+                        if coverage
+                        in {
+                            NativeCoverageState.PERMISSION_DENIED,
+                            NativeCoverageState.UNAVAILABLE,
+                        }
+                        else 0
+                    ),
+                    pending_count=1 if coverage is NativeCoverageState.NOT_MEASURED else 0,
+                    failure=(
+                        None
+                        if observed_failure is None
+                        else NativeProviderFailure(observed_failure)
+                    ),
+                )
+            )
+        return tuple(progress)
+
+    @staticmethod
+    def _admission_digest(envelope: NativeAdmissionEnvelope) -> str:
+        return sha256(
+            canonical_json(envelope.model_dump(mode="json", by_alias=True)).encode()
+        ).hexdigest()
+
+    def _validate_authority_locked(
+        self,
+        connection: Connection,
+        envelope: NativeAdmissionEnvelope,
+        authority: NativeAdmissionAuthority,
+        *,
+        at: datetime,
+    ) -> tuple[ContractNativeSourceKind, str]:
+        recorded_at = ensure_utc(at)
+        admission_digest = self._admission_digest(envelope)
+        self._lock_configuration(connection, authority.configuration_id)
+        grant = connection.execute(
+            select(
+                native_admission_authorities,
+                audit_events.c.capability,
+                audit_events.c.outcome,
+            )
+            .join(
+                audit_events,
+                audit_events.c.audit_id == native_admission_authorities.c.audit_id,
+            )
+            .where(native_admission_authorities.c.authority_id == authority.authority_id)
+            .with_for_update(of=native_admission_authorities)
+        ).one_or_none()
+        latest = connection.execute(
+            select(func.max(native_configuration_revisions.c.revision)).where(
+                native_configuration_revisions.c.configuration_id == authority.configuration_id
+            )
+        ).scalar_one()
+        selected = connection.execute(
+            select(
+                native_source_accounts.c.account_id,
+                native_source_accounts.c.source_id,
+                native_source_accounts.c.bridge_id,
+                native_source_accounts.c.private_locator.label("account_locator"),
+                native_source_buckets.c.private_locator.label("bucket_locator"),
+                native_source_buckets.c.source_kind,
+                native_source_buckets.c.selectable,
+            )
+            .select_from(
+                native_configuration_buckets.join(
+                    native_source_buckets,
+                    native_source_buckets.c.bucket_id == native_configuration_buckets.c.bucket_id,
+                ).join(
+                    native_source_accounts,
+                    native_source_accounts.c.account_id == native_source_buckets.c.account_id,
+                )
+            )
+            .where(
+                native_configuration_buckets.c.configuration_id == authority.configuration_id,
+                native_configuration_buckets.c.revision == authority.configuration_revision,
+                native_configuration_buckets.c.bucket_id == authority.bucket_id,
+            )
+        ).one_or_none()
+        if grant is None or selected is None:
+            raise NativeAdmissionAuthorityError("native admission authority was not found")
+        durable = grant._mapping
+        exact = (
+            str(durable["audit_id"]) == authority.audit_id
+            and str(durable["configuration_id"]) == authority.configuration_id
+            and int(durable["configuration_revision"]) == authority.configuration_revision
+            and str(durable["bridge_id"]) == authority.bridge_id
+            and str(durable["host_instance_id"]) == authority.bridge_id
+            and str(durable["bucket_id"]) == authority.bucket_id
+            and str(durable["source_id"]) == authority.source_id
+            and str(durable["envelope_id"]) == authority.envelope_id
+            and str(durable["request_id"]) == authority.request_id
+            and durable["issued_at"] == authority.issued_at
+            and durable["expires_at"] == authority.expires_at
+            and str(durable["capability"]) == NativeSourceCapability.SYNC.value
+            and str(durable["outcome"]) == "allowed"
+            and latest == authority.configuration_revision
+            and str(selected.source_id) == authority.source_id
+            and str(selected.bridge_id) == authority.bridge_id
+            and bool(selected.selectable)
+            and str(selected.account_locator) == envelope.account_id
+            and str(selected.bucket_locator) == envelope.bucket_id
+            and str(selected.source_kind) == envelope.kind.value
+            and envelope.metadata.host_instance_id == authority.bridge_id
+            and envelope.metadata.envelope_id == authority.envelope_id
+            and envelope.request_id == authority.request_id
+            and authority.issued_at <= recorded_at <= authority.expires_at
+        )
+        prior_digest = durable["admission_sha256"]
+        if not exact or (prior_digest is not None and str(prior_digest) != admission_digest):
+            raise NativeAdmissionAuthorityError("native admission authority did not match")
+        return ContractNativeSourceKind(str(selected.source_kind)), admission_digest
+
+    def prevalidate_authority(
+        self,
+        envelope: NativeAdmissionEnvelope,
+        authority: NativeAdmissionAuthority,
+        *,
+        at: datetime,
+    ) -> None:
+        """Lock and validate a durable grant without consuming it or writing status."""
+        with self._engine.begin() as connection:
+            self._validate_authority_locked(connection, envelope, authority, at=at)
+
+    def record_admission_preflight_durably(
+        self,
+        envelope: NativeAdmissionEnvelope,
+        authority: NativeAdmissionAuthority,
+        results: tuple[NativeBucketProgress, ...],
+        *,
+        observed_at: datetime,
+    ) -> None:
+        """Record an accepted operational denial only while its grant remains current."""
+        with self._engine.begin() as connection:
+            self._validate_authority_locked(connection, envelope, authority, at=observed_at)
+            self._record_preflight_rows(
+                connection,
+                authority.configuration_id,
+                authority.configuration_revision,
+                results,
+                observed_at=observed_at,
+            )
+
+    def admit_evidence_durably(
+        self,
+        envelope: NativeAdmissionEnvelope,
+        authority: NativeAdmissionAuthority,
+        preflight: tuple[NativeBucketProgress, ...] = (),
+        *,
+        at: datetime,
+    ) -> tuple[tuple[str, bool], ...]:
+        recorded_at = ensure_utc(at)
+        outcomes: list[tuple[str, bool]] = []
+        with self._engine.begin() as connection:
+            source_kind, admission_digest = self._validate_authority_locked(
+                connection, envelope, authority, at=recorded_at
+            )
+            self._record_preflight_rows(
+                connection,
+                authority.configuration_id,
+                authority.configuration_revision,
+                preflight,
+                observed_at=recorded_at,
+            )
+            prior_digest = connection.scalar(
+                select(native_admission_authorities.c.admission_sha256).where(
+                    native_admission_authorities.c.authority_id == authority.authority_id
+                )
+            )
+            if prior_digest is None:
+                connection.execute(
+                    update(native_admission_authorities)
+                    .where(
+                        native_admission_authorities.c.authority_id == authority.authority_id,
+                        native_admission_authorities.c.admission_sha256.is_(None),
+                    )
+                    .values(consumed_at=recorded_at, admission_sha256=admission_digest)
+                )
+            object_kind = {
+                ContractNativeSourceKind.MAIL: ObjectKind.MAIL_MESSAGE,
+                ContractNativeSourceKind.CALENDAR: ObjectKind.CALENDAR_EVENT,
+                ContractNativeSourceKind.CONTACTS: ObjectKind.CONTACT,
+            }[source_kind]
+            media_type = {
+                ObjectKind.MAIL_MESSAGE: "message/rfc822",
+                ObjectKind.CALENDAR_EVENT: "application/calendar+json",
+                ObjectKind.CONTACT: "application/contact+json",
+            }[object_kind]
+            repository = SqlNativeSourceRepository(connection)
+            for record in envelope.records:
+                modified_at = (
+                    recorded_at
+                    if record.source_modified_unix_milliseconds is None
+                    else datetime.fromtimestamp(
+                        record.source_modified_unix_milliseconds / 1000, tz=recorded_at.tzinfo
+                    )
+                )
+                observed = observe_object(
+                    connection,
+                    source_id=authority.source_id,
+                    native_locator=record.id,
+                    kind=object_kind,
+                    fingerprint=record.source_revision,
+                    modified_at=modified_at,
+                    media_type=media_type,
+                    size_bytes=len(record.payload),
+                )
+                _, created = repository._record_evidence_with_created(
+                    version_id=observed.version_id,
+                    kind=object_kind,
+                    payload=bytes(record.payload),
+                    recorded_at=recorded_at,
+                )
+                repository.record_observation(
+                    observation_id=issue_identifier(IdKind.SOURCE_OBSERVATION),
+                    source_object_id=observed.source_object_id,
+                    version_id=observed.version_id,
+                    bucket_id=authority.bucket_id,
+                    observed_at=recorded_at,
+                )
+                outcomes.append((observed.version_id, created))
+        return tuple(outcomes)
+
+
+class SqlNativeReviewProposalRouter:
+    """Route existing consequential proposals to Review with exact source lineage.
+
+    The candidate source is the bounded extraction boundary: it may name an
+    already-persisted proposal for one source version. This adapter can only
+    open Review cases and persist lineage; it exposes no decision or promotion
+    operation.
+    """
+
+    def __init__(
+        self,
+        engine: Engine,
+        candidates_for_version: Callable[[str], tuple[str, ...]],
+    ) -> None:
+        self._engine = engine
+        self._candidates_for_version = candidates_for_version
+
+    def open_review_proposals(self, version_ids: tuple[str, ...]) -> tuple[str, ...]:
+        if version_ids != tuple(dict.fromkeys(version_ids)):
+            raise ValueError("native Review routing requires unique source versions")
+        routed: list[str] = []
+        with self._engine.begin() as connection:
+            for source_version_id in version_ids:
+                validate_identifier(source_version_id, IdKind.VERSION)
+                proposal_ids = self._candidates_for_version(source_version_id)
+                if proposal_ids != tuple(dict.fromkeys(proposal_ids)):
+                    raise ValueError("native enrichment candidates must be unique")
+                for proposal_id in proposal_ids:
+                    validate_identifier(proposal_id, IdKind.PROPOSAL)
+                    proposal_exists = connection.execute(
+                        select(capture_proposals.c.proposal_id).where(
+                            capture_proposals.c.proposal_id == proposal_id
+                        )
+                    ).scalar_one_or_none()
+                    if proposal_exists is None:
+                        raise LookupError("native enrichment candidate is not a stored proposal")
+                    review_case_id = open_review_case(connection, proposal_id)
+                    if review_case_id is None:
+                        continue
+                    prior = connection.execute(
+                        select(native_source_review_routes.c.review_case_id).where(
+                            native_source_review_routes.c.source_version_id == source_version_id,
+                            native_source_review_routes.c.proposal_id == proposal_id,
+                        )
+                    ).scalar_one_or_none()
+                    if prior is not None:
+                        if str(prior) != review_case_id:
+                            raise NativePersistenceConflictError(
+                                "a proposal cannot be rebound to another Review case"
+                            )
+                    else:
+                        connection.execute(
+                            insert(native_source_review_routes).values(
+                                source_version_id=source_version_id,
+                                proposal_id=proposal_id,
+                                review_case_id=review_case_id,
+                                routed_at=func.now(),
+                            )
+                        )
+                    routed.append(proposal_id)
+        return tuple(routed)

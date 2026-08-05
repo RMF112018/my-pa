@@ -24,6 +24,8 @@ __all__ = [
     "ExactBucketSelection",
     "LiveActivationGate",
     "LiveActivationGateState",
+    "NativeAdmissionAuthority",
+    "NativeAdmissionAuthorityError",
     "NativeBridge",
     "NativeCheckpoint",
     "NativeConfigurationRevision",
@@ -316,3 +318,41 @@ class LiveActivationGate:
         validate_identifier(self.gate_id, IdKind.NATIVE_LIVE_GATE)
         validate_identifier(self.bucket_id, IdKind.NATIVE_BUCKET)
         object.__setattr__(self, "recorded_at", ensure_utc(self.recorded_at))
+
+
+class NativeAdmissionAuthorityError(RuntimeError):
+    """A durable native admission grant was absent, stale, or mismatched."""
+
+
+@dataclass(frozen=True, slots=True)
+class NativeAdmissionAuthority:
+    """One application-issued handle for a durable exact admission grant."""
+
+    authority_id: str
+    configuration_id: str
+    configuration_revision: int
+    bridge_id: str
+    bucket_id: str
+    source_id: str
+    audit_id: str
+    envelope_id: str
+    request_id: str
+    issued_at: datetime
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.authority_id, IdKind.NATIVE_AUTHORITY)
+        validate_identifier(self.configuration_id, IdKind.NATIVE_CONFIGURATION)
+        validate_identifier(self.bridge_id, IdKind.NATIVE_BRIDGE)
+        validate_identifier(self.bucket_id, IdKind.NATIVE_BUCKET)
+        validate_identifier(self.source_id, IdKind.SOURCE)
+        validate_identifier(self.audit_id, IdKind.AUDIT)
+        if self.configuration_revision < 1:
+            raise ValueError("native authority requires a configuration revision")
+        for name, value in (("envelope", self.envelope_id), ("request", self.request_id)):
+            if not value or len(value) > 200:
+                raise ValueError(f"native authority requires a bounded {name} identifier")
+        object.__setattr__(self, "issued_at", ensure_utc(self.issued_at))
+        object.__setattr__(self, "expires_at", ensure_utc(self.expires_at))
+        if not self.issued_at < self.expires_at <= self.issued_at + timedelta(minutes=10):
+            raise ValueError("native authority lifetime must be positive and bounded")

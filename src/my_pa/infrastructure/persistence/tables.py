@@ -132,7 +132,7 @@ from my_pa.domain.conversation.event import ConversationChannel, ConversationSta
 from my_pa.domain.extraction.coverage import LimitationReason
 from my_pa.domain.extraction.quarantine import QuarantineReason, QuarantineReviewState
 from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.native_sources import (
     LiveActivationGateState,
@@ -155,6 +155,13 @@ from my_pa.domain.source.registry import SourceProviderKind
 SCHEMA: Final = "knowledge"
 
 METADATA: Final = MetaData(schema=SCHEMA)
+
+#: The current runtime audit vocabulary. Unlike Alembic's historical literals,
+#: this declaration follows both capability enums because it describes the
+#: schema at head rather than a revision whose meaning must remain frozen.
+_CURRENT_AUDIT_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    member.value for member in Capability
+) | frozenset(member.value for member in NativeSourceCapability)
 
 #: A worker may attempt one job this many times before it is failed terminally.
 #: Section 8.6 requires retries to be bounded; this is the bound, and it is the
@@ -746,7 +753,7 @@ audit_events = Table(
     _is_identifier("audit_id", IdKind.AUDIT),
     _is_identifier("correlation_id", IdKind.CORRELATION),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
-    _one_of("capability", Capability),
+    _one_of("capability", _CURRENT_AUDIT_CAPABILITIES),
     _one_of("purpose", Purpose),
     _one_of("outcome", AuditOutcome, name="audit_outcome_is_known"),
     _one_of("denial_reason", DenialReason, name="denial_reason_is_known"),
@@ -2443,6 +2450,131 @@ native_configuration_buckets = Table(
         ],
     ),
     PrimaryKeyConstraint("configuration_id", "revision", "bucket_id"),
+)
+
+native_preflight_observations = Table(
+    "native_preflight_observations",
+    METADATA,
+    Column("observation_id", Text, primary_key=True),
+    Column("configuration_id", Text, nullable=False),
+    Column("configuration_revision", Integer, nullable=False),
+    Column("bucket_id", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("failure", Text),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("observation_id", IdKind.SOURCE_OBSERVATION),
+    ForeignKeyConstraint(
+        ["configuration_id", "configuration_revision", "bucket_id"],
+        [
+            f"{SCHEMA}.native_configuration_buckets.configuration_id",
+            f"{SCHEMA}.native_configuration_buckets.revision",
+            f"{SCHEMA}.native_configuration_buckets.bucket_id",
+        ],
+        name="native_preflight_requires_selected_bucket",
+    ),
+    CheckConstraint(
+        "state IN ('reachable', 'permission_denied', 'unavailable', 'identity_drift')",
+        name="native_preflight_state_is_known",
+    ),
+    CheckConstraint(
+        "failure IS NULL OR failure IN ('permission_denied', 'account_unavailable', "
+        "'bucket_unavailable', 'transient_unavailable')",
+        name="native_preflight_failure_is_known",
+    ),
+    CheckConstraint(
+        "(state = 'reachable' AND failure IS NULL) OR "
+        "(state = 'permission_denied' AND failure = 'permission_denied') OR "
+        "(state = 'unavailable' AND failure IN "
+        "('account_unavailable', 'bucket_unavailable', 'transient_unavailable')) OR "
+        "(state = 'identity_drift' AND failure = 'bucket_unavailable')",
+        name="native_preflight_state_and_failure_agree",
+    ),
+    Index(
+        "native_preflight_latest_by_bucket",
+        "configuration_id",
+        "configuration_revision",
+        "bucket_id",
+        "observed_at",
+    ),
+)
+
+native_admission_authorities = Table(
+    "native_admission_authorities",
+    METADATA,
+    Column("authority_id", Text, primary_key=True),
+    Column("audit_id", Text, ForeignKey(f"{SCHEMA}.audit_events.audit_id"), nullable=False),
+    Column("configuration_id", Text, nullable=False),
+    Column("configuration_revision", Integer, nullable=False),
+    Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
+    Column("bucket_id", Text, nullable=False),
+    Column("source_id", Text, ForeignKey(f"{SCHEMA}.sources.source_id"), nullable=False),
+    Column("host_instance_id", Text, nullable=False),
+    Column("envelope_id", Text, nullable=False),
+    Column("request_id", Text, nullable=False),
+    Column("issued_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True)),
+    Column("admission_sha256", Text),
+    _is_identifier("authority_id", IdKind.NATIVE_AUTHORITY),
+    _is_identifier("host_instance_id", IdKind.NATIVE_BRIDGE),
+    ForeignKeyConstraint(
+        ["configuration_id", "configuration_revision", "bucket_id"],
+        [
+            f"{SCHEMA}.native_configuration_buckets.configuration_id",
+            f"{SCHEMA}.native_configuration_buckets.revision",
+            f"{SCHEMA}.native_configuration_buckets.bucket_id",
+        ],
+        name="native_authority_requires_selected_bucket",
+    ),
+    CheckConstraint("bridge_id = host_instance_id", name="native_authority_binds_host"),
+    CheckConstraint("expires_at > issued_at", name="native_authority_has_positive_lifetime"),
+    CheckConstraint(
+        "expires_at <= issued_at + interval '10 minutes'",
+        name="native_authority_lifetime_is_bounded",
+    ),
+    CheckConstraint(
+        "length(envelope_id) BETWEEN 1 AND 200 AND length(request_id) BETWEEN 1 AND 200",
+        name="native_authority_wire_ids_are_bounded",
+    ),
+    CheckConstraint(
+        "(consumed_at IS NULL) = (admission_sha256 IS NULL)",
+        name="native_authority_consumption_is_complete",
+    ),
+    CheckConstraint(
+        "admission_sha256 IS NULL OR admission_sha256 ~ '^[0-9a-f]{64}$'",
+        name="native_authority_admission_digest_is_sha256",
+    ),
+    UniqueConstraint("envelope_id", name="native_authority_envelope_is_issued_once"),
+)
+
+native_source_review_routes = Table(
+    "native_source_review_routes",
+    METADATA,
+    Column(
+        "source_version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.source_object_versions.version_id"),
+        nullable=False,
+    ),
+    Column(
+        "proposal_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_proposals.proposal_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "review_case_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.capture_review_cases.review_case_id"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("routed_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("source_version_id", IdKind.VERSION),
+    _is_identifier("proposal_id", IdKind.PROPOSAL),
+    _is_identifier("review_case_id", IdKind.REVIEW_CASE),
+    PrimaryKeyConstraint("source_version_id", "proposal_id"),
 )
 
 native_sync_runs = Table(

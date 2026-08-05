@@ -71,8 +71,8 @@ EXPECTED_SCHEMA = "knowledge"
 
 #: Restated, not imported. The knowledge revision's five, this revision's three,
 #: the audit revision's one, the enrollment-objects revision's one, the capture
-#: revision's five, and the proposal revision's seven, each against the revision
-#: that must create them and no other.
+#: revision's five, the proposal revision's seven, and WP-12C's three, each
+#: against the revision that must create them and no other.
 KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "7e5a1fb93d62": frozenset(
         {
@@ -163,6 +163,13 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "native_watcher_simulations",
             "native_simulation_receipts",
             "native_live_activation_gates",
+        }
+    ),
+    "9d5e2f7b4c61": frozenset(
+        {
+            "native_admission_authorities",
+            "native_preflight_observations",
+            "native_source_review_routes",
         }
     ),
 }

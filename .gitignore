@@ -14,6 +14,9 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
+# SwiftPM build products for the bounded WP-12 native source host package.
+/native/apple-source-host/.build/
+
 # Local configuration. Only .env.example is committed, and it holds no secret.
 .env
 .env.*

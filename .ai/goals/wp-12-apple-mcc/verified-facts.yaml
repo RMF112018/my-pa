@@ -1,0 +1,74 @@
+schema_version: 1
+goal_id: WP-12-APPLE-MCC
+disposition: CORRECTIVE_WORK_READY_FOR_REAUDIT
+repository:
+  path: .
+  repository: RMF112018/my-pa
+  branch: main
+  upstream: origin/main
+  head_sha: 634890e0bc089294a242be176280c09766bac493
+  tree_sha: 5cc28830cc213ec9c45441376202d9476ccfed05
+  clean_at_preflight: true
+  equals_origin_main: true
+authorization:
+  id: AUTH-WP12-20260804-OPERATOR-001
+  wp10_deferred: true
+  wp11_deferred: true
+  wp12_promoted_pre_completion: true
+  repository_planning_and_implementation: true
+  live_apple_access: false
+  tcc_or_credentials: false
+  signing_or_notarization: false
+  watcher_activation: false
+  external_model_disclosure: false
+  deployment_or_production: false
+  destructive_actions: false
+  risk_acceptance: false
+feature_package:
+  package_id: MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087
+  folder_id: 13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5
+  manifest_id: 1gBPfHAtPClqFoT7skQJlpp9Sf2L72q_J
+  manifest_bytes: 9647
+  manifest_sha256: cc7fdf665a844adcddef5beb2c8cb52d2bbd7d69b3c7a79e0babc1b5a793b175
+  substantive_members: 16
+  substantive_readback_matches: 16
+  top_level_files_observed: 18
+canonical_package:
+  package_id: MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006
+  version: '2.3'
+  prior_version: '2.2'
+  folder_id: 1Z8Aug1_3v6ILgvopY8XpjiNMBySZOCCq
+  manifest_id: 1xxQG_fsUlTxX7VRXOCm8SSCjYF2xPV1j
+  manifest_bytes: 13899
+  manifest_sha256: d1b3f7a91fbe07d11f9100346f0ef65f0e3576d35dcf27708f585bb5e6ca038a
+  members: 21
+  revised: 17
+  unchanged: 4
+  local_mirror_non_manifest_hash_matches: 20
+counts:
+  acceptance_criteria: 48
+  canonical_decisions: 15
+  canonical_open_operator_decisions: 10
+  canonical_feature_risks: 13
+current_implementation:
+  public_capabilities: 15
+  alembic_head: 7f2a9d6c4e18
+  frontend_present: false
+  native_macos_host_present: false
+  live_apple_adapter_present: false
+  apple_control_plane_present: false
+  read_only_source_port_present: true
+  source_object_version_plane_present: true
+  proposal_review_plane_present: true
+  synthetic_personal_fixture_present: true
+corrective_plan:
+  slice_order: [A, B, D, C, E, F, G, H]
+  acceptance_rows_with_components_evidence_dependencies: 48
+  criteria_with_exactly_one_final_slice: 48
+  duplicate_or_contradictory_final_slice_assignments: 0
+  ac_037_only_final_slice: C
+  simulation_watcher_types_and_live_activation_gate_separate: true
+  authoritative_watching_literal_or_writer_present: false
+  live_activation_writer_authorized_or_planned_now: false
+  authoritative_watching_evidence: NOT_RUN_OPERATOR_GATED
+  live_signing_attestation_evidence: NOT_RUN_OPERATOR_GATED

@@ -1,0 +1,31 @@
+schema_version: 1
+goal_id: WP-12-APPLE-MCC
+checkpoint: corrected_repository_truth_and_architecture_plan
+requested_disposition: CORRECTIVE_WORK_READY_FOR_REAUDIT
+authorization_id: AUTH-WP12-20260804-OPERATOR-001
+repository:
+  repository: RMF112018/my-pa
+  branch: main
+  head_sha: 634890e0bc089294a242be176280c09766bac493
+  tree_sha: 5cc28830cc213ec9c45441376202d9476ccfed05
+review_questions:
+  - Does the plan preserve source read-only authority and reuse the canonical evidence planes without an Apple domain silo?
+  - Does every NAPDCB-AC-001 through NAPDCB-AC-048 map to components, test tier, evidence method/artifact, final work slice and explicit blocking dependencies?
+  - Are foundation and final-discharge slices distinguished, including D before C for native integration and C ownership of configuration audit?
+  - Does every criterion have exactly one final slice across the matrix and narrative lists, with zero duplicate or contradictory ownership?
+  - Are simulation receipts and watcher states structurally non-substitutable for live activation evidence and authoritative watching?
+  - Are WP-10/WP-11, live Apple/TCC/signing, activation, disclosure, deployment, destruction and risk acceptance excluded?
+  - Are migration order, closed-set widening, rollback, idempotency, checkpoint monotonicity and watcher activation gates complete?
+  - Is the minimal Apple configuration frontend sufficiently separated from deferred Capture PWA/offline work?
+blocking_findings_required: true
+self_approval_prohibited: true
+on_pass: authorize_first_bounded_implementation_pr_in_corrected_dependency_order
+on_fail: return_exact_findings_against_current_artifact_hashes
+artifacts:
+  - repository-truth-report.md
+  - evidence-index.json
+  - verified-facts.yaml
+  - assumptions-and-unknowns.md
+  - gap-matrix.yaml
+  - wp-12-architecture-acceptance-plan.md
+  - decision-register.yaml

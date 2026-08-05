@@ -19,6 +19,7 @@
 - [`docs/architecture/system-context.md`](architecture/system-context.md) — actors, external systems, trust and authority boundaries.
 - [`docs/architecture/module-boundaries.md`](architecture/module-boundaries.md) — module ownership, dependency direction, and split triggers.
 - [`docs/architecture/data-authority.md`](architecture/data-authority.md) — data ownership, authority, lifecycle, and disclosure.
+- [`native/apple-source-host/README.md`](../native/apple-source-host/README.md) — WP-12A's source-built Swift protocol-v1 feasibility boundary: immutable provider-neutral values, read-only Mail/Calendar/Contacts contracts, and deterministic synthetic checks only; no live Apple framework, permission, activation, database, network, or source-mutation authority.
 
 ## Specifications
 
@@ -32,9 +33,11 @@
 - [`docs/specs/relationship-intelligence-v0.2.md`](specs/relationship-intelligence-v0.2.md) — mirror of the Relationship Intelligence product specification, promoted into scope 2026-08-01.
 - [`docs/specs/quick-capture/`](specs/quick-capture/00_README.md) — mirror of the Quick Capture feature package, promoted into scope 2026-08-01 and admitted by ADR-003.
 
+Current authority correction to the historical final sentences in the canonical-package entry above: direct authorization `AUTH-WP12-20260804-OPERATOR-001` now promotes bounded synthetic WP-12 repository implementation ahead of deferred WP-10/WP-11. The package itself still grants no authority; the operator authorization and its limits are recorded in [`docs/plans/mcv-completion-plan.md`](plans/mcv-completion-plan.md) `D-105` through `D-107`.
+
 Not mirrored, routed by identity only: the **Frontier NAS MCP Connector** feature package (`MYPA-FRONTIER-NAS-MCP-CONNECTOR-FEATURE-PACKAGE-20260802-086`, Drive folder `1McYcZODHhUb2k-vOQJnkHVQyqHbWRuVa`). It became canonical product scope on 2026-08-02 but drives no planned work package; see `docs/plans/mcv-completion-plan.md` `D-22`.
 
-Also indexed by identity only: the **Native Apple Personal Data Capture Bridge**, user-facing **Apple Mail, Calendar & Contacts** (`MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087`, Drive folder `13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5`). It is not active implementation scope and grants no live-personal-data, TCC, credential, deployment, production, or risk authority; see `docs/plans/mcv-completion-plan.md` `D-105`.
+Also indexed by identity only: the **Native Apple Personal Data Capture Bridge**, user-facing **Apple Mail, Calendar & Contacts** (`MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087`, Drive folder `13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5`). It is active only for bounded synthetic repository implementation under `AUTH-WP12-20260804-OPERATOR-001`; live personal data, TCC, credentials, signing, activation, source mutation, deployment, production, destruction, and risk acceptance remain unauthorized. See `docs/plans/mcv-completion-plan.md` `D-105` through `D-107`.
 
 ## Plans
 

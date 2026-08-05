@@ -22,7 +22,13 @@ from types import MappingProxyType
 
 from my_pa.domain.identity.purpose import Purpose
 
-__all__ = ["Capability", "is_operator_only", "permitted_purposes"]
+__all__ = [
+    "AuthorizedCapability",
+    "Capability",
+    "NativeSourceCapability",
+    "is_operator_only",
+    "permitted_purposes",
+]
 
 
 class Capability(StrEnum):
@@ -66,6 +72,25 @@ class Capability(StrEnum):
     REVIEW_DECIDE = "review.decide"
 
 
+class NativeSourceCapability(StrEnum):
+    """Authenticated native-host commands, separate from legacy public transports."""
+
+    DISCOVER = "native_sources.discover"
+    CONFIGURE = "native_sources.configure"
+    PREFLIGHT = "native_sources.preflight"
+    SYNC = "native_sources.sync"
+    STATUS = "native_sources.status"
+    RETRY = "native_sources.retry"
+    RECONCILE = "native_sources.reconcile"
+    PAUSE = "native_sources.pause"
+    RESUME = "native_sources.resume"
+    BACKFILL = "native_sources.backfill"
+    DISABLE = "native_sources.disable"
+
+
+type AuthorizedCapability = Capability | NativeSourceCapability
+
+
 #: Capabilities restricted to an authenticated operator principal.
 #:
 #: `sources.enroll` alone, and no capture capability, which is a decision rather
@@ -90,9 +115,22 @@ class Capability(StrEnum):
 #: `P00-OD-010` there is one local principal in any case, so making it
 #: operator-only would restrict nobody while implying an authority boundary this
 #: build cannot draw.
-_OPERATOR_ONLY: frozenset[Capability] = frozenset({Capability.SOURCES_ENROLL})
+_OPERATOR_ONLY: frozenset[AuthorizedCapability] = frozenset(
+    {
+        Capability.SOURCES_ENROLL,
+        NativeSourceCapability.CONFIGURE,
+        NativeSourceCapability.PREFLIGHT,
+        NativeSourceCapability.SYNC,
+        NativeSourceCapability.RETRY,
+        NativeSourceCapability.RECONCILE,
+        NativeSourceCapability.PAUSE,
+        NativeSourceCapability.RESUME,
+        NativeSourceCapability.BACKFILL,
+        NativeSourceCapability.DISABLE,
+    }
+)
 
-_PERMITTED_PURPOSES: Mapping[Capability, frozenset[Purpose]] = MappingProxyType(
+_PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = MappingProxyType(
     {
         Capability.CAPABILITIES_GET: frozenset(
             {Purpose.STATUS_OBSERVATION, Purpose.SECURITY_VALIDATION}
@@ -121,16 +159,27 @@ _PERMITTED_PURPOSES: Mapping[Capability, frozenset[Purpose]] = MappingProxyType(
         # the enum above records.
         Capability.REVIEW_LIST: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.REVIEW_DECIDE: frozenset({Purpose.REVIEW_DISPOSITION}),
+        NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
+        NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
+        NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
+        NativeSourceCapability.SYNC: frozenset({Purpose.CONTENT_EXTRACTION}),
+        NativeSourceCapability.STATUS: frozenset({Purpose.STATUS_OBSERVATION}),
+        NativeSourceCapability.RETRY: frozenset({Purpose.CONTENT_EXTRACTION}),
+        NativeSourceCapability.RECONCILE: frozenset({Purpose.CONTENT_EXTRACTION}),
+        NativeSourceCapability.PAUSE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
+        NativeSourceCapability.RESUME: frozenset({Purpose.CONTENT_EXTRACTION}),
+        NativeSourceCapability.BACKFILL: frozenset({Purpose.CONTENT_EXTRACTION}),
+        NativeSourceCapability.DISABLE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
     }
 )
 
 
-def is_operator_only(capability: Capability) -> bool:
+def is_operator_only(capability: AuthorizedCapability) -> bool:
     """Return whether `capability` requires an authenticated operator."""
     return capability in _OPERATOR_ONLY
 
 
-def permitted_purposes(capability: Capability) -> frozenset[Purpose]:
+def permitted_purposes(capability: AuthorizedCapability) -> frozenset[Purpose]:
     """Return the purposes that may invoke `capability`.
 
     An unmapped capability yields the empty set, so policy denies it.

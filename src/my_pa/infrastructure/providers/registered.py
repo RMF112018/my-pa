@@ -28,7 +28,11 @@ from my_pa.infrastructure.persistence.tables import sources
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 from my_pa.infrastructure.providers.identity import RegistryIdentity
 
-__all__ = ["RegisteredSourceProviders"]
+__all__ = ["NativeSourceAdapterUnavailableError", "RegisteredSourceProviders"]
+
+
+class NativeSourceAdapterUnavailableError(RuntimeError):
+    """A native-source vocabulary row has no live adapter in this slice."""
 
 
 class RegisteredSourceProviders(SourceProviders):
@@ -49,12 +53,9 @@ class RegisteredSourceProviders(SourceProviders):
     with the same `obj_…` for the same file, because neither of them is where
     the answer is kept.
 
-    **`SourceProviderKind` has one member, so the match has one arm.**
-    `assert_never` is what makes a second member a type error here rather than a
-    source that silently answers `None` -- which would report `unavailable` for a
-    source that is configured, correctly served, and merely unhandled by this
-    function. A lookup that goes quiet when the enum grows is the shape of defect
-    this package exists to remove.
+    Native Apple kinds are persistence vocabulary in WP-12B, not live adapters.
+    They raise an explicit generic error rather than returning `None`, which is
+    reserved for an absent source, and without disclosing the stored locator.
 
     **Not a plugin framework.** There is no table of kinds, nothing is looked up
     by name, and nothing is read from configuration. The one arm names the one
@@ -96,5 +97,13 @@ class RegisteredSourceProviders(SourceProviders):
                     source_id,
                     RegistryIdentity(self._connection, source_id),
                 )
-            case _:  # pragma: no cover - `assert_never` makes this a type error
+            case (
+                SourceProviderKind.APPLE_MAIL
+                | SourceProviderKind.APPLE_CALENDAR
+                | SourceProviderKind.APPLE_CONTACTS
+            ):
+                raise NativeSourceAdapterUnavailableError(
+                    "native source adapters are not composed in WP-12B"
+                )
+            case _:  # pragma: no cover - exhaustiveness is checked statically
                 assert_never(kind)

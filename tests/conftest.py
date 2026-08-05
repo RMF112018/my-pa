@@ -99,6 +99,7 @@ from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
 from my_pa.domain.source.enrollment import (
     Enrollment,
@@ -155,13 +156,14 @@ class World:
     #: pointer and no lifecycle column, because the table has neither — and the
     #: current version is derived from `capture_versions` exactly as the writer
     #: derives it. `capture_keys` is the fake's stand-in for the unique index on
-    #: `capture_submissions.idempotency_key`, which is what tells a replay from a
-    #: conflict; a fake that decided that some other way would let a test prove a
-    #: behaviour the constraint does not give.
+    #: `capture_submissions (principal_id, idempotency_key)` — per-principal
+    #: since `PKL-MYPA-D-WP03-001`, so the same key held by two principals is two
+    #: independent admissions and never a replay; a fake that decided that some
+    #: other way would let a test prove a behaviour the constraint does not give.
     captures: dict[str, tuple[str, datetime]] = field(default_factory=dict)
     capture_versions: list[CaptureVersion] = field(default_factory=list)
     capture_receipts: dict[str, CaptureReceipt] = field(default_factory=dict)
-    capture_keys: dict[str, tuple[str, str]] = field(default_factory=dict)
+    capture_keys: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
     review_cases: list[ReviewCase] = field(default_factory=list)
     review_decisions: list[ReviewDecision] = field(default_factory=list)
     audit: list[AuditEvent] = field(default_factory=list)
@@ -394,20 +396,29 @@ class _Captures(CaptureRepository):
     port, because a Python list has no trigger. That claim belongs to the
     `database` tier, against a server that actually refuses the `UPDATE`.
 
-    The idempotency rule is reproduced rather than approximated: a key already in
-    use with the same payload digest returns the stored receipt and creates
-    nothing, and a key in use with a different digest raises. Those are the two
-    answers the unique index on `capture_submissions.idempotency_key` produces,
-    so a test about `QC-AC-031`/`QC-AC-032` at this tier is about the same rule
-    the store enforces.
+    The idempotency rule is reproduced rather than approximated: a key already
+    held by *this principal* with the same payload digest returns the stored
+    receipt and creates nothing, and a key so held with a different digest
+    raises. Those are the two answers the unique index on
+    `capture_submissions (principal_id, idempotency_key)` produces
+    (`PKL-MYPA-D-WP03-001`), so a test about `QC-AC-031`/`QC-AC-032` at this
+    tier is about the same rule the store enforces. Every read is partitioned
+    by the caller's `principal_id` the way `partition_criterion` partitions the
+    store's, so a foreign capture is indistinguishable from an absent one here
+    too.
     """
 
     def __init__(self, world: World) -> None:
         self._world = world
 
-    def admit(self, request: CaptureAdmissionRequest) -> CaptureAdmission:
+    def admit(self, request: CaptureAdmissionRequest, *, principal_id: str) -> CaptureAdmission:
         self._world.fail("admit")
-        held = self._world.capture_keys.get(request.idempotency_key)
+        if request.principal_id != principal_id:
+            # The same refusal the store makes: admission is bound to the
+            # authenticated principal, never to one the payload carries
+            # (MU-AC-02).
+            raise CallerSuppliedPrincipalError("principal_id")
+        held = self._world.capture_keys.get((principal_id, request.idempotency_key))
         if held is not None:
             digest, receipt_id = held
             if digest != request.payload_digest:
@@ -420,7 +431,7 @@ class _Captures(CaptureRepository):
             number, supersedes = 1, None
         else:
             capture_id = request.capture_id
-            head = self._head(capture_id)
+            head = self._head(capture_id, principal_id=principal_id)
             if head is None:
                 raise UnknownScopeError("the request names no stored capture")
             number, supersedes = head.version_number + 1, head.version_id
@@ -458,30 +469,36 @@ class _Captures(CaptureRepository):
             issued_at=request.accepted_at,
         )
         self._world.capture_receipts[receipt.receipt_id] = receipt
-        self._world.capture_keys[request.idempotency_key] = (
+        self._world.capture_keys[(principal_id, request.idempotency_key)] = (
             request.payload_digest,
             receipt.receipt_id,
         )
         return CaptureAdmission(receipt=receipt, created=True)
 
-    def version(self, capture_id: str, *, version_id: str | None = None) -> CaptureVersion | None:
+    def version(
+        self, capture_id: str, *, version_id: str | None = None, principal_id: str
+    ) -> CaptureVersion | None:
         self._world.fail("capture_version")
         if version_id is None:
-            return self._head(capture_id)
+            return self._head(capture_id, principal_id=principal_id)
         return next(
             (
                 version
                 for version in self._world.capture_versions
-                if version.capture_id == capture_id and version.version_id == version_id
+                if version.capture_id == capture_id
+                and version.version_id == version_id
+                and version.owner_principal_id == principal_id
             ),
             None,
         )
 
-    def captures(self, *, limit: int) -> tuple[CaptureSummary, ...]:
+    def captures(self, *, limit: int, principal_id: str) -> tuple[CaptureSummary, ...]:
         self._world.fail("capture_page")
         summaries: list[CaptureSummary] = []
         for capture_id, (owner, created_at) in self._world.captures.items():
-            head = self._head(capture_id)
+            if owner != principal_id:
+                continue
+            head = self._head(capture_id, principal_id=principal_id)
             if head is None:
                 continue
             summaries.append(
@@ -500,7 +517,7 @@ class _Captures(CaptureRepository):
         summaries.sort(key=lambda s: (s.created_at, s.capture_id), reverse=True)
         return tuple(summaries[:limit])
 
-    def search(self, request: CaptureSearchRequest) -> CaptureSearchOutcome:
+    def search(self, request: CaptureSearchRequest, *, principal_id: str) -> CaptureSearchOutcome:
         """Exact match over the versions this world holds.
 
         A whole-word containment test over the stored text, which is what the
@@ -517,20 +534,28 @@ class _Captures(CaptureRepository):
         limitation
         arithmetic and its no-content answer are provable on FAST.
 
-        The scope is the same two conditions `capture_text_in_scope` applies:
-        not superseded, and acknowledged by a receipt. Reproduced rather than
-        approximated, for the reason the idempotency rule above is.
+        The scope is the same three conditions `capture_text_in_scope` applies:
+        owned by the caller (`PKL-MYPA-D-WP03-001`), not superseded, and
+        acknowledged by a receipt. Reproduced rather than approximated, for the
+        reason the idempotency rule above is — and both counts below are taken
+        over the caller's partition, exactly as `totals_statement` takes them,
+        so the denominators cannot leak another principal's volume.
         """
         self._world.fail("capture_search")
+        mine = [
+            version
+            for version in self._world.capture_versions
+            if version.owner_principal_id == principal_id
+        ]
         superseded = {
             version.supersedes_version_id
-            for version in self._world.capture_versions
+            for version in mine
             if version.supersedes_version_id is not None
         }
         acknowledged = {receipt.version_id for receipt in self._world.capture_receipts.values()}
         in_scope = [
             version
-            for version in self._world.capture_versions
+            for version in mine
             if version.version_id not in superseded and version.version_id in acknowledged
         ]
         terms = request.query.text.split()
@@ -552,13 +577,23 @@ class _Captures(CaptureRepository):
                 for version in found[: request.limit]
             ),
             searchable_versions=len(in_scope),
-            stored_versions=len(self._world.capture_versions),
+            stored_versions=len(mine),
             truncated=len(found) > request.limit,
         )
 
-    def _head(self, capture_id: str) -> CaptureVersion | None:
-        """The greatest version number the capture holds, derived not stored."""
-        held = [v for v in self._world.capture_versions if v.capture_id == capture_id]
+    def _head(self, capture_id: str, *, principal_id: str) -> CaptureVersion | None:
+        """The greatest version number the caller's capture holds, derived not stored.
+
+        Scoped to the caller's partition, because this is what decides whether a
+        revision finds a head to succeed: a foreign capture yields `None` here
+        and therefore `UnknownScopeError` above, the same shape an absent
+        capture yields (`PKL-MYPA-D-WP03-001`).
+        """
+        held = [
+            v
+            for v in self._world.capture_versions
+            if v.capture_id == capture_id and v.owner_principal_id == principal_id
+        ]
         return max(held, key=lambda v: v.version_number) if held else None
 
 
@@ -948,10 +983,13 @@ def staged_capture(scene: Scene, *, text: str = "a synthetic note") -> CaptureVe
             processing_policy=ProcessingPolicy.LOCAL_ONLY,
             server_received_at=WHEN,
             accepted_at=WHEN,
-        )
+        ),
+        principal_id=scene.principal.principal_id,
     )
     stored = unit_of_work.captures.version(
-        admission.receipt.capture_id, version_id=admission.receipt.version_id
+        admission.receipt.capture_id,
+        version_id=admission.receipt.version_id,
+        principal_id=scene.principal.principal_id,
     )
     assert stored is not None
     return stored

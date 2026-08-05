@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import Engine, text
-from tests.pipeline.conftest import drain, save
+from tests.pipeline.conftest import PRINCIPAL_ID, drain, save
 
 from my_pa.contracts.ports import CaptureSearchRequest
 from my_pa.domain.search.query import SearchQuery
@@ -43,6 +43,7 @@ from my_pa.infrastructure.persistence.capture_search import (
     search_captures,
 )
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, job_for
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.proposals import proposal_count
 from my_pa.infrastructure.persistence.tables import DEFAULT_MAX_ATTEMPTS, JobState
 
@@ -66,8 +67,12 @@ MAX_ATTEMPTS = DEFAULT_MAX_ATTEMPTS
 def _find(engine: Engine, query: str, *, limit: int = 10) -> tuple[str, ...]:
     """The version identifiers a capture search returns for `query`."""
     request = CaptureSearchRequest(query=SearchQuery(query), limit=limit)
+    context = capture_context(PRINCIPAL_ID)
     with engine.connect() as connection:
-        return tuple(match.version_id for match in search_captures(connection, request).matches)
+        return tuple(
+            match.version_id
+            for match in search_captures(connection, request, context=context).matches
+        )
 
 
 def test_a_stemmed_variant_does_not_match_and_the_exact_word_does(engine: Engine) -> None:
@@ -276,7 +281,9 @@ def test_the_capture_search_uses_the_functional_index_and_not_a_sequential_scan(
     assert _find(engine, "running") == (saved.version_id,)
 
     request = CaptureSearchRequest(query=SearchQuery("running"), limit=10)
-    compiled = match_statement(request).compile(engine, compile_kwargs={"literal_binds": True})
+    compiled = match_statement(request, context=capture_context(PRINCIPAL_ID)).compile(
+        engine, compile_kwargs={"literal_binds": True}
+    )
     with engine.connect() as connection:
         connection.execute(text("SET LOCAL enable_seqscan = off"))
         plan = "\n".join(

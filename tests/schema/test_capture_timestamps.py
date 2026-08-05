@@ -49,6 +49,7 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.capture import admit_capture
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -131,6 +132,7 @@ def _admit(
     occurred_at: datetime | None,
 ) -> str:
     """Store one capture through the production writer. Returns its version."""
+    principal_id = issue_identifier(IdKind.PRINCIPAL)
     with engine.begin() as connection:
         admission = admit_capture(
             connection,
@@ -140,7 +142,7 @@ def _admit(
                 idempotency_key=key,
                 request_id=f"req-{key}",
                 correlation_id=issue_identifier(IdKind.CORRELATION),
-                principal_id=issue_identifier(IdKind.PRINCIPAL),
+                principal_id=principal_id,
                 audit_id=issue_identifier(IdKind.AUDIT),
                 classification=Classification.PRIVATE_LOCAL,
                 processing_policy=ProcessingPolicy.LOCAL_ONLY,
@@ -149,6 +151,7 @@ def _admit(
                 client_created_at=client_created_at,
                 occurred_at=occurred_at,
             ),
+            context=capture_context(principal_id),
         )
     return admission.receipt.version_id
 

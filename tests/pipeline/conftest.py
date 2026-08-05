@@ -45,9 +45,17 @@ from my_pa.infrastructure.jobs.capture_pipeline import process_capture_version
 from my_pa.infrastructure.jobs.worker import JobHandler, WorkerRun, issue_worker_owner, run_worker
 from my_pa.infrastructure.persistence.capture import admit_capture
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.tables import capture_jobs
 
 ROOT = Path(__file__).resolve().parents[2]
+
+#: One synthetic principal for the whole suite, minted once rather than per
+#: save: the store partitions captures and idempotency keys by principal
+#: (`PKL-MYPA-D-WP03-001`), so a per-save principal would make a key retry an
+#: independent admission and would hide every saved capture from the search a
+#: test runs afterwards.
+PRINCIPAL_ID = issue_identifier(IdKind.PRINCIPAL)
 
 #: Fixed name so a run interrupted before teardown is cleaned up by the next one.
 #: Distinct from every other suite's, because the database tier runs serially and
@@ -142,7 +150,7 @@ def save(
         idempotency_key=key or f"pipeline-{issue_identifier(IdKind.CORRELATION)}",
         request_id=f"req-{issue_identifier(IdKind.CORRELATION)}",
         correlation_id=issue_identifier(IdKind.CORRELATION),
-        principal_id=issue_identifier(IdKind.PRINCIPAL),
+        principal_id=PRINCIPAL_ID,
         audit_id=issue_identifier(IdKind.AUDIT),
         classification=Classification.PRIVATE_LOCAL,
         processing_policy=ProcessingPolicy.LOCAL_ONLY,
@@ -154,7 +162,7 @@ def save(
         context_source_object_id=context_source_object_id,
         context_source_version_id=context_source_version_id,
     )
-    admission = admit_capture(connection, request)
+    admission = admit_capture(connection, request, context=capture_context(PRINCIPAL_ID))
     receipt = admission.receipt
     operation_id = connection.execute(
         select(capture_jobs.c.operation_id).where(capture_jobs.c.version_id == receipt.version_id)

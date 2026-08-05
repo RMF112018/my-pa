@@ -105,6 +105,7 @@ from my_pa.infrastructure.persistence.knowledge import (
     outcome_for_object,
     read_extraction,
 )
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.registry import (
     UnknownSourceError,
     get_source,
@@ -257,12 +258,19 @@ class _Captures(CaptureRepository):
     `persistence.capture`: the capture plane's lexical index is its own concern
     with its own configuration and its own scope predicate, and the module that
     writes a capture has no reason to hold either.
+
+    Each method takes the port's `principal_id` and builds the
+    `PrincipalContext` here (WP-03), because the port speaks the contracts
+    vocabulary — a text identifier — and the guard speaks the persistence one —
+    a context with the durable UUID beside it. `capture_context` is the only
+    translation between the two, so a Principal that reaches this class at all
+    reaches every scoped statement below it identically.
     """
 
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
-    def admit(self, request: CaptureAdmissionRequest) -> CaptureAdmission:
+    def admit(self, request: CaptureAdmissionRequest, *, principal_id: str) -> CaptureAdmission:
         """Admit one submission, letting both of its refusals through.
 
         `CaptureConflictError` is a domain type the application already imports
@@ -272,15 +280,30 @@ class _Captures(CaptureRepository):
         `UnknownScopeError` is already the port's own vocabulary, so translating
         it here would mean catching a port error to raise the same port error.
         """
-        return _read(lambda: admit_capture(self._connection, request))
+        return _read(
+            lambda: admit_capture(self._connection, request, context=capture_context(principal_id))
+        )
 
-    def version(self, capture_id: str, *, version_id: str | None = None) -> CaptureVersion | None:
-        return _read(lambda: capture_version(self._connection, capture_id, version_id=version_id))
+    def version(
+        self, capture_id: str, *, version_id: str | None = None, principal_id: str
+    ) -> CaptureVersion | None:
+        return _read(
+            lambda: capture_version(
+                self._connection,
+                capture_id,
+                version_id=version_id,
+                context=capture_context(principal_id),
+            )
+        )
 
-    def captures(self, *, limit: int) -> tuple[CaptureSummary, ...]:
-        return _read(lambda: capture_page(self._connection, limit=limit))
+    def captures(self, *, limit: int, principal_id: str) -> tuple[CaptureSummary, ...]:
+        return _read(
+            lambda: capture_page(
+                self._connection, limit=limit, context=capture_context(principal_id)
+            )
+        )
 
-    def search(self, request: CaptureSearchRequest) -> CaptureSearchOutcome:
+    def search(self, request: CaptureSearchRequest, *, principal_id: str) -> CaptureSearchOutcome:
         """One page of exact matches over stored capture text.
 
         `_read` translates the store's own failures into the port's vocabulary,
@@ -289,7 +312,11 @@ class _Captures(CaptureRepository):
         `persistence.search`'s are, and both are unavailability or an internal
         fault rather than an answer about the caller's request.
         """
-        return _read(lambda: search_captures(self._connection, request))
+        return _read(
+            lambda: search_captures(
+                self._connection, request, context=capture_context(principal_id)
+            )
+        )
 
 
 class _Reviews(ReviewRepository):

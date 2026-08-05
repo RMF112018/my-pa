@@ -75,10 +75,13 @@ transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choic
 is between naming what this is and shipping a transport that cannot reach one of
 the fifteen capabilities.
 
-The identifier is issued per process run, so an audit trail identifies a run
-rather than a person. A stable local identity is part of what `P00-OD-010`
-settles; deriving one from the host or the account would put a personal value in
-an opaque identifier, which `INV-PKL-005` forbids.
+The identifier is durable across process runs (`PKL-MYPA-D-WP03-001`): it is
+derived from a fixed namespace UUID in `my_pa.domain.identity.binding`, not
+issued per run and not derived from the host or the account — so no personal
+value sits inside the opaque identifier (`INV-PKL-005`) and no stored capture is
+stranded behind a principal that died with its process. What `P00-OD-010` still
+settles is authentication of *multiple* principals; the single local operator's
+name is no longer a per-run accident.
 
 ## The providers
 
@@ -113,9 +116,8 @@ from sqlalchemy import Engine
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import Settings
 from my_pa.contracts.ports import UnitOfWork
-from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.identity.principal import Principal, PrincipalKind
-from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
@@ -124,9 +126,17 @@ __all__ = ["GatewayRuntime", "build_gateway_runtime", "local_principal"]
 
 
 def local_principal() -> Principal:
-    """The one principal this process acts as. See the module docstring."""
+    """The one principal this process acts as — the same one every process acts as.
+
+    The identifier is derived, not minted (`PKL-MYPA-D-WP03-001`): it is the
+    durable local-operator binding from `my_pa.domain.identity.binding`, so two
+    gateway processes — or one process before and after a restart — present the
+    same `principal_id`. Capture ownership is partitioned by that identifier,
+    and a per-process random identifier here would strand every stored capture
+    behind a principal that no longer exists the moment the process exits.
+    """
     return Principal(
-        principal_id=issue_identifier(IdKind.PRINCIPAL),
+        principal_id=capture_principal_id(LOCAL_OPERATOR_UUID),
         kind=PrincipalKind.OPERATOR,
         authenticated=True,
     )

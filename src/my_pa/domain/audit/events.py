@@ -15,7 +15,11 @@ from enum import StrEnum
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import (
+    AuthorizedCapability,
+    Capability,
+    NativeSourceCapability,
+)
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import DenialReason, PolicyDecision, validate_policy_version
 
@@ -50,7 +54,7 @@ class AuditEvent:
     audit_id: str
     correlation_id: str
     principal_id: str
-    capability: Capability
+    capability: Capability | NativeSourceCapability
     purpose: Purpose
     outcome: AuditOutcome
     policy_version: str
@@ -80,7 +84,7 @@ def audit_event_for(
     audit_id: str,
     correlation_id: str,
     principal_id: str,
-    capability: Capability,
+    capability: AuthorizedCapability,
     purpose: Purpose,
     decision: PolicyDecision,
     recorded_at: datetime,

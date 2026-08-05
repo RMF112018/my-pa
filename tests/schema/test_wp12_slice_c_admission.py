@@ -202,7 +202,9 @@ def _authority(store: SqlNativeSourceControlStore) -> NativeAdmissionAuthority:
     )
 
 
-def _envelope(authority: NativeAdmissionAuthority) -> NativeAdmissionEnvelope:
+def _envelope(
+    authority: NativeAdmissionAuthority, *, next_cursor: str | None = None
+) -> NativeAdmissionEnvelope:
     wire: dict[str, Any] = {
         "metadata": {
             "protocolVersion": NATIVE_SOURCE_PROTOCOL_V1,
@@ -224,7 +226,7 @@ def _envelope(authority: NativeAdmissionAuthority) -> NativeAdmissionEnvelope:
                 "payload": [115, 121, 110, 116, 104, 101, 116, 105, 99],
             }
         ],
-        "nextCursor": None,
+        "nextCursor": next_cursor,
     }
     return NativeAdmissionEnvelope.model_validate(wire)
 
@@ -303,6 +305,45 @@ class _PagedSyntheticHost:
             ],
             "nextCursor": "page-2" if cursor is None else None,
         }
+
+
+class _CursorCycleHost(_PagedSyntheticHost):
+    def __init__(
+        self,
+        next_by_cursor: dict[str | None, str | None],
+        *,
+        fail_cursor_once: str | None = None,
+    ) -> None:
+        self._next_by_cursor = next_by_cursor
+        self._fail_cursor_once = fail_cursor_once
+
+    def read(
+        self,
+        selection: NativeBucketSelection,
+        *,
+        time_range: tuple[datetime, datetime] | None,
+        cursor: str | None,
+        limit: int,
+        bridge_id: str,
+        envelope_id: str,
+        request_id: str,
+        at: datetime,
+    ) -> dict[str, Any]:
+        if self._fail_cursor_once is not None and cursor == self._fail_cursor_once:
+            self._fail_cursor_once = None
+            raise RuntimeError("synthetic restart boundary")
+        wire = super().read(
+            selection,
+            time_range=time_range,
+            cursor=cursor,
+            limit=limit,
+            bridge_id=bridge_id,
+            envelope_id=envelope_id,
+            request_id=request_id,
+            at=at,
+        )
+        wire["nextCursor"] = self._next_by_cursor[cursor]
+        return wire
 
 
 class _NoProposals:
@@ -860,13 +901,126 @@ def test_wp12e_cutoff_run_job_and_checkpoint_are_exact_durable_and_fail_closed(
         authority_id=authority.authority_id,
         next_cursor="page-2",
     )
-    with pytest.raises(IntegrityError, match="requires an admitted page"):
+    with pytest.raises(IntegrityError, match="requires its exact admitted page"):
         baseline.checkpoint_admitted_page(job, page, recorded_at=WHEN)
     assert baseline.resume_point(job.job_id).page_count == 0
 
-    envelope = _envelope(authority)
-    outcomes = control.admit_evidence_durably(envelope, authority, at=WHEN)
+    envelope = _envelope(authority, next_cursor="page-2")
+    outcomes = control.admit_evidence_durably(
+        envelope,
+        authority,
+        at=WHEN,
+        checkpoint_job_id=job.job_id,
+        checkpoint_run_id=job.run_id,
+    )
     assert len(outcomes) == 1
+    with c_engine.connect() as connection:
+        binding = connection.execute(
+            select(
+                native_admission_authorities.c.checkpoint_job_id,
+                native_admission_authorities.c.checkpoint_run_id,
+                native_admission_authorities.c.checkpoint_cursor_private,
+                native_admission_authorities.c.checkpoint_cursor_digest,
+                native_admission_authorities.c.checkpoint_terminal,
+                native_admission_authorities.c.checkpoint_item_count,
+            ).where(native_admission_authorities.c.authority_id == authority.authority_id)
+        ).one()
+    assert binding == (
+        job.job_id,
+        job.run_id,
+        "page-2",
+        sha256(b"page-2").hexdigest(),
+        False,
+        1,
+    )
+
+    alternate = baseline.prepare(
+        configuration_id=CONFIGURATION,
+        idempotency_key="baseline-frozen-alternate-run",
+        proposed_cutoff_at=cutoff,
+        adapter_identity="a" * 64,
+    )
+    with c_engine.connect() as connection:
+        alternate_job = connection.scalar(
+            select(native_sync_jobs.c.job_id).where(native_sync_jobs.c.run_id == alternate.run_id)
+        )
+    revised = NativeConfigurationRevision(
+        CONFIGURATION,
+        2,
+        BRIDGE,
+        "America/New_York",
+        date(2026, 8, 1),
+        cutoff,
+        ExactBucketSelection((BUCKET,)),
+        WHEN + timedelta(minutes=1),
+    )
+    control.append_configuration(revised, expected_prior_revision=1)
+    revised_run = baseline.prepare(
+        configuration_id=CONFIGURATION,
+        idempotency_key="baseline-frozen-revised-run",
+        proposed_cutoff_at=cutoff + timedelta(minutes=1),
+        adapter_identity="a" * 64,
+    )
+    with c_engine.connect() as connection:
+        revised_job = connection.scalar(
+            select(native_sync_jobs.c.job_id).where(native_sync_jobs.c.run_id == revised_run.run_id)
+        )
+
+    checkpoint_insert = text(
+        """INSERT INTO knowledge.native_checkpoints
+             (checkpoint_id, bucket_id, job_id, admission_authority_id, sequence,
+              previous_checkpoint_id, cursor_private, cursor_digest, terminal,
+              item_count, recorded_at)
+           VALUES (:checkpoint_id, :bucket_id, :job_id, :authority_id, 1, NULL,
+                   :cursor, :digest, :terminal, :item_count, :recorded_at)"""
+    )
+    plants = (
+        ("wrong-run", str(alternate_job), "page-2", sha256(b"page-2").hexdigest(), False, 1),
+        ("wrong-revision", str(revised_job), "page-2", sha256(b"page-2").hexdigest(), False, 1),
+        ("forged-cursor", job.job_id, "forged", sha256(b"forged").hexdigest(), False, 1),
+        ("forged-digest", job.job_id, "page-2", "f" * 64, False, 1),
+        (
+            "forged-terminal",
+            job.job_id,
+            "__my_pa_native_baseline_complete__",
+            sha256(b"__my_pa_native_baseline_complete__").hexdigest(),
+            True,
+            1,
+        ),
+        ("forged-count", job.job_id, "page-2", sha256(b"page-2").hexdigest(), False, 2),
+    )
+    with c_engine.begin() as connection:
+        for ordinal, (_name, planted_job, cursor, digest, terminal, count) in enumerate(
+            plants, start=1
+        ):
+            savepoint = connection.begin_nested()
+            with pytest.raises(IntegrityError, match="exact admitted page"):
+                connection.execute(
+                    checkpoint_insert,
+                    {
+                        "checkpoint_id": f"ncp_{ordinal + 100:016d}",
+                        "bucket_id": BUCKET,
+                        "job_id": planted_job,
+                        "authority_id": authority.authority_id,
+                        "cursor": cursor,
+                        "digest": digest,
+                        "terminal": terminal,
+                        "item_count": count,
+                        "recorded_at": WHEN,
+                    },
+                )
+            savepoint.rollback()
+        immutable = connection.begin_nested()
+        with pytest.raises(IntegrityError, match="immutable"):
+            connection.execute(
+                text(
+                    "UPDATE knowledge.native_admission_authorities "
+                    "SET checkpoint_item_count = 2 WHERE authority_id = :authority_id"
+                ),
+                {"authority_id": authority.authority_id},
+            )
+        immutable.rollback()
+
     baseline.checkpoint_admitted_page(job, page, recorded_at=WHEN)
     assert baseline.resume_point(job.job_id) == BaselineResumePoint(
         cursor="page-2", terminal=False, page_count=1
@@ -880,6 +1034,224 @@ def test_wp12e_cutoff_run_job_and_checkpoint_are_exact_durable_and_fail_closed(
             )
         ).one()
     assert checkpoint == (job.job_id, authority.authority_id, 1)
+
+
+@pytest.mark.database
+def test_wp12e_database_rejects_wrong_insert_and_update_ranges_for_every_kind(
+    c_engine: Engine,
+) -> None:
+    _seed(c_engine)
+    ids = {
+        "calendar_source": "src_0000000000000010",
+        "calendar_account": "nacct_0000000000000010",
+        "calendar_bucket": "nbkt_0000000000000010",
+        "contacts_source": "src_0000000000000011",
+        "contacts_account": "nacct_0000000000000011",
+        "contacts_bucket": "nbkt_0000000000000011",
+    }
+    with c_engine.begin() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO knowledge.sources
+                     (source_id, provider_kind, label, classification, native_root)
+                   VALUES (:calendar_source, 'apple_calendar', 'Synthetic Calendar',
+                           'synthetic_test', 'calendar-root'),
+                          (:contacts_source, 'apple_contacts', 'Synthetic Contacts',
+                           'synthetic_test', 'contacts-root')"""
+            ),
+            ids,
+        )
+        connection.execute(
+            text(
+                """INSERT INTO knowledge.native_source_accounts
+                     (account_id, bridge_id, source_id, source_kind, label, private_locator,
+                      first_observed_at)
+                   VALUES (:calendar_account, :bridge, :calendar_source, 'calendar',
+                           'Synthetic Calendar', 'calendar.account', :at),
+                          (:contacts_account, :bridge, :contacts_source, 'contacts',
+                           'Synthetic Contacts', 'contacts.account', :at)"""
+            ),
+            {**ids, "bridge": BRIDGE, "at": WHEN},
+        )
+        connection.execute(
+            text(
+                """INSERT INTO knowledge.native_source_buckets
+                     (bucket_id, account_id, source_kind, label, private_locator, selectable,
+                      first_observed_at)
+                   VALUES (:calendar_bucket, :calendar_account, 'calendar',
+                           'Synthetic Calendar', 'calendar.bucket', true, :at),
+                          (:contacts_bucket, :contacts_account, 'contacts',
+                           'Synthetic Contacts', 'contacts.bucket', true, :at)"""
+            ),
+            {**ids, "at": WHEN},
+        )
+    configuration_id = "ncfg_0000000000000010"
+    SqlNativeSourceControlStore(c_engine).append_configuration(
+        NativeConfigurationRevision(
+            configuration_id,
+            1,
+            BRIDGE,
+            "America/New_York",
+            date(2026, 8, 1),
+            WHEN,
+            ExactBucketSelection((BUCKET, ids["calendar_bucket"], ids["contacts_bucket"])),
+            WHEN,
+        ),
+        expected_prior_revision=0,
+    )
+    frozen = SqlNativeBaselineStore(c_engine).prepare(
+        configuration_id=configuration_id,
+        idempotency_key="all-kind-range-guard",
+        proposed_cutoff_at=WHEN + timedelta(days=1),
+        adapter_identity="r" * 64,
+    )
+    with c_engine.connect() as connection:
+        jobs = connection.execute(
+            select(native_sync_jobs).where(native_sync_jobs.c.run_id == frozen.run_id)
+        ).all()
+    assert len(jobs) == 3
+
+    insert_job = text(
+        """INSERT INTO knowledge.native_sync_jobs
+             (job_id, configuration_id, configuration_revision, bucket_id,
+              range_start, range_end, state, lease_owner, lease_expires_at,
+              idempotency_key, created_at, updated_at, run_id, read_mode)
+           VALUES (:job_id, :configuration_id, :configuration_revision, :bucket_id,
+                   :range_start, :range_end, 'queued', NULL, NULL,
+                   :idempotency_key, :created_at, :updated_at, :run_id, :read_mode)"""
+    )
+    ordinal = 200
+    with c_engine.begin() as connection:
+        for row in jobs:
+            kind = connection.scalar(
+                text(
+                    "SELECT source_kind FROM knowledge.native_source_buckets "
+                    "WHERE bucket_id = :bucket_id"
+                ),
+                {"bucket_id": row.bucket_id},
+            )
+            wrong_start = (
+                row.range_start - timedelta(seconds=1)
+                if kind == "contacts"
+                else row.range_start + timedelta(seconds=1)
+            )
+            wrong_end = (
+                row.range_end + timedelta(seconds=1)
+                if kind == "contacts"
+                else row.range_end - timedelta(seconds=1)
+            )
+            for endpoint, changed_start, changed_end in (
+                ("start", wrong_start, row.range_end),
+                ("end", row.range_start, wrong_end),
+            ):
+                ordinal += 1
+                insert_plant = connection.begin_nested()
+                with pytest.raises(IntegrityError, match="frozen"):
+                    connection.execute(
+                        insert_job,
+                        {
+                            **row._mapping,
+                            "job_id": f"njob_{ordinal:016d}",
+                            "range_start": changed_start,
+                            "range_end": changed_end,
+                            "idempotency_key": f"raw-{kind}-{endpoint}",
+                        },
+                    )
+                insert_plant.rollback()
+
+                update_plant = connection.begin_nested()
+                with pytest.raises(IntegrityError, match="frozen"):
+                    update_statement = (
+                        text(
+                            "UPDATE knowledge.native_sync_jobs SET range_start = :value "
+                            "WHERE job_id = :job_id"
+                        )
+                        if endpoint == "start"
+                        else text(
+                            "UPDATE knowledge.native_sync_jobs SET range_end = :value "
+                            "WHERE job_id = :job_id"
+                        )
+                    )
+                    connection.execute(
+                        update_statement,
+                        {
+                            "value": changed_start if endpoint == "start" else changed_end,
+                            "job_id": row.job_id,
+                        },
+                    )
+                update_plant.rollback()
+
+
+@pytest.mark.database
+def test_wp12e_page_and_record_budgets_fail_closed_before_another_checkpoint(
+    c_engine: Engine,
+) -> None:
+    _seed(c_engine)
+    baseline = SqlNativeBaselineStore(c_engine)
+    frozen = baseline.prepare(
+        configuration_id=CONFIGURATION,
+        idempotency_key="bounded-total-work",
+        proposed_cutoff_at=WHEN,
+        adapter_identity="b" * 64,
+    )
+    job = baseline.claim(frozen.run_id, owner="bounded-worker", lease_for=timedelta(minutes=5))
+    assert job is not None
+    control = SqlNativeSourceControlStore(c_engine)
+
+    first_authority = _authority(control)
+    first_outcomes = control.admit_evidence_durably(
+        _envelope(first_authority, next_cursor="A"),
+        first_authority,
+        at=WHEN,
+        checkpoint_job_id=job.job_id,
+        checkpoint_run_id=job.run_id,
+    )
+    assert len(first_outcomes) == 1
+    first_page = NativeReadPageReceipt(
+        NativeAdmissionReceipt(
+            first_authority.request_id,
+            BUCKET,
+            1,
+            0,
+            "a" * 64,
+            0,
+            False,
+        ),
+        first_authority.authority_id,
+        "A",
+    )
+    baseline.checkpoint_admitted_page(job, first_page, recorded_at=WHEN)
+
+    second_authority = _authority(control)
+    second_outcomes = control.admit_evidence_durably(
+        _envelope(second_authority, next_cursor="B"),
+        second_authority,
+        at=WHEN,
+        checkpoint_job_id=job.job_id,
+        checkpoint_run_id=job.run_id,
+    )
+    assert second_outcomes == ((first_outcomes[0][0], False),)
+    second_page = NativeReadPageReceipt(
+        NativeAdmissionReceipt(
+            second_authority.request_id,
+            BUCKET,
+            0,
+            1,
+            "b" * 64,
+            0,
+            False,
+        ),
+        second_authority.authority_id,
+        "B",
+    )
+    baseline._MAX_PAGES_PER_JOB = 1
+    with pytest.raises(NativePersistenceConflictError, match="page bound"):
+        baseline.checkpoint_admitted_page(job, second_page, recorded_at=WHEN)
+    baseline._MAX_PAGES_PER_JOB = 10_000
+    baseline._MAX_RECORDS_PER_JOB = 1
+    with pytest.raises(NativePersistenceConflictError, match="record bound"):
+        baseline.checkpoint_admitted_page(job, second_page, recorded_at=WHEN)
+    assert baseline.resume_point(job.job_id).page_count == 1
 
 
 @pytest.mark.database
@@ -906,6 +1278,29 @@ def test_wp12e_earlier_start_queues_only_missing_delta_and_later_start_retains_e
         WHEN + timedelta(minutes=1),
     )
     control.append_configuration(earlier, expected_prior_revision=1)
+    with c_engine.begin() as connection:
+        wrong_kind = connection.begin_nested()
+        with pytest.raises(IntegrityError, match="run kind contradicts"):
+            connection.execute(
+                text(
+                    """INSERT INTO knowledge.native_sync_runs
+                         (run_id, configuration_id, configuration_revision, run_kind, state,
+                          start_at, cutoff_at, calendar_horizon_at, idempotency_key,
+                          recorded_at, bridge_id, adapter_identity)
+                       VALUES ('nrun_0000000000000098', :configuration, 2, 'baseline',
+                               'running', :start, :cutoff, :horizon, 'raw-wrong-kind',
+                               :cutoff, :bridge, :adapter)"""
+                ),
+                {
+                    "configuration": CONFIGURATION,
+                    "start": datetime(2026, 7, 1, 4, tzinfo=UTC),
+                    "cutoff": WHEN + timedelta(days=1),
+                    "horizon": WHEN + timedelta(days=91),
+                    "bridge": BRIDGE,
+                    "adapter": "b" * 64,
+                },
+            )
+        wrong_kind.rollback()
     baseline = SqlNativeBaselineStore(c_engine)
     backfill = baseline.prepare(
         configuration_id=CONFIGURATION,
@@ -1112,6 +1507,16 @@ def test_wp12e_revision_upgrades_populated_prior_head_and_round_trips(c_engine: 
         ).one()
     assert (run.bridge_id, run.adapter_identity) == (BRIDGE, "legacy-protocol-v1")
     assert (job.run_id, job.read_mode) == (None, "bounded_time")
+    with c_engine.begin() as connection:
+        connection.execute(
+            text(
+                """UPDATE knowledge.native_sync_jobs
+                   SET state = 'running', lease_owner = 'legacy-worker',
+                       lease_expires_at = :expiry, updated_at = :updated
+                   WHERE job_id = 'njob_0000000000000099'"""
+            ),
+            {"expiry": WHEN + timedelta(minutes=5), "updated": WHEN},
+        )
 
     command.downgrade(_config(), "9d5e2f7b4c61")
     columns = {
@@ -1216,3 +1621,95 @@ def test_wp12e_sql_executor_replays_after_admission_crash_and_resumes_all_pages(
             select(native_sync_jobs.c.state).where(native_sync_jobs.c.run_id == resumed.run_id)
         )
     assert state == "succeeded"
+
+
+@pytest.mark.database
+@pytest.mark.recovery
+@pytest.mark.e2e
+@pytest.mark.parametrize(
+    ("next_by_cursor", "restart_cursor", "expected_pages"),
+    (
+        ({None: "A", "A": "A"}, None, 1),
+        ({None: "A", "A": "B", "B": "A"}, "B", 2),
+    ),
+)
+def test_wp12e_durable_cursor_history_rejects_immediate_and_multinode_cycles_after_restart(
+    c_engine: Engine,
+    next_by_cursor: dict[str | None, str | None],
+    restart_cursor: str | None,
+    expected_pages: int,
+) -> None:
+    _seed(c_engine)
+    host = _CursorCycleHost(next_by_cursor, fail_cursor_once=restart_cursor)
+    controller = NativeSourceController(
+        store=SqlNativeSourceControlStore(c_engine),
+        host=host,
+        audit=SqlAlchemyAuditSink(c_engine),
+        proposals=_NoProposals(),
+    )
+    baseline = SqlNativeBaselineStore(c_engine)
+
+    def contexts(
+        request_id: str, at: datetime
+    ) -> tuple[NativeRequestContext, NativeRequestContext]:
+        return (
+            NativeRequestContext(
+                principal=Principal(
+                    "prn_0000000000000200", PrincipalKind.OPERATOR, authenticated=True
+                ),
+                purpose=Purpose.CONTENT_EXTRACTION,
+                correlation_id="corr_0000000000000200",
+                request_id=request_id,
+                authorized_source_ids=frozenset({SOURCE}),
+                at=at,
+            ),
+            NativeRequestContext(
+                principal=Principal(
+                    "prn_0000000000000201",
+                    PrincipalKind.SOURCE_PROVIDER_ADAPTER,
+                    authenticated=True,
+                ),
+                purpose=Purpose.CONTENT_EXTRACTION,
+                correlation_id="corr_0000000000000200",
+                request_id=request_id,
+                authorized_source_ids=frozenset(),
+                at=at,
+            ),
+        )
+
+    executor = NativeBaselineExecutor(
+        controller=controller,
+        store=baseline,
+        contexts=contexts,
+        clock=lambda: WHEN,
+    )
+    if restart_cursor is not None:
+        with pytest.raises(RuntimeError, match="restart boundary"):
+            executor.execute(
+                configuration_id=CONFIGURATION,
+                idempotency_key="durable-cycle",
+                owner="cycle-worker",
+            )
+    with pytest.raises(NativePersistenceConflictError, match="cursor repeated"):
+        NativeBaselineExecutor(
+            controller=controller,
+            store=SqlNativeBaselineStore(c_engine),
+            contexts=contexts,
+            clock=lambda: WHEN,
+        ).execute(
+            configuration_id=CONFIGURATION,
+            idempotency_key="durable-cycle",
+            owner="cycle-worker",
+        )
+    with c_engine.connect() as connection:
+        job_id = connection.scalar(
+            select(native_sync_jobs.c.job_id).where(
+                native_sync_jobs.c.idempotency_key == f"durable-cycle:{BUCKET}"
+            )
+        )
+        durable = connection.execute(
+            select(native_checkpoints.c.cursor_private)
+            .where(native_checkpoints.c.job_id == job_id)
+            .order_by(native_checkpoints.c.sequence)
+        ).scalars()
+        assert tuple(durable) == tuple(next_by_cursor.values())[:expected_pages]

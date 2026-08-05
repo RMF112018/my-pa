@@ -78,6 +78,7 @@ from sqlalchemy import (
 )
 
 from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.contracts.v1.native_sources import NATIVE_SOURCE_MAX_PAGE_SIZE
 from my_pa.domain.audit.events import AuditOutcome
 from my_pa.domain.capture.assertion import AssertionState
 from my_pa.domain.capture.classification import (
@@ -153,6 +154,7 @@ from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind
 
 SCHEMA: Final = "knowledge"
+NATIVE_BASELINE_TERMINAL_CURSOR: Final = "__my_pa_native_baseline_complete__"
 
 METADATA: Final = MetaData(schema=SCHEMA)
 
@@ -2515,6 +2517,12 @@ native_admission_authorities = Table(
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("consumed_at", DateTime(timezone=True)),
     Column("admission_sha256", Text),
+    Column("checkpoint_job_id", Text, ForeignKey(f"{SCHEMA}.native_sync_jobs.job_id")),
+    Column("checkpoint_run_id", Text, ForeignKey(f"{SCHEMA}.native_sync_runs.run_id")),
+    Column("checkpoint_cursor_private", Text),
+    Column("checkpoint_cursor_digest", Text),
+    Column("checkpoint_terminal", Boolean),
+    Column("checkpoint_item_count", Integer),
     _is_identifier("authority_id", IdKind.NATIVE_AUTHORITY),
     _is_identifier("host_instance_id", IdKind.NATIVE_BRIDGE),
     ForeignKeyConstraint(
@@ -2543,6 +2551,36 @@ native_admission_authorities = Table(
     CheckConstraint(
         "admission_sha256 IS NULL OR admission_sha256 ~ '^[0-9a-f]{64}$'",
         name="native_authority_admission_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "(checkpoint_job_id IS NULL AND checkpoint_run_id IS NULL "
+        "AND checkpoint_cursor_private IS NULL AND checkpoint_cursor_digest IS NULL "
+        "AND checkpoint_terminal IS NULL AND checkpoint_item_count IS NULL) OR "
+        "(checkpoint_job_id IS NOT NULL AND checkpoint_run_id IS NOT NULL "
+        "AND checkpoint_cursor_private IS NOT NULL AND checkpoint_cursor_digest IS NOT NULL "
+        "AND checkpoint_terminal IS NOT NULL AND checkpoint_item_count IS NOT NULL)",
+        name="native_authority_checkpoint_binding_is_complete",
+    ),
+    CheckConstraint(
+        "checkpoint_cursor_private IS NULL OR length(checkpoint_cursor_private) BETWEEN 1 AND 512",
+        name="native_authority_checkpoint_cursor_is_bounded",
+    ),
+    CheckConstraint(
+        "checkpoint_cursor_digest IS NULL OR checkpoint_cursor_digest ~ '^[0-9a-f]{64}$'",
+        name="native_authority_checkpoint_digest_is_sha256",
+    ),
+    CheckConstraint(
+        f"checkpoint_terminal IS NULL OR "
+        f"(checkpoint_terminal AND checkpoint_cursor_private = "
+        f"'{NATIVE_BASELINE_TERMINAL_CURSOR}') OR "
+        f"(NOT checkpoint_terminal AND checkpoint_cursor_private <> "
+        f"'{NATIVE_BASELINE_TERMINAL_CURSOR}')",
+        name="native_authority_checkpoint_terminal_matches_cursor",
+    ),
+    CheckConstraint(
+        f"checkpoint_item_count IS NULL OR checkpoint_item_count BETWEEN 0 AND "
+        f"{NATIVE_SOURCE_MAX_PAGE_SIZE}",
+        name="native_authority_checkpoint_count_is_page_bounded",
     ),
     UniqueConstraint("envelope_id", name="native_authority_envelope_is_issued_once"),
 )
@@ -2737,6 +2775,10 @@ native_checkpoints = Table(
     CheckConstraint(
         "cursor_digest ~ '^[0-9a-f]{64}$'",
         name="native_checkpoint_digest_is_sha256",
+    ),
+    CheckConstraint(
+        f"item_count BETWEEN 0 AND {NATIVE_SOURCE_MAX_PAGE_SIZE}",
+        name="native_checkpoint_item_count_is_page_bounded",
     ),
     UniqueConstraint("bucket_id", "sequence", name="native_checkpoint_sequence_is_monotonic"),
 )

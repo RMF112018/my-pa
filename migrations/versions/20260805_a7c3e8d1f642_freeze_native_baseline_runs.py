@@ -50,20 +50,91 @@ def upgrade() -> None:
             CHECK (read_mode IN ('bounded_time', 'current_inventory'));
         ALTER TABLE knowledge.native_sync_jobs ALTER COLUMN read_mode DROP DEFAULT;
 
+        ALTER TABLE knowledge.native_admission_authorities
+          ADD COLUMN checkpoint_job_id text
+            REFERENCES knowledge.native_sync_jobs(job_id),
+          ADD COLUMN checkpoint_run_id text
+            REFERENCES knowledge.native_sync_runs(run_id),
+          ADD COLUMN checkpoint_cursor_private text,
+          ADD COLUMN checkpoint_cursor_digest text,
+          ADD COLUMN checkpoint_terminal boolean,
+          ADD COLUMN checkpoint_item_count integer,
+          ADD CONSTRAINT native_authority_checkpoint_binding_is_complete CHECK (
+            (checkpoint_job_id IS NULL AND checkpoint_run_id IS NULL
+              AND checkpoint_cursor_private IS NULL AND checkpoint_cursor_digest IS NULL
+              AND checkpoint_terminal IS NULL AND checkpoint_item_count IS NULL)
+            OR
+            (checkpoint_job_id IS NOT NULL AND checkpoint_run_id IS NOT NULL
+              AND checkpoint_cursor_private IS NOT NULL
+              AND checkpoint_cursor_digest IS NOT NULL
+              AND checkpoint_terminal IS NOT NULL AND checkpoint_item_count IS NOT NULL)
+          ),
+          ADD CONSTRAINT native_authority_checkpoint_cursor_is_bounded
+            CHECK (checkpoint_cursor_private IS NULL
+              OR length(checkpoint_cursor_private) BETWEEN 1 AND 512),
+          ADD CONSTRAINT native_authority_checkpoint_digest_is_sha256
+            CHECK (checkpoint_cursor_digest IS NULL
+              OR checkpoint_cursor_digest ~ '^[0-9a-f]{64}$'),
+          ADD CONSTRAINT native_authority_checkpoint_terminal_matches_cursor CHECK (
+            checkpoint_terminal IS NULL
+            OR (checkpoint_terminal
+              AND checkpoint_cursor_private = '__my_pa_native_baseline_complete__')
+            OR (NOT checkpoint_terminal
+              AND checkpoint_cursor_private <> '__my_pa_native_baseline_complete__')
+          ),
+          ADD CONSTRAINT native_authority_checkpoint_count_is_page_bounded
+            CHECK (checkpoint_item_count IS NULL OR checkpoint_item_count BETWEEN 0 AND 100);
+
+        CREATE FUNCTION knowledge.native_authority_consumption_is_immutable() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          IF OLD.consumed_at IS NOT NULL THEN
+            RAISE EXCEPTION 'consumed native admission authority is immutable'
+              USING ERRCODE = 'integrity_constraint_violation';
+          END IF;
+          IF NEW.authority_id IS DISTINCT FROM OLD.authority_id
+             OR NEW.audit_id IS DISTINCT FROM OLD.audit_id
+             OR NEW.configuration_id IS DISTINCT FROM OLD.configuration_id
+             OR NEW.configuration_revision IS DISTINCT FROM OLD.configuration_revision
+             OR NEW.bridge_id IS DISTINCT FROM OLD.bridge_id
+             OR NEW.bucket_id IS DISTINCT FROM OLD.bucket_id
+             OR NEW.source_id IS DISTINCT FROM OLD.source_id
+             OR NEW.host_instance_id IS DISTINCT FROM OLD.host_instance_id
+             OR NEW.envelope_id IS DISTINCT FROM OLD.envelope_id
+             OR NEW.request_id IS DISTINCT FROM OLD.request_id
+             OR NEW.issued_at IS DISTINCT FROM OLD.issued_at
+             OR NEW.expires_at IS DISTINCT FROM OLD.expires_at
+             OR NEW.consumed_at IS NULL
+             OR NEW.admission_sha256 IS NULL THEN
+            RAISE EXCEPTION 'native admission authority permits only one exact consumption'
+              USING ERRCODE = 'integrity_constraint_violation';
+          END IF;
+          RETURN NEW;
+        END; $$;
+        CREATE TRIGGER native_authority_allows_one_exact_consumption
+          BEFORE UPDATE ON knowledge.native_admission_authorities
+          FOR EACH ROW EXECUTE FUNCTION knowledge.native_authority_consumption_is_immutable();
+
         ALTER TABLE knowledge.native_checkpoints
           ADD COLUMN job_id text REFERENCES knowledge.native_sync_jobs(job_id),
           ADD COLUMN admission_authority_id text
             REFERENCES knowledge.native_admission_authorities(authority_id),
           ADD COLUMN terminal boolean NOT NULL DEFAULT false,
           ADD COLUMN item_count integer NOT NULL DEFAULT 0 CHECK (item_count >= 0),
-          ADD CONSTRAINT one_checkpoint_per_native_admission UNIQUE (admission_authority_id);
+          ADD CONSTRAINT one_checkpoint_per_native_admission UNIQUE (admission_authority_id),
+          ADD CONSTRAINT native_checkpoint_item_count_is_page_bounded
+            CHECK (item_count BETWEEN 0 AND 100);
         ALTER TABLE knowledge.native_checkpoints
           ALTER COLUMN terminal DROP DEFAULT,
           ALTER COLUMN item_count DROP DEFAULT;
 
         CREATE FUNCTION knowledge.native_run_snapshot_is_exact() RETURNS trigger
         LANGUAGE plpgsql AS $$
-        DECLARE configured_bridge text; configured_start timestamptz;
+        DECLARE
+          configured_bridge text;
+          configured_start timestamptz;
+          prior_start timestamptz;
+          expected_kind text;
         BEGIN
           SELECT bridge_id, start_at INTO configured_bridge, configured_start
           FROM knowledge.native_configuration_revisions
@@ -74,6 +145,27 @@ def upgrade() -> None:
             RAISE EXCEPTION 'native run does not freeze its exact configuration inputs'
               USING ERRCODE = 'integrity_constraint_violation';
           END IF;
+          IF EXISTS (
+            SELECT 1 FROM knowledge.native_sync_runs
+            WHERE configuration_id = NEW.configuration_id
+              AND configuration_revision = NEW.configuration_revision
+              AND idempotency_key = NEW.idempotency_key
+          ) THEN
+            RETURN NEW;
+          END IF;
+          SELECT start_at INTO prior_start
+          FROM knowledge.native_configuration_revisions
+          WHERE configuration_id = NEW.configuration_id
+            AND revision = NEW.configuration_revision - 1;
+          expected_kind := CASE
+            WHEN prior_start IS NOT NULL AND configured_start < prior_start THEN 'backfill'
+            ELSE 'baseline'
+          END;
+          IF NEW.run_kind IN ('baseline', 'backfill')
+             AND NEW.run_kind IS DISTINCT FROM expected_kind THEN
+            RAISE EXCEPTION 'native baseline run kind contradicts its immutable start history'
+              USING ERRCODE = 'integrity_constraint_violation';
+          END IF;
           RETURN NEW;
         END; $$;
         CREATE TRIGGER native_run_requires_exact_frozen_inputs
@@ -82,14 +174,40 @@ def upgrade() -> None:
 
         CREATE FUNCTION knowledge.native_job_matches_frozen_run() RETURNS trigger
         LANGUAGE plpgsql AS $$
-        DECLARE run_configuration text; run_revision integer; bucket_kind text;
+        DECLARE
+          run_configuration text;
+          run_revision integer;
+          run_kind text;
+          run_start timestamptz;
+          run_cutoff timestamptz;
+          run_horizon timestamptz;
+          prior_start timestamptz;
+          bucket_kind text;
+          expected_end timestamptz;
         BEGIN
+          IF TG_OP = 'UPDATE' AND (
+            NEW.run_id IS DISTINCT FROM OLD.run_id
+            OR NEW.configuration_id IS DISTINCT FROM OLD.configuration_id
+            OR NEW.configuration_revision IS DISTINCT FROM OLD.configuration_revision
+            OR NEW.bucket_id IS DISTINCT FROM OLD.bucket_id
+            OR NEW.range_start IS DISTINCT FROM OLD.range_start
+            OR NEW.range_end IS DISTINCT FROM OLD.range_end
+            OR NEW.read_mode IS DISTINCT FROM OLD.read_mode
+          ) THEN
+            RAISE EXCEPTION 'native job frozen scope is immutable'
+              USING ERRCODE = 'integrity_constraint_violation';
+          END IF;
           IF NEW.run_id IS NULL THEN
+            IF TG_OP = 'UPDATE' AND OLD.run_id IS NULL THEN
+              RETURN NEW;
+            END IF;
             RAISE EXCEPTION 'new native job requires an exact frozen run'
               USING ERRCODE = 'integrity_constraint_violation';
           END IF;
-          SELECT configuration_id, configuration_revision
-            INTO run_configuration, run_revision
+          SELECT configuration_id, configuration_revision, native_sync_runs.run_kind,
+                 start_at, cutoff_at, calendar_horizon_at
+            INTO run_configuration, run_revision, run_kind,
+                 run_start, run_cutoff, run_horizon
           FROM knowledge.native_sync_runs WHERE run_id = NEW.run_id;
           SELECT source_kind INTO bucket_kind
           FROM knowledge.native_source_buckets WHERE bucket_id = NEW.bucket_id;
@@ -98,9 +216,41 @@ def upgrade() -> None:
             RAISE EXCEPTION 'native job is outside its frozen run'
               USING ERRCODE = 'integrity_constraint_violation';
           END IF;
+          IF run_kind NOT IN ('baseline', 'backfill') THEN
+            RAISE EXCEPTION 'native baseline job requires a baseline or backfill run'
+              USING ERRCODE = 'integrity_constraint_violation';
+          END IF;
           IF (bucket_kind = 'contacts') <> (NEW.read_mode = 'current_inventory') THEN
             RAISE EXCEPTION 'native job read mode contradicts its source kind'
               USING ERRCODE = 'integrity_constraint_violation';
+          END IF;
+          IF bucket_kind = 'contacts' THEN
+            IF NEW.range_start IS DISTINCT FROM run_cutoff
+               OR NEW.range_end IS DISTINCT FROM run_cutoff THEN
+              RAISE EXCEPTION 'native contacts job is outside its frozen inventory sentinel'
+                USING ERRCODE = 'integrity_constraint_violation';
+            END IF;
+          ELSE
+            expected_end := CASE
+              WHEN bucket_kind = 'calendar' THEN run_horizon
+              ELSE run_cutoff
+            END;
+            IF run_kind = 'backfill' THEN
+              SELECT start_at INTO prior_start
+              FROM knowledge.native_configuration_revisions
+              WHERE configuration_id = run_configuration
+                AND revision = run_revision - 1;
+              IF prior_start IS NULL OR run_start >= prior_start THEN
+                RAISE EXCEPTION 'native backfill run lacks an earlier-start delta'
+                  USING ERRCODE = 'integrity_constraint_violation';
+              END IF;
+              expected_end := prior_start - interval '1 millisecond';
+            END IF;
+            IF NEW.range_start IS DISTINCT FROM run_start
+               OR NEW.range_end IS DISTINCT FROM expected_end THEN
+              RAISE EXCEPTION 'native job range is outside its exact frozen run window'
+                USING ERRCODE = 'integrity_constraint_violation';
+            END IF;
           END IF;
           RETURN NEW;
         END; $$;
@@ -110,21 +260,51 @@ def upgrade() -> None:
 
         CREATE FUNCTION knowledge.native_checkpoint_follows_admission() RETURNS trigger
         LANGUAGE plpgsql AS $$
-        DECLARE job_bucket text; authority_bucket text; consumed timestamptz;
+        DECLARE
+          job_bucket text;
+          job_run text;
+          job_configuration text;
+          job_revision integer;
+          authority_bucket text;
+          authority_run text;
+          authority_job text;
+          authority_configuration text;
+          authority_revision integer;
+          authority_cursor text;
+          authority_digest text;
+          authority_terminal boolean;
+          authority_count integer;
+          consumed timestamptz;
         BEGIN
           IF NEW.job_id IS NULL OR NEW.admission_authority_id IS NULL THEN
             RAISE EXCEPTION 'new native checkpoint requires an admitted page binding'
               USING ERRCODE = 'integrity_constraint_violation';
           END IF;
-          SELECT bucket_id INTO job_bucket
+          SELECT bucket_id, run_id, configuration_id, configuration_revision
+            INTO job_bucket, job_run, job_configuration, job_revision
           FROM knowledge.native_sync_jobs WHERE job_id = NEW.job_id;
-          SELECT bucket_id, consumed_at INTO authority_bucket, consumed
+          SELECT bucket_id, consumed_at, checkpoint_run_id, checkpoint_job_id,
+                 configuration_id, configuration_revision,
+                 checkpoint_cursor_private, checkpoint_cursor_digest,
+                 checkpoint_terminal, checkpoint_item_count
+            INTO authority_bucket, consumed, authority_run, authority_job,
+                 authority_configuration, authority_revision,
+                 authority_cursor, authority_digest,
+                 authority_terminal, authority_count
           FROM knowledge.native_admission_authorities
           WHERE authority_id = NEW.admission_authority_id;
           IF job_bucket IS DISTINCT FROM NEW.bucket_id
              OR authority_bucket IS DISTINCT FROM NEW.bucket_id
+             OR job_run IS DISTINCT FROM authority_run
+             OR NEW.job_id IS DISTINCT FROM authority_job
+             OR job_configuration IS DISTINCT FROM authority_configuration
+             OR job_revision IS DISTINCT FROM authority_revision
+             OR NEW.cursor_private IS DISTINCT FROM authority_cursor
+             OR NEW.cursor_digest IS DISTINCT FROM authority_digest
+             OR NEW.terminal IS DISTINCT FROM authority_terminal
+             OR NEW.item_count IS DISTINCT FROM authority_count
              OR consumed IS NULL THEN
-            RAISE EXCEPTION 'native checkpoint requires an admitted page in its exact job bucket'
+            RAISE EXCEPTION 'native checkpoint requires its exact admitted page and frozen job'
               USING ERRCODE = 'integrity_constraint_violation';
           END IF;
           RETURN NEW;
@@ -145,13 +325,29 @@ def downgrade() -> None:
         DROP FUNCTION knowledge.native_job_matches_frozen_run();
         DROP TRIGGER native_run_requires_exact_frozen_inputs ON knowledge.native_sync_runs;
         DROP FUNCTION knowledge.native_run_snapshot_is_exact();
+        DROP TRIGGER native_authority_allows_one_exact_consumption
+          ON knowledge.native_admission_authorities;
+        DROP FUNCTION knowledge.native_authority_consumption_is_immutable();
 
         ALTER TABLE knowledge.native_checkpoints
           DROP CONSTRAINT one_checkpoint_per_native_admission,
+          DROP CONSTRAINT native_checkpoint_item_count_is_page_bounded,
           DROP COLUMN item_count,
           DROP COLUMN terminal,
           DROP COLUMN admission_authority_id,
           DROP COLUMN job_id;
+        ALTER TABLE knowledge.native_admission_authorities
+          DROP CONSTRAINT native_authority_checkpoint_count_is_page_bounded,
+          DROP CONSTRAINT native_authority_checkpoint_terminal_matches_cursor,
+          DROP CONSTRAINT native_authority_checkpoint_digest_is_sha256,
+          DROP CONSTRAINT native_authority_checkpoint_cursor_is_bounded,
+          DROP CONSTRAINT native_authority_checkpoint_binding_is_complete,
+          DROP COLUMN checkpoint_item_count,
+          DROP COLUMN checkpoint_terminal,
+          DROP COLUMN checkpoint_cursor_digest,
+          DROP COLUMN checkpoint_cursor_private,
+          DROP COLUMN checkpoint_run_id,
+          DROP COLUMN checkpoint_job_id;
         ALTER TABLE knowledge.native_sync_jobs
           DROP CONSTRAINT native_sync_job_read_mode_is_known,
           DROP COLUMN read_mode,

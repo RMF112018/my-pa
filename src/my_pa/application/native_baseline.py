@@ -136,6 +136,8 @@ class NativeBaselineExecutor:
                 time_range=(job.range_start, job.range_end) if not job.current_inventory else None,
                 cursor=resume.cursor,
                 limit=NATIVE_SOURCE_MAX_PAGE_SIZE,
+                checkpoint_job_id=job.job_id,
+                checkpoint_run_id=job.run_id,
             )
             if self._after_admission is not None:
                 self._after_admission(job, page)

@@ -113,7 +113,7 @@ criteria:
     slice: E
     foundation_slices: [B, D, C]
     components: [domain/native_sources/mail_window, native-host/mail-adapter, worker/native-baseline]
-    tests: [mail-boundary-matrix]
+    tests: [mail-boundary-matrix, raw-mail-job-range-insert-update]
     tier: PR
     evidence: {method: synthetic_boundary_fixture_end_to_end, artifact: mail-window-e2e.xml}
     implementation_evidence: [src/my_pa/application/native_baseline.py, tests/unit/test_wp12_slice_e_baseline.py, tests/unit/test_wp12_slice_c_application.py]
@@ -124,7 +124,7 @@ criteria:
     slice: E
     foundation_slices: [B, D, C]
     components: [domain/native_sources/calendar_window, native-host/calendar-adapter, worker/native-baseline]
-    tests: [calendar-overlap-boundaries]
+    tests: [calendar-overlap-boundaries, raw-calendar-job-range-insert-update]
     tier: PR
     evidence: {method: synthetic_overlap_fixture_end_to_end, artifact: calendar-window-e2e.xml}
     implementation_evidence: [src/my_pa/application/native_baseline.py, tests/unit/test_wp12_slice_e_baseline.py]
@@ -177,7 +177,7 @@ criteria:
     slice: E
     foundation_slices: [B, D, C]
     components: [native-host/paging, worker/native-baseline, persistence/native_bucket_runs]
-    tests: [page-ceiling-resume]
+    tests: [page-ceiling-resume, durable-immediate-repeat, durable-multinode-cycle, durable-page-and-record-budget]
     tier: PR
     evidence: {method: bounded_fixture_and_crash_resume_test, artifact: paging-resume.xml}
     implementation_evidence: [src/my_pa/application/native_baseline.py, src/my_pa/contracts/v1/native_sources.py, native/apple-source-host/Sources/AppleSourceHost/NativeSourceProtocolV1.swift, tests/unit/test_wp12_slice_e_baseline.py]
@@ -199,7 +199,7 @@ criteria:
     slice: E
     foundation_slices: [B, D, C]
     components: [worker/native-baseline, persistence/native_sync_jobs, native-host/spool]
-    tests: [crash-resume-matrix]
+    tests: [crash-resume-matrix, durable-cursor-cycle-after-restart]
     tier: FULL
     evidence: {method: fault_injection_full_suite, artifact: crash-resume-full.xml}
     implementation_evidence: [src/my_pa/application/native_baseline.py, src/my_pa/infrastructure/persistence/native_sources.py, tests/unit/test_wp12_slice_e_baseline.py]
@@ -210,7 +210,7 @@ criteria:
     slice: E
     foundation_slices: [B, C]
     components: [persistence/native_checkpoints, worker/native-baseline]
-    tests: [checkpoint-before-admission-guard]
+    tests: [checkpoint-before-admission-guard, exact-admission-checkpoint-binding-raw-plants]
     tier: PR
     evidence: {method: deferred_constraint_and_rollback_snapshot, artifact: checkpoint-guard.xml}
     implementation_evidence: [migrations/versions/20260805_a7c3e8d1f642_freeze_native_baseline_runs.py, src/my_pa/infrastructure/persistence/native_sources.py, tests/schema/test_wp12_slice_c_admission.py]

@@ -267,6 +267,8 @@ class NativeSourceStore(Protocol):
         preflight: tuple[NativeBucketProgress, ...],
         *,
         at: datetime,
+        checkpoint_job_id: str | None = None,
+        checkpoint_run_id: str | None = None,
     ) -> tuple[tuple[str, bool], ...]:
         """Atomically validate, record preflight, consume authority, and commit evidence."""
 
@@ -660,6 +662,8 @@ class NativeSourceController:
         *,
         authority: NativeSyncAuthority,
         wire_envelope: Mapping[str, Any],
+        checkpoint_job_id: str | None = None,
+        checkpoint_run_id: str | None = None,
     ) -> NativeAdmissionReceipt:
         if (
             not context.principal.authenticated
@@ -716,6 +720,8 @@ class NativeSourceController:
                 authority,
                 verification.bucket_results,
                 at=context.at,
+                checkpoint_job_id=checkpoint_job_id,
+                checkpoint_run_id=checkpoint_run_id,
             )
         except NativeAdmissionAuthorityError as exc:
             raise AdmissionDeniedError("native sync authority is stale or unauthenticated") from exc
@@ -772,6 +778,8 @@ class NativeSourceController:
         time_range: tuple[datetime, datetime] | None,
         cursor: str | None,
         limit: int = NATIVE_SOURCE_MAX_PAGE_SIZE,
+        checkpoint_job_id: str | None = None,
+        checkpoint_run_id: str | None = None,
     ) -> NativeReadPageReceipt:
         """Read and durably admit one exact page under a fresh sync grant."""
         if control_context.request_id != admission_context.request_id:
@@ -803,7 +811,13 @@ class NativeSourceController:
             at=control_context.at,
         )
         envelope = NativeAdmissionEnvelope.model_validate(wire)
-        admission = self.admit(admission_context, authority=authority, wire_envelope=wire)
+        admission = self.admit(
+            admission_context,
+            authority=authority,
+            wire_envelope=wire,
+            checkpoint_job_id=checkpoint_job_id,
+            checkpoint_run_id=checkpoint_run_id,
+        )
         return NativeReadPageReceipt(
             admission=admission,
             authority_id=authority.authority_id,

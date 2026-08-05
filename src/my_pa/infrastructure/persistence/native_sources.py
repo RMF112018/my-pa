@@ -25,6 +25,7 @@ from my_pa.contracts.native_baseline import (
 )
 from my_pa.contracts.v1.base import canonical_json
 from my_pa.contracts.v1.native_sources import (
+    NATIVE_SOURCE_MAX_PAGE_SIZE,
     NativeAdmissionEnvelope,
     NativeBucketProgress,
     NativeCoverageState,
@@ -851,6 +852,8 @@ class SqlNativeBaselineStore:
     """Engine-backed frozen baseline/job/checkpoint implementation."""
 
     _TERMINAL_CURSOR = "__my_pa_native_baseline_complete__"
+    _MAX_PAGES_PER_JOB = 10_000
+    _MAX_RECORDS_PER_JOB = _MAX_PAGES_PER_JOB * NATIVE_SOURCE_MAX_PAGE_SIZE
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
@@ -1114,14 +1117,29 @@ class SqlNativeBaselineStore:
             ).scalar_one_or_none()
             if lease is None or str(lease) != job.bucket_id:
                 raise NativePersistenceConflictError("the native baseline lease is stale")
-            prior_job = connection.execute(
-                select(native_checkpoints.c.cursor_private)
-                .where(native_checkpoints.c.job_id == job.job_id)
-                .order_by(native_checkpoints.c.sequence.desc())
-                .limit(1)
-            ).scalar_one_or_none()
-            if page.next_cursor is not None and prior_job == page.next_cursor:
-                raise NativePersistenceConflictError("a native page cursor made no progress")
+            prior_cursors = tuple(
+                str(value)
+                for value in connection.execute(
+                    select(native_checkpoints.c.cursor_private)
+                    .where(native_checkpoints.c.job_id == job.job_id)
+                    .order_by(native_checkpoints.c.sequence)
+                ).scalars()
+            )
+            if len(prior_cursors) >= self._MAX_PAGES_PER_JOB:
+                raise NativePersistenceConflictError("the native baseline page bound was reached")
+            page_count = page.admission.admitted_count + page.admission.duplicate_count
+            prior_count = int(
+                connection.scalar(
+                    select(func.coalesce(func.sum(native_checkpoints.c.item_count), 0)).where(
+                        native_checkpoints.c.job_id == job.job_id
+                    )
+                )
+                or 0
+            )
+            if prior_count + page_count > self._MAX_RECORDS_PER_JOB:
+                raise NativePersistenceConflictError("the native baseline record bound was reached")
+            if page.next_cursor is not None and page.next_cursor in prior_cursors:
+                raise NativePersistenceConflictError("a native page cursor repeated")
             latest = connection.execute(
                 select(native_checkpoints.c.checkpoint_id, native_checkpoints.c.sequence)
                 .where(native_checkpoints.c.bucket_id == job.bucket_id)
@@ -1138,7 +1156,7 @@ class SqlNativeBaselineStore:
                 previous_checkpoint_id=None if latest is None else str(latest.checkpoint_id),
                 cursor_digest=sha256(cursor.encode()).hexdigest(),
                 terminal=page.next_cursor is None,
-                item_count=page.admission.admitted_count + page.admission.duplicate_count,
+                item_count=page_count,
                 recorded_at=recorded_at,
             )
             SqlNativeSourceRepository(connection).compare_and_set_checkpoint(
@@ -1164,15 +1182,18 @@ class SqlNativeBaselineStore:
     def complete(self, run_id: str) -> bool:
         validate_identifier(run_id, IdKind.NATIVE_RUN)
         with self._engine.connect() as connection:
-            counts = connection.execute(
-                select(
-                    func.count(native_sync_jobs.c.job_id),
-                    func.count(native_sync_jobs.c.job_id).filter(
-                        native_sync_jobs.c.state == "succeeded"
-                    ),
-                ).where(native_sync_jobs.c.run_id == run_id)
-            ).one()
-        return int(counts[0]) > 0 and int(counts[0]) == int(counts[1])
+            total = connection.scalar(
+                select(func.count(native_sync_jobs.c.job_id)).where(
+                    native_sync_jobs.c.run_id == run_id
+                )
+            )
+            succeeded = connection.scalar(
+                select(func.count(native_sync_jobs.c.job_id)).where(
+                    native_sync_jobs.c.run_id == run_id,
+                    native_sync_jobs.c.state == "succeeded",
+                )
+            )
+        return int(total or 0) > 0 and int(total or 0) == int(succeeded or 0)
 
 
 class SqlNativeSourceControlStore:
@@ -1703,8 +1724,17 @@ class SqlNativeSourceControlStore:
         preflight: tuple[NativeBucketProgress, ...] = (),
         *,
         at: datetime,
+        checkpoint_job_id: str | None = None,
+        checkpoint_run_id: str | None = None,
     ) -> tuple[tuple[str, bool], ...]:
         recorded_at = ensure_utc(at)
+        if (checkpoint_job_id is None) != (checkpoint_run_id is None):
+            raise NativeAdmissionAuthorityError(
+                "native page checkpoint binding requires both job and run"
+            )
+        if checkpoint_job_id is not None:
+            validate_identifier(checkpoint_job_id, IdKind.NATIVE_JOB)
+            validate_identifier(checkpoint_run_id or "", IdKind.NATIVE_RUN)
         outcomes: list[tuple[str, bool]] = []
         with self._engine.begin() as connection:
             source_kind, admission_digest = self._validate_authority_locked(
@@ -1717,20 +1747,89 @@ class SqlNativeSourceControlStore:
                 preflight,
                 observed_at=recorded_at,
             )
-            prior_digest = connection.scalar(
-                select(native_admission_authorities.c.admission_sha256).where(
-                    native_admission_authorities.c.authority_id == authority.authority_id
-                )
+            terminal_cursor = SqlNativeBaselineStore._TERMINAL_CURSOR
+            checkpoint_cursor = (
+                terminal_cursor if envelope.next_cursor is None else envelope.next_cursor
             )
+            checkpoint_binding: tuple[object, ...] | None = None
+            if checkpoint_job_id is not None and checkpoint_run_id is not None:
+                job = connection.execute(
+                    select(
+                        native_sync_jobs.c.run_id,
+                        native_sync_jobs.c.configuration_id,
+                        native_sync_jobs.c.configuration_revision,
+                        native_sync_jobs.c.bucket_id,
+                    ).where(native_sync_jobs.c.job_id == checkpoint_job_id)
+                ).one_or_none()
+                if (
+                    job is None
+                    or str(job.run_id) != checkpoint_run_id
+                    or str(job.configuration_id) != authority.configuration_id
+                    or int(job.configuration_revision) != authority.configuration_revision
+                    or str(job.bucket_id) != authority.bucket_id
+                ):
+                    raise NativeAdmissionAuthorityError(
+                        "native page authority does not match its exact frozen job"
+                    )
+                checkpoint_binding = (
+                    checkpoint_job_id,
+                    checkpoint_run_id,
+                    checkpoint_cursor,
+                    sha256(checkpoint_cursor.encode()).hexdigest(),
+                    envelope.next_cursor is None,
+                    len(envelope.records),
+                )
+            durable_consumption = connection.execute(
+                select(
+                    native_admission_authorities.c.admission_sha256,
+                    native_admission_authorities.c.checkpoint_job_id,
+                    native_admission_authorities.c.checkpoint_run_id,
+                    native_admission_authorities.c.checkpoint_cursor_private,
+                    native_admission_authorities.c.checkpoint_cursor_digest,
+                    native_admission_authorities.c.checkpoint_terminal,
+                    native_admission_authorities.c.checkpoint_item_count,
+                ).where(native_admission_authorities.c.authority_id == authority.authority_id)
+            ).one()
+            prior_digest = durable_consumption.admission_sha256
             if prior_digest is None:
+                values: dict[str, object] = {
+                    "consumed_at": recorded_at,
+                    "admission_sha256": admission_digest,
+                }
+                if checkpoint_binding is not None:
+                    (
+                        values["checkpoint_job_id"],
+                        values["checkpoint_run_id"],
+                        values["checkpoint_cursor_private"],
+                        values["checkpoint_cursor_digest"],
+                        values["checkpoint_terminal"],
+                        values["checkpoint_item_count"],
+                    ) = checkpoint_binding
                 connection.execute(
                     update(native_admission_authorities)
                     .where(
                         native_admission_authorities.c.authority_id == authority.authority_id,
                         native_admission_authorities.c.admission_sha256.is_(None),
                     )
-                    .values(consumed_at=recorded_at, admission_sha256=admission_digest)
+                    .values(**values)
                 )
+            else:
+                durable_binding = (
+                    None
+                    if durable_consumption.checkpoint_job_id is None
+                    else (
+                        str(durable_consumption.checkpoint_job_id),
+                        str(durable_consumption.checkpoint_run_id),
+                        str(durable_consumption.checkpoint_cursor_private),
+                        str(durable_consumption.checkpoint_cursor_digest),
+                        bool(durable_consumption.checkpoint_terminal),
+                        int(durable_consumption.checkpoint_item_count),
+                    )
+                )
+                if durable_binding != checkpoint_binding:
+                    raise NativeAdmissionAuthorityError(
+                        "native page authority checkpoint binding changed on replay"
+                    )
             object_kind = {
                 ContractNativeSourceKind.MAIL: ObjectKind.MAIL_MESSAGE,
                 ContractNativeSourceKind.CALENDAR: ObjectKind.CALENDAR_EVENT,

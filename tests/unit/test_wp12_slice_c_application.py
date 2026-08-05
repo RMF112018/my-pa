@@ -419,7 +419,10 @@ class Store:
         preflight: tuple[NativeBucketProgress, ...] = (),
         *,
         at: datetime,
+        checkpoint_job_id: str | None = None,
+        checkpoint_run_id: str | None = None,
     ) -> tuple[tuple[str, bool], ...]:
+        del checkpoint_job_id, checkpoint_run_id
         stored = self.authorities.get(authority.authority_id)
         current = self.latest_configuration(authority.configuration_id)
         if (

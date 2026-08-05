@@ -120,6 +120,23 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "relationship_evidence_observations",
         "relationship_conversation_participants",
         "relationship_conversation_observations",
+        "source_version_evidence",
+        "native_bridges",
+        "native_bridge_observations",
+        "native_source_accounts",
+        "native_source_buckets",
+        "native_discovery_snapshots",
+        "native_configuration_revisions",
+        "native_configuration_buckets",
+        "native_sync_runs",
+        "native_bucket_runs",
+        "native_sync_jobs",
+        "native_checkpoints",
+        "source_observations",
+        "source_memberships",
+        "native_watcher_simulations",
+        "native_simulation_receipts",
+        "native_live_activation_gates",
     }
 )
 

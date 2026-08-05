@@ -296,6 +296,38 @@ RELATIONSHIP_TRIGGERS: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: The exact native-source trigger inventory added above this revision. Restated
+#: here so the global equality remains sensitive to both missing and unexpected
+#: triggers while this test continues to prove its original span-trigger claim.
+NATIVE_SOURCE_TRIGGERS: Final[frozenset[str]] = frozenset(
+    {
+        "source_version_evidence_is_append_only",
+        "native_bridge_observations_is_append_only",
+        "native_discovery_snapshots_is_append_only",
+        "native_configuration_revisions_is_append_only",
+        "native_configuration_buckets_is_append_only",
+        "native_sync_runs_is_append_only",
+        "native_bucket_runs_is_append_only",
+        "native_checkpoints_is_append_only",
+        "source_observations_is_append_only",
+        "source_memberships_is_append_only",
+        "native_watcher_simulations_is_append_only",
+        "native_simulation_receipts_is_append_only",
+        "native_live_activation_gates_is_append_only",
+        "native_checkpoint_requires_current_predecessor",
+        "native_simulation_requires_closed_transition",
+        "native_configuration_requires_bucket",
+        "native_configuration_bucket_matches_seal",
+        "source_observation_requires_matching_version",
+        "source_membership_requires_matching_contact_version",
+        "source_evidence_requires_matching_object_kind",
+        "native_account_requires_matching_provider",
+        "native_bucket_requires_account_and_parent_scope",
+        "native_bucket_run_requires_selected_bucket",
+        "native_simulation_receipt_requires_exact_evidence",
+    }
+)
+
 _CONSTRAINT = text(
     "SELECT pg_get_constraintdef(con.oid) FROM pg_constraint con "
     "JOIN pg_class rel ON rel.oid = con.conrelid "
@@ -825,6 +857,7 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "a_span_link_leaves_its_proposal_cited",
             *REVIEW_TRIGGERS,
             *RELATIONSHIP_TRIGGERS,
+            *NATIVE_SOURCE_TRIGGERS,
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

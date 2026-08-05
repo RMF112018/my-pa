@@ -42,6 +42,9 @@ class ObjectKind(StrEnum):
 
     FILE = "file"
     CONTAINER = "container"
+    MAIL_MESSAGE = "mail_message"
+    CALENDAR_EVENT = "calendar_event"
+    CONTACT = "contact"
 
 
 class ProviderError(Exception):

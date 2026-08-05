@@ -57,6 +57,21 @@ def test_contract_prefixes_are_stable() -> None:
         "cov",
         "tli",
         "cpart",
+        "sevd",
+        "sobs",
+        "smem",
+        "nbrg",
+        "nacct",
+        "nbkt",
+        "ndisc",
+        "ncfg",
+        "nrun",
+        "nbrun",
+        "njob",
+        "ncp",
+        "nsim",
+        "nsimr",
+        "nlg",
     }
 
 

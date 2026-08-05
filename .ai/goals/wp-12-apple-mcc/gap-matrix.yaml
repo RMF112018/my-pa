@@ -98,33 +98,36 @@ criteria:
     blocking_dependencies: [A-date-contract]
   - id: NAPDCB-AC-010
     requirement: Begin Sync captures one immutable UTC cutoff.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: E
     foundation_slices: [B, C]
     components: [application/native_sources/sync_begin, persistence/native_sync_runs]
     tests: [single-server-cutoff, cutoff-immutability]
     tier: PR
     evidence: {method: isolated_database_immutability_test, artifact: cutoff-immutability.xml}
+    implementation_evidence: [src/my_pa/application/native_baseline.py, src/my_pa/infrastructure/persistence/native_sources.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [B-run-schema, C-sync-command]
   - id: NAPDCB-AC-011
     requirement: Mail includes messages from normalized start through cutoff inclusive.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: E
     foundation_slices: [B, D, C]
     components: [domain/native_sources/mail_window, native-host/mail-adapter, worker/native-baseline]
     tests: [mail-boundary-matrix]
     tier: PR
     evidence: {method: synthetic_boundary_fixture_end_to_end, artifact: mail-window-e2e.xml}
+    implementation_evidence: [src/my_pa/application/native_baseline.py, tests/unit/test_wp12_slice_e_baseline.py, tests/unit/test_wp12_slice_c_application.py]
     blocking_dependencies: [B-window-types, D-mail-synthetic-adapter, C-admission]
   - id: NAPDCB-AC-012
     requirement: Calendar includes overlapping events through cutoff plus 90 days.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: E
     foundation_slices: [B, D, C]
     components: [domain/native_sources/calendar_window, native-host/calendar-adapter, worker/native-baseline]
     tests: [calendar-overlap-boundaries]
     tier: PR
     evidence: {method: synthetic_overlap_fixture_end_to_end, artifact: calendar-window-e2e.xml}
+    implementation_evidence: [src/my_pa/application/native_baseline.py, tests/unit/test_wp12_slice_e_baseline.py]
     blocking_dependencies: [B-window-types, D-calendar-synthetic-adapter, C-admission]
   - id: NAPDCB-AC-013
     requirement: Preserve recurrence series and occurrence identity with bounded expansion.
@@ -138,13 +141,14 @@ criteria:
     blocking_dependencies: [A-calendar-contract, B-occurrence-identity]
   - id: NAPDCB-AC-014
     requirement: Contacts include all current selected collection members without date cutoff.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: E
     foundation_slices: [B, D, C]
     components: [native-host/contacts-adapter, worker/native-baseline, persistence/source-memberships]
     tests: [contact-current-inventory]
     tier: PR
     evidence: {method: synthetic_inventory_end_to_end, artifact: contacts-inventory-e2e.xml}
+    implementation_evidence: [src/my_pa/infrastructure/persistence/native_sources.py, tests/schema/test_wp12_slice_c_admission.py, tests/unit/test_wp12_slice_e_baseline.py]
     blocking_dependencies: [B-membership-schema, D-contacts-synthetic-adapter, C-admission]
   - id: NAPDCB-AC-015
     requirement: Memberships remain separate from object identity.
@@ -158,23 +162,25 @@ criteria:
     blocking_dependencies: [A-envelope-contract]
   - id: NAPDCB-AC-016
     requirement: Freeze configuration, range, adapter and bridge identity.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: E
     foundation_slices: [B, D, C]
     components: [domain/native_sources/frozen_run, persistence/native_sync_runs]
     tests: [run-snapshot-immutability]
     tier: PR
     evidence: {method: database_trigger_and_application_snapshot_test, artifact: frozen-run.xml}
+    implementation_evidence: [migrations/versions/20260805_a7c3e8d1f642_freeze_native_baseline_runs.py, src/my_pa/domain/native_sources/models.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [B-run-schema, D-adapter-version, C-sync-command]
   - id: NAPDCB-AC-017
     requirement: Pagination and batching are bounded and resumable.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: E
     foundation_slices: [B, D, C]
     components: [native-host/paging, worker/native-baseline, persistence/native_bucket_runs]
     tests: [page-ceiling-resume]
     tier: PR
     evidence: {method: bounded_fixture_and_crash_resume_test, artifact: paging-resume.xml}
+    implementation_evidence: [src/my_pa/application/native_baseline.py, src/my_pa/contracts/v1/native_sources.py, native/apple-source-host/Sources/AppleSourceHost/NativeSourceProtocolV1.swift, tests/unit/test_wp12_slice_e_baseline.py]
     blocking_dependencies: [B-cursor-schema, D-paged-adapter, C-admission]
   - id: NAPDCB-AC-018
     requirement: Duplicate admission creates no duplicate immutable version.
@@ -189,23 +195,25 @@ criteria:
     blocking_dependencies: [B-idempotency-constraints, D-versioned-envelope]
   - id: NAPDCB-AC-019
     requirement: Interrupted baseline resumes from durable state.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_FULL_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: E
     foundation_slices: [B, D, C]
     components: [worker/native-baseline, persistence/native_sync_jobs, native-host/spool]
     tests: [crash-resume-matrix]
     tier: FULL
     evidence: {method: fault_injection_full_suite, artifact: crash-resume-full.xml}
+    implementation_evidence: [src/my_pa/application/native_baseline.py, src/my_pa/infrastructure/persistence/native_sources.py, tests/unit/test_wp12_slice_e_baseline.py]
     blocking_dependencies: [B-job-schema, D-spool, C-admission]
   - id: NAPDCB-AC-020
     requirement: Failed admission cannot advance checkpoint past the item.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: E
     foundation_slices: [B, C]
     components: [persistence/native_checkpoints, worker/native-baseline]
     tests: [checkpoint-before-admission-guard]
     tier: PR
     evidence: {method: deferred_constraint_and_rollback_snapshot, artifact: checkpoint-guard.xml}
+    implementation_evidence: [migrations/versions/20260805_a7c3e8d1f642_freeze_native_baseline_runs.py, src/my_pa/infrastructure/persistence/native_sources.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [B-checkpoint-constraints, C-admission-receipts]
   - id: NAPDCB-AC-021
     requirement: Progress reports counts and state without content.
@@ -333,23 +341,25 @@ criteria:
     blocking_dependencies: [B-config-and-evidence-schema]
   - id: NAPDCB-AC-033
     requirement: Earlier start performs idempotent backfill.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_FULL_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: E
     foundation_slices: [B, D, C]
     components: [application/native_sources/backfill, worker/native-baseline]
     tests: [earlier-start-delta-backfill]
     tier: FULL
     evidence: {method: repeated_delta_backfill_full_suite, artifact: backfill-full.xml}
+    implementation_evidence: [src/my_pa/infrastructure/persistence/native_sources.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [B-run-range-constraints, D-paged-adapters, C-backfill-command]
   - id: NAPDCB-AC-034
     requirement: Later start does not delete prior observations.
-    current: NOT_IMPLEMENTED
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: E
     foundation_slices: [B, C]
     components: [application/native_sources/configure, persistence/source_observations]
     tests: [later-start-no-delete]
     tier: PR
     evidence: {method: database_before_after_snapshot, artifact: later-start.xml}
+    implementation_evidence: [src/my_pa/infrastructure/persistence/native_sources.py, tests/schema/test_wp12_slice_c_admission.py]
     blocking_dependencies: [B-append-only-evidence, C-configure-command]
   - id: NAPDCB-AC-035
     requirement: Contact-group changes reconcile membership and preserve history.

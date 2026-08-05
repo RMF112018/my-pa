@@ -2590,6 +2590,8 @@ native_sync_runs = Table(
     Column("calendar_horizon_at", DateTime(timezone=True), nullable=False),
     Column("idempotency_key", Text, nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
+    Column("adapter_identity", Text, nullable=False),
     _is_identifier("run_id", IdKind.NATIVE_RUN),
     _one_of("run_kind", NativeRunKind, name="native_run_kind_is_known"),
     _one_of("state", NativeRunState, name="native_run_state_is_known"),
@@ -2601,6 +2603,10 @@ native_sync_runs = Table(
         ],
     ),
     CheckConstraint("start_at <= cutoff_at", name="native_run_range_is_ordered"),
+    CheckConstraint(
+        "adapter_identity ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'",
+        name="native_run_adapter_identity_is_bounded",
+    ),
     CheckConstraint(
         "calendar_horizon_at = cutoff_at + interval '90 days'",
         name="native_run_calendar_horizon_is_ninety_days",
@@ -2647,6 +2653,8 @@ native_sync_jobs = Table(
     Column("idempotency_key", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("run_id", Text, ForeignKey(f"{SCHEMA}.native_sync_runs.run_id")),
+    Column("read_mode", Text, nullable=False),
     _is_identifier("job_id", IdKind.NATIVE_JOB),
     ForeignKeyConstraint(
         ["configuration_id", "configuration_revision"],
@@ -2669,6 +2677,10 @@ native_sync_jobs = Table(
         name="native_sync_job_state_is_known",
     ),
     CheckConstraint("range_start <= range_end", name="native_sync_job_range_is_ordered"),
+    CheckConstraint(
+        "read_mode IN ('bounded_time', 'current_inventory')",
+        name="native_sync_job_read_mode_is_known",
+    ),
     CheckConstraint(
         "(state = 'running') = (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)",
         name="a_native_job_is_running_exactly_while_leased",
@@ -2707,6 +2719,15 @@ native_checkpoints = Table(
     Column("cursor_private", Text, nullable=False),
     Column("cursor_digest", Text, nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("job_id", Text, ForeignKey(f"{SCHEMA}.native_sync_jobs.job_id")),
+    Column(
+        "admission_authority_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.native_admission_authorities.authority_id"),
+        unique=True,
+    ),
+    Column("terminal", Boolean, nullable=False),
+    Column("item_count", Integer, nullable=False),
     _is_identifier("checkpoint_id", IdKind.NATIVE_CHECKPOINT),
     CheckConstraint("sequence >= 1", name="native_checkpoint_sequence_starts_at_one"),
     CheckConstraint(

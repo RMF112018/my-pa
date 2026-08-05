@@ -17,6 +17,12 @@ from hashlib import sha256
 from sqlalchemy import Connection, Engine, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from my_pa.contracts.native_baseline import (
+    AdmittedNativePage,
+    BaselineResumePoint,
+    FrozenBaseline,
+    NativeBaselineJob,
+)
 from my_pa.contracts.v1.base import canonical_json
 from my_pa.contracts.v1.native_sources import (
     NativeAdmissionEnvelope,
@@ -41,6 +47,8 @@ from my_pa.domain.native_sources import (
     NativeCheckpoint,
     NativeConfigurationRevision,
     NativeRun,
+    NativeRunKind,
+    NativeRunState,
     NativeSourceAccount,
     NativeSourceBucket,
     SimulationReceipt,
@@ -81,6 +89,7 @@ __all__ = [
     "NativeConfigurationSnapshotRecord",
     "NativeJobLease",
     "NativePersistenceConflictError",
+    "SqlNativeBaselineStore",
     "SqlNativeReviewProposalRouter",
     "SqlNativeSourceControlStore",
     "SqlNativeSourceRepository",
@@ -98,9 +107,13 @@ class NativePersistenceConflictError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class NativeJobLease:
     job_id: str
+    run_id: str
+    configuration_id: str
+    configuration_revision: int
     bucket_id: str
     range_start: datetime
     range_end: datetime
+    read_mode: str
     lease_owner: str
     lease_expires_at: datetime
 
@@ -288,6 +301,8 @@ class SqlNativeSourceRepository:
                 run_id=run.run_id,
                 configuration_id=run.configuration_id,
                 configuration_revision=run.configuration_revision,
+                bridge_id=run.bridge_id,
+                adapter_identity=run.adapter_identity,
                 run_kind=run.kind.value,
                 state=run.state.value,
                 start_at=run.start_at,
@@ -307,6 +322,8 @@ class SqlNativeSourceRepository:
                 native_sync_runs.c.run_id,
                 native_sync_runs.c.configuration_id,
                 native_sync_runs.c.configuration_revision,
+                native_sync_runs.c.bridge_id,
+                native_sync_runs.c.adapter_identity,
                 native_sync_runs.c.run_kind,
                 native_sync_runs.c.state,
                 native_sync_runs.c.start_at,
@@ -323,6 +340,8 @@ class SqlNativeSourceRepository:
         stored_inputs = (
             row.configuration_id,
             row.configuration_revision,
+            row.bridge_id,
+            row.adapter_identity,
             row.run_kind,
             row.state,
             row.start_at,
@@ -333,6 +352,8 @@ class SqlNativeSourceRepository:
         requested_inputs = (
             run.configuration_id,
             run.configuration_revision,
+            run.bridge_id,
+            run.adapter_identity,
             run.kind.value,
             run.state.value,
             run.start_at,
@@ -500,40 +521,167 @@ class SqlNativeSourceRepository:
             or checkpoint.previous_checkpoint_id != actual_predecessor
         ):
             raise CheckpointConflictError("native checkpoint compare-and-set failed")
-        self._connection.execute(
-            insert(native_checkpoints).values(
-                checkpoint_id=checkpoint.checkpoint_id,
-                bucket_id=checkpoint.bucket_id,
-                sequence=checkpoint.sequence,
-                previous_checkpoint_id=checkpoint.previous_checkpoint_id,
-                cursor_private=cursor_private,
-                cursor_digest=checkpoint.cursor_digest,
-                recorded_at=checkpoint.recorded_at,
+        if checkpoint.job_id is None:
+            # Historical-revision compatibility only.  The WP-12E head trigger
+            # rejects every new unbound checkpoint; this shape remains useful
+            # when validating the pre-WP-12E schema itself.
+            self._connection.execute(
+                text(
+                    """INSERT INTO knowledge.native_checkpoints
+                         (checkpoint_id, bucket_id, sequence, previous_checkpoint_id,
+                          cursor_private, cursor_digest, recorded_at)
+                       VALUES (:checkpoint_id, :bucket_id, :sequence,
+                               :previous_checkpoint_id, :cursor_private,
+                               :cursor_digest, :recorded_at)"""
+                ),
+                {
+                    "checkpoint_id": checkpoint.checkpoint_id,
+                    "bucket_id": checkpoint.bucket_id,
+                    "sequence": checkpoint.sequence,
+                    "previous_checkpoint_id": checkpoint.previous_checkpoint_id,
+                    "cursor_private": cursor_private,
+                    "cursor_digest": checkpoint.cursor_digest,
+                    "recorded_at": checkpoint.recorded_at,
+                },
             )
+        else:
+            self._connection.execute(
+                insert(native_checkpoints).values(
+                    checkpoint_id=checkpoint.checkpoint_id,
+                    bucket_id=checkpoint.bucket_id,
+                    job_id=checkpoint.job_id,
+                    admission_authority_id=checkpoint.admission_authority_id,
+                    sequence=checkpoint.sequence,
+                    previous_checkpoint_id=checkpoint.previous_checkpoint_id,
+                    cursor_private=cursor_private,
+                    cursor_digest=checkpoint.cursor_digest,
+                    terminal=checkpoint.terminal,
+                    item_count=checkpoint.item_count,
+                    recorded_at=checkpoint.recorded_at,
+                )
+            )
+
+    def latest_job_checkpoint(self, job_id: str) -> tuple[NativeCheckpoint, str] | None:
+        """Return the latest durable cursor for one baseline job only."""
+        validate_identifier(job_id, IdKind.NATIVE_JOB)
+        row = self._connection.execute(
+            select(
+                native_checkpoints.c.checkpoint_id,
+                native_checkpoints.c.bucket_id,
+                native_checkpoints.c.job_id,
+                native_checkpoints.c.admission_authority_id,
+                native_checkpoints.c.sequence,
+                native_checkpoints.c.previous_checkpoint_id,
+                native_checkpoints.c.cursor_private,
+                native_checkpoints.c.cursor_digest,
+                native_checkpoints.c.terminal,
+                native_checkpoints.c.item_count,
+                native_checkpoints.c.recorded_at,
+            )
+            .where(native_checkpoints.c.job_id == job_id)
+            .order_by(native_checkpoints.c.sequence.desc())
+            .limit(1)
+        ).one_or_none()
+        if row is None:
+            return None
+        return (
+            NativeCheckpoint(
+                checkpoint_id=str(row.checkpoint_id),
+                bucket_id=str(row.bucket_id),
+                job_id=str(row.job_id),
+                admission_authority_id=str(row.admission_authority_id),
+                sequence=int(row.sequence),
+                previous_checkpoint_id=(
+                    None if row.previous_checkpoint_id is None else str(row.previous_checkpoint_id)
+                ),
+                cursor_digest=str(row.cursor_digest),
+                terminal=bool(row.terminal),
+                item_count=int(row.item_count),
+                recorded_at=row.recorded_at,
+            ),
+            str(row.cursor_private),
         )
 
     def enqueue_job(
         self,
         *,
         job_id: str,
+        run_id: str | None = None,
         configuration_id: str,
         configuration_revision: int,
         bucket_id: str,
         range_start: datetime,
         range_end: datetime,
+        read_mode: str = "bounded_time",
         idempotency_key: str,
         created_at: datetime,
     ) -> str:
         validate_identifier(job_id, IdKind.NATIVE_JOB)
+        if run_id is not None:
+            validate_identifier(run_id, IdKind.NATIVE_RUN)
+        if read_mode not in {"bounded_time", "current_inventory"}:
+            raise ValueError("a native job requires a closed read mode")
+        if run_id is None:
+            # Historical-revision compatibility only.  The WP-12E head trigger
+            # rejects this legacy shape so current callers cannot bypass the
+            # frozen-run binding.
+            inserted = self._connection.execute(
+                text(
+                    """INSERT INTO knowledge.native_sync_jobs
+                         (job_id, configuration_id, configuration_revision, bucket_id,
+                          range_start, range_end, state, idempotency_key, created_at,
+                          updated_at)
+                       VALUES (:job_id, :configuration_id, :configuration_revision,
+                               :bucket_id, :range_start, :range_end, 'queued',
+                               :idempotency_key, :created_at, :created_at)
+                       ON CONFLICT ON CONSTRAINT native_sync_job_idempotency_is_scoped
+                       DO NOTHING RETURNING job_id"""
+                ),
+                {
+                    "job_id": job_id,
+                    "configuration_id": configuration_id,
+                    "configuration_revision": configuration_revision,
+                    "bucket_id": bucket_id,
+                    "range_start": ensure_utc(range_start),
+                    "range_end": ensure_utc(range_end),
+                    "idempotency_key": idempotency_key,
+                    "created_at": ensure_utc(created_at),
+                },
+            ).scalar_one_or_none()
+            if inserted is not None:
+                return str(inserted)
+            existing = self._connection.execute(
+                select(
+                    native_sync_jobs.c.job_id,
+                    native_sync_jobs.c.range_start,
+                    native_sync_jobs.c.range_end,
+                ).where(
+                    native_sync_jobs.c.configuration_id == configuration_id,
+                    native_sync_jobs.c.configuration_revision == configuration_revision,
+                    native_sync_jobs.c.bucket_id == bucket_id,
+                    native_sync_jobs.c.idempotency_key == idempotency_key,
+                )
+            ).one_or_none()
+            row = conflicting_row(existing, "knowledge.native_sync_jobs")
+            if (row.range_start, row.range_end) != (
+                ensure_utc(range_start),
+                ensure_utc(range_end),
+            ):
+                raise NativePersistenceConflictError(
+                    "a native job idempotency key names different temporal bounds"
+                )
+            return str(row.job_id)
         statement = (
             pg_insert(native_sync_jobs)
             .values(
                 job_id=job_id,
+                run_id=run_id,
                 configuration_id=configuration_id,
                 configuration_revision=configuration_revision,
                 bucket_id=bucket_id,
                 range_start=ensure_utc(range_start),
                 range_end=ensure_utc(range_end),
+                read_mode=read_mode,
                 state="queued",
                 idempotency_key=idempotency_key,
                 created_at=ensure_utc(created_at),
@@ -548,8 +696,10 @@ class SqlNativeSourceRepository:
         existing = self._connection.execute(
             select(
                 native_sync_jobs.c.job_id,
+                native_sync_jobs.c.run_id,
                 native_sync_jobs.c.range_start,
                 native_sync_jobs.c.range_end,
+                native_sync_jobs.c.read_mode,
             ).where(
                 native_sync_jobs.c.configuration_id == configuration_id,
                 native_sync_jobs.c.configuration_revision == configuration_revision,
@@ -558,9 +708,11 @@ class SqlNativeSourceRepository:
             )
         ).one_or_none()
         row = conflicting_row(existing, "knowledge.native_sync_jobs")
-        if (row.range_start, row.range_end) != (
+        if (row.run_id, row.range_start, row.range_end, row.read_mode) != (
+            run_id,
             ensure_utc(range_start),
             ensure_utc(range_end),
+            read_mode,
         ):
             raise NativePersistenceConflictError(
                 "a native job idempotency key names different temporal bounds"
@@ -595,14 +747,66 @@ class SqlNativeSourceRepository:
             )
             .returning(
                 native_sync_jobs.c.job_id,
+                native_sync_jobs.c.run_id,
+                native_sync_jobs.c.configuration_id,
+                native_sync_jobs.c.configuration_revision,
                 native_sync_jobs.c.bucket_id,
                 native_sync_jobs.c.range_start,
                 native_sync_jobs.c.range_end,
+                native_sync_jobs.c.read_mode,
                 native_sync_jobs.c.lease_owner,
                 native_sync_jobs.c.lease_expires_at,
             )
         ).one_or_none()
         return None if row is None else NativeJobLease(*row)
+
+    def finish_job(
+        self,
+        *,
+        job_id: str,
+        owner: str,
+        item_count: int,
+        recorded_at: datetime,
+    ) -> None:
+        """Finish exactly the caller's lease after a terminal admitted checkpoint."""
+        validate_identifier(job_id, IdKind.NATIVE_JOB)
+        if item_count < 0:
+            raise ValueError("a native job item count cannot be negative")
+        terminal = self._connection.execute(
+            select(native_checkpoints.c.checkpoint_id).where(
+                native_checkpoints.c.job_id == job_id,
+                native_checkpoints.c.terminal.is_(True),
+            )
+        ).scalar_one_or_none()
+        if terminal is None:
+            raise NativePersistenceConflictError(
+                "a native job cannot finish without its terminal admitted checkpoint"
+            )
+        row = self._connection.execute(
+            update(native_sync_jobs)
+            .where(
+                native_sync_jobs.c.job_id == job_id,
+                native_sync_jobs.c.state == "running",
+                native_sync_jobs.c.lease_owner == owner,
+            )
+            .values(
+                state="succeeded",
+                lease_owner=None,
+                lease_expires_at=None,
+                updated_at=ensure_utc(recorded_at),
+            )
+            .returning(native_sync_jobs.c.run_id, native_sync_jobs.c.bucket_id)
+        ).one_or_none()
+        if row is None or row.run_id is None:
+            raise NativePersistenceConflictError("the native job lease is stale")
+        self.append_bucket_run(
+            bucket_run_id=issue_identifier(IdKind.NATIVE_BUCKET_RUN),
+            run_id=str(row.run_id),
+            bucket_id=str(row.bucket_id),
+            state="succeeded",
+            item_count=item_count,
+            recorded_at=recorded_at,
+        )
 
     def append_simulation(self, simulation: WatcherSimulation) -> None:
         self._connection.execute(
@@ -641,6 +845,334 @@ class SqlNativeSourceRepository:
                 recorded_at=gate.recorded_at,
             )
         )
+
+
+class SqlNativeBaselineStore:
+    """Engine-backed frozen baseline/job/checkpoint implementation."""
+
+    _TERMINAL_CURSOR = "__my_pa_native_baseline_complete__"
+
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
+
+    @staticmethod
+    def _lock_configuration(connection: Connection, configuration_id: str) -> None:
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:configuration_id, 0))"),
+            {"configuration_id": configuration_id},
+        )
+
+    def selected_kinds(self, configuration_id: str) -> tuple[ContractNativeSourceKind, ...]:
+        validate_identifier(configuration_id, IdKind.NATIVE_CONFIGURATION)
+        with self._engine.connect() as connection:
+            revision = connection.scalar(
+                select(func.max(native_configuration_revisions.c.revision)).where(
+                    native_configuration_revisions.c.configuration_id == configuration_id
+                )
+            )
+            if revision is None:
+                return ()
+            values = connection.execute(
+                select(native_source_buckets.c.source_kind)
+                .select_from(
+                    native_configuration_buckets.join(
+                        native_source_buckets,
+                        native_source_buckets.c.bucket_id
+                        == native_configuration_buckets.c.bucket_id,
+                    )
+                )
+                .where(
+                    native_configuration_buckets.c.configuration_id == configuration_id,
+                    native_configuration_buckets.c.revision == revision,
+                )
+                .distinct()
+                .order_by(native_source_buckets.c.source_kind)
+            ).scalars()
+        return tuple(ContractNativeSourceKind(str(value)) for value in values)
+
+    def prepare(
+        self,
+        *,
+        configuration_id: str,
+        idempotency_key: str,
+        proposed_cutoff_at: datetime,
+        adapter_identity: str,
+    ) -> FrozenBaseline:
+        validate_identifier(configuration_id, IdKind.NATIVE_CONFIGURATION)
+        if not idempotency_key:
+            raise ValueError("a native baseline idempotency key is required")
+        cutoff = ensure_utc(proposed_cutoff_at)
+        with self._engine.begin() as connection:
+            self._lock_configuration(connection, configuration_id)
+            existing = connection.execute(
+                select(
+                    native_sync_runs.c.run_id,
+                    native_sync_runs.c.configuration_revision,
+                    native_sync_runs.c.cutoff_at,
+                    native_sync_runs.c.adapter_identity,
+                ).where(
+                    native_sync_runs.c.configuration_id == configuration_id,
+                    native_sync_runs.c.idempotency_key == idempotency_key,
+                )
+            ).one_or_none()
+            if existing is not None:
+                if str(existing.adapter_identity) != adapter_identity:
+                    raise NativePersistenceConflictError(
+                        "a native baseline retry changed its frozen adapter identity"
+                    )
+                return FrozenBaseline(
+                    run_id=str(existing.run_id),
+                    configuration_id=configuration_id,
+                    configuration_revision=int(existing.configuration_revision),
+                    cutoff_at=existing.cutoff_at,
+                )
+            configuration = connection.execute(
+                select(
+                    native_configuration_revisions.c.revision,
+                    native_configuration_revisions.c.bridge_id,
+                    native_configuration_revisions.c.start_at,
+                )
+                .where(native_configuration_revisions.c.configuration_id == configuration_id)
+                .order_by(native_configuration_revisions.c.revision.desc())
+                .limit(1)
+            ).one_or_none()
+            if configuration is None:
+                raise LookupError("native baseline configuration was not found")
+            start_at = configuration.start_at
+            if start_at > cutoff:
+                raise NativePersistenceConflictError(
+                    "the server cutoff precedes the normalized configuration start"
+                )
+            prior_start = connection.scalar(
+                select(native_configuration_revisions.c.start_at).where(
+                    native_configuration_revisions.c.configuration_id == configuration_id,
+                    native_configuration_revisions.c.revision == int(configuration.revision) - 1,
+                )
+            )
+            backfill = prior_start is not None and start_at < prior_start
+            prior_boundary = prior_start if isinstance(prior_start, datetime) else None
+            run_id = issue_identifier(IdKind.NATIVE_RUN)
+            run = NativeRun(
+                run_id=run_id,
+                configuration_id=configuration_id,
+                configuration_revision=int(configuration.revision),
+                bridge_id=str(configuration.bridge_id),
+                adapter_identity=adapter_identity,
+                kind=NativeRunKind.BACKFILL if backfill else NativeRunKind.BASELINE,
+                state=NativeRunState.RUNNING,
+                start_at=start_at,
+                cutoff_at=cutoff,
+                calendar_horizon_at=cutoff + timedelta(days=90),
+                recorded_at=cutoff,
+            )
+            repository = SqlNativeSourceRepository(connection)
+            repository.append_run(run, idempotency_key=idempotency_key)
+            selected = connection.execute(
+                select(
+                    native_configuration_buckets.c.bucket_id,
+                    native_source_buckets.c.source_kind,
+                )
+                .select_from(
+                    native_configuration_buckets.join(
+                        native_source_buckets,
+                        native_source_buckets.c.bucket_id
+                        == native_configuration_buckets.c.bucket_id,
+                    )
+                )
+                .where(
+                    native_configuration_buckets.c.configuration_id == configuration_id,
+                    native_configuration_buckets.c.revision == configuration.revision,
+                )
+                .order_by(native_configuration_buckets.c.bucket_id)
+            ).all()
+            for bucket in selected:
+                kind = ContractNativeSourceKind(str(bucket.source_kind))
+                current_inventory = kind is ContractNativeSourceKind.CONTACTS
+                range_end = (
+                    cutoff
+                    if kind is not ContractNativeSourceKind.CALENDAR
+                    else cutoff + timedelta(days=90)
+                )
+                if backfill and not current_inventory and prior_boundary is not None:
+                    range_end = min(range_end, prior_boundary - timedelta(milliseconds=1))
+                repository.enqueue_job(
+                    job_id=issue_identifier(IdKind.NATIVE_JOB),
+                    run_id=run_id,
+                    configuration_id=configuration_id,
+                    configuration_revision=int(configuration.revision),
+                    bucket_id=str(bucket.bucket_id),
+                    range_start=cutoff if current_inventory else start_at,
+                    range_end=cutoff if current_inventory else range_end,
+                    read_mode="current_inventory" if current_inventory else "bounded_time",
+                    idempotency_key=f"{idempotency_key}:{bucket.bucket_id}",
+                    created_at=cutoff,
+                )
+        return FrozenBaseline(
+            run_id=run_id,
+            configuration_id=configuration_id,
+            configuration_revision=int(configuration.revision),
+            cutoff_at=cutoff,
+        )
+
+    def claim(self, run_id: str, *, owner: str, lease_for: timedelta) -> NativeBaselineJob | None:
+        validate_identifier(run_id, IdKind.NATIVE_RUN)
+        if not owner or lease_for <= timedelta(0):
+            raise ValueError("a native baseline claim requires owner and positive lease")
+        with self._engine.begin() as connection:
+            candidate = (
+                select(native_sync_jobs.c.job_id)
+                .where(
+                    native_sync_jobs.c.run_id == run_id,
+                    (native_sync_jobs.c.state == "queued")
+                    | (
+                        (native_sync_jobs.c.state == "running")
+                        & (
+                            (native_sync_jobs.c.lease_expires_at <= func.now())
+                            | (native_sync_jobs.c.lease_owner == owner)
+                        )
+                    ),
+                )
+                .order_by(native_sync_jobs.c.created_at, native_sync_jobs.c.job_id)
+                .with_for_update(skip_locked=True)
+                .limit(1)
+                .cte("claimable_baseline_job")
+            )
+            row = connection.execute(
+                update(native_sync_jobs)
+                .where(native_sync_jobs.c.job_id == candidate.c.job_id)
+                .values(
+                    state="running",
+                    lease_owner=owner,
+                    lease_expires_at=func.now() + lease_for,
+                    updated_at=func.now(),
+                )
+                .returning(
+                    native_sync_jobs.c.job_id,
+                    native_sync_jobs.c.run_id,
+                    native_sync_jobs.c.configuration_id,
+                    native_sync_jobs.c.configuration_revision,
+                    native_sync_jobs.c.bucket_id,
+                    native_sync_jobs.c.range_start,
+                    native_sync_jobs.c.range_end,
+                    native_sync_jobs.c.read_mode,
+                )
+            ).one_or_none()
+            if row is None:
+                return None
+            kind = connection.scalar(
+                select(native_source_buckets.c.source_kind).where(
+                    native_source_buckets.c.bucket_id == row.bucket_id
+                )
+            )
+        return NativeBaselineJob(
+            job_id=str(row.job_id),
+            run_id=str(row.run_id),
+            configuration_id=str(row.configuration_id),
+            configuration_revision=int(row.configuration_revision),
+            bucket_id=str(row.bucket_id),
+            kind=ContractNativeSourceKind(str(kind)),
+            range_start=row.range_start,
+            range_end=row.range_end,
+            current_inventory=str(row.read_mode) == "current_inventory",
+            lease_owner=owner,
+        )
+
+    def resume_point(self, job_id: str) -> BaselineResumePoint:
+        validate_identifier(job_id, IdKind.NATIVE_JOB)
+        with self._engine.connect() as connection:
+            rows = connection.execute(
+                select(native_checkpoints.c.cursor_private, native_checkpoints.c.terminal)
+                .where(native_checkpoints.c.job_id == job_id)
+                .order_by(native_checkpoints.c.sequence)
+            ).all()
+        if not rows:
+            return BaselineResumePoint(cursor=None, terminal=False, page_count=0)
+        latest = rows[-1]
+        return BaselineResumePoint(
+            cursor=None if latest.terminal else str(latest.cursor_private),
+            terminal=bool(latest.terminal),
+            page_count=len(rows),
+        )
+
+    def checkpoint_admitted_page(
+        self,
+        job: NativeBaselineJob,
+        page: AdmittedNativePage,
+        *,
+        recorded_at: datetime,
+    ) -> None:
+        cursor = self._TERMINAL_CURSOR if page.next_cursor is None else page.next_cursor
+        with self._engine.begin() as connection:
+            lease = connection.execute(
+                select(native_sync_jobs.c.bucket_id).where(
+                    native_sync_jobs.c.job_id == job.job_id,
+                    native_sync_jobs.c.run_id == job.run_id,
+                    native_sync_jobs.c.state == "running",
+                    native_sync_jobs.c.lease_owner == job.lease_owner,
+                    native_sync_jobs.c.lease_expires_at > func.now(),
+                )
+            ).scalar_one_or_none()
+            if lease is None or str(lease) != job.bucket_id:
+                raise NativePersistenceConflictError("the native baseline lease is stale")
+            prior_job = connection.execute(
+                select(native_checkpoints.c.cursor_private)
+                .where(native_checkpoints.c.job_id == job.job_id)
+                .order_by(native_checkpoints.c.sequence.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if page.next_cursor is not None and prior_job == page.next_cursor:
+                raise NativePersistenceConflictError("a native page cursor made no progress")
+            latest = connection.execute(
+                select(native_checkpoints.c.checkpoint_id, native_checkpoints.c.sequence)
+                .where(native_checkpoints.c.bucket_id == job.bucket_id)
+                .order_by(native_checkpoints.c.sequence.desc())
+                .limit(1)
+            ).one_or_none()
+            sequence = 1 if latest is None else int(latest.sequence) + 1
+            checkpoint = NativeCheckpoint(
+                checkpoint_id=issue_identifier(IdKind.NATIVE_CHECKPOINT),
+                bucket_id=job.bucket_id,
+                job_id=job.job_id,
+                admission_authority_id=page.authority_id,
+                sequence=sequence,
+                previous_checkpoint_id=None if latest is None else str(latest.checkpoint_id),
+                cursor_digest=sha256(cursor.encode()).hexdigest(),
+                terminal=page.next_cursor is None,
+                item_count=page.admission.admitted_count + page.admission.duplicate_count,
+                recorded_at=recorded_at,
+            )
+            SqlNativeSourceRepository(connection).compare_and_set_checkpoint(
+                checkpoint,
+                expected_sequence=sequence - 1,
+                cursor_private=cursor,
+            )
+
+    def finish(self, job: NativeBaselineJob, *, recorded_at: datetime) -> None:
+        with self._engine.begin() as connection:
+            total = connection.scalar(
+                select(func.coalesce(func.sum(native_checkpoints.c.item_count), 0)).where(
+                    native_checkpoints.c.job_id == job.job_id
+                )
+            )
+            SqlNativeSourceRepository(connection).finish_job(
+                job_id=job.job_id,
+                owner=job.lease_owner,
+                item_count=int(total or 0),
+                recorded_at=recorded_at,
+            )
+
+    def complete(self, run_id: str) -> bool:
+        validate_identifier(run_id, IdKind.NATIVE_RUN)
+        with self._engine.connect() as connection:
+            counts = connection.execute(
+                select(
+                    func.count(native_sync_jobs.c.job_id),
+                    func.count(native_sync_jobs.c.job_id).filter(
+                        native_sync_jobs.c.state == "succeeded"
+                    ),
+                ).where(native_sync_jobs.c.run_id == run_id)
+            ).one()
+        return int(counts[0]) > 0 and int(counts[0]) == int(counts[1])
 
 
 class SqlNativeSourceControlStore:
@@ -1241,6 +1773,16 @@ class SqlNativeSourceControlStore:
                     bucket_id=authority.bucket_id,
                     observed_at=recorded_at,
                 )
+                if source_kind is ContractNativeSourceKind.CONTACTS:
+                    repository.record_membership(
+                        ContactMembership(
+                            membership_id=issue_identifier(IdKind.SOURCE_MEMBERSHIP),
+                            group_bucket_id=authority.bucket_id,
+                            contact_object_id=observed.source_object_id,
+                            version_id=observed.version_id,
+                            observed_at=recorded_at,
+                        )
+                    )
                 outcomes.append((observed.version_id, created))
         return tuple(outcomes)
 

@@ -114,6 +114,7 @@ class Host:
         self.preflight_calls = 0
         self.response_request_id: str | None = None
         self.on_preflight: Callable[[], None] | None = None
+        self.read_calls: list[dict[str, object]] = []
 
     def negotiate(self, supported_versions: tuple[str, ...]) -> str:
         assert supported_versions == (NATIVE_SOURCE_PROTOCOL_V1,)
@@ -195,6 +196,42 @@ class Host:
             "results": results,
         }
 
+    def adapter_identity(self, kind: NativeSourceKind) -> str:
+        return f"synthetic-{kind.value}-v1"
+
+    def read(
+        self,
+        selection: NativeBucketSelection,
+        *,
+        time_range: tuple[datetime, datetime] | None,
+        cursor: str | None,
+        limit: int,
+        bridge_id: str,
+        envelope_id: str,
+        request_id: str,
+        at: datetime,
+    ) -> dict[str, Any]:
+        del bridge_id, at
+        self.read_calls.append({"time_range": time_range, "cursor": cursor, "limit": limit})
+        return {
+            "metadata": _metadata(envelope_id),
+            "requestID": request_id,
+            "kind": selection.kind.value,
+            "accountID": selection.account_id,
+            "bucketID": selection.bucket_id,
+            "records": [
+                {
+                    "id": f"message.{cursor or 'first'}",
+                    "bucketID": selection.bucket_id,
+                    "kind": selection.kind.value,
+                    "sourceRevision": f"revision-{cursor or 'first'}",
+                    "sourceModifiedUnixMilliseconds": 1_775_563_200_000,
+                    "payload": [115, 121, 110, 116, 104, 101, 116, 105, 99],
+                }
+            ],
+            "nextCursor": "page-2" if cursor is None else None,
+        }
+
 
 class Store:
     def __init__(self) -> None:
@@ -231,6 +268,7 @@ class Store:
         self.consumed: dict[str, NativeAdmissionEnvelope] = {}
         self.preflight: dict[str, NativeBucketProgress] = {}
         self.preflight_writes = 0
+        self.authority_count = 0
 
     def bridge_protocol(self, bridge_id: str) -> str | None:
         return NATIVE_SOURCE_PROTOCOL_V1 if bridge_id == BRIDGE else None
@@ -318,15 +356,17 @@ class Store:
         issued_at: datetime,
         expires_at: datetime,
     ) -> NativeSyncAuthority:
+        self.authority_count += 1
+        authority_id = f"nauth_{self.authority_count:016d}"
         authority = NativeSyncAuthority(
-            authority_id="nauth_0000000000000001",
+            authority_id=authority_id,
             configuration_id=configuration.configuration_id,
             configuration_revision=configuration.revision,
             bridge_id=configuration.bridge_id,
             bucket_id=binding.bucket_id,
             source_id=binding.source_id,
             audit_id=audit_id,
-            envelope_id="nauth_0000000000000001",
+            envelope_id=authority_id,
             request_id=request_id,
             issued_at=issued_at,
             expires_at=expires_at,
@@ -764,6 +804,45 @@ def test_admission_is_exact_idempotent_and_evidence_survives_enrichment_failure(
         )
     assert host.preflight_calls == calls_before_denials
     assert store.preflight_writes == writes_before_denials
+
+
+def test_wp12e_controller_reads_one_bounded_exact_page_before_durable_admission() -> None:
+    controller, store, host, _, _ = _controller()
+    store.append_configuration(_configuration(), expected_prior_revision=0)
+    control = _context(
+        purpose=Purpose.CONTENT_EXTRACTION,
+        sources=frozenset({SOURCE_A, SOURCE_B}),
+        request_id="baseline.page.1",
+    )
+    adapter = _context(
+        purpose=Purpose.CONTENT_EXTRACTION,
+        sources=frozenset(),
+        kind=PrincipalKind.SOURCE_PROVIDER_ADAPTER,
+        request_id="baseline.page.1",
+    )
+    window = (WHEN - timedelta(days=30), WHEN)
+    page = controller.read_and_admit_page(
+        control,
+        adapter,
+        configuration_id=CONFIGURATION,
+        bucket_id=BUCKET_A,
+        time_range=window,
+        cursor=None,
+        limit=100,
+    )
+    assert (page.admission.admitted_count, page.next_cursor) == (1, "page-2")
+    assert host.read_calls == [{"time_range": window, "cursor": None, "limit": 100}]
+    assert page.authority_id in store.consumed
+    with pytest.raises(ValueError, match="outside the frozen bound"):
+        controller.read_and_admit_page(
+            control,
+            adapter,
+            configuration_id=CONFIGURATION,
+            bucket_id=BUCKET_A,
+            time_range=window,
+            cursor=None,
+            limit=101,
+        )
 
 
 def test_contract_rejects_unknown_fields_scope_drift_and_content_in_progress() -> None:

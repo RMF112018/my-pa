@@ -139,7 +139,11 @@ def engine(disposable_database: str) -> Iterator[Engine]:
             # Each test starts from an empty audit trail, so a count is a
             # statement about what this test did.
             connection.execute(
-                text("TRUNCATE knowledge.native_admission_authorities, knowledge.audit_events")
+                text(
+                    "TRUNCATE knowledge.native_simulation_receipts, "
+                    "knowledge.native_checkpoints, "
+                    "knowledge.native_admission_authorities, knowledge.audit_events"
+                )
             )
             connection.execute(text("TRUNCATE knowledge.sources CASCADE"))
         yield built

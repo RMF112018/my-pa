@@ -19,17 +19,31 @@ from sqlalchemy import CheckConstraint, Engine, func, inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
+from my_pa.application.native_baseline import (
+    BaselineResumePoint,
+    NativeBaselineExecutor,
+    NativeBaselineJob,
+)
+from my_pa.application.native_sources import (
+    NativeAdmissionReceipt,
+    NativeReadPageReceipt,
+    NativeRequestContext,
+    NativeSourceController,
+)
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.v1.native_sources import (
     NATIVE_SOURCE_PROTOCOL_V1,
     NativeAdmissionEnvelope,
     NativeBucketProgress,
+    NativeBucketSelection,
     NativeCoverageState,
     NativePreflightState,
     NativeProviderFailure,
     NativeSourceKind,
 )
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
+from my_pa.domain.identity.principal import Principal, PrincipalKind
+from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.native_sources import (
     ExactBucketSelection,
     NativeAdmissionAuthority,
@@ -37,9 +51,11 @@ from my_pa.domain.native_sources import (
     NativeConfigurationRevision,
 )
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.native_sources import (
     NativeBucketBindingRecord,
     NativePersistenceConflictError,
+    SqlNativeBaselineStore,
     SqlNativeReviewProposalRouter,
     SqlNativeSourceControlStore,
     SqlNativeSourceRepository,
@@ -48,8 +64,12 @@ from my_pa.infrastructure.persistence.tables import (
     audit_events,
     capture_review_cases,
     native_admission_authorities,
+    native_bucket_runs,
+    native_checkpoints,
     native_preflight_observations,
     native_source_review_routes,
+    native_sync_jobs,
+    native_sync_runs,
     source_object_versions,
     source_objects,
     source_observations,
@@ -207,6 +227,88 @@ def _envelope(authority: NativeAdmissionAuthority) -> NativeAdmissionEnvelope:
         "nextCursor": None,
     }
     return NativeAdmissionEnvelope.model_validate(wire)
+
+
+class _PagedSyntheticHost:
+    def negotiate(self, supported_versions: tuple[str, ...]) -> str:
+        assert supported_versions == (NATIVE_SOURCE_PROTOCOL_V1,)
+        return NATIVE_SOURCE_PROTOCOL_V1
+
+    def adapter_identity(self, kind: NativeSourceKind) -> str:
+        return f"synthetic-{kind.value}-v1"
+
+    def preflight(
+        self,
+        selections: tuple[NativeBucketSelection, ...],
+        *,
+        bridge_id: str,
+        request_id: str,
+        at: datetime,
+    ) -> dict[str, Any]:
+        del at
+        return {
+            "metadata": {
+                "protocolVersion": NATIVE_SOURCE_PROTOCOL_V1,
+                "envelopeID": f"preflight.{request_id}",
+                "hostInstanceID": bridge_id,
+                "emittedAtUnixMilliseconds": 1_775_563_200_000,
+            },
+            "requestID": request_id,
+            "results": [
+                {
+                    "selection": selection.model_dump(mode="json", by_alias=True),
+                    "state": "reachable",
+                    "failure": None,
+                }
+                for selection in selections
+            ],
+        }
+
+    def read(
+        self,
+        selection: NativeBucketSelection,
+        *,
+        time_range: tuple[datetime, datetime] | None,
+        cursor: str | None,
+        limit: int,
+        bridge_id: str,
+        envelope_id: str,
+        request_id: str,
+        at: datetime,
+    ) -> dict[str, Any]:
+        del time_range, at
+        assert limit == 100
+        selected = selection.model_dump(mode="json", by_alias=True)
+        ordinal = "1" if cursor is None else "2"
+        return {
+            "metadata": {
+                "protocolVersion": NATIVE_SOURCE_PROTOCOL_V1,
+                "envelopeID": envelope_id,
+                "hostInstanceID": bridge_id,
+                "emittedAtUnixMilliseconds": 1_775_563_200_000,
+            },
+            "requestID": request_id,
+            "kind": selected["kind"],
+            "accountID": selected["accountID"],
+            "bucketID": selected["bucketID"],
+            "records": [
+                {
+                    "id": f"message.baseline.{ordinal}",
+                    "bucketID": selected["bucketID"],
+                    "kind": selected["kind"],
+                    "sourceRevision": f"revision-{ordinal}",
+                    "sourceModifiedUnixMilliseconds": 1_775_563_200_000,
+                    "payload": [112, 97, 103, 101, int(ordinal) + 48],
+                }
+            ],
+            "nextCursor": "page-2" if cursor is None else None,
+        }
+
+
+class _NoProposals:
+    def open_review_proposals(self, version_ids: tuple[str, ...]) -> tuple[str, ...]:
+        del version_ids
+        return ()
 
 
 @pytest.mark.database
@@ -657,3 +759,460 @@ def test_native_enrichment_routes_exact_source_version_to_existing_governed_revi
         assert connection.scalar(select(func.count()).select_from(capture_review_cases)) == 1
     assert not hasattr(router, "promote")
     assert not hasattr(router, "decide")
+
+
+@pytest.mark.database
+def test_wp12e_cutoff_run_job_and_checkpoint_are_exact_durable_and_fail_closed(
+    c_engine: Engine,
+) -> None:
+    _seed(c_engine)
+    baseline = SqlNativeBaselineStore(c_engine)
+    cutoff = WHEN + timedelta(days=1)
+    frozen = baseline.prepare(
+        configuration_id=CONFIGURATION,
+        idempotency_key="baseline-frozen-1",
+        proposed_cutoff_at=cutoff,
+        adapter_identity="a" * 64,
+    )
+    replay = baseline.prepare(
+        configuration_id=CONFIGURATION,
+        idempotency_key="baseline-frozen-1",
+        proposed_cutoff_at=cutoff + timedelta(days=30),
+        adapter_identity="a" * 64,
+    )
+    assert replay == frozen
+    with c_engine.connect() as connection:
+        run = connection.execute(
+            select(
+                native_sync_runs.c.bridge_id,
+                native_sync_runs.c.adapter_identity,
+                native_sync_runs.c.start_at,
+                native_sync_runs.c.cutoff_at,
+            ).where(native_sync_runs.c.run_id == frozen.run_id)
+        ).one()
+        job_row = connection.execute(
+            select(native_sync_jobs).where(native_sync_jobs.c.run_id == frozen.run_id)
+        ).one()
+    assert run.bridge_id == BRIDGE
+    assert run.adapter_identity == "a" * 64
+    assert run.start_at == datetime(2026, 8, 1, 4, tzinfo=UTC)
+    assert run.cutoff_at == cutoff
+    assert job_row.range_start == run.start_at
+    assert job_row.range_end == cutoff
+    assert job_row.read_mode == "bounded_time"
+
+    with c_engine.begin() as connection:
+        unbound_job = connection.begin_nested()
+        with pytest.raises(IntegrityError, match="requires an exact frozen run"):
+            connection.execute(
+                text(
+                    """INSERT INTO knowledge.native_sync_jobs
+                         (job_id, configuration_id, configuration_revision, bucket_id,
+                          range_start, range_end, read_mode, state, idempotency_key,
+                          created_at, updated_at)
+                       VALUES (:job_id, :configuration_id, 1, :bucket_id, :range_start,
+                               :range_end, 'bounded_time', 'queued', 'unbound-job',
+                               :recorded_at, :recorded_at)"""
+                ),
+                {
+                    "job_id": "njob_0000000000000099",
+                    "configuration_id": CONFIGURATION,
+                    "bucket_id": BUCKET,
+                    "range_start": run.start_at,
+                    "range_end": cutoff,
+                    "recorded_at": WHEN,
+                },
+            )
+        unbound_job.rollback()
+        unbound_checkpoint = connection.begin_nested()
+        with pytest.raises(IntegrityError, match="requires an admitted page binding"):
+            connection.execute(
+                text(
+                    """INSERT INTO knowledge.native_checkpoints
+                         (checkpoint_id, bucket_id, sequence, cursor_private,
+                          cursor_digest, terminal, item_count, recorded_at)
+                       VALUES (:checkpoint_id, :bucket_id, 1, 'unbound-cursor',
+                               :cursor_digest, false, 0, :recorded_at)"""
+                ),
+                {
+                    "checkpoint_id": "ncp_0000000000000099",
+                    "bucket_id": BUCKET,
+                    "cursor_digest": sha256(b"unbound-cursor").hexdigest(),
+                    "recorded_at": WHEN,
+                },
+            )
+        unbound_checkpoint.rollback()
+
+    job = baseline.claim(frozen.run_id, owner="synthetic-worker", lease_for=timedelta(minutes=5))
+    assert job is not None
+    control = SqlNativeSourceControlStore(c_engine)
+    authority = _authority(control)
+    page = NativeReadPageReceipt(
+        admission=NativeAdmissionReceipt(
+            request_id=authority.request_id,
+            bucket_id=BUCKET,
+            admitted_count=1,
+            duplicate_count=0,
+            evidence_digest="b" * 64,
+            enrichment_proposal_count=0,
+            enrichment_failed=False,
+        ),
+        authority_id=authority.authority_id,
+        next_cursor="page-2",
+    )
+    with pytest.raises(IntegrityError, match="requires an admitted page"):
+        baseline.checkpoint_admitted_page(job, page, recorded_at=WHEN)
+    assert baseline.resume_point(job.job_id).page_count == 0
+
+    envelope = _envelope(authority)
+    outcomes = control.admit_evidence_durably(envelope, authority, at=WHEN)
+    assert len(outcomes) == 1
+    baseline.checkpoint_admitted_page(job, page, recorded_at=WHEN)
+    assert baseline.resume_point(job.job_id) == BaselineResumePoint(
+        cursor="page-2", terminal=False, page_count=1
+    )
+    with c_engine.connect() as connection:
+        checkpoint = connection.execute(
+            select(
+                native_checkpoints.c.job_id,
+                native_checkpoints.c.admission_authority_id,
+                native_checkpoints.c.item_count,
+            )
+        ).one()
+    assert checkpoint == (job.job_id, authority.authority_id, 1)
+
+
+@pytest.mark.database
+def test_wp12e_earlier_start_queues_only_missing_delta_and_later_start_retains_evidence(
+    c_engine: Engine,
+) -> None:
+    _seed(c_engine)
+    control = SqlNativeSourceControlStore(c_engine)
+    authority = _authority(control)
+    control.admit_evidence_durably(_envelope(authority), authority, at=WHEN)
+    with c_engine.connect() as connection:
+        evidence_before = connection.scalar(
+            select(func.count()).select_from(source_version_evidence)
+        )
+
+    earlier = NativeConfigurationRevision(
+        CONFIGURATION,
+        2,
+        BRIDGE,
+        "America/New_York",
+        date(2026, 7, 1),
+        WHEN + timedelta(days=1),
+        ExactBucketSelection((BUCKET,)),
+        WHEN + timedelta(minutes=1),
+    )
+    control.append_configuration(earlier, expected_prior_revision=1)
+    baseline = SqlNativeBaselineStore(c_engine)
+    backfill = baseline.prepare(
+        configuration_id=CONFIGURATION,
+        idempotency_key="earlier-delta",
+        proposed_cutoff_at=WHEN + timedelta(days=1),
+        adapter_identity="b" * 64,
+    )
+    with c_engine.connect() as connection:
+        backfill_job = connection.execute(
+            select(native_sync_jobs).where(native_sync_jobs.c.run_id == backfill.run_id)
+        ).one()
+    assert backfill_job.range_start == datetime(2026, 7, 1, 4, tzinfo=UTC)
+    assert backfill_job.range_end == datetime(2026, 8, 1, 4, tzinfo=UTC) - timedelta(milliseconds=1)
+
+    later = NativeConfigurationRevision(
+        CONFIGURATION,
+        3,
+        BRIDGE,
+        "America/New_York",
+        date(2026, 8, 2),
+        WHEN + timedelta(days=2),
+        ExactBucketSelection((BUCKET,)),
+        WHEN + timedelta(minutes=2),
+    )
+    control.append_configuration(later, expected_prior_revision=2)
+    baseline.prepare(
+        configuration_id=CONFIGURATION,
+        idempotency_key="later-no-delete",
+        proposed_cutoff_at=WHEN + timedelta(days=2),
+        adapter_identity="b" * 64,
+    )
+    with c_engine.connect() as connection:
+        evidence_after = connection.scalar(
+            select(func.count()).select_from(source_version_evidence)
+        )
+        observations_after = connection.scalar(
+            select(func.count()).select_from(source_observations)
+        )
+    assert evidence_after == evidence_before == 1
+    assert observations_after == 1
+
+
+@pytest.mark.database
+def test_wp12e_contacts_use_current_inventory_and_admission_records_membership(
+    c_engine: Engine,
+) -> None:
+    _seed(c_engine)
+    ids = {
+        "source": "src_0000000000000002",
+        "account": "nacct_0000000000000002",
+        "bucket": "nbkt_0000000000000003",
+        "configuration": "ncfg_0000000000000002",
+    }
+    with c_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.sources "
+                "(source_id, provider_kind, label, classification, native_root) "
+                "VALUES (:source, 'apple_contacts', 'Synthetic Contacts', "
+                "'synthetic_test', 'contacts-root')"
+            ),
+            ids,
+        )
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.native_source_accounts "
+                "(account_id, bridge_id, source_id, source_kind, label, private_locator, "
+                "first_observed_at) VALUES (:account, :bridge, :source, 'contacts', "
+                "'Synthetic Contacts', 'contacts.account', :at)"
+            ),
+            {**ids, "bridge": BRIDGE, "at": WHEN},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.native_source_buckets "
+                "(bucket_id, account_id, source_kind, label, private_locator, selectable, "
+                "first_observed_at) VALUES (:bucket, :account, 'contacts', "
+                "'Synthetic Group', 'contacts.group', true, :at)"
+            ),
+            {**ids, "at": WHEN},
+        )
+    control = SqlNativeSourceControlStore(c_engine)
+    configuration = NativeConfigurationRevision(
+        ids["configuration"],
+        1,
+        BRIDGE,
+        "America/New_York",
+        date(2026, 8, 1),
+        WHEN,
+        ExactBucketSelection((ids["bucket"],)),
+        WHEN,
+    )
+    control.append_configuration(configuration, expected_prior_revision=0)
+    baseline = SqlNativeBaselineStore(c_engine)
+    frozen = baseline.prepare(
+        configuration_id=ids["configuration"],
+        idempotency_key="contacts-inventory",
+        proposed_cutoff_at=WHEN,
+        adapter_identity="c" * 64,
+    )
+    with c_engine.connect() as connection:
+        job = connection.execute(
+            select(native_sync_jobs).where(native_sync_jobs.c.run_id == frozen.run_id)
+        ).one()
+    assert job.read_mode == "current_inventory"
+    assert job.range_start == job.range_end == WHEN
+
+    binding = NativeBucketBindingRecord(
+        ids["bucket"],
+        ids["account"],
+        ids["source"],
+        BRIDGE,
+        NativeSourceKind.CONTACTS,
+        "Synthetic Contacts",
+        "Synthetic Group",
+        "contacts.account",
+        "contacts.group",
+        True,
+    )
+    authority = control.issue_sync_authority(
+        configuration,
+        binding,
+        audit_id=AUDIT,
+        request_id="contacts.inventory",
+        issued_at=WHEN,
+        expires_at=WHEN + timedelta(minutes=5),
+    )
+    wire = {
+        "metadata": {
+            "protocolVersion": NATIVE_SOURCE_PROTOCOL_V1,
+            "envelopeID": authority.envelope_id,
+            "hostInstanceID": BRIDGE,
+            "emittedAtUnixMilliseconds": 1_775_563_200_000,
+        },
+        "requestID": authority.request_id,
+        "kind": "contacts",
+        "accountID": "contacts.account",
+        "bucketID": "contacts.group",
+        "records": [
+            {
+                "id": "contact.synthetic",
+                "bucketID": "contacts.group",
+                "kind": "contacts",
+                "sourceRevision": "revision-1",
+                "sourceModifiedUnixMilliseconds": None,
+                "payload": [123, 125],
+            }
+        ],
+        "nextCursor": None,
+    }
+    control.admit_evidence_durably(NativeAdmissionEnvelope.model_validate(wire), authority, at=WHEN)
+    with c_engine.connect() as connection:
+        membership_count = connection.scalar(
+            text(
+                "SELECT count(*) FROM knowledge.source_memberships WHERE parent_bucket_id = :bucket"
+            ),
+            {"bucket": ids["bucket"]},
+        )
+    assert membership_count == 1
+
+
+@pytest.mark.database
+def test_wp12e_revision_upgrades_populated_prior_head_and_round_trips(c_engine: Engine) -> None:
+    command.downgrade(_config(), "9d5e2f7b4c61")
+    _seed(c_engine)
+    with c_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.native_sync_runs "
+                "(run_id, configuration_id, configuration_revision, run_kind, state, "
+                "start_at, cutoff_at, calendar_horizon_at, idempotency_key, recorded_at) "
+                "VALUES ('nrun_0000000000000099', :configuration, 1, 'baseline', "
+                "'succeeded', :start, :cutoff, :horizon, 'legacy-run', :cutoff)"
+            ),
+            {
+                "configuration": CONFIGURATION,
+                "start": datetime(2026, 8, 1, 4, tzinfo=UTC),
+                "cutoff": WHEN,
+                "horizon": WHEN + timedelta(days=90),
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.native_sync_jobs "
+                "(job_id, configuration_id, configuration_revision, bucket_id, range_start, "
+                "range_end, state, idempotency_key, created_at, updated_at) "
+                "VALUES ('njob_0000000000000099', :configuration, 1, :bucket, :start, "
+                ":cutoff, 'queued', 'legacy-job', :cutoff, :cutoff)"
+            ),
+            {
+                "configuration": CONFIGURATION,
+                "bucket": BUCKET,
+                "start": datetime(2026, 8, 1, 4, tzinfo=UTC),
+                "cutoff": WHEN,
+            },
+        )
+    command.upgrade(_config(), "head")
+    with c_engine.connect() as connection:
+        run = connection.execute(
+            select(native_sync_runs).where(native_sync_runs.c.run_id == "nrun_0000000000000099")
+        ).one()
+        job = connection.execute(
+            select(native_sync_jobs).where(native_sync_jobs.c.job_id == "njob_0000000000000099")
+        ).one()
+    assert (run.bridge_id, run.adapter_identity) == (BRIDGE, "legacy-protocol-v1")
+    assert (job.run_id, job.read_mode) == (None, "bounded_time")
+
+    command.downgrade(_config(), "9d5e2f7b4c61")
+    columns = {
+        str(column["name"])
+        for column in inspect(c_engine).get_columns("native_sync_runs", schema="knowledge")
+    }
+    assert {"bridge_id", "adapter_identity"}.isdisjoint(columns)
+    command.upgrade(_config(), "head")
+
+
+@pytest.mark.database
+@pytest.mark.recovery
+@pytest.mark.e2e
+def test_wp12e_sql_executor_replays_after_admission_crash_and_resumes_all_pages(
+    c_engine: Engine,
+) -> None:
+    _seed(c_engine)
+    controller = NativeSourceController(
+        store=SqlNativeSourceControlStore(c_engine),
+        host=_PagedSyntheticHost(),
+        audit=SqlAlchemyAuditSink(c_engine),
+        proposals=_NoProposals(),
+    )
+    baseline = SqlNativeBaselineStore(c_engine)
+
+    def contexts(
+        request_id: str, at: datetime
+    ) -> tuple[NativeRequestContext, NativeRequestContext]:
+        return (
+            NativeRequestContext(
+                principal=Principal(
+                    "prn_0000000000000100", PrincipalKind.OPERATOR, authenticated=True
+                ),
+                purpose=Purpose.CONTENT_EXTRACTION,
+                correlation_id="corr_0000000000000100",
+                request_id=request_id,
+                authorized_source_ids=frozenset({SOURCE}),
+                at=at,
+            ),
+            NativeRequestContext(
+                principal=Principal(
+                    "prn_0000000000000101",
+                    PrincipalKind.SOURCE_PROVIDER_ADAPTER,
+                    authenticated=True,
+                ),
+                purpose=Purpose.CONTENT_EXTRACTION,
+                correlation_id="corr_0000000000000100",
+                request_id=request_id,
+                authorized_source_ids=frozenset(),
+                at=at,
+            ),
+        )
+
+    crash = True
+
+    def after_admission(job: NativeBaselineJob, page: NativeReadPageReceipt) -> None:
+        nonlocal crash
+        del job, page
+        if crash:
+            crash = False
+            raise RuntimeError("synthetic crash after durable admission")
+
+    first = NativeBaselineExecutor(
+        controller=controller,
+        store=baseline,
+        contexts=contexts,
+        clock=lambda: WHEN,
+        after_admission=after_admission,
+    )
+    with pytest.raises(RuntimeError, match="after durable admission"):
+        first.execute(
+            configuration_id=CONFIGURATION,
+            idempotency_key="sql-e2e-baseline",
+            owner="stable-worker",
+        )
+    with c_engine.connect() as connection:
+        assert connection.scalar(select(func.count()).select_from(source_version_evidence)) == 1
+        assert connection.scalar(select(func.count()).select_from(native_checkpoints)) == 0
+
+    resumed = NativeBaselineExecutor(
+        controller=controller,
+        store=baseline,
+        contexts=contexts,
+        clock=lambda: WHEN + timedelta(days=1),
+    ).execute(
+        configuration_id=CONFIGURATION,
+        idempotency_key="sql-e2e-baseline",
+        owner="stable-worker",
+    )
+    assert resumed.cutoff_at == WHEN
+    with c_engine.connect() as connection:
+        assert connection.scalar(select(func.count()).select_from(source_version_evidence)) == 2
+        assert connection.scalar(select(func.count()).select_from(source_observations)) == 2
+        checkpoints = connection.execute(
+            select(native_checkpoints.c.terminal, native_checkpoints.c.item_count).order_by(
+                native_checkpoints.c.sequence
+            )
+        ).all()
+        assert checkpoints == [(False, 1), (True, 1)]
+        assert connection.scalar(select(func.count()).select_from(native_bucket_runs)) == 1
+        state = connection.scalar(
+            select(native_sync_jobs.c.state).where(native_sync_jobs.c.run_id == resumed.run_id)
+        )
+    assert state == "succeeded"

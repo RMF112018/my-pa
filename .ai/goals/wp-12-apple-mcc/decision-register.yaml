@@ -65,6 +65,10 @@ decisions:
     decision: AC-024 authoritative watching and AC-047 live attestation remain NOT_RUN_OPERATOR_GATED. Repository work proves only that missing or synthetic signing, notarization, registration, compatibility, environment, scope, checkpoint or operator-authority evidence cannot cross the live gate.
     basis: corrective review B2 and authorization boundary
     status: corrective_proposal_for_review
+  - id: WP12-D-017
+    decision: A baseline creates one immutable running run snapshot and mutable leased jobs; each successful job ends only after an append-only terminal checkpoint bound to a consumed admission authority, then emits one append-only bucket-run receipt. Aggregate completion is derived from the jobs rather than by mutating the frozen run.
+    basis: NAPDCB-AC-010, AC-016, AC-017, AC-019 and AC-020; existing append-only native_sync_runs contract
+    status: implemented_proposal_for_exact_head_review
 operator_decisions_remaining:
   count: 10
   ids:

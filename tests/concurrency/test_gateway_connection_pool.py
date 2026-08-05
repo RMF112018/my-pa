@@ -262,7 +262,11 @@ def engines(disposable_database: str) -> Iterator[tuple[Engine, Engine]]:
     try:
         with runtime.work_engine.begin() as connection:
             connection.execute(
-                text("TRUNCATE knowledge.native_admission_authorities, knowledge.audit_events")
+                text(
+                    "TRUNCATE knowledge.native_simulation_receipts, "
+                    "knowledge.native_checkpoints, "
+                    "knowledge.native_admission_authorities, knowledge.audit_events"
+                )
             )
         yield runtime.work_engine, runtime.audit_engine
     finally:
@@ -282,7 +286,11 @@ def shared_engine(disposable_database: str) -> Iterator[Engine]:
     try:
         with engine.begin() as connection:
             connection.execute(
-                text("TRUNCATE knowledge.native_admission_authorities, knowledge.audit_events")
+                text(
+                    "TRUNCATE knowledge.native_simulation_receipts, "
+                    "knowledge.native_checkpoints, "
+                    "knowledge.native_admission_authorities, knowledge.audit_events"
+                )
             )
         yield engine
     finally:

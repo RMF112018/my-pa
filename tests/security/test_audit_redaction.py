@@ -117,7 +117,11 @@ def engine(disposable_database: str) -> Iterator[Engine]:
     try:
         with built.begin() as connection:
             connection.execute(
-                text("TRUNCATE knowledge.native_admission_authorities, knowledge.audit_events")
+                text(
+                    "TRUNCATE knowledge.native_simulation_receipts, "
+                    "knowledge.native_checkpoints, "
+                    "knowledge.native_admission_authorities, knowledge.audit_events"
+                )
             )
             connection.execute(text("TRUNCATE knowledge.sources CASCADE"))
         yield built

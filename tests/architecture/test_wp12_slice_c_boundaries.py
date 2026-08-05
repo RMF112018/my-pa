@@ -28,7 +28,13 @@ def _methods(protocol: type) -> set[str]:
 
 
 def test_host_boundary_is_read_only_and_holds_no_database_or_activation_surface() -> None:
-    assert _methods(NativeSourceHost) == {"negotiate", "discover", "preflight"}
+    assert _methods(NativeSourceHost) == {
+        "adapter_identity",
+        "discover",
+        "negotiate",
+        "preflight",
+        "read",
+    }
     forbidden = {
         "connect",
         "credential",

@@ -92,6 +92,7 @@ class IdKind(StrEnum):
     NATIVE_SIMULATION = "nsim"
     NATIVE_SIMULATION_RECEIPT = "nsimr"
     NATIVE_LIVE_GATE = "nlg"
+    NATIVE_AUTHORITY = "nauth"
     OPERATION = "op"
     KNOWLEDGE = "kn"
     AUDIT = "audit"

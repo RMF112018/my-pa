@@ -137,6 +137,7 @@ DECLARATION = "my_pa.infrastructure.persistence.tables"
 #: A callable is what a revision uses when it freezes something — it returns
 #: copies with the derived constraints replaced. `_TABLES` is the plain case.
 _EMISSION_CALLABLES: Final = (
+    "_historical_knowledge_tables",
     "_historical_audit_events",
     "_historical_capture_tables",
     "_historical_wp7_tables",
@@ -159,10 +160,9 @@ _CLOSED_SET = re.compile(r"IN \(([^)]*)\)|<@ ARRAY\[([^\]]*)\]")
 _LITERAL = re.compile(r"'([^']*)'")
 
 #: Every still-derived site, with the revision that emits it, the closed set it
-#: tracks, and the exact vocabulary it emits today. Ten sites in ten sources,
-#: carried by two revisions, neither of which WP-6 or WP-7 edits — freezing them
-#: is a separate package (`D-81`), and neither package changes the membership of
-#: any of these sets, so none of them fires.
+#: tracks, and the exact vocabulary it emits today. WP-12 freezes the five sites
+#: in the knowledge-schema revision because it expands two of their vocabularies;
+#: the five extraction sites remain derived and unchanged.
 #:
 #: The independent reviewer's list named nine sites and eight sources. Both
 #: numbers were low: `quarantine_review_state_is_known` derives from
@@ -173,53 +173,6 @@ _LITERAL = re.compile(r"'([^']*)'")
 #: error code added to `v1` changes what `7e5a1fb93d62` emits.
 ALLOWED: Final[frozenset[tuple[str, str, str, str, tuple[str, ...]]]] = frozenset(
     {
-        (
-            "7e5a1fb93d62",
-            "sources",
-            "classification_is_known",
-            "my_pa.domain.common.classification.Classification",
-            ("private_local", "restricted_local", "synthetic_test"),
-        ),
-        (
-            "7e5a1fb93d62",
-            "sources",
-            "provider_kind_is_known",
-            "my_pa.domain.source.registry.SourceProviderKind",
-            ("fixture",),
-        ),
-        (
-            "7e5a1fb93d62",
-            "source_objects",
-            "kind_is_known",
-            "my_pa.domain.source.provider.ObjectKind",
-            ("container", "file"),
-        ),
-        (
-            "7e5a1fb93d62",
-            "jobs",
-            "state_is_known",
-            "my_pa.infrastructure.persistence.tables.JobState",
-            ("failed", "queued", "running", "succeeded"),
-        ),
-        (
-            "7e5a1fb93d62",
-            "jobs",
-            "last_error_code_is_a_public_error_code",
-            "my_pa.contracts.v1.errors.ErrorCode",
-            (
-                "ambiguous_request",
-                "cancelled",
-                "conflict",
-                "denied",
-                "internal_error",
-                "invalid_request",
-                "not_found",
-                "quarantined",
-                "rate_limited",
-                "unavailable",
-                "unsupported",
-            ),
-        ),
         (
             "8b3f5c17d904",
             "extractions",
@@ -272,6 +225,29 @@ ALLOWED: Final[frozenset[tuple[str, str, str, str, tuple[str, ...]]]] = frozense
 #: `FROZEN_CAPABILITIES` in `test_capture_schema_migration.py` gives: a test that
 #: read the revision's own literal would pass however that literal changed.
 FROZEN: Final[dict[str, dict[str, tuple[str, ...]]]] = {
+    "7e5a1fb93d62": {
+        "provider_kind_is_known": ("fixture",),
+        "classification_is_known": (
+            "private_local",
+            "restricted_local",
+            "synthetic_test",
+        ),
+        "kind_is_known": ("container", "file"),
+        "state_is_known": ("failed", "queued", "running", "succeeded"),
+        "last_error_code_is_a_public_error_code": (
+            "ambiguous_request",
+            "cancelled",
+            "conflict",
+            "denied",
+            "internal_error",
+            "invalid_request",
+            "not_found",
+            "quarantined",
+            "rate_limited",
+            "unavailable",
+            "unsupported",
+        ),
+    },
     "9c6b4a18ed72": {
         "capability_is_known": (
             "capabilities.get",
@@ -581,8 +557,8 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 14
-    assert len({revision for revision, _ in revisions}) == 14
+    assert len(revisions) == 15
+    assert len({revision for revision, _ in revisions}) == 15
     assert {"9c6b4a18ed72", "1a4c9e77b2d5", "2b7e9f4c1a83", "7e5a1fb93d62", "8b3f5c17d904"} <= {
         revision for revision, _ in revisions
     }
@@ -597,7 +573,10 @@ def test_the_live_closed_sets_are_discovered() -> None:
     """
     live = _live_closed_sets()
     assert len(live) > 40
-    assert live[frozenset({"container", "file"})] == "my_pa.domain.source.provider.ObjectKind"
+    assert (
+        live[frozenset({"calendar_event", "contact", "container", "file", "mail_message"})]
+        == "my_pa.domain.source.provider.ObjectKind"
+    )
     assert (
         live[frozenset({"pending_review"})]
         == "my_pa.domain.extraction.quarantine.QuarantineReviewState"
@@ -650,8 +629,8 @@ def test_the_allowlist_names_only_revisions_this_package_does_not_edit() -> None
     all. If one appears in the allowlist, the freeze that closed it has been
     undone and the residual class has grown rather than shrunk.
     """
-    assert {revision for revision, *_ in ALLOWED} == {"7e5a1fb93d62", "8b3f5c17d904"}
-    assert len(ALLOWED) == 10
+    assert {revision for revision, *_ in ALLOWED} == {"8b3f5c17d904"}
+    assert len(ALLOWED) == 5
     assert not {revision for revision, *_ in ALLOWED} & set(FROZEN)
 
 

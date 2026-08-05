@@ -19,7 +19,7 @@
 - [`docs/architecture/system-context.md`](architecture/system-context.md) — actors, external systems, trust and authority boundaries.
 - [`docs/architecture/module-boundaries.md`](architecture/module-boundaries.md) — module ownership, dependency direction, and split triggers.
 - [`docs/architecture/data-authority.md`](architecture/data-authority.md) — data ownership, authority, lifecycle, and disclosure.
-- [`native/apple-source-host/README.md`](../native/apple-source-host/README.md) — WP-12A's source-built Swift protocol-v1 feasibility boundary: immutable provider-neutral values, read-only Mail/Calendar/Contacts contracts, and deterministic synthetic checks only; no live Apple framework, permission, activation, database, network, or source-mutation authority.
+- [`native/apple-source-host/README.md`](../native/apple-source-host/README.md) — WP-12D's source-built Swift protocol-v1 synthetic host: immutable versioned discovery/preflight/read envelopes, deterministic Mail/Calendar/Contacts adapters, bounded recurrence identity, and an owner-only atomic bounded spool; no live Apple framework, permission, activation, database, network, application admission, or source-mutation authority.
 
 ## Specifications
 

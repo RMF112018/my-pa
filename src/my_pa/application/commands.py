@@ -44,25 +44,33 @@ from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.relationship.event import RelationshipEventType
 
 __all__ = [
+    "AddProjectCommand",
+    "CloseSituationCommand",
     "Command",
     "CreateCapture",
     "DecideReviewCase",
     "EnrollSource",
+    "EnterFrameCommand",
     "FetchSource",
     "GetCapabilities",
     "GetSourceMetadata",
     "GetSourceStatus",
+    "LinkSituationToProjectCommand",
     "ListCaptures",
     "ListReviewCases",
     "ListSources",
+    "OpenSituationCommand",
     "ReadCapture",
     "ReadKnowledge",
+    "RecordRelationshipEventCommand",
     "Representation",
     "ReviseCapture",
     "SearchCaptures",
     "SearchKnowledge",
+    "TraceObjectCommand",
 ]
 
 
@@ -578,3 +586,180 @@ type Command = (
     | ListReviewCases
     | DecideReviewCase
 )
+
+
+# --- WP-06 R5 continuity commands ------------------------------------------
+#
+# These are a separate command family from the `Command` union above, and the
+# difference is deliberate. The union's members flow through a transport parse
+# into `ApplicationService.invoke`, whose one authorization path derives the
+# Principal from authenticated context — which is why "the principal is not
+# here" holds for them and why they carry a `Capability` ClassVar.
+#
+# The continuity commands below are consumed by the standalone `SituationService`
+# (`application.situation_service`), the same shape the fixture-only
+# `RelationshipService` uses: a caller resolves the authenticated Principal and
+# passes it in explicitly, and the repository stamps and filters every row by it.
+# So these carry `principal_id` as their first field — not as a caller-supplied
+# identity a transport controls, but as the resolved partition the service was
+# asked to act within. They are not part of `Command`, hold no `Capability`, and
+# never reach `invoke`; keeping them out of the union is what stops a continuity
+# command from ever being dispatched as if it were an authorized capability.
+#
+# Validation raises `InvalidIdentifierError`/`ValueError` at construction, the
+# same way `contracts.ports.ReviewDecisionRequest` does, rather than the
+# transport-facing `InvalidRequestError`/`SafeDetail` machinery, because these
+# are built inside the application layer and not from a raw caller payload.
+
+
+@dataclass(frozen=True, slots=True)
+class OpenSituationCommand:
+    """Open one purposeful operational context for a Principal.
+
+    `object_refs` are opaque references the Situation is about; the Situation
+    references them and never owns them.
+    """
+
+    principal_id: str
+    title: str
+    description: str | None = None
+    object_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not self.title.strip():
+            raise ValueError("a situation carries a non-blank title")
+        if any(not ref.strip() for ref in self.object_refs):
+            raise ValueError("object references are non-empty strings")
+
+
+@dataclass(frozen=True, slots=True)
+class CloseSituationCommand:
+    """Close one Situation, recording its outcome. Never deletes referenced objects."""
+
+    principal_id: str
+    situation_id: str
+    outcome: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.situation_id, IdKind.SITUATION)
+        if not self.outcome.strip():
+            raise ValueError("closing a situation records a non-blank outcome")
+
+
+@dataclass(frozen=True, slots=True)
+class EnterFrameCommand:
+    """Enter the current view within one Situation of what matters."""
+
+    principal_id: str
+    situation_id: str
+    label: str
+    evidence_refs: tuple[str, ...] = ()
+    alternatives: tuple[str, ...] = ()
+    obligations: tuple[str, ...] = ()
+    uncertainty: str | None = None
+    next_authority: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.situation_id, IdKind.SITUATION)
+        if not self.label.strip():
+            raise ValueError("a frame carries a non-blank label")
+        for name, refs in (
+            ("evidence", self.evidence_refs),
+            ("alternatives", self.alternatives),
+            ("obligations", self.obligations),
+        ):
+            if any(not ref.strip() for ref in refs):
+                raise ValueError(f"{name} references are non-empty strings")
+
+
+@dataclass(frozen=True, slots=True)
+class AddProjectCommand:
+    """Create one durable work context with participants for a Principal."""
+
+    principal_id: str
+    name: str
+    description: str | None = None
+    participants: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not self.name.strip():
+            raise ValueError("a project carries a non-blank name")
+        if any(not p.strip() for p in self.participants):
+            raise ValueError("participants are non-empty strings")
+
+
+@dataclass(frozen=True, slots=True)
+class LinkSituationToProjectCommand:
+    """Bind one Situation into one Project. Unique per (project, situation)."""
+
+    principal_id: str
+    project_id: str
+    situation_id: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.project_id, IdKind.PROJECT)
+        validate_identifier(self.situation_id, IdKind.SITUATION)
+
+
+@dataclass(frozen=True, slots=True)
+class RecordRelationshipEventCommand:
+    """Record one dated event on a Person's relationship timeline.
+
+    `accepted` gates whether Today/Pulse and the briefing read the event as an
+    accepted timeline fact; it defaults false so a proposed event never surfaces
+    as accepted (invariant 5).
+    """
+
+    principal_id: str
+    person_id: str
+    event_type: RelationshipEventType
+    occurred_at: datetime
+    context: str | None = None
+    accepted: bool = False
+    source_ref: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.person_id, IdKind.PERSON)
+        if not isinstance(self.event_type, RelationshipEventType):
+            raise ValueError("a relationship event names one event type")
+        if not isinstance(self.occurred_at, datetime):
+            raise ValueError("a relationship event records when it occurred")
+        ensure_utc(self.occurred_at)
+        if not isinstance(self.accepted, bool):
+            raise ValueError("acceptance is a boolean gate")
+        if self.context is not None and not isinstance(self.context, str):
+            raise ValueError("event context is text or absent")
+
+
+@dataclass(frozen=True, slots=True)
+class TraceObjectCommand:
+    """Reconstruct one object over a time range from the source events it cites."""
+
+    principal_id: str
+    object_id: str
+    object_type: str
+    time_range_start: datetime | None = None
+    time_range_end: datetime | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not self.object_id.strip():
+            raise ValueError("a trace names the object it reconstructs")
+        if not self.object_type.strip():
+            raise ValueError("a trace records the kind of object it reconstructs")
+        if self.time_range_start is not None:
+            ensure_utc(self.time_range_start)
+        if self.time_range_end is not None:
+            ensure_utc(self.time_range_end)
+        if (
+            self.time_range_start is not None
+            and self.time_range_end is not None
+            and self.time_range_end < self.time_range_start
+        ):
+            raise ValueError("a trace range ends no earlier than it starts")

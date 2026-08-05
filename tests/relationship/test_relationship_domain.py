@@ -148,6 +148,19 @@ def test_unresolved_source_binding_is_bounded_without_storing_raw_mention_text()
 
 
 EXPECTED_MODEL_FIELDS = {
+    "my_pa.domain.relationship.event.RelationshipEvent": frozenset(
+        {
+            "event_id",
+            "principal_id",
+            "person_id",
+            "event_type",
+            "occurred_at",
+            "created_at",
+            "context",
+            "accepted",
+            "source_ref",
+        }
+    ),
     "my_pa.domain.relationship.identity.Affiliation": frozenset(
         {
             "affiliation_id",
@@ -242,9 +255,23 @@ EXPECTED_MODEL_FIELDS = {
 }
 
 EXPECTED_TABLE_COLUMNS = {
+    "relationship_events": frozenset(
+        {
+            "event_id",
+            "principal_id",
+            "person_id",
+            "event_type",
+            "occurred_at",
+            "created_at",
+            "context",
+            "accepted",
+            "source_ref",
+        }
+    ),
     "relationship_affiliations": frozenset(
         {
             "affiliation_id",
+            "principal_id",
             "person_id",
             "organization_id",
             "observation_id",
@@ -253,22 +280,31 @@ EXPECTED_TABLE_COLUMNS = {
             "effective_to",
         }
     ),
-    "relationship_aliases": frozenset({"alias_id", "person_id", "observation_id", "value"}),
-    "relationship_conversation_observations": frozenset({"participant_id", "observation_id"}),
+    "relationship_aliases": frozenset(
+        {"alias_id", "principal_id", "person_id", "observation_id", "value"}
+    ),
+    "relationship_conversation_observations": frozenset(
+        {"participant_id", "principal_id", "observation_id"}
+    ),
     "relationship_conversation_participants": frozenset(
-        {"participant_id", "conversation_id", "person_id", "unresolved_mention_id"}
+        {"participant_id", "principal_id", "conversation_id", "person_id", "unresolved_mention_id"}
     ),
     "relationship_duplicate_members": frozenset(
-        {"duplicate_set_id", "person_id", "observation_id"}
+        {"duplicate_set_id", "principal_id", "person_id", "observation_id"}
     ),
-    "relationship_duplicate_sets": frozenset({"duplicate_set_id", "candidate_kind", "created_at"}),
+    "relationship_duplicate_sets": frozenset(
+        {"duplicate_set_id", "principal_id", "candidate_kind", "created_at"}
+    ),
     "relationship_evidence": frozenset(
-        {"evidence_id", "person_id", "authority", "effective_at", "recorded_at"}
+        {"evidence_id", "principal_id", "person_id", "authority", "effective_at", "recorded_at"}
     ),
-    "relationship_evidence_observations": frozenset({"evidence_id", "observation_id"}),
+    "relationship_evidence_observations": frozenset(
+        {"evidence_id", "principal_id", "observation_id"}
+    ),
     "relationship_identity_observations": frozenset(
         {
             "observation_id",
+            "principal_id",
             "source_id",
             "source_object_id",
             "source_version",
@@ -280,6 +316,7 @@ EXPECTED_TABLE_COLUMNS = {
     "relationship_identity_resolutions": frozenset(
         {
             "resolution_id",
+            "principal_id",
             "resolution_sequence",
             "action",
             "review_case_id",
@@ -292,6 +329,7 @@ EXPECTED_TABLE_COLUMNS = {
     "relationship_identity_review_cases": frozenset(
         {
             "review_case_id",
+            "principal_id",
             "duplicate_set_id",
             "requested_action",
             "retained_person_id",
@@ -302,20 +340,33 @@ EXPECTED_TABLE_COLUMNS = {
     "relationship_identity_review_decisions": frozenset(
         {"decision_id", "review_case_id", "sequence", "disposition", "principal_id", "decided_at"}
     ),
-    "relationship_observation_links": frozenset({"observation_id", "person_id", "resolution_id"}),
-    "relationship_organizations": frozenset({"organization_id", "display_name", "created_at"}),
+    "relationship_observation_links": frozenset(
+        {"observation_id", "principal_id", "person_id", "resolution_id"}
+    ),
+    "relationship_organizations": frozenset(
+        {"organization_id", "principal_id", "display_name", "created_at"}
+    ),
     "relationship_people": frozenset(
         {
             "person_id",
+            "principal_id",
             "display_name",
             "created_at",
             "superseded_by_person_id",
             "state_resolution_id",
         }
     ),
-    "relationship_resolution_observations": frozenset({"resolution_id", "observation_id"}),
+    "relationship_resolution_observations": frozenset(
+        {"resolution_id", "principal_id", "observation_id"}
+    ),
     "relationship_unresolved_mentions": frozenset(
-        {"unresolved_mention_id", "source_object_id", "source_version", "observed_at"}
+        {
+            "unresolved_mention_id",
+            "principal_id",
+            "source_object_id",
+            "source_version",
+            "observed_at",
+        }
     ),
 }
 
@@ -350,8 +401,8 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith("relationship_")
     }
-    assert len(actual_model_fields) == 16
-    assert len(actual_table_columns) == 17
+    assert len(actual_model_fields) == 17
+    assert len(actual_table_columns) == 18
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

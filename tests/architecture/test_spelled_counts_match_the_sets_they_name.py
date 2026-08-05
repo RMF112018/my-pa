@@ -170,6 +170,11 @@ def _cardinals(limit: int = 999) -> dict[str, int]:
 
 
 CARDINALS = _cardinals()
+#: The inverse of `CARDINALS`: the one spelling each value is written with. Used
+#: where a test constructs the *correct* sentence to check its own reader against
+#: a derived count, so the spelling works past nineteen (a bare `_UNITS[n]` index
+#: raised once the Alembic chain crossed twenty).
+SPELLED = {value: word for word, value in CARDINALS.items()}
 ORDINALS = {word: value for value, word in enumerate(_ORDINAL_UNITS)}
 
 #: The article, not a count. See the boundary note in the module docstring.
@@ -714,7 +719,7 @@ def test_a_chain_claim_is_read_in_both_shapes_the_plan_writes() -> None:
         "abcdef012345",
     ]
 
-    correct = f"Implemented, {_UNITS[len(revision_files())]} revisions, head `{alembic_head()}`"
+    correct = f"Implemented, {SPELLED[len(revision_files())]} revisions, head `{alembic_head()}`"
     count = REVISION_COUNT.search(correct)
     head = CHAIN_HEAD.search(correct)
     assert count is not None and CARDINALS[count["count"].lower()] == len(revision_files())

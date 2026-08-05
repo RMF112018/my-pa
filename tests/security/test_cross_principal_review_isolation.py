@@ -119,9 +119,7 @@ def engine(disposable_database: str) -> Iterator[Engine]:
         engine.dispose()
 
 
-def _seed_consequential_proposal(
-    connection: Connection, owner: str, ordinal: int
-) -> str:
+def _seed_consequential_proposal(connection: Connection, owner: str, ordinal: int) -> str:
     """One capture, version, span and commitment proposal owned by ``owner``.
 
     A commitment always routes to review regardless of confidence, so the
@@ -184,7 +182,9 @@ def _seed_consequential_proposal(
     return ids["proposal_id"]
 
 
-def _decision(review_case_id: str, principal_id: str, disposition: Disposition) -> ReviewDecisionRequest:
+def _decision(
+    review_case_id: str, principal_id: str, disposition: Disposition
+) -> ReviewDecisionRequest:
     return ReviewDecisionRequest(
         review_case_id=review_case_id,
         expected_review_version=0,
@@ -280,13 +280,17 @@ def test_promotion_records_carry_the_owners_partition(engine: Engine) -> None:
             ),
             {"assertion": decision.assertion_id},
         ).scalar_one()
-        span_principals = connection.execute(
-            text(
-                f"SELECT DISTINCT principal_id FROM {SCHEMA}.capture_assertion_spans "  # noqa: S608
-                "WHERE assertion_id = :assertion"
-            ),
-            {"assertion": decision.assertion_id},
-        ).scalars().all()
+        span_principals = (
+            connection.execute(
+                text(
+                    f"SELECT DISTINCT principal_id FROM {SCHEMA}.capture_assertion_spans "  # noqa: S608
+                    "WHERE assertion_id = :assertion"
+                ),
+                {"assertion": decision.assertion_id},
+            )
+            .scalars()
+            .all()
+        )
         receipt_principal = connection.execute(
             text(
                 f"SELECT principal_id FROM {SCHEMA}.capture_promotion_receipts "  # noqa: S608

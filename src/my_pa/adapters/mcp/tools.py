@@ -180,13 +180,20 @@ _COMMANDS: Mapping[Capability, type] = MappingProxyType(
 
 
 def _tools() -> tuple[Tool, ...]:
+    """Publish only commands this transport can normalize and dispatch.
+
+    The global capability vocabulary also includes WP-12C's authenticated
+    native-host boundary. Those commands remain deliberately unwired here until
+    WP-12G; iterating the Command-derived map preserves that separation and
+    prevents an import-time KeyError for an enum-valid unavailable capability.
+    """
     return tuple(
         Tool(
             name=capability.value,
             description=_summary(_COMMANDS[capability]),
             input_schema=input_schema_for(_COMMANDS[capability]),
         )
-        for capability in Capability
+        for capability in _COMMANDS
     )
 
 

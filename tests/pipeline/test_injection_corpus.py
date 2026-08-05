@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import Engine, select
-from tests.pipeline.conftest import drain, save
+from tests.pipeline.conftest import PRINCIPAL_ID, drain, save
 
 from my_pa.contracts.ports import CaptureSearchRequest
 from my_pa.domain.capture.classification import CaptureLabel, EntityType, ResolutionState
@@ -43,6 +43,7 @@ from my_pa.domain.capture.pipeline import PipelineStage, ProcessingState
 from my_pa.domain.capture.proposal import ProposalMethod, ProposalState, ProposalType, RiskClass
 from my_pa.domain.search.query import SearchQuery
 from my_pa.infrastructure.persistence.capture_search import search_captures
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.proposals import (
     presentable_proposals,
     proposal_count,
@@ -261,7 +262,8 @@ def test_a_quoted_region_is_recorded_as_quoted_and_not_as_the_users_own(
 
 def _search(connection: object, query: str) -> object:
     request = CaptureSearchRequest(query=SearchQuery(query), limit=10)
-    return search_captures(connection, request)  # type: ignore[arg-type]
+    context = capture_context(PRINCIPAL_ID)
+    return search_captures(connection, request, context=context)  # type: ignore[arg-type]
 
 
 def _members(connection: object, column: object, enumeration: type) -> None:

@@ -460,16 +460,23 @@ class CaptureRepository(ABC):
     carries, so the two halves fail independently: the port offers no such call,
     and the server refuses one made anyway.
 
-    **Nothing here takes an owning principal as a filter** (`D-72`).
-    `owner_principal_id` is stored on every version because `ADR-003` clause 6
-    requires it, and read back so a caller can see who wrote one, but it is not
-    an input to any lookup. Identity in this build is process-scoped, so
-    owner-scoped reads would make a capture unreadable after a restart while
-    enforcing a distinction a single-local-principal deployment cannot make.
+    **Every operation takes the authenticated Principal as an input** (WP-03,
+    `PKL-MYPA-D-WP03-001`, superseding `D-72`). `owner_principal_id` was stored
+    on every version because `ADR-003` clause 6 required it and was read back
+    without ever deciding anything; under the ratified campaign it decides
+    everything: a read, a list, a search, and a revise each answer only within
+    the caller's own partition. `D-72`'s argument — identity was process-scoped,
+    so owner equality would strand captures across restarts — is dissolved
+    rather than overruled: the local operator's identity is now durable
+    (`domain.identity.binding`), so the same person holds the same partition
+    across restarts. The parameter is `principal_id` as the knowledge schema's
+    text vocabulary (`prn_…`) because that is what the rows carry; it is the
+    composition root's authenticated Principal and never a request field
+    (MU-AC-02).
     """
 
     @abstractmethod
-    def admit(self, request: CaptureAdmissionRequest) -> CaptureAdmission:
+    def admit(self, request: CaptureAdmissionRequest, *, principal_id: str) -> CaptureAdmission:
         """Store one capture version and everything that commits with it.
 
         The capture (for a new chain), the version, the receipt, the submission,
@@ -479,27 +486,34 @@ class CaptureRepository(ABC):
         own connection, and this stores the reference (`D-34`).
 
         Raises `domain.capture.errors.CaptureConflictError` when the idempotency
-        key is already bound to different content, and `UnknownScopeError` when
-        `capture_id` names no capture.
+        key is already bound to different content *by this Principal*, and
+        `UnknownScopeError` when `capture_id` names no capture this Principal
+        owns — a capture another Principal owns earns the same refusal a
+        nonexistent one does, so the answer maps nothing. The request's own
+        `principal_id` must equal this parameter and is verified below rather
+        than trusted.
         """
 
     @abstractmethod
-    def version(self, capture_id: str, *, version_id: str | None = None) -> CaptureVersion | None:
+    def version(
+        self, capture_id: str, *, version_id: str | None = None, principal_id: str
+    ) -> CaptureVersion | None:
         """One stored version of `capture_id`, or `None`.
 
         `version_id` omitted means the current one, which is the greatest version
         number the capture holds. Named, it means exactly that version — a
         superseded predecessor included, which is the "independently
         retrievable" half of `QC-AC-010`. A version of another capture is `None`,
-        the same answer as one that does not exist.
+        the same answer as one that does not exist — and a capture another
+        Principal owns is `None` too, the third absence with the same face.
         """
 
     @abstractmethod
-    def captures(self, *, limit: int) -> tuple[CaptureSummary, ...]:
-        """One bounded page of captures, newest first."""
+    def captures(self, *, limit: int, principal_id: str) -> tuple[CaptureSummary, ...]:
+        """One bounded page of the Principal's own captures, newest first."""
 
     @abstractmethod
-    def search(self, request: CaptureSearchRequest) -> CaptureSearchOutcome:
+    def search(self, request: CaptureSearchRequest, *, principal_id: str) -> CaptureSearchOutcome:
         """One bounded page of capture versions whose stored text matched.
 
         Exact at word granularity always, and at character granularity where

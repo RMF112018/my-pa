@@ -107,6 +107,10 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
 )
+from my_pa.infrastructure.persistence.principal_scope import (
+    PrincipalContext,
+    partition_criterion,
+)
 from my_pa.infrastructure.persistence.tables import capture_receipts, capture_versions
 
 __all__ = [
@@ -208,7 +212,7 @@ def _acknowledged_version_ids() -> Select[Any]:
     return select(capture_receipts.c.version_id)
 
 
-def capture_text_in_scope() -> tuple[ColumnElement[bool], ...]:
+def capture_text_in_scope(context: PrincipalContext) -> tuple[ColumnElement[bool], ...]:
     """Which rows of `capture_versions` hold text a capture search may return.
 
     One list, used by the page statement and by the totals beside it. When
@@ -217,8 +221,17 @@ def capture_text_in_scope() -> tuple[ColumnElement[bool], ...]:
     compared and found to agree — the divergence that stood for six review
     rounds on the extraction plane and was false for two of six conditions.
 
-    The two, and what each decides:
+    The three, and what each decides:
 
+    * **Owned by the context's Principal** (WP-03, `PKL-MYPA-D-WP03-001`).
+      `D-72` argued the owner condition's absence was structural because
+      identity was process-scoped; the ratified campaign is the operator
+      decision that supersedes it, and the condition is
+      `principal_scope.partition_criterion` rather than a comparison written
+      here, so this plane and every other user-scoped read agree by
+      construction about what the partition is.
+      `tests/security/test_cross_principal_capture_isolation.py` is what fails
+      if this goes.
     * **Not superseded.** A revised capture's earlier version is history, and
       returning it as a match would present text the user replaced as text the
       user holds. It is still readable by `capture.read`, which is
@@ -232,21 +245,14 @@ def capture_text_in_scope() -> tuple[ColumnElement[bool], ...]:
       write it past the writer, which is exactly the fault injection the
       quarantine tests use.
 
-    **There is no owner condition, and its absence is structural** (`D-72`,
-    `D-67`). Capture authorization is capability plus purpose; identity in this
-    build is process-scoped, so owner equality would make the capability
-    unusable across two processes while enforcing a distinction a
-    single-local-principal deployment cannot make.
-    `tests/capture/test_owner_is_not_authorization.py` fails the moment someone
-    adds one here.
-
-    **There is no processing-policy condition either.** `local_only` is the only
+    **There is no processing-policy condition.** `local_only` is the only
     value the column can hold, so a condition on it could never exclude a row —
     a condition nothing can exercise, which the extraction plane's own predicate
     docstring rules out. The policy is read where it decides something, which is
     `P-01`.
     """
     return (
+        partition_criterion(capture_versions, context),
         capture_versions.c.version_id.not_in(_superseded_version_ids()),
         capture_versions.c.version_id.in_(_acknowledged_version_ids()),
     )
@@ -431,7 +437,10 @@ def _exact_confirmation(
 
 
 def match_statement(
-    request: CaptureSearchRequest, plane: SearchPlane = CAPTURE_VERSIONS
+    request: CaptureSearchRequest,
+    *,
+    context: PrincipalContext,
+    plane: SearchPlane = CAPTURE_VERSIONS,
 ) -> Select[Any]:
     """One bounded page of capture versions whose text matches `request`.
 
@@ -458,7 +467,7 @@ def match_statement(
             plane.table.c.recorded_at,
         )
         .where(
-            *capture_text_in_scope(),
+            *capture_text_in_scope(context),
             document_vector(plane).bool_op("@@")(_tsquery(request)),
             *_exact_confirmation(request, plane),
         )
@@ -467,14 +476,25 @@ def match_statement(
     )
 
 
-def totals_statement(plane: SearchPlane = CAPTURE_VERSIONS) -> Select[Any]:
-    """How many versions the scope holds, and how many exist at all.
+def totals_statement(
+    *, context: PrincipalContext, plane: SearchPlane = CAPTURE_VERSIONS
+) -> Select[Any]:
+    """How many of the Principal's versions the scope holds, and how many it stores.
 
     Two counts in one statement and one snapshot, because a page beside a
     coverage figure read from a second snapshot is how a search reports "nothing
     found" for a scope that held something. The scoped count uses the same
     `capture_text_in_scope` the page does, so the two cannot disagree about
     which rows are in scope.
+
+    **Both counts are partitioned** (WP-03). `stored` was every version in the
+    table while every version belonged to the one local operator; reported
+    across Principals it would be a volume channel — each caller could watch
+    everyone else's writing accumulate in a denominator. The statement carries
+    the partition in its own WHERE, so the aggregate never sees another
+    Principal's rows; the scope conditions then repeat the partition inside the
+    `CASE`, which is redundant on purpose — the searchable count stays a strict
+    subset of `stored` by construction rather than by two clauses agreeing.
 
     **`count(CASE …)` rather than `count(*) FILTER (WHERE …)`, and not by
     preference.** `FunctionElement.filter` is untyped in SQLAlchemy's stubs at
@@ -490,8 +510,12 @@ def totals_statement(plane: SearchPlane = CAPTURE_VERSIONS) -> Select[Any]:
     ANDs it, so anything less would widen the scope this count shares with the
     page.
     """
-    scoped = func.count(case((and_(*capture_text_in_scope()), 1)))
-    return select(scoped.label("searchable"), func.count().label("stored")).select_from(plane.table)
+    scoped = func.count(case((and_(*capture_text_in_scope(context)), 1)))
+    return (
+        select(scoped.label("searchable"), func.count().label("stored"))
+        .select_from(plane.table)
+        .where(partition_criterion(plane.table, context))
+    )
 
 
 def _execute(connection: Connection, statement: Select[Any]) -> CursorResult[Any]:
@@ -514,17 +538,19 @@ def _execute(connection: Connection, statement: Select[Any]) -> CursorResult[Any
     raise CaptureSearchInternalError("the capture search could not be completed")
 
 
-def search_captures(connection: Connection, request: CaptureSearchRequest) -> CaptureSearchOutcome:
-    """One page of capture matches, with the counts a disclosure is built from.
+def search_captures(
+    connection: Connection, request: CaptureSearchRequest, *, context: PrincipalContext
+) -> CaptureSearchOutcome:
+    """One page of the Principal's capture matches, with the counts a disclosure is built from.
 
     `truncated` is decided by asking for one row more than the page holds, which
     is how `capture.list` decides it too: a page that happens to be exactly full
     is not a truncated one, and a count-then-page would answer from two
     snapshots.
     """
-    rows = list(_execute(connection, match_statement(request)).all())
+    rows = list(_execute(connection, match_statement(request, context=context)).all())
     truncated = len(rows) > request.limit
-    totals = _execute(connection, totals_statement()).one()
+    totals = _execute(connection, totals_statement(context=context)).one()
     return CaptureSearchOutcome(
         matches=tuple(
             CaptureSearchMatch(

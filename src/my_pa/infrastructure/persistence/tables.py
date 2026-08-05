@@ -981,6 +981,13 @@ capture_submissions = Table(
         f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
         name="a_submission_records_a_bounded_key",
     ),
+    # As `1a4c9e77b2d5` emitted it. **The head shape is no longer this**:
+    # `e7f3a9c2d514` (WP-03) replaces it forward with
+    # `a_capture_key_admits_one_submission_per_principal` UNIQUE
+    # (principal_id, idempotency_key), because that revision copies this live
+    # declaration when it runs and restating the key here would change what a
+    # merged revision emits. The mechanism argument above still holds; only the
+    # collision domain narrowed from global to per-Principal.
     UniqueConstraint("idempotency_key", name="a_capture_key_admits_one_submission"),
 )
 

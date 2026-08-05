@@ -30,6 +30,21 @@ second is the window the unique constraint exists to close, and is what
 **Nothing here reads or writes a source.** ADR-003 clause 5 makes capture a
 product-owned record rather than a source read, and this module imports no
 provider, no registry, and no source table.
+
+**Every operation takes a `PrincipalContext` and is bound to it** (WP-03,
+`PKL-MYPA-D-WP03-001`). `D-72` recorded owner columns and enforced nothing on
+them; the ratified campaign is the operator decision that supersedes it.
+Admission verifies the request's `principal_id` against the context and
+refuses a mismatch as `CallerSuppliedPrincipalError` — a write path must never
+accept identity from payload (MU-AC-02), including from its own composition
+bugs. Reads pass through `principal_scoped`, so a capture another Principal
+owns answers exactly what a capture that does not exist answers: `None` from a
+read, `UnknownScopeError` from a revise — the refusal names no identifier, so
+it cannot be used to learn whether the capture exists. The idempotency key's
+collision domain narrows to the Principal's own submissions
+(`a_capture_key_admits_one_submission_per_principal`, revision
+`e7f3a9c2d514`); replay lookup carries the same two-column predicate, so one
+Principal's replay can never return another's receipt.
 """
 
 from __future__ import annotations
@@ -60,9 +75,15 @@ from my_pa.domain.capture.version import CaptureContent, CaptureVersion, Process
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.conversation.event import ConversationChannel, ConversationState
+from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import conflicting_row
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, enqueue_job
+from my_pa.infrastructure.persistence.principal_scope import (
+    PrincipalContext,
+    principal_scoped,
+    require_principal_context,
+)
 from my_pa.infrastructure.persistence.review import mark_changed_assertions_for_revalidation
 from my_pa.infrastructure.persistence.tables import (
     capture_context_links,
@@ -132,7 +153,7 @@ def _to_version(row: Row[tuple[object, ...]]) -> CaptureVersion:
     )
 
 
-def _head(connection: Connection, capture_id: str) -> _Head | None:
+def _head(connection: Connection, capture_id: str, *, context: PrincipalContext) -> _Head | None:
     """The capture's current version, read inside the admitting transaction.
 
     A concurrent revise that read the same head cannot also store it: the two
@@ -140,10 +161,21 @@ def _head(connection: Connection, capture_id: str) -> _Head | None:
     `supersedes_version_id`, and both constraints are unique. The loser is
     refused by the server rather than by a check that already ran, which is the
     same discipline `persistence.enrollment` states for idempotency keys.
+
+    Scoped to the context's Principal, and that scoping is the revise-path
+    ownership check: a capture another Principal owns has no head *for this
+    caller*, so the revise refuses with the same `UnknownScopeError` a
+    nonexistent capture earns — one answer for both, which is what keeps the
+    refusal from being an existence oracle.
     """
     row: Row[tuple[str, int]] | None = connection.execute(
-        select(capture_versions.c.version_id, capture_versions.c.version_number)
-        .where(capture_versions.c.capture_id == capture_id)
+        principal_scoped(
+            select(capture_versions.c.version_id, capture_versions.c.version_number).where(
+                capture_versions.c.capture_id == capture_id
+            ),
+            capture_versions,
+            context,
+        )
         .order_by(capture_versions.c.version_number.desc())
         .limit(1)
     ).one_or_none()
@@ -177,15 +209,26 @@ def _receipt(connection: Connection, receipt_id: str) -> CaptureReceipt:
     )
 
 
-def admit_capture(connection: Connection, request: CaptureAdmissionRequest) -> CaptureAdmission:
+def admit_capture(
+    connection: Connection, request: CaptureAdmissionRequest, *, context: PrincipalContext
+) -> CaptureAdmission:
     """Admit one submission, or return the receipt its key is already bound to.
 
     Raises `CaptureConflictError` when the key is bound to different content, and
-    `UnknownScopeError` when `request.capture_id` names no capture. Both roll the
-    caller's transaction back, so a refused request stores nothing — which is
+    `UnknownScopeError` when `request.capture_id` names no capture *this
+    Principal owns* — the two are one answer on purpose. Both roll the caller's
+    transaction back, so a refused request stores nothing — which is
     `QC-AC-032`'s "fails closed" as a property of the transaction rather than of
     a cleanup path.
+
+    The request still carries a `principal_id` because the port shape predates
+    the context, and it is **verified rather than trusted**: a request whose
+    payload names a Principal other than the authenticated one is refused as
+    `CallerSuppliedPrincipalError` before anything is written (MU-AC-02).
     """
+    resolved = require_principal_context(context)
+    if request.principal_id != resolved.capture_principal_id:
+        raise CallerSuppliedPrincipalError("principal_id")
     content_digest = request.content.digest
     payload_digest = request.payload_digest
     submission_id = issue_identifier(IdKind.SUBMISSION)
@@ -210,14 +253,16 @@ def admit_capture(connection: Connection, request: CaptureAdmissionRequest) -> C
             version_id=version_id,
             receipt_id=receipt_id,
         )
-        .on_conflict_do_nothing(constraint="a_capture_key_admits_one_submission")
+        .on_conflict_do_nothing(constraint="a_capture_key_admits_one_submission_per_principal")
         .returning(capture_submissions.c.submission_id)
     ).one_or_none()
 
     if admitted is None:
-        return _replay(connection, request.idempotency_key, payload_digest)
+        return _replay(connection, request.idempotency_key, payload_digest, context=resolved)
 
-    capture_id, prior = _chain(connection, request, version_id=version_id, digest=content_digest)
+    capture_id, prior = _chain(
+        connection, request, version_id=version_id, digest=content_digest, context=resolved
+    )
     if request.capture_id is None and request.capture_kind is CaptureKind.CONVERSATION_LOG:
         connection.execute(
             capture_conversations.insert().values(
@@ -255,7 +300,9 @@ def admit_capture(connection: Connection, request: CaptureAdmissionRequest) -> C
     return CaptureAdmission(receipt=_receipt(connection, receipt_id), created=True)
 
 
-def _replay(connection: Connection, idempotency_key: str, digest: str) -> CaptureAdmission:
+def _replay(
+    connection: Connection, idempotency_key: str, digest: str, *, context: PrincipalContext
+) -> CaptureAdmission:
     """Answer a request whose idempotency key is already in use.
 
     The stored payload digest is what decides, and it is compared rather than
@@ -263,10 +310,19 @@ def _replay(connection: Connection, idempotency_key: str, digest: str) -> Captur
     whether two requests carried the same one. Which field differs is
     deliberately not reported — that would describe the stored request to
     whoever guessed the key.
+
+    The lookup carries the same two columns the unique constraint does. The
+    constraint alone makes the scoped lookup return exactly the row whose
+    conflict sent us here; the explicit predicate makes the scoping true in
+    this statement rather than inferred from another object's definition.
     """
     row = connection.execute(
-        select(capture_submissions.c.payload_sha256, capture_submissions.c.receipt_id).where(
-            capture_submissions.c.idempotency_key == idempotency_key
+        principal_scoped(
+            select(capture_submissions.c.payload_sha256, capture_submissions.c.receipt_id).where(
+                capture_submissions.c.idempotency_key == idempotency_key
+            ),
+            capture_submissions,
+            context,
         )
     ).one_or_none()
     stored = conflicting_row(row, "knowledge.capture_submissions")
@@ -281,6 +337,7 @@ def _chain(
     *,
     version_id: str,
     digest: str,
+    context: PrincipalContext,
 ) -> tuple[str, _Head | None]:
     """Insert the version, starting a chain or appending to one. Returns the capture.
 
@@ -300,12 +357,13 @@ def _chain(
         version_number, supersedes, prior = 1, None, None
     else:
         capture_id = validate_identifier(request.capture_id, IdKind.CAPTURE)
-        head = _head(connection, capture_id)
+        head = _head(connection, capture_id, context=context)
         if head is None:
-            # No such capture, or one with no version, which cannot exist: a
-            # capture is created with its first version in one transaction. The
-            # answer names no identifier, so a caller cannot use the refusal to
-            # learn whether a capture it may not see exists.
+            # No such capture, one with no version (which cannot exist: a
+            # capture is created with its first version in one transaction), or
+            # one another Principal owns — the scoped head makes those three
+            # one case. The answer names no identifier, so a caller cannot use
+            # the refusal to learn whether a capture it may not see exists.
             raise UnknownScopeError("the request names no stored capture")
         version_number, supersedes, prior = head.version_number + 1, head.version_id, head
 
@@ -370,9 +428,13 @@ def _record_launch_context(
 
 
 def capture_version(
-    connection: Connection, capture_id: str, *, version_id: str | None = None
+    connection: Connection,
+    capture_id: str,
+    *,
+    version_id: str | None = None,
+    context: PrincipalContext,
 ) -> CaptureVersion | None:
-    """Return one stored version of `capture_id`, or `None`.
+    """Return one stored version of `capture_id` the context's Principal owns, or `None`.
 
     `version_id` omitted returns the current version, which is the greatest
     version number the capture holds — read from the rows rather than from a
@@ -382,10 +444,16 @@ def capture_version(
 
     The capture is part of the lookup rather than derived from the version, so a
     version identifier belonging to a different capture answers `None` — the same
-    answer as one that names nothing.
+    answer as one that names nothing, and the same answer as one another
+    Principal owns (WP-03): three absences one response, so the read cannot be
+    used to map another Principal's identifiers.
     """
     validate_identifier(capture_id, IdKind.CAPTURE)
-    statement = select(*_VERSION_COLUMNS).where(capture_versions.c.capture_id == capture_id)
+    statement = principal_scoped(
+        select(*_VERSION_COLUMNS).where(capture_versions.c.capture_id == capture_id),
+        capture_versions,
+        context,
+    )
     if version_id is None:
         statement = statement.order_by(capture_versions.c.version_number.desc()).limit(1)
     else:
@@ -395,25 +463,32 @@ def capture_version(
     return None if row is None else _to_version(row)
 
 
-def capture_page(connection: Connection, *, limit: int) -> tuple[CaptureSummary, ...]:
-    """One bounded page of captures, newest first.
+def capture_page(
+    connection: Connection, *, limit: int, context: PrincipalContext
+) -> tuple[CaptureSummary, ...]:
+    """One bounded page of the context Principal's captures, newest first.
 
     No content and no per-version detail beyond where the chain has got to. The
     counts and the latest version are read in one statement, so a capture cannot
     be reported with a version count from one snapshot and a head from another.
+    The page is scoped before it is limited, so another Principal's captures do
+    not occupy slots in this one's page any more than they appear in it.
     """
     if limit < 1:
         raise ValueError("a page holds at least one capture")
     latest_number = func.max(capture_versions.c.version_number)
     rows = connection.execute(
-        select(
-            captures.c.capture_id,
-            captures.c.owner_principal_id,
-            captures.c.created_at,
-            func.count().label("version_count"),
-            latest_number.label("latest_version_number"),
+        principal_scoped(
+            select(
+                captures.c.capture_id,
+                captures.c.owner_principal_id,
+                captures.c.created_at,
+                func.count().label("version_count"),
+                latest_number.label("latest_version_number"),
+            ).join(capture_versions, capture_versions.c.capture_id == captures.c.capture_id),
+            captures,
+            context,
         )
-        .join(capture_versions, capture_versions.c.capture_id == captures.c.capture_id)
         .group_by(captures.c.capture_id, captures.c.owner_principal_id, captures.c.created_at)
         .order_by(captures.c.created_at.desc(), captures.c.capture_id)
         .limit(limit)

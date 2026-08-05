@@ -67,7 +67,10 @@ export default async function SystemPage() {
         <CardTitle>Capabilities and limits</CardTitle>
         <CardBody>
           <ul className="list-inside list-disc">
-            <li>Capture is available and acknowledged, but the processing pipeline (WP-03) has not landed.</li>
+            <li>
+              Capture is acknowledged with per-principal idempotent receipts (WP-03); the web
+              gateway is not yet wired to the Python capture pipeline.
+            </li>
             <li>Nothing is asserted on your behalf; proposals always wait for your disposition.</li>
             <li>Offline capture and sync arrive with WP-04 (R3).</li>
             <li>Isolation diagnostics will surface here once the backend read models are wired.</li>
@@ -80,11 +83,11 @@ export default async function SystemPage() {
         <CardBody>
           <dl className="grid grid-cols-[8rem_1fr] gap-1 font-mono text-xs">
             <dt className="text-muted">work package</dt>
-            <dd>WP-02 (R1 — frontend shell)</dd>
+            <dd>WP-03 (R2 — principal-partitioned capture)</dd>
             <dt className="text-muted">frontend</dt>
             <dd>Next.js App Router (see ADR-004)</dd>
             <dt className="text-muted">schema head</dt>
-            <dd>c4a7e2d81b53 (17 revisions)</dd>
+            <dd>e7f3a9c2d514 (18 revisions)</dd>
           </dl>
         </CardBody>
       </Card>

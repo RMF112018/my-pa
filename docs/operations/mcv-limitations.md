@@ -64,73 +64,61 @@ exactly one principal, it is the process, and there is nothing to authenticate
 Evidence: `apps/gateway.py`, `src/my_pa/bootstrap/gateway.py`,
 `PHASE-00-OPEN-DECISION-LEDGER.md`.
 
-## 2. Ownership survives only as long as the serving process. **This blocks multi-principal operation.**
+## 2. The local operator is one durable principal; live multi-principal identity is still not wired to the runtime
 
-**Corrected as a class on 2026-08-03 (`D-72`).** This limitation was headed "a
-principal does not survive its process, so the CLI cannot read back what it
-enrolled", which was written from the CLI case alone and named the narrowest
-instance of a general property. The honest statement is the general one: an
-identity in this build belongs to a *process*, not to a person, and everything
-scoped to it lasts exactly as long as that process does.
+**Rewritten 2026-08-05 (WP-03, `PKL-MYPA-D-WP03-001`).** This limitation was
+headed "ownership survives only as long as the serving process", and that was
+true when it was written: `local_principal()` issued a fresh principal
+identifier per composition, so three CLI processes were three principals and a
+gateway restart was a new one (measured 2026-08-03 and transcribed in
+`ops/runbooks/end-to-end-operations.md`; its paragraph carries the same dated
+correction). WP-03 dissolved that premise rather than working around it:
+`local_principal()` now derives its identifier from the fixed
+`LOCAL_OPERATOR_UUID` (`domain/identity/binding.py`), so every composition — a
+CLI invocation, a gateway process, a gateway process after a restart — acts as
+**one** durable local operator. `tests/capture/test_owner_is_the_partition.py`
+composes two runtimes over one database and asserts the identifiers are equal
+and that the second runtime revises and reads what the first wrote.
 
-`local_principal()` issues a fresh principal identifier per composition.
-`apps/cli/invoke.py` composes a runtime per invocation, so each invocation is a
-new principal; `apps/gateway.py` composes one per process, so a gateway holds one
-principal — **and mints a new one when it restarts**. Nothing persists an
-identity and nothing can be supplied one: the envelope's `principal_id` is
-correlation input (`contracts/v1/envelope.py`, `application/service.py`), and
-`apps/cli/invoke.py` refuses a `--principal` option deliberately.
+Nothing can still be supplied an identity from outside: the envelope's
+`principal_id` is correlation input (`contracts/v1/envelope.py`,
+`application/service.py`), `apps/cli/invoke.py` refuses a `--principal` option
+deliberately, and a capture admission whose payload names a principal other
+than the authenticated one is refused as `CallerSuppliedPrincipalError`
+(MU-AC-02).
 
-Measured on disposable databases on 2026-08-03 and transcribed in
-`ops/runbooks/end-to-end-operations.md` (plural deliberately — the runbook's own
-paragraph said "that database", singular, and there were two; see its provenance
-table):
+**Captures are now owner-scoped.** `capture.read`, `capture.list`,
+`capture.search` and the revise path of `capture.create` resolve against the
+authenticated principal's own partition
+(`infrastructure/persistence/capture.py`, `capture_search.py`), a foreign
+capture answers exactly what a nonexistent one answers, and the idempotency
+key's collision domain is per principal (revision `e7f3a9c2d514`). `D-72` —
+owner recorded, never enforced — is superseded. The former text of this
+limitation argued that adding the owner check would make `QC-AC-013` unprovable
+across processes; that was true only while the owner died with its process, and
+the durable binding is what made both halves hold at once.
 
-- **three CLI processes → three distinct principals.** `sources.enroll` through
-  `apps/cli/invoke.py` was `allowed` and wrote its enrollment; three later
-  `invoke.py` calls to `sources.status` for that enrollment were each `denied`
-  with `denial_reason scope_not_authorized`, under three different identifiers.
-- **one gateway runtime → one principal across three reads**, which is why the
-  same four capabilities through one running gateway recorded `allowed` four
-  times under one identifier.
-- **a second composition is a second principal**, which is what a restart is.
-  `tests/capture/test_owner_is_not_authorization.py` composes two runtimes over
-  one database and asserts the two identifiers differ.
-
-Two consequences, and the second is the one that blocks.
-
-**Scoped capabilities are usable from `apps/cli/invoke.py` only within a scope
-that same invocation enrolled**, which no single invocation can do. The
-exceptions are the capabilities that carry no source scope at all —
-`capabilities.get` and, since WP-6, the four `capture.*` capabilities.
-
-**Captures carry no owner-scoped access control, and this build cannot give them
-one.** `ADR-003` clause 6 requires every stored version to bind its owning
-principal, and it does: `knowledge.capture_versions.owner_principal_id` is
-`NOT NULL` and records the principal that wrote each version. But `capture.read`,
-`capture.list` and `capture.revise` authorize on **capability and purpose alone**
-and never on owner equality (`D-72`). Under `P00-OD-010`-open, loopback-only,
-single-local-principal operation that enforces nothing a second principal could
-observe, and adding the check would make `QC-AC-013` unprovable across processes
-because the predecessor's owner never exists again. On a loopback single-operator
-build it is not a live exposure and `D-30` refuses ingress. **It becomes one the
-moment a second principal exists**, so this limitation is stated as *blocking* on
-multi-principal operation rather than as a note.
+**What still blocks: no live identity reaches the serving runtime.** The
+identity plane (`identity.user_accounts`, WP-01) mints durable principals from
+validated Entra claims, and the capture plane partitions on whatever
+authenticated principal it is handed — but the gateway composition still hands
+it only the local operator, because `P00-OD-010` (which authentication
+mechanism fronts this) is **open** and reserved to the operator, and `D-30`
+refuses ingress. Cross-principal isolation is proven on synthetic principals
+(`tests/security/test_cross_principal_capture_isolation.py`), not on live ones.
 
 **Invalidation trigger: operator resolution of `P00-OD-010`.** That decision
-supplies the authentication mechanism this defers to, and at that point the
-absence of owner-scoped access control on captures stops being a limitation and
-becomes a defect to close.
+supplies the mechanism that puts a second authenticated principal in front of
+the runtime; the enforcement it would rely on is already in place and tested.
 
-This is not a defect any work package so far may fix: whether a local principal
-has a durable identity is an authentication question. Recorded as `D-67` and
-`D-72` in `docs/plans/mcv-completion-plan.md`, which defer it to that decision
-rather than closing it here.
+Recorded as `D-67` and `D-72` in `docs/plans/mcv-completion-plan.md`, both now
+superseded by `PKL-MYPA-D-WP03-001` (`docs/decisions/ADR-005-principal-partitioned-capture.md`).
 
 Evidence: `src/my_pa/bootstrap/gateway.py`,
-`src/my_pa/application/authorization.py`, `src/my_pa/domain/policy/decision.py`,
-`src/my_pa/infrastructure/persistence/tables.py`,
-`tests/capture/test_owner_is_not_authorization.py::test_a_capture_created_by_one_runtime_is_revised_and_read_by_another`,
+`src/my_pa/domain/identity/binding.py`,
+`src/my_pa/infrastructure/persistence/capture.py`,
+`tests/capture/test_owner_is_the_partition.py::test_a_capture_created_by_one_runtime_is_revised_and_read_by_another`,
+`tests/security/test_cross_principal_capture_isolation.py`,
 `ops/runbooks/end-to-end-operations.md`.
 
 ## 3. The corpus is four synthetic objects, and nothing has been proven wider

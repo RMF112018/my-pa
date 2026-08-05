@@ -11,8 +11,8 @@ export async function GET(request: NextRequest) {
   if (!guard.ok) return guard.response;
 
   return NextResponse.json({
-    workPackage: "WP-02",
-    schemaHead: "c4a7e2d81b53",
+    workPackage: "WP-03",
+    schemaHead: "e7f3a9c2d514",
     identityProvider: guard.principal.synthetic ? "synthetic" : "entra",
     entraConfigured: msalSeamConfig().enabled,
     connectedSources: [],

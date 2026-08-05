@@ -52,7 +52,7 @@ describe("app shell", () => {
     const user = userEvent.setup();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
-        JSON.stringify({ receiptId: "rcpt-1", status: "acknowledged_not_persisted" }),
+        JSON.stringify({ receiptId: "rcpt-1", created: true, status: "acknowledged_not_persisted" }),
         { status: 200 },
       ),
     );
@@ -74,7 +74,9 @@ describe("app shell", () => {
       expect.objectContaining({ method: "POST" }),
     );
     const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
-    expect(body).toEqual({ text: "confirm pour window", mode: "text" });
+    expect(body.text).toBe("confirm pour window");
+    expect(body.mode).toBe("text");
+    expect(body.idempotencyKey).toMatch(/^cap-[0-9a-f-]+$/);
     // The payload must never carry identity fields.
     expect(Object.keys(body)).not.toContain("principalId");
     expect(Object.keys(body)).not.toContain("oid");

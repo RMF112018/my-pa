@@ -8,16 +8,18 @@ retry in the same tables, and would put application code on the write path of
 migration governance state. Two planes with different lifetimes, different
 writers, and different authority do not share a schema.
 
-Ten concerns, twenty-nine tables, and nothing else. There is no scheduler, no
-priority column, and no soft-delete flag: each of those would be a mechanism with
-no caller, and `AGENTS.md` section 2 rules them out until one exists.
+The schema is split into bounded concerns and contains no general scheduler,
+priority column, or soft-delete flag: each of those would be a mechanism with no
+caller, and `AGENTS.md` section 2 rules them out until one exists.
 `audit_events` is not the "audit mirror" an earlier revision of this paragraph
 ruled out — a mirror duplicates rows another table already owns, and this is the
 only place an audit event is stored at all (`D-34`).
 
-**Three columns in the schema hold content, and they are three different
-authorities.** `extractions.text` is derived text bound to the source version it
-was extracted from. `capture_versions.content` is the text the user typed, which
+**Four columns in the schema hold content, under three different authorities.**
+`source_version_evidence.payload` is byte-exact, source-authoritative evidence
+bound to one immutable source version. `extractions.text` is derived text bound
+to the source version it was extracted from. `capture_versions.content` is the
+text the user typed, which
 `ADR-003` makes a product-owned record rather than a source read — a third
 authority class, not a source-system write and not a managed-document write.
 `capture_processing_text.normalized_text` is `P-02`'s conservative rewrite of
@@ -35,18 +37,16 @@ failed, of the section 11 rule that an audit event records that something
 happened and never what was in it, and of `QC-AC-041`, which requires that no
 capture text appear in an event payload or a receipt.
 
-`native_root` and `native_locator` are the only provider-native values in the
-schema, they exist because an opaque identifier has to resolve back to something,
-and no domain type carries either of them. Everything else is an opaque
-identifier, an enumerated code, a bounded token, a timestamp, or a count.
+`native_root`, `native_locator`, `private_locator`, and `cursor_private` are the
+only provider-native values in the schema. They exist because an opaque
+identifier has to resolve back to something, and no domain type carries any of
+them. Everything else is an opaque identifier, an enumerated code, a bounded
+token, a timestamp, a count, or source-authoritative evidence bytes.
 
-The tables are declared once here and used by both the Alembic revisions that
-create them and the modules that write to them, so the schema applied and the
-schema assumed cannot drift apart. Each revision names the tables it creates
-explicitly: this `MetaData` is shared, so a revision that created "everything
-declared here" would change meaning every time a table was added to this module.
-`tests/schema/test_extraction_schema_migration.py` asserts that correspondence
-per revision.
+The tables are declared once here for runtime access. Alembic revisions use
+frozen literal definitions so an old revision cannot change meaning when this
+module evolves. Each revision names the tables it creates explicitly, and schema
+tests assert the correspondence.
 """
 
 from __future__ import annotations
@@ -60,11 +60,14 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Identity,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     PrimaryKeyConstraint,
     Table,
@@ -131,6 +134,13 @@ from my_pa.domain.extraction.quarantine import QuarantineReason, QuarantineRevie
 from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.native_sources import (
+    LiveActivationGateState,
+    NativeRunKind,
+    NativeRunState,
+    NativeSourceKind,
+    WatcherSimulationState,
+)
 from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
 from my_pa.domain.relationship.identity import ResolutionAction
 from my_pa.domain.relationship.profile import EvidenceAuthority
@@ -2259,4 +2269,440 @@ relationship_conversation_observations = Table(
         nullable=False,
     ),
     PrimaryKeyConstraint("participant_id", "observation_id"),
+)
+
+# WP-12 provider-neutral source evidence and native control plane. Provider
+# locators occur only on account/bucket infrastructure rows; no domain value
+# imported above carries one.
+source_version_evidence = Table(
+    "source_version_evidence",
+    METADATA,
+    Column("evidence_id", Text, primary_key=True),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.source_object_versions.version_id"),
+        nullable=False,
+    ),
+    Column("evidence_kind", Text, nullable=False),
+    Column("payload", LargeBinary, nullable=False),
+    Column("payload_sha256", Text, nullable=False),
+    Column("byte_count", BigInteger, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("evidence_id", IdKind.SOURCE_EVIDENCE),
+    CheckConstraint(
+        "evidence_kind IN ('calendar_event', 'contact', 'mail_message')",
+        name="source_evidence_kind_is_known",
+    ),
+    CheckConstraint(
+        "payload_sha256 ~ '^[0-9a-f]{64}$'",
+        name="source_evidence_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "byte_count = octet_length(payload)",
+        name="source_evidence_byte_count_matches_payload",
+    ),
+    UniqueConstraint(
+        "version_id",
+        "evidence_kind",
+        "payload_sha256",
+        name="source_version_evidence_is_idempotent",
+    ),
+)
+
+native_bridges = Table(
+    "native_bridges",
+    METADATA,
+    Column("bridge_id", Text, primary_key=True),
+    Column("protocol_version", Text, nullable=False),
+    Column("label", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("bridge_id", IdKind.NATIVE_BRIDGE),
+    UniqueConstraint("protocol_version", "label", name="a_native_bridge_identity_is_stable"),
+)
+
+native_bridge_observations = Table(
+    "native_bridge_observations",
+    METADATA,
+    Column("observation_id", Text, primary_key=True),
+    Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
+    Column("available", Boolean, nullable=False),
+    Column("protocol_version", Text, nullable=False),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("observation_id", IdKind.SOURCE_OBSERVATION),
+)
+
+native_source_accounts = Table(
+    "native_source_accounts",
+    METADATA,
+    Column("account_id", Text, primary_key=True),
+    Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
+    Column("source_id", Text, ForeignKey(f"{SCHEMA}.sources.source_id"), nullable=False),
+    Column("source_kind", Text, nullable=False),
+    Column("label", Text, nullable=False),
+    Column("private_locator", Text, nullable=False),
+    Column("first_observed_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("account_id", IdKind.NATIVE_ACCOUNT),
+    _one_of("source_kind", NativeSourceKind, name="native_account_source_kind_is_known"),
+    UniqueConstraint(
+        "bridge_id",
+        "source_kind",
+        "private_locator",
+        name="native_account_locator_is_issued_once",
+    ),
+)
+
+native_source_buckets = Table(
+    "native_source_buckets",
+    METADATA,
+    Column("bucket_id", Text, primary_key=True),
+    Column(
+        "account_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.native_source_accounts.account_id"),
+        nullable=False,
+    ),
+    Column("parent_bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id")),
+    Column("source_kind", Text, nullable=False),
+    Column("label", Text, nullable=False),
+    Column("private_locator", Text, nullable=False),
+    Column("selectable", Boolean, nullable=False),
+    Column("first_observed_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("bucket_id", IdKind.NATIVE_BUCKET),
+    _one_of("source_kind", NativeSourceKind, name="native_bucket_source_kind_is_known"),
+    CheckConstraint(
+        "parent_bucket_id IS NULL OR parent_bucket_id <> bucket_id",
+        name="a_native_bucket_cannot_parent_itself",
+    ),
+    UniqueConstraint(
+        "account_id",
+        "private_locator",
+        name="native_bucket_locator_is_issued_once",
+    ),
+)
+
+native_discovery_snapshots = Table(
+    "native_discovery_snapshots",
+    METADATA,
+    Column("discovery_id", Text, primary_key=True),
+    Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
+    Column("snapshot_sha256", Text, nullable=False),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("discovery_id", IdKind.NATIVE_DISCOVERY),
+    CheckConstraint(
+        "snapshot_sha256 ~ '^[0-9a-f]{64}$'",
+        name="native_discovery_digest_is_sha256",
+    ),
+    UniqueConstraint(
+        "bridge_id",
+        "snapshot_sha256",
+        name="native_discovery_snapshot_is_idempotent",
+    ),
+)
+
+native_configuration_revisions = Table(
+    "native_configuration_revisions",
+    METADATA,
+    Column("configuration_id", Text, nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
+    Column("timezone_name", Text, nullable=False),
+    Column("start_date", Date, nullable=False),
+    Column("start_at", DateTime(timezone=True), nullable=False),
+    Column("cutoff_at", DateTime(timezone=True), nullable=False),
+    Column("calendar_horizon_at", DateTime(timezone=True), nullable=False),
+    Column("selection_sha256", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("configuration_id", IdKind.NATIVE_CONFIGURATION),
+    CheckConstraint("revision >= 1", name="native_configuration_revision_starts_at_one"),
+    CheckConstraint("start_at <= cutoff_at", name="native_configuration_range_is_ordered"),
+    CheckConstraint(
+        "calendar_horizon_at = cutoff_at + interval '90 days'",
+        name="native_calendar_horizon_is_ninety_days",
+    ),
+    CheckConstraint(
+        "selection_sha256 ~ '^[0-9a-f]{64}$'",
+        name="native_configuration_selection_digest_is_sha256",
+    ),
+    PrimaryKeyConstraint("configuration_id", "revision"),
+)
+
+native_configuration_buckets = Table(
+    "native_configuration_buckets",
+    METADATA,
+    Column("configuration_id", Text, nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column(
+        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
+    ),
+    ForeignKeyConstraint(
+        ["configuration_id", "revision"],
+        [
+            f"{SCHEMA}.native_configuration_revisions.configuration_id",
+            f"{SCHEMA}.native_configuration_revisions.revision",
+        ],
+    ),
+    PrimaryKeyConstraint("configuration_id", "revision", "bucket_id"),
+)
+
+native_sync_runs = Table(
+    "native_sync_runs",
+    METADATA,
+    Column("run_id", Text, primary_key=True),
+    Column("configuration_id", Text, nullable=False),
+    Column("configuration_revision", Integer, nullable=False),
+    Column("run_kind", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("start_at", DateTime(timezone=True), nullable=False),
+    Column("cutoff_at", DateTime(timezone=True), nullable=False),
+    Column("calendar_horizon_at", DateTime(timezone=True), nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("run_id", IdKind.NATIVE_RUN),
+    _one_of("run_kind", NativeRunKind, name="native_run_kind_is_known"),
+    _one_of("state", NativeRunState, name="native_run_state_is_known"),
+    ForeignKeyConstraint(
+        ["configuration_id", "configuration_revision"],
+        [
+            f"{SCHEMA}.native_configuration_revisions.configuration_id",
+            f"{SCHEMA}.native_configuration_revisions.revision",
+        ],
+    ),
+    CheckConstraint("start_at <= cutoff_at", name="native_run_range_is_ordered"),
+    CheckConstraint(
+        "calendar_horizon_at = cutoff_at + interval '90 days'",
+        name="native_run_calendar_horizon_is_ninety_days",
+    ),
+    UniqueConstraint(
+        "configuration_id",
+        "configuration_revision",
+        "idempotency_key",
+        name="native_sync_run_idempotency_is_scoped",
+    ),
+)
+
+native_bucket_runs = Table(
+    "native_bucket_runs",
+    METADATA,
+    Column("bucket_run_id", Text, primary_key=True),
+    Column("run_id", Text, ForeignKey(f"{SCHEMA}.native_sync_runs.run_id"), nullable=False),
+    Column(
+        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
+    ),
+    Column("state", Text, nullable=False),
+    Column("item_count", BigInteger, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("bucket_run_id", IdKind.NATIVE_BUCKET_RUN),
+    _one_of("state", NativeRunState, name="native_bucket_run_state_is_known"),
+    CheckConstraint("item_count >= 0", name="native_bucket_run_count_is_not_negative"),
+    UniqueConstraint("run_id", "bucket_id", name="one_native_bucket_receipt_per_run"),
+)
+
+native_sync_jobs = Table(
+    "native_sync_jobs",
+    METADATA,
+    Column("job_id", Text, primary_key=True),
+    Column("configuration_id", Text, nullable=False),
+    Column("configuration_revision", Integer, nullable=False),
+    Column(
+        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
+    ),
+    Column("range_start", DateTime(timezone=True), nullable=False),
+    Column("range_end", DateTime(timezone=True), nullable=False),
+    Column("state", Text, nullable=False),
+    Column("lease_owner", Text),
+    Column("lease_expires_at", DateTime(timezone=True)),
+    Column("idempotency_key", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("job_id", IdKind.NATIVE_JOB),
+    ForeignKeyConstraint(
+        ["configuration_id", "configuration_revision"],
+        [
+            f"{SCHEMA}.native_configuration_revisions.configuration_id",
+            f"{SCHEMA}.native_configuration_revisions.revision",
+        ],
+    ),
+    ForeignKeyConstraint(
+        ["configuration_id", "configuration_revision", "bucket_id"],
+        [
+            f"{SCHEMA}.native_configuration_buckets.configuration_id",
+            f"{SCHEMA}.native_configuration_buckets.revision",
+            f"{SCHEMA}.native_configuration_buckets.bucket_id",
+        ],
+        name="native_job_requires_selected_bucket",
+    ),
+    CheckConstraint(
+        "state IN ('failed', 'queued', 'running', 'succeeded')",
+        name="native_sync_job_state_is_known",
+    ),
+    CheckConstraint("range_start <= range_end", name="native_sync_job_range_is_ordered"),
+    CheckConstraint(
+        "(state = 'running') = (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)",
+        name="a_native_job_is_running_exactly_while_leased",
+    ),
+    UniqueConstraint(
+        "configuration_id",
+        "configuration_revision",
+        "bucket_id",
+        "idempotency_key",
+        name="native_sync_job_idempotency_is_scoped",
+    ),
+    Index(
+        "one_active_native_lease_per_bucket_range",
+        "bucket_id",
+        "range_start",
+        "range_end",
+        unique=True,
+        postgresql_where=text("state = 'running'"),
+    ),
+)
+
+native_checkpoints = Table(
+    "native_checkpoints",
+    METADATA,
+    Column("checkpoint_id", Text, primary_key=True),
+    Column(
+        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
+    ),
+    Column("sequence", BigInteger, nullable=False),
+    Column(
+        "previous_checkpoint_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.native_checkpoints.checkpoint_id"),
+        unique=True,
+    ),
+    Column("cursor_private", Text, nullable=False),
+    Column("cursor_digest", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("checkpoint_id", IdKind.NATIVE_CHECKPOINT),
+    CheckConstraint("sequence >= 1", name="native_checkpoint_sequence_starts_at_one"),
+    CheckConstraint(
+        "(sequence = 1) = (previous_checkpoint_id IS NULL)",
+        name="native_checkpoint_predecessor_matches_sequence",
+    ),
+    CheckConstraint(
+        "cursor_digest ~ '^[0-9a-f]{64}$'",
+        name="native_checkpoint_digest_is_sha256",
+    ),
+    UniqueConstraint("bucket_id", "sequence", name="native_checkpoint_sequence_is_monotonic"),
+)
+
+source_observations = Table(
+    "source_observations",
+    METADATA,
+    Column("observation_id", Text, primary_key=True),
+    Column(
+        "source_object_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.source_objects.source_object_id"),
+        nullable=False,
+    ),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.source_object_versions.version_id"),
+        nullable=False,
+    ),
+    Column(
+        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
+    ),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("observation_id", IdKind.SOURCE_OBSERVATION),
+    UniqueConstraint(
+        "version_id",
+        "bucket_id",
+        name="source_version_observation_is_idempotent",
+    ),
+)
+
+source_memberships = Table(
+    "source_memberships",
+    METADATA,
+    Column("membership_id", Text, primary_key=True),
+    Column(
+        "parent_bucket_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"),
+        nullable=False,
+    ),
+    Column(
+        "source_object_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.source_objects.source_object_id"),
+        nullable=False,
+    ),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.source_object_versions.version_id"),
+        nullable=False,
+    ),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("membership_id", IdKind.SOURCE_MEMBERSHIP),
+    UniqueConstraint(
+        "parent_bucket_id",
+        "version_id",
+        name="source_membership_version_is_idempotent",
+    ),
+)
+
+native_watcher_simulations = Table(
+    "native_watcher_simulations",
+    METADATA,
+    Column("simulation_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column(
+        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
+    ),
+    Column("state", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("simulation_id", IdKind.NATIVE_SIMULATION),
+    _one_of("state", WatcherSimulationState, name="native_simulation_state_is_known"),
+    CheckConstraint("sequence >= 1", name="native_simulation_sequence_starts_at_one"),
+    PrimaryKeyConstraint("simulation_id", "sequence"),
+)
+
+native_simulation_receipts = Table(
+    "native_simulation_receipts",
+    METADATA,
+    Column("receipt_id", Text, primary_key=True),
+    Column("simulation_id", Text, nullable=False),
+    Column("simulation_sequence", Integer, nullable=False),
+    Column(
+        "checkpoint_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.native_checkpoints.checkpoint_id"),
+        nullable=False,
+    ),
+    Column("terminal_state", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("receipt_id", IdKind.NATIVE_SIMULATION_RECEIPT),
+    ForeignKeyConstraint(
+        ["simulation_id", "simulation_sequence"],
+        [
+            f"{SCHEMA}.native_watcher_simulations.simulation_id",
+            f"{SCHEMA}.native_watcher_simulations.sequence",
+        ],
+    ),
+    CheckConstraint(
+        "terminal_state IN ('simulation_complete', 'simulation_failed')",
+        name="native_simulation_receipt_state_is_terminal",
+    ),
+    UniqueConstraint("simulation_id", name="one_receipt_per_native_simulation"),
+)
+
+native_live_activation_gates = Table(
+    "native_live_activation_gates",
+    METADATA,
+    Column("gate_id", Text, primary_key=True),
+    Column(
+        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
+    ),
+    Column("state", Text, nullable=False),
+    Column("reason_code", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("gate_id", IdKind.NATIVE_LIVE_GATE),
+    _one_of("state", LiveActivationGateState, name="native_live_gate_state_is_known"),
+    UniqueConstraint("bucket_id", name="one_native_live_gate_per_bucket"),
 )

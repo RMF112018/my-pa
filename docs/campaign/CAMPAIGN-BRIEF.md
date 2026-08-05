@@ -5,12 +5,12 @@ product_package_version: "4.0"
 product_package_sha256: 60e886e9dd19c6d39929990cd939ab1eb8c9c11eea8b0fb8faffac971516d6a4
 repository: RMF112018/my-pa
 remote: https://github.com/RMF112018/my-pa.git
-main_head: 6461e2ae914d9c70f487fa602d98987cd851e30d
-main_tree: de4113fe3595f84373ca54ee5ec6b559ace5722d
+main_head: 646c2731a749173d2d162d882b39c6c6f6080157
+main_tree: 4965ee5259926aac57eaffe7ed74d0f5d59e6a1a
 active_goal_id: GOAL-MYPA-MOSS-MCV-MVP-V4
-active_work_item_id: WP-03-R2-CAPTURE
+active_work_item_id: WP-04-R3-OFFLINE-CAPTURE
 active_authorization_id: PROMPT-MYPA-MOSS-FULL-IMPLEMENTATION-MANAGER-20260805-001
-lifecycle_state: WP03_IMPLEMENTED_PR_OPEN_AWAITING_REVIEW
+lifecycle_state: WP03_MERGED_VALIDATED
 completed_work_packages:
   - id: WP-00
     name: Campaign Formation and Ratification
@@ -44,6 +44,23 @@ completed_work_packages:
       - docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md
       - web/ (Next.js App Router application, synthetic identity provider)
       - web/src/middleware.ts and route-level session guards
+  - id: WP-03
+    name: R2 Product-owned Capture — Principal-Partitioned Ownership
+    merged_as: 646c2731a749173d2d162d882b39c6c6f6080157
+    merge_method: "squash (PR 47, all three CI checks green)"
+    post_merge_validation: >
+      FAST tier 3018 passed (+15 new unit tests from 3003 baseline); web
+      vitest 29 passed (+4 from 25 baseline). Branch
+      feat/wp-03-r2-principal-capture deleted remotely and locally.
+    artifacts:
+      - docs/decisions/ADR-005-principal-partitioned-capture.md
+      - migrations/versions/20260805_e7f3a9c2d514_partition_capture_by_principal.py
+      - src/my_pa/domain/identity/binding.py (durable principal derivation)
+      - tests/unit/test_principal_binding.py (6 tests)
+      - tests/security/test_cross_principal_capture_isolation.py (4 tests)
+      - tests/schema/test_capture_partition_migration.py (2 tests)
+      - tests/capture/test_owner_is_the_partition.py (renamed, 2 tests)
+      - web/src/lib/capture/idempotency.ts (per-principal admission store)
 current_acceptance_baseline: MU-AC-01..MU-AC-05 (19_ACCEPTANCE_CRITERIA_CROSSWALK.md)
 active_decisions:
   - id: CD-01
@@ -98,8 +115,8 @@ required_sources:
   - /docs/campaign/WORK-PACKAGE-MAP.md
   - product package documents 02, 07, 09, 12, 13, 17, 18, 19
 invalidations:
-  - Any commit to main after 6461e2ae914d9c70f487fa602d98987cd851e30d
-    invalidates the head identity recorded here; re-authenticate before WP-04.
+  - Any commit to main after 646c2731a749173d2d162d882b39c6c6f6080157
+    invalidates the head identity recorded here; re-authenticate before WP-05.
 artifact_references:
   ratification: docs/campaign/RATIFICATION-MYPA-MOSS-V4-20260805.md
   truth_report: docs/campaign/REPOSITORY-TRUTH-REPORT-20260805.md
@@ -130,13 +147,13 @@ activation).
 - **WP-02 (MossAIc Frontend Shell) merged** as `6461e2ae` (PR 46):
   Next.js App Router PWA under `web/` with five destinations, synthetic
   Entra-shaped identity boundary, and canonical TypeScript contracts.
-- **WP-03 (R2 Product-owned Capture) implemented on
-  `feat/wp-03-r2-principal-capture`:** durable local-operator principal
-  (`domain/identity/binding.py`), ownership bound and verified at capture
-  admission, per-Principal idempotency at revision `e7f3a9c2d514`,
-  owner-scoped read/list/search/revise (foreign captures are nonexistent),
-  and cross-Principal capture isolation negative tests (ADR-005,
-  PKL-MYPA-D-WP03-001). PR open for review.
+- **WP-03 (R2 Product-owned Capture) merged** as `646c273` (PR 47):
+  durable local-operator principal (`domain/identity/binding.py`),
+  ownership bound and verified at capture admission, per-Principal
+  idempotency at revision `e7f3a9c2d514`, owner-scoped
+  read/list/search/revise (foreign captures are nonexistent), and
+  cross-Principal capture isolation negative tests (ADR-005,
+  PKL-MYPA-D-WP03-001).
 
 ## Operating rules in force
 

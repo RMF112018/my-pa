@@ -5,12 +5,12 @@ product_package_version: "4.0"
 product_package_sha256: 60e886e9dd19c6d39929990cd939ab1eb8c9c11eea8b0fb8faffac971516d6a4
 repository: RMF112018/my-pa
 remote: https://github.com/RMF112018/my-pa.git
-main_head: 646c2731a749173d2d162d882b39c6c6f6080157
-main_tree: 4965ee5259926aac57eaffe7ed74d0f5d59e6a1a
+main_head: a2f5345629db6de568f46724214bab84158bc383
+main_tree: 210a62fe78fe4707ab26bb773dca0d9b7840aca7
 active_goal_id: GOAL-MYPA-MOSS-MCV-MVP-V4
-active_work_item_id: WP-05-R4-REVIEW-PROMOTION
+active_work_item_id: WP-06-R5-RELATIONSHIP-CONTINUITY
 active_authorization_id: PROMPT-MYPA-MOSS-FULL-IMPLEMENTATION-MANAGER-20260805-001
-lifecycle_state: WP04_DEFERRED_WP05_ACTIVE
+lifecycle_state: WP05_MERGED_WP06_ACTIVE
 completed_work_packages:
   - id: WP-00
     name: Campaign Formation and Ratification
@@ -61,6 +61,32 @@ completed_work_packages:
       - tests/schema/test_capture_partition_migration.py (2 tests)
       - tests/capture/test_owner_is_the_partition.py (renamed, 2 tests)
       - web/src/lib/capture/idempotency.ts (per-principal admission store)
+  - id: WP-05
+    name: R4 Proposal / Review / Promotion — Principal-Partitioned
+    merged_as: a2f5345629db6de568f46724214bab84158bc383
+    merge_method: "squash (PR 48)"
+    post_merge_validation: >
+      FAST tier 3018 passed at merge baseline; ADR-006
+      (PKL-MYPA-D-WP05-001) accepted. Branch
+      feat/wp-05-r4-review-promotion deleted remotely and locally.
+    artifacts:
+      - docs/decisions/ADR-006-principal-partitioned-review-and-promotion.md
+      - src/my_pa/domain/review/ (review cases, assertions, spans, receipts)
+      - owner-derived principal_id on review records; principal-scoped
+        reads and decisions; non-authoritative AI until human disposition
+  - id: WP-06
+    name: R5 Relationship / Project Continuity — Principal-Partitioned
+    status: active
+    branch: feat/wp-06-r5-relationship-continuity
+    artifacts:
+      - docs/decisions/ADR-007-principal-partitioned-relationship-and-project-continuity.md
+      - migrations partitioning the relationship graph (add principal_id to
+        17 relationship tables) and creating 7 R5 tables (situations, frames,
+        traces, projects, project_situations, relationship_events, pulse_items)
+      - src/my_pa/domain/situation/ and domain/relationship/event.py
+      - src/my_pa/application/situation_service.py and situation repository
+      - web/ situation board, projects, and principal-scoped relationship
+        timeline surfaces (accepted-only continuity)
 current_acceptance_baseline: MU-AC-01..MU-AC-05 (19_ACCEPTANCE_CRITERIA_CROSSWALK.md)
 active_decisions:
   - id: CD-01
@@ -101,6 +127,16 @@ active_decisions:
       revision e7f3a9c2d514, and a foreign Principal's capture is
       indistinguishable from a nonexistent one on every read path.
       Supersedes the D-72 working default and dissolves the D-67 premise.
+  - id: CD-07
+    decision: >
+      WP-06 relationship/project continuity is Principal-partitioned
+      (ADR-007, PKL-MYPA-D-WP06-001): the relationship graph and the new
+      Situation/Frame/Trace/Project/RelationshipEvent/PulseItem tables all
+      carry a mandatory owner-derived principal_id with the opaque-identifier
+      CHECK and a principal-first index; situation, project, and relationship
+      timeline reads are principal-scoped, continuity surfaces expose only
+      accepted evidence, and a foreign Principal's continuity is
+      indistinguishable from a nonexistent one on every read path (MU-AC-05).
 open_findings: []
 blocked_actions:
   - production deployment or activation
@@ -118,7 +154,7 @@ deferred_work_packages:
       leaf dependency not required by downstream work packages. WP-05 depends
       only on WP-03 (captures as input) and WP-01 (identity foundation), both
       complete.
-next_work_package: WP-05-R4-REVIEW-PROMOTION
+next_work_package: WP-07-R6-MICROSOFT-365-READ-CONNECTOR
 required_sources:
   - /docs/campaign/WORK-PACKAGE-MAP.md
   - product package documents 02, 07, 09, 12, 13, 17, 18, 19
@@ -162,6 +198,21 @@ activation).
   read/list/search/revise (foreign captures are nonexistent), and
   cross-Principal capture isolation negative tests (ADR-005,
   PKL-MYPA-D-WP03-001).
+- **WP-05 (R4 Proposal / Review / Promotion) merged** as `a2f5345`
+  (PR 48): owner-derived `principal_id` on review cases, assertions,
+  spans, and receipts; principal-scoped reads and decisions; AI proposals
+  remain non-authoritative until human disposition (ADR-006,
+  PKL-MYPA-D-WP05-001).
+- **WP-06 (R5 Relationship / Project Continuity) active** on
+  `feat/wp-06-r5-relationship-continuity`: the relationship graph is
+  partitioned by `principal_id` and seven new continuity tables
+  (situations, frames, traces, projects, project_situations,
+  relationship_events, pulse_items) are created, each carrying the
+  mandatory opaque-identifier `principal_id` and a principal-first index;
+  the Situation/Frame/Trace/Project domain, application service and
+  repository, principal-scoped situation/project/timeline read surfaces,
+  accepted-only continuity, and MU-AC-05 cross-Principal isolation
+  negative tests (ADR-007, PKL-MYPA-D-WP06-001).
 
 ## Operating rules in force
 

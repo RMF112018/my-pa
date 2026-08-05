@@ -14,5 +14,10 @@ let package = Package(
             dependencies: ["AppleSourceHost"],
             path: "Tests/AppleSourceHostContractChecks"
         ),
+        .executableTarget(
+            name: "AppleSourceHostFixtureExport",
+            dependencies: ["AppleSourceHost"],
+            path: "Tests/AppleSourceHostFixtureExport"
+        ),
     ]
 )

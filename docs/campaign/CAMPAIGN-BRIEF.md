@@ -8,9 +8,9 @@ remote: https://github.com/RMF112018/my-pa.git
 main_head: 646c2731a749173d2d162d882b39c6c6f6080157
 main_tree: 4965ee5259926aac57eaffe7ed74d0f5d59e6a1a
 active_goal_id: GOAL-MYPA-MOSS-MCV-MVP-V4
-active_work_item_id: WP-04-R3-OFFLINE-CAPTURE
+active_work_item_id: WP-05-R4-REVIEW-PROMOTION
 active_authorization_id: PROMPT-MYPA-MOSS-FULL-IMPLEMENTATION-MANAGER-20260805-001
-lifecycle_state: WP03_MERGED_VALIDATED
+lifecycle_state: WP04_DEFERRED_WP05_ACTIVE
 completed_work_packages:
   - id: WP-00
     name: Campaign Formation and Ratification
@@ -110,7 +110,15 @@ blocked_actions:
 operator_only_decisions:
   - MCV completion date (AGENTS.md section 1, open ledger)
   - live tenant activation and app registration for R0A+
-next_work_package: WP-04-R3-OFFLINE-CAPTURE
+deferred_work_packages:
+  - id: WP-04
+    name: R3 Offline Capture
+    reason: >
+      WP-04 (offline capture queue) is deferred by operator decision. It is a
+      leaf dependency not required by downstream work packages. WP-05 depends
+      only on WP-03 (captures as input) and WP-01 (identity foundation), both
+      complete.
+next_work_package: WP-05-R4-REVIEW-PROMOTION
 required_sources:
   - /docs/campaign/WORK-PACKAGE-MAP.md
   - product package documents 02, 07, 09, 12, 13, 17, 18, 19

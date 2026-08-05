@@ -40,9 +40,22 @@ listing and every disposition are scoped to the signed-in principal — a foreig
 `decide_review` partition (MU-AC-04). Cases are principal-scoped synthetic fixtures until
 the Python read models are wired.
 
+WP-06 (R5) adds the **relationship / project continuity** surfaces. The **Situation board**
+(`/situations`, `/api/situations`, `/api/projects`) gathers the principal's Situations and
+Projects into one purposeful view — a Situation references records it does not own and shows
+their state without claiming authority. The **relationship timeline**
+(`/relationships/:personId`, `/api/relationships/:personId/timeline`) shows a person's
+accepted interactions, meetings, and commitments in time order. Both read **only accepted
+records**: a proposed (not-accepted) relationship event never surfaces on a timeline, the
+web-tier shadow of the Python `list_accepted_events` filter, and this is the WP-06 gate that
+Today/Pulse and timelines read only accepted records. Every listing is scoped to the signed-in
+principal, and a person that does not resolve in the caller's own partition is `not_found` —
+a foreign person and an unknown person are indistinguishable (MU-AC-05). Records are
+principal-scoped synthetic fixtures until the Python continuity read models are wired.
+
 Not delivered here: capture persistence and the processing pipeline (WP-03), offline
-(WP-04), Situations (WP-06), the Microsoft Graph connector (WP-07), AI processing
-(WP-08), and the To-Do projection (WP-09).
+(WP-04), the Microsoft Graph connector (WP-07), AI processing (WP-08), and the To-Do
+projection (WP-09).
 
 ## Commands
 

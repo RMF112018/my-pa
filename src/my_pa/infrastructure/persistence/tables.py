@@ -132,7 +132,7 @@ from my_pa.domain.conversation.event import ConversationChannel, ConversationSta
 from my_pa.domain.extraction.coverage import LimitationReason
 from my_pa.domain.extraction.quarantine import QuarantineReason, QuarantineReviewState
 from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.native_sources import (
     LiveActivationGateState,
@@ -155,6 +155,13 @@ from my_pa.domain.source.registry import SourceProviderKind
 SCHEMA: Final = "knowledge"
 
 METADATA: Final = MetaData(schema=SCHEMA)
+
+#: The current runtime audit vocabulary. Unlike Alembic's historical literals,
+#: this declaration follows both capability enums because it describes the
+#: schema at head rather than a revision whose meaning must remain frozen.
+_CURRENT_AUDIT_CAPABILITIES: Final[frozenset[str]] = frozenset(
+    member.value for member in Capability
+) | frozenset(member.value for member in NativeSourceCapability)
 
 #: A worker may attempt one job this many times before it is failed terminally.
 #: Section 8.6 requires retries to be bounded; this is the bound, and it is the
@@ -746,7 +753,7 @@ audit_events = Table(
     _is_identifier("audit_id", IdKind.AUDIT),
     _is_identifier("correlation_id", IdKind.CORRELATION),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
-    _one_of("capability", Capability),
+    _one_of("capability", _CURRENT_AUDIT_CAPABILITIES),
     _one_of("purpose", Purpose),
     _one_of("outcome", AuditOutcome, name="audit_outcome_is_known"),
     _one_of("denial_reason", DenialReason, name="denial_reason_is_known"),

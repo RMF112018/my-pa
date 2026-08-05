@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -14,7 +15,7 @@ from typing import Any
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, func, inspect, select, text
+from sqlalchemy import CheckConstraint, Engine, func, inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
@@ -28,6 +29,7 @@ from my_pa.contracts.v1.native_sources import (
     NativeProviderFailure,
     NativeSourceKind,
 )
+from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.native_sources import (
     ExactBucketSelection,
     NativeAdmissionAuthority,
@@ -43,6 +45,7 @@ from my_pa.infrastructure.persistence.native_sources import (
     SqlNativeSourceRepository,
 )
 from my_pa.infrastructure.persistence.tables import (
+    audit_events,
     capture_review_cases,
     native_admission_authorities,
     native_preflight_observations,
@@ -62,6 +65,10 @@ BUCKET = "nbkt_0000000000000001"
 BUCKET_2 = "nbkt_0000000000000002"
 CONFIGURATION = "ncfg_0000000000000001"
 AUDIT = "audit_0000000000000001"
+
+
+def _capability_constraint_values(expression: str) -> frozenset[str]:
+    return frozenset(re.findall(r"'([^']+)'", expression))
 
 
 def _config() -> Config:
@@ -238,6 +245,37 @@ def test_wp12c_migration_extends_vocab_and_adds_only_three_bounded_tables(
                 {"at": WHEN},
             )
         savepoint.rollback()
+
+
+@pytest.mark.database
+def test_current_metadata_capability_vocabulary_matches_alembic_head(c_engine: Engine) -> None:
+    expected = frozenset(member.value for member in Capability) | frozenset(
+        member.value for member in NativeSourceCapability
+    )
+    metadata_constraint = next(
+        constraint
+        for constraint in audit_events.constraints
+        if isinstance(constraint, CheckConstraint) and constraint.name == "capability_is_known"
+    )
+    metadata_values = _capability_constraint_values(str(metadata_constraint.sqltext))
+    with c_engine.connect() as connection:
+        migrated_expression = connection.execute(
+            text(
+                """SELECT pg_get_constraintdef(con.oid)
+                     FROM pg_constraint con
+                     JOIN pg_class rel ON rel.oid = con.conrelid
+                     JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+                     WHERE nsp.nspname = 'knowledge'
+                       AND rel.relname = 'audit_events'
+                       AND con.conname = 'capability_is_known'"""
+            )
+        ).scalar_one()
+    migrated_values = _capability_constraint_values(migrated_expression)
+
+    assert metadata_values == migrated_values == expected
+    assert {member.value for member in Capability} <= metadata_values
+    assert {member.value for member in NativeSourceCapability} <= metadata_values
+    assert "native_sources.delete" not in metadata_values
 
 
 @pytest.mark.database

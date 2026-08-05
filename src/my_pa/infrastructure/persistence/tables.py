@@ -1557,9 +1557,12 @@ capture_review_cases = Table(
         ForeignKey(f"{SCHEMA}.capture_versions.version_id", ondelete="CASCADE"),
         nullable=False,
     ),
+    Column("principal_id", Text, nullable=False),
     Column("opened_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     _is_identifier("review_case_id", IdKind.REVIEW_CASE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     Index("capture_review_cases_by_capture", "capture_id", "opened_at"),
+    Index("capture_review_cases_by_principal", "principal_id", "opened_at"),
 )
 
 #: `ReviewDecision`: what was decided, by whom, and in what order.
@@ -1646,6 +1649,7 @@ capture_assertions = Table(
         ForeignKey(f"{SCHEMA}.capture_review_decisions.decision_id", ondelete="CASCADE"),
         nullable=False,
     ),
+    Column("principal_id", Text, nullable=False),
     Column("assertion_type", Text, nullable=False),
     Column("state", Text, nullable=False),
     Column("normalized_value", Text),
@@ -1658,6 +1662,7 @@ capture_assertions = Table(
     Column("accepted_at", DateTime(timezone=True), nullable=False),
     Column("revalidation_required_at", DateTime(timezone=True)),
     _is_identifier("assertion_id", IdKind.ASSERTION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     # The assertion's type is the proposal's type carried forward, so it is
     # constrained against the same vocabulary rather than a parallel one.
     _one_of("assertion_type", ProposalType, name="assertion_type_is_known"),
@@ -1676,7 +1681,15 @@ capture_assertions = Table(
         f"BETWEEN 1 AND {MAX_NORMALIZED_VALUE_CHARACTERS}",
         name="an_asserted_value_is_bounded",
     ),
+    Index("capture_assertions_by_principal", "principal_id", "assertion_id"),
+    # The historical index, kept exactly as `3c8f1e2a5b74` emitted it so the
+    # freeze in that revision stays purely subtractive (`D-48`).
     Index("capture_assertions_by_version", "version_id", "state"),
+    # The principal-first composite that makes a per-owner "assertions in this
+    # version, by state" read an index scan rather than a filter over the whole
+    # version. Added by `b9a4ecdfac0b`; a distinct name so the freeze only ever
+    # *drops* WP-05 additions and never has to reshape a historical index.
+    Index("capture_assertions_by_principal_version", "principal_id", "version_id", "state"),
 )
 
 #: The `[1..n]` between an assertion and the spans it rests on, mirroring
@@ -1702,9 +1715,12 @@ capture_assertion_spans = Table(
         ForeignKey(f"{SCHEMA}.capture_spans.span_id", ondelete="CASCADE"),
         nullable=False,
     ),
+    Column("principal_id", Text, nullable=False),
     Column("linked_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     PrimaryKeyConstraint("assertion_id", "span_id", name="an_assertion_cites_a_span_once"),
     Index("capture_assertion_spans_by_span", "span_id"),
+    Index("capture_assertion_spans_by_principal", "principal_id", "assertion_id"),
 )
 
 #: One row per promotion: safe evidence that one proposal became canonical.
@@ -1734,14 +1750,17 @@ capture_promotion_receipts = Table(
         ForeignKey(f"{SCHEMA}.capture_review_decisions.decision_id", ondelete="CASCADE"),
         nullable=False,
     ),
+    Column("principal_id", Text, nullable=False),
     Column("policy_version", Text, nullable=False),
     Column("issued_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     _is_identifier("receipt_id", IdKind.RECEIPT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     _matches(
         "policy_version",
         POLICY_VERSION_PATTERN.pattern,
         name="promotion_policy_version_is_a_known_shape",
     ),
+    Index("capture_promotion_receipts_by_principal", "principal_id", "receipt_id"),
 )
 
 #: `CaptureContextLink`: what a capture was launched from

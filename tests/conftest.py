@@ -601,9 +601,15 @@ class _Reviews(ReviewRepository):
     def __init__(self, world: World) -> None:
         self._world = world
 
-    def cases(self, *, limit: int) -> tuple[ReviewCase, ...]:
+    def cases(self, *, limit: int, principal_id: str) -> tuple[ReviewCase, ...]:
         self._world.fail("review_cases")
-        return tuple(self._world.review_cases[:limit])
+        owned = {
+            version.capture_id
+            for version in self._world.capture_versions
+            if version.owner_principal_id == principal_id
+        }
+        confined = [case for case in self._world.review_cases if case.capture_id in owned]
+        return tuple(confined[:limit])
 
     def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
         self._world.fail("review_decide")
@@ -1005,6 +1011,7 @@ def staged_review_case(scene: Scene, capture: CaptureVersion | None = None) -> R
         proposal_id=issue_identifier(IdKind.PROPOSAL),
         capture_id=version.capture_id,
         version_id=version.version_id,
+        principal_id=version.owner_principal_id,
         proposal_type=ProposalType.COMMITMENT,
         proposal_state=ProposalState.NEEDS_REVIEW,
         risk_class=RiskClass.MODERATE,

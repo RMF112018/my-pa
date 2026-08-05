@@ -26,14 +26,23 @@ Delivered:
   contract and domain vocabulary; see `src/contracts/README.md`.
 - **Capture** and **Reveal** affordances posting to stub API routes that acknowledge
   with `coverage: "synthetic"` disclosures; a principal-scoped synthetic **Pulse** on
-  Today; honest "not yet connected" states on Situations, Review, and Library; full
+  Today; honest "not yet connected" states on Situations and Library; full
   disclosure on System.
 - **PWA install surface**: web manifest plus a minimal network-only service worker.
   No offline queue — that is WP-04 (R3).
 
+WP-05 (R4) adds the **Review workbench**: a principal-scoped listing (`/api/review`) and
+per-case disposition route (`/api/review/:id/decide`) that turn a proposal into a
+canonical record only on an explicit accept / correct-and-accept, returning the immutable
+receipt the promotion issues. Correct-and-accept preserves the original proposal. The
+listing and every disposition are scoped to the signed-in principal — a foreign case is
+`not_found`, never disclosed — the web-tier shadow of the Python `review_cases` /
+`decide_review` partition (MU-AC-04). Cases are principal-scoped synthetic fixtures until
+the Python read models are wired.
+
 Not delivered here: capture persistence and the processing pipeline (WP-03), offline
-(WP-04), the review workbench (WP-05), Situations (WP-06), the Microsoft Graph
-connector (WP-07), AI processing (WP-08), and the To-Do projection (WP-09).
+(WP-04), Situations (WP-06), the Microsoft Graph connector (WP-07), AI processing
+(WP-08), and the To-Do projection (WP-09).
 
 ## Commands
 

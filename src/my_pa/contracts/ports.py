@@ -572,8 +572,13 @@ class ReviewRepository(ABC):
     """Review cases and the only port capable of canonical promotion."""
 
     @abstractmethod
-    def cases(self, *, limit: int) -> tuple[ReviewCase, ...]:
-        """One bounded page, oldest case first."""
+    def cases(self, *, limit: int, principal_id: str) -> tuple[ReviewCase, ...]:
+        """One bounded page for this Principal, oldest case first.
+
+        `principal_id` is the authenticated caller's identifier: the page is
+        confined to that Principal's partition, and a case belonging to any
+        other Principal is unreachable through this port (MU-AC-04).
+        """
 
     @abstractmethod
     def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:

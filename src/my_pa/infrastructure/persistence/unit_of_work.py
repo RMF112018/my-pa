@@ -325,8 +325,12 @@ class _Reviews(ReviewRepository):
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
-    def cases(self, *, limit: int) -> tuple[ReviewCase, ...]:
-        return _read(lambda: review_cases(self._connection, limit=limit))
+    def cases(self, *, limit: int, principal_id: str) -> tuple[ReviewCase, ...]:
+        return _read(
+            lambda: review_cases(
+                self._connection, limit=limit, context=capture_context(principal_id)
+            )
+        )
 
     def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
         return _read(lambda: decide_review(self._connection, request))

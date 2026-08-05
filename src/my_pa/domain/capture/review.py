@@ -125,6 +125,7 @@ class ReviewCase:
     proposal_id: str
     capture_id: str
     version_id: str
+    principal_id: str
     proposal_type: ProposalType
     proposal_state: ProposalState
     risk_class: RiskClass
@@ -137,6 +138,7 @@ class ReviewCase:
         validate_identifier(self.proposal_id, IdKind.PROPOSAL)
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         validate_identifier(self.version_id, IdKind.CAPTURE_VERSION)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         ensure_utc(self.opened_at)
         if self.review_version < 0:
             raise ReviewError("a review version is not negative")

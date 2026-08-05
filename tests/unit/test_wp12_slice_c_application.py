@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -106,8 +107,13 @@ class Audit(AuditSink):
 
 class Host:
     def __init__(self) -> None:
-        self.states: dict[str, tuple[NativePreflightState, NativeProviderFailure | None]] = {}
+        self.states: dict[
+            str | tuple[str, str, str],
+            tuple[NativePreflightState, NativeProviderFailure | None],
+        ] = {}
         self.preflight_calls = 0
+        self.response_request_id: str | None = None
+        self.on_preflight: Callable[[], None] | None = None
 
     def negotiate(self, supported_versions: tuple[str, ...]) -> str:
         assert supported_versions == (NATIVE_SOURCE_PROTOCOL_V1,)
@@ -164,10 +170,13 @@ class Host:
     ) -> dict[str, Any]:
         del bridge_id, at
         self.preflight_calls += 1
+        if self.on_preflight is not None:
+            self.on_preflight()
         results = []
         for selection in selections:
             state, failure = self.states.get(
-                selection.bucket_id, (NativePreflightState.REACHABLE, None)
+                (selection.kind.value, selection.account_id, selection.bucket_id),
+                self.states.get(selection.bucket_id, (NativePreflightState.REACHABLE, None)),
             )
             results.append(
                 {
@@ -182,7 +191,7 @@ class Host:
             )
         return {
             "metadata": _metadata(f"preflight.{self.preflight_calls}"),
-            "requestID": request_id,
+            "requestID": self.response_request_id or request_id,
             "results": results,
         }
 
@@ -347,10 +356,27 @@ class Store:
         ):
             raise NativeAdmissionAuthorityError("synthetic authority mismatch")
 
+    def record_admission_preflight_durably(
+        self,
+        envelope: NativeAdmissionEnvelope,
+        authority: NativeSyncAuthority,
+        results: tuple[NativeBucketProgress, ...],
+        *,
+        observed_at: datetime,
+    ) -> None:
+        self.prevalidate_authority(envelope, authority, at=observed_at)
+        self.record_preflight(
+            authority.configuration_id,
+            authority.configuration_revision,
+            results,
+            observed_at=observed_at,
+        )
+
     def admit_evidence_durably(
         self,
         envelope: NativeAdmissionEnvelope,
         authority: NativeSyncAuthority,
+        preflight: tuple[NativeBucketProgress, ...] = (),
         *,
         at: datetime,
     ) -> tuple[tuple[str, bool], ...]:
@@ -369,6 +395,12 @@ class Store:
         prior = self.consumed.get(authority.authority_id)
         if prior is not None and prior != envelope:
             raise NativeAdmissionAuthorityError("synthetic authority replay mismatch")
+        self.record_preflight(
+            authority.configuration_id,
+            authority.configuration_revision,
+            preflight,
+            observed_at=at,
+        )
         self.consumed[authority.authority_id] = envelope
         outcomes = []
         for record in envelope.records:
@@ -399,12 +431,13 @@ def _context(
     purpose: Purpose,
     sources: frozenset[str],
     kind: PrincipalKind = PrincipalKind.OPERATOR,
+    request_id: str = "request.1",
 ) -> NativeRequestContext:
     return NativeRequestContext(
         principal=Principal("prn_0000000000000001", kind, authenticated=True),
         purpose=purpose,
         correlation_id="corr_0000000000000001",
-        request_id="request.1",
+        request_id=request_id,
         authorized_source_ids=sources,
         at=WHEN,
     )
@@ -578,6 +611,47 @@ def test_preflight_distinguishes_empty_permission_denial_and_unavailability() ->
     )
 
 
+def test_preflight_binds_request_and_composite_private_locator_exactly() -> None:
+    controller, store, host, _, _ = _controller()
+    context = _context(
+        purpose=Purpose.SECURITY_VALIDATION,
+        sources=frozenset({SOURCE_A, SOURCE_B}),
+    )
+    host.response_request_id = "read.stale"
+    verification = controller.preflight(context, bridge_id=BRIDGE, bucket_ids=(BUCKET_A, BUCKET_B))
+    assert not verification.identity_verified
+    assert not verification.reachable
+    assert store.preflight_writes == 0
+    assert store.configurations == []
+    assert store.authorities == {}
+    with pytest.raises(PreflightDeniedError, match="preflight did not pass"):
+        controller.configure(
+            _context(
+                purpose=Purpose.BOUNDED_ENROLLMENT,
+                sources=frozenset({SOURCE_A, SOURCE_B}),
+            ),
+            _configuration(),
+            typed_account_labels={ACCOUNT_A: "Account A", ACCOUNT_B: "Account B"},
+            typed_bucket_labels={BUCKET_A: "Inbox A", BUCKET_B: "Inbox B"},
+        )
+    assert store.preflight_writes == 0
+    assert store.configurations == []
+    assert store.authorities == {}
+
+    host.response_request_id = None
+    store.bindings[BUCKET_A] = replace(store.bindings[BUCKET_A], bucket_locator="bucket.shared")
+    store.bindings[BUCKET_B] = replace(store.bindings[BUCKET_B], bucket_locator="bucket.shared")
+    host.states[("mail", "account.b", "bucket.shared")] = (
+        NativePreflightState.PERMISSION_DENIED,
+        NativeProviderFailure.PERMISSION_DENIED,
+    )
+    verification = controller.preflight(context, bridge_id=BRIDGE, bucket_ids=(BUCKET_A, BUCKET_B))
+    assert tuple((result.bucket_id, result.coverage) for result in verification.bucket_results) == (
+        (BUCKET_A, NativeCoverageState.NOT_MEASURED),
+        (BUCKET_B, NativeCoverageState.PERMISSION_DENIED),
+    )
+
+
 def test_sync_repreflights_and_scope_removal_retains_evidence() -> None:
     controller, store, host, _, _ = _controller()
     store.append_configuration(_configuration(), expected_prior_revision=0)
@@ -740,6 +814,8 @@ def test_admission_refuses_non_adapter_and_preflight_drift() -> None:
         bucket_id=BUCKET_A,
     )
     assert isinstance(authority, NativeSyncAuthority)
+    calls_before_admission = host.preflight_calls
+    writes_before_admission = store.preflight_writes
     wire: dict[str, Any] = {
         "metadata": _metadata(authority.envelope_id),
         "requestID": authority.request_id,
@@ -769,6 +845,145 @@ def test_admission_refuses_non_adapter_and_preflight_drift() -> None:
             authority=authority,
             wire_envelope=wire,
         )
+    assert host.preflight_calls == calls_before_admission + 1
+    assert store.preflight_writes == writes_before_admission + 1
+    assert authority.authority_id not in store.consumed
+
+
+def test_admission_stale_preflight_request_id_has_zero_durable_effects() -> None:
+    controller, store, host, _, _ = _controller()
+    store.append_configuration(_configuration(), expected_prior_revision=0)
+    authority = controller.lifecycle(
+        _context(
+            purpose=Purpose.CONTENT_EXTRACTION,
+            sources=frozenset({SOURCE_A, SOURCE_B}),
+        ),
+        capability=NativeSourceCapability.SYNC,
+        configuration_id=CONFIGURATION,
+        bucket_id=BUCKET_A,
+    )
+    assert isinstance(authority, NativeSyncAuthority)
+    calls_before_admission = host.preflight_calls
+    writes_before_admission = store.preflight_writes
+    host.response_request_id = "read.stale"
+    wire: dict[str, Any] = {
+        "metadata": _metadata(authority.envelope_id),
+        "requestID": authority.request_id,
+        "kind": "mail",
+        "accountID": "account.a",
+        "bucketID": "bucket.a",
+        "records": [],
+        "nextCursor": None,
+    }
+
+    with pytest.raises(PreflightDeniedError, match="identity did not match"):
+        controller.admit(
+            _context(
+                purpose=Purpose.CONTENT_EXTRACTION,
+                sources=frozenset(),
+                kind=PrincipalKind.SOURCE_PROVIDER_ADAPTER,
+            ),
+            authority=authority,
+            wire_envelope=wire,
+        )
+
+    assert host.preflight_calls == calls_before_admission + 1
+    assert store.preflight_writes == writes_before_admission
+    assert store.persisted == {}
+    assert authority.authority_id not in store.consumed
+
+
+def test_admission_context_request_mismatch_has_zero_host_or_durable_effects() -> None:
+    controller, store, host, _, _ = _controller()
+    store.append_configuration(_configuration(), expected_prior_revision=0)
+    authority = controller.lifecycle(
+        _context(
+            purpose=Purpose.CONTENT_EXTRACTION,
+            sources=frozenset({SOURCE_A, SOURCE_B}),
+            request_id="request.a",
+        ),
+        capability=NativeSourceCapability.SYNC,
+        configuration_id=CONFIGURATION,
+        bucket_id=BUCKET_A,
+    )
+    assert isinstance(authority, NativeSyncAuthority)
+    calls_before_admission = host.preflight_calls
+    writes_before_admission = store.preflight_writes
+    wire: dict[str, Any] = {
+        "metadata": _metadata(authority.envelope_id),
+        "requestID": authority.request_id,
+        "kind": "mail",
+        "accountID": "account.a",
+        "bucketID": "bucket.a",
+        "records": [],
+        "nextCursor": None,
+    }
+
+    with pytest.raises(AdmissionDeniedError, match="bridge identity did not match"):
+        controller.admit(
+            _context(
+                purpose=Purpose.CONTENT_EXTRACTION,
+                sources=frozenset(),
+                kind=PrincipalKind.SOURCE_PROVIDER_ADAPTER,
+                request_id="request.b",
+            ),
+            authority=authority,
+            wire_envelope=wire,
+        )
+
+    assert host.preflight_calls == calls_before_admission
+    assert store.preflight_writes == writes_before_admission
+    assert store.persisted == {}
+    assert authority.authority_id not in store.consumed
+
+
+def test_admission_scope_removal_during_host_call_has_zero_durable_effects() -> None:
+    controller, store, host, _, _ = _controller()
+    store.append_configuration(_configuration(), expected_prior_revision=0)
+    authority = controller.lifecycle(
+        _context(
+            purpose=Purpose.CONTENT_EXTRACTION,
+            sources=frozenset({SOURCE_A, SOURCE_B}),
+        ),
+        capability=NativeSourceCapability.SYNC,
+        configuration_id=CONFIGURATION,
+        bucket_id=BUCKET_A,
+    )
+    assert isinstance(authority, NativeSyncAuthority)
+    calls_before_admission = host.preflight_calls
+    writes_before_admission = store.preflight_writes
+    revised = replace(
+        _configuration(),
+        revision=2,
+        selection=ExactBucketSelection((BUCKET_B,)),
+        created_at=WHEN + timedelta(seconds=1),
+    )
+    host.on_preflight = lambda: store.append_configuration(revised, expected_prior_revision=1)
+    wire: dict[str, Any] = {
+        "metadata": _metadata(authority.envelope_id),
+        "requestID": authority.request_id,
+        "kind": "mail",
+        "accountID": "account.a",
+        "bucketID": "bucket.a",
+        "records": [],
+        "nextCursor": None,
+    }
+
+    with pytest.raises(AdmissionDeniedError, match="stale or unauthenticated"):
+        controller.admit(
+            _context(
+                purpose=Purpose.CONTENT_EXTRACTION,
+                sources=frozenset(),
+                kind=PrincipalKind.SOURCE_PROVIDER_ADAPTER,
+            ),
+            authority=authority,
+            wire_envelope=wire,
+        )
+
+    assert host.preflight_calls == calls_before_admission + 1
+    assert store.preflight_writes == writes_before_admission
+    assert store.persisted == {}
+    assert authority.authority_id not in store.consumed
 
 
 @pytest.mark.connector

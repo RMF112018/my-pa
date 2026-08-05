@@ -44,6 +44,7 @@ from my_pa.infrastructure.persistence.native_sources import (
 )
 from my_pa.infrastructure.persistence.tables import (
     capture_review_cases,
+    native_admission_authorities,
     native_preflight_observations,
     native_source_review_routes,
     source_object_versions,
@@ -253,13 +254,18 @@ def test_wp12c_revision_round_trips_to_its_exact_prior_head(c_engine: Engine) ->
 
 
 @pytest.mark.database
-def test_exact_binding_scope_and_allowed_sync_audit_are_database_backed(c_engine: Engine) -> None:
+def test_source_visibility_exact_binding_and_allowed_sync_audit_are_database_backed(
+    c_engine: Engine,
+) -> None:
     _seed(c_engine)
     store = SqlNativeSourceControlStore(c_engine)
     assert store.bridge_protocol(BRIDGE) == NATIVE_SOURCE_PROTOCOL_V1
     assert store.bucket_bindings((BUCKET,)) == (_binding(),)
     assert store.visible_locator_pairs(BRIDGE, frozenset({SOURCE})) == frozenset(
-        {("account.synthetic", "bucket.synthetic")}
+        {
+            ("account.synthetic", "bucket.synthetic"),
+            ("account.synthetic", "bucket.archive"),
+        }
     )
     authority = _authority(store)
     assert authority.audit_id == AUDIT
@@ -368,8 +374,19 @@ def test_scope_removal_serializes_before_admission_and_makes_grant_stale(
     )
 
     def admit_after_lock() -> tuple[tuple[str, bool], ...]:
+        reachable = NativeBucketProgress(
+            bucket_id=BUCKET,
+            state=NativePreflightState.REACHABLE.value,
+            coverage=NativeCoverageState.NOT_MEASURED,
+            admitted_count=0,
+            failed_count=0,
+            pending_count=0,
+        )
         return SqlNativeSourceControlStore(c_engine).admit_evidence_durably(
-            _envelope(authority), authority, at=WHEN + timedelta(seconds=1)
+            _envelope(authority),
+            authority,
+            (reachable,),
+            at=WHEN + timedelta(seconds=1),
         )
 
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -387,6 +404,17 @@ def test_scope_removal_serializes_before_admission_and_makes_grant_stale(
 
     with c_engine.connect() as connection:
         assert connection.scalar(select(func.count()).select_from(source_version_evidence)) == 0
+        assert (
+            connection.scalar(select(func.count()).select_from(native_preflight_observations)) == 0
+        )
+        assert (
+            connection.scalar(
+                select(native_admission_authorities.c.admission_sha256).where(
+                    native_admission_authorities.c.authority_id == authority.authority_id
+                )
+            )
+            is None
+        )
 
 
 @pytest.mark.database
@@ -463,6 +491,56 @@ def test_durable_status_distinguishes_permission_denial_and_unavailability(
         NativeProviderFailure.TRANSIENT_UNAVAILABLE,
     )
     assert "synthetic" not in status.to_canonical_json()
+
+
+@pytest.mark.database
+def test_operational_denial_is_recorded_only_while_authority_scope_is_current(
+    c_engine: Engine,
+) -> None:
+    _seed(c_engine)
+    store = SqlNativeSourceControlStore(c_engine)
+    authority = _authority(store)
+    envelope = _envelope(authority)
+    denied = NativeBucketProgress(
+        bucket_id=BUCKET,
+        state=NativePreflightState.PERMISSION_DENIED.value,
+        coverage=NativeCoverageState.PERMISSION_DENIED,
+        admitted_count=0,
+        failed_count=1,
+        pending_count=0,
+        failure=NativeProviderFailure.PERMISSION_DENIED,
+    )
+    store.record_admission_preflight_durably(envelope, authority, (denied,), observed_at=WHEN)
+    current = store.latest_configuration(CONFIGURATION)
+    assert current is not None
+    store.append_configuration(
+        replace(
+            current.configuration,
+            revision=2,
+            selection=ExactBucketSelection((BUCKET_2,)),
+            created_at=WHEN + timedelta(seconds=1),
+        ),
+        expected_prior_revision=1,
+    )
+    with pytest.raises(NativeAdmissionAuthorityError):
+        store.record_admission_preflight_durably(
+            envelope,
+            authority,
+            (denied,),
+            observed_at=WHEN + timedelta(seconds=1),
+        )
+    with c_engine.connect() as connection:
+        assert (
+            connection.scalar(select(func.count()).select_from(native_preflight_observations)) == 1
+        )
+        assert (
+            connection.scalar(
+                select(native_admission_authorities.c.admission_sha256).where(
+                    native_admission_authorities.c.authority_id == authority.authority_id
+                )
+            )
+            is None
+        )
 
 
 @pytest.mark.database

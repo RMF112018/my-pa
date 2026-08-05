@@ -224,10 +224,25 @@ class NativeSourceStore(Protocol):
     ) -> None:
         """Validate durable replay eligibility without consuming the authority."""
 
+    def record_admission_preflight_durably(
+        self,
+        envelope: NativeAdmissionEnvelope,
+        authority: NativeSyncAuthority,
+        results: tuple[NativeBucketProgress, ...],
+        *,
+        observed_at: datetime,
+    ) -> None:
+        """Validate current authority and durably record an operational denial."""
+
     def admit_evidence_durably(
-        self, envelope: NativeAdmissionEnvelope, authority: NativeSyncAuthority, *, at: datetime
+        self,
+        envelope: NativeAdmissionEnvelope,
+        authority: NativeSyncAuthority,
+        preflight: tuple[NativeBucketProgress, ...],
+        *,
+        at: datetime,
     ) -> tuple[tuple[str, bool], ...]:
-        """Commit evidence before returning; bool says this call created the version."""
+        """Atomically validate, record preflight, consume authority, and commit evidence."""
 
 
 class ReviewProposalRouter(Protocol):
@@ -408,11 +423,19 @@ class NativeSourceController:
             )
         )
         exact = tuple(result.selection for result in envelope.results) == selections
-        identity = envelope.metadata.host_instance_id == bridge_id and exact
-        by_private_bucket = {result.selection.bucket_id: result for result in envelope.results}
+        identity = (
+            envelope.metadata.host_instance_id == bridge_id
+            and envelope.request_id == context.request_id
+            and exact
+        )
+        by_private_locator = {
+            _selection_key(result.selection): result for result in envelope.results
+        }
         progress: list[NativeBucketProgress] = []
         for binding in bindings:
-            result = by_private_bucket.get(binding.bucket_locator)
+            result = by_private_locator.get(
+                (binding.kind.value, binding.account_locator, binding.bucket_locator)
+            )
             if result is None:
                 raise PreflightDeniedError("native preflight omitted selected scope")
             coverage = {
@@ -623,6 +646,7 @@ class NativeSourceController:
             or envelope.metadata.protocol_version != NATIVE_SOURCE_PROTOCOL_V1
             or envelope.metadata.envelope_id != authority.envelope_id
             or envelope.request_id != authority.request_id
+            or context.request_id != authority.request_id
         ):
             raise AdmissionDeniedError("native admission bridge identity did not match")
         bindings = self._bindings((authority.bucket_id,), authority.bridge_id)
@@ -640,22 +664,33 @@ class NativeSourceController:
             raise AdmissionDeniedError("native sync authority is stale or unauthenticated") from exc
         # The read-only durable prevalidation transaction has ended before the
         # host call, so revocation can still occur while preflight is in flight.
-        # admit_evidence_durably therefore takes the same configuration and row
-        # locks and repeats every authority/current-scope/replay check before it
-        # admits bytes. Invalid grants never reach this host/status boundary.
+        # The final durable operations therefore repeat every authority/current-
+        # scope/replay check while holding the same configuration and grant locks.
         verification = self._preflight_exact(
             context, bridge_id=authority.bridge_id, bindings=(binding,)
         )
-        self._store.record_preflight(
-            authority.configuration_id,
-            authority.configuration_revision,
-            verification.bucket_results,
-            observed_at=context.at,
-        )
+        if not verification.identity_verified:
+            raise PreflightDeniedError("native admission preflight identity did not match")
         if not verification.reachable:
+            try:
+                self._store.record_admission_preflight_durably(
+                    envelope,
+                    authority,
+                    verification.bucket_results,
+                    observed_at=context.at,
+                )
+            except NativeAdmissionAuthorityError as exc:
+                raise AdmissionDeniedError(
+                    "native sync authority is stale or unauthenticated"
+                ) from exc
             raise PreflightDeniedError("native admission preflight did not pass")
         try:
-            versions = self._store.admit_evidence_durably(envelope, authority, at=context.at)
+            versions = self._store.admit_evidence_durably(
+                envelope,
+                authority,
+                verification.bucket_results,
+                at=context.at,
+            )
         except NativeAdmissionAuthorityError as exc:
             raise AdmissionDeniedError("native sync authority is stale or unauthenticated") from exc
         version_ids = tuple(version_id for version_id, _ in versions)

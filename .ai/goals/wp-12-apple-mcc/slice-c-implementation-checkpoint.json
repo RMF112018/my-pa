@@ -2,7 +2,7 @@
   "schema_version": 1,
   "goal_id": "WP-12-APPLE-MCC",
   "slice": "C",
-  "disposition": "CORRECTIVE_IMPLEMENTATION_PENDING_DATABASE_TIER_AND_RE_REVIEW",
+  "disposition": "ZERO_WRITE_ADMISSION_CORRECTION_LOCAL_PASS_PENDING_DATABASE_CI_EXACT_HEAD_RE_REVIEW_AND_PR_CI",
   "repository": {
     "repository": "RMF112018/my-pa",
     "branch": "bf/wp-12c-application-admission",
@@ -22,17 +22,36 @@
       "verdict": "BLOCK",
       "findings": 1,
       "report_preserved_unmodified": true,
-      "call_order_correction": "IMPLEMENTED_PENDING_NEW_EXACT_BYTE_RE_REVIEW"
+      "call_order_correction": "IMPLEMENTED_AND_PRECOMMIT_REREVIEWED",
+      "final_precommit_rereview": {
+        "report": "/private/tmp/WP12C-FINAL-PRECOMMIT-REREVIEW.md",
+        "sha256": "1f4efda4117ad12a196ca8394ee4b3b46313c7efb41e77330ef51e74d7c398db",
+        "verdict": "PASS_PENDING_DATABASE_CI"
+      }
+    },
+    "corrected_manifest_review": {
+      "report": "/private/tmp/WP12C-CORRECTED-MANIFEST-REVIEW.md",
+      "sha256": "abdc664215884663e0b942aa71e3273d44a5560f04d946436176d3ce9cdc1da3",
+      "verdict": "BLOCK",
+      "findings": 1,
+      "report_preserved_unmodified": true,
+      "zero_write_admission_correction": "IMPLEMENTED_LOCAL_FOCUSED_AND_DATABASE_PASS_EXACT_HEAD_REREVIEW_AND_PR_CI_PENDING"
     }
   },
   "corrective_cycle": {
     "scope_admission_serialization": "IMPLEMENTED_SHARED_CONFIGURATION_ADVISORY_XACT_LOCK",
     "exact_durable_authority": "IMPLEMENTED_BOUND_ISSUANCE_EXPIRY_AND_REPLAY_DIGEST",
     "authority_prevalidation_call_order": "IMPLEMENTED_BEFORE_HOST_OR_STATUS_WITH_FINAL_TRANSACTION_REVALIDATION",
+    "admission_preflight_zero_write_denial": "IMPLEMENTED_IDENTITY_BEFORE_WRITE_AND_REACHABLE_STATUS_ATOMIC_WITH_FINAL_AUTHORITY_EVIDENCE_TRANSACTION",
+    "operational_preflight_denial_status": "IMPLEMENTED_ONLY_AFTER_FINAL_CURRENT_SCOPE_AUTHORITY_VALIDATION_WITHOUT_CONSUMPTION",
     "swift_d_to_c_integration": "PASS_SYNTHETIC_NATIVE_HOST_EXPORT_TO_CONTROLLER",
-    "durable_denial_unavailability": "IMPLEMENTED_DATABASE_TEST_NOT_RUN",
-    "governed_review_lineage": "IMPLEMENTED_DATABASE_TEST_NOT_RUN",
-    "configuration_sequence": "IMPLEMENTED_DATABASE_TEST_NOT_RUN"
+    "durable_denial_unavailability": "IMPLEMENTED_LOCAL_DATABASE_TIER_PASS",
+    "governed_review_lineage": "IMPLEMENTED_LOCAL_DATABASE_TIER_PASS",
+    "configuration_sequence": "IMPLEMENTED_LOCAL_DATABASE_TIER_PASS",
+    "preflight_request_binding": "IMPLEMENTED_NEGATIVE_REGRESSION_PASS",
+    "composite_private_locator_binding": "IMPLEMENTED_COLLISION_REGRESSION_PASS",
+    "historical_migration_expectations": "CORRECTED_LOCAL_DATABASE_TIER_PASS",
+    "audit_fixture_fk_isolation": "CORRECTED_WITH_EXACT_DEPENDENT_TRUNCATION_LOCAL_DATABASE_TIER_PASS"
   },
   "acceptance": {
     "final_criteria_owned": [
@@ -49,7 +68,7 @@
       "NAPDCB-AC-045"
     ],
     "verified_fast": ["NAPDCB-AC-004", "NAPDCB-AC-021"],
-    "implemented_pending_database_tier": [
+    "implemented_verified_local_pr_tier_pending_exact_head_review": [
       "NAPDCB-AC-002",
       "NAPDCB-AC-008",
       "NAPDCB-AC-018",
@@ -71,20 +90,24 @@
     "source mutation, external-model disclosure, deployment, production, destruction, or risk acceptance"
   ],
   "validation": {
-    "focused_unit_fast": "PASS_9_DESELECTED_1_CONNECTOR",
+    "focused_unit_and_architecture": "PASS_33",
     "swift_to_controller_connector": "PASS_1_DESELECTED_9",
     "swift_d_contract_checks": "PASS_10_CHECKS",
-    "database_tests_collected": "PASS_9_TESTS",
-    "broad_non_database": "PASS_2949_DESELECTED_467_DATABASE_RECOVERY_E2E_CONNECTOR",
+    "database_tests_collected": "PASS_10_TESTS",
+    "broad_non_database": "PASS_2950_DESELECTED_467",
     "ruff": "PASS",
     "format_check": "PASS",
-    "mypy": "PASS_124_SOURCE_FILES",
+    "mypy": "PASS_147_SOURCE_FILES",
     "git_diff_check": "PASS",
-    "database_tier": "NOT_RUN_MY_PA_DATABASE_URL_UNAVAILABLE",
-    "independent_exact_head_review": "TWO_BLOCK_REPORTS_PRESERVED_NEW_EXACT_BYTE_RE_REVIEW_PENDING"
+    "zero_write_correction_unit_architecture": "PASS_19",
+    "zero_write_correction_database": "PASS_10_FULL_SLICE_C_ADMISSION_AND_PASS_467_DESELECTED_2953_DISPOSABLE_POSTGRESQL_17",
+    "database_tier": "PASS_467_DESELECTED_2953_DISPOSABLE_POSTGRESQL_17",
+    "independent_exact_head_review": "TWO_BLOCK_REPORTS_AND_PRECOMMIT_PASS_PRESERVED_CORRECTED_EXACT_HEAD_RE_REVIEW_PENDING",
+    "pr_ci": "PRIOR_RUN_30983415715_FAILED_CORRECTIONS_LOCAL_PASS_RERUN_PENDING"
   },
   "limitations": [
-    "Database-backed concurrency, migration application, durable audit, and transaction assertions are authored but unexecuted locally.",
+    "The corrected exact head still requires independent review and a green GitHub PR CI rerun before merge.",
+    "The final zero-write admission correction passed locally against isolated PostgreSQL and still requires a green PR CI rerun and independent exact-head review.",
     "Removing the final selected bucket is rejected because the Slice B exact-selection invariant requires at least one bucket; full configuration retirement remains deferred.",
     "Native capabilities are deliberately unavailable on legacy MCP, HTTP, and CLI transports until Slice G.",
     "Control commands authorize and receipt state transitions only; they do not execute Slice E/F jobs or watchers."
@@ -100,6 +123,9 @@
     "The first corrective broad run passed 2946 tests but exposed three stale closed-set declarations for the new tables and authority identifier; the exact vocabulary owners were reconciled and the full run then passed 2949 tests.",
     "A combined read-only static closeout command was rejected by the execution approval policy before it started; no check ran and no file changed, so the checks were rerun as smaller invocations.",
     "The split checkpoint parse invoked an unavailable unqualified python command; the repository virtualenv interpreter was used instead.",
-    "A command-substitution form of the final read-only SHA manifest was rejected by the execution approval policy before it started; the same fixed 26-path manifest was computed without command substitution."
+    "A command-substitution form of the final read-only SHA manifest was rejected by the execution approval policy before it started; the same fixed 26-path manifest was computed without command substitution.",
+    "PR CI run 30983415715 exposed six database-tier failures and 25 fixture errors: historical assertions omitted the three newer Slice C tables, head vocabulary omitted the separate native capability enum, one source-visibility assertion conflated source scope with selected configuration, and audit fixtures truncated a referenced table without its new dependent authority table. The bounded corrections passed the exact 466-test local database tier.",
+    "The PR source review found that preflight did not bind the returned request ID and indexed results only by bucket locator. Exact request and composite-locator regressions now pass, with no configuration, preflight-status, or authority write on a mismatched response.",
+    "The corrected-manifest review found that admission status committed before response acceptance and final current-scope validation. Reachable status now commits atomically with final authority validation, consumption, and evidence; identity-mismatched and concurrently revoked admissions leave zero durable admission effects. The first new isolated-database invocation could not start because MY_PA_DATABASE_URL was not configured. A separate auto-removed PostgreSQL 17 container was then created on loopback with tmpfs/trust, the full Slice C admission file passed 10 tests, and the exact database/recovery/e2e tier passed 467 tests with 2,953 deselected."
   ]
 }

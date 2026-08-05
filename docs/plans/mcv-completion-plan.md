@@ -2112,18 +2112,30 @@ canonical package's own ledger. Like `NAR-OP-*`, they are excluded from section
 ### WP-12C implementation checkpoint — 2026-08-05
 
 Slice C now has a bounded synthetic-only application admission and control
-implementation for its eleven final criteria. FAST evidence is complete for
-`NAPDCB-AC-004` and `NAPDCB-AC-021`; the other nine implementations remain
-pending the isolated-database PR tier and exact-head independent review, so this
+implementation for its eleven final criteria. Its local PR-tier evidence is
+complete: 467 database/recovery/e2e tests passed against a separate disposable
+PostgreSQL 17 database, and 2,950 FAST tests passed. Slice C still requires a
+green PR rerun and independent review of the corrected exact head, so this
 checkpoint does not declare Slice C complete. The first independent review
-returned `BLOCK` with six findings; its exact report and hash are preserved in
-the machine checkpoint. A bounded corrective cycle now implements serialized
-scope/admission, durable exact authority, real Swift-host integration, durable
-denial/unavailability status, governed Review lineage, and monotonic revision
-append. Those corrections still require the unavailable database tier and a
-new exact-head independent review. Native-host operation, baseline
-execution, watchers, frontend routes, live Apple access, and every other Slice
-E/F/G/H behavior remain absent or deferred. The machine-readable disposition is
+returned `BLOCK` with six findings; a corrective rereview found one call-order
+defect; the next precommit rereview passed pending database CI; and the PR source
+review then found request-ID and composite-locator binding defects. All reports
+remain preserved. A subsequent corrected-manifest review found that admission
+status could commit before response acceptance and final current-scope
+validation. The bounded correction now rejects response-identity mismatch
+before any write, commits reachable status atomically with final locked
+authority validation, consumption, and evidence, and records an operational
+preflight denial only after the same current-scope validation without consuming
+the authority. Focused unit and architecture regressions pass, the full Slice C
+admission schema file passes ten tests, and the exact database/recovery/e2e tier
+passes 467 tests against disposable PostgreSQL 17. A green PR-CI rerun remains
+mandatory. The correction also binds preflight to the exact request and `(kind,
+account, bucket)` locator, retains serialized scope/admission and durable exact
+authority, and repairs historical migration and disposable-test isolation
+without weakening the authority-to-audit foreign key. Native-host
+operation, baseline execution, watchers, frontend routes, live Apple access,
+and every other Slice E/F/G/H behavior remain absent or deferred. The
+machine-readable disposition is
 `.ai/goals/wp-12-apple-mcc/slice-c-implementation-checkpoint.json`.
 
 ### Invalidation

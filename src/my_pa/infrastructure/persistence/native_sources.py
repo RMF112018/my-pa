@@ -1145,10 +1145,30 @@ class SqlNativeSourceControlStore:
         with self._engine.begin() as connection:
             self._validate_authority_locked(connection, envelope, authority, at=at)
 
+    def record_admission_preflight_durably(
+        self,
+        envelope: NativeAdmissionEnvelope,
+        authority: NativeAdmissionAuthority,
+        results: tuple[NativeBucketProgress, ...],
+        *,
+        observed_at: datetime,
+    ) -> None:
+        """Record an accepted operational denial only while its grant remains current."""
+        with self._engine.begin() as connection:
+            self._validate_authority_locked(connection, envelope, authority, at=observed_at)
+            self._record_preflight_rows(
+                connection,
+                authority.configuration_id,
+                authority.configuration_revision,
+                results,
+                observed_at=observed_at,
+            )
+
     def admit_evidence_durably(
         self,
         envelope: NativeAdmissionEnvelope,
         authority: NativeAdmissionAuthority,
+        preflight: tuple[NativeBucketProgress, ...] = (),
         *,
         at: datetime,
     ) -> tuple[tuple[str, bool], ...]:
@@ -1157,6 +1177,13 @@ class SqlNativeSourceControlStore:
         with self._engine.begin() as connection:
             source_kind, admission_digest = self._validate_authority_locked(
                 connection, envelope, authority, at=recorded_at
+            )
+            self._record_preflight_rows(
+                connection,
+                authority.configuration_id,
+                authority.configuration_revision,
+                preflight,
+                observed_at=recorded_at,
             )
             prior_digest = connection.scalar(
                 select(native_admission_authorities.c.admission_sha256).where(

@@ -15,7 +15,7 @@ criteria:
     blocking_dependencies: [B-schema-contracts, D-synthetic-host, C-use-cases, E-baseline, F-watcher-simulation]
   - id: NAPDCB-AC-002
     requirement: Verify bridge identity, version, reachability and permissions independently.
-    current: IMPLEMENTED_PENDING_DATABASE_TIER
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [A, B, D]
     components: [native-host/versioned-protocol, domain/native_sources/bridge, application/native_sources/preflight]
@@ -77,7 +77,7 @@ criteria:
     blocking_dependencies: [A-configuration-contract]
   - id: NAPDCB-AC-008
     requirement: Reverify every selected bucket immediately before sync.
-    current: IMPLEMENTED_PENDING_DATABASE_TIER
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B, D]
     components: [native-host/preflight, application/native_sources/preflight, persistence/native_source_buckets]
@@ -178,7 +178,7 @@ criteria:
     blocking_dependencies: [B-cursor-schema, D-paged-adapter, C-admission]
   - id: NAPDCB-AC-018
     requirement: Duplicate admission creates no duplicate immutable version.
-    current: IMPLEMENTED_PENDING_DATABASE_TIER
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B, D]
     components: [application/native_sources/admit, persistence/source_object_versions]
@@ -220,7 +220,7 @@ criteria:
     blocking_dependencies: [B-run-and-count-model]
   - id: NAPDCB-AC-022
     requirement: Zero records, denial and unavailability are distinguishable.
-    current: IMPLEMENTED_PENDING_DATABASE_TIER
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B, D]
     components: [domain/native_sources/coverage, application/native_sources/status]
@@ -322,7 +322,7 @@ criteria:
     blocking_dependencies: [B-config-revisions, C-configure-command, E-baseline]
   - id: NAPDCB-AC-032
     requirement: Removing scope stops access without default evidence deletion.
-    current: IMPLEMENTED_PENDING_DATABASE_TIER
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B]
     components: [application/native_sources/disable, persistence/native_configuration_revisions]
@@ -373,7 +373,7 @@ criteria:
     blocking_dependencies: [D-preflight-adapter, C-resume-command, E-checkpoint]
   - id: NAPDCB-AC-037
     requirement: Configuration changes are revisioned and audited without content.
-    current: IMPLEMENTED_PENDING_DATABASE_TIER
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B]
     components: [application/native_sources/configure, application/authorization, persistence/native_configuration_revisions, persistence/audit]
@@ -424,7 +424,7 @@ criteria:
     blocking_dependencies: [A-spool-contract]
   - id: NAPDCB-AC-042
     requirement: Admission authenticates bridge and exact bucket scope.
-    current: IMPLEMENTED_PENDING_DATABASE_TIER
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [A, B, D]
     components: [native-host/admission-client, application/native_sources/admit, application/authorization]
@@ -445,7 +445,7 @@ criteria:
     blocking_dependencies: [A-envelope-contract]
   - id: NAPDCB-AC-044
     requirement: Evidence persists independently of enrichment success.
-    current: IMPLEMENTED_PENDING_DATABASE_TIER
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B, D]
     components: [application/native_sources/admit, persistence/source_version_evidence, infrastructure/jobs]
@@ -456,7 +456,7 @@ criteria:
     blocking_dependencies: [B-evidence-schema, D-versioned-envelope]
   - id: NAPDCB-AC-045
     requirement: Consequential derived records require governed Review.
-    current: IMPLEMENTED_PENDING_DATABASE_TIER
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
     slice: C
     foundation_slices: [B]
     components: [application/native_sources/enrichment_route, persistence/proposals, persistence/review]

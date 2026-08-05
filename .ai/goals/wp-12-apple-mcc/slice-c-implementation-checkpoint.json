@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "goal_id": "WP-12-APPLE-MCC",
+  "slice": "C",
+  "disposition": "CORRECTIVE_IMPLEMENTATION_PENDING_DATABASE_TIER_AND_RE_REVIEW",
+  "repository": {
+    "repository": "RMF112018/my-pa",
+    "branch": "bf/wp-12c-application-admission",
+    "base_sha": "856492dcdb8c0ab8ea6b0e6b704a0f2964fcc2cd",
+    "base_tree_sha": "aa754126cbaaf6e37bb2de8154cba59373ddc9fa"
+  },
+  "objective": "Implement synthetic-only native-source application configuration, preflight, control, authenticated admission, durable evidence, status, scope removal, audit, and Review routing without implementing later-slice execution or live Apple behavior.",
+  "independent_review": {
+    "report": "/private/tmp/WP12C-PRECOMMIT-REVIEW.md",
+    "sha256": "4b3277cf03dae701b231467705985a5e10c9f18443b349be9dbbb81c2c891c3d",
+    "verdict": "BLOCK",
+    "findings": 6,
+    "report_preserved_unmodified": true,
+    "corrective_re_review": {
+      "report": "/private/tmp/WP12C-CORRECTIVE-PRECOMMIT-REREVIEW.md",
+      "sha256": "5d25adc6dc2472069bc92c679f99a929336a7d994ddf792cf2330091f46189a6",
+      "verdict": "BLOCK",
+      "findings": 1,
+      "report_preserved_unmodified": true,
+      "call_order_correction": "IMPLEMENTED_PENDING_NEW_EXACT_BYTE_RE_REVIEW"
+    }
+  },
+  "corrective_cycle": {
+    "scope_admission_serialization": "IMPLEMENTED_SHARED_CONFIGURATION_ADVISORY_XACT_LOCK",
+    "exact_durable_authority": "IMPLEMENTED_BOUND_ISSUANCE_EXPIRY_AND_REPLAY_DIGEST",
+    "authority_prevalidation_call_order": "IMPLEMENTED_BEFORE_HOST_OR_STATUS_WITH_FINAL_TRANSACTION_REVALIDATION",
+    "swift_d_to_c_integration": "PASS_SYNTHETIC_NATIVE_HOST_EXPORT_TO_CONTROLLER",
+    "durable_denial_unavailability": "IMPLEMENTED_DATABASE_TEST_NOT_RUN",
+    "governed_review_lineage": "IMPLEMENTED_DATABASE_TEST_NOT_RUN",
+    "configuration_sequence": "IMPLEMENTED_DATABASE_TEST_NOT_RUN"
+  },
+  "acceptance": {
+    "final_criteria_owned": [
+      "NAPDCB-AC-002",
+      "NAPDCB-AC-004",
+      "NAPDCB-AC-008",
+      "NAPDCB-AC-018",
+      "NAPDCB-AC-021",
+      "NAPDCB-AC-022",
+      "NAPDCB-AC-032",
+      "NAPDCB-AC-037",
+      "NAPDCB-AC-042",
+      "NAPDCB-AC-044",
+      "NAPDCB-AC-045"
+    ],
+    "verified_fast": ["NAPDCB-AC-004", "NAPDCB-AC-021"],
+    "implemented_pending_database_tier": [
+      "NAPDCB-AC-002",
+      "NAPDCB-AC-008",
+      "NAPDCB-AC-018",
+      "NAPDCB-AC-022",
+      "NAPDCB-AC-032",
+      "NAPDCB-AC-037",
+      "NAPDCB-AC-042",
+      "NAPDCB-AC-044",
+      "NAPDCB-AC-045"
+    ],
+    "final_criteria_discharged": []
+  },
+  "out_of_scope": [
+    "live Apple frameworks, accounts, permissions, credentials, or personal data",
+    "TCC, entitlements, signing, notarization, installation, or watcher activation",
+    "baseline and incremental execution owned by Slices E and F",
+    "gateway, MCP, CLI, or frontend exposure owned by Slice G",
+    "live activation and operational proof owned by Slice H",
+    "source mutation, external-model disclosure, deployment, production, destruction, or risk acceptance"
+  ],
+  "validation": {
+    "focused_unit_fast": "PASS_9_DESELECTED_1_CONNECTOR",
+    "swift_to_controller_connector": "PASS_1_DESELECTED_9",
+    "swift_d_contract_checks": "PASS_10_CHECKS",
+    "database_tests_collected": "PASS_9_TESTS",
+    "broad_non_database": "PASS_2949_DESELECTED_467_DATABASE_RECOVERY_E2E_CONNECTOR",
+    "ruff": "PASS",
+    "format_check": "PASS",
+    "mypy": "PASS_124_SOURCE_FILES",
+    "git_diff_check": "PASS",
+    "database_tier": "NOT_RUN_MY_PA_DATABASE_URL_UNAVAILABLE",
+    "independent_exact_head_review": "TWO_BLOCK_REPORTS_PRESERVED_NEW_EXACT_BYTE_RE_REVIEW_PENDING"
+  },
+  "limitations": [
+    "Database-backed concurrency, migration application, durable audit, and transaction assertions are authored but unexecuted locally.",
+    "Removing the final selected bucket is rejected because the Slice B exact-selection invariant requires at least one bucket; full configuration retirement remains deferred.",
+    "Native capabilities are deliberately unavailable on legacy MCP, HTTP, and CLI transports until Slice G.",
+    "Control commands authorize and receipt state transitions only; they do not execute Slice E/F jobs or watchers."
+  ],
+  "failed_attempts": [
+    "A global expansion of the legacy Capability enum broke closed-set transport and readiness contracts; corrected by introducing a separate NativeSourceCapability union at policy and audit boundaries.",
+    "Infrastructure initially imported application protocol types, violating dependency direction; corrected with application-owned protocols and infrastructure-owned structural records.",
+    "A broad path-based run accidentally selected database tests without MY_PA_DATABASE_URL and produced 268 environment setup errors; no database was accessed or created.",
+    "The first corrected non-database run found an audit annotation whose named type alias obscured its closed enum union; corrected to an explicit union and rerun clean.",
+    "The virtualenv had no YAML parser, so the combined artifact-parse command stopped before tests; checkpoint JSON and the 48 matrix rows were instead validated with dependency-free repository checks.",
+    "An initial mechanical matrix patch placed status values on preceding criteria; exact 48-row verification caught it, all eleven intended rows were corrected, and every non-C row was rechecked unchanged.",
+    "The first corrective D contract invocation compiled but its lock probe resolved the external scratch executable relative to the repository; rerunning from /private/tmp with an absolute package path passed all ten checks.",
+    "The first corrective broad run passed 2946 tests but exposed three stale closed-set declarations for the new tables and authority identifier; the exact vocabulary owners were reconciled and the full run then passed 2949 tests.",
+    "A combined read-only static closeout command was rejected by the execution approval policy before it started; no check ran and no file changed, so the checks were rerun as smaller invocations.",
+    "The split checkpoint parse invoked an unavailable unqualified python command; the repository virtualenv interpreter was used instead.",
+    "A command-substitution form of the final read-only SHA manifest was rejected by the execution approval policy before it started; the same fixed 26-path manifest was computed without command substitution."
+  ]
+}

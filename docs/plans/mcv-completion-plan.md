@@ -39,7 +39,7 @@ Drive mirrors are review surfaces rather than a competing ledger.
 | Database container | `my-pa-postgres`, `postgres:17.10`, healthy | `docker ps` |
 | Database binding | `127.0.0.1:5433 -> 5432`, loopback only | `docker ps` port map |
 | Logical database | `my_pa` | `select current_database()` |
-| Alembic head | `8c4d1e7a2b90` in the repository, fifteen revisions; the canonical database remains at `6c4d3ea82f10` because every revision above it builds the `knowledge` schema, which runs only against disposable databases | `migrations/versions/*.py`, `select * from alembic_version` |
+| Alembic head | `9d5e2f7b4c61` in the repository, sixteen revisions; the canonical database remains at `6c4d3ea82f10` because every revision above it builds the `knowledge` schema, which runs only against disposable databases | `migrations/versions/*.py`, `select * from alembic_version` |
 | Extensions | `pg_trgm`, `unaccent`, `plpgsql` | `select extname from pg_extension` |
 
 ## 2. Verified corpus claim
@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-One hundred and twenty-two Python modules under `src/my_pa` and one hundred and nine test modules —
+One hundred and twenty-four Python modules under `src/my_pa` and one hundred and twelve test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -89,7 +89,7 @@ section disagrees with the tree.
 | `domain/source`, `domain/extraction`, `domain/search` — registry, bounded enrollment, provider port, extraction outcomes, quarantine, coverage, search query | Implemented and tested |
 | `infrastructure/persistence` — registry, enrollment, jobs, extraction, quarantine, coverage, lexical search | Implemented; covered by the database tier |
 | `infrastructure/providers/fixture.py` — read-only fixture source provider | Implemented and tested |
-| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, the enrolled object set, relationship identity and profiles, native-source control plane | Implemented, fifteen revisions, head `8c4d1e7a2b90` |
+| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, the enrolled object set, relationship identity and profiles, native-source control plane | Implemented, sixteen revisions, head `9d5e2f7b4c61` |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
 All fifteen capability names, their operator-only flags, and their permitted
@@ -2108,6 +2108,23 @@ independently verified MCV completion; it does not start that campaign now.
 The ten `NAPDCB-OP-001` through `NAPDCB-OP-010` decisions remain in the
 canonical package's own ledger. Like `NAR-OP-*`, they are excluded from section
 14's three-ledger counts and none is answered here.
+
+### WP-12C implementation checkpoint — 2026-08-05
+
+Slice C now has a bounded synthetic-only application admission and control
+implementation for its eleven final criteria. FAST evidence is complete for
+`NAPDCB-AC-004` and `NAPDCB-AC-021`; the other nine implementations remain
+pending the isolated-database PR tier and exact-head independent review, so this
+checkpoint does not declare Slice C complete. The first independent review
+returned `BLOCK` with six findings; its exact report and hash are preserved in
+the machine checkpoint. A bounded corrective cycle now implements serialized
+scope/admission, durable exact authority, real Swift-host integration, durable
+denial/unavailability status, governed Review lineage, and monotonic revision
+append. Those corrections still require the unavailable database tier and a
+new exact-head independent review. Native-host operation, baseline
+execution, watchers, frontend routes, live Apple access, and every other Slice
+E/F/G/H behavior remain absent or deferred. The machine-readable disposition is
+`.ai/goals/wp-12-apple-mcc/slice-c-implementation-checkpoint.json`.
 
 ### Invalidation
 

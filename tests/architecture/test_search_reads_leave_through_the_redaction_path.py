@@ -77,10 +77,20 @@ mode written into the gate.
 which are the two modules that publish a redaction contract, each with its own
 pair of redacted error names. The rule was previously not merely un-run on the
 sibling — it was *not expressible* for it, because the module path and the error
-names were module-level constants consumed by one assertion. The other eleven
-`persistence` modules are deliberately **out**: they publish no redaction
-contract, their nonzero counts are not defects, and extending this scan to them
-would turn a guard into a source of exceptions.
+names were module-level constants consumed by one assertion. Every other module
+under `persistence` is deliberately **out**: they publish no redaction contract,
+their nonzero counts are not defects, and extending this scan to them would turn
+a guard into a source of exceptions.
+
+**No number is written for that remainder, and the omission follows a rule this
+package now applies everywhere.** It said "the other eleven", which was wrong
+when written — the structural count is twelve — and the correction is to delete
+it rather than to write "twelve", because the next module added makes either one
+false in silence. The test used, so a reader can apply it to the next sentence
+they write here: *a count whose set this file does not itself display is
+removed; a count whose set is enumerated or parametrized in view stays, because
+the enumeration is the control.* By that test the numbers left in this file are
+all local to a table a reader can see.
 
 Two syntactic limits, named rather than left to be found. `_connection_parameters`
 collects only *parameters* annotated `Connection`, so a read reached through a
@@ -265,7 +275,9 @@ def _raised_when(body: list[ast.stmt], flag: str, value: bool) -> str | None:
     return None
 
 
-def _answers_with(function: ast.FunctionDef, flag: str, redacted: tuple[str, str]) -> bool:
+def _answers_with(
+    function: ast.FunctionDef, flag: str, retryable_value: bool, redacted: tuple[str, str]
+) -> bool:
     """Whether `flag` being true is what selects the *unavailable* error.
 
     The last link, and it was missing. `_classifies` checked the handlers' names
@@ -274,20 +286,24 @@ def _answers_with(function: ast.FunctionDef, flag: str, redacted: tuple[str, str
     every name present and every raise outside, while reporting a dropped
     connection as this system's fault and a missing column as retryable.
 
-    **Checked by meaning and not by spelling, and the first version of this
-    function got that wrong.** It required the literal shape `if <flag>: raise
-    <unavailable>` with the other raise below, which made
-    `if not unavailable: raise <internal>` / `raise <unavailable>` — an exact
-    behavioural equivalent — fail. Measured: that rewrite reddened this guard and
-    passed all eighteen behavioural classification cases, which is the definition
-    of a false positive. A guard that rejects a correct rewrite trains a reader to
-    edit the guard, and the next edit is the one that matters. So both branches
-    are evaluated instead, and only the answer is asserted.
+    **Checked by meaning and not by spelling, and two versions of this function
+    got that wrong in the same direction.** The first required the literal shape
+    `if <flag>: raise <unavailable>`, so `if not unavailable: raise <internal>` /
+    `raise <unavailable>` — an exact behavioural equivalent — failed. The second
+    fixed that but left the polarity pinned one level up, in `_classifies`, which
+    required the retryable handler to assign `True`: a module that named its flag
+    for the *other* side and set it the other way round was flagged, and flagged
+    as **rule 1**, "reads outside the redaction path", which points a maintainer
+    at a property that is not the one that failed. A guard that rejects a correct
+    rewrite trains a reader to edit the guard, and the next edit is the one that
+    matters — so the polarity is now an input rather than a requirement.
+    `retryable_value` is whatever the retryable handler assigns, and all that is
+    asserted is that *that* value selects the unavailable error.
     """
     unavailable, internal = redacted
     return (
-        _raised_when(function.body, flag, True) == unavailable
-        and _raised_when(function.body, flag, False) == internal
+        _raised_when(function.body, flag, retryable_value) == unavailable
+        and _raised_when(function.body, flag, not retryable_value) == internal
     )
 
 
@@ -314,9 +330,17 @@ def _classifies(node: ast.Try, function: ast.FunctionDef, redacted: tuple[str, s
     will not say so. Bodies, because names and order alone describe the shape of
     an answer without constraining the answer — see `_answers_with`.
 
+    **What is *not* required is which way round the flag runs.** Requiring the
+    retryable handler to assign `True` pinned a spelling: a module whose flag is
+    named for the other side, set the other way, and read the other way is
+    behaviourally identical and was flagged — under rule 1, at that, which names
+    the wrong property. Only the two values differing is required; which is which
+    is passed to `_answers_with` as an input.
+
     The behavioural holder of this property is
-    `tests/security/test_query_is_data_not_sql.py`, which substitutes nine
-    failures into both modules and asserts the classification each gets. This is
+    `tests/security/test_query_is_data_not_sql.py`, which substitutes every
+    failure in its `CLASSIFICATIONS` table into both modules and asserts the
+    classification each one gets. This is
     the structural half: it fails on a rearrangement that inverts the meaning
     even where no test happens to cover the class that moved.
     """
@@ -334,11 +358,12 @@ def _classifies(node: ast.Try, function: ast.FunctionDef, redacted: tuple[str, s
     if set_on_retryable is None or set_on_everything_else is None:
         return False
     flag, retryable_value = set_on_retryable
-    if (flag, retryable_value) != (set_on_everything_else[0], True):
+    # The same variable, set to opposite values. Same name because two variables
+    # would leave one of them deciding nothing; opposite values because a flag
+    # both handlers set alike carries no information about which one ran.
+    if flag != set_on_everything_else[0] or retryable_value == set_on_everything_else[1]:
         return False
-    if set_on_everything_else[1] is not False:
-        return False
-    return _answers_with(function, flag, redacted)
+    return _answers_with(function, flag, retryable_value, redacted)
 
 
 def _redaction_bodies(function: ast.FunctionDef, redacted: tuple[str, str]) -> list[list[ast.stmt]]:
@@ -389,57 +414,101 @@ def _safe_functions(
     return safe
 
 
+def _mentions_cursor(annotation: ast.expr | None) -> bool:
+    """Whether `CursorResult` appears anywhere in this annotation."""
+    return annotation is not None and any(
+        isinstance(node, ast.Name) and node.id == "CursorResult" for node in ast.walk(annotation)
+    )
+
+
 def _row_shapes(functions: list[ast.FunctionDef]) -> set[str]:
     """The module's declared row shapes, derived rather than listed.
 
-    A row shape is a function of this module whose one parameter is annotated
-    `CursorResult` — `_one_or_none`, `_every_row`, `_exactly_one`. Derived from
-    the annotation so that adding a fourth needs no edit here, and so that this
-    guard cannot drift from the module the way a maintained list would.
+    A row shape takes a cursor and returns rows: one parameter annotated
+    `CursorResult`, and a return annotation that **does not** mention it. That
+    second half was missing, and it is the whole of the rule rather than a
+    refinement of it.
+
+    **Measured.** A faithfully annotated
+    `def _the_cursor(result: CursorResult[Any]) -> CursorResult[Any]: return result`
+    was admitted as a declared shape, so `_execute(connection, statement,
+    _the_cursor)` handed the caller a live cursor outside the handler with rules
+    1, 2 and 3 all reporting `[]` — the exact defect rule 3 exists for, reached
+    through the front door instead of through a lambda. The lambda reddened
+    correctly the whole time, which is why the hole survived: the control passed.
+
+    A missing return annotation is refused too. Under `mypy --strict` every
+    function has one, so requiring it costs nothing and failing closed is the
+    right direction for a scan that decides whether a cursor can escape.
     """
     shapes: set[str] = set()
     for function in functions:
         arguments = (*function.args.posonlyargs, *function.args.args)
         if len(arguments) != 1:
             continue
-        annotation = arguments[0].annotation
-        if isinstance(annotation, ast.Subscript):
-            annotation = annotation.value
-        if isinstance(annotation, ast.Name) and annotation.id == "CursorResult":
+        if _mentions_cursor(arguments[0].annotation) and not _mentions_cursor(function.returns):
             shapes.add(function.name)
     return shapes
 
 
-def _materializing_functions(functions: list[ast.FunctionDef], shapes: set[str]) -> set[str]:
-    """The functions that take a row shape as an argument.
+def _applied_parameter(function: ast.FunctionDef, connections: set[str]) -> str | None:
+    """The parameter this function *applies* to the result of its own read.
 
-    Derived, not named: a function with more than one parameter, one of whose
-    annotations mentions `CursorResult` — which is `_execute` and, if a second
-    one is ever written, that one too. The distinction from `_row_shapes` is the
-    parameter count: a shape *is* the callable, a materializing function
-    *receives* one.
+    Derived from the body — a call whose callee is one of this function's own
+    parameters and whose argument is a call on the connection, which is
+    `materialize(connection.execute(statement))` and nothing else in either
+    module.
 
-    Rule 3 is scoped to calls to these. The first version scoped it to every
-    reading function and reported `search_extractions` calling `_context`,
-    `_matches` and `_coverage` — none of which takes a materializer, because
-    each already passes its own. Measured, not reasoned: that is what the first
-    run reported.
+    **Read from the body rather than the annotations, and that is the fix rather
+    than the implementation.** This was derived from the parameter *annotation*
+    mentioning `CursorResult`, so widening `_execute`'s signature to
+    `Callable[..., Rows]` — which `mypy --strict` accepts without complaint —
+    dropped `_execute` out of rule 3's scope entirely and the identity lambda
+    went green again. A guard whose scope can be edited out of existence by a
+    type annotation is not a control; a guard that reads what the code *does*
+    cannot be switched off by rewriting what it *claims*.
     """
-    materializing: set[str] = set()
-    for function in functions:
-        if function.name in shapes:
-            continue
-        arguments = (*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs)
-        if len(arguments) < 2:
-            continue
-        if any(
-            isinstance(node, ast.Name) and node.id == "CursorResult"
-            for argument in arguments
-            if argument.annotation is not None
-            for node in ast.walk(argument.annotation)
+    names = {
+        argument.arg
+        for argument in (
+            *function.args.posonlyargs,
+            *function.args.args,
+            *function.args.kwonlyargs,
+        )
+    }
+    for node in ast.walk(function):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in names
+            and any(
+                isinstance(argument, ast.Call)
+                and isinstance(argument.func, ast.Attribute)
+                and isinstance(argument.func.value, ast.Name)
+                and argument.func.value.id in connections
+                for argument in node.args
+            )
         ):
-            materializing.add(function.name)
-    return materializing
+            return node.func.id
+    return None
+
+
+def _materializer_positions(functions: list[ast.FunctionDef]) -> dict[str, tuple[int, str]]:
+    """`{function: (parameter index, parameter name)}` for every materializing read.
+
+    The index is what lets rule 3 look at the right argument of a call rather
+    than at any argument, so passing a row shape in the *wrong* position does not
+    excuse the right one.
+    """
+    positions: dict[str, tuple[int, str]] = {}
+    for function in functions:
+        applied = _applied_parameter(function, _connection_parameters(function))
+        if applied is None:
+            continue
+        ordered = [argument.arg for argument in (*function.args.posonlyargs, *function.args.args)]
+        if applied in ordered:
+            positions[function.name] = (ordered.index(applied), applied)
+    return positions
 
 
 def _escaping_cursors(
@@ -467,19 +536,35 @@ def _escaping_cursors(
     spelled, cannot perform I/O and cannot raise a database error outside the
     handler. Rule 2 then stops being the guarantee and becomes a second, cheaper
     net for the one spelling it does catch.
+
+    That last sentence is only true if a *declared* shape cannot return a cursor
+    either — see `_row_shapes`, where it was not true — and if the scope below
+    cannot be edited away — see `_applied_parameter`, where it could be. Both
+    holes were live at `d03b9f5`, both are closed here, and both were invisible
+    to the lambda control that passed throughout.
+
+    The argument is checked **by position**, so a row shape passed where the
+    statement goes does not excuse the materializer that is missing.
     """
-    materializing = _materializing_functions(functions, shapes) & reading
-    return sorted(
-        f"{function.name}:{call.lineno}"
-        for function in functions
-        for call in reads[function.name]
-        if isinstance(call.func, ast.Name)
-        and call.func.id in materializing
-        and not any(
-            isinstance(argument, ast.Name) and argument.id in shapes
-            for argument in (*call.args, *(keyword.value for keyword in call.keywords))
-        )
-    )
+    positions = _materializer_positions(functions)
+    escaping: list[str] = []
+    for function in functions:
+        for call in reads[function.name]:
+            if not isinstance(call.func, ast.Name):
+                continue
+            target = positions.get(call.func.id)
+            if target is None or call.func.id not in reading:
+                continue
+            index, name = target
+            supplied: ast.expr | None = None
+            if len(call.args) > index:
+                supplied = call.args[index]
+            for keyword in call.keywords:
+                if keyword.arg == name:
+                    supplied = keyword.value
+            if not (isinstance(supplied, ast.Name) and supplied.id in shapes):
+                escaping.append(f"{function.name}:{call.lineno}")
+    return sorted(escaping)
 
 
 def _scan(
@@ -665,6 +750,54 @@ def test_the_row_shape_scan_catches_what_the_unpacking_scan_cannot(name: str) ->
     )
 
 
+#: `{module: (translated by the unit of work, or not)}`. The asymmetry as it
+#: stands, which two paragraphs of prose now describe and which nothing checked.
+TRANSLATED_BY_THE_UNIT_OF_WORK = {"search.py": True, "capture_search.py": False}
+
+UNIT_OF_WORK = PERSISTENCE / "unit_of_work.py"
+
+
+@pytest.mark.parametrize("module", sorted(MODULES))
+def test_the_unit_of_work_translates_one_module_and_not_the_other(module: str) -> None:
+    """The fact two docstrings now assert, asserted here so they cannot rot.
+
+    `persistence.search`'s cost paragraph ends "`SqlAlchemyUnitOfWork` then
+    flattens it to `RepositoryFailureError`". `capture_search`'s was a verbatim
+    copy of it and the sentence did not survive the move: `_read` catches
+    `SQLAlchemyError` and `IsolationLevelError`, and these two classes are
+    neither, so a capture search's failure leaves the repository as itself.
+    `_Extractions.search` names its module's errors explicitly; `_Captures.search`
+    does not. What is read is the `except` clauses, because the note that
+    discloses the gap names both classes in prose and a text scan cannot tell a
+    handler from a sentence about the absence of one.
+
+    **This test exists so that closing the gap breaks the disclosure.** The note
+    at `_Captures.search` says the translation is missing and that fixing it is a
+    separate package. If somebody fixes it and leaves the note, the note becomes
+    the same kind of false sentence this test was written for — so the moment
+    `capture_search`'s errors appear in `unit_of_work`, this reddens and points
+    at both paragraphs. A disclosure that cannot notice its own repair is prose,
+    which is the thing this file exists to replace.
+    """
+    unavailable, internal = MODULES[module]
+    # Read from the `except` clauses and not from the file's text. The note at
+    # `_Captures.search` names both classes in prose in order to say that nothing
+    # catches them, so a substring scan answers "translated" for exactly the
+    # module the note is about — measured, not guessed: that is what the first
+    # version of this test did.
+    tree = ast.parse(UNIT_OF_WORK.read_text(encoding="utf-8"), filename=str(UNIT_OF_WORK))
+    caught: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler):
+            caught |= _named_types(node.type)
+    translated = {unavailable, internal} <= caught
+    assert translated is TRANSLATED_BY_THE_UNIT_OF_WORK[module], (
+        f"{module}'s errors are now "
+        f"{'translated' if translated else 'not translated'} by the unit of work; "
+        "update the cost paragraph in that module and the note at _Captures.search"
+    )
+
+
 #: A module shaped like `persistence.search` and nothing more: one wrapped read
 #: of its own, and one delegated read whose handler is the variable under test.
 #: Written out rather than cut from the real file, so that the control is a
@@ -790,6 +923,166 @@ def test_the_scan_discriminates(name: str, handler: str, expected: list[str]) ->
     escaping = unredacted_reads(
         PLANTED.format(handler=handler), f"<planted: {name}>", PLANTED_REDACTED
     )
+    assert sorted({entry.split(":")[0] for entry in escaping}) == expected
+
+
+#: The same decision with the flag running the other way: named for the internal
+#: side, set `False` by the retryable handler and `True` by the catch-all, and
+#: read accordingly. Behaviourally identical to `PLANTED` in every case.
+OPPOSITE_POLARITY = """\
+from sqlalchemy import Connection
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+
+from elsewhere import coverage_for
+
+
+def _every_row(result: CursorResult[Any]) -> object:
+    return result.all()
+
+
+def _execute(connection: Connection, statement: object, materialize: object) -> object:
+    internal = True
+    try:
+        return materialize(connection.execute(statement))
+    except (OperationalError, InterfaceError, DisconnectionError, PoolTimeoutError, OSError):
+        internal = False
+    except Exception:
+        internal = True
+    if internal:
+        raise SearchInternalError("internal")
+    raise SearchUnavailableError("unavailable")
+
+
+def search(connection: Connection) -> object:
+    return _execute(connection, "select 1", _every_row)
+"""
+
+#: The same module with only the *answer* changed: the retryable handler still
+#: sets `False`, and `False` now selects the internal error.
+OPPOSITE_POLARITY_BROKEN = OPPOSITE_POLARITY.replace(
+    '    if internal:\n        raise SearchInternalError("internal")\n'
+    '    raise SearchUnavailableError("unavailable")',
+    '    if internal:\n        raise SearchUnavailableError("unavailable")\n'
+    '    raise SearchInternalError("internal")',
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "source", "expected"),
+    [
+        ("the flag named and set for the other side", OPPOSITE_POLARITY, []),
+        ("the same flag, the answers swapped", OPPOSITE_POLARITY_BROKEN, ["_execute", "search"]),
+    ],
+)
+def test_the_scan_does_not_care_which_way_round_the_flag_runs(
+    name: str, source: str, expected: list[str]
+) -> None:
+    """Non-vacuity for dropping the polarity pin, with its paired defect.
+
+    `_classifies` required the retryable handler to assign `True`. A module that
+    names its flag for the internal side and sets it the other way is exactly as
+    correct and was flagged — and flagged as **rule 1**, "reads outside the
+    redaction path", which is not the property that failed and sends a maintainer
+    to the wrong place entirely. The first case must be clean.
+
+    The second case is what stops that becoming permissiveness: the same flag,
+    the same polarity, and the two errors exchanged. Only the answer differs, and
+    it must still redden.
+    """
+    escaping = unredacted_reads(source, f"<planted: {name}>", PLANTED_REDACTED)
+    assert sorted({entry.split(":")[0] for entry in escaping}) == expected
+
+
+#: A materializer that is a *declared* shape and still returns the cursor. The
+#: bypass rule 3 admitted at `d03b9f5`: annotated faithfully, accepted as a row
+#: shape, and it hands the caller a live `CursorResult` outside the handler.
+DECLARED_CURSOR = """\
+from typing import Any
+from collections.abc import Callable
+from sqlalchemy import Connection, CursorResult
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+
+
+def _every_row(result: CursorResult[Any]) -> object:
+    return result.all()
+
+{shape}
+
+def _execute[Rows](
+    connection: Connection,
+    statement: object,
+    materialize: {signature},
+) -> Rows:
+    unavailable = False
+    try:
+        return materialize(connection.execute(statement))
+    except (OperationalError, InterfaceError, DisconnectionError, PoolTimeoutError, OSError):
+        unavailable = True
+    except Exception:
+        unavailable = False
+    if unavailable:
+        raise SearchUnavailableError("unavailable")
+    raise SearchInternalError("internal")
+
+
+def _context(connection: Connection, statement: object) -> object:
+    cursor = _execute(connection, statement, {materializer})
+    return cursor.all()
+"""
+
+_RETURNS_CURSOR = (
+    "def _the_cursor(result: CursorResult[Any]) -> CursorResult[Any]:\n    return result\n"
+)
+_RETURNS_ROWS = "def _the_rows(result: CursorResult[Any]) -> object:\n    return result.all()\n"
+_NARROW = "Callable[[CursorResult[Any]], Rows]"
+_WIDE = "Callable[..., Rows]"
+
+
+@pytest.mark.parametrize(
+    ("name", "shape", "signature", "materializer", "expected"),
+    [
+        # The bypass: a declared shape that returns what it was given.
+        (
+            "a declared shape that returns the cursor",
+            _RETURNS_CURSOR,
+            _NARROW,
+            "_the_cursor",
+            ["_context"],
+        ),
+        # The control that passed throughout, and is why the bypass survived.
+        ("the identity lambda", "", _NARROW, "lambda result: result", ["_context"]),
+        # The scope bypass: widening the annotation used to drop `_execute` out
+        # of rule 3 entirely, taking the lambda with it.
+        (
+            "the identity lambda under a widened signature",
+            "",
+            _WIDE,
+            "lambda result: result",
+            ["_context"],
+        ),
+        # The control: a declared shape that returns rows.
+        ("a declared shape that returns rows", _RETURNS_ROWS, _NARROW, "_the_rows", []),
+    ],
+)
+def test_a_declared_row_shape_may_not_return_the_cursor(
+    name: str, shape: str, signature: str, materializer: str, expected: list[str]
+) -> None:
+    """Non-vacuity for the two holes rule 3 had, with controls on both sides.
+
+    The first case is the one to read. It is not a lambda and not a trick: it is
+    a correctly annotated function of the module, admitted as a declared row
+    shape, returning the live cursor. Rules 1, 2 and 3 all reported `[]` for it
+    while the lambda beside it reddened — a control passing is what let the hole
+    live.
+
+    The third case is the other half: `Callable[..., Rows]` typechecks, and
+    deriving rule 3's scope from that annotation let a signature edit switch the
+    rule off. The scope is read from the body now, so it cannot be.
+    """
+    source = DECLARED_CURSOR.format(shape=shape, signature=signature, materializer=materializer)
+    escaping = reads_without_a_declared_row_shape(source, f"<planted: {name}>", PLANTED_REDACTED)
     assert sorted({entry.split(":")[0] for entry in escaping}) == expected
 
 

@@ -21,13 +21,14 @@ the rule is derived from the syntax tree instead:
     carries an `# statement-timeout-exempt:` comment on the line above it.
 
 **No count of those callers is written in this docstring, and the omission is
-deliberate.** The first version said "seven calls in six files"; there were
-eight, in seven. A number maintained beside the thing instead of derived from it
-is the `D-24` shape, and writing it in the prose of the guard whose whole subject
-is that shape is the failure inside the fix. `test_the_exemptions_are_the_ones_
-that_are_meant` names the exempt *files*, which is a set a reader can act on and
-which reddens when it changes; the total is derivable by running the scan and is
-not restated anywhere.
+deliberate.** The first version stated one, and it was wrong — and the second
+version recorded the correction by stating the *right* one, which is the same
+defect with a better value in it. A number maintained beside the thing instead of
+derived from it is the `D-24` shape, and writing one in the prose of the guard
+whose whole subject is that shape is the failure inside the fix, twice over.
+`test_the_exemptions_are_the_ones_that_are_meant` names the exempt *files*, which
+is a set a reader can act on and which reddens when it changes; the total is
+derivable by running the scan and is restated nowhere.
 
 **The exemptions are the interesting half.** Alembic (`migrations/env.py`) runs
 DDL and functional-index builds sized to the corpus, and a `CREATE INDEX`

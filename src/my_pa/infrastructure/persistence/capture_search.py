@@ -580,16 +580,28 @@ def _execute[Rows](
     **The widening has a cost, and it is named here rather than left for a
     reader to discover.** `Exception` also catches the failures that are this
     module's own bugs — `TypeError`, `KeyError`, `AttributeError` — and turns
-    each into `CaptureSearchInternalError`. The raise is outside the handler, so `__context__` is
-    empty by design; `SqlAlchemyUnitOfWork` then flattens it to
-    `RepositoryFailureError`; and this repository has no logging anywhere in
-    `src/`. So a programming error inside a read now reaches an operator as an
-    envelope with no diagnostic in it, where before the widening it reached them
-    as a traceback. That is a real loss of debuggability and it is not a
-    laundering of one: the alternative is a handler naming one library's base
-    class, which is exactly how the builtin `TimeoutError` escaped this function
-    entirely. The redaction contract requires the wide handler; the cost is the
-    price of it.
+    each into `CaptureSearchInternalError`. The raise is outside the handler, so
+    `__context__` is empty by design, and this repository has no logging anywhere
+    in `src/`. So a programming error inside a read now reaches its caller
+    carrying nothing at all, where before the widening it reached them as a
+    traceback. That is a real loss of debuggability and it is not a laundering of
+    one: the alternative is a handler naming one library's base class, which is
+    exactly how the builtin `TimeoutError` escaped this function entirely. The
+    redaction contract requires the wide handler; the cost is the price of it.
+
+    **Where that error goes next is not what the sibling's copy of this paragraph
+    said, and the difference is a defect rather than a nuance.** In
+    `persistence.search` the cost paragraph ends "`SqlAlchemyUnitOfWork` then
+    flattens it to `RepositoryFailureError`", which is true there because
+    `_Extractions.search` catches `SearchInternalError` by name. This paragraph
+    was copied from it verbatim and the sentence does not survive the move:
+    nothing catches *these* two classes. `CaptureSearchUnavailableError` and
+    `CaptureSearchInternalError` appear nowhere in `src/` or `apps/` outside this
+    module, and `unit_of_work._read` handles `SQLAlchemyError` and
+    `IsolationLevelError`, neither of which they are. So a failure classified
+    here leaves `_Captures.search` as itself, past the port's vocabulary and
+    outside section 10's taxonomy. That is recorded at the call site in
+    `unit_of_work`, it predates this package, and it is not fixed here.
 
     **What would close it** is a sink that records the original where the caller
     cannot see it — a logger, or an audit row carrying a correlation identifier

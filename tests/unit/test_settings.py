@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.engine import make_url
 
 from my_pa.bootstrap.settings import (
     DATABASE_URL_SCHEME,
@@ -268,16 +269,26 @@ def test_a_database_url_without_a_database_is_rejected(raw: str) -> None:
         load_settings({DATABASE_URL: DATABASE_URL_SCHEME + raw})
 
 
-#: URLs that set the one libpq parameter `create_database_engine` writes. The
-#: last is upper-cased on purpose: the check is case-insensitive, so a spelling
-#: psycopg would reject at connect time is refused at startup instead of turning
-#: into a different failure three layers down.
+#: URLs that set the one libpq parameter `create_database_engine` writes.
+#:
+#: The upper-cased row is there because the check is case-insensitive: SQLAlchemy
+#: passes a query key through unchanged, so `OPTIONS=` would reach psycopg as an
+#: unknown keyword and fail there instead of here.
+#:
+#: **The fragment row is the one that matters.** It passed the first version of
+#: this refusal, which parsed with `urlsplit`. `urlsplit` honours `#` as a
+#: fragment delimiter and SQLAlchemy's own regex does not, so `urlsplit` saw a
+#: query of `x=1` while `make_url` — the parser the engine actually uses — yielded
+#: `options='-c statement_timeout=0'`: past the refusal, and to the exact value
+#: `statement_timeout_ms`'s `gt=0` exists to forbid. The fix was not to special-
+#: case `#`; it was to ask the engine's parser, so that agreement is structural
+#: rather than a punctuation list somebody maintains.
 _URLS_SETTING_OPTIONS = [
     f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=-c%20search_path%3Dmine",
     f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=-c%20statement_timeout%3D0",
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=",
     f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?sslmode=require&options=-c%20x%3D1",
     f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?OPTIONS=-c%20x%3D1",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?x=1#&options=-c%20statement_timeout%3D0",
 ]
 
 
@@ -318,24 +329,63 @@ def test_the_options_refusal_names_the_setting_that_replaces_it() -> None:
     assert url not in message
 
 
-@pytest.mark.parametrize(
-    "raw",
-    [
-        f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere",
-        f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?sslmode=require",
-        f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?connect_timeout=5",
-        f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?application_name=my_pa",
-    ],
-)
-def test_every_other_connection_parameter_is_still_accepted(raw: str) -> None:
-    """The control, and it is what keeps the refusal from being a ban on queries.
+#: URLs that must still load. The first four are ordinary libpq parameters an
+#: operator may need; a check that refused the query string wholesale would take
+#: them with it.
+#:
+#: **The last two are accepted deliberately, and both were measured rather than
+#: reasoned about.** Neither reaches psycopg as an `options` parameter, so
+#: neither is the override this rule exists to prevent:
+#:
+#: - `?options=` — SQLAlchemy drops an empty-valued query parameter entirely, so
+#:   `make_url(...).query` is `{}` and the driver is handed nothing. The first
+#:   version of this refusal used `parse_qs(..., keep_blank_values=True)` and
+#:   rejected it. That rejection is withdrawn on purpose: catching a value the
+#:   engine never receives would need a *second* parser beside the engine's, which
+#:   is precisely the divergence the fragment row above was caused by. A no-op is
+#:   not worth reintroducing the class for.
+#: - `?a=1#options=…`, with no `&` — `make_url` yields `{'a': '1#options=…'}`, one
+#:   parameter named `a`. The fragment row in the refusal table differs by a
+#:   single `&`, and that this table and that one disagree about two nearly
+#:   identical strings is the point: neither was decided by reading the
+#:   punctuation, both were decided by asking the parser that decides.
+_URLS_WITHOUT_OPTIONS = [
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?sslmode=require",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?connect_timeout=5",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?application_name=my_pa",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?a=1#options=-c%20x%3D1",
+]
 
-    Only `options` collides with what the engine writes. `sslmode`,
-    `connect_timeout` and `application_name` are ordinary libpq parameters an
-    operator may need, and a check that refused the query string wholesale would
-    take them with it.
-    """
+
+@pytest.mark.parametrize("raw", _URLS_WITHOUT_OPTIONS)
+def test_every_other_connection_parameter_is_still_accepted(raw: str) -> None:
+    """The control, and it is what keeps the refusal from being a ban on queries."""
     assert load_settings({DATABASE_URL: raw}).database_url == raw
+
+
+@pytest.mark.parametrize("raw", _URLS_SETTING_OPTIONS + _URLS_WITHOUT_OPTIONS)
+def test_the_validator_and_the_engine_read_the_same_url_the_same_way(raw: str) -> None:
+    """The rule behind the rule: refused exactly when the driver would be handed one.
+
+    Both tables are run through this, so it is a biconditional and not a
+    one-directional check — a validator that refused everything would satisfy the
+    refusal table and fail here. `make_url` is the engine's parser, which is what
+    makes agreement structural rather than a coincidence maintained by hand.
+
+    This is the assertion that would have caught the fragment bypass without
+    anybody thinking of `#`, because it never mentions punctuation.
+    """
+    reaches_the_driver = any(name.lower() == "options" for name in make_url(raw).query)
+    refused = False
+    try:
+        load_settings({DATABASE_URL: raw})
+    except SettingsError:
+        refused = True
+    assert refused == reaches_the_driver, (
+        "the validator and the engine disagree about whether this URL supplies an options parameter"
+    )
 
 
 def test_an_invalid_database_url_error_never_echoes_the_url() -> None:

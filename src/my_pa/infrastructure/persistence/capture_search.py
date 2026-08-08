@@ -577,6 +577,30 @@ def _execute[Rows](
     - The second handler is `Exception` for that last reason: a handler naming
       one library's base class cannot carry a promise about *any* failure.
 
+    **The widening has a cost, and it is named here rather than left for a
+    reader to discover.** `Exception` also catches the failures that are this
+    module's own bugs — `TypeError`, `KeyError`, `AttributeError` — and turns
+    each into `CaptureSearchInternalError`. The raise is outside the handler, so `__context__` is
+    empty by design; `SqlAlchemyUnitOfWork` then flattens it to
+    `RepositoryFailureError`; and this repository has no logging anywhere in
+    `src/`. So a programming error inside a read now reaches an operator as an
+    envelope with no diagnostic in it, where before the widening it reached them
+    as a traceback. That is a real loss of debuggability and it is not a
+    laundering of one: the alternative is a handler naming one library's base
+    class, which is exactly how the builtin `TimeoutError` escaped this function
+    entirely. The redaction contract requires the wide handler; the cost is the
+    price of it.
+
+    **What would close it** is a sink that records the original where the caller
+    cannot see it — a logger, or an audit row carrying a correlation identifier
+    the envelope also carries. Neither exists in `src/` today and adding one is a
+    new mechanism rather than a fix to this one, so it is disclosed here and not
+    built.
+
+    `KeyboardInterrupt` and `SystemExit` are unaffected. Both derive from
+    `BaseException` and not from `Exception`, so a cancelled process still dies
+    at the read rather than reporting that the search could not be completed.
+
     The `raise` statements are outside the `except` block on purpose: `raise …
     from None` clears `__cause__` and leaves the original in `__context__`,
     where a rendered traceback shows a `DBAPIError` whose message can contain

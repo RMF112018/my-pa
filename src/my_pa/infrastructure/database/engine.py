@@ -18,14 +18,26 @@ from typing import Final
 
 from sqlalchemy import Engine, create_engine, text
 
-__all__ = ["DatabaseHealth", "create_database_engine", "healthcheck"]
+__all__ = [
+    "POOL_TIMEOUT_SECONDS",
+    "DatabaseHealth",
+    "create_database_engine",
+    "healthcheck",
+]
 
 #: A single-user local bulk load runs a handful of long-lived connections, so
 #: the pool is small and hard-bounded: overflow is disabled so that a leak
 #: surfaces as a timeout here rather than as an unbounded number of backends on
 #: a server sized for a fixed few.
 _POOL_SIZE: Final = 5
-_POOL_TIMEOUT_SECONDS: Final = 30
+
+#: How long a checkout may wait for a connection. Public, and the reason is
+#: `bootstrap.settings`: `DEFAULT_STATEMENT_TIMEOUT_MS` is this number in
+#: milliseconds, so a request's two waits — for a connection, then on the
+#: server — have one ceiling. That equality was written in a comment and
+#: nowhere else, which is the `D-24` shape the same package exists to correct;
+#: it is now computed from this name, so the two cannot drift.
+POOL_TIMEOUT_SECONDS: Final = 30
 
 #: The container can be restarted between batches. One round trip per checkout
 #: is far cheaper than losing a batch to a stale connection.
@@ -104,7 +116,7 @@ def create_database_engine(url: str, *, statement_timeout_ms: int | None = None)
         url,
         pool_size=_POOL_SIZE,
         max_overflow=0,
-        pool_timeout=_POOL_TIMEOUT_SECONDS,
+        pool_timeout=POOL_TIMEOUT_SECONDS,
         pool_pre_ping=_POOL_PRE_PING,
         connect_args=connect_args,
     )

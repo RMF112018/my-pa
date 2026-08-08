@@ -987,3 +987,36 @@ def test_a_plane_this_module_did_not_construct_compiles_nothing() -> None:
     )
     with pytest.raises(ValueError, match="unsupported text-search configuration"):
         document_vector(twin)
+
+
+@pytest.mark.parametrize(
+    ("module", "unavailable_error", "internal_error"),
+    [
+        (search_module, SearchUnavailableError, SearchInternalError),
+        (capture_search_module, CaptureSearchUnavailableError, CaptureSearchInternalError),
+    ],
+    ids=["search", "capture_search"],
+)
+@pytest.mark.parametrize("failure", [KeyboardInterrupt(), SystemExit(1)], ids=["ctrl-c", "exit"])
+def test_a_cancelled_process_is_not_reported_as_a_failed_search(
+    module: object,
+    unavailable_error: type[Exception],
+    internal_error: type[Exception],
+    failure: BaseException,
+) -> None:
+    """The boundary of the wide handler, asserted rather than described.
+
+    `_execute`'s second handler is `Exception`, which is deliberately wide enough
+    to catch this module's own bugs — the cost that docstring names. It must not
+    be wide enough to catch a cancellation: `BaseException` is where the line
+    is, and `Ctrl-C` during a long read has to kill the process rather than be
+    reported to the caller as "the search could not be completed" while the
+    interpreter carries on.
+
+    Written as a test because it is the one half of that disclosure a test can
+    hold. The rest — that a `TypeError` now arrives with no diagnostic anywhere —
+    is a property of the *absence* of a logging sink, and there is nothing to
+    assert against.
+    """
+    with pytest.raises(type(failure)):
+        module._execute(FailingConnection(failure), object(), lambda result: result)

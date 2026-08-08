@@ -474,6 +474,30 @@ def _execute[Rows](
     builtin `TimeoutError` got out. Everything not named above is this system's
     fault, retrying will not help, and saying otherwise would be a false promise.
 
+    **The widening has a cost, and it is named here rather than left for a
+    reader to discover.** `Exception` also catches the failures that are this
+    module's own bugs — `TypeError`, `KeyError`, `AttributeError` — and turns
+    each into `SearchInternalError`. The raise is outside the handler, so `__context__` is
+    empty by design; `SqlAlchemyUnitOfWork` then flattens it to
+    `RepositoryFailureError`; and this repository has no logging anywhere in
+    `src/`. So a programming error inside a read now reaches an operator as an
+    envelope with no diagnostic in it, where before the widening it reached them
+    as a traceback. That is a real loss of debuggability and it is not a
+    laundering of one: the alternative is a handler naming one library's base
+    class, which is exactly how the builtin `TimeoutError` escaped this function
+    entirely. The redaction contract requires the wide handler; the cost is the
+    price of it.
+
+    **What would close it** is a sink that records the original where the caller
+    cannot see it — a logger, or an audit row carrying a correlation identifier
+    the envelope also carries. Neither exists in `src/` today and adding one is a
+    new mechanism rather than a fix to this one, so it is disclosed here and not
+    built.
+
+    `KeyboardInterrupt` and `SystemExit` are unaffected. Both derive from
+    `BaseException` and not from `Exception`, so a cancelled process still dies
+    at the read rather than reporting that the search could not be completed.
+
     The `raise` statements are outside the `except` block on purpose. `raise …
     from None` clears `__cause__` and leaves the original in `__context__`,
     where a rendered traceback shows a `DBAPIError` whose message can contain
@@ -738,10 +762,19 @@ def _coverage(connection: Connection, enrollment_id: str, *, moment: datetime) -
 
     `coverage_for` also raises `ValueError` — through `CoverageCounts` — when the
     counts it assembles do not fit inside its own eligible total. It is no longer
-    named here, because the second handler is `Exception` and names nothing: a
-    `ValueError` is not a database failure, and the point of the wider handler is
-    that this function does not have to enumerate the ways a delegated read can
-    fail in order to keep classifying them. That is a real
+    named in the handler, because the second one is `Exception` and names
+    nothing: a `ValueError` is not a database failure, and the point of the wider
+    handler is that this function does not have to enumerate the ways a delegated
+    read can fail in order to keep classifying them.
+
+    **`ValueError` is no longer the only non-database failure caught here, and
+    saying only that it is still caught would understate the change.**
+    `TypeError`, `KeyError` and `AttributeError` — every programming error inside
+    `coverage_for` — join it, and each now becomes `SearchInternalError` with an
+    empty `__context__` instead of a traceback. `_execute` states that cost in
+    full and it applies here identically; the delegated read is the larger
+    surface of the two, because `coverage_for` is a whole function rather than
+    one `connection.execute`. That is a real
     inconsistency and it must be reported, but as a typed error: an uncaught
     `ValueError` is outside section 10's taxonomy, carries no envelope, and
     reaches whoever is above this layer as an unclassified crash that leaves

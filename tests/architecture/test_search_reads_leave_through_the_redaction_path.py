@@ -28,10 +28,23 @@ hole lived in. The wrapping is checked by shape and not by name: the call sits
 in the body of a `try` whose handlers name `OperationalError`, `InterfaceError`
 and `SQLAlchemyError`, no handler body raises, and the enclosing function raises
 both `SearchUnavailableError` and `SearchInternalError` outside every handler.
-The last two clauses are the properties the module's own docstring argues for
-and could not enforce: the `unavailable`/`internal` discrimination, and the
-`raise` placed outside the `except` block so the original is not left on
-`__context__` for a rendered traceback to print.
+The last clause is the property the module's own docstring argues for and could
+not enforce: the `raise` placed outside the `except` block so the original is
+not left on `__context__` for a rendered traceback to print.
+
+**What the last two clauses do and do not enforce, stated exactly, because the
+first draft of this docstring overstated it.** Requiring both error names
+outside every handler catches a collapse by *deletion* — dropping the
+`SearchUnavailableError` raise makes this test fail. It does **not** catch a
+collapse by *merge*: folding the handlers into
+`except (OperationalError, InterfaceError, SQLAlchemyError, ValueError)` while
+keeping both `raise` statements reports every database failure as internal, and
+this test, `mypy` and `ruff` all pass it. The discrimination is held by
+`test_the_delegated_coverage_read_keeps_the_unavailable_internal_discrimination`
+in `tests/security/test_query_is_data_not_sql.py`, which fails on exactly that
+mutant. A syntactic guard that claimed the semantic property would be this
+campaign's own failure mode — a green gate structurally incapable of seeing the
+defect it names — written into the gate.
 
 What this does not prove is behavioural: that the wrapped call really produces a
 bare error against a live server. `tests/security/test_query_is_data_not_sql.py`
@@ -39,6 +52,16 @@ proves that, for a delegated read and for one of this module's own, by breaking
 the schema under a real search. Nor does it say anything about `coverage_for`
 itself, or about any other module: the claim is that *this* module's reads leave
 through *this* module's redaction, and it is bounded to that file.
+
+Two syntactic limits, named rather than left to be found. `_connection_parameters`
+collects only *parameters* annotated `Connection`, so a read reached through a
+local alias — `reader = connection; coverage_for(reader, ...)` — is invisible to
+this scan, and the function reports zero reads rather than an unwrapped one.
+And `_is_wrapped` tests *lexical* containment, so a call bound inside a `try`
+and invoked after it, through `partial` or a nested `def`, counts as wrapped.
+Neither is backstopped by the behavioural tests, which cover today's reads
+rather than tomorrow's. Making the scan alias-aware is a real dataflow problem
+and is not attempted here.
 """
 
 from __future__ import annotations
@@ -58,9 +81,10 @@ MODULE = ROOT / "src" / "my_pa" / "infrastructure" / "persistence" / "search.py"
 #: a failure or lets it through.
 CLASSIFIED: frozenset[str] = frozenset({"OperationalError", "InterfaceError", "SQLAlchemyError"})
 
-#: The errors a redacting function raises, both of them. Requiring both is what
-#: keeps a "fix" that collapses the discrimination — everything internal, or
-#: everything unavailable — from satisfying this test.
+#: The errors a redacting function raises, both of them. Requiring both catches a
+#: collapse by deletion — dropping either raise fails this test. It does NOT catch
+#: a collapse by merge, which keeps both raises and widens one handler; see the
+#: module docstring. That case is held behaviourally, not here.
 REDACTED: frozenset[str] = frozenset({"SearchUnavailableError", "SearchInternalError"})
 
 

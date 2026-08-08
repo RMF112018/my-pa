@@ -256,14 +256,14 @@ CASES: dict[str, tuple[str, list[str]]] = {
     ),
     # A positional value is not the keyword; the setting is keyword-only.
     "a positional argument": (f"positional():\n{POSITIONAL}", [POSITIONAL]),
-    # The three bypasses the presence-only check accepted. `None` is the one
+    # The bypasses the presence-only check accepted. `None` is the one
     # that matters most: it is how `create_database_engine` documents an
     # exemption, so the guard was accepting a silent, unmarked, uncensused one
     # while reporting the tree clean.
     "the keyword set to None": (f"nulled():\n{NULLED}", [NULLED]),
     "the keyword set to zero": (f"zeroed():\n{ZEROED}", [ZEROED]),
     "the keyword set negative": (f"negated():\n{NEGATED}", [NEGATED]),
-    # The control for those three: a variable is trusted, because no syntax tree
+    # The control for those: a variable is trusted, because no syntax tree
     # can evaluate it and `Settings.statement_timeout_ms` is `int` with `gt=0`.
     "the keyword set from settings": (
         "configured():\n    return create_database_engine(url, "
@@ -277,9 +277,9 @@ CASES: dict[str, tuple[str, list[str]]] = {
 def test_the_scan_discriminates(name: str) -> None:
     """Non-vacuity, and its paired controls.
 
-    Six shapes through one planted file. Two of them are the correct forms and
-    report nothing; four are the ways an engine can end up unbounded, including
-    the two a looser rule would have accepted — an empty marker and a marker
+    Every shape in the table above, through one planted file. The correct forms
+    report nothing; the rest are ways an engine can end up unbounded, including
+    the pair a looser rule would have accepted — an empty marker, and a marker
     that excuses a call it is nowhere near.
 
     The two known-good engines at the top of the planted file are in every case,
@@ -289,7 +289,7 @@ def test_the_scan_discriminates(name: str) -> None:
     Compared by the reported *line's text* and not by its number, because a
     number would pin the layout of the planted source rather than the rule it
     demonstrates — which is what the first version of this test did, and it
-    failed on all four defect cases for that reason alone.
+    failed on every defect case for that reason alone.
     """
     shape, expected = CASES[name]
     source = PLANTED.format(shape=shape)

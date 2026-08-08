@@ -84,13 +84,17 @@ a guard into a source of exceptions.
 
 **No number is written for that remainder, and the omission follows a rule this
 package now applies everywhere.** It said "the other eleven", which was wrong
-when written — the structural count is twelve — and the correction is to delete
-it rather than to write "twelve", because the next module added makes either one
-false in silence. The test used, so a reader can apply it to the next sentence
-they write here: *a count whose set this file does not itself display is
-removed; a count whose set is enumerated or parametrized in view stays, because
-the enumeration is the control.* By that test the numbers left in this file are
-all local to a table a reader can see.
+when written, and the correction is to delete the number rather than to write the
+right one, because the next module added makes either false in silence.
+
+The rule, tightened, so a reader can apply it to the next sentence they write
+here: **a count of a set is written only where it is derived — `len(...)` — or
+asserted. Prose carries no count of a set at all.** An earlier form allowed a
+count whose set was "enumerated or parametrized in view", which is attention
+rather than mechanism: nothing makes a maintainer who adds a row to a table
+forty lines below update a sentence above it. The numbers that survive in this
+file count things named in the same sentence — two handlers, two modules — or
+fixed structural facts, not the size of any collection.
 
 Two syntactic limits, named rather than left to be found. `_connection_parameters`
 collects only *parameters* annotated `Connection`, so a read reached through a
@@ -414,39 +418,78 @@ def _safe_functions(
     return safe
 
 
-def _mentions_cursor(annotation: ast.expr | None) -> bool:
-    """Whether `CursorResult` appears anywhere in this annotation."""
-    return annotation is not None and any(
-        isinstance(node, ast.Name) and node.id == "CursorResult" for node in ast.walk(annotation)
-    )
+def _annotation_names(annotation: ast.expr | None) -> set[str]:
+    """Every bare name in an annotation, including one written as a string.
+
+    A string annotation is an `ast.Constant`, which holds no `Name` nodes at all,
+    so a scan that walked the node saw an empty set. Parsing it is what makes
+    `-> "CursorResult[Any]"` and `-> CursorResult[Any]` the same claim.
+
+    **What this buys is precision, not an escape closed, and the distinction was
+    measured rather than assumed.** Under the positive rule in `_row_shapes` a
+    string annotation is refused with or without this parse — unparsed it mentions
+    no `Row`, so it fails the rule for the wrong reason but fails it. What parsing
+    changes is the *legitimate* case: a shape honestly annotated
+    `-> "Sequence[Row[Any]]"` is accepted when the string is parsed and refused
+    when it is not. So this prevents a false positive on correct code; the
+    escape it was first written for is closed by the positive rule instead.
+    Stated this way because a plant proved it: removing the parse reddens nothing
+    in the escape table.
+    """
+    if annotation is None:
+        return set()
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = ast.parse(annotation.value, mode="eval").body
+        except SyntaxError:
+            return set()
+    return {node.id for node in ast.walk(annotation) if isinstance(node, ast.Name)}
 
 
 def _row_shapes(functions: list[ast.FunctionDef]) -> set[str]:
     """The module's declared row shapes, derived rather than listed.
 
-    A row shape takes a cursor and returns rows: one parameter annotated
-    `CursorResult`, and a return annotation that **does not** mention it. That
-    second half was missing, and it is the whole of the rule rather than a
-    refinement of it.
+    A row shape takes a cursor and returns rows. Both halves are stated
+    **positively**: the parameter annotation must mention `CursorResult`, and the
+    return annotation must mention `Row` and must not mention `CursorResult`.
 
-    **Measured.** A faithfully annotated
-    `def _the_cursor(result: CursorResult[Any]) -> CursorResult[Any]: return result`
-    was admitted as a declared shape, so `_execute(connection, statement,
-    _the_cursor)` handed the caller a live cursor outside the handler with rules
-    1, 2 and 3 all reporting `[]` — the exact defect rule 3 exists for, reached
-    through the front door instead of through a lambda. The lambda reddened
-    correctly the whole time, which is why the hole survived: the control passed.
+    **The positive form is the point, and two negative forms shipped before it.**
+    The first checked only the parameter, so a function returning its argument was
+    a declared shape. The second added "and the return annotation does not mention
+    `CursorResult`", which is a different sentence from "returns rows" and was
+    green for every one of these, each verified handing a live cursor to a caller
+    outside the handler: `-> object`, `-> Any`, `-> Cursor` where `Cursor` is a
+    module-level alias for `CursorResult[Any]`, and `-> "CursorResult[Any]"`
+    written as a string. The first of those is **one token** from this file's own
+    passing control — delete the `.all()` from `_the_rows` and the control is the
+    defect. A rule that admits everything it has not thought to exclude will
+    always be one token from the next one.
 
-    A missing return annotation is refused too. Under `mypy --strict` every
-    function has one, so requiring it costs nothing and failing closed is the
-    right direction for a scan that decides whether a cursor can escape.
+    **What this still does not establish, named rather than left to be found.**
+    The rule is *the declared shape is not a `CursorResult`*, which is not the
+    same claim as *the declared shape performs no I/O*. A shape annotated
+    `-> Iterator[Row[Any]]` returning `result.partitions()` mentions `Row`,
+    passes, and hands back a lazy iterator that reads from the server after the
+    handler has been left. Closing that needs a rule about the *body* — that every
+    return path is a call that materializes — and this does not attempt one. It
+    is residue under the positive check exactly as it was under the negative one,
+    and it is the reason the sentence below says what the rule establishes rather
+    than what a reader would like it to.
+
+    A missing return annotation is refused, since it mentions no `Row`. Under
+    `mypy --strict` every function has one, so requiring it costs nothing and
+    failing closed is the right direction for a scan that decides whether a
+    cursor can escape.
     """
     shapes: set[str] = set()
     for function in functions:
         arguments = (*function.args.posonlyargs, *function.args.args)
         if len(arguments) != 1:
             continue
-        if _mentions_cursor(arguments[0].annotation) and not _mentions_cursor(function.returns):
+        if "CursorResult" not in _annotation_names(arguments[0].annotation):
+            continue
+        returned = _annotation_names(function.returns)
+        if "Row" in returned and "CursorResult" not in returned:
             shapes.add(function.name)
     return shapes
 
@@ -459,14 +502,22 @@ def _applied_parameter(function: ast.FunctionDef, connections: set[str]) -> str 
     `materialize(connection.execute(statement))` and nothing else in either
     module.
 
-    **Read from the body rather than the annotations, and that is the fix rather
-    than the implementation.** This was derived from the parameter *annotation*
-    mentioning `CursorResult`, so widening `_execute`'s signature to
-    `Callable[..., Rows]` — which `mypy --strict` accepts without complaint —
-    dropped `_execute` out of rule 3's scope entirely and the identity lambda
-    went green again. A guard whose scope can be edited out of existence by a
-    type annotation is not a control; a guard that reads what the code *does*
-    cannot be switched off by rewriting what it *claims*.
+    **Read from the body rather than the annotations.** This was derived from the
+    parameter *annotation* mentioning `CursorResult`, so widening `_execute`'s
+    signature to `Callable[..., Rows]` — which `mypy --strict` accepts without
+    complaint — dropped `_execute` out of rule 3's scope entirely and the
+    identity lambda went green again.
+
+    **That fix was described as making the scope uneditable, and it did not.**
+    Reading the body settled *which parameter* is applied; the lookup that used
+    it still searched `posonlyargs + args` only, so moving the materializer
+    behind a `*` removed `_execute` from the rule exactly as the annotation
+    widening had. Two different edits, one hole, and the second shipped under a
+    sentence claiming the first had closed it. `_materializer_positions` searches
+    `kwonlyargs` too, which closes the spelling now known; what is true in general
+    is the weaker statement that the scope no longer follows a *type annotation*,
+    and any further claim about it should be earned by a plant rather than
+    asserted here.
     """
     names = {
         argument.arg
@@ -493,14 +544,20 @@ def _applied_parameter(function: ast.FunctionDef, connections: set[str]) -> str 
     return None
 
 
-def _materializer_positions(functions: list[ast.FunctionDef]) -> dict[str, tuple[int, str]]:
-    """`{function: (parameter index, parameter name)}` for every materializing read.
+def _materializer_positions(functions: list[ast.FunctionDef]) -> dict[str, tuple[int | None, str]]:
+    """`{function: (positional index or None, parameter name)}` for each materializing read.
 
-    The index is what lets rule 3 look at the right argument of a call rather
-    than at any argument, so passing a row shape in the *wrong* position does not
-    excuse the right one.
+    The name is what makes the lookup work for a keyword argument and the index
+    is what makes it work for a positional one. Both are needed: a materializer
+    declared **keyword-only** has no positional index at all, and recording only
+    `posonlyargs + args` dropped `_execute` out of rule 3 entirely the moment the
+    parameter moved behind a `*` — which is idiomatic in this repository and is
+    the same scope hole as the annotation widening this rule was already
+    rewritten once to close. `kwonlyargs` is now searched too, and a function
+    whose materializer is keyword-only records `None` for the index so that a
+    positional argument in that slot cannot satisfy it.
     """
-    positions: dict[str, tuple[int, str]] = {}
+    positions: dict[str, tuple[int | None, str]] = {}
     for function in functions:
         applied = _applied_parameter(function, _connection_parameters(function))
         if applied is None:
@@ -508,6 +565,8 @@ def _materializer_positions(functions: list[ast.FunctionDef]) -> dict[str, tuple
         ordered = [argument.arg for argument in (*function.args.posonlyargs, *function.args.args)]
         if applied in ordered:
             positions[function.name] = (ordered.index(applied), applied)
+        elif applied in {argument.arg for argument in function.args.kwonlyargs}:
+            positions[function.name] = (None, applied)
     return positions
 
 
@@ -521,30 +580,38 @@ def _escaping_cursors(
 
     **This is the rule that makes rule 2's narrowness safe, and it exists because
     rule 2's narrowness was not.** Rule 2 matches `safe_read(...).attr()` and
-    nothing else, so three shapes reinstated the defect it was written for while
-    both it and rule 1 reported clean: assigning the result and unpacking it on
-    the next line, subscripting it, and — the one that actually matters —
+    nothing else, so several shapes reinstated the defect it was written for
+    while both it and rule 1 reported clean: assigning the result and unpacking it
+    on the next line, subscripting it, and — the one that actually matters —
     `_execute(connection, statement, lambda result: result)`, an identity
     materializer that hands the caller the live `CursorResult` again. mypy cannot
     object: `lambda result: result` satisfies `Callable[[CursorResult], Rows]`
     perfectly.
 
     Constraining the *materializer* instead of the use of the result is the
-    assumption-level fix. When every read materializes through one of the
-    module's declared shapes, what comes back is a `Row`, a `Row | None` or a
-    `Sequence[Row]` — never a cursor — so unpacking it afterwards, however it is
-    spelled, cannot perform I/O and cannot raise a database error outside the
-    handler. Rule 2 then stops being the guarantee and becomes a second, cheaper
-    net for the one spelling it does catch.
+    assumption-level fix, and what it establishes is narrower than the sentence
+    that stood here through two revisions. **What the rule establishes** is that
+    every read materializes through a shape this module declares, and that a
+    declared shape's return type mentions `Row` and not `CursorResult`. **What it
+    does not establish** is that no I/O happens after the handler is left: a
+    shape annotated `-> Iterator[Row[Any]]` returning `result.partitions()`
+    satisfies the rule and hands back a lazy iterator that reads from the server
+    later. Closing that needs a rule about every return path in the shape's
+    *body*, which is not attempted. So rule 2 is not redundant, and this rule is
+    not the guarantee — the two together make the escape routes that have
+    actually been found unreachable, which is a smaller claim and the true one.
 
-    That last sentence is only true if a *declared* shape cannot return a cursor
-    either — see `_row_shapes`, where it was not true — and if the scope below
-    cannot be edited away — see `_applied_parameter`, where it could be. Both
-    holes were live at `d03b9f5`, both are closed here, and both were invisible
-    to the lambda control that passed throughout.
+    The history is the argument for the altitude. This rule has been rewritten
+    three times and each version was universal in its prose and narrow in its
+    mechanism: "however it is spelled" was false for an identity lambda under a
+    widened signature, then false for four ways of annotating a shape that
+    returns its argument, then false for a keyword-only materializer. Every
+    version had a passing control beside it, and the control passing is what
+    carried the error forward. `ROUTES` is the table those escapes now live in.
 
-    The argument is checked **by position**, so a row shape passed where the
-    statement goes does not excuse the materializer that is missing.
+    The argument is checked **by name, and by position where the parameter has
+    one**, so a materializer moved behind a `*` stays in scope and a row shape
+    passed where the statement goes does not excuse the one that is missing.
     """
     positions = _materializer_positions(functions)
     escaping: list[str] = []
@@ -557,7 +624,7 @@ def _escaping_cursors(
                 continue
             index, name = target
             supplied: ast.expr | None = None
-            if len(call.args) > index:
+            if index is not None and len(call.args) > index:
                 supplied = call.args[index]
             for keyword in call.keywords:
                 if keyword.arg == name:
@@ -665,7 +732,7 @@ def test_every_read_materializes_through_a_declared_row_shape(module: str) -> No
     """Rule 3, applied to both modules that state it.
 
     The rule that makes "the cursor never leaves the handler" true rather than
-    merely usually true. See `_escaping_cursors` for the three shapes that
+    merely usually true. See `_escaping_cursors` for the shapes that
     defeated rule 2 alone.
     """
     path = PERSISTENCE / module
@@ -675,10 +742,10 @@ def test_every_read_materializes_through_a_declared_row_shape(module: str) -> No
     assert escaping == [], f"reads with an undeclared row shape in {module}: {escaping}"
 
 
-#: The three shapes that reinstate item 3's defect while rules 1 and 2 report
-#: clean. The first two are ordinary idioms in this repository; the third is the
-#: one that matters, because it hands the caller the live cursor back and
-#: typechecks perfectly.
+#: The shapes that reinstate item 3's defect while rules 1 and 2 report clean.
+#: The assign-then-unpack and subscript forms are ordinary idioms in this
+#: repository; the identity materializer is the one that matters, because it
+#: hands the caller the live cursor back and typechecks perfectly.
 BYPASSES = {
     "assign, then unpack on the next line": (
         "    r = _execute(connection, statement, _one_or_none)\n    return r.one_or_none()",
@@ -694,16 +761,18 @@ BYPASSES = {
 }
 
 UNSHAPED = """\
-from sqlalchemy import Connection, CursorResult
+from collections.abc import Sequence
+from typing import Any
+from sqlalchemy import Connection, CursorResult, Row
 from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 
-def _one_or_none(result: CursorResult[Any]) -> object:
+def _one_or_none(result: CursorResult[Any]) -> Row[Any] | None:
     return result.one_or_none()
 
 
-def _every_row(result: CursorResult[Any]) -> object:
+def _every_row(result: CursorResult[Any]) -> Sequence[Row[Any]]:
     return result.all()
 
 
@@ -734,7 +803,7 @@ def test_the_row_shape_scan_catches_what_the_unpacking_scan_cannot(name: str) ->
     """Non-vacuity for rule 3, and the demonstration that rule 2 needed it.
 
     Every case asserts **both** scans, so the record shows what each one sees.
-    Rule 2 reports nothing for any of the four — including the identity
+    Rule 2 reports nothing for any of them — including the identity
     materializer, whose cursor is stored before it is unpacked — and rule 3
     reports exactly the one that lets a cursor out. The fourth case is the
     control: the correct form, clean under both.
@@ -778,6 +847,15 @@ def test_the_unit_of_work_translates_one_module_and_not_the_other(module: str) -
     `capture_search`'s errors appear in `unit_of_work`, this reddens and points
     at both paragraphs. A disclosure that cannot notice its own repair is prose,
     which is the thing this file exists to replace.
+
+    **What it measures is coarser than what it claims to be about.** `caught`
+    unions the `except` clauses of the whole module, so a handler for these
+    classes added in *any* method — one unrelated to capture search — flips this
+    test just as a fix to `_Captures.search` would. It answers "does
+    `unit_of_work` handle these classes anywhere", not "does the capture search
+    path translate its failures". The coarse form is the useful one for a
+    tripwire on a disclosure, and stating the difference is cheaper than a
+    per-method scan that would have to model which handler encloses which call.
     """
     unavailable, internal = MODULES[module]
     # Read from the `except` clauses and not from the file's text. The note at
@@ -803,7 +881,9 @@ def test_the_unit_of_work_translates_one_module_and_not_the_other(module: str) -
 #: Written out rather than cut from the real file, so that the control is a
 #: statement of the rule instead of a copy of today's implementation.
 PLANTED = """\
-from sqlalchemy import Connection
+from collections.abc import Sequence
+from typing import Any
+from sqlalchemy import Connection, CursorResult, Row
 from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
@@ -907,14 +987,15 @@ def test_the_scan_discriminates(name: str, handler: str, expected: list[str]) ->
 
     A scan that reported everything would pass the test above the day the rule
     was broken, and a scan that reported nothing would pass it for ever. The
-    same planted module is run six ways: the delegated read left in the handler
+    same planted module is run every way the table below lists: the delegated
+    read left in the handler
     the hole had, the same read wrapped, the same read wrapped but with the
     `raise` moved inside the `except` block, one retryable name dropped, the two
     handlers merged, and the catch-all written first. Only the second is clean,
     so the scan is answering the question rather than its own name.
 
-    The last three are the ones the superset check this replaced let through:
-    each of them passed it, and two of them — the merge and the reordering —
+    The dropped name, the merge and the reordering are the ones the superset
+    check this replaced let through: each of them passed it, and the last two
     report every database failure as non-retryable.
 
     Compared by function and not by line, because a line number would pin the
@@ -930,14 +1011,16 @@ def test_the_scan_discriminates(name: str, handler: str, expected: list[str]) ->
 #: side, set `False` by the retryable handler and `True` by the catch-all, and
 #: read accordingly. Behaviourally identical to `PLANTED` in every case.
 OPPOSITE_POLARITY = """\
-from sqlalchemy import Connection
+from collections.abc import Sequence
+from typing import Any
+from sqlalchemy import Connection, CursorResult, Row
 from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from elsewhere import coverage_for
 
 
-def _every_row(result: CursorResult[Any]) -> object:
+def _every_row(result: CursorResult[Any]) -> Sequence[Row[Any]]:
     return result.all()
 
 
@@ -994,26 +1077,25 @@ def test_the_scan_does_not_care_which_way_round_the_flag_runs(
     assert sorted({entry.split(":")[0] for entry in escaping}) == expected
 
 
-#: A materializer that is a *declared* shape and still returns the cursor. The
-#: bypass rule 3 admitted at `d03b9f5`: annotated faithfully, accepted as a row
-#: shape, and it hands the caller a live `CursorResult` outside the handler.
-DECLARED_CURSOR = """\
+#: One module, parameterised over how the materializer is declared and passed.
+#: Every route below hands `_context` a live `CursorResult` outside the handler;
+#: the controls hand it rows. Nothing else differs.
+ESCAPE_ROUTES = """\
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
-from collections.abc import Callable
-from sqlalchemy import Connection, CursorResult
+
+from sqlalchemy import Connection, CursorResult, Row
 from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
-
-def _every_row(result: CursorResult[Any]) -> object:
-    return result.all()
+Cursor = CursorResult[Any]
 
 {shape}
 
 def _execute[Rows](
     connection: Connection,
     statement: object,
-    materialize: {signature},
+    {parameter}
 ) -> Rows:
     unavailable = False
     try:
@@ -1028,60 +1110,97 @@ def _execute[Rows](
 
 
 def _context(connection: Connection, statement: object) -> object:
-    cursor = _execute(connection, statement, {materializer})
+    cursor = _execute(connection, statement, {call})
     return cursor.all()
 """
 
-_RETURNS_CURSOR = (
-    "def _the_cursor(result: CursorResult[Any]) -> CursorResult[Any]:\n    return result\n"
-)
-_RETURNS_ROWS = "def _the_rows(result: CursorResult[Any]) -> object:\n    return result.all()\n"
-_NARROW = "Callable[[CursorResult[Any]], Rows]"
-_WIDE = "Callable[..., Rows]"
+_POSITIONAL = "materialize: Callable[[CursorResult[Any]], Rows],"
+_KEYWORD_ONLY = "*,\n    materialize: Callable[[CursorResult[Any]], Rows],"
 
 
-@pytest.mark.parametrize(
-    ("name", "shape", "signature", "materializer", "expected"),
-    [
-        # The bypass: a declared shape that returns what it was given.
-        (
-            "a declared shape that returns the cursor",
-            _RETURNS_CURSOR,
-            _NARROW,
-            "_the_cursor",
-            ["_context"],
-        ),
-        # The control that passed throughout, and is why the bypass survived.
-        ("the identity lambda", "", _NARROW, "lambda result: result", ["_context"]),
-        # The scope bypass: widening the annotation used to drop `_execute` out
-        # of rule 3 entirely, taking the lambda with it.
-        (
-            "the identity lambda under a widened signature",
-            "",
-            _WIDE,
-            "lambda result: result",
-            ["_context"],
-        ),
-        # The control: a declared shape that returns rows.
-        ("a declared shape that returns rows", _RETURNS_ROWS, _NARROW, "_the_rows", []),
-    ],
-)
-def test_a_declared_row_shape_may_not_return_the_cursor(
-    name: str, shape: str, signature: str, materializer: str, expected: list[str]
-) -> None:
-    """Non-vacuity for the two holes rule 3 had, with controls on both sides.
+def _shape(returns: str, body: str = "return result") -> str:
+    return f"def _shape(result: CursorResult[Any]) -> {returns}:\n    {body}\n"
 
-    The first case is the one to read. It is not a lambda and not a trick: it is
-    a correctly annotated function of the module, admitted as a declared row
-    shape, returning the live cursor. Rules 1, 2 and 3 all reported `[]` for it
-    while the lambda beside it reddened — a control passing is what let the hole
-    live.
 
-    The third case is the other half: `Callable[..., Rows]` typechecks, and
-    deriving rule 3's scope from that annotation let a signature edit switch the
-    rule off. The scope is read from the body now, so it cannot be.
+#: `{name: (shape, parameter declaration, call argument, what rule 3 must report)}`.
+#:
+#: Every escape here was green at `8ac0b8c`, each verified to put a live cursor
+#: in a caller's hands outside the handler. The `object` row is one token from
+#: the control beneath it — the control returns `result.all()` and the escape
+#: returns `result`, with the same annotation — which is the whole argument for a
+#: positive rule: a negative one is always one token from the next escape it did
+#: not think of.
+ROUTES: dict[str, tuple[str, str, str, list[str]]] = {
+    "a shape returning object": (_shape("object"), _POSITIONAL, "_shape", ["_context"]),
+    "a shape returning Any": (_shape("Any"), _POSITIONAL, "_shape", ["_context"]),
+    "a shape returning an alias for the cursor": (
+        _shape("Cursor"),
+        _POSITIONAL,
+        "_shape",
+        ["_context"],
+    ),
+    "a shape whose annotation is a string": (
+        _shape('"CursorResult[Any]"'),
+        _POSITIONAL,
+        "_shape",
+        ["_context"],
+    ),
+    # The control that keeps the string case honest: parsing the annotation is
+    # what stops a correctly annotated shape being refused for having quotes
+    # round it. Without the parse this row reddens and no escape row does.
+    "a shape returning rows, annotated as a string": (
+        _shape('"Sequence[Row[Any]]"', "return result.all()"),
+        _POSITIONAL,
+        "_shape",
+        [],
+    ),
+    "an identity lambda": ("", _POSITIONAL, "lambda result: result", ["_context"]),
+    "a keyword-only materializer": (
+        _shape("Sequence[Row[Any]]", "return result.all()"),
+        _KEYWORD_ONLY,
+        "materialize=lambda result: result",
+        ["_context"],
+    ),
+    # The controls. Each is a real row shape, and the first is the one the
+    # `object` escape above is a single token away from.
+    "a shape returning rows, annotated object-free": (
+        _shape("Sequence[Row[Any]]", "return result.all()"),
+        _POSITIONAL,
+        "_shape",
+        [],
+    ),
+    "a shape returning one row or none": (
+        _shape("Row[Any] | None", "return result.one_or_none()"),
+        _POSITIONAL,
+        "_shape",
+        [],
+    ),
+    "a keyword-only materializer given a real shape": (
+        _shape("Sequence[Row[Any]]", "return result.all()"),
+        _KEYWORD_ONLY,
+        "materialize=_shape",
+        [],
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ROUTES))
+def test_no_declared_shape_lets_the_cursor_out(name: str) -> None:
+    """Every route a cursor took past this rule, and the controls beside them.
+
+    Escapes and controls through one module. The escapes were green at
+    `8ac0b8c` under a rule that asked whether the return annotation *failed to
+    mention* `CursorResult`; they are refused by one that asks whether it
+    *mentions* `Row`. The controls are what stop that being a rule which refuses
+    everything — and a passing control is exactly what let this hole live through
+    two rounds, so they are run in the same table rather than somewhere else.
+
+    The keyword-only pair is the scope half rather than the shape half: the
+    escape is a real row shape declared behind a `*`, which used to remove
+    `_execute` from this rule altogether and take the lambda with it.
     """
-    source = DECLARED_CURSOR.format(shape=shape, signature=signature, materializer=materializer)
+    shape, parameter, call, expected = ROUTES[name]
+    source = ESCAPE_ROUTES.format(shape=shape, parameter=parameter, call=call)
     escaping = reads_without_a_declared_row_shape(source, f"<planted: {name}>", PLANTED_REDACTED)
     assert sorted({entry.split(":")[0] for entry in escaping}) == expected
 
@@ -1095,9 +1214,9 @@ BODIES_SWAPPED = """\
     except Exception:
         unavailable = True"""
 
-#: The decision as it is written, and three rewrites of it. Two mean the same
-#: thing and two invert the answer; no two of them differ in more than the
-#: placement of a `not` and two identifiers.
+#: The decision as it is written, and rewrites of it. Some mean the same thing
+#: and some invert the answer; no two of them differ in more than the placement
+#: of a `not` and two identifiers.
 _DECISION = (
     '    if unavailable:\n        raise SearchUnavailableError("unavailable")\n'
     '    raise SearchInternalError("internal")'
@@ -1136,9 +1255,9 @@ def test_the_scan_checks_the_answer_and_not_its_spelling(
 ) -> None:
     """Non-vacuity for the classification check, with both kinds of control.
 
-    Four modules that differ only in how the retryable decision is written. Two
-    are correct and must be clean; two invert what a caller is told and must be
-    flagged. A guard that pinned the spelling would pass the first and fail the
+    Modules that differ only in how the retryable decision is written. The
+    correct spellings must be clean; the ones that invert what a caller is told
+    must be flagged. A guard that pinned the spelling would pass the first and fail the
     third; a guard that checked only names and order — which is what this one did
     — passes the second.
     """
@@ -1151,7 +1270,9 @@ def test_the_scan_checks_the_answer_and_not_its_spelling(
 #: module differ: inside the handler as an argument, or outside it as a dot on
 #: what `_execute` returned.
 UNPACKED = """\
-from sqlalchemy import Connection
+from collections.abc import Sequence
+from typing import Any
+from sqlalchemy import Connection, CursorResult, Row
 from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 

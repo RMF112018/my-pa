@@ -40,9 +40,18 @@ it. So every statement this module *builds* runs through `_execute`, which
 converts any `SQLAlchemyError` into one of this module's own errors — *raised
 outside the `except` block*, so the original is not left in `__context__` where a
 traceback would render it. That makes the redaction a property of this module
-rather than of a setting in a file this module does not own. The exception is
-named where it is: the coverage read is `coverage_for`'s statements, not this
-module's, and it is not inside `_execute`.
+rather than of a setting in a file this module does not own.
+
+There is no longer an exception for the read this module *delegates*. The
+coverage read runs `coverage_for`'s statements rather than `_execute`'s, and
+`_coverage` now classifies them with the same handler set, so a failure there
+leaves as `SearchUnavailableError` or `SearchInternalError` like every other.
+The rule this states is not held by this paragraph:
+`tests/architecture/test_search_reads_leave_through_the_redaction_path.py`
+derives every connection-touching call from this file's syntax tree — the
+delegated one counts exactly as much as `connection.execute` — and fails if one
+is written outside that shape, or if a `raise` moves back inside an `except`.
+Prose is what let the delegated read stay open for a whole work package.
 
 **The index exists, and the predicate has to stay equal to it as an expression.**
 `knowledge.extractions` has no `tsvector` column and no trigger maintaining one.
@@ -109,13 +118,26 @@ set is the eligible total `coverage_for` reads for itself. Two tokens, a state
 clamp, and a `context_statement` column were deleted rather than reworded,
 because a token nothing can emit is a vocabulary entry that can never fire.
 
-Also not claimed: that no database failure of any kind can carry detail out of
-`search_extractions`. The coverage read runs `coverage_for`'s statements, which
-this module does not wrap — `_coverage` catches `ValueError` and nothing else —
-so a `ProgrammingError` raised there escapes as a `SQLAlchemyError` whose message
-carries the statement and its bound `enrollment_id`. That is a schema fault
-rather than a query fault and no caller's text reaches it, but it is a real hole
-in the redaction and it is carried into WP-4 rather than described as closed.
+Now claimed, where it was not: **every database read this function performs
+leaves as one of this module's own errors** — the context read, the page, the
+limitation tokens, and the coverage read it delegates. The last was the hole.
+`_coverage` caught `ValueError` and nothing else, so a `ProgrammingError` from
+`coverage_for` escaped as a `SQLAlchemyError` whose message carried the
+statement and its bound `enrollment_id`. A schema fault rather than a query
+fault, and no caller's text reached it, which is why it was disclosed here and
+scheduled rather than fixed — and it was then carried into a work package that
+shipped without closing it, which is the argument against keeping a guarantee in
+a paragraph. `test_no_database_failure_in_any_read_a_search_performs_discloses_a_statement`
+breaks a table under the delegated read and under one of this module's own, and
+reads the rendered traceback rather than the message, because `__context__` is
+where the leak was.
+
+Still not claimed, and both are narrower than that sentence sounds. It is a
+claim about *database* failures: a stored row that fails `validate_identifier`
+or `Classification` still raises `ValueError` out of this function unwrapped,
+carrying an identifier prefix rather than a statement or any caller text.
+And `UnknownEnrollmentError` carries the enrollment identifier deliberately —
+a caller that named a scope is entitled to be told which one was not found.
 
 **What a search may match is one shared definition, not a list written twice.**
 `match_statement`'s scope is `extraction.extracted_text_in_scope`, and so is
@@ -632,7 +654,19 @@ def _matches(
 def _coverage(connection: Connection, enrollment_id: str, *, moment: datetime) -> CoverageCounts:
     """Read coverage, or fail as this module's own error rather than a bare one.
 
-    `coverage_for` raises `ValueError` — through `CoverageCounts` — when the
+    **This is the delegated read, and it is classified exactly like the
+    statements this module builds.** `coverage_for` runs its own statements on
+    this connection, so `_execute` never sees them; until this guard caught a
+    `SQLAlchemyError`, a `ProgrammingError` from the coverage read left
+    `search_extractions` as a `DBAPIError` whose message carried the SQL and the
+    bound `enrollment_id`. Not the query-leak path — nothing on this side binds
+    the caller's text — but the same class of hole, and it is the one thing the
+    module docstring used to carry as open. The handler set is `_execute`'s, so
+    the retryable pair stays retryable and everything else stays internal;
+    `tests/architecture/test_search_reads_leave_through_the_redaction_path.py`
+    is what fails if a future read is added outside this shape.
+
+    `coverage_for` also raises `ValueError` — through `CoverageCounts` — when the
     counts it assembles do not fit inside its own eligible total. That is a real
     inconsistency and it must be reported, but as a typed error: an uncaught
     `ValueError` is outside section 10's taxonomy, carries no envelope, and
@@ -651,16 +685,24 @@ def _coverage(connection: Connection, enrollment_id: str, *, moment: datetime) -
     other arrangement that produces it. This one must not turn either into an
     untyped crash.
 
-    The `raise` is outside the `except` block for the same reason it is in
-    `_execute`: leaving the handler first is what keeps the original off
-    `__context__`, and while this particular `ValueError` carries no identifier,
-    a traceback rendered through it exposes the frames and locals of a coverage
-    read. The message says nothing but that the search did not complete.
+    The `raise` statements are outside the `except` block for the same reason
+    they are in `_execute`: leaving the handler first is what keeps the original
+    off `__context__`, where a rendered traceback would print the `DBAPIError`
+    and its parameters. The `ValueError` carries no identifier of its own, but a
+    traceback rendered through either exposes the frames and locals of a
+    coverage read. The messages say nothing but that the search did not
+    complete, and they are `_execute`'s two messages so that a caller cannot
+    tell which read failed.
     """
+    unavailable = False
     try:
         return coverage_for(connection, enrollment_id, observed_at=moment)
-    except ValueError:
-        pass
+    except (OperationalError, InterfaceError):
+        unavailable = True
+    except (SQLAlchemyError, ValueError):
+        unavailable = False
+    if unavailable:
+        raise SearchUnavailableError("the lexical index could not be read")
     raise SearchInternalError("the search could not be completed")
 
 

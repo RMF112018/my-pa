@@ -6,6 +6,7 @@ import pytest
 
 from my_pa.bootstrap.settings import (
     DATABASE_URL_SCHEME,
+    DEFAULT_STATEMENT_TIMEOUT_MS,
     ENV_PREFIX,
     MAX_FETCH_BYTES_CEILING,
     Environment,
@@ -267,6 +268,76 @@ def test_a_database_url_without_a_database_is_rejected(raw: str) -> None:
         load_settings({DATABASE_URL: DATABASE_URL_SCHEME + raw})
 
 
+#: URLs that set the one libpq parameter `create_database_engine` writes. The
+#: last is upper-cased on purpose: the check is case-insensitive, so a spelling
+#: psycopg would reject at connect time is refused at startup instead of turning
+#: into a different failure three layers down.
+_URLS_SETTING_OPTIONS = [
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=-c%20search_path%3Dmine",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=-c%20statement_timeout%3D0",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?sslmode=require&options=-c%20x%3D1",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?OPTIONS=-c%20x%3D1",
+]
+
+
+@pytest.mark.parametrize("raw", _URLS_SETTING_OPTIONS)
+def test_a_database_url_that_sets_libpq_options_is_refused(raw: str) -> None:
+    """The engine writes `options`, so a URL that also writes it is refused.
+
+    SQLAlchemy merges a URL's query string into the driver's connect arguments
+    and lets `connect_args` win, so this URL's parameter would be **discarded**
+    rather than combined — measured, not inferred: a URL carrying
+    `options=-c search_path=mine` reaches psycopg as
+    `options='-c statement_timeout=30000'`. Silently dropping an operator's
+    configuration is the failure; refusing to start is the answer.
+
+    Refused rather than merged, and merging is the tempting wrong answer: libpq
+    lets a later `-c` override an earlier one, so concatenating the two strings
+    would let the second URL above configure the statement timeout to `0` — the
+    value `statement_timeout_ms`'s `gt=0` exists to make unreachable, reached
+    through a different door. That case is in the table rather than described.
+    """
+    with pytest.raises(SettingsError, match="must not set the libpq options parameter"):
+        load_settings({DATABASE_URL: raw})
+
+
+def test_the_options_refusal_names_the_setting_that_replaces_it() -> None:
+    """A refusal that does not say what to do instead is a refusal to start.
+
+    The message names the parameter and the setting and nothing else — no URL,
+    no host, no credential, which is the rule the whole of this function follows.
+    """
+    url = f"{DATABASE_URL_SCHEME}://my_pa:SUPERSECRETVALUE@db.invalid:5432/somewhere?options=-c%20x%3D1"
+    with pytest.raises(SettingsError) as caught:
+        load_settings({DATABASE_URL: url})
+    message = str(caught.value)
+    assert f"{ENV_PREFIX}STATEMENT_TIMEOUT_MS" in message
+    assert "SUPERSECRETVALUE" not in message
+    assert "db.invalid" not in message
+    assert url not in message
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere",
+        f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?sslmode=require",
+        f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?connect_timeout=5",
+        f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?application_name=my_pa",
+    ],
+)
+def test_every_other_connection_parameter_is_still_accepted(raw: str) -> None:
+    """The control, and it is what keeps the refusal from being a ban on queries.
+
+    Only `options` collides with what the engine writes. `sslmode`,
+    `connect_timeout` and `application_name` are ordinary libpq parameters an
+    operator may need, and a check that refused the query string wholesale would
+    take them with it.
+    """
+    assert load_settings({DATABASE_URL: raw}).database_url == raw
+
+
 def test_an_invalid_database_url_error_never_echoes_the_url() -> None:
     """A rejected URL is the one setting value most likely to hold a password."""
     url = "postgresql+psycopg2://my_pa:SUPERSECRETVALUE@localhost:5433/my_pa"
@@ -274,3 +345,39 @@ def test_an_invalid_database_url_error_never_echoes_the_url() -> None:
         load_settings({DATABASE_URL: url})
     assert "SUPERSECRETVALUE" not in str(caught.value)
     assert url not in str(caught.value)
+
+
+def test_the_statement_timeout_is_configured_and_defaults_to_a_bound() -> None:
+    """A bound exists without configuration, and configuration can change it.
+
+    Both halves matter and neither implies the other. PostgreSQL's own default
+    is `0` — no bound at all — so an unconfigured process is exactly the state
+    this setting exists to leave: the default has to *be* a bound. And a bound
+    an operator cannot move is a constant with a longer name, which is what
+    `D-24` corrected for the four limit fields.
+    """
+    assert load_settings({DATABASE_URL: _A_URL}).statement_timeout_ms == (
+        DEFAULT_STATEMENT_TIMEOUT_MS
+    )
+    assert DEFAULT_STATEMENT_TIMEOUT_MS > 0
+    configured = load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}STATEMENT_TIMEOUT_MS": "5000"})
+    assert configured.statement_timeout_ms == 5000
+
+
+@pytest.mark.parametrize("raw", ["0", "-1"])
+def test_the_statement_timeout_cannot_be_configured_away(raw: str) -> None:
+    """`0` is how PostgreSQL spells "no timeout", so `0` is refused.
+
+    The one value that would turn this setting into the absence of the thing it
+    configures is not reachable through configuration, which is the same
+    fail-closed shape as `MY_PA_REDACTION_ENABLED=false`. A process that must
+    run unbounded is exempted in code, where the exemption is reviewable.
+    """
+    with pytest.raises(SettingsError, match="STATEMENT_TIMEOUT_MS"):
+        load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}STATEMENT_TIMEOUT_MS": raw})
+
+
+def test_a_misspelled_statement_timeout_is_not_silently_ignored() -> None:
+    """The fail-closed unknown-name check covers the new field like every other."""
+    with pytest.raises(SettingsError, match="unknown MY_PA_ settings"):
+        load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}STATEMENT_TIMEOUT": "5000"})

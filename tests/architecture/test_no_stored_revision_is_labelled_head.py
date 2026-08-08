@@ -93,7 +93,7 @@ _SELECT = re.compile(r"\bselect\b", re.IGNORECASE)
 #:
 #: **The implicit branch is positional, not an optional `AS`.** Making the
 #: keyword optional matches every word in the region, and the regions this rule
-#: reads are not all SQL: `apps/cli/health.py:126` qualifies as a
+#: reads are not all SQL: `database_revisions` in `apps/cli/health.py` qualifies as a
 #: revision-reading query while being English prose, because it names the table
 #: and the verb. Measured over all 14805 regions of the searched corpus, an
 #: optional-`AS` branch finds one such word — `head` in the prose of

@@ -37,10 +37,13 @@ query is `EmptySearchQueryError`.
 SQLAlchemy renders bound parameters into `DBAPIError` messages unless the engine
 was built with `hide_parameters=True`, and `create_database_engine` does not set
 it. So every statement this module *builds* runs through `_execute`, which
-converts any `SQLAlchemyError` into one of this module's own errors — *raised
+converts any exception at all into one of this module's own errors — *raised
 outside the `except` block*, so the original is not left in `__context__` where a
 traceback would render it. That makes the redaction a property of this module
-rather than of a setting in a file this module does not own.
+rather than of a setting in a file this module does not own. `_execute` also
+materializes the rows *inside* its own handler rather than returning a cursor for
+the caller to unpack afterwards, which is what makes "every failure of a read"
+mean the whole read and not the part before the dot.
 
 There is no longer an exception for the read this module *delegates*. The
 coverage read runs `coverage_for`'s statements rather than `_execute`'s, and
@@ -98,9 +101,15 @@ use `extractions_by_enrollment` — whose leading column it is — and apply the
 match as a filter, which is the right plan and is what it does at test-fixture
 scale. That index's second column is `status`, and both this module and
 `coverage_for` filter on it, because both take their scope from the one
-definition `match_statement` names. This module also sets no statement timeout.
-The index removes the sequential scan as the only possibility; it does not bound
-what a query can cost.
+definition `match_statement` names. The index removes the sequential scan as the
+only possibility; it does not bound what a query can cost, and nothing in this
+module ever did. What does is `MY_PA_STATEMENT_TIMEOUT_MS`, set as a connection
+option by `create_database_engine` on every engine the gateway builds, so a
+statement this module sends is cancelled by the server rather than run until it
+finishes. A cancelled statement arrives as an `OperationalError` and leaves
+through `_execute` as `SearchUnavailableError`, which is the honest answer: it is
+retryable, and it is the one failure in the retryable set that says the query was
+too expensive rather than that the server was unreachable.
 
 **What a search returns is bounded by the enrollment's scope, both selectors.**
 This was the largest of the things this module used to disclaim. A root-selector
@@ -191,6 +200,7 @@ divergence."""
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
@@ -212,7 +222,14 @@ from sqlalchemy import (
     tuple_,
 )
 from sqlalchemy.dialects.postgresql import REGCONFIG
-from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import (
+    DisconnectionError,
+    InterfaceError,
+    OperationalError,
+)
+from sqlalchemy.exc import (
+    TimeoutError as PoolTimeoutError,
+)
 
 from my_pa.contracts.v1.disclosure import (
     Coverage,
@@ -400,8 +417,62 @@ class SearchPage:
     disclosure: Disclosure
 
 
-def _execute(connection: Connection, statement: Executable) -> CursorResult[Any]:
-    """Run `statement`, converting any database failure into a bare typed error.
+def _one_or_none(result: CursorResult[Any]) -> Row[Any] | None:
+    """The single row, or `None`. Raises `MultipleResultsFound` for more."""
+    return result.one_or_none()
+
+
+def _every_row(result: CursorResult[Any]) -> Sequence[Row[Any]]:
+    """Every row the cursor holds."""
+    return result.all()
+
+
+def _execute[Rows](
+    connection: Connection,
+    statement: Executable,
+    materialize: Callable[[CursorResult[Any]], Rows],
+) -> Rows:
+    """Run `statement`, materialize its rows, and convert any failure into a bare typed error.
+
+    **`materialize` is an argument rather than something the caller applies to
+    the returned cursor, and that is the only reason it exists.** This function
+    used to return the `CursorResult` itself, so every caller wrote
+    `_execute(…).one_or_none()` or `_execute(…).all()` — and the `try` had
+    already been left by the time the dot ran. `MultipleResultsFound` from
+    `.one_or_none()` would therefore have propagated raw: outside section 10's
+    taxonomy, outside the envelope, and past the redaction this module's whole
+    contract is. **This is a structural defect and not an exploitable one, and
+    the difference is worth stating rather than blurring.** Nothing reaches it
+    today: the only `one_or_none` read filters on a primary key, and psycopg
+    buffers a result set, so `.all()` performs no I/O after the cursor is
+    returned. What was false was the *guarantee*, which says every failure of a
+    read leaves through here. Passing the shape in makes the guarantee true by
+    construction rather than by an argument about today's predicates.
+
+    **The retryable set is derived from the exception hierarchy, not from the two
+    names a driver happens to raise most.** `OperationalError` and
+    `InterfaceError` alone left three retryable failures classified as this
+    system's fault, and one of them was not classified at all:
+
+    - `DisconnectionError` is a direct subclass of `SQLAlchemyError` and of
+      neither of those two. A dropped connection is the definition of retryable.
+    - `TimeoutError` — SQLAlchemy's, imported here as `PoolTimeoutError` because
+      the builtin of that name means something else — is raised when a pool
+      checkout waits out `pool_timeout`. It is reachable by construction rather
+      than in principle: `create_database_engine` builds a pool of five with
+      overflow disabled, and `bootstrap.gateway` builds two of them.
+    - The builtin `TimeoutError` is an `OSError`, so it is not a
+      `SQLAlchemyError` at all and **escaped this function entirely**, taking
+      the socket-level failures beside it — `ConnectionResetError`,
+      `BrokenPipeError` — with it. `OSError` is the class those belong to and it
+      is caught as the class.
+
+    The second handler is `Exception` and not `SQLAlchemyError` for the same
+    reason. The contract this module publishes is that *any* failure of a read
+    becomes one of its two errors carrying nothing; a handler naming one library's
+    base class promises that only for that library's failures, which is how the
+    builtin `TimeoutError` got out. Everything not named above is this system's
+    fault, retrying will not help, and saying otherwise would be a false promise.
 
     The `raise` statements are outside the `except` block on purpose. `raise …
     from None` clears `__cause__` and leaves the original in `__context__`,
@@ -410,14 +481,10 @@ def _execute(connection: Connection, statement: Executable) -> CursorResult[Any]
     """
     unavailable = False
     try:
-        return connection.execute(statement)
-    except (OperationalError, InterfaceError):
-        # The server is unreachable, the connection died, or a statement
-        # timeout fired. Conditionally retryable.
+        return materialize(connection.execute(statement))
+    except (OperationalError, InterfaceError, DisconnectionError, PoolTimeoutError, OSError):
         unavailable = True
-    except SQLAlchemyError:
-        # A missing column, a type error, a programming mistake. Retrying will
-        # not help and saying otherwise would be a false promise.
+    except Exception:
         unavailable = False
     if unavailable:
         raise SearchUnavailableError("the lexical index could not be read")
@@ -493,7 +560,7 @@ def context_statement(request: SearchRequest) -> Select[Any]:
 
 def _context(connection: Connection, request: SearchRequest) -> Row[Any]:
     """Run `context_statement`, or report that the scope names no enrollment."""
-    row = _execute(connection, context_statement(request)).one_or_none()
+    row = _execute(connection, context_statement(request), _one_or_none)
     if row is None:
         raise UnknownEnrollmentError(f"no enrollment {request.enrollment_id}")
     return row
@@ -529,7 +596,8 @@ def _limitation_tokens(connection: Connection, enrollment_id: str) -> tuple[str,
             coverage_limitations.c.enrollment_id == enrollment_id,
             coverage_limitations.c.observed_at == latest.scalar_subquery(),
         ),
-    ).all()
+        _every_row,
+    )
     return tuple(
         sorted(
             AggregateLimitation(
@@ -648,7 +716,7 @@ def match_statement(request: SearchRequest, position: SearchCursor | None) -> Se
 def _matches(
     connection: Connection, request: SearchRequest, position: SearchCursor | None
 ) -> list[Row[Any]]:
-    return list(_execute(connection, match_statement(request, position)).all())
+    return list(_execute(connection, match_statement(request, position), _every_row))
 
 
 def _coverage(connection: Connection, enrollment_id: str, *, moment: datetime) -> CoverageCounts:
@@ -661,13 +729,19 @@ def _coverage(connection: Connection, enrollment_id: str, *, moment: datetime) -
     `search_extractions` as a `DBAPIError` whose message carried the SQL and the
     bound `enrollment_id`. Not the query-leak path — nothing on this side binds
     the caller's text — but the same class of hole, and it is the one thing the
-    module docstring used to carry as open. The handler set is `_execute`'s, so
-    the retryable pair stays retryable and everything else stays internal;
+    module docstring used to carry as open. The handler set is `_execute`'s, name
+    for name, so the retryable set stays retryable and everything else stays
+    internal; `_execute` argues that set, and
     `tests/architecture/test_search_reads_leave_through_the_redaction_path.py`
-    is what fails if a future read is added outside this shape.
+    is what fails if a future read is added outside this shape or if either
+    handler drops a name.
 
     `coverage_for` also raises `ValueError` — through `CoverageCounts` — when the
-    counts it assembles do not fit inside its own eligible total. That is a real
+    counts it assembles do not fit inside its own eligible total. It is no longer
+    named here, because the second handler is `Exception` and names nothing: a
+    `ValueError` is not a database failure, and the point of the wider handler is
+    that this function does not have to enumerate the ways a delegated read can
+    fail in order to keep classifying them. That is a real
     inconsistency and it must be reported, but as a typed error: an uncaught
     `ValueError` is outside section 10's taxonomy, carries no envelope, and
     reaches whoever is above this layer as an unclassified crash that leaves
@@ -697,9 +771,9 @@ def _coverage(connection: Connection, enrollment_id: str, *, moment: datetime) -
     unavailable = False
     try:
         return coverage_for(connection, enrollment_id, observed_at=moment)
-    except (OperationalError, InterfaceError):
+    except (OperationalError, InterfaceError, DisconnectionError, PoolTimeoutError, OSError):
         unavailable = True
-    except (SQLAlchemyError, ValueError):
+    except Exception:
         unavailable = False
     if unavailable:
         raise SearchUnavailableError("the lexical index could not be read")

@@ -47,7 +47,14 @@ from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, ProgrammingError
+from sqlalchemy.exc import (
+    DBAPIError,
+    DisconnectionError,
+    InterfaceError,
+    OperationalError,
+    ProgrammingError,
+)
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.common.classification import Classification
@@ -65,7 +72,15 @@ from my_pa.domain.source.enrollment import EnrollmentRequest, EnrollmentScope
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind, issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence import capture_search as capture_search_module
 from my_pa.infrastructure.persistence import search as search_module
+from my_pa.infrastructure.persistence.capture_search import (
+    CAPTURE_VERSIONS,
+    CaptureSearchInternalError,
+    CaptureSearchUnavailableError,
+    SearchPlane,
+    document_vector,
+)
 from my_pa.infrastructure.persistence.enrollment import accept_enrollment, record_scope
 from my_pa.infrastructure.persistence.extraction import record_outcome
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
@@ -793,3 +808,215 @@ def test_the_query_text_is_not_in_the_statement_the_server_logs(
         ).scalars()
         for statement in prepared:
             assert private not in statement
+
+
+#: Every failure a read can produce, beside the classification it must get.
+#:
+#: **The first three rows are the ones the handler set was missing**, and each
+#: was verified against the installed SQLAlchemy rather than read off a
+#: docstring. `DisconnectionError` and SQLAlchemy's `TimeoutError` are direct
+#: subclasses of `SQLAlchemyError` and of neither `OperationalError` nor
+#: `InterfaceError`, so both were classified as this system's fault — a dropped
+#: connection and an exhausted pool, told not to retry. The builtin
+#: `TimeoutError` is an `OSError` and not a `SQLAlchemyError` at all, so it
+#: escaped the handler entirely: no classification, no envelope, and a rendered
+#: traceback through frames that hold the bound query.
+#:
+#: The pool timeout is reachable by construction rather than in principle.
+#: `create_database_engine` sets `pool_size=5, max_overflow=0, pool_timeout=30`
+#: and `bootstrap.gateway` builds two such pools.
+CLASSIFICATIONS = [
+    ("a dropped connection", DisconnectionError("gone"), True),
+    ("an exhausted pool", PoolTimeoutError("no connection available"), True),
+    ("a socket timeout", TimeoutError("timed out"), True),
+    ("a reset socket", ConnectionResetError("reset by peer"), True),
+    ("the server went away", OperationalError("SELECT 1", {}, Exception("orig")), True),
+    ("the connection broke", InterfaceError("SELECT 1", {}, Exception("orig")), True),
+    ("the schema is wrong", ProgrammingError("SELECT 1", {}, Exception("orig")), False),
+    ("an impossible count", ValueError("accounted exceeds eligible"), False),
+    ("a programming mistake", TypeError("not a statement"), False),
+]
+
+
+class FailingConnection:
+    """A `Connection` that fails the way this case says, and holds no server.
+
+    Substituted rather than provoked, because four of the nine cases cannot be
+    produced against a live server without killing one: a pool cannot be
+    exhausted by a test that holds no connections, and a builtin `TimeoutError`
+    is raised by the socket layer under conditions a test cannot arrange. The
+    live half of this question is the database tier above, which breaks a real
+    schema under a real search.
+    """
+
+    def __init__(self, failure: BaseException) -> None:
+        self._failure = failure
+
+    def execute(self, statement: object) -> object:
+        raise self._failure
+
+
+@pytest.mark.parametrize(
+    ("module", "unavailable_error", "internal_error"),
+    [
+        (search_module, SearchUnavailableError, SearchInternalError),
+        (capture_search_module, CaptureSearchUnavailableError, CaptureSearchInternalError),
+    ],
+    ids=["search", "capture_search"],
+)
+@pytest.mark.parametrize(
+    ("name", "failure", "retryable"),
+    CLASSIFICATIONS,
+    ids=[case[0] for case in CLASSIFICATIONS],
+)
+def test_every_failure_of_a_read_is_classified_and_carries_nothing(
+    module: object,
+    unavailable_error: type[Exception],
+    internal_error: type[Exception],
+    name: str,
+    failure: BaseException,
+    retryable: bool,
+) -> None:
+    """`_execute`'s classification, over the whole set rather than over two names.
+
+    Applied to both modules from one table, because the defect was the same
+    defect twice and a fix that closed one would be exactly the shape seven
+    review rounds of this campaign have blocked: a correction that closes the
+    case its finding named and leaves the adjacent one open.
+
+    Three things are asserted of every case and the third is the one that fails
+    when a class is *missing* rather than misclassified: the error is one of the
+    two the module publishes at all. A failure outside the handler set does not
+    arrive misclassified — it arrives as itself.
+    """
+    expected = unavailable_error if retryable else internal_error
+    with pytest.raises((unavailable_error, internal_error)) as raised:
+        module._execute(FailingConnection(failure), object(), lambda result: result)
+
+    assert isinstance(raised.value, expected), f"{name} was classified as {type(raised.value)}"
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    rendered = "".join(traceback.format_exception(raised.value))
+    for fragment in ("SELECT 1", "accounted exceeds eligible", "reset by peer"):
+        assert fragment not in rendered, f"{fragment!r} reached the rendered traceback"
+
+
+@pytest.mark.parametrize(
+    ("name", "failure", "retryable"),
+    CLASSIFICATIONS,
+    ids=[case[0] for case in CLASSIFICATIONS],
+)
+def test_the_delegated_read_is_classified_over_the_same_set(
+    monkeypatch: pytest.MonkeyPatch, name: str, failure: BaseException, retryable: bool
+) -> None:
+    """`_coverage`'s handler set is `_execute`'s, asserted rather than described.
+
+    The two were written out separately and stayed equal by inspection. They are
+    now checked against one table, so a name added to one and not the other is a
+    failure here rather than a divergence a reviewer has to notice.
+    """
+
+    def raise_it(*arguments: object, **keywords: object) -> object:
+        raise failure
+
+    monkeypatch.setattr(search_module, "coverage_for", raise_it)
+    expected = SearchUnavailableError if retryable else SearchInternalError
+    with pytest.raises((SearchUnavailableError, SearchInternalError)) as raised:
+        search_module._coverage(None, LEAKED_IDENTIFIER, moment=WHEN)  # type: ignore[arg-type]
+
+    assert isinstance(raised.value, expected), f"{name} was classified as {type(raised.value)}"
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+
+
+def test_no_configuration_reaches_the_sql_except_the_one_checked_at_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The text-search configuration is the one value that is *written* into SQL.
+
+    Everything else a caller supplies is a bound parameter; the configuration
+    name cannot be, because a bound one does not match the functional index —
+    which `persistence.search` measured and both modules record. So the set of
+    names that can reach `literal_column` is the whole of the guard, and it was
+    a module attribute re-read at statement-build time. `Final` stops
+    `mypy --strict` rebinding it inside the checked tree; it stops nothing
+    outside one, and `document_vector` is public and takes the plane whose
+    `configuration` it would then compile.
+
+    Rebinding the set is how that is demonstrated without inventing an attacker:
+    the check now runs once, at import, so a wider set installed afterwards
+    changes nothing. **Before this package the assertion below was false** — a
+    plane carrying `evil` compiled to `to_tsvector('evil', content)`.
+
+    The control is the second half: the registered plane still compiles, so this
+    is a test of the boundary and not of a module that refuses everything.
+    """
+    monkeypatch.setattr(
+        capture_search_module, "INDEXED_CONFIGURATIONS", frozenset({"simple", "evil"})
+    )
+    forged = SearchPlane(
+        table=CAPTURE_VERSIONS.table,
+        text_column=CAPTURE_VERSIONS.text_column,
+        configuration="evil",
+        index_name=CAPTURE_VERSIONS.index_name,
+    )
+    with pytest.raises(ValueError, match="unsupported text-search configuration"):
+        document_vector(forged)
+
+    compiled = str(document_vector().compile(dialect=postgresql.dialect()))
+    assert "'simple'" in compiled
+    assert "evil" not in compiled
+
+
+def test_a_plane_this_module_did_not_construct_compiles_nothing() -> None:
+    """Identity, not equality, and the reason is `Column.__eq__`.
+
+    A `SearchPlane` holds a `Column`, whose `__eq__` builds a SQL expression
+    rather than answering a question, so membership of a mapping keyed by plane
+    is a comparison this module should not be making. Identity is also the
+    stricter rule: the module says there is one instance, and a caller holding a
+    plane it did not construct is not a caller whose configuration name should
+    be interpolated — even when that name is the admissible one, which is what
+    this asserts.
+    """
+    twin = SearchPlane(
+        table=CAPTURE_VERSIONS.table,
+        text_column=CAPTURE_VERSIONS.text_column,
+        configuration=CAPTURE_VERSIONS.configuration,
+        index_name=CAPTURE_VERSIONS.index_name,
+    )
+    with pytest.raises(ValueError, match="unsupported text-search configuration"):
+        document_vector(twin)
+
+
+@pytest.mark.parametrize(
+    ("module", "unavailable_error", "internal_error"),
+    [
+        (search_module, SearchUnavailableError, SearchInternalError),
+        (capture_search_module, CaptureSearchUnavailableError, CaptureSearchInternalError),
+    ],
+    ids=["search", "capture_search"],
+)
+@pytest.mark.parametrize("failure", [KeyboardInterrupt(), SystemExit(1)], ids=["ctrl-c", "exit"])
+def test_a_cancelled_process_is_not_reported_as_a_failed_search(
+    module: object,
+    unavailable_error: type[Exception],
+    internal_error: type[Exception],
+    failure: BaseException,
+) -> None:
+    """The boundary of the wide handler, asserted rather than described.
+
+    `_execute`'s second handler is `Exception`, which is deliberately wide enough
+    to catch this module's own bugs — the cost that docstring names. It must not
+    be wide enough to catch a cancellation: `BaseException` is where the line
+    is, and `Ctrl-C` during a long read has to kill the process rather than be
+    reported to the caller as "the search could not be completed" while the
+    interpreter carries on.
+
+    Written as a test because it is the one half of that disclosure a test can
+    hold. The rest — that a `TypeError` now arrives with no diagnostic anywhere —
+    is a property of the *absence* of a logging sink, and there is nothing to
+    assert against.
+    """
+    with pytest.raises(type(failure)):
+        module._execute(FailingConnection(failure), object(), lambda result: result)

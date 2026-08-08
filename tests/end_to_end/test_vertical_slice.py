@@ -674,7 +674,8 @@ def test_an_identifier_issued_under_one_registered_root_is_denied_under_a_nested
     never given. The containment is asserted below rather than only described.
 
     **The identifier is reached by listing, not by enrolling.** The effective
-    `max_enrollment_depth` is **0** by default (`bootstrap/settings.py:131`) and
+    `max_enrollment_depth` is **0** by default (`Settings` in
+    `bootstrap/settings.py`) and
     the handler refuses a deeper request outright, so no enrollment this
     composition accepts can reach a grandchild. `sources.list` can: it is bounded
     by the registered root and not by the enrolled object set, which is

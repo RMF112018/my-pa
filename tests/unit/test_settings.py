@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.engine import make_url
 
 from my_pa.bootstrap.settings import (
     DATABASE_URL_SCHEME,
+    DEFAULT_STATEMENT_TIMEOUT_MS,
     ENV_PREFIX,
     MAX_FETCH_BYTES_CEILING,
     Environment,
@@ -267,6 +269,125 @@ def test_a_database_url_without_a_database_is_rejected(raw: str) -> None:
         load_settings({DATABASE_URL: DATABASE_URL_SCHEME + raw})
 
 
+#: URLs that set the one libpq parameter `create_database_engine` writes.
+#:
+#: The upper-cased row is there because the check is case-insensitive: SQLAlchemy
+#: passes a query key through unchanged, so `OPTIONS=` would reach psycopg as an
+#: unknown keyword and fail there instead of here.
+#:
+#: **The fragment row is the one that matters.** It passed the first version of
+#: this refusal, which parsed with `urlsplit`. `urlsplit` honours `#` as a
+#: fragment delimiter and SQLAlchemy's own regex does not, so `urlsplit` saw a
+#: query of `x=1` while `make_url` — the parser the engine actually uses — yielded
+#: `options='-c statement_timeout=0'`: past the refusal, and to the exact value
+#: `statement_timeout_ms`'s `gt=0` exists to forbid. The fix was not to special-
+#: case `#`; it was to ask the engine's parser, so that agreement is structural
+#: rather than a punctuation list somebody maintains.
+_URLS_SETTING_OPTIONS = [
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=-c%20search_path%3Dmine",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=-c%20statement_timeout%3D0",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?sslmode=require&options=-c%20x%3D1",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?OPTIONS=-c%20x%3D1",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?x=1#&options=-c%20statement_timeout%3D0",
+]
+
+
+@pytest.mark.parametrize("raw", _URLS_SETTING_OPTIONS)
+def test_a_database_url_that_sets_libpq_options_is_refused(raw: str) -> None:
+    """The engine writes `options`, so a URL that also writes it is refused.
+
+    SQLAlchemy merges a URL's query string into the driver's connect arguments
+    and lets `connect_args` win, so this URL's parameter would be **discarded**
+    rather than combined — measured, not inferred: a URL carrying
+    `options=-c search_path=mine` reaches psycopg as
+    `options='-c statement_timeout=30000'`. Silently dropping an operator's
+    configuration is the failure; refusing to start is the answer.
+
+    Refused rather than merged, and merging is the tempting wrong answer: libpq
+    lets a later `-c` override an earlier one, so concatenating the two strings
+    would let the second URL above configure the statement timeout to `0` — the
+    value `statement_timeout_ms`'s `gt=0` exists to make unreachable, reached
+    through a different door. That case is in the table rather than described.
+    """
+    with pytest.raises(SettingsError, match="must not set the libpq options parameter"):
+        load_settings({DATABASE_URL: raw})
+
+
+def test_the_options_refusal_names_the_setting_that_replaces_it() -> None:
+    """A refusal that does not say what to do instead is a refusal to start.
+
+    The message names the parameter and the setting and nothing else — no URL,
+    no host, no credential, which is the rule the whole of this function follows.
+    """
+    url = f"{DATABASE_URL_SCHEME}://my_pa:SUPERSECRETVALUE@db.invalid:5432/somewhere?options=-c%20x%3D1"
+    with pytest.raises(SettingsError) as caught:
+        load_settings({DATABASE_URL: url})
+    message = str(caught.value)
+    assert f"{ENV_PREFIX}STATEMENT_TIMEOUT_MS" in message
+    assert "SUPERSECRETVALUE" not in message
+    assert "db.invalid" not in message
+    assert url not in message
+
+
+#: URLs that must still load. The first four are ordinary libpq parameters an
+#: operator may need; a check that refused the query string wholesale would take
+#: them with it.
+#:
+#: **The last two are accepted deliberately, and both were measured rather than
+#: reasoned about.** Neither reaches psycopg as an `options` parameter, so
+#: neither is the override this rule exists to prevent:
+#:
+#: - `?options=` — SQLAlchemy drops an empty-valued query parameter entirely, so
+#:   `make_url(...).query` is `{}` and the driver is handed nothing. The first
+#:   version of this refusal used `parse_qs(..., keep_blank_values=True)` and
+#:   rejected it. That rejection is withdrawn on purpose: catching a value the
+#:   engine never receives would need a *second* parser beside the engine's, which
+#:   is precisely the divergence the fragment row above was caused by. A no-op is
+#:   not worth reintroducing the class for.
+#: - `?a=1#options=…`, with no `&` — `make_url` yields `{'a': '1#options=…'}`, one
+#:   parameter named `a`. The fragment row in the refusal table differs by a
+#:   single `&`, and that this table and that one disagree about two nearly
+#:   identical strings is the point: neither was decided by reading the
+#:   punctuation, both were decided by asking the parser that decides.
+_URLS_WITHOUT_OPTIONS = [
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?sslmode=require",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?connect_timeout=5",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?application_name=my_pa",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=",
+    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?a=1#options=-c%20x%3D1",
+]
+
+
+@pytest.mark.parametrize("raw", _URLS_WITHOUT_OPTIONS)
+def test_every_other_connection_parameter_is_still_accepted(raw: str) -> None:
+    """The control, and it is what keeps the refusal from being a ban on queries."""
+    assert load_settings({DATABASE_URL: raw}).database_url == raw
+
+
+@pytest.mark.parametrize("raw", _URLS_SETTING_OPTIONS + _URLS_WITHOUT_OPTIONS)
+def test_the_validator_and_the_engine_read_the_same_url_the_same_way(raw: str) -> None:
+    """The rule behind the rule: refused exactly when the driver would be handed one.
+
+    Both tables are run through this, so it is a biconditional and not a
+    one-directional check — a validator that refused everything would satisfy the
+    refusal table and fail here. `make_url` is the engine's parser, which is what
+    makes agreement structural rather than a coincidence maintained by hand.
+
+    This is the assertion that would have caught the fragment bypass without
+    anybody thinking of `#`, because it never mentions punctuation.
+    """
+    reaches_the_driver = any(name.lower() == "options" for name in make_url(raw).query)
+    refused = False
+    try:
+        load_settings({DATABASE_URL: raw})
+    except SettingsError:
+        refused = True
+    assert refused == reaches_the_driver, (
+        "the validator and the engine disagree about whether this URL supplies an options parameter"
+    )
+
+
 def test_an_invalid_database_url_error_never_echoes_the_url() -> None:
     """A rejected URL is the one setting value most likely to hold a password."""
     url = "postgresql+psycopg2://my_pa:SUPERSECRETVALUE@localhost:5433/my_pa"
@@ -274,3 +395,39 @@ def test_an_invalid_database_url_error_never_echoes_the_url() -> None:
         load_settings({DATABASE_URL: url})
     assert "SUPERSECRETVALUE" not in str(caught.value)
     assert url not in str(caught.value)
+
+
+def test_the_statement_timeout_is_configured_and_defaults_to_a_bound() -> None:
+    """A bound exists without configuration, and configuration can change it.
+
+    Both halves matter and neither implies the other. PostgreSQL's own default
+    is `0` — no bound at all — so an unconfigured process is exactly the state
+    this setting exists to leave: the default has to *be* a bound. And a bound
+    an operator cannot move is a constant with a longer name, which is what
+    `D-24` corrected for the four limit fields.
+    """
+    assert load_settings({DATABASE_URL: _A_URL}).statement_timeout_ms == (
+        DEFAULT_STATEMENT_TIMEOUT_MS
+    )
+    assert DEFAULT_STATEMENT_TIMEOUT_MS > 0
+    configured = load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}STATEMENT_TIMEOUT_MS": "5000"})
+    assert configured.statement_timeout_ms == 5000
+
+
+@pytest.mark.parametrize("raw", ["0", "-1"])
+def test_the_statement_timeout_cannot_be_configured_away(raw: str) -> None:
+    """`0` is how PostgreSQL spells "no timeout", so `0` is refused.
+
+    The one value that would turn this setting into the absence of the thing it
+    configures is not reachable through configuration, which is the same
+    fail-closed shape as `MY_PA_REDACTION_ENABLED=false`. A process that must
+    run unbounded is exempted in code, where the exemption is reviewable.
+    """
+    with pytest.raises(SettingsError, match="STATEMENT_TIMEOUT_MS"):
+        load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}STATEMENT_TIMEOUT_MS": raw})
+
+
+def test_a_misspelled_statement_timeout_is_not_silently_ignored() -> None:
+    """The fail-closed unknown-name check covers the new field like every other."""
+    with pytest.raises(SettingsError, match="unknown MY_PA_ settings"):
+        load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}STATEMENT_TIMEOUT": "5000"})

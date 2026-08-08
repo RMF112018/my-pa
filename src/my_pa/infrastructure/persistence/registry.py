@@ -13,7 +13,7 @@ the physical layer, it returns a bare string rather than a domain type so it
 cannot be passed onward by accident, and its result must not reach a response, a
 log, or an error message.
 
-Identity is issued, then looked up. `register_source` and `record_object` insert
+Identity is issued, then looked up. `register_source` and `observe_object` insert
 a freshly issued identifier and fall back to selecting the existing row when the
 natural key is already present, so re-observing the same object returns the
 identifier issued the first time. That is what makes an opaque identifier stable

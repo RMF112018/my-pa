@@ -36,6 +36,7 @@ from __future__ import annotations
 import io
 import os
 import secrets
+import traceback
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,7 +47,7 @@ from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import DBAPIError, ProgrammingError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError, ProgrammingError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.common.classification import Classification
@@ -64,11 +65,14 @@ from my_pa.domain.source.enrollment import EnrollmentRequest, EnrollmentScope
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind, issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence import search as search_module
 from my_pa.infrastructure.persistence.enrollment import accept_enrollment, record_scope
 from my_pa.infrastructure.persistence.extraction import record_outcome
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
 from my_pa.infrastructure.persistence.search import (
     SEARCH_CONFIG,
+    SearchInternalError,
+    SearchUnavailableError,
     context_statement,
     match_statement,
     search_extractions,
@@ -624,6 +628,147 @@ def test_a_database_failure_during_a_search_discloses_no_query_text(
             connection.execute(
                 text("ALTER TABLE knowledge.extractions_moved RENAME TO extractions")
             )
+
+
+#: The two tables a search reads through, one on each side of the redaction
+#: boundary as it stood. `extractions` is read by a statement
+#: `persistence.search` builds and runs through `_execute`, so a failure there
+#: was always converted. `coverage_limitations` is read only by `coverage_for`,
+#: which `persistence.search` delegates to — and, until this change, did not
+#: wrap. Both are broken the same way and the same assertions are made about
+#: both, which is what makes this a discriminating check rather than one that
+#: reports every failure as a leak. `coverage_limitations` is also the last
+#: statement `coverage_for` runs, so the three counts before it succeed and the
+#: failure is unambiguously the delegated read.
+BROKEN_READS: dict[str, str] = {
+    "the delegated coverage read": "coverage_limitations",
+    "this module's own page read": "extractions",
+}
+
+
+@pytest.mark.database
+@pytest.mark.parametrize("read", sorted(BROKEN_READS))
+def test_no_database_failure_in_any_read_a_search_performs_discloses_a_statement(
+    corpus: tuple[Engine, str], read: str
+) -> None:
+    """The leak the module's own docstring used to carry as open, in both reads.
+
+    The failure is produced for real — the table is renamed out from under the
+    search — and what is inspected is the *rendered traceback*, not `str(exc)`.
+    That distinction is the whole point: `raise … from None` clears `__cause__`
+    and leaves the original in `__context__`, so an exception whose own message
+    says nothing still prints a `DBAPIError` carrying the statement and its
+    bound parameters when anything formats it. `format_exception` is what a log
+    handler does.
+
+    What leaks here is SQL text and a bound `enrollment_id`, not the caller's
+    query: nothing on the coverage side binds query text. The identifier is
+    asserted against anyway, because it is the parameter this path actually
+    carries and it is the one an envelope must not disclose through an error.
+    """
+    engine, enrollment_id = corpus
+    table = BROKEN_READS[read]
+    private = "zephyrine ledger reconciliation"
+
+    with engine.begin() as connection:
+        connection.execute(text(f"ALTER TABLE knowledge.{table} RENAME TO {table}_moved"))
+    try:
+        with (
+            engine.connect() as connection,
+            pytest.raises((SearchUnavailableError, SearchInternalError)) as raised,
+        ):
+            search_extractions(
+                connection,
+                SearchRequest(enrollment_id=enrollment_id, query=SearchQuery(private)),
+            )
+        failure = raised.value
+        assert not isinstance(failure, DBAPIError), "a driver error reached the caller"
+        rendered = "".join(traceback.format_exception(failure))
+        chain = f"{failure!r} {failure.args} {failure.__cause__!r} {failure.__context__!r}"
+        # The table is named schema-qualified, which is how a statement writes
+        # it. The bare name would be matched by `search_extractions` in the
+        # traceback's own source lines and would fail for a reason that is not
+        # a leak — measured, not guessed: it is what the first run of this test
+        # did.
+        leaks = (private, "zephyrine", "search_text", enrollment_id, f"knowledge.{table}", "SELECT")
+        for fragment in leaks:
+            assert fragment not in rendered, f"{fragment!r} reached the rendered traceback"
+            assert fragment not in chain, f"{fragment!r} reached the exception chain"
+        assert failure.__cause__ is None
+        assert failure.__context__ is None
+    finally:
+        with engine.begin() as connection:
+            connection.execute(text(f"ALTER TABLE knowledge.{table}_moved RENAME TO {table}"))
+
+
+#: A statement and a parameter set shaped like the ones `coverage_for` runs.
+#: SQLAlchemy renders both into a `DBAPIError`'s message, which is what makes
+#: an unwrapped delegated read a disclosure rather than merely an unclassified
+#: crash.
+LEAKED_STATEMENT = (
+    "SELECT knowledge.coverage_limitations.reason FROM knowledge.coverage_limitations "
+    "WHERE knowledge.coverage_limitations.enrollment_id = %(enrollment_id_1)s"
+)
+LEAKED_IDENTIFIER = "enr_c0ffee0000000000000000000000000000000000000000000000000000000000"
+
+
+@pytest.mark.parametrize(
+    ("name", "failure", "expected"),
+    [
+        ("the server went away", OperationalError, SearchUnavailableError),
+        ("the connection broke", InterfaceError, SearchUnavailableError),
+        ("the schema is wrong", ProgrammingError, SearchInternalError),
+    ],
+)
+def test_the_delegated_coverage_read_keeps_the_unavailable_internal_discrimination(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    failure: type[DBAPIError],
+    expected: type[Exception],
+) -> None:
+    """Wrapping the delegated read must not flatten what it is wrapped into.
+
+    Telling a caller to retry a missing column is a lie with a retry budget
+    attached, so the delegated read has to keep the same split the statements
+    this module builds already keep. The database tier above breaks a schema,
+    which is one classification; the retryable pair cannot be produced that way
+    without killing a server, so it is produced by substituting the failure the
+    delegated call raises. What is asserted is the classification and the
+    emptiness of the chain, both of which are `_coverage`'s to get right.
+    """
+
+    def raise_it(*arguments: object, **keywords: object) -> object:
+        raise failure(LEAKED_STATEMENT, {"enrollment_id_1": LEAKED_IDENTIFIER}, Exception("orig"))
+
+    monkeypatch.setattr(search_module, "coverage_for", raise_it)
+    with pytest.raises(expected) as raised:
+        search_module._coverage(None, LEAKED_IDENTIFIER, moment=WHEN)  # type: ignore[arg-type]
+
+    caught = raised.value
+    rendered = "".join(traceback.format_exception(caught))
+    for fragment in ("coverage_limitations", LEAKED_IDENTIFIER, "SELECT"):
+        assert fragment not in rendered, f"{fragment!r} reached the rendered traceback"
+    assert caught.__cause__ is None
+    assert caught.__context__ is None
+
+
+def test_the_coverage_guard_still_reports_an_impossible_count_as_internal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`ValueError` was the one failure `_coverage` already classified, and it stays.
+
+    `coverage_for` raises it through `CoverageCounts` when the counts do not fit
+    inside the eligible total. That is not a database failure and it must not
+    become retryable now that database failures are handled beside it.
+    """
+
+    def raise_it(*arguments: object, **keywords: object) -> object:
+        raise ValueError("accounted exceeds eligible")
+
+    monkeypatch.setattr(search_module, "coverage_for", raise_it)
+    with pytest.raises(SearchInternalError) as raised:
+        search_module._coverage(None, LEAKED_IDENTIFIER, moment=WHEN)  # type: ignore[arg-type]
+    assert raised.value.__context__ is None
 
 
 @pytest.mark.database

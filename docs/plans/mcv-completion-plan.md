@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-One hundred and nineteen Python modules under `src/my_pa` and one hundred and five test modules —
+One hundred and nineteen Python modules under `src/my_pa` and one hundred and six test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -355,7 +355,13 @@ rediscovered.
 - **`coverage_for` runs outside `persistence.search`'s redaction path**, so a
   `SQLAlchemyError` from the coverage read escapes carrying SQL and a bound
   identifier. Not the query-leak path, since nothing there binds query text, but
-  the same class of hole.
+  the same class of hole. **Closed** — after WP-4 shipped rather than in it,
+  which is the whole finding. `_coverage` now classifies the delegated failure
+  with `_execute`'s handler set, and
+  `tests/architecture/test_search_reads_leave_through_the_redaction_path.py`
+  derives the rule from the module's own syntax tree, so the next read written
+  outside the redaction path fails a test rather than being disclosed in a
+  paragraph and scheduled here again.
 - **No `statement_timeout` is configured anywhere.** The functional index removes
   the sequential scan as the only possibility without bounding what a query can
   cost. WP-4 owns process and connection configuration.

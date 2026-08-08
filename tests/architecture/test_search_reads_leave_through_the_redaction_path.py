@@ -94,17 +94,32 @@ count whose set was "enumerated or parametrized in view", which is attention
 rather than mechanism: nothing makes a maintainer who adds a row to a table
 forty lines below update a sentence above it. The numbers that survive in this
 file count things named in the same sentence — two handlers, two modules — or
-fixed structural facts, not the size of any collection.
+fixed structural facts, not the size of any collection. The line that separates
+them: **a count of a past event is safe, because the past does not grow; a count
+of a current set is not, because the set does.**
 
-Two syntactic limits, named rather than left to be found. `_connection_parameters`
+Five syntactic limits, named rather than left to be found. `_connection_parameters`
 collects only *parameters* annotated `Connection`, so a read reached through a
 local alias — `reader = connection; coverage_for(reader, ...)` — is invisible to
 this scan, and the function reports zero reads rather than an unwrapped one.
 And `_is_wrapped` tests *lexical* containment, so a call bound inside a `try`
 and invoked after it, through `partial` or a nested `def`, counts as wrapped.
-Neither is backstopped by the behavioural tests, which cover today's reads
-rather than tomorrow's. Making the scan alias-aware is a real dataflow problem
-and is not attempted here.
+
+Three more belong to rule 3's *scope*, which is read from the body: a
+materializer that is assigned before it is passed — `shape = _one_or_none;
+_execute(connection, statement, shape)` — drops the function out of scope, as
+does `_execute` written with no materializer parameter at all. Both are the
+scope class that has already produced two escapes by other spellings, and
+neither is closed. The third is the residue `_row_shapes` carries: the rule
+reasons about the *annotation*, not the object, so `-> Iterable[Row[Any]]:
+return result` passes while handing back the cursor.
+
+None of the five is backstopped by the behavioural tests, which cover today's
+reads rather than tomorrow's. Making the scan alias-aware is a real dataflow
+problem, and a rule over every return path in a shape's body would be the first
+thing in this file to reason about values rather than declarations; neither is
+attempted here. The limits are recorded because a known boundary with no record
+is what this rule's three versions were each caught by.
 """
 
 from __future__ import annotations
@@ -602,12 +617,13 @@ def _escaping_cursors(
     actually been found unreachable, which is a smaller claim and the true one.
 
     The history is the argument for the altitude. This rule has been rewritten
-    three times and each version was universal in its prose and narrow in its
-    mechanism: "however it is spelled" was false for an identity lambda under a
-    widened signature, then false for four ways of annotating a shape that
-    returns its argument, then false for a keyword-only materializer. Every
-    version had a passing control beside it, and the control passing is what
-    carried the error forward. `ROUTES` is the table those escapes now live in.
+    twice — three versions — and the first two were universal in their prose and
+    narrow in their mechanism: "however it is spelled" was false for an identity
+    lambda under a widened signature, and then, in the version that replaced it,
+    false for four ways of annotating a shape that returns its argument and for
+    a keyword-only materializer. Every version had a passing control beside it,
+    and the control passing is what carried the error forward. `ROUTES` is the
+    table those escapes now live in, which is why the controls sit in it too.
 
     The argument is checked **by name, and by position where the parameter has
     one**, so a materializer moved behind a `*` stays in scope and a row shape

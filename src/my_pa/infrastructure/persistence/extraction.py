@@ -94,8 +94,13 @@ longer tests `eligible > 0` before claiming complete coverage, and why it no
 longer tests that a truncated page is non-empty before issuing a cursor. It is
 about a condition written at a site to decide there, which is why the `status`
 test inside `extracted_text_in_scope` is not one: that list is written once and
-used twice, `status` decides at one of the two uses, and dropping it from the
-other would mean two lists again. The single exception is a condition the type checker
+used at three sites — `coverage_for` here, `persistence.search`'s
+`match_statement`, and `persistence.knowledge`'s `read_extraction` — and
+dropping the condition from one of them would mean separate lists again. Since
+`9d4e7a3b1c62` narrowed `extractions.status`, that condition decides at none of
+the three; `extracted_text_in_scope` says at length why it is retained anyway,
+and the short version is that its redundancy rests on a `CHECK` rather than on
+anything the rows above can express. The single exception is a condition the type checker
 requires in order to narrow a value: `record_outcome`'s missing-reason check is
 one, and it is written as the narrowing it is and says so where it stands.
 
@@ -404,17 +409,35 @@ def extracted_text_in_scope(enrollment_id: str) -> tuple[ColumnElement[bool], ..
       other's rows;
       `test_a_search_returns_only_the_rows_its_own_enrollment_wrote` holds all of
       that constant except the enrollment.
-    * `status`, which decides in the count and cannot decide in the page:
-      `text_exists_exactly_when_something_was_extracted` makes `text` null for
-      every other status, `to_tsvector` of null is null, and `null @@ query` is
-      null, so `match_statement`'s match predicate already excludes those rows.
-      It stays because this is one list rather than two asserted to be equal, and
-      dropping a condition from one side is precisely the divergence this exists
-      to prevent. That is the edge of this module's rule about conditions nothing
-      can exercise: the rule is about a condition written at a site to decide
-      there, and this one is written once, where it decides —
-      `test_a_row_filed_in_extractions_as_quarantined_is_not_counted_as_processed`
-      is what fails if it goes.
+    * `status`, which is **redundant and retained, and no test fails if it
+      goes.** That is stated plainly because it used to be false and the sentence
+      that stood here named the test that would fail. It named
+      `test_a_row_filed_in_extractions_as_quarantined_is_not_counted_as_processed`,
+      which planted a `quarantined` row in `extractions` by hand — and
+      `extraction_status_is_known` now refuses exactly that row, so the test
+      cannot arrange its premise and the property moved to
+      `test_the_schema_refuses_a_quarantined_outcome_filed_as_an_extraction`,
+      where the server does the refusing.
+
+      The redundancy is provable rather than assumed. Every row this list can
+      reach carries `enrollment_id = :enrollment_id`, and the narrowed constraint
+      leaves `status` only `extracted` or `unsupported`. So a row failing this
+      condition is `unsupported` under that same enrollment, which is precisely
+      the membership `_unsupported_objects` selects, and the sibling `not_in`
+      therefore already excludes it. Both columns are `NOT NULL`, so that `NOT
+      IN` cannot go three-valued and let it back. The exclusions this condition
+      makes are a **subset** of the ones already made.
+
+      It stays for two reasons, and neither is defence in depth. This is one list
+      rather than two asserted to be equal, and dropping a condition from one
+      side is exactly the divergence the list exists to prevent. And its
+      redundancy is a consequence of a *constraint*, not of the query: it holds
+      only while the storage vocabulary stays two, and a condition that would
+      resume deciding the moment a `CHECK` was widened is not the same thing as
+      a condition no arrangement of rows can exercise. This module's rule about
+      such conditions is about a predicate written at a site to decide there;
+      this one is written once, in a shared definition of scope, and is kept
+      against a schema change rather than against a row.
     * `authorized_object` and `authorized_media_type`, the two dimensions of what
       the enrollment authorizes, applied to the object and to the stored text.
     * the two precedence exclusions. An object with any quarantine row is

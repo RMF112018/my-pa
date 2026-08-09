@@ -5,8 +5,36 @@ out-of-range value raises rather than falling back to a default, so a typo in a
 security-relevant name cannot silently leave the safe setting in place.
 
 No secret is committed. `database_url` is the one setting whose value may carry a
-credential, and it has no default at all. Error messages never echo a setting's
-value, so a URL with a password in it cannot leak through a failure.
+credential, and it has no default at all. The messages this module composes never
+echo a setting's value, and the field is `repr=False` so the value does not ride
+out in `repr(settings)` either — the channel that mattered most, because pytest
+prints the `repr` of a failing assertion's operands.
+
+Two channels were open here and are named rather than left to be found. The first
+is closed. Pydantic's own `ValidationError` renders `input_value=`, and for a
+model validator that input is the whole settings mapping, so the rendered error
+carries the URL; the rendering elides the middle of a long input, which is why
+this looked closed when tested with a long URL and was not, since a short URL is
+rendered whole. `load_settings` used to attach that error to the `SettingsError`
+it raises, putting the URL within reach of anything that prints a traceback.
+It now composes its message inside the handler and raises *outside* the `except`
+block, so both `__cause__` and `__context__` are `None` and no rendering of the
+chain — `traceback.format_exception`, `logging.exception`, an unhandled
+traceback — reaches the value. `raise … from None` would not have sufficed: it
+clears `__cause__` and sets `__suppress_context__`, which quiets those two
+renderers, but leaves the `ValidationError` on `__context__` for anything that
+walks the chain itself to read out of. Nothing diagnostic was
+traded for this; the composed message still names every rejected field with its
+reason. `infrastructure.persistence.search._execute` holds bound query text with
+the same idiom, and `tests/unit/test_settings.py` walks the chain rather than
+reading `str(exc)`, because reading only the top-level message is what let this
+survive a review.
+
+The second channel is open by design: `model_dump` and `model_dump_json` return
+`database_url` with its password. They are asked for explicitly rather than
+reached by accident, and callers must not log their output. `repr`, `str` and the
+exception chain are the paths something reaches without meaning to, and those are
+the ones closed.
 
 `MY_PA_DATABASE_URL` is required rather than defaulted, which resolves
 `P00-OD-008`. That decision's stated default was to fail closed when the URL is
@@ -24,9 +52,10 @@ import os
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Final
-from urllib.parse import urlsplit
 
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, PrivateAttr, ValidationError, model_validator
+from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import ArgumentError
 
 from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
@@ -96,18 +125,40 @@ class SettingsError(ValueError):
     """
 
 
-def _validate_database_url(url: str) -> None:
-    """Reject a URL the engine could not use, before anything tries to connect.
+def _parse_database_url(url: str) -> URL:
+    """Parse the URL once, reject one the engine could not use, and return the parse.
+
+    The parser here is SQLAlchemy's, and that is the whole point. `create_engine`
+    parses whatever string it is handed with `make_url`, so a check performed by
+    any other parser is a check on a different reading of the same text: the
+    scheme, host and database approved here would not have to be the scheme, host
+    and database the process then connects to. Two parsers agreeing on ordinary
+    input is not the same as there being one answer.
+
+    So there is one parse. The `URL` this returns is the object the caller hands
+    to `create_database_engine`, and `create_engine` returns a `URL` unchanged
+    rather than parsing it again — which is what leaves no second reading to
+    diverge from the first.
 
     Names the defect, never the URL: a supplied URL may embed a password.
+    `ArgumentError` and `ValueError` are both reachable from `make_url` — a
+    string it cannot match, and a match whose port is not a number — and the
+    second carries the offending text, so neither is allowed to propagate.
     """
-    parsed = urlsplit(url)
-    if parsed.scheme != DATABASE_URL_SCHEME:
+    try:
+        parsed = make_url(url)
+    except (ArgumentError, ValueError) as exc:
+        raise SettingsError(
+            f"{ENV_PREFIX}DATABASE_URL is not a URL the engine can parse; it "
+            f"must use the {DATABASE_URL_SCHEME} scheme and name a host and a database"
+        ) from exc
+    if parsed.drivername != DATABASE_URL_SCHEME:
         raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must use the {DATABASE_URL_SCHEME} scheme")
-    if not parsed.hostname:
+    if not parsed.host:
         raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must name a host")
-    if not parsed.path.lstrip("/"):
+    if not parsed.database:
         raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must name a database")
+    return parsed
 
 
 class Settings(StrictModel):
@@ -129,11 +180,34 @@ class Settings(StrictModel):
     default_page_size: int = Field(default=50, gt=0, le=1000)
     max_fetch_bytes: int = Field(default=8 * 1024 * 1024, gt=0, le=MAX_FETCH_BYTES_CEILING)
     max_enrollment_depth: int = Field(default=0, ge=0, le=MAX_ENROLLMENT_DEPTH)
-    database_url: str
+    #: `repr=False` because this is the one field that can hold a password, and
+    #: `repr` is where it escaped. Pydantic's generated `repr` — which `str` also
+    #: uses — printed every field's value, so `Settings(… database_url='…')`
+    #: appeared verbatim wherever a `Settings` object was rendered. The channel
+    #: that made it more than theoretical is the test suite: pytest's assertion
+    #: rewriting prints the `repr` of every operand in a failing comparison, so
+    #: one unrelated failing assertion holding a `Settings` would have put a live
+    #: DSN into CI output, which `SECURITY.md` treats as disclosure regardless of
+    #: how it got there.
+    #:
+    #: Deliberately not `SecretStr`. That would change the field's type and every
+    #: consumer would have to unwrap it — a far wider change than the disclosure
+    #: warrants. `repr=False` closes `repr` and `str` and touches nothing else.
+    #: It does **not** close `model_dump`/`model_dump_json`, which are asked for
+    #: explicitly rather than reached by accident. Pydantic's own
+    #: `ValidationError` rendering was the other way out and is closed in
+    #: `load_settings`, which raises outside its `except` block; see the module
+    #: docstring and the tests.
+    database_url: str = Field(repr=False)
+
+    #: The single parse of `database_url`, produced by validation and handed on
+    #: unchanged. Private because it is not configuration an operator supplies
+    #: and must not become a second place a URL can enter from.
+    _parsed_database_url: URL = PrivateAttr()
 
     @model_validator(mode="after")
     def _check(self) -> Settings:
-        _validate_database_url(self.database_url)
+        self._parsed_database_url = _parse_database_url(self.database_url)
         if not self.redaction_enabled:
             raise SettingsError(
                 "redaction cannot be disabled; debug mode does not bypass redaction"
@@ -146,6 +220,23 @@ class Settings(StrictModel):
         # at startup instead of at the first `capabilities.get`.
         self.effective_limits()
         return self
+
+    def parsed_database_url(self) -> URL:
+        """`database_url` as validation read it, for `create_database_engine`.
+
+        Returns the stored parse rather than parsing again, so the URL the engine
+        is configured with is the same object validation approved and not a
+        second reading of the same string. Pass this, not `database_url`, to
+        anything that opens a connection.
+
+        Two Pydantic entry points bypass the validator that fills the parse and
+        so break this accessor by design, neither of which anything calls:
+        `model_copy(update={"database_url": …})` leaves the stored parse
+        describing the *old* string, and `model_construct(…)` never sets it at
+        all, so this raises `AttributeError`. Build settings with
+        `load_settings` or `Settings(...)`.
+        """
+        return self._parsed_database_url
 
     def effective_limits(self) -> EffectiveLimits:
         """The configured limits, as the shape `capabilities.get` publishes.
@@ -221,6 +312,8 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     if unknown:
         raise SettingsError(f"unknown {ENV_PREFIX} settings: {sorted(unknown)}")
 
+    # Composed inside the handler, raised outside it. See the `raise` below.
+    message = ""
     try:
         return Settings(**values)  # type: ignore[arg-type]
     except ValidationError as exc:
@@ -247,4 +340,16 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
                 "supply the password out of band through PGPASSWORD or "
                 "~/.pgpass rather than committing one"
             )
-        raise SettingsError(message) from exc
+    # Outside the `except` block on purpose, and this is the whole disclosure
+    # control — the same idiom `infrastructure.persistence.search._execute` uses
+    # for bound query text. Pydantic's `ValidationError` renders `input_value=`,
+    # and for a model validator that input is the entire settings mapping, so the
+    # rendered error contains the DSN verbatim. `raise … from exc` published it on
+    # `__cause__`, where `traceback.format_exception` and `logging.exception` both
+    # printed it. `raise … from None` is not the fix: it sets
+    # `__suppress_context__`, which stops those two printing, but leaves the
+    # `ValidationError` on `__context__` for anything that walks the chain itself
+    # to read. Leaving the handler before raising is what empties both links.
+    # Nothing diagnostic is lost: `message` above already names every rejected
+    # field with its reason.
+    raise SettingsError(message)

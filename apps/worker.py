@@ -127,7 +127,7 @@ def _report(owner: str, plane: str, run: WorkerRun) -> None:
 
 def _run(args: argparse.Namespace) -> int:
     settings = load_settings()
-    engine = create_database_engine(settings.database_url)
+    engine = create_database_engine(settings.parsed_database_url())
     plane, handler = _PLANES[args.plane]
     owner = issue_worker_owner()
     stop = threading.Event()

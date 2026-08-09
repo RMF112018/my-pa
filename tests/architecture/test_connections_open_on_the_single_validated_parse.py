@@ -48,13 +48,29 @@ exclusion stays a decision somebody made rather than a root nobody added.
 `URL` reaching `create_engine` is the same object validation approved — that is
 `tests/unit/test_settings.py`'s identity assertion — nor that the gateway
 composes two engines from it, which is `tests/unit/test_gateway_composition.py`.
-It shows only that no production module *asks* for the second parse. Two
+It shows only that no production module *asks* for the second parse. Three
 syntactic limits, named rather than left to be found: provenance is followed
 through assignments to plain names, so a URL reached through a container, an
 attribute of a local object, or a rebinding inside a comprehension is `unknown`
-rather than traced (it fails, which is the safe direction); and a name assigned
-in two places is raw if either assignment is raw, which is a conservative merge
-and not a flow-sensitive one.
+rather than traced (it fails, which is the safe direction); a name assigned in
+two places is raw if either assignment is raw, which is a conservative merge and
+not a flow-sensitive one; and — the one that fails the *other* way — calls are
+discovered by the name spelled at the call site, so importing the factory under
+another name, rebinding it to a local name and calling that, or calling
+SQLAlchemy's `create_engine` directly leaves this scan with no call to classify
+at all. Not `unknown`, which fails: nothing seen, nothing to fail. Argument
+classification fails closed; call discovery does not.
+
+What bounds that third limit, stated without inflating it: at this head the scan
+discovers all eight production calls, so nothing is currently hidden from it;
+reaching the gap takes a deliberate rename rather than the ordinary regression
+this guard was built to catch; and application-layer modules cannot get there at
+all, because `tests/architecture/test_dependency_direction.py:355` and
+`test_transport_adds_no_behaviour.py:157` already forbid them from naming
+`create_database_engine` or `create_engine` in the first place. The residual is
+therefore confined to the composition roots. Closing it would mean resolving
+imports, which is a larger scan than this file should carry; it is named here
+rather than fixed, and naming it is not the same as covering it.
 """
 
 from __future__ import annotations
@@ -71,8 +87,11 @@ ROOT = Path(__file__).resolve().parents[2]
 #: absent; see the module docstring and the test that holds the exclusion.
 PRODUCTION_ROOTS: tuple[str, ...] = ("src", "apps", "scripts", "migrations")
 
-#: The factory that opens a pool. Matched by name rather than by resolved
-#: import, because a module that aliases it on import has still called it.
+#: The factory that opens a pool. Matched by the name written *at the call*,
+#: not by resolved import — so a module that imports it under another name, or
+#: calls SQLAlchemy's `create_engine` directly, is not seen here at all. That is
+#: the third syntactic limit in the module docstring; read it before relying on
+#: this constant to mean "every call".
 ENGINE_FACTORY = "create_database_engine"
 
 #: The accessor that returns the single parse validation made.

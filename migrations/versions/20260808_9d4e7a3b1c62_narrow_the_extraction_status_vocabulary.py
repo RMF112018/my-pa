@@ -106,9 +106,16 @@ depends_on: str | Sequence[str] | None = None
 #: why this revision exists is impossible without saying which declaration
 #: changed. That heuristic is deliberately fail-closed, and the honest way past
 #: it is to state the emission rather than to reword the prose until the scan
-#: stops matching. An empty list is the true answer and it keeps the guard's
-#: reach intact: a table added here later has to be named, or the emission stops
-#: being readable and the guard says so.
+#: stops matching. An empty list is the true answer, and its reach is stated at
+#: what it buys rather than above it: `_emitted` returns any `list`, and `[]` is
+#: one, so declaring it satisfies the readability test and **shadows** the
+#: `MetaData` fallback below it. A later author who added a table through
+#: `op.create_table` or `op.execute` without touching this list would leave the
+#: emission "readable" and that guard silent. What the declaration buys is that
+#: the emission is stated rather than inferred; it does not buy detection of a
+#: table added beside it. Nothing here creates a table today, and
+#: `9d4e7a3b1c62`'s raw `ALTER` is outside that guard's reach in any case
+#: (`D-109`).
 _TABLES: list[Table] = []
 
 SCHEMA: Final = "knowledge"

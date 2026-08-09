@@ -23,11 +23,12 @@ Alembic renders, so a revision added tomorrow is covered with no edit here.
 anywhere in the chain, measured at the head that introduced this module:
 `extraction_status_is_known` by `9d4e7a3b1c62`; `capability_is_known` by
 `3c8f1e2a5b74`, `2b7e9f4c1a83` and `1a4c9e77b2d5`; `purpose_is_known` by
-`3c8f1e2a5b74` and `1a4c9e77b2d5`. `KNOWN_RESTATED` holds that list as a
-**floor** rather than as a description, so a restatement added later is covered
-automatically and one that disappears is a failure. It is a list and not a
-spelled figure on purpose: a written-down count of a current set is the defect
-`D-108` had to correct twice, once inside the guard whose subject it is.
+`3c8f1e2a5b74` and `1a4c9e77b2d5`. `KNOWN_RESTATED` holds that list and is
+asserted as an **equality**, so a restatement leaving the chain and one entering
+it unlisted both redden. A floor stood here first and was worth nothing — see the
+constant's own comment. It is a list and not a spelled figure on purpose: a
+written-down count of a current set is the defect `D-108` had to correct twice,
+once inside the guard whose subject it is.
 
 **What was unguarded, stated as a negative result over that universe**, because
 "nothing else is broken" is worth something only when the universe is named.
@@ -60,12 +61,14 @@ Neither is sufficient alone: this one cannot see anything a server does to the
 text it is handed, and the tier only visits the revisions its modules stop at.
 
 **Keyed by `(table, constraint)` and not by constraint name, because a name alone
-does not identify a constraint here.** Measured over the rendered chain: seven
-names sit on more than one table — `state_is_known` on both
-`knowledge.jobs` (`failed, queued, running, succeeded`) and
-`migration_control.table_progress` (`RUNNING, COMPLETED, FAILED`),
-`status_is_known` on two `migration_control` tables, and five
-`*_is_an_opaque_identifier` names across the capture and audit tables. **A first
+does not identify a constraint here.** Measured over the rendered chain, the names
+that sit on more than one table are `state_is_known` — on `knowledge.jobs`
+(`failed, queued, running, succeeded`) and on `migration_control.table_progress`
+(`RUNNING, COMPLETED, FAILED`) — `status_is_known`, on two `migration_control`
+tables, and `audit_id_`, `correlation_id_`, `owner_principal_id_`,
+`principal_id_` and `receipt_id_is_an_opaque_identifier` across the capture and
+audit tables. Named rather than counted, for the reason the paragraph above
+gives. **A first
 version of this module looked the landing text up by name alone, and an
 independent reviewer broke it with a plant**: a `downgrade` restoring
 `migration_control.table_progress.state_is_known` with `knowledge.jobs`'
@@ -75,22 +78,43 @@ enclosing `CREATE TABLE` or the `ALTER TABLE` that carries the statement, so
 `(table, name)` is the key on both sides of every comparison. That plant now
 reddens.
 
+**Reading failures are failures, not silences — which is the third defect a
+review found here and the one that generalises.** `_TOKEN` is a regular
+expression, and the first two versions of it quietly skipped anything it did not
+match: a wrong restoration written `CHECK(` without the space, or as an unnamed
+`ADD CHECK`, or in lower case, or with a newline before `CHECK`, produced no row,
+was therefore compared against nothing, and left this module green. A parse that
+skips is worse than a parse that is narrow, because narrowness is visible in the
+limits section and skipping is visible nowhere. So `_ANY_CHECK` counts, crudely
+and independently, every `CHECK` in every downgrade block, and
+`test_the_reader_finds_the_restatements_it_is_meant_to_read` asserts that
+`_TOKEN` read all of them. A shape nobody anticipated now reddens. `_BOUNDARY`
+gets the same treatment from the other end: the block count is asserted against
+`migrations/versions/`, because a boundary line the pattern cannot match takes a
+whole revision's DDL into the discarded preamble — measured by a reviewer with a
+non-hex revision id, which the old pattern's `[0-9a-f]*` could not match.
+
 **What it does NOT detect**, at demonstrated capability and no higher.
 
-* **`CHECK` constraints only.** `_CONSTRAINT` matches `CONSTRAINT <name> CHECK
-  (`, so a `UNIQUE`, `FOREIGN KEY`, `PRIMARY KEY` or `EXCLUDE` constraint that a
-  `downgrade` re-adds over different columns contributes no row here and is not
-  covered. "Vocabulary" in this module means the literals inside a `CHECK`, not
-  any other thing a constraint can constrain.
+* **`CHECK` constraints only.** `_TOKEN`'s second alternative matches
+  `[CONSTRAINT <name> ]CHECK (`, so a `UNIQUE`, `FOREIGN KEY`, `PRIMARY KEY` or
+  `EXCLUDE` constraint that a `downgrade` re-adds over different columns
+  contributes no row here and is not covered — and, unlike a `CHECK`, is not
+  counted by `_ANY_CHECK` either, so it does not redden the reader. "Vocabulary"
+  in this module means the literals inside a `CHECK`, and nothing else a
+  constraint can constrain.
 * **Only what a `downgrade` re-adds.** A `downgrade` that drops a constraint and
   never restores it emits no `ADD CONSTRAINT` and is not covered, and one written
   as an empty function is invisible for the same reason — which is why
   `9d4e7a3b1c62` restates its text explicitly rather than doing nothing, since
   doing nothing would reach the same database unreadably.
 * **Only `CHECK` text, not the rest of the schema.** Two databases at one
-  revision can still differ in a column type, an index, or a trigger, and nothing
-  here would say so. `test_head_round_trip.py` makes the whole-database
-  comparison, and only at `base`.
+  revision can still differ in a column type, an index, a trigger or a default,
+  and nothing here would say so. `test_head_round_trip.py` makes the
+  whole-database comparison, and only at `base`.
+* **An unnamed `CHECK` is refused rather than checked.** PostgreSQL names one for
+  itself, so there is nothing to key it by; the reader test fails and asks for a
+  name. That is a limit, not a check.
 
 The landing text is accumulated from the upgrade stream up to the revision the
 downgrade lands on, so a constraint dropped by a later revision and never re-added
@@ -108,7 +132,7 @@ import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Final
+from typing import Final, NamedTuple
 
 import pytest
 from alembic import command
@@ -117,11 +141,13 @@ from alembic.config import Config
 from my_pa.bootstrap.settings import ENV_PREFIX
 
 ROOT = Path(__file__).resolve().parents[2]
+VERSIONS = ROOT / "migrations" / "versions"
 
 #: `(revision undone, revision landed on, table, constraint, text restored,
-#: text in force where it lands)`. The landing text is `None` when nothing
-#: holds that `(table, constraint)` there, which the claim refuses.
-Restatement = tuple[str, str, str, str, str, str | None]
+#: text in force where it lands)`. The constraint is `None` for an unnamed
+#: `CHECK`, and the landing text is `None` when nothing holds that
+#: `(table, constraint)` there. The claim refuses both.
+Restatement = tuple[str, str, str, str | None, str, str | None]
 
 #: Offline rendering still loads the process settings, and `MY_PA_DATABASE_URL`
 #: is required with no default. Nothing is dialled: `sql=True` renders to a
@@ -155,7 +181,18 @@ KNOWN_RESTATED: Final[frozenset[tuple[str, str, str]]] = frozenset(
 #: Alembic separates one revision's emitted DDL from the next's in `--sql` mode.
 #: Splitting on it is what makes "the text in force at revision X" computable
 #: from a single render rather than from one render per revision.
-_BOUNDARY = "^-- Running {direction} (?P<source>[0-9a-f]*) -> (?P<target>[0-9a-f]*)"
+#:
+#: The identifiers are matched as "not a space or comma" rather than as hex.
+#: Every revision in this chain today happens to have a hex id, and an earlier
+#: version of this pattern said so — which meant a revision created with
+#: `alembic revision --rev-id wp13_start` produced a boundary line this pattern
+#: did not match, so `re.split` did not split, and that revision's entire DDL was
+#: absorbed into the discarded preamble. A reviewer measured exactly that: a
+#: wrong downgrade under a non-hex id left this module green. Nothing here now
+#: depends on how an id is spelled, and `test_the_reader_finds_the_restatements
+#: _it_is_meant_to_read` counts the blocks against the revision files so a block
+#: going missing for any other reason is a failure rather than a silence.
+_BOUNDARY = r"^-- Running {direction} (?P<source>[^\s,]*) -> (?P<target>[^\s,]*)"
 
 #: Either the statement that names a table, or a named `CHECK` inside one.
 #:
@@ -168,9 +205,23 @@ _BOUNDARY = "^-- Running {direction} (?P<source>[0-9a-f]*) -> (?P<target>[0-9a-f
 #: constraint created inline by one revision and restated by an `ALTER` in
 #: another is the ordinary case here.
 _TOKEN = re.compile(
-    r"\b(?:CREATE|ALTER) TABLE\s+(?:IF NOT EXISTS\s+)?(?P<table>[\w.\"]+)"
-    r'|CONSTRAINT "?(?P<name>\w+)"? CHECK \('
+    r"\b(?:CREATE|ALTER)\s+TABLE\s+(?:ONLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(?P<table>[\w.\"]+)"
+    r'|(?:CONSTRAINT\s+"?(?P<name>\w+)"?\s+)?CHECK\s*\(',
+    re.IGNORECASE,
 )
+
+#: The crudest thing that can recognise a `CHECK` at all, used only to count.
+#:
+#: `_TOKEN` is the reader; this is the auditor of the reader. A parser that
+#: silently skips a shape it cannot read turns a defect into a silence, which is
+#: exactly how the first two versions of this module passed plants that should
+#: have reddened them: written `CHECK(` without the space, or as an unnamed
+#: `ADD CHECK`, or in lower case, or with a newline before `CHECK`, a wrong
+#: restoration produced no row and was therefore never compared and never missed.
+#: Every occurrence this finds in a downgrade block must become a row below, and
+#: the difference — not the rows — is what the reader test asserts on. A shape
+#: nobody anticipated now reddens instead of vanishing.
+_ANY_CHECK = re.compile(r"\bCHECK\s*\(", re.IGNORECASE)
 
 
 def _config(buffer: io.StringIO) -> Config:
@@ -182,10 +233,11 @@ def _checks(body: str) -> list[tuple[str, str, str]]:
 
     The table is the one most recently named by a `CREATE TABLE` or `ALTER TABLE`
     ahead of the constraint, which is where the statement puts it in both shapes.
-    Carrying it is not decoration: seven constraint names in this chain sit on
-    more than one table, so a `(name, expression)` pair does not identify
-    anything and a comparison keyed on it silently compares two different
-    constraints.
+    Carrying it is not decoration: constraint names in this chain are not
+    unique — `state_is_known` and `status_is_known` each sit on two tables and
+    five `*_is_an_opaque_identifier` names sit on three or four — so a
+    `(name, expression)` pair identifies nothing and a comparison keyed on it
+    silently compares two different constraints.
 
     The expression is taken by matching parentheses rather than by a lazy regex,
     because every vocabulary in this repository is written `column IN ('a', 'b')`
@@ -203,6 +255,9 @@ def _checks(body: str) -> list[tuple[str, str, str]]:
         while depth and index < len(body):
             depth += {"(": 1, ")": -1}.get(body[index], 0)
             index += 1
+        # `None` for an unnamed `ADD CHECK`, which PostgreSQL names for itself.
+        # Kept as a row rather than skipped: this guard compares by name and
+        # cannot key one, so it has to say so rather than pass over it.
         found.append((table, match.group("name"), body[match.end() : index - 1].strip()))
     return found
 
@@ -213,8 +268,23 @@ def _blocks(stream: str, direction: str) -> list[tuple[str, str, str]]:
     return [(parts[i], parts[i + 1], parts[i + 2]) for i in range(1, len(parts), 3)]
 
 
+class Rendered(NamedTuple):
+    """What one render of the chain yields, with the audit of its own reading.
+
+    `rows` is the comparison. `blocks` and `unreadable` are how the reader is
+    held to account: a revision whose block never got split out contributes no
+    rows and would otherwise be indistinguishable from a revision with nothing to
+    say, and a `CHECK` written in a shape `_TOKEN` cannot read would vanish the
+    same way. Both are counted so both can be asserted.
+    """
+
+    rows: list[Restatement]
+    blocks: int
+    unreadable: list[tuple[str, int, int]]
+
+
 @pytest.fixture
-def restated() -> Iterator[list[Restatement]]:
+def restated() -> Iterator[Rendered]:
     """Every `CHECK` a `downgrade` re-adds, beside the text in force where it lands.
 
     One row per `ADD CONSTRAINT ... CHECK` in the downgrade stream: the revision
@@ -239,7 +309,7 @@ def restated() -> Iterator[list[Restatement]]:
 
     upgrades = _blocks(upward.getvalue(), "upgrade")
 
-    def in_force(landing: str, table: str, name: str) -> str | None:
+    def in_force(landing: str, table: str, name: str | None) -> str | None:
         """The text `(table, name)` holds after `upgrade base:landing`.
 
         `landing` is empty for the block that lands on `base`, which no upgrade
@@ -248,7 +318,7 @@ def restated() -> Iterator[list[Restatement]]:
         Refused explicitly instead: at `base` there is no constraint in force,
         and a downgrade re-adding one there is a defect rather than a comparison.
         """
-        if not landing:
+        if not landing or name is None:
             return None
         held: str | None = None
         for _, target, body in upgrades:
@@ -259,44 +329,80 @@ def restated() -> Iterator[list[Restatement]]:
                 break
         return held
 
+    downgrades = _blocks(downward.getvalue(), "downgrade")
     rows = [
         (undone, landing, table, name, restores, in_force(landing, table, name))
-        for undone, landing, body in _blocks(downward.getvalue(), "downgrade")
+        for undone, landing, body in downgrades
         for table, name, restores in _checks(body)
     ]
-    yield sorted(rows)
+    yield Rendered(
+        rows=sorted(rows, key=lambda row: tuple("" if part is None else part for part in row)),
+        blocks=len(downgrades),
+        unreadable=[
+            (undone, len(_ANY_CHECK.findall(body)), len(_checks(body)))
+            for undone, _, body in downgrades
+            if len(_ANY_CHECK.findall(body)) != len(_checks(body))
+        ],
+    )
 
 
 def test_the_reader_finds_the_restatements_it_is_meant_to_read(
-    restated: list[Restatement],
+    restated: Rendered,
 ) -> None:
     """The control that makes the comparison below a measurement.
 
-    The claim below quantifies over rows this render produced. A parse that
-    matched nothing would produce no rows and the claim would pass vacuously,
-    which is the shape of check this repository refuses. So the set of rows is
-    asserted equal to `KNOWN_RESTATED`, and every parsed expression asserted
-    non-empty, against the real chain and not a synthetic one.
+    The claim below quantifies over rows this render produced, so anything the
+    reader failed to read is not a failing comparison — it is a missing one, and
+    a missing comparison looks exactly like a passing repository. Three things
+    are asserted before the claim, and each covers a way that could happen.
 
-    Equality in both directions, and the two failures mean different things. A
-    row this render no longer produces means a downgrade stopped restating
-    something, so the claim below covers less than it did. A row this render
-    produces that is not listed means a restatement entered the chain without
-    anyone editing this file — which is the only thing that makes "widening this
-    guard requires editing it" true rather than said.
+    **Every revision's block was found.** `_BOUNDARY` splits the stream on
+    Alembic's own `-- Running downgrade` lines; a line it does not match takes
+    that revision's whole DDL into the discarded preamble. Counting the blocks
+    against `migrations/versions/` is what turns that from a silence into a
+    failure — a reviewer produced exactly that silence with a non-hex revision id.
+
+    **Every `CHECK` in every block was read.** `_ANY_CHECK` is cruder than
+    `_TOKEN` on purpose, and the difference between the two counts is the set of
+    constraints the reader could not attribute. A wrong downgrade written
+    `CHECK(` without the space, or as an unnamed `ADD CHECK`, or in lower case,
+    passed the first two versions of this module green for exactly this reason.
+
+    **Every row is one this file lists, and every listed row is present.**
+    Equality in both directions, and the two failures mean different things: a
+    row gone means a downgrade stopped restating something and the claim covers
+    less than it did; a row unlisted means a restatement entered the chain
+    without anyone editing this file, which is the only thing that makes
+    "widening this guard requires editing it" true rather than said.
     """
-    found = {(undone, table, name) for undone, _, table, name, _, _ in restated}
+    assert restated.blocks == len(list(VERSIONS.glob("*.py"))), (
+        f"the downgrade stream split into {restated.blocks} revision blocks but "
+        f"{len(list(VERSIONS.glob('*.py')))} revisions exist. A revision whose "
+        "boundary line `_BOUNDARY` cannot match contributes no rows at all"
+    )
+    assert not restated.unreadable, (
+        "a `CHECK` was emitted that `_TOKEN` could not read, so it produced no "
+        "row and was compared against nothing. `(revision, found by _ANY_CHECK, "
+        f"read by _TOKEN)`: {restated.unreadable}"
+    )
+    for undone, _, table, name, _, _ in restated.rows:
+        assert name is not None, (
+            f"{undone}'s downgrade re-adds an unnamed `CHECK` on {table}. This "
+            "guard compares by name and the server picks that name itself, so "
+            "there is nothing to compare it against — name the constraint"
+        )
 
+    found = {(undone, table, name) for undone, _, table, name, _, _ in restated.rows}
     assert found == KNOWN_RESTATED, (
         "the set of restated constraints moved. Gone from the chain: "
         f"{sorted(KNOWN_RESTATED - found)}; new and unlisted: {sorted(found - KNOWN_RESTATED)}"
     )
-    for undone, _, table, name, restores, _ in restated:
+    for undone, _, table, name, restores, _ in restated.rows:
         assert restores, f"{undone} restores {table}.{name} with an expression that parsed as empty"
 
 
 def test_every_downgrade_restores_the_text_in_force_where_it_lands(
-    restated: list[Restatement],
+    restated: Rendered,
 ) -> None:
     """The claim, over every restatement in the chain at once.
 
@@ -307,7 +413,7 @@ def test_every_downgrade_restores_the_text_in_force_where_it_lands(
     """
     compared = [
         (undone, landing, table, name, restores, held, restores == held)
-        for undone, landing, table, name, restores, held in restated
+        for undone, landing, table, name, restores, held in restated.rows
     ]
     report = "\n".join(
         f"  {undone} -> {landing or 'base'}  {table}.{name}\n"

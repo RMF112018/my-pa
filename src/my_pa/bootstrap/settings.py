@@ -5,8 +5,22 @@ out-of-range value raises rather than falling back to a default, so a typo in a
 security-relevant name cannot silently leave the safe setting in place.
 
 No secret is committed. `database_url` is the one setting whose value may carry a
-credential, and it has no default at all. Error messages never echo a setting's
-value, so a URL with a password in it cannot leak through a failure.
+credential, and it has no default at all. The messages this module composes never
+echo a setting's value, and the field is `repr=False` so the value does not ride
+out in `repr(settings)` either — the channel that mattered most, because pytest
+prints the `repr` of a failing assertion's operands.
+
+Two channels are open and are named here rather than left to be found. Pydantic's
+own `ValidationError` renders `input_value=`, and for a model validator that
+input is the whole settings mapping; `load_settings` attaches that error to the
+`SettingsError` it raises, so the URL is reachable on `__cause__` by anything
+that prints a traceback. The rendering elides the middle of a long input, which
+is why this looks closed when tested with a long URL and is not: a short URL is
+rendered whole. And `model_dump`/`model_dump_json` return the value by design.
+Neither is closed at this commit. Closing the first is a change to how
+`load_settings` raises — the message it composes already carries every field's
+diagnosis, so nothing is lost by severing the chain — and it was deferred rather
+than judged unnecessary.
 
 `MY_PA_DATABASE_URL` is required rather than defaulted, which resolves
 `P00-OD-008`. That decision's stated default was to fail closed when the URL is
@@ -152,7 +166,23 @@ class Settings(StrictModel):
     default_page_size: int = Field(default=50, gt=0, le=1000)
     max_fetch_bytes: int = Field(default=8 * 1024 * 1024, gt=0, le=MAX_FETCH_BYTES_CEILING)
     max_enrollment_depth: int = Field(default=0, ge=0, le=MAX_ENROLLMENT_DEPTH)
-    database_url: str
+    #: `repr=False` because this is the one field that can hold a password, and
+    #: `repr` is where it escaped. Pydantic's generated `repr` — which `str` also
+    #: uses — printed every field's value, so `Settings(… database_url='…')`
+    #: appeared verbatim wherever a `Settings` object was rendered. The channel
+    #: that made it more than theoretical is the test suite: pytest's assertion
+    #: rewriting prints the `repr` of every operand in a failing comparison, so
+    #: one unrelated failing assertion holding a `Settings` would have put a live
+    #: DSN into CI output, which `SECURITY.md` treats as disclosure regardless of
+    #: how it got there.
+    #:
+    #: Deliberately not `SecretStr`. That would change the field's type and every
+    #: consumer would have to unwrap it — a far wider change than the disclosure
+    #: warrants. `repr=False` closes `repr` and `str` and touches nothing else.
+    #: It does **not** close `model_dump`/`model_dump_json`, which are asked for
+    #: explicitly rather than reached by accident, nor Pydantic's own
+    #: `ValidationError` rendering; see `parsed_database_url` and the tests.
+    database_url: str = Field(repr=False)
 
     #: The single parse of `database_url`, produced by validation and handed on
     #: unchanged. Private because it is not configuration an operator supplies
@@ -182,6 +212,13 @@ class Settings(StrictModel):
         is configured with is the same object validation approved and not a
         second reading of the same string. Pass this, not `database_url`, to
         anything that opens a connection.
+
+        Two Pydantic entry points bypass the validator that fills the parse and
+        so break this accessor by design, neither of which anything calls:
+        `model_copy(update={"database_url": …})` leaves the stored parse
+        describing the *old* string, and `model_construct(…)` never sets it at
+        all, so this raises `AttributeError`. Build settings with
+        `load_settings` or `Settings(...)`.
         """
         return self._parsed_database_url
 

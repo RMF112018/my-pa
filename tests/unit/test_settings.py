@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy.engine import URL
 
 from my_pa.bootstrap.settings import (
     DATABASE_URL_SCHEME,
@@ -276,6 +277,39 @@ def test_an_invalid_database_url_error_never_echoes_the_url() -> None:
     assert url not in str(caught.value)
 
 
+def test_an_accepted_database_url_is_absent_from_the_settings_repr() -> None:
+    """The rejected URL was guarded. The accepted one is the one that has a password.
+
+    Every test above is about a URL that failed validation, and each asserts the
+    error message stays quiet. Nothing asserted anything about the URL that
+    *succeeded*, and Pydantic's generated `repr` printed it — so a `Settings`
+    built from a real environment carried a live DSN into anything that rendered
+    it. `str` is the same rendering, which is why both are asserted here.
+
+    The channel that makes this more than theoretical is this suite. Pytest's
+    assertion rewriting prints the `repr` of the operands of a failing
+    comparison, so any unrelated failing assertion holding a `Settings` object
+    would publish the credential in CI output.
+
+    `SUPERSECRETVALUE` is an obviously synthetic password and `db.invalid` is a
+    reserved name that cannot resolve, so nothing here can connect anywhere.
+    Removing `repr=False` from the field fails this test.
+    """
+    synthetic_credential = "SUPERSECRETVALUE"
+    url = f"{DATABASE_URL_SCHEME}://someone:{synthetic_credential}@db.invalid:5432/somewhere"
+    settings = load_settings({DATABASE_URL: url})
+
+    assert settings.database_url == url, "the value is kept; only its rendering is suppressed"
+    for rendering, name in ((repr(settings), "repr"), (str(settings), "str")):
+        assert synthetic_credential not in rendering, f"the password reached {name}(Settings)"
+        assert url not in rendering, f"the URL reached {name}(Settings)"
+        # The other fields must still render, or this bought secrecy with
+        # silence: a `repr` that showed nothing would pass the two assertions
+        # above and destroy every unrelated diagnostic that uses one.
+        assert "max_page_size=200" in rendering
+        assert "redaction_enabled=True" in rendering
+
+
 # The URL a process connects to is decided once
 # ---------------------------------------------
 #
@@ -293,14 +327,35 @@ def test_an_invalid_database_url_error_never_echoes_the_url() -> None:
 # the engines are.
 
 
-def test_settings_parses_the_database_url_exactly_once() -> None:
+def test_settings_parses_the_database_url_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
     """One parse, kept — not one parser, re-run.
 
-    Object identity is the assertion because it is the only one that
-    distinguishes a stored parse from a fresh parse that happens to agree.
+    Two assertions, because the name needs both and for a while it only had the
+    second. Object identity across accessor calls says the accessor is stable,
+    which is necessary but is not what "exactly once" claims: an implementation
+    that parsed twice during validation and stored the second parse would satisfy
+    it, and the name would still read as a guarantee nobody was checking. So the
+    parser is counted directly. `make_url` is the only reading of the string that
+    happens anywhere — `_parse_database_url` calls it and `create_engine` returns
+    a `URL` untouched — so one call to it over a whole `load_settings`, accessor
+    included, is the claim stated as a number rather than as a name.
     """
+    import my_pa.bootstrap.settings as settings_module
+
+    real_make_url = settings_module.make_url
+    readings: list[str] = []
+
+    def counting_make_url(value: str) -> URL:
+        readings.append(value)
+        return real_make_url(value)
+
+    monkeypatch.setattr(settings_module, "make_url", counting_make_url)
+
     settings = load_settings({DATABASE_URL: _A_URL})
+    assert readings == [_A_URL], f"the URL was read {len(readings)} times, not once"
+
     assert settings.parsed_database_url() is settings.parsed_database_url()
+    assert readings == [_A_URL], "the accessor re-read the string instead of returning the parse"
 
 
 def test_a_url_the_engine_cannot_parse_is_refused_without_naming_it() -> None:

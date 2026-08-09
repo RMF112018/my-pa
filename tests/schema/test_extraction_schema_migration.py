@@ -635,9 +635,10 @@ def test_downgrading_this_revision_restores_the_previous_vocabulary(
     Both halves are built here rather than one being restated, and the first
     assertion is the control: a fresh chain that did not already hold the narrow
     vocabulary would make the final equality true for the wrong reason.
-    `tests/schema/test_every_downgrade_restores_the_vocabulary_below_it.py` makes
-    the same claim for every revision in the chain, off rendered DDL rather than
-    off a server; this one is the measurement.
+    `tests/schema/test_every_revision_denotes_one_schema.py` makes the same claim
+    for every revision in the chain, over every constraint rather than this one;
+    this test names the revision `D-109` was about, so a failure here says which
+    vocabulary moved rather than only that something did.
     """
     engine = create_database_engine(disposable_database)
     try:

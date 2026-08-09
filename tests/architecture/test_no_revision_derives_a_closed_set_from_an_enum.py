@@ -26,11 +26,11 @@ same undercount `D-81` warns about, repeated inside the row that warns about
 it). Ten were listed before the guard was widened, and widening it added
 `4b9f0d27ac31`'s; the paragraph on the widening below says exactly what listing
 those does and does not buy. **Its size is asserted in
-`test_the_allowlist_names_only_revisions_this_package_does_not_edit` and is
-deliberately not spelled out here or beside `ALLOWED`**: the count moved from
-fifteen to fourteen at `D-108` and three spelled figures in this file went stale
-in the same change — inside the guard whose whole subject is a written-down
-vocabulary drifting from the thing it describes. A count of a current set belongs
+`test_the_allowlist_names_only_revisions_this_package_does_not_edit`, which is
+the one place it is written down**: it moved at `D-108`, and three spelled
+figures elsewhere in this file went stale in the same change — inside the guard
+whose whole subject is a written-down vocabulary drifting from the thing it
+describes. A count of a current set belongs
 next to an assertion that fails when it moves, or nowhere.
 
 Each entry pins the *exact* vocabulary that site emits today, so the guard

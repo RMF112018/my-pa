@@ -51,9 +51,9 @@ fresh one admits two: the exact divergence this revision exists to remove,
 reintroduced by its own reverse. Measured rather than reasoned — built both ways
 against PostgreSQL 17.10, two databases at `7f2a9d6c4e18` admitted
 `{extracted, quarantined, unsupported}` and `{extracted, unsupported}`.
-`tests/schema/test_every_downgrade_restores_the_vocabulary_below_it.py` and
+`tests/schema/test_every_revision_denotes_one_schema.py` and
 `test_downgrading_this_revision_restores_the_previous_vocabulary` are what stop
-that returning.
+that returning, both against a server rather than against rendered text.
 
 It restores no rows, because none were removed. It does not return an older
 database to the byte state it held before this revision ran; that state is not
@@ -72,10 +72,11 @@ carries the companion the copy also left behind: a database-tier test pinning
 the vocabulary its own downgrade restores. That test now has a sibling for this
 revision, and a chain-wide guard above it.
 
-Written as an explicit restatement and **not** as an empty `downgrade`, which
-would leave the same database and be worse: emitting no DDL leaves nothing for
-`test_every_downgrade_restores_the_vocabulary_below_it` to read, so what this
-revision leaves behind on the way down would be unpinned all over again.
+Written as an explicit restatement and **not** as an empty `downgrade`. Both
+reach the same database, and the guards above measure the database rather than
+the DDL, so neither is stronger than the other mechanically. Stating the text is
+what makes the revision's intent legible to a reader, which is the reason that
+survives now that the claim is executed rather than parsed.
 
 Revision ID: 9d4e7a3b1c62
 Revises: 7f2a9d6c4e18

@@ -31,7 +31,17 @@ Four claims, separated because they fail for different reasons:
    parameter.
 4. **A hand-written partition comparison is registered or refused.** Seventeen
    exist today, all in planes this package did not repair; the registry is exact,
-   so an eighteenth fails the build.
+   so an eighteenth fails the build. The comparison is matched off an arbitrary
+   attribute chain, not off a bare name: `plane.table.c.principal_id == …` was
+   invisible to the first version of the matcher, and an independent review
+   substituted exactly that for `partition_criterion(...)` in
+   `reap_abandoned_jobs` with all 140 tests still green.
+5. **A guarded module is checked statement by statement, or is registered as
+   only checked as a whole.** Claim 1 asks whether a module calls the guard
+   *anywhere*, and `jobs.py` answered yes on the strength of `claim_job` and
+   `enqueue_job` while `job_for` and `job_state` read the plane with nothing but
+   an operation id — visible to neither the guarded set nor `QUARANTINED`. Two
+   modules now account for every statement; the rest say so.
 
 Nothing here opens a connection, reaches a source, or touches a database. It
 parses the source tree, so a violation is caught even when nothing executes the
@@ -149,6 +159,91 @@ QUARANTINED: Final = {
     ),
 }
 
+#: The guarded modules whose *statements* are checked one by one, rather than
+#: only the module as a whole.
+#:
+#: Claim 1 asks whether a module calls the guard anywhere, and that is a weak
+#: question: `jobs.py` qualified because `claim_job` and `enqueue_job` call it,
+#: which made `job_for` and `job_state` — two unpartitioned reads — invisible to
+#: both the guarded set and `QUARANTINED` at once. A module here has to account
+#: for every statement it builds over a partitioned table.
+STATEMENT_LEVEL: Final = frozenset(
+    {
+        "infrastructure/persistence/jobs.py",
+        "infrastructure/persistence/relationships.py",
+    }
+)
+
+#: The guarded modules that are still only checked as a whole, and why each one
+#: is not statement-level yet. Registered rather than left implicit: "this module
+#: uses the guard somewhere" is a different claim from "every statement in it
+#: does", and a reader is entitled to know which one they are being given.
+#:
+#: These counts are what a statement-level scan measures today, and they are the
+#: work each entry represents rather than a hidden hole: every one of these
+#: modules is reached only through an application path that has already resolved
+#: the Principal, which is the same argument the `QUARANTINED` entries make.
+PER_MODULE_ONLY: Final = {
+    "infrastructure/jobs/capture_pipeline.py": (
+        "derives a `PrincipalContext` from the stored owner of the version it is "
+        "processing and hands it to the modules that query. Its own two "
+        "statements read `capture_versions` by `version_id` to find that owner, "
+        "so they are the derivation the partition comes from rather than uses."
+    ),
+    "infrastructure/persistence/capture.py": (
+        "three statements of eight — the receipt read, the submission upsert, and "
+        "the max-version-number subquery — carry the partition through an "
+        "idempotency key or a version identifier instead of `principal_scoped`. "
+        "Converting them is capture-plane work, not WP-04's."
+    ),
+    "infrastructure/persistence/capture_search.py": (
+        "two statements of three build fragments over `capture_versions` that the "
+        "scoped statement composes; the composed statement carries "
+        "`partition_criterion`."
+    ),
+    "infrastructure/persistence/review.py": (
+        "twelve statements of thirteen scope the review plane by "
+        "`review_case_id`/`proposal_id`/`version_id` rather than by Principal, "
+        "relying on the one `principal_scoped` read that resolves the case. That "
+        "is the review plane's own chain and repairing it is WP-06's."
+    ),
+}
+
+#: Statements in `jobs.py` that build a query over a partitioned job table
+#: *without* reaching the partition, as `function -> (statement count, reason)`.
+#:
+#: Exact, and counted, so a second unpartitioned statement inside an already
+#: registered function reddens as loudly as a new function does. This is the
+#: legible residual of C-3: the four sites below are not reached by a Principal
+#: predicate, and each one says what holds it instead.
+UNPARTITIONED_JOB_STATEMENTS: Final = {
+    "job_principal": (
+        1,
+        "reads the subject's own row by its primary key to find the Principal a "
+        "queued job belongs to. It *is* the derivation the partition comes from, "
+        "so a partition predicate here would be circular; it fails closed with "
+        "`UnownedJobSubjectError` when there is no such row.",
+    ),
+    "hold_lease": (
+        1,
+        "matches `operation_id` and `lease_owner` together and holds the row "
+        "`FOR UPDATE`. The lease owner is a token this worker was issued, not "
+        "something a request carries, and the answer is a boolean about a lease "
+        "rather than any of the job's content.",
+    ),
+    "complete_job": (
+        1,
+        "same three-way match as `hold_lease` on the write path: a worker that "
+        "does not hold the lease updates no row. Adding the Principal means "
+        "giving the worker loop one to state, which is WP-05's lane.",
+    ),
+    "release_job": (
+        1,
+        "the failure counterpart of `complete_job`, matched on the same lease "
+        "owner and state, and unpartitioned for the same reason.",
+    ),
+}
+
 #: Every hand-written partition comparison in the tree, as
 #: `module -> ((table, column), ...)` sorted with multiplicity.
 #:
@@ -245,21 +340,55 @@ def _calls_the_guard(path: Path) -> frozenset[str]:
     return frozenset(called)
 
 
+def partition_column_reference(node: ast.expr) -> tuple[str, str] | None:
+    """`<anything>.c.<partition column>` as `(what it was read off, column)`, or `None`.
+
+    The receiver is rendered rather than required to be a bare `ast.Name`, and
+    that is the whole of the fix this function carries. The first version
+    matched only `<Name>.c.<column>`, so `plane.table.c.principal_id == …` — a
+    partition predicate written by hand off an attribute chain — was invisible
+    to it. An independent review replaced `partition_criterion(...)` in
+    `reap_abandoned_jobs` with exactly that expression and all 140 tests in this
+    module stayed green.
+
+    The subscript spelling of a column is read too, because `table.c["principal_id"]`
+    is the same access with different punctuation.
+
+    Public: a control below runs it over the expression that got through.
+    """
+    if isinstance(node, ast.Attribute):
+        column, accessor = node.attr, node.value
+    elif (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, str)
+    ):
+        column, accessor = node.slice.value, node.value
+    else:
+        return None
+    if column not in PARTITION_COLUMNS:
+        return None
+    if not isinstance(accessor, ast.Attribute) or accessor.attr != "c":
+        return None
+    return ast.unparse(accessor.value), column
+
+
 def _hand_written_comparisons(path: Path) -> tuple[tuple[str, str], ...]:
-    """Every `<table>.c.<partition column> == …` written at a call site."""
+    """Every `<table>.c.<partition column> == …` written at a call site.
+
+    Both sides of the comparison, because `principal_id == table.c.principal_id`
+    is the same predicate typed backwards and SQLAlchemy builds the same clause
+    from it.
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found: list[tuple[str, str]] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Compare) or not isinstance(node.left, ast.Attribute):
+        if not isinstance(node, ast.Compare):
             continue
-        column = node.left.attr
-        if column not in PARTITION_COLUMNS:
-            continue
-        accessor = node.left.value
-        if not isinstance(accessor, ast.Attribute) or accessor.attr != "c":
-            continue
-        if isinstance(accessor.value, ast.Name):
-            found.append((accessor.value.id, column))
+        for operand in (node.left, *node.comparators):
+            reference = partition_column_reference(operand)
+            if reference is not None:
+                found.append(reference)
     return tuple(sorted(found))
 
 
@@ -405,16 +534,26 @@ def test_hand_written_partition_comparisons_match_their_registry_exactly() -> No
         "partition through `principal_scope`, or add the site here with a reason"
     )
 
-    # The control: the detector finds a comparison when there is one to find.
-    synthetic = ast.parse("x = captures.c.owner_principal_id == other")
-    found = [
-        (node.left.value.value.id, node.left.attr)
-        for node in ast.walk(synthetic)
-        if isinstance(node, ast.Compare)
-        and isinstance(node.left, ast.Attribute)
-        and isinstance(node.left.value, ast.Attribute)
-    ]
-    assert found == [("captures", "owner_principal_id")]
+    # The control: the detector finds a comparison when there is one to find,
+    # in each shape that is one. The attribute-chain case is here because it was
+    # a reachable bypass — `plane.table.c.principal_id == principal_id`
+    # substituted for `partition_criterion(...)` in `reap_abandoned_jobs` left
+    # every test in this module green.
+    for source, expected in (
+        ("captures.c.owner_principal_id", ("captures", "owner_principal_id")),
+        ("plane.table.c.principal_id", ("plane.table", "principal_id")),
+        ("self._plane.table.c.principal_id", ("self._plane.table", "principal_id")),
+        ("table.c['principal_id']", ("table", "principal_id")),
+    ):
+        parsed = ast.parse(source, mode="eval").body
+        assert partition_column_reference(parsed) == expected, source
+
+    # And it distinguishes: a non-partition column is not a partition predicate,
+    # and a column read off something that is not a `.c` collection is not one
+    # either. A detector that answered yes to everything would report the whole
+    # tree and the registry would stop meaning anything.
+    for ignored in ("jobs.c.state", "row.principal_id", "plane.table.principal_id"):
+        assert partition_column_reference(ast.parse(ignored, mode="eval").body) is None, ignored
 
 
 def test_every_relationship_statement_reaches_the_partition() -> None:
@@ -459,4 +598,213 @@ def test_every_relationship_statement_reaches_the_partition() -> None:
         "table without reaching the partition through `principal_scope`. Every "
         "read and update predicate goes through `_mine`; every insert goes "
         "through `_bound`"
+    )
+
+
+#: The names `jobs.py` reaches a partitioned table through. It never names a
+#: declaration: every statement is built against `plane.table`, so a scan that
+#: looked for `jobs.c` — the way the relationship scan looks for its
+#: declarations — would examine nothing and report zero offenders.
+_PLANE_TABLES: Final = ("plane.table", "plane.owner_table")
+
+#: What makes a statement a query rather than a fragment. `_abandoned`'s `and_`,
+#: `release_job`'s `exhausted`, and `job_for`'s `reported` are predicate and
+#: value pieces that the statements below compose; each is checked where it is
+#: used, and counting them separately would ask a `case()` expression to carry a
+#: partition it has nowhere to put.
+_QUERY_MARKERS: Final = ("connection.execute(", "select(", ".update()", ".insert()")
+
+
+def _named_assignments(function: ast.FunctionDef) -> tuple[tuple[str, ast.expr], ...]:
+    bindings: list[tuple[str, ast.expr]] = []
+    for node in ast.walk(function):
+        if isinstance(node, ast.Assign):
+            bindings.extend(
+                (target.id, node.value) for target in node.targets if isinstance(target, ast.Name)
+            )
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and node.value is not None
+            and isinstance(node.target, ast.Name)
+        ):
+            bindings.append((node.target.id, node.value))
+    return tuple(bindings)
+
+
+def _to_a_fixed_point(
+    bindings: tuple[tuple[str, ast.expr], ...], seed: frozenset[str], qualifies: object
+) -> frozenset[str]:
+    names = set(seed)
+    changed = True
+    while changed:
+        changed = False
+        for name, value in bindings:
+            if name in names:
+                continue
+            if qualifies(value, frozenset(names)):  # type: ignore[operator]
+                names.add(name)
+                changed = True
+    return frozenset(names)
+
+
+def _plane_table_aliases(function: ast.FunctionDef) -> frozenset[str]:
+    """Local names bound to a job plane's table — `table = plane.table`, and so on."""
+
+    def qualifies(value: ast.expr, known: frozenset[str]) -> bool:
+        rendered = ast.unparse(value)
+        return rendered in _PLANE_TABLES or rendered in known
+
+    return _to_a_fixed_point(_named_assignments(function), frozenset(), qualifies)
+
+
+def _partition_predicate_names(function: ast.FunctionDef) -> frozenset[str]:
+    """Local names holding a predicate or a value set the guard built.
+
+    `claim_job` binds `mine = partition_criterion(...)` once and uses it in two
+    statements, which is the right way to write it and would otherwise look to a
+    text scan like two statements with no guard in them.
+
+    Bound from a *direct* guard call, or from such a name alone. Not from
+    anything that merely mentions one: `row = connection.execute(statement)`
+    would then be "guarded" because `statement` was, and the rule would launder
+    every following statement in the function.
+    """
+
+    def qualifies(value: ast.expr, known: frozenset[str]) -> bool:
+        rendered = ast.unparse(value)
+        return any(f"{call}(" in rendered for call in GUARD_CALLS) or rendered in known
+
+    return _to_a_fixed_point(_named_assignments(function), frozenset(), qualifies)
+
+
+def unpartitioned_job_statements() -> dict[str, int]:
+    """`jobs.py`'s query statements that do not reach the partition, by function.
+
+    Public, because a control below runs it against a `jobs.py` whose partition
+    predicates have been read out of the file, so the small number it reports for
+    the real module is a measurement rather than a scan that matched nothing.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "jobs.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return _unpartitioned_statements_in(tree)
+
+
+def _unpartitioned_statements_in(tree: ast.Module) -> dict[str, int]:
+    offending: dict[str, int] = {}
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        aliases = _plane_table_aliases(function)
+        predicates = _partition_predicate_names(function)
+        for statement in ast.walk(function):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.AnnAssign | ast.Return):
+                continue
+            rendered = ast.unparse(statement)
+            if not any(marker in rendered for marker in _QUERY_MARKERS):
+                continue
+            used = {node.id for node in ast.walk(statement) if isinstance(node, ast.Name)}
+            chains = {
+                ast.unparse(node) for node in ast.walk(statement) if isinstance(node, ast.Attribute)
+            }
+            if not (used & aliases) and not (chains & set(_PLANE_TABLES)):
+                continue
+            reaches = any(f"{call}(" in rendered for call in GUARD_CALLS) or bool(used & predicates)
+            if not reaches:
+                offending[function.name] = offending.get(function.name, 0) + 1
+    return offending
+
+
+def test_every_job_statement_reaches_the_partition_or_is_registered() -> None:
+    """C-3: the job plane, statement by statement rather than module by module.
+
+    `jobs.py` was "reached through the guard" because two of its nine functions
+    call `principal_scope`. That is how `job_for` and `job_state` came to read
+    the whole table with only an operation id and be visible to neither this
+    module's guarded set nor its `QUARANTINED` registry — a module-level
+    accounting cannot see inside a module it has already accounted for.
+
+    Exact equality against `UNPARTITIONED_JOB_STATEMENTS`, with counts, so a new
+    unpartitioned statement reddens whether it is written in a new function or
+    beside one that is already registered.
+    """
+    measured = unpartitioned_job_statements()
+    registered = {name: count for name, (count, _) in UNPARTITIONED_JOB_STATEMENTS.items()}
+    assert measured == registered, (
+        f"the unpartitioned statements in `jobs.py` are now {measured} and the "
+        f"registry says {registered}. Scope the statement through "
+        "`principal_scope` — a required `principal_id` and a "
+        "`partition_criterion`, the way `claim_job` and `job_for` take it — or "
+        "register the function here with what holds the partition instead"
+    )
+
+
+def test_the_job_statement_scan_reports_a_statement_that_really_is_unscoped() -> None:
+    """The control for C-3, on the exact regression the guard was blind to.
+
+    `job_for` reading the plane with only an operation id is the defect this
+    scan exists to catch, and it is reconstructed here by deleting the partition
+    predicate from a parsed copy of the real module rather than by writing a
+    synthetic function that resembles one.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "jobs.py"
+    source = path.read_text(encoding="utf-8")
+    assert "partition_criterion(table, capture_context(principal_id))," in source, (
+        "`job_for` no longer states its partition the way this control removes it"
+    )
+    unscoped = ast.parse(
+        source.replace("partition_criterion(table, capture_context(principal_id)),", "")
+    )
+    measured = _unpartitioned_statements_in(unscoped)
+    assert measured.get("job_for") == 1, (
+        "the scan did not report `job_for` once its partition predicate was "
+        f"removed; it reported {measured}, so the small number it reports for the "
+        "real module means nothing"
+    )
+
+    # And the scan is looking at the real module's queries rather than at a
+    # handful of them: the guarded statements outnumber the registered residual.
+    guarded = len(
+        [
+            name
+            for name in ("enqueue_job", "reap_abandoned_jobs", "claim_job", "job_for")
+            if name not in unpartitioned_job_statements()
+        ]
+    )
+    assert guarded == 4
+
+
+def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() -> None:
+    """The other half of C-3: which guarded modules got the stronger check.
+
+    Exact set equality against `REACHED_THROUGH_THE_GUARD`, so a module joining
+    the guarded set has to be classified rather than inheriting the weaker
+    per-module claim silently — which is the exact way `jobs.py` came to hold two
+    unpartitioned reads that nothing in this file could see.
+    """
+    classified = STATEMENT_LEVEL | set(PER_MODULE_ONLY)
+    assert classified == REACHED_THROUGH_THE_GUARD, (
+        f"{sorted(classified ^ REACHED_THROUGH_THE_GUARD)} are guarded but not "
+        "classified, or classified but not guarded. Say whether every statement "
+        "in the module reaches the partition (STATEMENT_LEVEL) or only the module "
+        "as a whole does (PER_MODULE_ONLY), with the reason"
+    )
+    overlap = sorted(STATEMENT_LEVEL & set(PER_MODULE_ONLY))
+    assert overlap == [], f"{overlap} are both statement-level and per-module; one is wrong"
+
+    # Each statement-level module has a test above that actually does it, and
+    # the two are named here so removing one of those tests without removing the
+    # claim reddens.
+    assert (
+        frozenset(
+            {
+                "infrastructure/persistence/jobs.py",
+                "infrastructure/persistence/relationships.py",
+            }
+        )
+        == STATEMENT_LEVEL
+    ), (
+        "a module was added to STATEMENT_LEVEL without a statement-level test; "
+        "`test_every_relationship_statement_reaches_the_partition` and "
+        "`test_every_job_statement_reaches_the_partition_or_is_registered` are "
+        "the two that exist"
     )

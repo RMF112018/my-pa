@@ -42,9 +42,14 @@ nothing:
 downgrades across `3c8f1e2a5b74` but asserts over tables, not vocabularies. So
 the reviewer's plant would have gone green in every restating revision except
 `1a4c9e77b2d5`'s — not only in the one it was aimed at. Planted rather than
-argued: `zz_reviewer_probe` in `2b7e9f4c1a83`'s and in `3c8f1e2a5b74`'s downgrade
-constants left the whole FAST tier green with this module removed, and reddens it
-with this module present. This module covers the whole list.
+argued: `zz_reviewer_probe` added to `2b7e9f4c1a83`'s
+`_CAPABILITIES_BEFORE_THIS_REVISION` and to `3c8f1e2a5b74`'s
+`_PURPOSES_BEFORE_THIS_REVISION`, each run twice — with this module deselected
+the whole FAST tier is **2995 passed, green**, and with it selected the same tree
+is **1 failed, 2996 passed**. Deselected rather than deleted: deleting the file
+reddens the repository's own test-module count instead, which is a different
+signal and would have made this control read the wrong way. This module covers
+the whole list.
 
 **Offline, and therefore in FAST.** Nothing here connects: `command.upgrade` and
 `command.downgrade` with `sql=True` render the DDL both ways, which is exactly

@@ -236,9 +236,18 @@ def test_each_worker_takes_its_own_principal_s_work_when_both_queues_hold_some(
     B's job is queued *first*, so under the global FIFO this replaces it would be
     the row A's worker took. The ordering is the point: a test that queued A's
     work first would pass against an unpartitioned claim.
+
+    Two transactions, and that is not incidental. `created_at` defaults to
+    `now()`, which in PostgreSQL is the *transaction's* start time — two enqueues
+    in one transaction carry identical timestamps and the claim's tie-break falls
+    to `operation_id`, which is random. A controlled violation of the claim's
+    partition reddened this on one plane and not the other for exactly that
+    reason. Separate transactions give B's row a genuinely earlier `created_at`,
+    so "oldest first" is a fact about the rows rather than a coin toss.
     """
     with engine.begin() as connection:
         b_operation = enqueue_job(connection, subject.format(2), plane=plane)
+    with engine.begin() as connection:
         a_operation = enqueue_job(connection, subject.format(1), plane=plane)
 
     with engine.begin() as connection:

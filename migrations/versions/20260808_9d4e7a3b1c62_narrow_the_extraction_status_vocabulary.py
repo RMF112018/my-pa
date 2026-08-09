@@ -3,7 +3,7 @@
 `extraction_status_is_known` was derived from `ExtractionStatus`, so it admitted
 `quarantined` — a status `record_outcome` routes to `quarantine_records` before
 it ever reaches the insert. The declaration's own comment already said "a
-quarantined object is *not* a row here"; the constraint five dozen lines below it
+quarantined object is *not* a row here"; the constraint 57 lines below it
 said otherwise. Narrowing to `('extracted', 'unsupported')` makes the declaration
 enforce the claim it was already making.
 

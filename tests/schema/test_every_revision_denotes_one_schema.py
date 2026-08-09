@@ -39,34 +39,48 @@ behaviour: applied and rolled back in the database tier, with only SQL generatio
 checked by FAST. Siting the claim in FAST was the mistake underneath all four
 rounds.
 
-**What it compares.** Four kinds of fact about every table in every non-system
-schema, straight out of the catalogue: constraints
-(`pg_get_constraintdef`), columns (type, `NOT NULL`, and `DEFAULT`), indexes
-(`pg_get_indexdef`), and non-internal triggers (`pg_get_triggerdef`). So a
-`UNIQUE` a downgrade forgot, a `FOREIGN KEY` it restored over different columns,
-a `NOT NULL` it dropped, a default it changed, an index it left behind and a
-trigger it failed to remove all fail the same comparison. Nothing inside those
-four kinds is enumerated, so nothing inside them can be forgotten — the property
-`test_head_round_trip.py` establishes at `base`, held at every revision instead of
-only the last one.
+**What it compares.** Seven kinds of fact, straight out of the catalogue:
+constraints (`pg_get_constraintdef`), columns (type, `NOT NULL`, `DEFAULT`),
+indexes (`pg_get_indexdef`), non-internal triggers (`pg_get_triggerdef`),
+relations with their kind, schemas, and extensions. So a `UNIQUE` a downgrade
+forgot, a `FOREIGN KEY` it restored over different columns, a `NOT NULL` it
+dropped, a default it changed, an index or a view or a sequence it left behind, a
+schema it did not drop, an extension nobody drops, and a trigger it failed to
+remove all fail the same comparison.
+
+The last three kinds were added after a review planted them: a `downgrade`
+leaving a stray view, schema, sequence or extension behind passed the earlier
+four-kind version green. Those are exactly the residue shapes
+`test_head_round_trip.py` exists for, and it checks them only between `head` and
+`base` — so at an intermediate revision they were outside every test in the tree.
+Adding them is what makes this module's relationship to that test the one it
+claims: the same property, held at every revision rather than only the last.
 
 **What it does NOT compare**, at demonstrated capability and no higher, and
-listed because the first version of this module claimed a default was covered
-when a plant showed it was not. The four kinds above are what it reads, so
-everything else about a database is outside it: table and column *comments*,
-privileges and ownership, collations, sequence parameters, functions and
-procedures other than the triggers that call them, row-level security policies,
-publications, and anything about *rows*. Two databases at one revision can still
-differ in any of those and this test will pass.
+listed because two earlier versions of this module claimed a dimension they did
+not read. Outside the seven kinds, and outside every test in this tree: table and
+column *comments*, privileges and ownership, collations, sequence *parameters*
+(`START`, `INCREMENT`, `CACHE` — the sequence's existence is compared, its
+settings are not), functions and procedures other than the triggers that call
+them, row-level security policies, publications, enum type labels, column
+ordinal position (the snapshot is sorted by text, so a reordering is invisible),
+identity columns, and anything about *rows*. Two databases at one revision can
+still differ in any of those and this test will pass.
 
 **`public.alembic_version` is excluded by name, for the reason
 `test_head_round_trip.py` gives**: Alembic creates it and no revision owns it, so
 it appears the moment the first `upgrade` runs and no `downgrade` can drop it.
-Measured rather than asserted, and the earlier version of this sentence
-overstated it: without the exclusion exactly **one** revision's comparison
-differs — the first, where the table does not exist in the "fresh" snapshot and
-does afterwards. From the second revision on it is in both sides and cancels. The
-only fact the exclusion hides is that table's own primary key.
+The exclusion covers the table *and its index*, because the index is a separate
+`pg_class` row that the table's own exclusion does not reach — measured, after
+the earlier version let `alembic_version_pkc` through and failed the first
+revision on it.
+
+Measured rather than asserted, and both halves of the earlier sentence were
+wrong. It hides **five** facts, not one: the table and its index as relations,
+the column, the primary key, and the index definition. And without it exactly
+**one** revision's comparison differs — the first, where the table is absent from
+the "fresh" snapshot and present afterwards; from the second revision on it is in
+both sides and cancels.
 """
 
 from __future__ import annotations
@@ -118,11 +132,20 @@ VERSION_TABLE: Final = ("public", "alembic_version")
 #: them; `attisdropped` columns are skipped because a dropped column leaves a
 #: tombstone whose name is not stable.
 _SNAPSHOT = text(
-    "WITH visible AS ("
+    "WITH owned_by_alembic AS ("
+    "  SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+    "  WHERE n.nspname = :version_schema AND c.relname = :version_table"
+    "  UNION"
+    "  SELECT i.indexrelid FROM pg_index i"
+    "  WHERE i.indrelid IN ("
+    "    SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+    "    WHERE n.nspname = :version_schema AND c.relname = :version_table)"
+    "), "
+    "visible AS ("
     "  SELECT c.oid, n.nspname, c.relname, c.relkind"
     "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
     "  WHERE n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'"
-    "    AND NOT (n.nspname = :version_schema AND c.relname = :version_table)"
+    "    AND c.oid NOT IN (SELECT oid FROM owned_by_alembic)"
     ") "
     "SELECT 'constraint ' || v.nspname||'.'||v.relname||'.'||con.conname"
     "       ||' = '||pg_get_constraintdef(con.oid) "
@@ -142,6 +165,13 @@ _SNAPSHOT = text(
     "SELECT 'trigger ' || v.nspname||'.'||v.relname||'.'||t.tgname"
     "       ||' = '||pg_get_triggerdef(t.oid) "
     "FROM pg_trigger t JOIN visible v ON v.oid = t.tgrelid WHERE NOT t.tgisinternal "
+    "UNION ALL "
+    "SELECT 'relation ' || v.nspname||'.'||v.relname||' = '||v.relkind::text FROM visible v "
+    "UNION ALL "
+    "SELECT 'schema ' || n.nspname FROM pg_namespace n "
+    "WHERE n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema' "
+    "UNION ALL "
+    "SELECT 'extension ' || e.extname FROM pg_extension e "
     "ORDER BY 1"
 )
 
@@ -219,10 +249,14 @@ def test_every_revision_returns_the_database_to_what_the_one_below_it_denotes(
             "this walk would silently skip a revision"
         )
 
-        empty = _schema_facts(engine)
-        assert empty == (), (
-            f"a database nothing has migrated already holds {len(empty)} constraints"
-        )
+        # Not empty, and named rather than counted: `CREATE DATABASE` itself
+        # leaves the `public` schema and the `plpgsql` extension, which is what
+        # `test_head_round_trip.py` asserts for the same reason — a `_schema_facts`
+        # that returned nothing for every state would satisfy every comparison
+        # below and prove nothing at all.
+        created = _schema_facts(engine)
+        assert "schema public" in created, created
+        assert "extension plpgsql" in created, created
 
         for revision in revisions:
             parent = revision.down_revision or "base"
@@ -244,10 +278,11 @@ def test_every_revision_returns_the_database_to_what_the_one_below_it_denotes(
             command.upgrade(_config(), revision.revision)
 
         at_head = _schema_facts(engine)
-        assert len(at_head) > len(empty), (
+        assert set(at_head) > set(created), (
             "the chain added no schema fact at all, so every comparison above "
-            "compared two empty sets and proved nothing"
+            "compared two identical snapshots and proved nothing"
         )
+        assert "schema knowledge" in at_head, "the chain did not build the knowledge schema"
 
         command.downgrade(_config(), "base")
     finally:

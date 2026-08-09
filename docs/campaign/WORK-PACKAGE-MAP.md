@@ -1,5 +1,7 @@
 # Work Package Map — my-pa Moss MCV/MVP Implementation Campaign
 
+> **Historical record — superseded.** This is the superseded Moss v4.0 campaign's work-package sequencing (WP-00 through WP-09), including the "WP-06 active / WP-07 Microsoft 365 Graph connector next" claim. It is superseded by `MYPA-CANONICAL-APPLICATION-COMPLETION-PLAN-20260809-001`, whose WP-01 → WP-02 → WP-03 critical path (milestone MS-0) is the current sequence — see [`docs/campaign/CAMPAIGN-BRIEF.md`](CAMPAIGN-BRIEF.md). Microsoft Graph connectors described below remain off by default and are not the active personal-data ingestion path. Original text preserved below unchanged.
+
 ```yaml
 map_id: WORK-PACKAGE-MAP-MYPA-MOSS-20260805
 product_package: MYPA-MOSS-CANONICAL-PRODUCT-PACKAGE-20260805-008 (v4.0)

@@ -182,8 +182,11 @@ _EMISSION_LIST: Final = "_TABLES"
 #: site nobody could see — which is this module's entire subject. It was added
 #: with `capture_proposals.a_missing_required_field_is_a_required_field`, and it
 #: names no site that was previously hidden: no revision in the chain emitted an
-#: `ARRAY[…]` literal before that one, which `test_the_allowlist_names_only_
-#: revisions_this_package_does_not_edit` holds at ten.
+#: `ARRAY[…]` literal before that one. `ALLOWED` below is the whole residual set,
+#: and `test_the_allowlist_names_only_revisions_this_package_does_not_edit` holds
+#: it to the revisions listed there rather than to a count restated here — a
+#: spelled figure in a comment is the defect this package exists to remove, and
+#: this one had already gone stale.
 _CLOSED_SET = re.compile(r"IN \(([^)]*)\)|<@ ARRAY\[([^\]]*)\]")
 _LITERAL = re.compile(r"'([^']*)'")
 

@@ -22,21 +22,50 @@ tokens of a command rather than to the bytes of a file.
 **Why the parser is written here.** No YAML library is a declared dependency of
 this package, and this test must run in the FAST tier on an ordinary install, so
 it cannot import one. `_parse_workflow` is a parser for the block subset of YAML
-this repository's workflows use: mappings, sequences, block scalars, comments
-and plain scalars. It **raises** on a construct it does not understand rather
-than skipping it, because a parser that silently skipped would be exactly the
-guard that cannot fire. Flow collections are the one construct it reads without
-interpreting — `branches: [main]` comes back as the string `"[main]"` — which is
-pinned in the synthetic parse below rather than left to be discovered, and which
-costs nothing here because no `run:` is written in flow style.
-`test_the_parser_reads_a_document_it_has_never_seen`
-exercises it on a synthetic workflow whose expected parse is written out, and
-`test_the_workflow_parses_into_jobs_that_run_commands` is the emptiness test
-over the real file.
+this repository's workflows use, and the list is exact because the gaps in it
+were fail-open for four commits:
+
+* **Reads.** Block mappings and block sequences; comments and blank lines; plain
+  scalars; simply quoted scalars, unquoted; `|`-family block scalars, joined
+  with newlines; `>`-family block scalars, *folded* — line breaks between
+  equally indented lines become spaces and a run of blank lines becomes one
+  fewer newline, which is what YAML means by `>` and what
+  `run: >` over two lines means to the shell.
+* **Reads without interpreting.** A flow *sequence* comes back as its own text:
+  `branches: [main]` is the string `"[main]"`. That is pinned in the synthetic
+  parse below rather than left to be discovered, and it is safe here only
+  because a flow sequence in a `steps:` position then fails the `isinstance`
+  check in `_steps` rather than parsing to nothing.
+* **Raises.** A line that is neither a mapping entry nor a sequence entry; a
+  flow *mapping* anywhere (`- {name: Check, run: mypy src}`, whose block reading
+  loses every key after the first and yields a step with no `run:`); a quoted
+  scalar whose quoting is not simple, meaning it carries an escape or an inner
+  quote; and a folded scalar containing a more-indented line, which YAML keeps
+  literal under a third joining rule this parser does not implement.
+* **Ignores.** Chomping and keep modifiers. `>-`, `>` and `>+` are read alike
+  and no trailing newline is reproduced, which cannot change how a command line
+  tokenizes and is the one place this parser is deliberately loose.
+
+It raises rather than skipping because a parser that silently skipped would be
+exactly the guard that cannot fire — which is what it was. Three of the four
+shapes above were **silent** passes, and two of them were demonstrated
+end-to-end against the real workflow: a `run: >` holding `python -m mypy` and
+`src` on two lines was joined with a newline, so the guard read a bare
+invocation and a stray word and went green on `D-64` itself.
+`test_the_parser_reads_a_document_it_has_never_seen` exercises the parser on a
+synthetic workflow whose expected parse is written out — including a folded
+scalar over *several* lines, because a single-line `>-` is the one case where
+folding and newline-joining are indistinguishable and a control that cannot
+discriminate is not a control.
+`test_the_parser_refuses_or_reads_every_step_shape_it_meets` is the fail-closed
+table, and `test_the_workflow_parses_into_jobs_that_run_commands` is the
+emptiness test over the real file.
 
 **What it does not check.** It does not run `mypy`, so it says nothing about
 whether the 140 files pass; that is what CI's own `mypy` step is for. It reads
-`.github/workflows/*.yml` only, so a `mypy` invocation in a Makefile, a
+`.github/workflows/*.yml` and `*.yaml` — both, because GitHub Actions honours
+both and a real `.yaml` workflow running `mypy src` sat outside this guard
+undetected — so a `mypy` invocation in a Makefile, a
 pre-commit hook or a script is outside it. And the argument rule is *stricter*
 than `D-64` needs: any token after `mypy` that does not begin with `-` is
 refused, so `--config-file pyproject.toml` written with a space would be refused
@@ -65,8 +94,18 @@ PYPROJECT = ROOT / "pyproject.toml"
 
 #: The block-scalar indicators. Chomping and keep modifiers are accepted because
 #: the workflow uses `>-`, and a header this parser did not know would otherwise
-#: be read as a plain scalar and swallow a whole script.
+#: be read as a plain scalar and swallow a whole script. The `|` family and the
+#: `>` family are **not** joined the same way; see `_block_scalar`.
 _BLOCK_SCALARS: Final = frozenset({"|", "|-", "|+", ">", ">-", ">+"})
+
+#: The suffixes GitHub Actions reads out of `.github/workflows`. Both of them,
+#: because it honours both identically: a real `extra-typecheck.yaml` running
+#: `mypy src` was invisible to a `*.yml` glob and read exactly like a file that
+#: had been checked.
+_WORKFLOW_SUFFIXES: Final = frozenset({".yml", ".yaml"})
+
+#: The quote characters a simply quoted scalar may be wrapped in.
+_QUOTES: Final = frozenset({'"', "'"})
 
 #: Shell control operators, so `a && mypy src` is two commands and not one.
 _OPERATORS: Final = frozenset({"&&", "||", ";", "|", "&"})
@@ -112,8 +151,63 @@ def _split_key(line: str) -> tuple[str, str] | None:
     return head.strip().strip("\"'"), rest.strip()
 
 
-def _block_scalar(lines: list[str], index: int, indent: int) -> tuple[str, int]:
-    """Every line more indented than `indent`, dedented to its own margin."""
+def _refuse_flow_mapping(value: str, index: int) -> None:
+    """A flow mapping is refused, because reading it as a block loses its keys.
+
+    `- {name: Check, run: mypy src}` splits at its first `": "`, which is inside
+    the braces, and comes back as `{'{name': 'Check, run: mypy src}'}` — a step
+    mapping with no `run:` key, which `_steps` then skips without a word. A
+    parser that cannot read a construct must say so; this is where it says so.
+    """
+    if value.startswith("{"):
+        raise ValueError(
+            f"line {index + 1} is a flow mapping: {value!r}. Read as a block it loses "
+            "every key after the first, so a step written this way is skipped rather "
+            "than checked; write it as a block mapping"
+        )
+
+
+def _scalar(value: str, index: int) -> str:
+    """A plain scalar unchanged, a simply quoted one unquoted, anything else refused.
+
+    `_split_key` unquotes the key and used to leave the value alone, so
+    `run: "python -m mypy src"` came back with its quotes attached: `shlex` saw
+    one token whose basename is not `mypy`, **zero** invocations were found, and
+    a targeted invocation passed the rule below by being invisible to it.
+
+    Simple quoting only. An escape or an inner quote of the same kind is
+    refused rather than approximated, because `"mypy \\"src\\""` and `'it''s'`
+    both mean something this parser would otherwise get wrong quietly.
+    """
+    _refuse_flow_mapping(value, index)
+    quote = value[:1]
+    if quote not in _QUOTES:
+        return value
+    if len(value) < 2 or not value.endswith(quote) or quote in value[1:-1] or "\\" in value:
+        raise ValueError(
+            f"line {index + 1} is a quoted scalar this parser will not unquote: "
+            f"{value!r}. Approximating it is how a real invocation comes to read "
+            "as a single word that no rule matches"
+        )
+    return value[1:-1]
+
+
+def _block_scalar(lines: list[str], index: int, indent: int, folded: bool) -> tuple[str, int]:
+    """Every line more indented than `indent`, dedented to its own margin.
+
+    `folded` selects the join, and the two joins are different answers rather
+    than different spellings. YAML's `|` keeps every line break; YAML's `>`
+    *folds* a break between equally indented lines into a space. So
+
+        run: >
+          python -m mypy
+          src
+
+    is the single command `python -m mypy src` — `D-64` exactly — and joining it
+    with a newline instead reads a bare invocation followed by the word `src`,
+    which is the guard returning green on the defect it exists to catch.
+    """
+    start = index
     body: list[str] = []
     while index < len(lines):
         line = lines[index]
@@ -126,7 +220,37 @@ def _block_scalar(lines: list[str], index: int, indent: int) -> tuple[str, int]:
     if not body:
         return "", index
     margin = min(_indent(line) for line in body if line.strip())
-    return "\n".join(line[margin:] if line.strip() else "" for line in body), index
+    dedented = [line[margin:] if line.strip() else "" for line in body]
+    if not folded:
+        return "\n".join(dedented), index
+    return _fold(dedented, start), index
+
+
+def _fold(dedented: list[str], start: int) -> str:
+    """YAML folding over the subset this repository writes.
+
+    Breaks between equally indented lines fold to spaces, and a run of *n* blank
+    lines becomes *n* - 1 newlines. A **more-indented** line is kept literally by
+    YAML under a third rule, which this parser does not implement and therefore
+    refuses: guessing that rule wrong is the same class of mistake as reading
+    `>` as `|`.
+    """
+    paragraphs: list[str] = []
+    current: list[str] = []
+    for offset, line in enumerate(dedented):
+        if not line:
+            paragraphs.append(" ".join(current))
+            current = []
+        elif line.startswith(" "):
+            raise ValueError(
+                f"line {start + offset + 1} is more indented than its folded scalar: "
+                f"{line!r}. YAML keeps such a line literal, which is a joining rule "
+                "this parser does not read; write the block with `|` instead of `>`"
+            )
+        else:
+            current.append(line)
+    paragraphs.append(" ".join(current))
+    return "\n".join(paragraphs)
 
 
 def _parse_block(lines: list[str], index: int, indent: int) -> tuple[object, int]:
@@ -145,8 +269,9 @@ def _parse_sequence(lines: list[str], index: int, indent: int) -> tuple[list[obj
         if not entry.startswith("- "):
             return items, index
         rest = entry[2:]
+        _refuse_flow_mapping(rest, index)
         if _split_key(rest) is None:
-            items.append(rest)
+            items.append(_scalar(rest, index))
             index += 1
             continue
         # A mapping opening on the dash line. Rewriting the line as if the dash
@@ -174,9 +299,9 @@ def _parse_mapping(lines: list[str], index: int, indent: int) -> tuple[dict[str,
         key, rest = split
         index += 1
         if rest in _BLOCK_SCALARS:
-            mapping[key], index = _block_scalar(lines, index, indent)
+            mapping[key], index = _block_scalar(lines, index, indent, rest.startswith(">"))
         elif rest:
-            mapping[key] = rest
+            mapping[key] = _scalar(rest, index - 1)
         else:
             nested = _content(lines, index)
             if nested < len(lines) and _indent(lines[nested]) > indent:
@@ -256,34 +381,68 @@ def mypy_arguments(script: str) -> list[tuple[str, ...]]:
     return invocations
 
 
+def _workflow_files(directory: Path) -> list[Path]:
+    """Every file in `directory` GitHub Actions would run.
+
+    Both suffixes. `glob("*.yml")` alone left `.yaml` workflows outside this
+    guard entirely, which is not a narrower check but no check at all: the file
+    was never opened, so nothing about it could go red.
+    """
+    return sorted(
+        path for path in directory.iterdir() if path.is_file() and path.suffix in _WORKFLOW_SUFFIXES
+    )
+
+
+def _steps_in(name: str, document: str) -> list[tuple[str, str, str]]:
+    """Every `(workflow, job, shell script)` one workflow document declares.
+
+    The assertions are the parser's downstream half of failing closed. A `steps:`
+    that parsed to a string — a flow sequence, an alias — or a step that parsed
+    to something other than a mapping stops here loudly rather than contributing
+    nothing to a rule that quantifies over what it returns.
+    """
+    found: list[tuple[str, str, str]] = []
+    workflow = _parse_workflow(document)
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict), f"{name} declares no jobs mapping"
+    for job, definition in jobs.items():
+        assert isinstance(definition, dict), f"{name}: job {job} is not a mapping"
+        steps = definition.get("steps")
+        assert isinstance(steps, list), f"{name}: job {job} declares no steps"
+        for step in steps:
+            assert isinstance(step, dict), f"{name}: job {job} has a non-mapping step"
+            script = step.get("run")
+            if isinstance(script, str):
+                found.append((name, str(job), script))
+    return found
+
+
 def _steps() -> list[tuple[str, str, str]]:
     """Every `(workflow, job, shell script)` the repository's CI runs."""
     found: list[tuple[str, str, str]] = []
-    for path in sorted(WORKFLOWS.glob("*.yml")):
-        workflow = _parse_workflow(path.read_text(encoding="utf-8"))
-        jobs = workflow.get("jobs")
-        assert isinstance(jobs, dict), f"{path.name} declares no jobs mapping"
-        for job, definition in jobs.items():
-            assert isinstance(definition, dict), f"{path.name}: job {job} is not a mapping"
-            steps = definition.get("steps")
-            assert isinstance(steps, list), f"{path.name}: job {job} declares no steps"
-            for step in steps:
-                assert isinstance(step, dict), f"{path.name}: job {job} has a non-mapping step"
-                script = step.get("run")
-                if isinstance(script, str):
-                    found.append((path.name, str(job), script))
+    for path in _workflow_files(WORKFLOWS):
+        found.extend(_steps_in(path.name, path.read_text(encoding="utf-8")))
     return found
 
 
 def test_the_parser_reads_a_document_it_has_never_seen() -> None:
     """The extractor's own control: a synthetic workflow with its parse written out.
 
-    Every construct the real file uses and one it does not — a nested mapping, a
-    sequence of mappings, a `|` block scalar holding a `#` line that must survive
-    as script text, a `>-` folded scalar, a whole-line comment that must not,
-    a `key:` with no value, and a `host:port` scalar that is not a mapping.
+    Every construct the real file uses and several it does not — a nested
+    mapping, a sequence of mappings, a `|` block scalar holding a `#` line that
+    must survive as script text and a blank line that must survive as one, a
+    whole-line comment that must not, a `key:` with no value, a quoted scalar, and
+    a `host:port` scalar that is not a mapping.
     Without this, a parser that returned an empty mapping would make every rule
     below pass by describing nothing.
+
+    **The folded scalars are written over several lines on purpose.** This test
+    exercised `>-` on a single-line value only, which is the one shape where
+    folding and newline-joining produce the same string — so it agreed with a
+    parser that read `>` as `|`, and the defect that let `run: >` hide a target
+    from `D-64` sat underneath a green control. Both a folded `run:` and a folded
+    option are spelled out here, blank line included, because a same-shape
+    control that cannot discriminate is not a control.
     """
     document = "\n".join(
         [
@@ -298,10 +457,17 @@ def test_the_parser_reads_a_document_it_has_never_seen() -> None:
             "    steps:",
             "      - name: Checkout",
             "        uses: actions/checkout@abc",
+            '        id: "checkout"',
             "      - name: Check",
             "        run: |",
             "          # a shell comment, which is script and not YAML",
             "          python -m mypy",
+            "",
+            "          echo done",
+            "      - name: Folded",
+            "        run: >",
+            "          python -m mypy",
+            "          --strict",
             "",
             "          echo done",
             "  second:",
@@ -310,6 +476,7 @@ def test_the_parser_reads_a_document_it_has_never_seen() -> None:
             "    empty:",
             "    options: >-",
             "      --health-retries 5",
+            "      --health-timeout 5s",
             "    steps:",
             "      - run: python -m mypy",
         ]
@@ -326,18 +493,122 @@ def test_the_parser_reads_a_document_it_has_never_seen() -> None:
     assert isinstance(first, dict)
     assert first["runs-on"] == "ubuntu-latest"
     assert first["steps"] == [
-        {"name": "Checkout", "uses": "actions/checkout@abc"},
+        {"name": "Checkout", "uses": "actions/checkout@abc", "id": "checkout"},
         {
             "name": "Check",
             "run": ("# a shell comment, which is script and not YAML\npython -m mypy\n\necho done"),
         },
+        # Folded: the two option lines become one command line, and the blank
+        # line becomes the break between two. A `|` reading would give three
+        # commands, the first of them a bare `python -m mypy`.
+        {"name": "Folded", "run": "python -m mypy --strict\necho done"},
     ]
     second = jobs["second"]
     assert isinstance(second, dict)
     assert second["ports"] == ["5432:5432"]
     assert second["empty"] is None
-    assert second["options"] == "--health-retries 5"
+    assert second["options"] == "--health-retries 5 --health-timeout 5s"
     assert second["steps"] == [{"run": "python -m mypy"}]
+
+
+def _one_job(*step_lines: str) -> str:
+    """A minimal workflow whose only job carries the given step lines."""
+    return "\n".join(["jobs:", "  only:", "    runs-on: ubuntu-latest", "    steps:", *step_lines])
+
+
+_STEP = "      - name: Typecheck"
+
+#: `D-64` written the way each construct spells it, and what must happen to it.
+#: `None` means the parser must raise or `_steps_in` must assert; a list is the
+#: invocation read correctly. Nothing may return `[]` while a target is present,
+#: because `[]` is the answer that reads as "this workflow does not invoke mypy"
+#: and satisfies every rule in this file by describing nothing. Three of these
+#: shapes returned exactly that, and two were demonstrated against the real
+#: workflow before the parser was fixed.
+_STEP_SHAPES: Final[list[tuple[str, list[tuple[str, ...]] | None]]] = [
+    # The folded scalar, which was the live bypass: `>` folds the break to a
+    # space, so these two lines are the single command `python -m mypy src`.
+    (_one_job(_STEP, "        run: >", "          python -m mypy", "          src"), [("src",)]),
+    # Its discriminating control. The same two lines under `|` really are two
+    # commands, the first of them bare — which is what `>` used to be read as.
+    (_one_job(_STEP, "        run: |", "          python -m mypy", "          src"), [()]),
+    # A more-indented line in a folded scalar is YAML's third joining rule.
+    (_one_job(_STEP, "        run: >", "          python -m mypy", "            src"), None),
+    # The plainly caught control, and the bare form that must stay accepted.
+    (_one_job(_STEP, "        run: |", "          python -m mypy src"), [("src",)]),
+    (_one_job(_STEP, "        run: |", "          python -m mypy"), [()]),
+    # The quoted scalar, which used to yield zero invocations in silence.
+    (_one_job(_STEP, '        run: "python -m mypy src"'), [("src",)]),
+    (_one_job(_STEP, "        run: 'python -m mypy src'"), [("src",)]),
+    (_one_job(_STEP, '        run: "python -m mypy \\"src\\""'), None),
+    # The flow-mapping step, which used to parse to a step with no `run:` key.
+    (_one_job("      - {name: Typecheck, run: mypy src}"), None),
+    # The four the reviewer verified already fail closed, pinned so they stay so.
+    ("jobs:\n  only:\n    steps: [{name: T, run: mypy src}]", None),
+    ("jobs:\n  a:\n    steps: &s\n      - run: mypy src\n  b:\n    steps: *s", None),
+    ("jobs:\n  only:\n\t\tsteps:\n\t\t\t- run: mypy src", None),
+    (_one_job("      - run: mypy") + "\n---\njobs:\n  b:\n    steps:\n      - run: mypy src", None),
+]
+
+
+@pytest.mark.parametrize(
+    ("document", "expected"),
+    _STEP_SHAPES,
+    ids=[
+        "a folded run folds, so its target is read",
+        "the same lines under a literal block are two commands",
+        "a folded run with a more-indented line is refused",
+        "a literal block naming a target is caught",
+        "a literal block naming none is bare",
+        "a quoted run is unquoted, so its target is read",
+        "a single-quoted run is unquoted too",
+        "a quoted run carrying an escape is refused",
+        "a flow-mapping step is refused",
+        "a flow sequence of steps is refused",
+        "an alias in a steps position is refused",
+        "tab indentation is refused",
+        "a second document is refused",
+    ],
+)
+def test_the_parser_refuses_or_reads_every_step_shape_it_meets(
+    document: str, expected: list[tuple[str, ...]] | None
+) -> None:
+    """The fail-closed table: loud, or right — never silently empty.
+
+    The docstring above claims this parser raises on what it cannot read rather
+    than skipping it. Four constructs falsified that, and two of them were
+    demonstrated end-to-end by planting `D-64` into the real workflow and
+    watching this file return green. Each is a row here beside a control that is
+    known to be caught, so the table cannot pass by refusing everything and
+    cannot pass by reading everything as bare.
+    """
+    if expected is None:
+        with pytest.raises((ValueError, AssertionError)):
+            _steps_in("planted.yml", document)
+        return
+
+    found = [
+        arguments
+        for _, _, script in _steps_in("planted.yml", document)
+        for arguments in mypy_arguments(script)
+    ]
+    assert found == expected
+
+
+def test_every_workflow_file_github_would_run_is_read(tmp_path: Path) -> None:
+    """`.yaml` is not a second-class spelling, and this guard read only `.yml`.
+
+    GitHub Actions runs both suffixes identically. A real
+    `.github/workflows/extra-typecheck.yaml` invoking `python -m mypy src` was
+    never opened by this file, so `D-64` could be restored in a new workflow with
+    every gate green — not a narrower check but no check at all.
+    """
+    for name in ("a.yml", "b.yaml", "c.txt", "d.yml.bak", "e.YML"):
+        (tmp_path / name).write_text("name: x\n", encoding="utf-8")
+    (tmp_path / "f.yml").mkdir()
+
+    assert [path.name for path in _workflow_files(tmp_path)] == ["a.yml", "b.yaml"]
+    assert _workflow_files(WORKFLOWS), "the real workflow directory reads as empty"
 
 
 def test_the_workflow_parses_into_jobs_that_run_commands() -> None:
@@ -391,6 +662,12 @@ def test_ci_invokes_mypy_and_every_invocation_is_bare() -> None:
         ("python -m mypy \\\n  src", [("src",)]),
         ("python -m mypy -p my_pa", [("-p", "my_pa")]),
         ("ruff check . && python -m mypy src", [("src",)]),
+        # Spellings a launcher, a variable or a matrix could reach the target
+        # through. Each is caught today; each is here so it stays caught.
+        ("uv run mypy src", [("src",)]),
+        ("mypy $ARGS", [("$ARGS",)]),
+        ("mypy ${{ matrix.target }}", [("${{", "matrix.target", "}}")]),
+        ("mypy --config-file pyproject.toml", [("--config-file", "pyproject.toml")]),
         # A comment naming the defect is not the defect. Four such lines are in
         # the workflow, which is why `grep 'mypy src'` cannot be the rule.
         ("# never write `mypy src`\npython -m mypy", [()]),

@@ -156,6 +156,9 @@ EXTRACTION_REVISION = "8b3f5c17d904"
 KNOWLEDGE_REVISION = "7e5a1fb93d62"
 FOUNDATION_HEAD = "6c4d3ea82f10"
 
+#: The constraint `9d4e7a3b1c62` narrows, named once because three tests read it.
+STATUS_CONSTRAINT = "extraction_status_is_known"
+
 #: The revision that creates the migrated corpus's tables, and how many. Used as
 #: a positive control for the DDL parser: those statements are schema-qualified
 #: and quoted, so a parser that only understood unquoted names would report every
@@ -357,9 +360,7 @@ def _admitted_statuses() -> frozenset[str]:
     tests below exist to prevent.
     """
     constraint = next(
-        candidate
-        for candidate in extractions.constraints
-        if candidate.name == "extraction_status_is_known"
+        candidate for candidate in extractions.constraints if candidate.name == STATUS_CONSTRAINT
     )
     assert isinstance(constraint, CheckConstraint)
     return frozenset(re.findall(r"'([^']*)'", str(constraint.sqltext)))
@@ -382,7 +383,7 @@ def test_the_detector_reads_the_status_vocabulary_off_the_constraint() -> None:
         next(
             candidate
             for candidate in extractions.constraints
-            if candidate.name == "extraction_status_is_known"
+            if candidate.name == STATUS_CONSTRAINT
         ).sqltext
     )
 
@@ -417,6 +418,61 @@ def test_the_stored_status_vocabulary_is_the_outcome_vocabulary_less_quarantined
 
     assert _admitted_statuses() == outcomes - {ExtractionStatus.QUARANTINED.value}
     assert _admitted_statuses() < outcomes, "storage must stay a strict subset of outcome"
+
+
+def _final_status_check(emitted: str) -> str:
+    """The last `extraction_status_is_known` expression a full upgrade leaves behind.
+
+    Read off the emitted DDL rather than off either declaration, because the
+    question is what a database ends up holding and not what either file says.
+    """
+    found = re.findall(
+        rf'ADD CONSTRAINT "{STATUS_CONSTRAINT}" CHECK \((.+?)\);',
+        emitted,
+    )
+    assert found, "no ALTER re-stated the status constraint; the chain cannot converge"
+    return found[-1].strip()
+
+
+def test_a_migrated_database_converges_with_a_freshly_built_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two ways to reach head must admit exactly the same statuses.
+
+    `8b3f5c17d904` creates `extractions` from the *live* declaration, so
+    narrowing that declaration changed what an already-merged revision emits. A
+    database built from empty today gets the narrow constraint at
+    `8b3f5c17d904`; a database migrated before the narrowing landed still holds
+    the wide one. They are the same schema version and must not disagree about
+    what `status` admits — `9d4e7a3b1c62` is the revision that makes them agree,
+    and this is what makes "agree" a measurement rather than an intention.
+
+    Compared as *text*, not as a value set, and deliberately so: the two are
+    produced by different mechanisms — `_one_of` compiles one and a frozen
+    literal in the revision states the other — and the whole failure this guards
+    against is those two drifting apart. Equal vocabularies written differently
+    would still be two statements of one thing, which is what
+    `test_the_stored_status_vocabulary_is_the_outcome_vocabulary_less_quarantined`
+    above is about; equal text is the stronger property and is available here
+    because `_one_of` sorts its literals.
+
+    Reddens the day someone edits the declaration's vocabulary without writing
+    the revision that carries an existing database to it — which is precisely the
+    defect that made this revision necessary, left able to recur.
+    """
+    monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", "postgresql+psycopg://nobody@nowhere/nothing")
+    buffer = io.StringIO()
+
+    command.upgrade(_config(output_buffer=buffer), "head", sql=True)
+
+    declared = str(
+        next(
+            candidate
+            for candidate in extractions.constraints
+            if candidate.name == STATUS_CONSTRAINT
+        ).sqltext
+    )
+    assert _final_status_check(buffer.getvalue()) == declared
 
 
 @pytest.fixture

@@ -39,7 +39,7 @@ Drive mirrors are review surfaces rather than a competing ledger.
 | Database container | `my-pa-postgres`, `postgres:17.10`, healthy | `docker ps` |
 | Database binding | `127.0.0.1:5433 -> 5432`, loopback only | `docker ps` port map |
 | Logical database | `my_pa` | `select current_database()` |
-| Alembic head | `7f2a9d6c4e18` in the repository, fourteen revisions; the canonical database remains at `6c4d3ea82f10` because every revision above it builds the `knowledge` schema, which runs only against disposable databases | `migrations/versions/*.py`, `select * from alembic_version` |
+| Alembic head | `9d4e7a3b1c62` in the repository, fifteen revisions; the canonical database remains at `6c4d3ea82f10` because every revision above it builds the `knowledge` schema, which runs only against disposable databases | `migrations/versions/*.py`, `select * from alembic_version` |
 | Extensions | `pg_trgm`, `unaccent`, `plpgsql` | `select extname from pg_extension` |
 
 ## 2. Verified corpus claim
@@ -89,7 +89,7 @@ section disagrees with the tree.
 | `domain/source`, `domain/extraction`, `domain/search` — registry, bounded enrollment, provider port, extraction outcomes, quarantine, coverage, search query | Implemented and tested |
 | `infrastructure/persistence` — registry, enrollment, jobs, extraction, quarantine, coverage, lexical search | Implemented; covered by the database tier |
 | `infrastructure/providers/fixture.py` — read-only fixture source provider | Implemented and tested |
-| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, the enrolled object set, relationship identity and profiles | Implemented, fourteen revisions, head `7f2a9d6c4e18` |
+| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, the enrolled object set, relationship identity and profiles, the extraction status narrowing | Implemented, fifteen revisions, head `9d4e7a3b1c62` |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
 All fifteen capability names, their operator-only flags, and their permitted

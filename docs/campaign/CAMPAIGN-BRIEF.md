@@ -8,15 +8,28 @@ validated_audit_package: MYPA-CURRENT-STATE-PACKAGE-20260809-001
 repository: RMF112018/my-pa
 remote: https://github.com/RMF112018/my-pa.git
 operating_lineage: recovery/pre-20260805-utc-rollback-c9fb513
-operating_lineage_head: 60f8ccfba72cff3cd9be10164fca1f19af8d84e7
-operating_lineage_tree: 8ccdc862e90d61858b540b3a40e881f368303269
+operating_lineage_head: 81589cc851905f9d63f5faf0690322682d1e8b85
+operating_lineage_tree: 7eb87fa18f7a9f6718c6c9441dbecdf98453d543
 reauthentication_date: "2026-08-09"
-active_work_package: WP-03
-active_work_package_name: Persistence and Alembic Migration-Chain Reconciliation
+active_work_package: WP-04
+active_work_package_name: next package per MYPA-CANONICAL-APPLICATION-COMPLETION-PLAN-20260809-001
 supersedes: WP-N01
-completed_work_packages: [WP-01, WP-02, WP-S01]
+completed_work_packages: [WP-01, WP-02, WP-S01, WP-03]
 milestone_ms0: WP-01 -> WP-02 -> WP-S01 -> WP-03
 ```
+
+**`operating_lineage_head` was stale and is corrected here.** It read
+`60f8ccfba72cff3cd9be10164fca1f19af8d84e7`, which is the **parent** of the true
+head: `git rev-parse recovery/pre-20260805-utc-rollback-c9fb513` and its
+`origin/` counterpart both return `81589cc851905f9d63f5faf0690322682d1e8b85`
+(WP-S01's own campaign-brief commit, which advanced the lineage past `60f8ccf`
+without the figure being brought forward). `operating_lineage_tree` is corrected
+with it. WP-03 was based on `81589cc…`, not on `60f8ccf…`.
+
+**WP-03's integration is not recorded here.** The head and tree the operating
+lineage reaches when `bf/wp-03-migration-chain-reconciliation` is merged are
+recorded by the merging step; this frontmatter records the base it left from.
+See [`WP-03-MIGRATION-CHAIN-RECORD.md`](WP-03-MIGRATION-CHAIN-RECORD.md).
 
 This brief is the campaign's continuity aid, not a governance ledger. `AGENTS.md` remains the normative policy; this file states where the campaign currently stands against it.
 
@@ -28,7 +41,7 @@ This brief is the campaign's continuity aid, not a governance ledger. `AGENTS.md
 
 - WP-01 has no dependencies.
 - WP-01 -> WP-02 -> WP-03 forms milestone MS-0.
-- Completed work packages: none yet.
+- Completed work packages: WP-01, WP-02, WP-S01, WP-03 (this line read "none yet" and was stale from WP-01's frontmatter onward).
 - Remaining work: 34 bounded work packages across 8 workstreams per the completion plan.
 
 ## Open blocking findings
@@ -177,6 +190,21 @@ Update this brief's frontmatter and decision log at every material transition (w
 - **Residual:** deleting the branch removed forward signposting; it is **not** a history rewrite. See D-06.
 - **Invalidation:** none outstanding.
 
+### D-09 — native-plane principal partitioning deferred to WP-04
+
+- **Decision:** WP-03 adds no principal scoping to the native-source plane. Deferred to **WP-04**.
+- **Rationale, and it is a measured premise rather than a judgement call:** WP-02 carried forward an acceptance condition that WP-12E's "baseline tables must be principal-partitioned before admission". Revision `a7c3e8d1f642` contains **zero `CREATE TABLE`** — it creates no tables. The four it alters are created unpartitioned by `8c4d1e7a2b90` and `9d5e2f7b4c61`, both already on the chain. All **22** `native_*` / `source_*` tables in `knowledge` are unpartitioned and carry no `principal_id`, so partitioning a subset would leave partitioned children joined to unpartitioned parents. The condition is moot in any case: the revision was not admitted (see D-10).
+- **What the acceptance clause does ask — "principal constraints/indexes preserved" — was verified, not assumed:** 30 `principal_id_is_an_opaque_identifier` CHECKs, 39 `by_principal` indexes, 1 `a_capture_key_admits_one_submission_per_principal`, identical **by name set** across `d2e3f4a5b6c7`, the new head `9d4e7a3b1c62`, and a full round trip, all read from `pg_catalog` on live PostgreSQL 17.10.
+- **Evidence:** `docs/campaign/WP-03-MIGRATION-CHAIN-RECORD.md`; the superseded condition is annotated in place in `docs/campaign/WP-02-INTEGRATION-RECORD.md`.
+- **Invalidation:** any revision that adds `principal_id` to, or partitions, a `native_*` / `source_*` table before WP-04.
+
+### D-10 — WP-03 re-authored 12 of the 15 deferred commits; 3 deferred with reasons
+
+- **Decision:** of the 15 commits WP-02 deferred to WP-03, **12 were re-authored** as five items of work, and **3 are deferred again**, each with a named owner or a named reason.
+- **Rationale:** 14 of the 15 conflict under 3-way merge against this lineage, so the source commits were used as specifications rather than cherry-picks. The three not carried: `355a0f8b` / `6348b246` (revision `a7c3e8d1f642`) — **attempted and reverted**, DDL-coherent but application-incompatible, blocked on WP-12E's application half (~707 lines of `native_sources.py`, a new `application/native_baseline.py`, contract widening), which is feature behavior and not migration-chain work; `288bdb14` / `dcc97266` — superseded **within their own source branch**, which deletes the file they harden; `6e491c24` — out of scope, code-inert here, already on `origin/main`.
+- **Evidence:** `docs/campaign/WP-03-MIGRATION-CHAIN-RECORD.md`, which names the source commits per re-authored item and records the reverted attempt at 8 failed + 4 errors in `tests/schema`, independently reproduced.
+- **Invalidation:** any of the four WP-02 source branch heads moves.
+
 ## Triaged backlog carried out of WP-02
 
 These are recorded decisions, not oversights. None blocks WP-03.
@@ -184,5 +212,13 @@ These are recorded decisions, not oversights. None blocks WP-03.
 1. **URL-parser divergence — FIXED by WP-S01; no longer live.** `src/my_pa/bootstrap/settings.py` validated the database URL with one parser while `src/my_pa/infrastructure/database/engine.py` let the engine parse it with another, so the configuration the validator approved was not necessarily the one the engine connected to. It is now parsed exactly once, by the parser that governs the connection, and that same parse is what the engine is configured with — there is no second reading left to diverge from the first. Regression coverage is of two kinds, and saying so is the point: an earlier version of this sentence named only the first and was measured to guard **one of seven** production call sites. `tests/unit/test_settings.py` counts the parser and asserts one reading of the string per `load_settings`, and `tests/unit/test_gateway_composition.py` asserts the object validation approved is what the gateway's engines are configured with — behavioural, and between them they cover `bootstrap/gateway.py` alone. The other six callers are held structurally by `tests/architecture/test_connections_open_on_the_single_validated_parse.py`, which parses every production module's syntax tree and rejects any `create_database_engine` call whose URL argument does not resolve — through local bindings, so an aliased parse still counts — to `Settings.parsed_database_url()`. All seven sites fail that guard when reverted to `.database_url`; six of them reddened nothing before it existed. What the guard does **not** do is behavioural: it shows that no production module *asks* for a second parse, not that the engine received the approved object. That half remains the two unit tests', and it remains gateway-only. All of it is expressed as invariants rather than as inputs. This was carried out of WP-02 as its own bounded work package, which is what WP-S01 was. Reproduction detail remains withheld from this public repository under `SECURITY.md`.
 2. **The conditional split of `6e491c24…` was declined** as not cleanly separable — its `settings.py` hunk and all five of its tests are welded to statement-timeout machinery WP-02 was not authorized to port. 21 files of that commit are unported and enumerated in the integration record.
 3. **`docs/plans/mcv-completion-plan.md` is deliberately untouched** beyond a single re-derived count. It still presents the superseded MCV work-package order as current while remaining linked from `README.md`. This is a documentation-reconciliation item and is **not** WP-03 scope (WP-03 is the migration chain only).
-4. **WP-03 acceptance condition:** WP-12E's baseline tables were authored before principal partitioning existed and carry no `principal_id`. Any re-authoring of those migrations into the single chain must address this.
-5. **The database tier has now been executed in this environment — this item is withdrawn as written.** It previously read "has never been executed in this environment (no PostgreSQL reachable)," and that is no longer true. PostgreSQL 17.10 runs in a local Docker container and the full suite has been observed to pass against it end to end, twice and by two parties: at **3639 passed, zero failures and zero errors** by an independent second context that ran it itself before this correction, and at **3657 passed, zero failures and zero errors** at head `02b1f4e` by an independent reviewer who collected and ran it there, which is the same suite plus the sixteen tests this correction adds and the two further unit tests that landed after it. This sentence read **3655** when it was written, which was true at `f202fb6` and went stale by two the moment those unit tests landed without the figure being brought forward; the number here is now the head one, and it is the head, not the correction alone, that the count belongs to. An earlier run reporting `3139 passed, 500 errors` is superseded and was not evidence of defects: every one of those errors was `password authentication failed`, from supplying a password to a server configured for `trust` on loopback — a misconfiguration of the run, corrected before the figure above. The consequence for WP-02's `search.py` redaction fix is that it is no longer covered by the AST guard alone; its two end-to-end tests are inside that suite and ran. What is still **not** claimed: no continuous-integration environment has been shown to reproduce this, the container is a developer's local one rather than a provisioned tier, and WP-03 still needs a live PostgreSQL of its own to discharge its acceptance criteria.
+4. **WP-03 acceptance condition:** WP-12E's baseline tables were authored before principal partitioning existed and carry no `principal_id`. Any re-authoring of those migrations into the single chain must address this. — **Superseded by D-09, on a measured premise: there are no such tables.** Revision `a7c3e8d1f642` contains zero `CREATE TABLE`; the four tables it alters were created unpartitioned by revisions already on the chain, and all 22 `native_*`/`source_*` tables in `knowledge` are in that same state. Moot regardless, because the revision was not admitted (D-10). Original wording left standing above.
+5. **The database tier has now been executed in this environment — this item is withdrawn as written.** It previously read "has never been executed in this environment (no PostgreSQL reachable)," and that is no longer true. PostgreSQL 17.10 runs in a local Docker container and the full suite has been observed to pass against it end to end, twice and by two parties: at **3639 passed, zero failures and zero errors** by an independent second context that ran it itself before this correction, and at **3657 passed, zero failures and zero errors** at head `02b1f4e` by an independent reviewer who collected and ran it there, which is the same suite plus the sixteen tests this correction adds and the two further unit tests that landed after it. This sentence read **3655** when it was written, which was true at `f202fb6` and went stale by two the moment those unit tests landed without the figure being brought forward; the number here is now the head one, and it is the head, not the correction alone, that the count belongs to. An earlier run reporting `3139 passed, 500 errors` is superseded and was not evidence of defects: every one of those errors was `password authentication failed`, from supplying a password to a server configured for `trust` on loopback — a misconfiguration of the run, corrected before the figure above. The consequence for WP-02's `search.py` redaction fix is that it is no longer covered by the AST guard alone; its two end-to-end tests are inside that suite and ran. What is still **not** claimed: no continuous-integration environment has been shown to reproduce this, the container is a developer's local one rather than a provisioned tier, and WP-03 still needs a live PostgreSQL of its own to discharge its acceptance criteria. **WP-03 has since discharged them against its own PostgreSQL 17.10 container** — empty→head, prior-head→head, and a full round trip, with `tests/schema` at 223 passed and the whole suite at **3660 passed, 0 failed, 0 errors**. The CI half of this item stands: no continuous-integration environment has yet been shown to reproduce it.
+
+## Backlog carried out of WP-03
+
+Neither blocks the merge of WP-03, and neither is WP-04 scope by default — both need an owning package named.
+
+6. **The `render_as_string(hide_password=False)` sites across the test tree — deferred a second time, and it now needs an owner.** WP-02 raised this as a redaction note *for WP-03*; WP-03 closed the one site it had authored that did not need to exist (review finding F1) and was not authorized to sweep the rest. Measured at WP-03's head: **72 sites across 36 test files**, all under `tests/`, none in production code. **35** are the maintenance-engine shape and are avoidable by the same one-line change F1 made — `create_database_engine` takes a `URL`, so the render is pure loss. **36** write a rendered DSN into `MY_PA_DATABASE_URL` because `migrations/env.py` reads the URL from the environment at import time; those are structural and cannot be closed without changing how Alembic is handed a connection here. **1** renders a deliberately closed port for a negative probe. Nothing logs any of them, but a rendered traceback over the local could disclose a database password. Schedule the two families together, so the structural one is not taken as the excuse for the avoidable one.
+
+7. **The `NativeRunState.RUNNING` widening hazard — must be resolved when WP-12E is rescheduled.** `tables.py` derives **two** database CHECKs from the one `NativeRunState` enum: `native_run_state_is_known` on `knowledge.native_sync_runs` and `native_bucket_run_state_is_known` on `knowledge.native_bucket_runs`. Revision `a7c3e8d1f642` widens only the first; it does not alter `native_bucket_runs` at all. So adding `RUNNING` to the enum desyncs the second site, and **no test catches it** — the parity guard compares constraint *names* (`pg_constraint.conname`), not `pg_get_constraintdef` text, so a constraint that keeps its name and changes its vocabulary is invisible to it. Whoever reschedules WP-12E owns both the second `ALTER` and a guard that compares definitions rather than names.

@@ -81,8 +81,35 @@ rendered DDL and left this module at **16 passed**, its unplanted count.
 that test refuses a revision whose *emission* is unreadable, and a revision with
 a readable emission plus an `op.execute` beside it satisfies it.
 
-**And the gap is already occupied by a merged revision, which the plant only
-made visible.** `7f2a9d6c4e18` builds all seventeen of its tables in raw SQL: it
+**And the gap is already occupied by merged revisions, which the plant only made
+visible.** Named rather than counted, because an earlier version of this
+paragraph said "a merged revision" and the gap it was disclosing was wider than
+the one revision it named — an understated limit inside the section whose whole
+job is to state a limit exactly, which is the `D-86` shape one file over. The
+revisions whose emitted DDL carries at least one closed-set vocabulary
+`_emitted` cannot see are `1e6c0a94f3b7`, `2f7d1ba05c48`, `1a4c9e77b2d5`,
+`2b7e9f4c1a83`, `3c8f1e2a5b74`, `7f2a9d6c4e18` and `9d4e7a3b1c62` — measured by
+rendering each revision's DDL offline and differencing the `_CLOSED_SET`
+vocabularies in it against the ones `_emitted` plus `_closed_sets` report for
+the same revision.
+
+**The ones a reader would act on are those whose unseen vocabulary is exactly
+equal to a live closed set**, which is the signature this module exists to find:
+`7f2a9d6c4e18` (`ResolutionAction`, `EvidenceAuthority`,
+`personal_fixture._ALLOWED_DOMAINS`) and `3c8f1e2a5b74` (`Capability` and
+`Purpose`, restated through `_restate`'s raw `ALTER` rather than through a
+`Table`). Read by hand each writes literals and imports no enum, so both comply
+with `D-69`; what is missing is verification, not compliance. The rest carry
+vocabularies that match no live closed set: `1e6c0a94f3b7` and `2f7d1ba05c48`
+are the migration-target revisions that execute `.sql` files; `1a4c9e77b2d5` and
+`2b7e9f4c1a83` restate the audit capability and purpose vocabularies frozen at
+their own revisions; and `9d4e7a3b1c62` is the `extractions.status` `ALTER` this
+package added, whose `('extracted', 'unsupported')` is a strict subset of
+`ExtractionStatus` rather than equal to it — which is why it is unseen *and*
+unmatched, and why narrowing it was the fix rather than freezing it.
+
+`7f2a9d6c4e18` is the largest of them. It builds all seventeen of its tables in
+raw SQL: it
 imports `alembic.op` and nothing else, holds no `Table` and names no declaration
 module, so `_emitted` returns `None` for it and the readability test above skips
 it rather than failing it. It appears in neither `ALLOWED` nor `FROZEN`. Its

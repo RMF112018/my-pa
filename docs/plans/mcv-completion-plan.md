@@ -481,6 +481,45 @@ rediscovered.
   per the `D-78`/`D-81` shape. No new `D-` identifier is minted — see the
   identifier-reservation note under section 13's decision table.*
 
+  *Corrected 2026-08-09: **item (1) is closed, and the 2026-08-08 correction
+  above that calls it "open — and the only one of the five whose wording still
+  holds exactly as written" is false from this change forward.** Both halves of
+  that sentence were true when written and neither is now. `extractions.status`
+  admits `('extracted', 'unsupported')`: the constraint is an inline literal at
+  `src/my_pa/infrastructure/persistence/tables.py`, no longer derived from
+  `ExtractionStatus`, and `9d4e7a3b1c62` carries an already-migrated database to
+  the same text a freshly built one gets from `8b3f5c17d904`. **The bullet's own
+  wording — "admits a status no counting query matches" — is the accurate
+  statement of the defect and is what was fixed**; the stronger framings this
+  package was handed on the way here ("writable-by-schema, never written, and
+  uncounted") were measured false in one third and are not what closed. The
+  quarantined outcome *is* counted: `outcome_for_object` in
+  `infrastructure/persistence/knowledge.py` returns it from `quarantine_records`
+  before it reads `extractions` at all. What was wrong was narrower and worse
+  than "uncounted": the declaration's own comment said "a quarantined object is
+  *not* a row here" 57 lines above a constraint that admitted exactly such a row
+  — a rule stated in prose and enforced by nothing, in one declaration, which is
+  the `D-69`/`D-81` shape. **What replaced the lost derivation is named rather
+  than assumed**: narrowing removed the one mechanism that noticed a fourth
+  `ExtractionStatus` member, so
+  `test_the_stored_status_vocabulary_is_the_outcome_vocabulary_less_quarantined`
+  asserts the storage vocabulary equals the outcome vocabulary less
+  `QUARANTINED`, against a derived right-hand side, and
+  `test_a_migrated_database_converges_with_a_freshly_built_one` compares the last
+  emitted constraint text with the live declaration. **This is FAST-green and
+  unvalidated where it matters, and that is stated at its true strength rather
+  than softened**: `MY_PA_DATABASE_URL` was unset in the executing environment,
+  the database tier never ran, and that the narrowed `CHECK` refuses the planted
+  insert in `test_the_schema_refuses_a_quarantined_outcome_filed_as_an_extraction`
+  is an inference from the constraint text and **not a measurement**. **Four of
+  the five items in this bullet are now closed and item (4)'s residue is closed
+  by its own correction above; nothing here claims the bullet as a whole is
+  retired**, and the four `8b3f5c17d904` allowlist rows this change did not touch
+  remain `D-81`'s reserved package — see `D-108`. The superseded wording is kept
+  and negated rather than deleted, per the `D-78`/`D-81` shape. No new `D-`
+  identifier is minted here — see the identifier-reservation note under section
+  13's decision table.*
+
 ### What the WP-3 reviews cost, and what they bought
 
 Seven reviews, seven blocks, and CI green on all three jobs for every head every
@@ -1343,6 +1382,8 @@ managed-document write and grants the source-provider port nothing.
 
 | D-105 | **Canonical version 2.3 is re-mirrored; Apple Mail, Calendar & Contacts yields provisional WP-12 with planning reserved to the operator** | `REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z` revised 17 of the canonical package's 21 numbered artifacts in place, preserved all 21 Drive identities and parent bindings, and took the package from 2.2 to 2.3. The publisher labels the Native Apple Personal Data Capture Bridge as conditional MCV scope and calls its sequence WP-12. Authority evidence is layered rather than identical: the numbered canonical artifacts carry their own implementation-not-granted blocks; the disposition denies implementation, live access, source mutation, deployment, production, and risk acceptance; the readback asserts only that implementation authority was not granted; and the publication and roundtrip receipts carry the fuller denial list covering live personal data, TCC/credential mutation, source mutation, deployment/watchers, production activation, external-model disclosure, destructive retention, and risk acceptance. The operator then clarified that the MCV is explicitly not complete and that WP-12 is provisional after WP-10 and WP-11; separate operator authorization is required before WP-12 implementation planning. The operator assigned WP-12 no pre-MCV or post-MCV disposition. Because `D-104` still defers WP-10 until completion and WP-11 depends on WP-10, the resulting completion-boundary conflict is recorded rather than resolved by inference. Nothing in WP-12 is planned, implemented, or authorized. | Re-mirrored; WP-12 provisional / `OPERATOR_AUTHORIZATION_REQUIRED`; boundary unresolved; no implementation authority |
 
+| D-108 | **`extractions.status` is narrowed to the vocabulary a writer can file, and one of `8b3f5c17d904`'s five allowlisted derivations is closed while the other four remain `D-81`'s reserved package** | The declaration's own comment said "a quarantined object is *not* a row here" **57 lines above** a constraint that admitted exactly such a row: `extraction_status_is_known` was `_one_of("status", ExtractionStatus, ...)`, derived from the three-member outcome enum. That is a rule stated in prose and enforced by nothing, inside one declaration — the `D-69`/`D-81` shape. The **outcome** vocabulary is legitimately three and stays three: `record_outcome` dispatches on all three and `outcome_for_object` reports a quarantine from `quarantine_records`, so the handed-down framing that the status was "uncounted" was **measured false**. The **storage** vocabulary is two, because `record_outcome`'s quarantined branch returns a `quarantine_records` row before the single `pg_insert(extractions)` in `src/`. Narrowing replaces a *demonstration* that a mis-filed row is not counted with an *impossibility*. **Written as an inline literal at the call site, deliberately not as a module-level named `frozenset`** — measured, not reasoned: a module-level `frozenset({"extracted", "unsupported"})` is discovered by the `D-81` guard's `_live_closed_sets` walk and puts the site straight back into `_derived_sites()`, leaving the merged revision tracking a renamed constant instead of an enum. As an inline literal the emitted set equals no live closed set (89 live closed sets in `my_pa` at this head; `{extracted, unsupported}` is not among them), so the site drops out by measurement and `ALLOWED` shrinks **15 to 14** — the direction the guard requires. **The disclosure, which must not be read as the reserved package being done.** This freezes **exactly one of `8b3f5c17d904`'s five** allowlisted sites, and it does so through the *declaration* rather than through `_FROZEN`. The other four — `only_a_supported_media_type_is_extracted`, `quarantine_reason_is_known`, `quarantine_review_state_is_known`, `limitation_reason_is_known` — are untouched, still derived, and still belong to the package `D-81` reserves for freezing `7e5a1fb93d62` and `8b3f5c17d904`. That package is neither done nor made unnecessary by this row; `assert not {revision for revision, *_ in ALLOWED} & set(FROZEN)` still makes `8b3f5c17d904` all-or-nothing for the `_FROZEN` technique, which is why this route was taken instead. **`9d4e7a3b1c62` is what keeps the two ways to head honest**, since `8b3f5c17d904` creates `extractions` from the live declaration and a fresh database therefore gets the narrow constraint at that revision while a migrated one keeps the wide one. It restates the constraint forward on `2b7e9f4c1a83`'s `_restate` pattern, unconditionally, with a frozen literal each way and a real `downgrade`; a pre-existing `quarantined` row makes `ADD CONSTRAINT` fail loudly rather than being deleted to let the migration through. **What replaced the lost derivation**, because cutting it removed the only thing that noticed a fourth outcome member: `test_the_stored_status_vocabulary_is_the_outcome_vocabulary_less_quarantined` asserts the storage vocabulary equals `{m.value for m in ExtractionStatus} - {QUARANTINED}` against a derived right-hand side, and `test_a_migrated_database_converges_with_a_freshly_built_one` compares the last emitted constraint text against the live declaration. Both were proven to fire with the defect reinstated. The read-side `status == 'extracted'` filter in `extracted_text_in_scope` becomes **redundant-but-correct and is retained, not deleted**: every row it excludes is `unsupported` under the same enrollment and so already excluded by the sibling `not_in`, whose columns are both `NOT NULL` and cannot go three-valued — but the redundancy rests on a `CHECK` rather than on anything the rows express, so the condition would resume deciding the moment that `CHECK` were widened | Implemented on `bf/extractions-quarantined-debt`. **FAST-green and unvalidated where it matters:** `MY_PA_DATABASE_URL` was unset in the executing environment, so the `database` tier never ran and the refusal in `test_the_schema_refuses_a_quarantined_outcome_filed_as_an_extraction` is an inference from the constraint text rather than a measurement. **No independent review has run against any head on this branch.** Invalidated by a fourth `ExtractionStatus` member, which must state which vocabulary it joins, or by the reserved freeze package, which must then account for the four rows this change left |
+
 **Identifier reservation: `D-106` and `D-107` are not available, and the two
 corrections dated 2026-08-08 therefore mint no new row.** Parsed structurally at
 `8dd4ef6` — every line whose stripped form begins `|`, outer pipes stripped,
@@ -1364,6 +1405,22 @@ naming a correcting decision, and the reason is recorded here rather than left
 for a reader to infer.** Whether `D-106` and `D-107` are ever readmitted to
 `main`, and under which meaning, is a question about the WP-12 line and is not
 resolved by this note.
+
+**Recomputed 2026-08-09, and the reservation held.** The extraction-constraint
+package needed a row for a *decision* rather than a correction, so it could not
+take the dated-in-place route the paragraph above describes, and the next number
+after `D-105` is the one this note says is unavailable. The same parse was run
+again rather than inherited: at `e212712` this table held **105 rows, `D-1`
+through `D-105`, no gaps and no duplicates**; the identical parse over
+`origin/recovery/pre-20260805-utc-rollback-c9fb513`, the
+`custody/wp12-local-main-88e8d81` tag, and the
+`custody/pre-20260805-rollback-line` tag returned **107 rows through `D-107`** on
+all three. So `D-106` and `D-107` remain spoken for on three retained refs and
+the package minted **`D-108`**, skipping two numbers on purpose. The gap in this
+table between `D-105` and `D-108` is therefore **deliberate and is not a parse
+error** — a later reader recomputing "no gaps" will find one, and this is the
+sentence that says why. Nothing here readmits `D-106` or `D-107`, which remains
+a question about the WP-12 line.
 
 **`D-36`'s citation shipped ahead of its row, and that is recorded rather than
 quietly closed.** WP-4B2b added the section 6 sentence attributing the second

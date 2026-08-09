@@ -86,8 +86,10 @@ made visible.** `7f2a9d6c4e18` builds all seventeen of its tables in raw SQL: it
 imports `alembic.op` and nothing else, holds no `Table` and names no declaration
 module, so `_emitted` returns `None` for it and the readability test above skips
 it rather than failing it. It appears in neither `ALLOWED` nor `FROZEN`. Its
-emitted DDL carries fifteen closed-set expressions in seven distinct
-vocabularies — counted with this module's own `_CLOSED_SET` and `_LITERAL` — and
+emitted DDL carries sixteen `_CLOSED_SET` matches, one of which names columns
+rather than literals (`IN (NEW.resolution_id, later.resolution_id)`) and is
+discarded — stated rather than absorbed — leaving seven distinct literal
+vocabularies, counted with this module's own `_CLOSED_SET` and `_LITERAL`, and
 **three of those seven are exactly equal to a live closed set**
 (`ResolutionAction`, `EvidenceAuthority`, and
 `personal_fixture._ALLOWED_DOMAINS`). By the doctrine stated at the top of this

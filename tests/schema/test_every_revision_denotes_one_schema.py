@@ -114,11 +114,16 @@ DISPOSABLE_DATABASE = "my_pa_revision_denotation_test"
 #: appear in every comparison after the first `upgrade` and in none before.
 VERSION_TABLE: Final = ("public", "alembic_version")
 
-#: Everything about a table this comparison can reach, as one comparable line
-#: each, in four kinds: constraints, columns (type, nullability and default),
-#: indexes, and non-internal triggers.
+#: Everything this comparison can reach, as one comparable line each: the
+#: table-scoped facts — constraints, columns (type, nullability and default),
+#: indexes, and non-internal triggers — and the database-scoped ones — relations
+#: with their kind, schemas, and extensions. Written as an enumeration rather
+#: than a count, because the count is what went stale: this comment said "four
+#: kinds" while the query below emitted seven and the module docstring said
+#: seven, so the constant's own annotation understated its reach in the file
+#: whose subject is a control that states its reach exactly.
 #:
-#: **Four kinds rather than one, because a review found the one.** The first
+#: **More than constraints alone, because a review found the gap.** The first
 #: version read `pg_constraint` alone, and the reviewer measured what that misses:
 #: `NOT NULL` lives in `pg_attribute.attnotnull` and a default in `pg_attrdef`,
 #: neither of which produces a `pg_constraint` row. A `downgrade` that dropped a

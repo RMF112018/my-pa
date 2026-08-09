@@ -20,13 +20,18 @@ Three claims:
 1. **No production module reads a principal identity from a caller-supplied
    container.** Envelope metadata, request bodies, headers, query and path
    parameters, CLI namespaces, and MCP tool-argument mappings — in the
-   attribute, the subscript, and the `getattr` form, under the container's own
-   name *or any local name this module bound from it*. The last clause is not
-   decoration: an independent review planted `context = request_metadata`
-   followed by `context.principal_id`, `getattr(metadata, "principal_id")`, and
-   `data = envelope.copy()` followed by `data["principal_id"]` in
-   `application/service.py`, and every test in this module stayed green. All
-   three are controls below now.
+   attribute, the subscript, the `getattr`, and the accessor-method form
+   (`.get`, `.pop`, `.__getitem__`, `operator.attrgetter`/`itemgetter`), under a
+   literal key or one bound to a local string constant, and under the
+   container's own name *or any local name this module bound from it*. Neither
+   the alias clause nor the accessor clause is decoration. An independent review
+   planted `context = request_metadata` followed by `context.principal_id`,
+   `getattr(metadata, "principal_id")`, and `data = envelope.copy()` followed by
+   `data["principal_id"]` in `application/service.py`, and every test in this
+   module stayed green; a later review planted `_acting =
+   payload.get("principal_id")` in `adapters/normalization.py`, one line below a
+   legitimate `payload.get("representation")`, and the whole suite stayed green
+   again. All of them are controls below now.
 2. **Where a caller-supplied `principal_id` is read at all, it is read to be
    verified, and the sites are registered exactly.** Three modules compare a
    request's stated owner against the server-resolved one and refuse a
@@ -50,7 +55,9 @@ Nothing here opens a connection, reaches a source, or touches a database.
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -68,6 +75,19 @@ PRINCIPAL_FIELDS: Final = frozenset({"principal_id", "capture_principal_id", "pr
 #: a Principal is *resolved from* — a request that names them has named the
 #: account the resolution would have reached.
 IDENTITY_KEYS: Final = PRINCIPAL_FIELDS | frozenset({"tid", "oid"})
+
+#: Methods that read one named key out of a container. `payload["principal_id"]`
+#: and `payload.get("principal_id")` are the same read, and a detector that saw
+#: only the syntax saw only half of them: `adapters/normalization.py` reaches its
+#: whole request document through `.get`, so the accessor form is the *idiomatic*
+#: way to write this defect in this tree, not an exotic one.
+_ACCESSOR_METHODS: Final = frozenset({"get", "pop", "setdefault", "__getitem__"})
+
+#: `operator`'s two getter factories, which turn a key into a callable and so
+#: split one read across two statements: `read = itemgetter("principal_id")`
+#: then `read(payload)`. Both halves are tracked, under `operator.attrgetter` and
+#: under the bare name a direct import gives it.
+_GETTER_FACTORIES: Final = frozenset({"attrgetter", "itemgetter"})
 
 #: Containers a caller controls. A `principal_id` read off any of these — as an
 #: attribute or as a mapping key — is identity taken from payload.
@@ -161,29 +181,61 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     ),
 }
 
-#: Receivers that are not caller-supplied at all, and why. Everything not named
-#: here and not in `CALLER_SUPPLIED` is an internal object.
+#: Receivers that are not caller-supplied at all, and the bindings that earn
+#: each one its trust. Everything not named here and not in `CALLER_SUPPLIED` is
+#: an internal object.
 #:
-#: **A name on this list is trusted for what it is bound from, not for how it is
-#: spelled.** `rebound_from_caller_input` below withdraws any entry that the
-#: module under inspection assigns from caller data, so `context =
-#: request_metadata` followed by `context.principal_id` is a read off a
-#: caller-supplied container and is reported as one. Without that, this list
-#: would be a list of names an attacker may pick: `context` is the clearest case,
-#: because "a PrincipalContext or an application context" is exactly the kind of
-#: object a request document could be mistaken for.
-_DERIVED_RECEIVERS: Final = frozenset(
+#: **A name on this list is trusted for what it is bound from, never for how it
+#: is spelled**, and the mapping is what makes that literally true rather than
+#: aspirational. There are exactly three ways a name gets bound in a module this
+#: scan reads, and each is checked:
+#:
+#: * *Assignment.* `rebound_from_caller_input` withdraws any entry the module
+#:   assigns from caller data, so `context = request_metadata` followed by
+#:   `context.principal_id` is a read off a caller-supplied container and is
+#:   reported as one.
+#: * *Parameter.* `_receivers_bound_by_an_unearned_parameter` withdraws any
+#:   entry a parameter binds without an annotation naming one of the types below.
+#:   This was a live bypass: `def _x(context): return context.principal_id`,
+#:   called with a request document, was invisible to *both* detectors, because
+#:   `rebound_from_caller_input` reads assignment targets and a parameter is not
+#:   one. The annotation is not a second spelling — it is a declared type that
+#:   `mypy` checks over this whole tree, so a helper cannot claim `Principal` and
+#:   be handed an envelope.
+#: * *Import or module-level definition.* Neither can be a caller's document:
+#:   both are fixed before a request exists.
+#:
+#: Without this, the mapping would be a list of names an attacker may pick.
+#: `context` is the clearest case, because "a PrincipalContext or an application
+#: context" is exactly the kind of object a request document could be mistaken
+#: for.
+#:
+#: `self` takes no type names because its binding is the call protocol's, not an
+#: annotation's — and it is trusted *only* as the leading parameter of a method
+#: defined in a class body. A module-level `def _x(self)` is spelling again.
+_DERIVED_RECEIVERS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     {
-        "self",  # a dataclass validating its own field
-        "principal",  # the resolved Principal
-        "authorization",  # carries the resolved Principal
-        "context",  # a PrincipalContext or an application context
-        "resolved",  # the output of `require_principal_context`
-        "account",  # a registered UserAccount
-        "event",  # a domain audit event
-        "row",  # a database row
-        "mapping",  # a database row mapping
-        "c",  # a table's column collection
+        # A dataclass validating its own field.
+        "self": frozenset(),
+        # The resolved Principal.
+        "principal": frozenset({"Principal"}),
+        # Carries the resolved Principal.
+        "authorization": frozenset({"Authorization"}),
+        # A PrincipalContext or an application context.
+        "context": frozenset({"PrincipalContext", "NativeRequestContext", "ServerRequestContext"}),
+        # The output of `require_principal_context`.
+        "resolved": frozenset({"PrincipalContext"}),
+        # A registered account on the identity plane or a native source.
+        "account": frozenset({"UserAccount", "NativeSourceAccount"}),
+        # A domain audit event.
+        "event": frozenset({"AuditEvent"}),
+        # A database row.
+        "row": frozenset({"Row"}),
+        # A database row mapping. Deliberately not bare `Mapping`: a caller's
+        # document is a `Mapping` too.
+        "mapping": frozenset({"RowMapping", "OffsetMapping"}),
+        # A table's column collection.
+        "c": frozenset({"ColumnCollection", "ReadOnlyColumnCollection"}),
     }
 )
 
@@ -317,34 +369,152 @@ def rebound_from_caller_input(tree: ast.AST) -> frozenset[str]:
     return frozenset(rebound)
 
 
-def identity_read(node: ast.AST, keys: frozenset[str]) -> tuple[ast.expr, str] | None:
-    """The container and key of one identity read, in each of the three forms.
+def string_constants(tree: ast.AST) -> Mapping[str, frozenset[str]]:
+    """Every local name bound, directly or transitively, to a string literal.
 
-    `x.principal_id`, `x["principal_id"]`, and `getattr(x, "principal_id")` are
-    one defect written three ways, and a detector that walked only the first was
-    a detector two rewrites got past. `getattr` with a computed name is not here
-    on purpose: `getattr(parsed, field)` in the CLI adapter iterates a list of
-    option names, and reporting it would say nothing about identity.
+    A key is as reboundable as a container, and one indirection was enough:
+    `key = "principal_id"` followed by `payload.get(key)` reads exactly what
+    `payload.get("principal_id")` reads. Resolved off `_local_bindings`, so it is
+    the same notion of "a name this module bound" the alias rule uses, and to a
+    fixed point for the same reason.
+
+    A name is mapped to the *set* of literals it is ever bound to rather than to
+    one, so a name assigned twice is forbidden if either assignment forbids it.
+    That is the fail-closed direction: a detector that took the last write would
+    be turned off by adding a later one.
     """
+    bindings = _local_bindings(tree)
+    constants: dict[str, set[str]] = {}
+    changed = True
+    while changed:
+        changed = False
+        for name, value in bindings:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                literals = {value.value}
+            elif isinstance(value, ast.Name):
+                literals = set(constants.get(value.id, ()))
+            else:
+                continue
+            known = constants.setdefault(name, set())
+            if not literals <= known:
+                known |= literals
+                changed = True
+    return {name: frozenset(literals) for name, literals in constants.items()}
+
+
+def _literal_key(
+    node: ast.expr, constants: Mapping[str, frozenset[str]], keys: frozenset[str]
+) -> str | None:
+    """The forbidden key an expression names, written out or bound to a local.
+
+    Only a literal or a name this module bound to one. A genuinely computed name
+    stays out, which is what keeps `getattr(parsed, field)` in the CLI adapter —
+    a loop over that adapter's own option names — from being reported as
+    identity.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value if node.value in keys else None
+    if isinstance(node, ast.Name):
+        named = constants.get(node.id, frozenset()) & keys
+        return min(named) if named else None
+    return None
+
+
+def _getter_key(
+    node: ast.expr, constants: Mapping[str, frozenset[str]], keys: frozenset[str]
+) -> str | None:
+    """The forbidden key an `attrgetter`/`itemgetter` construction would read."""
+    if not isinstance(node, ast.Call) or not node.args:
+        return None
+    if isinstance(node.func, ast.Name):
+        factory = node.func.id
+    elif isinstance(node.func, ast.Attribute):
+        factory = node.func.attr
+    else:
+        return None
+    if factory not in _GETTER_FACTORIES:
+        return None
+    return _literal_key(node.args[0], constants, keys)
+
+
+def identity_getters(
+    tree: ast.AST, constants: Mapping[str, frozenset[str]], keys: frozenset[str]
+) -> Mapping[str, str]:
+    """Local names bound to an `attrgetter`/`itemgetter` over a forbidden key.
+
+    The second half of the split form. `read = operator.itemgetter("oid")` names
+    no container, so it is not a read yet; `read(payload)` is, and this is what
+    lets the call site know what `read` was built to pull out.
+    """
+    return {
+        name: key
+        for name, value in _local_bindings(tree)
+        if (key := _getter_key(value, constants, keys)) is not None
+    }
+
+
+def _identity_call_read(
+    node: ast.Call,
+    keys: frozenset[str],
+    constants: Mapping[str, frozenset[str]],
+    getters: Mapping[str, str],
+) -> tuple[ast.expr, str] | None:
+    """The container and key of an identity read written as a call."""
+    if isinstance(node.func, ast.Name) and node.func.id == "getattr" and len(node.args) >= 2:
+        key = _literal_key(node.args[1], constants, keys)
+        if key is not None:
+            return node.args[0], key
+    if isinstance(node.func, ast.Attribute) and node.func.attr in _ACCESSOR_METHODS and node.args:
+        key = _literal_key(node.args[0], constants, keys)
+        if key is not None:
+            return node.func.value, key
+    if node.args:
+        applied = _getter_key(node.func, constants, keys)
+        if applied is None and isinstance(node.func, ast.Name):
+            applied = getters.get(node.func.id)
+        if applied is not None:
+            return node.args[0], applied
+    return None
+
+
+def identity_read(
+    node: ast.AST,
+    keys: frozenset[str],
+    constants: Mapping[str, frozenset[str]] | None = None,
+    getters: Mapping[str, str] | None = None,
+) -> tuple[ast.expr, str] | None:
+    """The container and key of one identity read, in each of the forms it has.
+
+    `x.principal_id`, `x["principal_id"]`, `getattr(x, "principal_id")`,
+    `x.get("principal_id")`, `x.pop("principal_id")`,
+    `x.__getitem__("principal_id")`, and `operator.itemgetter("principal_id")(x)`
+    are one defect written seven ways, and each widening here closed a detector
+    some rewrite had got past. The accessor family was the largest hole and the
+    least exotic one: `adapters/normalization.py` reads its whole request
+    document through `.get`, so `payload.get("principal_id")` is how this defect
+    would actually be written in this tree, and it was invisible.
+
+    `constants` extends every key position to a name this module bound to a
+    string literal, so `k = "principal_id"` before `payload.get(k)` is the same
+    read; `getters` extends the call form to an `operator` getter bound to a
+    local name. Both default to empty, which is this function's behaviour over a
+    single expression with nothing around it.
+
+    `getattr` with a *computed* name is still not here, on purpose:
+    `getattr(parsed, field)` in the CLI adapter iterates a list of option names,
+    and reporting it would say nothing about identity. A name bound to a literal
+    is not computed, which is why `constants` does not disturb that exemption.
+    """
+    constants = {} if constants is None else constants
+    getters = {} if getters is None else getters
     if isinstance(node, ast.Attribute) and node.attr in keys:
         return node.value, node.attr
-    if (
-        isinstance(node, ast.Subscript)
-        and isinstance(node.slice, ast.Constant)
-        and isinstance(node.slice.value, str)
-        and node.slice.value in keys
-    ):
-        return node.value, node.slice.value
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "getattr"
-        and len(node.args) >= 2
-        and isinstance(node.args[1], ast.Constant)
-        and isinstance(node.args[1].value, str)
-        and node.args[1].value in keys
-    ):
-        return node.args[0], node.args[1].value
+    if isinstance(node, ast.Subscript):
+        key = _literal_key(node.slice, constants, keys)
+        if key is not None:
+            return node.value, key
+    if isinstance(node, ast.Call):
+        return _identity_call_read(node, keys, constants, getters)
     return None
 
 
@@ -355,15 +525,18 @@ def caller_supplied_reads(tree: ast.AST) -> tuple[tuple[int, str], ...]:
     really does contain one. A detector that found nothing would otherwise agree
     with the production zero for the wrong reason.
 
-    Three axes, each of which was a way past the first version of this function:
-    the *key* is any of `IDENTITY_KEYS` rather than the principal names alone,
-    the *form* is attribute, subscript, or `getattr`, and the *container* is
+    Four axes, each of which was a way past some version of this function: the
+    *key* is any of `IDENTITY_KEYS` rather than the principal names alone and may
+    be written out or bound to a local string, the *form* is attribute,
+    subscript, `getattr`, or the accessor-method family, and the *container* is
     anything `CALLER_SUPPLIED` names **or anything this module bound from one**.
     """
     untrusted = CALLER_SUPPLIED | rebound_from_caller_input(tree)
+    constants = string_constants(tree)
+    getters = identity_getters(tree, constants, IDENTITY_KEYS)
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
-        read = identity_read(node, IDENTITY_KEYS)
+        read = identity_read(node, IDENTITY_KEYS, constants, getters)
         if read is None:
             continue
         container, _ = read
@@ -372,20 +545,115 @@ def caller_supplied_reads(tree: ast.AST) -> tuple[tuple[int, str], ...]:
     return tuple(sorted(found))
 
 
+def _annotation_names(annotation: ast.expr | None) -> frozenset[str]:
+    """The type names an annotation asserts, with unions flattened.
+
+    A subscript contributes its *head* and not its arguments, because `Row[Any]`
+    is a `Row` however it is parameterised, while `Mapping[str, Any]` must not
+    borrow trust from whatever it is parameterised by. `None` in a union
+    contributes nothing, so `PrincipalContext | None` asserts exactly
+    `PrincipalContext`. A string annotation is parsed, so a forward reference is
+    not a way out.
+    """
+    if annotation is None:
+        return frozenset()
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = ast.parse(annotation.value, mode="eval").body
+        except SyntaxError:
+            return frozenset()
+    if isinstance(annotation, ast.Name):
+        return frozenset({annotation.id})
+    if isinstance(annotation, ast.Attribute):
+        return frozenset({annotation.attr})
+    if isinstance(annotation, ast.Subscript):
+        return _annotation_names(annotation.value)
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        return _annotation_names(annotation.left) | _annotation_names(annotation.right)
+    return frozenset()
+
+
+def _method_bodies(tree: ast.AST) -> frozenset[int]:
+    """The `id()` of every function defined directly in a class body."""
+    return frozenset(
+        id(item)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+        for item in node.body
+        if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
+    )
+
+
+def receivers_bound_by_an_unearned_parameter(tree: ast.AST) -> frozenset[str]:
+    """Derived-receiver names that some parameter in `tree` binds without earning it.
+
+    The other half of "trusted for what it is bound from". `rebound_from_caller_input`
+    inspects assignment targets, and a parameter is not one, so before this
+    existed a helper only had to *spell* its parameter with one of the ten
+    trusted names to take a request document and read a principal out of it —
+    `def _x(context): return context.principal_id`, called with caller data, was
+    invisible to both detectors.
+
+    A parameter earns the trust by declaring one of the types
+    `_DERIVED_RECEIVERS` lists for its name. That is a fact about the binding
+    rather than a second spelling, because `mypy` checks these annotations over
+    the whole tree: a helper cannot annotate `Principal` and be handed an
+    envelope. `self` earns it differently — as the leading parameter of a method
+    defined in a class body, where the call protocol does the binding — and a
+    module-level `def _x(self)` earns nothing.
+
+    Withdrawal is module-wide, not per-function, because every other rule here is
+    module-wide too. If one function in a module binds `context` without earning
+    it, `context` stops being a derived receiver for that whole module and its
+    principal reads land in the exact registry, where a human has to say what
+    verifies them. That is the fail-closed direction.
+
+    Public because a control below runs it over trees that really do bind an
+    unearned parameter, so the empty answer it gives for production is a
+    measurement rather than an assumption.
+    """
+    methods = _method_bodies(tree)
+    withdrawn: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            continue
+        positional = [*node.args.posonlyargs, *node.args.args]
+        optional = (node.args.vararg, node.args.kwarg)
+        every = [*positional, *node.args.kwonlyargs, *(a for a in optional if a is not None)]
+        for argument in every:
+            accepted = _DERIVED_RECEIVERS.get(argument.arg)
+            if accepted is None:
+                continue
+            if argument.arg == "self":
+                if not (id(node) in methods and positional and positional[0] is argument):
+                    withdrawn.add("self")
+                continue
+            declared = _annotation_names(argument.annotation)
+            if not declared or not declared <= accepted:
+                withdrawn.add(argument.arg)
+    return frozenset(withdrawn)
+
+
 def _stated_principal_reads(tree: ast.AST) -> tuple[tuple[str, str], ...]:
     """Every `principal_id` read off a receiver that is neither derived nor a table.
 
     The backstop behind claim 1: whatever `caller_supplied_reads` does not
     classify as caller data still has to be a receiver someone registered. It
-    reads the same three forms, so a subscript is not a blind spot here either,
-    and it withdraws `_DERIVED_RECEIVERS` membership from any name this module
-    rebound from caller input — a whitelisted name that was assigned a request
-    document is not a derived receiver, whatever it is called.
+    reads the same forms, so neither a subscript nor a `.get` is a blind spot
+    here either, and it withdraws `_DERIVED_RECEIVERS` membership from every name
+    the module binds without earning it — assigned from a request document
+    (`rebound_from_caller_input`) or taken as a parameter that declares no
+    derived type (`receivers_bound_by_an_unearned_parameter`). A whitelisted name
+    is a derived receiver because of where its value came from, never because of
+    what it is called.
     """
-    derived = _DERIVED_RECEIVERS - rebound_from_caller_input(tree)
+    unearned = rebound_from_caller_input(tree) | receivers_bound_by_an_unearned_parameter(tree)
+    derived = frozenset(_DERIVED_RECEIVERS) - unearned
+    constants = string_constants(tree)
+    getters = identity_getters(tree, constants, PRINCIPAL_FIELDS)
     found: list[tuple[str, str]] = []
     for node in ast.walk(tree):
-        read = identity_read(node, PRINCIPAL_FIELDS)
+        read = identity_read(node, PRINCIPAL_FIELDS, constants, getters)
         if read is None:
             continue
         container, field = read
@@ -472,6 +740,29 @@ def test_the_caller_supplied_detector_reports_a_read_that_really_is_one() -> Non
         # The Entra pair is identity too: a payload that names `tid`/`oid` has
         # named the account the resolution would have reached.
         "claims = payload['claims']\ntenant = claims['tid']",
+        # The accessor family. The first of these is the exact probe an
+        # independent review planted one line below `payload.get("representation")`
+        # in `adapters/normalization.py`; the entire architecture suite stayed
+        # green, because the detector walked `ast.Subscript` and never the `.get`
+        # that this tree actually reads its request documents with.
+        "_acting = payload.get('principal_id')",
+        "_acting = arguments.get('principal_id', None)",
+        "_acting = payload.pop('principal_id')",
+        "_acting = payload.setdefault('oid', '')",
+        "_acting = payload.__getitem__('principal_id')",
+        # A key is as reboundable as a container.
+        "key = 'principal_id'\n_acting = payload.get(key)",
+        "key = 'tid'\n_acting = envelope[key]",
+        # `operator` splits one read across two statements, applied inline or
+        # bound to a name first, under the module and under a direct import.
+        "import operator\n_acting = operator.attrgetter('principal_id')(metadata)",
+        "import operator\n_acting = operator.itemgetter('principal_id')(payload)",
+        "from operator import itemgetter\n_acting = itemgetter('oid')(payload)",
+        "from operator import attrgetter\n"
+        "read = attrgetter('principal_id')\n"
+        "_acting = read(request_metadata)",
+        # The accessor form reaches through the alias rule like every other form.
+        "data = envelope.copy()\n_acting = data.get('principal_id')",
     )
     for source in bypasses:
         assert caller_supplied_reads(ast.parse(source)) != (), (
@@ -495,6 +786,19 @@ def test_the_caller_supplied_detector_reports_a_read_that_really_is_one() -> Non
         # A computed attribute name says nothing about identity: the CLI adapter
         # iterates its own option names through `getattr(parsed, field)`.
         "for field in fields:\n    supplied = getattr(parsed, field)",
+        # The accessor widening is about the *key*, not about `.get`. These two
+        # are the real lines at `adapters/normalization.py:170` and `:393` — the
+        # module reads its whole request document this way — and a rule that
+        # reported them would have to be turned off, which is the only outcome
+        # worse than the hole it closed.
+        "named = payload.get('representation')",
+        "payload = arguments.get(PAYLOAD_KEY, {})",
+        "kind = payload.get('kind')\nvalues = arguments.pop('values', ())",
+        # A computed key stays out of the accessor form too, for the same reason
+        # it stays out of `getattr`: it names no identity.
+        "for field in fields:\n    supplied = payload.get(field)",
+        # An `operator` getter over something that is not identity is not a read.
+        "import operator\nname = operator.itemgetter('representation')(payload)",
     ):
         assert caller_supplied_reads(ast.parse(allowed)) == (), (
             f"the detector reported {allowed!r}, which is a derived read; a "
@@ -532,6 +836,73 @@ def test_the_alias_rule_withdraws_a_whitelisted_name_that_was_rebound() -> None:
     )
     assert _stated_principal_reads(ast.parse("x = getattr(found, 'principal_id')")) == (
         ("found", "principal_id"),
+    )
+    assert _stated_principal_reads(ast.parse("x = found.get('principal_id')")) == (
+        ("found", "principal_id"),
+    )
+
+
+def test_a_parameter_does_not_earn_a_derived_receiver_name_by_spelling_it() -> None:
+    """The other half of claim 2's backstop, and a bypass of both detectors until now.
+
+    `rebound_from_caller_input` reads assignment targets, and a parameter is not
+    one, so a helper used to be able to take a request document and read a
+    principal out of it by *spelling* its parameter with one of the ten trusted
+    names. Every line below survived the whole module before this control
+    existed. The registry is only exact if a name earns its trust from what binds
+    it.
+    """
+    for unearned in (
+        "def _x(context):\n    return context.principal_id",
+        "def _x(resolved):\n    return resolved.principal_id",
+        "def _x(row):\n    return row.principal_id",
+        "def _x(authorization):\n    return authorization.principal_id",
+        "def _x(principal):\n    return principal.principal_id",
+        # An annotation that is not one of the types the name claims earns
+        # nothing, which is the case that matters: a request document is a
+        # `Mapping` and would otherwise take `mapping`'s trust by declaring it.
+        "def _x(mapping: dict[str, str]):\n    return mapping['principal_id']",
+        "def _x(context: Mapping[str, object]):\n    return context.get('principal_id')",
+        # `self` is bound by the call protocol, so a module-level function only
+        # spells it.
+        "def _x(self):\n    return self.principal_id",
+        # A keyword-only, starred, or lambda parameter binds a name too.
+        "def _x(*, account):\n    return account.principal_id",
+        "def _x(**event):\n    return event['principal_id']",
+        "_x = lambda row: row.principal_id",
+    ):
+        assert _stated_principal_reads(ast.parse(unearned)) != (), (
+            f"{unearned!r} reads a principal off a parameter that earned nothing "
+            "but its spelling, and neither detector reported it"
+        )
+
+    # And the control at the other end, or every correct helper in the tree would
+    # land in the registry and the registry would stop meaning anything. Each of
+    # these is a shape production actually uses.
+    for earned in (
+        "def _x(principal: Principal):\n    return principal.principal_id",
+        "def _x(authorization: Authorization):\n    return authorization.principal.principal_id",
+        "def _x(context: PrincipalContext | None):\n    return context.principal_id",
+        "def _x(context: 'PrincipalContext'):\n    return context.principal_id",
+        "def _x(row: Row[tuple[object, ...]]):\n    return row.principal_id",
+        "def _x(account: UserAccount):\n    return account.principal_id",
+        "def _x(event: AuditEvent):\n    return event.principal_id",
+        "class C:\n    def _x(self):\n        return self.principal_id",
+    ):
+        assert _stated_principal_reads(ast.parse(earned)) == (), (
+            f"{earned!r} declares a derived type and was reported anyway; a "
+            "backstop that fired on every helper would distinguish nothing"
+        )
+
+    # The withdrawal itself, named rather than inferred from the reads above.
+    assert receivers_bound_by_an_unearned_parameter(
+        ast.parse("def _x(context, row: Row[int], mapping: dict[str, str]):\n    return 0")
+    ) == frozenset({"context", "mapping"})
+    assert (
+        receivers_bound_by_an_unearned_parameter(
+            ast.parse("class C:\n    def _x(self, principal: Principal):\n        return 0")
+        )
+        == frozenset()
     )
 
 

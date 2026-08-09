@@ -279,6 +279,7 @@ def run_worker(
     owner: str,
     handler: JobHandler,
     stop: threading.Event,
+    principal_id: str,
     plane: JobPlane = ENROLLMENT_JOBS,
     max_iterations: int | None = None,
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
@@ -294,6 +295,14 @@ def run_worker(
     returns to the top. When `max_iterations` is set, an idle iteration does not
     wait at all: a bounded run asked to do at most *n* iterations should not
     spend *n* whole `poll_seconds` waits discovering there is nothing to do.
+
+    `principal_id` is the Principal whose queue this loop serves, and it is
+    required rather than defaulted (WP-04). Until the queues carried a partition,
+    `claim_job` took the oldest claimable row in the whole table, which made the
+    dequeue a global FIFO: one Principal's backlog decided when another's work
+    ran. A default here would restore that by omission, so there is none — a
+    worker says whose work it is doing. The composition root supplies it from the
+    Principal it already derived, never from a request.
 
     `plane` chooses which job table the claim, the completion, and the release
     run against. One worker process serves one plane: a loop that claimed from
@@ -319,7 +328,13 @@ def run_worker(
         with engine.begin() as connection:
             # Committed on leaving this block, so the lease is visible to every
             # other worker before any work begins.
-            job = claim_job(connection, owner=owner, lease_seconds=lease_seconds, plane=plane)
+            job = claim_job(
+                connection,
+                owner=owner,
+                lease_seconds=lease_seconds,
+                principal_id=principal_id,
+                plane=plane,
+            )
 
         if job is None:
             idle += 1

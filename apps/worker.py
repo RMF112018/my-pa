@@ -67,6 +67,7 @@ import threading
 from collections.abc import Mapping
 from types import FrameType, MappingProxyType
 
+from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs.capture_pipeline import process_capture_version
@@ -138,6 +139,13 @@ def _run(args: argparse.Namespace) -> int:
             owner=owner,
             handler=handler,
             stop=stop,
+            # The Principal this process acts as, derived from the durable
+            # local-operator binding by `bootstrap.gateway` — the same value the
+            # gateway presents, and the same one across restarts. A worker
+            # claims its own Principal's work and no one else's (WP-04); there
+            # is no flag for this, because a flag would be a caller naming a
+            # partition.
+            principal_id=local_principal().principal_id,
             plane=plane,
             max_iterations=1 if args.once else args.max_iterations,
             lease_seconds=args.lease_seconds,

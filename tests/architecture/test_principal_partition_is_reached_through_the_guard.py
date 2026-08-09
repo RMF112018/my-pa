@@ -82,6 +82,12 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         "infrastructure/jobs/capture_pipeline.py",
         "infrastructure/persistence/capture.py",
         "infrastructure/persistence/capture_search.py",
+        # Both job queues gained `principal_id` at revision `4f1a8b6d92e3`; the
+        # dequeue and the reap carry the partition and the enqueue stamps it
+        # from the subject's stored owner. It also names `enrollments` and
+        # `capture_versions` — to *read* that owner, which is where the
+        # partition comes from and so cannot itself be scoped by one.
+        "infrastructure/persistence/jobs.py",
         "infrastructure/persistence/relationships.py",
         "infrastructure/persistence/review.py",
     }

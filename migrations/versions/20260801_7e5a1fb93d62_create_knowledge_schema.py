@@ -34,6 +34,7 @@ Created: 2026-08-01 15:20:00.000000
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Final
 
 from alembic import op
 from sqlalchemy import CheckConstraint, MetaData, Table
@@ -76,11 +77,47 @@ _FROZEN: dict[str, dict[str, str]] = {
 }
 
 
+#: WP-04's queue partition, frozen out of this revision.
+#:
+#: `4f1a8b6d92e3` adds `principal_id`, its `principal_id_is_an_opaque_identifier`
+#: CHECK, and a principal-first claim-order index to "jobs". This
+#: revision copies the *live* declaration, so without the subtraction below it
+#: would emit those too — retroactively changing what an already-merged revision
+#: means, which is the `D-48` hazard, and making a base-to-head replay fail on a
+#: duplicate column the moment `4f1a8b6d92e3` runs. Same discipline as
+#: `3c8f1e2a5b74`'s `_freeze_out_wp05_principal`: a local subtraction on a
+#: throwaway copy, never on the shared declaration, which still carries the
+#: column the application reads and writes.
+_WP04_QUEUE_PRINCIPAL_TABLES: Final = frozenset({"jobs"})
+_WP04_PRINCIPAL_CHECK: Final = "principal_id_is_an_opaque_identifier"
+_WP04_PRINCIPAL_INDEXES: Final = frozenset({"jobs_by_principal_claim_order"})
+
+
+def _freeze_out_wp04_queue_principal(copy: Table) -> None:
+    """Remove `4f1a8b6d92e3`'s queue partition from one copied table in place."""
+    if copy.name not in _WP04_QUEUE_PRINCIPAL_TABLES:
+        return
+    for index in [
+        candidate for candidate in copy.indexes if candidate.name in _WP04_PRINCIPAL_INDEXES
+    ]:
+        copy.indexes.discard(index)
+    for constraint in [
+        candidate for candidate in copy.constraints if candidate.name == _WP04_PRINCIPAL_CHECK
+    ]:
+        copy.constraints.discard(constraint)
+    # `Table` exposes no public column removal; `_columns.remove` is how a copied
+    # column is dropped from a throwaway metadata. Neither queue's
+    # `principal_id` carries a foreign key or takes part in a primary key, so the
+    # copy is otherwise intact.
+    copy._columns.remove(copy.c.principal_id)
+
+
 def _historical_knowledge_tables() -> list[Table]:
     """Return the five declarations with their original closed sets frozen."""
     frozen = MetaData(schema=SCHEMA)
     copies = [table.to_metadata(frozen) for table in _TABLES]
     for copy in copies:
+        _freeze_out_wp04_queue_principal(copy)
         replacements = _FROZEN.get(copy.name, {})
         for constraint in [
             candidate for candidate in copy.constraints if candidate.name in replacements

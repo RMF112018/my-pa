@@ -213,9 +213,7 @@ def disposable_database() -> Iterator[str]:
     deletes schemas.
     """
     configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
+    maintenance = create_database_engine(configured.set(database="postgres"))
     drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
 
     def _administer(*statements: object) -> None:
@@ -228,6 +226,12 @@ def disposable_database() -> Iterator[str]:
     previous = os.environ.get(variable)
     try:
         _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
+        # Rendered with the password because this is an environment variable, not
+        # an argument: `migrations/env.py` reads the URL out of the environment at
+        # import time and Alembic offers no way to hand this fixture's connection
+        # to it, so the credential has to survive the trip as text. The engine
+        # built above takes the `URL` object instead, which is why only this site
+        # renders one.
         url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
         os.environ[variable] = url
         yield url

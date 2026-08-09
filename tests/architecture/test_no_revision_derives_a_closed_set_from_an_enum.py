@@ -17,14 +17,16 @@ hazard*, because the next member added to that enum is the moment they stop
 agreeing — and one of the two will change silently. So the test does not care how
 the constraint was written; it cares whether the revision still tracks the domain.
 
-**The allowlist must shrink.** `ALLOWED` is the ten sites, in ten distinct
-sources, carried by the two revisions `D-81` deliberately does not edit
-(`D-92`; the count said "nine sources" in `D-81` and in WP-7's brief, and the
-omitted tenth was `my_pa.contracts.v1.errors.ErrorCode`, which reaches
-`jobs.last_error_code_is_a_public_error_code` without being a `StrEnum` — the
-same undercount `D-81` warns about, repeated inside the row that warns about
-it). Each entry pins the *exact* vocabulary that site emits today, so the guard
-reddens three ways:
+**The allowlist must shrink.** `ALLOWED` is the residual set of still-derived
+sites: those carried by the revisions `D-81` deliberately does not edit. Its
+size, and the revisions it names, are asserted in
+`test_the_allowlist_names_only_revisions_this_package_does_not_edit` and are
+deliberately not spelled here — a count of a current set belongs next to an
+assertion that fails when it moves, or nowhere, which is the rule the comment on
+the constant itself now follows. `D-92` is why it is put that way: the count was
+restated by hand, and wrong, until it was derived from this ledger instead. Each
+entry pins the *exact* vocabulary that site emits today, so the guard reddens
+three ways:
 
 - a member added to any listed enum changes an emitted vocabulary — red;
 - a new derived constraint appears in a revision **through a shape `_emitted`

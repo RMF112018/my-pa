@@ -246,8 +246,16 @@ ends — four added, one replaced:
 | `tests/search_quality/test_lexical_search.py::test_a_row_filed_in_extractions_as_quarantined_is_not_counted_as_processed` | removed — replaced by the row above |
 
 Nothing was skipped, xfailed, weakened, or deleted to reach these figures.
-`ruff check .` clean, `ruff format --check .` clean (536 files), `mypy` clean over
-164 source files.
+`ruff check .` clean and `mypy` clean over 164 source files, both at `cff9d1c…`.
+
+`ruff format --check .` is clean at every head in this range, but its **file
+count is not a constant of the branch and must be bound to a head**, which the
+earlier wording here did not do. This repository's `ruff` formats Markdown as
+well as Python, so this record's own file moves the number: **536 files at
+`cff9d1c…`** (304 `.py` + 232 `.md`) and **537 files at the head that carries
+this record** (304 `.py` + 233 `.md`) — the 537th being
+`docs/campaign/WP-03-MIGRATION-CHAIN-RECORD.md` itself. The composition is given
+so the figure can be re-derived at either head rather than trusted.
 
 ## Carried-forward backlog
 

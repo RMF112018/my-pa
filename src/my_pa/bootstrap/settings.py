@@ -24,9 +24,10 @@ import os
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Final
-from urllib.parse import urlsplit
 
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, PrivateAttr, ValidationError, model_validator
+from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import ArgumentError
 
 from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
@@ -96,18 +97,40 @@ class SettingsError(ValueError):
     """
 
 
-def _validate_database_url(url: str) -> None:
-    """Reject a URL the engine could not use, before anything tries to connect.
+def _parse_database_url(url: str) -> URL:
+    """Parse the URL once, reject one the engine could not use, and return the parse.
+
+    The parser here is SQLAlchemy's, and that is the whole point. `create_engine`
+    parses whatever string it is handed with `make_url`, so a check performed by
+    any other parser is a check on a different reading of the same text: the
+    scheme, host and database approved here would not have to be the scheme, host
+    and database the process then connects to. Two parsers agreeing on ordinary
+    input is not the same as there being one answer.
+
+    So there is one parse. The `URL` this returns is the object the caller hands
+    to `create_database_engine`, and `create_engine` returns a `URL` unchanged
+    rather than parsing it again — which is what leaves no second reading to
+    diverge from the first.
 
     Names the defect, never the URL: a supplied URL may embed a password.
+    `ArgumentError` and `ValueError` are both reachable from `make_url` — a
+    string it cannot match, and a match whose port is not a number — and the
+    second carries the offending text, so neither is allowed to propagate.
     """
-    parsed = urlsplit(url)
-    if parsed.scheme != DATABASE_URL_SCHEME:
+    try:
+        parsed = make_url(url)
+    except (ArgumentError, ValueError) as exc:
+        raise SettingsError(
+            f"{ENV_PREFIX}DATABASE_URL is not a URL the engine can parse; it "
+            f"must use the {DATABASE_URL_SCHEME} scheme and name a host and a database"
+        ) from exc
+    if parsed.drivername != DATABASE_URL_SCHEME:
         raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must use the {DATABASE_URL_SCHEME} scheme")
-    if not parsed.hostname:
+    if not parsed.host:
         raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must name a host")
-    if not parsed.path.lstrip("/"):
+    if not parsed.database:
         raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must name a database")
+    return parsed
 
 
 class Settings(StrictModel):
@@ -131,9 +154,14 @@ class Settings(StrictModel):
     max_enrollment_depth: int = Field(default=0, ge=0, le=MAX_ENROLLMENT_DEPTH)
     database_url: str
 
+    #: The single parse of `database_url`, produced by validation and handed on
+    #: unchanged. Private because it is not configuration an operator supplies
+    #: and must not become a second place a URL can enter from.
+    _parsed_database_url: URL = PrivateAttr()
+
     @model_validator(mode="after")
     def _check(self) -> Settings:
-        _validate_database_url(self.database_url)
+        self._parsed_database_url = _parse_database_url(self.database_url)
         if not self.redaction_enabled:
             raise SettingsError(
                 "redaction cannot be disabled; debug mode does not bypass redaction"
@@ -146,6 +174,16 @@ class Settings(StrictModel):
         # at startup instead of at the first `capabilities.get`.
         self.effective_limits()
         return self
+
+    def parsed_database_url(self) -> URL:
+        """`database_url` as validation read it, for `create_database_engine`.
+
+        Returns the stored parse rather than parsing again, so the URL the engine
+        is configured with is the same object validation approved and not a
+        second reading of the same string. Pass this, not `database_url`, to
+        anything that opens a connection.
+        """
+        return self._parsed_database_url
 
     def effective_limits(self) -> EffectiveLimits:
         """The configured limits, as the shape `capabilities.get` publishes.

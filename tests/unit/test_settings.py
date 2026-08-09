@@ -274,3 +274,47 @@ def test_an_invalid_database_url_error_never_echoes_the_url() -> None:
         load_settings({DATABASE_URL: url})
     assert "SUPERSECRETVALUE" not in str(caught.value)
     assert url not in str(caught.value)
+
+
+# The URL a process connects to is decided once
+# ---------------------------------------------
+#
+# `create_engine` reads a URL string with SQLAlchemy's own parser. If settings
+# validated the same string with a different parser, the scheme, host and
+# database that were approved would be one reading of the text and the ones
+# connected to would be another, and nothing would hold the two together — two
+# parsers that agree on ordinary input have still each answered separately.
+#
+# These are invariants rather than examples, and deliberately so: they assert
+# that there is exactly one answer and that it is the one used, which does not
+# depend on knowing an input for which two answers would differ. The other half
+# — that the composition root hands that answer to the engine rather than
+# handing over the text — is asserted in `test_gateway_composition.py`, where
+# the engines are.
+
+
+def test_settings_parses_the_database_url_exactly_once() -> None:
+    """One parse, kept — not one parser, re-run.
+
+    Object identity is the assertion because it is the only one that
+    distinguishes a stored parse from a fresh parse that happens to agree.
+    """
+    settings = load_settings({DATABASE_URL: _A_URL})
+    assert settings.parsed_database_url() is settings.parsed_database_url()
+
+
+def test_a_url_the_engine_cannot_parse_is_refused_without_naming_it() -> None:
+    """Well-formedness is decided by the parser that has to use the URL.
+
+    A port that is not a number is the plain case: whatever the engine's parser
+    refuses is refused at startup, and it is refused in this repository's own
+    error type with a message that names the defect. Letting the parser's own
+    exception out would put a fragment of the URL in the traceback of a value
+    that can carry a password.
+    """
+    url = f"{DATABASE_URL_SCHEME}://someone:SUPERSECRETVALUE@db.invalid:not-a-port/somewhere"
+    with pytest.raises(SettingsError) as caught:
+        load_settings({DATABASE_URL: url})
+    assert "SUPERSECRETVALUE" not in str(caught.value)
+    assert "not-a-port" not in str(caught.value)
+    assert url not in str(caught.value)

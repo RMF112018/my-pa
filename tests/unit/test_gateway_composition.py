@@ -140,3 +140,29 @@ def test_the_composition_reads_the_configured_limits() -> None:
         assert built.service._limits.default_page_size == 10
     finally:
         built.close()
+
+
+def test_both_engines_connect_to_the_url_settings_validated() -> None:
+    """The parse that was checked is the parse the pools are configured with.
+
+    `create_engine` reads a URL string with SQLAlchemy's own parser. A
+    composition root that hands over the *text* has the engine read it a second
+    time, and the scheme, host and database that startup approved are then one
+    reading while the ones connected to are another, with nothing holding the
+    two together. Handing over the parse leaves no second reading to diverge
+    from the first.
+
+    Identity, not equality, is the assertion: an equal-but-separate `URL` is
+    exactly what a second reading that happened to agree would produce, so
+    equality cannot tell the fixed arrangement from the broken one. Asserted for
+    both engines because there are two pools and either could be wired from the
+    wrong thing.
+    """
+    settings = Settings(database_url=A_URL)
+    approved = settings.parsed_database_url()
+    built = build_gateway_runtime(settings)
+    try:
+        assert built.work_engine.url is approved
+        assert built.audit_engine.url is approved
+    finally:
+        built.close()

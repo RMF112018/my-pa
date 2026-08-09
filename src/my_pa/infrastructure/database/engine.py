@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import URL, Engine, create_engine, text
 
 __all__ = ["DatabaseHealth", "create_database_engine", "healthcheck"]
 
@@ -39,8 +39,15 @@ class DatabaseHealth:
     extensions: tuple[str, ...]
 
 
-def create_database_engine(url: str) -> Engine:
+def create_database_engine(url: str | URL) -> Engine:
     """Build the engine for `url`.
+
+    Accepts an already-parsed `URL` as well as a string, and a caller that has
+    validated a URL should pass the parse rather than the text. `create_engine`
+    parses a string but returns a `URL` unchanged, so passing the parse is what
+    makes the connection use the reading that was checked instead of a second
+    reading of the same characters. Nothing here validates: this module is handed
+    a URL, it does not decide which one (see the module docstring).
 
     Callers own the engine's lifetime and should `dispose()` it when finished.
     """

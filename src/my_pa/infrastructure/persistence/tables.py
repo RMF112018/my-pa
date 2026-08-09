@@ -530,8 +530,15 @@ jobs = Table(
 #: returns a `quarantine_records` row before it reaches the insert, so no
 #: production path can produce `status = 'quarantined'` in this table. The
 #: constraint below is therefore written against the two, not derived from the
-#: enum. Admitting the third would be the schema asserting a state no writer can
-#: reach — and this table's own rule, stated for `trust_level` above and for
+#: enum.
+#:
+#: **It is the paragraph at the top of this comment, enforced instead of
+#: stated.** "A quarantined object is *not* a row here" was written 57 lines
+#: above the constraint that admitted exactly such a row — a rule declared in
+#: prose and checked by nothing, in the same declaration, which is the `D-69`
+#: and `D-81` shape this campaign exists to remove. The narrowing does not add
+#: a new claim; it makes the claim already made here structural. And this
+#: table's own rule, stated for `trust_level` above and for
 #: `_refuse_an_unauthorized_object` in `persistence.extraction`, is that the
 #: price of a state being *impossible* rather than merely unreported is worth
 #: paying. `test_the_stored_status_vocabulary_is_the_outcome_vocabulary_less

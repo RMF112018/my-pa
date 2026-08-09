@@ -37,7 +37,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import Connection, Engine, text
+from sqlalchemy import CheckConstraint, Connection, Engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
@@ -63,7 +63,7 @@ from my_pa.infrastructure.persistence.extraction import (
 )
 from my_pa.infrastructure.persistence.knowledge import pending_objects
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
-from my_pa.infrastructure.persistence.tables import METADATA
+from my_pa.infrastructure.persistence.tables import METADATA, extractions
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -347,6 +347,76 @@ def test_offline_mode_emits_the_extraction_ddl_without_connecting(
         assert f"CREATE TABLE {EXPECTED_SCHEMA}.{table}" in emitted
     for constraint in EXPECTED_EXTRACTION_CHECKS | EXPECTED_EXTRACTION_UNIQUES:
         assert constraint in emitted
+
+
+def _admitted_statuses() -> frozenset[str]:
+    """The values `extraction_status_is_known` admits, read off the declaration.
+
+    Read out of the constraint's own SQL text rather than restated, because a
+    restated copy is exactly the second statement of a vocabulary that the two
+    tests below exist to prevent.
+    """
+    constraint = next(
+        candidate
+        for candidate in extractions.constraints
+        if candidate.name == "extraction_status_is_known"
+    )
+    assert isinstance(constraint, CheckConstraint)
+    return frozenset(re.findall(r"'([^']*)'", str(constraint.sqltext)))
+
+
+def test_the_detector_reads_the_status_vocabulary_off_the_constraint() -> None:
+    """The control that makes the equality below a measurement.
+
+    `_admitted_statuses` finds a constraint by name and parses quoted literals
+    out of its compiled text. Both halves can fail silently: a renamed
+    constraint raises here rather than in the assertion that matters, and a
+    parse that matched nothing would make the test below compare two empty sets
+    and pass. So the non-emptiness and the shape of the text are asserted
+    first, against the real declaration and not a synthetic one.
+    """
+    admitted = _admitted_statuses()
+
+    assert admitted, "the status vocabulary parsed as empty; the check below would be vacuous"
+    assert "status IN (" in str(
+        next(
+            candidate
+            for candidate in extractions.constraints
+            if candidate.name == "extraction_status_is_known"
+        ).sqltext
+    )
+
+
+def test_the_stored_status_vocabulary_is_the_outcome_vocabulary_less_quarantined() -> None:
+    """The storage vocabulary is a strict subset of the outcome vocabulary, by name.
+
+    `ExtractionStatus` is the *outcome* vocabulary: three things can happen to an
+    object and `record_outcome` dispatches on all three. `extractions.status` is
+    the *storage* vocabulary and is two, because the quarantined branch returns a
+    `quarantine_records` row before reaching the insert, so no production path
+    can file the third here.
+
+    Those two facts used to be one fact — the constraint was derived from the
+    enum — and that derivation was what
+    `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`
+    allowlisted for `8b3f5c17d904`. Cutting the derivation to make the state
+    impossible would otherwise cut the only thing that noticed a fourth outcome
+    member, and the new member would then be discovered when a server refused an
+    insert at some later run. **This assertion is what replaces the
+    derivation.** A fourth `ExtractionStatus` member reddens here, at the
+    declaration, and the diff then has to say which vocabulary it belongs to: a
+    fourth thing that can happen and is filed here goes in the literal, and a
+    fourth thing routed elsewhere goes in the subtrahend beside `QUARANTINED`.
+
+    Written as an equality against a *derived* right-hand side and not against a
+    restated pair. `assert _admitted_statuses() == {"extracted", "unsupported"}`
+    would pass unchanged the day a fourth member landed, which is the shape of
+    check this module exists to refuse.
+    """
+    outcomes = {member.value for member in ExtractionStatus}
+
+    assert _admitted_statuses() == outcomes - {ExtractionStatus.QUARANTINED.value}
+    assert _admitted_statuses() < outcomes, "storage must stay a strict subset of outcome"
 
 
 @pytest.fixture

@@ -156,7 +156,13 @@ EXTRACTION_REVISION = "8b3f5c17d904"
 KNOWLEDGE_REVISION = "7e5a1fb93d62"
 FOUNDATION_HEAD = "6c4d3ea82f10"
 
-#: The constraint `9d4e7a3b1c62` narrows, named once because three tests read it.
+#: The revision below `9d4e7a3b1c62`, which is where its `downgrade` lands and
+#: therefore the revision two databases have to agree at.
+RELATIONSHIP_REVISION = "7f2a9d6c4e18"
+
+#: The constraint `9d4e7a3b1c62` narrows, named once so that the tests reading it
+#: read one name. Deliberately without a count of those tests: a spelled figure
+#: for the size of a current set is the defect `D-108` had to correct twice.
 STATUS_CONSTRAINT = "extraction_status_is_known"
 
 #: The revision that creates the migrated corpus's tables, and how many. Used as
@@ -590,6 +596,74 @@ def test_downgrading_one_revision_leaves_the_knowledge_tables_alone(
 
         command.upgrade(_config(), "head")
         assert _tables(engine) == ALL_KNOWLEDGE_TABLES
+
+        command.downgrade(_config(), "base")
+    finally:
+        engine.dispose()
+
+
+def _admitted_by_the_server(engine: Engine) -> frozenset[str]:
+    """The values `extraction_status_is_known` admits, read out of the catalogue.
+
+    `pg_get_constraintdef` rather than the declaration, because the whole subject
+    of the test below is a case where the two disagreed: what a database admits
+    is what the server wrote down, not what a Python object says it should have.
+    """
+    with engine.connect() as connection:
+        definition = connection.execute(
+            text("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = :name"),
+            {"name": STATUS_CONSTRAINT},
+        ).scalar_one()
+    return frozenset(re.findall(r"'([^']*)'", definition))
+
+
+@pytest.mark.database
+def test_downgrading_this_revision_restores_the_previous_vocabulary(
+    disposable_database: str,
+) -> None:
+    """The two ways to be at `7f2a9d6c4e18` admit the same statuses, against a server.
+
+    **This is the companion `1a4c9e77b2d5` already had and this revision was
+    written without.** `test_capture_schema_migration.py`'s test of the same name
+    pins the vocabulary that revision's downgrade restores; copying its
+    `_restate` pattern without copying this left the downgrade direction pinned
+    by nothing, and it was wrong. It restored `('extracted', 'quarantined',
+    'unsupported')` while `8b3f5c17d904` — which builds `extractions` from the
+    live declaration — had been narrowed to two, so a database that came back
+    down admitted a value a freshly built one at the same revision refused.
+
+    Both halves are built here rather than one being restated, and the first
+    assertion is the control: a fresh chain that did not already hold the narrow
+    vocabulary would make the final equality true for the wrong reason.
+    `tests/schema/test_every_downgrade_restores_the_vocabulary_below_it.py` makes
+    the same claim for every revision in the chain, off rendered DDL rather than
+    off a server; this one is the measurement.
+    """
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), RELATIONSHIP_REVISION)
+        fresh = _admitted_by_the_server(engine)
+
+        # The controls. Without them a downgrade and a fresh build that both
+        # admitted everything, or both admitted nothing readable, would agree.
+        assert fresh == _admitted_statuses(), (
+            "a database freshly built to the revision below already disagrees "
+            "with the declaration, so the equality below tests nothing"
+        )
+        assert ExtractionStatus.QUARANTINED.value not in fresh
+
+        command.upgrade(_config(), "head")
+        assert _admitted_by_the_server(engine) == fresh, (
+            "the upgrade is documented as a no-op on a freshly built database "
+            "and did not behave as one"
+        )
+
+        command.downgrade(_config(), RELATIONSHIP_REVISION)
+
+        assert _admitted_by_the_server(engine) == fresh, (
+            "a database that went to head and back admits a different status "
+            "vocabulary than one freshly built to the same revision"
+        )
 
         command.downgrade(_config(), "base")
     finally:

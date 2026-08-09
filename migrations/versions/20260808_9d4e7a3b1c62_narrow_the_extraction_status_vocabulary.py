@@ -40,9 +40,42 @@ sanctioned, and deleting it here to let the migration proceed would destroy that
 evidence silently — which `AGENTS.md` forbids and which no operator asked for.
 The failure is loud, reversible, and leaves the operator holding the decision.
 
-The `downgrade` restores the three-value vocabulary, which is what `8b3f5c17d904`
-denoted before this revision existed. It restores no rows, because none were
-removed.
+**The `downgrade` restores the *narrow* vocabulary, and that is this revision's
+subject rather than an oversight.** `8b3f5c17d904` builds `extractions` from the
+live declaration, so what the revision below this one denotes is not fixed in
+time — it moved the day that declaration was narrowed. A database freshly built
+to `7f2a9d6c4e18` today holds `('extracted', 'unsupported')`. Had this
+`downgrade` restated the three-value text, a database that went to
+`9d4e7a3b1c62` and back would admit three values at the same revision at which a
+fresh one admits two: the exact divergence this revision exists to remove,
+reintroduced by its own reverse. Measured rather than reasoned — built both ways
+against PostgreSQL 17.10, two databases at `7f2a9d6c4e18` admitted
+`{extracted, quarantined, unsupported}` and `{extracted, unsupported}`.
+`tests/schema/test_every_downgrade_restores_the_vocabulary_below_it.py` and
+`test_downgrading_this_revision_restores_the_previous_vocabulary` are what stop
+that returning.
+
+It restores no rows, because none were removed. It does not return an older
+database to the byte state it held before this revision ran; that state is not
+recoverable from here, and it is not what "downgrade to `7f2a9d6c4e18`" means.
+It returns the database to what `7f2a9d6c4e18` denotes, which is the only
+reading under which two databases at one revision are the same database.
+
+**Why the `_restate` precedent could not simply be copied.** The pattern comes
+from `2b7e9f4c1a83`, whose `_CAPABILITIES_BEFORE_THIS_REVISION` is sound because
+the revision below *it* carries a frozen literal, so that revision's denotation
+cannot move. **That precondition does not hold here**: the revision below is
+derived, and it has already moved. A precedent is a pair — a technique and the
+condition under which it is sound — and a `..._BEFORE_THIS_REVISION` constant
+naming three values was the first copied without the second. `1a4c9e77b2d5`
+carries the companion the copy also left behind: a database-tier test pinning
+the vocabulary its own downgrade restores. That test now has a sibling for this
+revision, and a chain-wide guard above it.
+
+Written as an explicit restatement and **not** as an empty `downgrade`, which
+would leave the same database and be worse: emitting no DDL leaves nothing for
+`test_every_downgrade_restores_the_vocabulary_below_it` to read, so what this
+revision leaves behind on the way down would be unpinned all over again.
 
 Revision ID: 9d4e7a3b1c62
 Revises: 7f2a9d6c4e18
@@ -87,13 +120,13 @@ CONSTRAINT: Final = "extraction_status_is_known"
 #: would emit different DDL the day that declaration changed, which is the defect
 #: this revision is repairing rather than one to repeat. Sorted, which is the
 #: order `_one_of` produces, so the two texts can be compared directly.
-_STATUS_AT_THIS_REVISION: Final = "status IN ('extracted', 'unsupported')"
-
-#: What `8b3f5c17d904` denoted before this revision, restated for the same reason
-#: `_CAPABILITIES_BEFORE_THIS_REVISION` is restated in `2b7e9f4c1a83`: a downgrade
-#: has to put the constraint back to what the revision below it means, not to
-#: whatever the domain says on the day the downgrade runs.
-_STATUS_BEFORE_THIS_REVISION: Final = "status IN ('extracted', 'quarantined', 'unsupported')"
+#:
+#: **One constant, used in both directions**, because at this revision and at the
+#: one below it the admitted vocabulary is the same text — see the `downgrade`
+#: paragraph in the docstring for why that is a property of `8b3f5c17d904` being
+#: derived and not a shortcut. A second constant here would be a second statement
+#: of one thing, and the first thing a second statement can do is disagree.
+_STATUS_VOCABULARY: Final = "status IN ('extracted', 'unsupported')"
 
 
 def _restate(check: str) -> None:
@@ -103,8 +136,8 @@ def _restate(check: str) -> None:
 
 
 def upgrade() -> None:
-    _restate(_STATUS_AT_THIS_REVISION)
+    _restate(_STATUS_VOCABULARY)
 
 
 def downgrade() -> None:
-    _restate(_STATUS_BEFORE_THIS_REVISION)
+    _restate(_STATUS_VOCABULARY)

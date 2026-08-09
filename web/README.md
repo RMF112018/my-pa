@@ -1,12 +1,23 @@
 # `web/` — MossAIc frontend shell
 
-**Status:** `IMPLEMENTING` (WP-02 / R1)
+**Status:** built across WP-00 through WP-06 of the **superseded** Moss v4.0
+campaign; runs against synthetic fixtures only and is not deployable.
 
 The Next.js (App Router) progressive web app for `my-pa`, decided by
 [`docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md`](../docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md).
 Routed by `docs/00_REPOSITORY_SOURCE_INDEX.md`.
 
-## What WP-02 delivers — and what it does not
+The operating lineage for this repository is
+`recovery/pre-20260805-utc-rollback-c9fb513`; see
+[`../README.md`](../README.md) and
+[`../docs/campaign/CAMPAIGN-BRIEF.md`](../docs/campaign/CAMPAIGN-BRIEF.md).
+**The `WP-nn` / `Rn` labels in this file are the superseded Moss v4.0
+campaign's own numbering and do not refer to the work packages of the current
+campaign, which reuses the same numbers for different work.** This file
+previously read `Status: IMPLEMENTING (WP-02 / R1)`, which described neither
+the delivered state of this shell nor any current work package.
+
+## What the R1 slice delivers — and what it does not
 
 Delivered:
 
@@ -53,9 +64,21 @@ principal, and a person that does not resolve in the caller's own partition is `
 a foreign person and an unknown person are indistinguishable (MU-AC-05). Records are
 principal-scoped synthetic fixtures until the Python continuity read models are wired.
 
-Not delivered here: capture persistence and the processing pipeline (WP-03), offline
-(WP-04), the Microsoft Graph connector (WP-07), AI processing (WP-08), and the To-Do
-projection (WP-09).
+Not delivered here: capture persistence and the processing pipeline, offline support,
+AI processing, and the To-Do projection. These were sequenced as WP-03, WP-04, WP-08
+and WP-09 of the superseded Moss v4.0 campaign; that sequencing is not a current
+delivery schedule.
+
+**Personal-data ingestion is Apple-first.** Apple Mail, Calendar, Contacts, and
+Tasks/To-Do through the first-party native Apple architecture
+([`../native/apple-source-host/README.md`](../native/apple-source-host/README.md))
+are the active ingestion direction. Microsoft Graph is retained in the product
+definition but **off by default and not an active personal-data ingestion path**; a
+disabled Graph connector must not be reported as a degraded active source. The Entra
+authentication used by this shell's synthetic identity boundary is a separate concern
+from Graph connector activation. This file previously listed "the Microsoft Graph
+connector (WP-07)" among the things pending delivery here, which presented the
+superseded Graph-primary sequencing as a live commitment; it is not one.
 
 ## Commands
 

@@ -1507,12 +1507,15 @@ public research, `RI-OD-010` offline posture, `RI-OD-013` importance labels,
 `RI-OD-014` device matrix, `RI-OD-015` voice capture, `RI-OD-017` independent
 usability and privacy review gate before release.
 
-### Five questions this plan raises that no ledger contains
+### Six questions this plan raises that no ledger contains
 
 Ratification on 2026-08-02 answered the third of these outright, changed the
 footing of the first and the fourth, and added a fifth. The answered one is kept
 and marked rather than deleted, because a list that quietly drops the question it
-resolved teaches a reader nothing about how it was resolved.
+resolved teaches a reader nothing about how it was resolved. The sixth was opened
+on 2026-08-08 by a gap #52 disclosed and deliberately left, and it is a contract
+change rather than a repair, which is why it is a question here rather than work
+in a package.
 
 1. **The MCV completion declaration.** *Still reserved to the operator.* `AGENTS.md` section 1
    said the MCV ran "through August 2, 2026." When this was written that was
@@ -1617,6 +1620,36 @@ resolved teaches a reader nothing about how it was resolved.
    assumes. The decision that will eventually be needed is `MCP-OP-001`:
    whether the connector is sequenced after the MCV, as its own package
    recommends, or reprioritised ahead of it. Nothing needs deciding today.
+
+6. **`_Captures.search` lets a `CaptureSearchInternalError` reach the application
+   past the port's vocabulary, and closing it is a contract change.** *Opened
+   2026-08-08.* #52 found this on the way to something else, deliberately did not
+   fix it, and recorded it at the site in
+   `src/my_pa/infrastructure/persistence/unit_of_work.py` — pinned by a test read
+   from the `except` clauses themselves, so closing the gap without removing the
+   note reddens rather than leaving a false sentence behind. That is disclosure
+   done well, and it is why this entry is a question rather than a defect
+   awaiting a worker.
+
+   The reason it is listed here rather than fixed is that the two available
+   repairs are not equivalent, and neither is the orchestrator's to choose.
+   **Either** the port's error vocabulary widens to admit the internal-error
+   case, which changes what every caller of the capture port must handle;
+   **or** the adapter translates the internal error into an existing member of
+   the vocabulary, which is the narrower change but discards the distinction
+   between "the search plane failed" and whatever member it is folded into. The
+   first is a contract change in the sense `P00-OD-004` uses for the `eligible`
+   field; the second is a defect-laundering risk of exactly the kind section 10
+   of `AGENTS.md` forbids, and it would have to be argued rather than assumed
+   safe. Nothing in the repository establishes which the operator wants.
+
+   No `D-` identifier is minted for it — `D-106` and `D-107` are reserved, for
+   the reason recorded under section 13's decision table — and no ledger this
+   plan tracks contains a question it fits, which is why it is here. It blocks no
+   package in section 12 and is deliberately **not** added to the counts above,
+   on the same grounds as the connector's nine: those counts cover the three
+   ledgers this plan tracks, and this is not in one of them. It is direction-
+   neutral: the gap and both repairs are identical under either product line.
 
 ### Nine more package decisions arrived with the v2.2 revision
 

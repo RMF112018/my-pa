@@ -8,14 +8,14 @@ validated_audit_package: MYPA-CURRENT-STATE-PACKAGE-20260809-001
 repository: RMF112018/my-pa
 remote: https://github.com/RMF112018/my-pa.git
 operating_lineage: recovery/pre-20260805-utc-rollback-c9fb513
-operating_lineage_head: b0be48ca83481dd1f22ea2b8b9a3c2011211096f
-operating_lineage_tree: d1bc78bc073f2980fa547507e996b94156e5e75e
+operating_lineage_head: 60f8ccfba72cff3cd9be10164fca1f19af8d84e7
+operating_lineage_tree: 8ccdc862e90d61858b540b3a40e881f368303269
 reauthentication_date: "2026-08-09"
 active_work_package: WP-03
 active_work_package_name: Persistence and Alembic Migration-Chain Reconciliation
 supersedes: WP-N01
-completed_work_packages: [WP-01, WP-02]
-milestone_ms0: WP-01 -> WP-02 -> WP-03
+completed_work_packages: [WP-01, WP-02, WP-S01]
+milestone_ms0: WP-01 -> WP-02 -> WP-S01 -> WP-03
 ```
 
 This brief is the campaign's continuity aid, not a governance ledger. `AGENTS.md` remains the normative policy; this file states where the campaign currently stands against it.
@@ -167,6 +167,15 @@ Update this brief's frontmatter and decision log at every material transition (w
 - **Rationale:** `bf/extractions-quarantined-debt` strictly contains `bf/mcv-neutral-remainder` (identical SHAs), so the true unique population is 29, not the 36 a naive per-branch sum suggests. Every commit is accounted for exactly once.
 - **Evidence:** `docs/campaign/WP-02-INTEGRATION-RECORD.md`; independently recomputed by the reviewer as 8 + 6 + 15 = 29 with zero unaccounted and zero phantom entries.
 - **Invalidation:** any of the four source branch heads moves.
+
+### D-08 — WP-S01 was inserted ahead of WP-03 by operator decision, as its own bounded package
+
+- **Decision:** the URL-parser divergence carried out of WP-02 as backlog item 1 was fixed as its own work package, **WP-S01**, executed before WP-03 rather than deferred. The operator was presented the verified facts and chose to remove the underlying defect rather than only its disclosure, and to do so immediately as a bounded package.
+- **Rationale:** the defect was live at head and the branch carrying its reproduction detail was still published. Containing the disclosure without patching the defect would have left the defect; patching without containing would have left the disclosure. Both were closed in one cycle.
+- **Scope executed:** the remote branch `bf/wp-02-selective-branch-reconciliation` was deleted under explicit, narrow operator authorization — an exception to the standing prohibition on branch deletion, covering that one remote ref and nothing else. Its local counterpart was removed afterwards as an ordinary bounded work-branch cleanup under `AGENTS.md` §8.1, once its content was re-derived as fully contained in this lineage.
+- **Evidence:** before deletion the branch tip differed from this lineage in exactly one file, `docs/campaign/CAMPAIGN-BRIEF.md`, and on the stale side only — every other path was byte-identical, so nothing unique was lost. Merged tree `8ccdc862e90d61858b540b3a40e881f368303269` equals the independently reviewed tree.
+- **Residual:** deleting the branch removed forward signposting; it is **not** a history rewrite. See D-06.
+- **Invalidation:** none outstanding.
 
 ## Triaged backlog carried out of WP-02
 

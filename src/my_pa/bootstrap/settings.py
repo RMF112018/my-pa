@@ -10,17 +10,31 @@ echo a setting's value, and the field is `repr=False` so the value does not ride
 out in `repr(settings)` either — the channel that mattered most, because pytest
 prints the `repr` of a failing assertion's operands.
 
-Two channels are open and are named here rather than left to be found. Pydantic's
-own `ValidationError` renders `input_value=`, and for a model validator that
-input is the whole settings mapping; `load_settings` attaches that error to the
-`SettingsError` it raises, so the URL is reachable on `__cause__` by anything
-that prints a traceback. The rendering elides the middle of a long input, which
-is why this looks closed when tested with a long URL and is not: a short URL is
-rendered whole. And `model_dump`/`model_dump_json` return the value by design.
-Neither is closed at this commit. Closing the first is a change to how
-`load_settings` raises — the message it composes already carries every field's
-diagnosis, so nothing is lost by severing the chain — and it was deferred rather
-than judged unnecessary.
+Two channels were open here and are named rather than left to be found. The first
+is closed. Pydantic's own `ValidationError` renders `input_value=`, and for a
+model validator that input is the whole settings mapping, so the rendered error
+carries the URL; the rendering elides the middle of a long input, which is why
+this looked closed when tested with a long URL and was not, since a short URL is
+rendered whole. `load_settings` used to attach that error to the `SettingsError`
+it raises, putting the URL within reach of anything that prints a traceback.
+It now composes its message inside the handler and raises *outside* the `except`
+block, so both `__cause__` and `__context__` are `None` and no rendering of the
+chain — `traceback.format_exception`, `logging.exception`, an unhandled
+traceback — reaches the value. `raise … from None` would not have sufficed: it
+clears `__cause__` and sets `__suppress_context__`, which quiets those two
+renderers, but leaves the `ValidationError` on `__context__` for anything that
+walks the chain itself to read out of. Nothing diagnostic was
+traded for this; the composed message still names every rejected field with its
+reason. `infrastructure.persistence.search._execute` holds bound query text with
+the same idiom, and `tests/unit/test_settings.py` walks the chain rather than
+reading `str(exc)`, because reading only the top-level message is what let this
+survive a review.
+
+The second channel is open by design: `model_dump` and `model_dump_json` return
+`database_url` with its password. They are asked for explicitly rather than
+reached by accident, and callers must not log their output. `repr`, `str` and the
+exception chain are the paths something reaches without meaning to, and those are
+the ones closed.
 
 `MY_PA_DATABASE_URL` is required rather than defaulted, which resolves
 `P00-OD-008`. That decision's stated default was to fail closed when the URL is
@@ -180,8 +194,10 @@ class Settings(StrictModel):
     #: consumer would have to unwrap it — a far wider change than the disclosure
     #: warrants. `repr=False` closes `repr` and `str` and touches nothing else.
     #: It does **not** close `model_dump`/`model_dump_json`, which are asked for
-    #: explicitly rather than reached by accident, nor Pydantic's own
-    #: `ValidationError` rendering; see `parsed_database_url` and the tests.
+    #: explicitly rather than reached by accident. Pydantic's own
+    #: `ValidationError` rendering was the other way out and is closed in
+    #: `load_settings`, which raises outside its `except` block; see the module
+    #: docstring and the tests.
     database_url: str = Field(repr=False)
 
     #: The single parse of `database_url`, produced by validation and handed on
@@ -296,6 +312,8 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
     if unknown:
         raise SettingsError(f"unknown {ENV_PREFIX} settings: {sorted(unknown)}")
 
+    # Composed inside the handler, raised outside it. See the `raise` below.
+    message = ""
     try:
         return Settings(**values)  # type: ignore[arg-type]
     except ValidationError as exc:
@@ -322,4 +340,16 @@ def load_settings(environ: Mapping[str, str] | None = None) -> Settings:
                 "supply the password out of band through PGPASSWORD or "
                 "~/.pgpass rather than committing one"
             )
-        raise SettingsError(message) from exc
+    # Outside the `except` block on purpose, and this is the whole disclosure
+    # control — the same idiom `infrastructure.persistence.search._execute` uses
+    # for bound query text. Pydantic's `ValidationError` renders `input_value=`,
+    # and for a model validator that input is the entire settings mapping, so the
+    # rendered error contains the DSN verbatim. `raise … from exc` published it on
+    # `__cause__`, where `traceback.format_exception` and `logging.exception` both
+    # printed it. `raise … from None` is not the fix: it sets
+    # `__suppress_context__`, which stops those two printing, but leaves the
+    # `ValidationError` on `__context__` for anything that walks the chain itself
+    # to read. Leaving the handler before raising is what empties both links.
+    # Nothing diagnostic is lost: `message` above already names every rejected
+    # field with its reason.
+    raise SettingsError(message)

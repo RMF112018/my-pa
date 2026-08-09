@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import traceback
+
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.engine import URL
 
 from my_pa.bootstrap.settings import (
@@ -275,6 +278,109 @@ def test_an_invalid_database_url_error_never_echoes_the_url() -> None:
         load_settings({DATABASE_URL: url})
     assert "SUPERSECRETVALUE" not in str(caught.value)
     assert url not in str(caught.value)
+
+
+def test_a_rejected_database_url_is_absent_from_the_whole_exception_chain() -> None:
+    """The message was quiet; the chain behind it was not.
+
+    Every other disclosure test here reads `str(exc)`, and reading only the
+    top-level message is exactly what let this survive. `load_settings` used to
+    raise `SettingsError(…) from exc`, and `exc` is Pydantic's `ValidationError`,
+    which renders `input_value=` — for a model validator, the whole settings
+    mapping. So the DSN was one `logging.exception` or one unhandled traceback
+    away, on `__cause__`, while `str` stayed clean.
+
+    A *short* URL is what makes this visible, and the first assertion below is
+    what keeps that true. Pydantic elides the middle of a long input and keeps the
+    head and the tail, so a long DSN renders with the password cut out — which is
+    how this channel passed for closed. Length is therefore load-bearing, and a
+    later pydantic that elides more aggressively would quietly turn every
+    assertion here green against unfixed code. So the leak is proved renderable
+    for this exact input before it is asserted absent.
+
+    `raise … from None` is not sufficient either, though not for the reason it is
+    usually given: it sets `__suppress_context__`, so `traceback.format_exception`
+    and `logging.exception` do *not* print the context. It leaves the
+    `ValidationError` reachable on `__context__`, where anything that walks the
+    chain itself — a structured-log serializer, an error reporter, a debugger, the
+    explicit walk below — still reads the DSN out of it. Only leaving the handler
+    before raising empties both links, so this fails if the `raise` moves back
+    inside the `except` under either spelling.
+
+    The URL is built into a local rather than written inline in the call below,
+    because a rendered traceback prints the *source line* of each frame: an
+    inline literal would appear in the chain by way of this test's own text and
+    make the assertions unfalsifiable.
+    """
+    synthetic_credential = "NOTAREALPW"
+    url = f"mysql://u:{synthetic_credential}@h/d"
+
+    # Non-vacuity, asserted rather than assumed: pydantic must render this input
+    # whole. `Settings(...)` raises the same `ValidationError` `load_settings`
+    # used to attach, so this is the exact text the chain would have carried.
+    with pytest.raises(ValidationError) as raw:
+        Settings(database_url=url)
+    assert synthetic_credential in str(raw.value), (
+        "pydantic elided the password out of this input, so the assertions below "
+        "would hold against the unfixed code too — shorten the URL"
+    )
+
+    with pytest.raises(SettingsError) as caught:
+        load_settings({DATABASE_URL: url})
+    error = caught.value
+
+    # The chain is severed at both links, not just the one `from None` clears.
+    assert error.__cause__ is None, "the ValidationError is still on __cause__"
+    assert error.__context__ is None, "the ValidationError is still on __context__"
+
+    # Walk the links explicitly as well as rendering, so a future chain that is
+    # non-empty but happens to render harmlessly is still caught.
+    walked: list[str] = [str(error)]
+    seen: set[int] = {id(error)}
+    pending: list[BaseException] = [error]
+    while pending:
+        current = pending.pop()
+        for link in (current.__cause__, current.__context__):
+            if link is not None and id(link) not in seen:
+                seen.add(id(link))
+                walked.append(str(link))
+                pending.append(link)
+
+    rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+
+    for text, where in ((rendered, "the rendered traceback"), ("\n".join(walked), "the chain")):
+        assert synthetic_credential not in text, f"the password reached {where}"
+        assert url not in text, f"the URL reached {where}"
+
+    # Bought with severance, not with silence: the top-level message must still
+    # say which setting was rejected and why, or this test would pass against a
+    # `SettingsError("")`.
+    assert DATABASE_URL in str(error)
+    assert DATABASE_URL_SCHEME in str(error)
+
+
+def test_severing_the_chain_keeps_every_field_named_with_its_reason() -> None:
+    """Diagnostics survive the fix, including for settings that are not the URL.
+
+    The chain was severed to keep a password out of a traceback. If that had cost
+    the other fields their diagnosis, the trade would be a bad one and this is
+    where it would show: two unrelated bad values plus the credential-bearing one,
+    and all three still named in the single top-level message.
+    """
+    with pytest.raises(SettingsError) as caught:
+        load_settings(
+            {
+                DATABASE_URL: f"{DATABASE_URL_SCHEME}://someone@db.invalid/somewhere",
+                f"{ENV_PREFIX}MAX_PAGE_SIZE": "0",
+                f"{ENV_PREFIX}MAX_ENROLLMENT_DEPTH": "-1",
+            }
+        )
+    message = str(caught.value)
+
+    assert f"{ENV_PREFIX}MAX_PAGE_SIZE" in message
+    assert f"{ENV_PREFIX}MAX_ENROLLMENT_DEPTH" in message
+    assert "greater than 0" in message
+    assert "greater than or equal to 0" in message
 
 
 def test_an_accepted_database_url_is_absent_from_the_settings_repr() -> None:

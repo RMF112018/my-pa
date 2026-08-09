@@ -28,9 +28,11 @@ were fail-open for four commits:
 * **Reads.** Block mappings and block sequences; comments and blank lines; plain
   scalars; simply quoted scalars, unquoted; `|`-family block scalars, joined
   with newlines; `>`-family block scalars, *folded* — line breaks between
-  equally indented lines become spaces and a run of blank lines becomes one
-  fewer newline, which is what YAML means by `>` and what
-  `run: >` over two lines means to the shell.
+  equally indented lines become spaces and a run of *n* blank lines becomes *n*
+  newlines — equivalently, a lone break folds to a space — which is what YAML
+  means by `>` and what `run: >` over two lines means to the shell. The
+  arithmetic is spelled out because the first version of this sentence said
+  "one fewer newline", which the implementation never did.
 * **Reads without interpreting.** A flow *sequence* comes back as its own text:
   `branches: [main]` is the string `"[main]"`. That is pinned in the synthetic
   parse below rather than left to be discovered, and it is safe here only
@@ -66,7 +68,12 @@ whether the 140 files pass; that is what CI's own `mypy` step is for. It reads
 `.github/workflows/*.yml` and `*.yaml` — both, because GitHub Actions honours
 both and a real `.yaml` workflow running `mypy src` sat outside this guard
 undetected — so a `mypy` invocation in a Makefile, a
-pre-commit hook or a script is outside it. And the argument rule is *stricter*
+pre-commit hook or a script is outside it. It also checks only for *targets*,
+not for options that narrow what mypy reads: `--exclude=apps/` and
+`--config-file=other.toml` begin with `-` and pass green while genuinely
+shrinking the checked tree. That is outside `D-64`, which is about an explicit
+path overriding `[tool.mypy] files`, but it is named here so the guard is not
+read as covering it. And the argument rule is *stricter*
 than `D-64` needs: any token after `mypy` that does not begin with `-` is
 refused, so `--config-file pyproject.toml` written with a space would be refused
 along with `src`. Modelling mypy's option grammar in a test is the alternative,
@@ -230,7 +237,10 @@ def _fold(dedented: list[str], start: int) -> str:
     """YAML folding over the subset this repository writes.
 
     Breaks between equally indented lines fold to spaces, and a run of *n* blank
-    lines becomes *n* - 1 newlines. A **more-indented** line is kept literally by
+    lines becomes *n* newlines: one blank line is one newline, two are two. (The
+    equivalent statement is that a lone break folds to a space, so the *first*
+    break in a run is the one that disappears.) A **more-indented** line is kept
+    literally by
     YAML under a third rule, which this parser does not implement and therefore
     refuses: guessing that rule wrong is the same class of mistake as reading
     `>` as `|`.
@@ -361,9 +371,14 @@ def mypy_arguments(script: str) -> list[tuple[str, ...]]:
     A token is an invocation when its basename is `mypy`, which reads `mypy`,
     `/usr/local/bin/mypy` and the `python -m mypy` form alike without a special
     case for each. `mypy` is prefiltered as a substring only to avoid tokenizing
-    every line of embedded Python in the workflow's heredocs; a command that
-    invokes mypy necessarily contains the string, so the prefilter cannot hide
-    one.
+    every line of embedded Python in the workflow's heredocs. Any command that
+    *writes* mypy contains the string, so the prefilter hides nothing anyone
+    would write — but the claim is not absolute and is not stated as one: a
+    command that assembles the name, `M=mypy; python -m $M src`, returns no
+    invocation and does so silently. Nothing in this repository writes that, and
+    it is recorded rather than left for the next reader to find, because an
+    absolute claim in this docstring is what an independent review blocked on
+    once already.
     """
     invocations: list[tuple[str, ...]] = []
     for command in _command_lines(script):
@@ -408,7 +423,13 @@ def _steps_in(name: str, document: str) -> list[tuple[str, str, str]]:
     for job, definition in jobs.items():
         assert isinstance(definition, dict), f"{name}: job {job} is not a mapping"
         steps = definition.get("steps")
-        assert isinstance(steps, list), f"{name}: job {job} declares no steps"
+        assert isinstance(steps, list), (
+            f"{name}: job {job} declares no steps. If the file plainly does declare "
+            "them, the likely cause is a block sequence written at the same indent "
+            "as its `steps:` key — valid YAML and a common Actions style, which "
+            "this parser does not join to its key and which therefore arrives here "
+            "as an empty value rather than as a list"
+        )
         for step in steps:
             assert isinstance(step, dict), f"{name}: job {job} has a non-mapping step"
             script = step.get("run")

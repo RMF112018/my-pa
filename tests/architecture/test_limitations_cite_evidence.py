@@ -108,17 +108,37 @@ def _pathlike(token: str) -> bool:
 #: Every `## ` heading is one limitation. Numbered, so the count is visible.
 _LIMITATION = re.compile(r"^## \d+\. ", re.MULTILINE)
 
+#: What ends a limitation's text: the next heading of any level, numbered or
+#: not. `_LIMITATION` is the wrong terminator and the first version of
+#: `limitation_section` used it anyway — a scan that only stops at `## N.` runs
+#: straight through an `## Appendix`, a `### ` subheading, or a section that
+#: loses its numbering. Demonstrated on the real document by an independent
+#: review: section 12 renamed, its body rewritten to claim it "GRANTS A PUBLIC
+#: CAPABILITY and has been fully exercised against production people", and the
+#: three asserted phrases moved into a new `## Appendix` — the whole of
+#: `tests/architecture/` passed, 1290 tests agreeing with a limitations
+#: document that had been made to claim production exposure. The commit that
+#: introduced this helper existed to unkey four guards from literals and left
+#: this one keyed to a numbering convention; its sibling `section_of` in
+#: `test_readme_state_claims.py`, written in the same changeset, already used a
+#: heading regex. Anchoring stays `^## N\. ` — the section is identified by its
+#: number — and only the boundary is structural.
+_HEADING = re.compile(r"^#{1,6} ", re.MULTILINE)
+
 
 def limitation_section(text: str, number: int) -> str:
     """Limitation `number`'s own text, ending where the next limitation begins.
 
-    Bounded by `_LIMITATION` rather than by the next number written out. Two
-    scans here were bounded by neither and by a literal respectively:
-    `split("## 12.", 1)[1]` ran to end of file, which is right only for as long
-    as 12 is the last section, and `split("## 11.")[1].split("## 12.")[0]` names
-    its terminator, so inserting a section — renumbering 12 to 13 — widens that
-    scan to end of file with nothing going red. The regex was already in this
-    module, unused, which is the whole of the fix.
+    Bounded by `_HEADING` — the next heading of any level — rather than by the
+    next number written out. Three scans here were wrong in three different
+    ways. `split("## 12.", 1)[1]` ran to end of file, which is right only for as
+    long as 12 is the last section. `split("## 11.")[1].split("## 12.")[0]`
+    names its terminator, so renumbering 12 to 13 with nothing taking 12 widens
+    that scan to end of file with nothing going red — and note the shape:
+    *inserting* a new `## 12.` narrows the scan and goes red, so the hazard is
+    the renumber, not the insert. And this function's own first version bounded
+    itself with `_LIMITATION`, which stops only at `## N.` and therefore runs
+    straight through a heading that is not numbered.
     """
     opening = re.compile(rf"^## {number}\. ", re.MULTILINE).search(text)
     assert opening is not None, (
@@ -126,7 +146,7 @@ def limitation_section(text: str, number: int) -> str:
         "heading that is gone decides nothing"
     )
     following = [
-        match.start() for match in _LIMITATION.finditer(text) if match.start() > opening.start()
+        match.start() for match in _HEADING.finditer(text) if match.start() > opening.start()
     ]
     section = text[opening.start() : following[0] if following else len(text)]
     assert section.strip(), f"limitation {number} is empty"

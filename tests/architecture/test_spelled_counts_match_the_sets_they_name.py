@@ -412,9 +412,19 @@ def plan_current_state() -> list[tuple[str, int]]:
     """
     text = PLAN.read_text(encoding="utf-8")
     found: list[tuple[str, int]] = []
-    for number, heading in CURRENT_STATE_SECTIONS:
+    for _number, heading in CURRENT_STATE_SECTIONS:
         start = text.index(heading)
-        end = text.index(f"\n## {number + 1}. ", start)
+        # From the end of the anchor line, not from `start`: these anchors begin
+        # with a newline, so `start` sits *before* the section's own heading and
+        # a scan from there terminates on that heading and returns nothing.
+        # Measured — the first version of this fix did exactly that and both
+        # tests below went red on an empty section.
+        following = [
+            match.start()
+            for match in _HEADING.finditer(text)
+            if match.start() >= start + len(heading)
+        ]
+        end = following[0] if following else len(text)
         found.append((text[start:end], text[:start].count("\n")))
     return found
 
@@ -422,6 +432,28 @@ def plan_current_state() -> list[tuple[str, int]]:
 def plan_current_state_text() -> str:
     """The current-state sections as one passage, for rules that only match."""
     return "\n".join(section for section, _ in plan_current_state())
+
+
+#: What ends a current-state section: the next heading of any level. This read
+#: `text.index(f"\\n## {number + 1}. ")` until 2026-08-08 — the successor's
+#: number written out, which is the same defect three other guards in this
+#: directory carried and this package removed from each of them. It was loud
+#: rather than silent, because `str.index` raises when the literal is absent, so
+#: it was the least dangerous instance; but loudness came from `index` raising,
+#: not from the boundary being derived, and a reordering that moved a section
+#: without renumbering would have widened the scan with nothing going red. The
+#: section is still *anchored* by its own heading — only the boundary is
+#: structural — so the numbers in `CURRENT_STATE_SECTIONS` still say which
+#: sections are read.
+#:
+#: Same-or-shallower, not any heading. A `## ` section legitimately contains
+#: `### ` subsections, and terminating at the first heading of *any* level cuts
+#: the section off at its own first subheading. That was measured rather than
+#: reasoned about: the first version of this fix used `^#{1,6} ` and two tests
+#: went red, which is the direction this class of error should fail in — a
+#: narrowed scan finds less and complains, where a widened one finds more and
+#: stays quiet.
+_HEADING = re.compile(r"^#{1,2} ", re.MULTILINE)
 
 
 #: Leading markers that are layout rather than prose: a Python comment hash, a

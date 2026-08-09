@@ -49,17 +49,17 @@ from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
 
+from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.classification import Classification
-from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.extraction.coverage import CoverageCounts, CoverageState
 from my_pa.domain.extraction.quarantine import QuarantineReason
 from my_pa.domain.extraction.text import ExtractionOutcome
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.source.enrollment import EnrollmentRequest, EnrollmentScope
 from my_pa.domain.source.provider import ObjectKind, SourceObjectContent
-from my_pa.domain.source.registry import SourceProviderKind, issue_identifier
+from my_pa.domain.source.registry import SourceProviderKind
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs import extraction
 from my_pa.infrastructure.jobs.extraction import extract_enrollment
@@ -90,6 +90,19 @@ def _administer(maintenance: Engine, *statements: object) -> None:
     with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
         for statement in statements:
             connection.execute(statement)  # type: ignore[arg-type]
+
+
+#: The Principal whose queue these tests claim from, and it is the *process's*
+#: rather than an invented one.
+#:
+#: `claim_job` is partitioned by Principal (WP-04, revision `4f1a8b6d92e3`), so
+#: a worker claims its own Principal's work and no one else's. One test below
+#: runs a real `apps/worker.py` child, which derives its Principal from
+#: `bootstrap.gateway.local_principal` — the durable local-operator binding —
+#: and would claim nothing at all if these enrollments were staged under an
+#: invented identifier. Using the same derivation here is what keeps the
+#: in-process runs and the child process looking at one queue.
+WORKER_PRINCIPAL = local_principal().principal_id
 
 
 @pytest.fixture(scope="module")
@@ -183,7 +196,7 @@ def _stage(
             connection,
             EnrollmentRequest(
                 source_id=source.source_id,
-                principal_id=issue_identifier(IdKind.PRINCIPAL),
+                principal_id=WORKER_PRINCIPAL,
                 purpose=Purpose.BOUNDED_ENROLLMENT,
                 scope=EnrollmentScope(object_ids=objects),
                 media_types=media_types,
@@ -209,6 +222,7 @@ def _stage(
 def _run(engine: Engine, *, iterations: int = 1, owner: str | None = None) -> object:
     return run_worker(
         engine,
+        principal_id=WORKER_PRINCIPAL,
         owner=owner or issue_worker_owner(),
         handler=extract_enrollment,
         stop=threading.Event(),
@@ -706,7 +720,10 @@ def test_an_expired_lease_lets_another_worker_finish_the_job(
     staged = _stage(engine, corpus, "expired")
     dead = issue_worker_owner()
     with engine.begin() as connection:
-        assert claim_job(connection, owner=dead, lease_seconds=1) is not None
+        assert (
+            claim_job(connection, principal_id=WORKER_PRINCIPAL, owner=dead, lease_seconds=1)
+            is not None
+        )
     with engine.begin() as connection:
         connection.execute(
             text("UPDATE knowledge.jobs SET lease_expires_at = now() - interval '1 second'")

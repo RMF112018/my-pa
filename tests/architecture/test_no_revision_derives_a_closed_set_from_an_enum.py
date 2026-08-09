@@ -27,8 +27,11 @@ it). Each entry pins the *exact* vocabulary that site emits today, so the guard
 reddens three ways:
 
 - a member added to any listed enum changes an emitted vocabulary — red;
-- a new derived constraint appears in any revision — red, because it is not in
-  the allowlist;
+- a new derived constraint appears in a revision **through a shape `_emitted`
+  reads** — red, because it is not in the allowlist. That qualifier is load
+  bearing and was absent until it was measured: `_emitted` reads a revision's
+  `Table` objects, so a constraint written as raw SQL is outside it. Measured,
+  not reasoned — see the paragraph below;
 - a listed site is frozen — red, because the allowlist must then lose a row.
 
 A guard whose allowlist can be widened silently is the vacuous-guard shape this
@@ -49,10 +52,51 @@ touches the shared declaration through a shape this module cannot read — witho
 which a later revision could derive freely simply by being written differently.
 
 **What it does NOT detect, stated because a control described as closing a class
-it does not close is the overclaim this campaign keeps catching (`D-86`).** This
-module reads a constraint whose admitted vocabulary is a whole closed *set*. Nine
-constraints instead embed a single enum **value**, and every one of them is
-outside this guard's coverage:
+it does not close is the overclaim this campaign keeps catching (`D-86`).**
+
+**It cannot see a closed set built in raw SQL.** `_emitted` reads the `Table`
+objects a revision hands to `create_all`, so a constraint that never becomes a
+`Table` object is not read at all. A revision writing
+`op.execute("… ADD CONSTRAINT … CHECK (status IN (…))")` with the vocabulary
+joined out of a live `StrEnum` derives exactly as freely as `D-69` forbids, and
+this module goes on passing. Replayed on this chain rather than reasoned about:
+`9d4e7a3b1c62`'s `_STATUS_VOCABULARY` was rewritten to join `ExtractionStatus`'s
+members, which put `CHECK (status IN ('extracted', 'quarantined',
+'unsupported'))` verbatim into the rendered DDL and left this module at **16
+passed**, its unplanted count.
+`test_every_revision_declares_its_emission_readably` does not reach it either:
+that test refuses a revision whose *emission* is unreadable, and a revision with
+a readable emission plus an `op.execute` beside it satisfies it — which is
+exactly the shape `9d4e7a3b1c62` has, since it declares an empty `_TABLES` and
+does all its work in `op.execute`.
+
+**And the gap is already occupied by a merged revision, which the plant only
+made visible.** `7f2a9d6c4e18` builds all seventeen of its tables in raw SQL: it
+imports `alembic.op` and nothing else, holds no `Table` and names no declaration
+module, so `_emitted` returns `None` for it and the readability test above skips
+it rather than failing it. It appears in neither `ALLOWED` nor `FROZEN`. Counted
+with this module's own `_CLOSED_SET` and `_LITERAL` over its rendered DDL, its
+emitted SQL carries fifteen closed-set expressions in seven distinct
+vocabularies, and **three of those seven are exactly equal to a live closed set**
+(`my_pa.domain.relationship.identity.ResolutionAction`,
+`my_pa.domain.relationship.profile.EvidenceAuthority`, and
+`my_pa.infrastructure.providers.personal_fixture._ALLOWED_DOMAINS`). By the
+doctrine stated at the top of this file, that equality is the signature this
+module exists to find, and here it finds nothing.
+
+**What that does and does not mean, stated at measurement rather than above it.**
+Read by hand, `7f2a9d6c4e18` writes literals; it imports no enum and derives
+nothing, so it complies with `D-69` today. What is missing is not compliance but
+*verification*: that compliance rests on someone having read the file, and a
+later edit joining one of those three vocabularies out of its enum would restore
+the exact `D-69` defect with this module still green. **Closing it belongs to a
+package that owns this module**: it needs a rule that reads each revision's
+emitted SQL text and attributes vocabularies to live closed sets, which is a
+different parse from the object-graph read below and not an extension of it.
+
+**It reads sets, not single values.** This module reads a constraint whose
+admitted vocabulary is a whole closed *set*. Nine constraints instead embed a
+single enum **value**, and every one of them is outside this guard's coverage:
 
 - `a_job_is_running_exactly_while_leased` and
   `a_capture_job_is_running_exactly_while_leased`, from `JobState.RUNNING`;

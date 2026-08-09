@@ -33,7 +33,12 @@ This brief is the campaign's continuity aid, not a governance ledger. `AGENTS.md
 
 ## Open blocking findings
 
-None.
+None. An independent review of WP-01 passed with no blocking findings; the two disclosed non-blocking gaps it raised are recorded below and are not blockers.
+
+## Non-blocking follow-ups
+
+- **Stale documentation outside WP-01 scope, pending follow-up:** `web/README.md` still declares `Status: IMPLEMENTING (WP-02/R1)` and lists "the Microsoft Graph connector (WP-07)" as pending delivery; `docs/architecture/system-context.md` cites a stale eleven-revision Alembic head (the actual head on the operating lineage is `d2e3f4a5b6c7` across 21 revision files). Both files were outside WP-01's declared in-scope path list and were deliberately left unchanged. They present pre-correction sequencing language to a reader, and `README.md` links to `web/README.md`. Route to a follow-up work package.
+- **Archival note:** the superseded Moss v4.0 per-work-package merge ledger (merge SHAs and per-PR test counts) was not carried into this brief; it remains recoverable from `git log origin/main`.
 
 ## Specification prerequisites (open-decision register)
 

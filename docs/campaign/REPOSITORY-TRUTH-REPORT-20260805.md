@@ -1,5 +1,7 @@
 # Repository Truth Report — RMF112018/my-pa — 2026-08-05
 
+> **Historical record — superseded.** This is a point-in-time record from 2026-08-05 against `main` head `88e8d8193095afa8d903db08324a588a5786908b`. It is superseded by the 2026-08-09 reauthentication against the operating lineage `recovery/pre-20260805-utc-rollback-c9fb513` at `c9fb513a2afadf98f29b6d5ec3ad69db69e5ec1a`, recorded in [`docs/campaign/CAMPAIGN-BRIEF.md`](CAMPAIGN-BRIEF.md). Its branch/PR inventory and sequencing claims are not current. Original text preserved below unchanged.
+
 ```yaml
 report_id: REPOSITORY-TRUTH-REPORT-20260805
 repository: RMF112018/my-pa

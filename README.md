@@ -2,6 +2,10 @@
 
 `my-pa` is the clean implementation repository for a local-first personal knowledge layer that mediates access to authoritative NAS files, managed documents, personal-data connectors, knowledge records, relationship intelligence, and model-facing context.
 
+## Operating lineage
+
+The operating lineage for this repository is `recovery/pre-20260805-utc-rollback-c9fb513` at commit `c9fb513a2afadf98f29b6d5ec3ad69db69e5ec1a` (tree `9975318c731ac6150f251df7bdee5475c3b529d8`), reauthenticated 2026-08-09 as an exact match to the completion plan's planning-time claim. GitHub reporting `main` as the repository's default branch is metadata, not operating-lineage authority; `main` is not the current operating lineage. [`docs/campaign/CAMPAIGN-BRIEF.md`](docs/campaign/CAMPAIGN-BRIEF.md) carries the full branch topology, migration state, and reconciliation posture bound to this head.
+
 ## Current state
 
 The repository contains the Python package `my_pa` under `src/`, the Alembic
@@ -84,8 +88,9 @@ A third entry stood beside them until WP-6 and is recorded the same way:
 
 Not implemented. None of the following exists beyond a scaffold README:
 
-- managed documents, GoodNotes ingestion, and Obsidian projection;
-- any frontend. The repository contains no JavaScript toolchain and no `package.json`.
+- managed documents, GoodNotes ingestion, and Obsidian projection.
+
+A frontend exists under [`web/`](web/README.md): a Next.js App Router PWA (MossAIc) with a synthetic Entra-shaped identity boundary, built across WP-00 through WP-06 of the superseded Moss v4.0 campaign recorded in [`docs/campaign/CAMPAIGN-BRIEF.md`](docs/campaign/CAMPAIGN-BRIEF.md). It runs against synthetic fixtures only — no live Entra tenant, no live Microsoft Graph connector — and it is not deployable. Personal-data ingestion is Apple-first: Apple Mail, Calendar, Contacts, and Tasks/To-Do through the first-party native Apple architecture ([`native/apple-source-host/README.md`](native/apple-source-host/README.md)) are the active ingestion direction. Microsoft Graph is retained in the product definition but **off by default and not an active personal-data ingestion path**; Entra authentication used by the frontend's synthetic identity boundary is a separate concern from Graph connector activation, and a disabled Graph connector must not be reported as a degraded active source.
 
 Accordingly, `capabilities.get` reports every capability `available` and
 readiness `ready`, while PDF still reports `decision_gated` pending
@@ -126,7 +131,7 @@ instrument it rests on.
 
 ## Repository map
 
-Start with [`docs/00_REPOSITORY_SOURCE_INDEX.md`](docs/00_REPOSITORY_SOURCE_INDEX.md).
+Start with [`docs/00_REPOSITORY_SOURCE_INDEX.md`](docs/00_REPOSITORY_SOURCE_INDEX.md). The active campaign state — operating lineage, active work package, branch topology, and reconciliation posture — is [`docs/campaign/CAMPAIGN-BRIEF.md`](docs/campaign/CAMPAIGN-BRIEF.md).
 
 ## Boundaries
 

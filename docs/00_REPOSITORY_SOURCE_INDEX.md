@@ -1,5 +1,9 @@
 # Repository Source Index
 
+## Operating lineage
+
+The operating lineage for this repository is `recovery/pre-20260805-utc-rollback-c9fb513` at head `c9fb513a2afadf98f29b6d5ec3ad69db69e5ec1a` (tree `9975318c731ac6150f251df7bdee5475c3b529d8`), reauthenticated 2026-08-09. GitHub's default branch (`main`) is repository metadata, not operating-lineage authority. [`docs/campaign/CAMPAIGN-BRIEF.md`](campaign/CAMPAIGN-BRIEF.md) is the authoritative record of this binding, the recomputed branch topology, and the reconciliation posture toward the other long-lived branches.
+
 ## Normative governance
 
 - [`AGENTS.md`](../AGENTS.md) — principal repository and coding-agent policy.
@@ -43,6 +47,13 @@ Also indexed by identity only: the **Native Apple Personal Data Capture Bridge**
 ## Plans
 
 - [`docs/plans/mcv-completion-plan.md`](plans/mcv-completion-plan.md) — current gap audit and integrated work-package plan: what the repository contains, what the accepted specification requires, and which dispatched workstreams are deferred and why.
+
+## Campaign
+
+- [`docs/campaign/CAMPAIGN-BRIEF.md`](campaign/CAMPAIGN-BRIEF.md) — the current campaign's continuity record: operating lineage binding, active work package (WP-01), dependency status, branch topology, migration facts, decisions, and invalidation rules. Authoritative for present campaign state.
+- [`docs/campaign/WORK-PACKAGE-MAP.md`](campaign/WORK-PACKAGE-MAP.md) — historical: the superseded Moss v4.0 campaign's work-package sequencing (WP-00 through WP-09). Superseded by `MYPA-CANONICAL-APPLICATION-COMPLETION-PLAN-20260809-001`; see the banner at the top of the file.
+- [`docs/campaign/RATIFICATION-MYPA-MOSS-V4-20260805.md`](campaign/RATIFICATION-MYPA-MOSS-V4-20260805.md) — historical: the 2026-08-05 product-package ratification record for the superseded Moss v4.0 campaign.
+- [`docs/campaign/REPOSITORY-TRUTH-REPORT-20260805.md`](campaign/REPOSITORY-TRUTH-REPORT-20260805.md) — historical: the 2026-08-05 repository truth report against `main` head `88e8d81…`, superseded by the 2026-08-09 reauthentication against the recovery lineage.
 
 ## Security
 

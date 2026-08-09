@@ -1,5 +1,7 @@
 # Product Package Ratification Record — my-pa Moss v4.0
 
+> **Historical record — superseded.** This is a point-in-time record from the 2026-08-05 Moss v4.0 campaign. It is superseded by `MYPA-CANONICAL-APPLICATION-COMPLETION-PLAN-20260809-001` and `MYPA-CANONICAL-PRODUCT-DEFINITION-20260809-009`. Its `main`-head binding and sequencing claims are not current; the current operating lineage is `recovery/pre-20260805-utc-rollback-c9fb513`, recorded in [`docs/campaign/CAMPAIGN-BRIEF.md`](CAMPAIGN-BRIEF.md). Original text preserved below unchanged.
+
 ```yaml
 record_id: RATIFICATION-MYPA-MOSS-V4-20260805
 record_type: PRODUCT_PACKAGE_RATIFICATION

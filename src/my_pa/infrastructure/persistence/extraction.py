@@ -390,13 +390,18 @@ def _unsupported_objects(enrollment_id: str) -> Select[Any]:
 def extracted_text_in_scope(enrollment_id: str) -> tuple[ColumnElement[bool], ...]:
     """Which rows of `extractions` hold text that `enrollment_id`'s grant covers.
 
-    One list, used by `coverage_for`'s `processed` count and by
-    `persistence.search`'s `match_statement`. When evaluated against one
-    statement snapshot, the two apply the same predicate set because they are
-    built from this call and not because two predicate lists were compared and
-    found to agree. That comparison stood here for six review rounds and was
-    false for two of the six conditions. A page of text beside a coverage report
-    that says the scope
+    **One list, and every statement that reads stored extracted text is built
+    from it** — `coverage_for`'s `processed` count here, `persistence.search`'s
+    `match_statement`, and `persistence.knowledge`'s `read_extraction`. Named
+    rather than counted, and named in full: the sentence that stood here named
+    two, and `read_extraction` has been the third since `f18e7e3` — the commit
+    after the one that wrote the sentence. A reader checking the claim would have
+    found a caller the docstring did not know about, with no way to tell whether
+    that was an omission or a violation. When evaluated against one statement snapshot,
+    they apply the same predicate set because they are built from this call and
+    not because predicate lists were compared and found to agree. That comparison
+    stood here for six review rounds and was false for two of the six conditions.
+    A page of text beside a coverage report that says the scope
     holds none of it is the exact contradiction section 9.7 makes this system's
     reason for existing; differing predicates are one way to reach it, and the
     separate-snapshot window described below is another.

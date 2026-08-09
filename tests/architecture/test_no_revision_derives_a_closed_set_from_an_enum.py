@@ -17,20 +17,35 @@ hazard*, because the next member added to that enum is the moment they stop
 agreeing — and one of the two will change silently. So the test does not care how
 the constraint was written; it cares whether the revision still tracks the domain.
 
-**The allowlist must shrink.** `ALLOWED` is the fifteen sites carried by the
-three revisions `D-81` deliberately does not edit (`D-92`; the count said "nine
-sources" in `D-81` and in WP-7's brief, and the omitted tenth was
+**The allowlist must shrink.** `ALLOWED` is the residual set of sites carried by
+the three revisions `D-81` deliberately does not edit (`D-92`; the count said
+"nine sources" in `D-81` and in WP-7's brief, and the omitted tenth was
 `my_pa.contracts.v1.errors.ErrorCode`, which reaches
 `jobs.last_error_code_is_a_public_error_code` without being a `StrEnum` — the
 same undercount `D-81` warns about, repeated inside the row that warns about
-it). Ten of the fifteen were listed before the guard was widened; the last five
-are `4b9f0d27ac31`'s, and the paragraph on the widening below says exactly what
-listing them does and does not buy. Each entry pins the *exact* vocabulary that
-site emits today, so the guard reddens three ways:
+it). Ten were listed before the guard was widened, and widening it added
+`4b9f0d27ac31`'s; the paragraph on the widening below says exactly what listing
+those does and does not buy. **Its size is asserted in
+`test_the_allowlist_names_only_revisions_this_package_does_not_edit` and is
+deliberately not spelled out here or beside `ALLOWED`**: the count moved from
+fifteen to fourteen at `D-108` and three spelled figures in this file went stale
+in the same change — inside the guard whose whole subject is a written-down
+vocabulary drifting from the thing it describes. A count of a current set belongs
+next to an assertion that fails when it moves, or nowhere.
+
+Each entry pins the *exact* vocabulary that site emits today, so the guard
+reddens three ways:
 
 - a member added to any listed enum changes an emitted vocabulary — red;
-- a new derived constraint appears in any revision — red, because it is not in
-  the allowlist;
+- a new derived constraint appears in a revision **through a shape `_emitted`
+  reads** — red, because it is not in the allowlist. That qualifier is load
+  bearing and was absent until `D-109`: `_emitted` reads a revision's `Table`
+  objects, so a constraint written as raw SQL is outside it. Measured, not
+  reasoned — an `op.execute` in `9d4e7a3b1c62` building
+  `CHECK (status IN (…))` by joining `ExtractionStatus`'s members reached the
+  rendered DDL verbatim and left this module at **16 passed**. The unqualified
+  version of this bullet was false for `op.execute` and is the reason the "what
+  it does NOT detect" section below now names that shape;
 - a listed site is frozen — red, because the allowlist must then lose a row.
 
 A guard whose allowlist can be widened silently is the vacuous-guard shape this
@@ -51,10 +66,48 @@ touches the shared declaration through a shape this module cannot read — witho
 which a later revision could derive freely simply by being written differently.
 
 **What it does NOT detect, stated because a control described as closing a class
-it does not close is the overclaim this campaign keeps catching (`D-86`).** This
-module reads a constraint whose admitted vocabulary is a whole closed *set*. Nine
-constraints instead embed a single enum **value**, and every one of them is
-outside this guard's coverage:
+it does not close is the overclaim this campaign keeps catching (`D-86`).**
+
+**It cannot see a closed set built in raw SQL (`D-109`).** `_emitted` reads the
+`Table` objects a revision hands to `create_all`, so a constraint that never
+becomes a `Table` object is not read at all. A revision writing
+`op.execute("… ADD CONSTRAINT … CHECK (status IN (…))")` with the vocabulary
+joined out of a live `StrEnum` derives exactly as freely as `D-69` forbids, and
+this module goes on passing. Replayed here rather than reasoned about: that
+`op.execute` planted in `9d4e7a3b1c62`, deriving from `ExtractionStatus`, put
+`CHECK (status IN ('extracted', 'quarantined', 'unsupported'))` verbatim into the
+rendered DDL and left this module at **16 passed**, its unplanted count.
+`test_every_revision_declares_its_emission_readably` does not reach it either:
+that test refuses a revision whose *emission* is unreadable, and a revision with
+a readable emission plus an `op.execute` beside it satisfies it.
+
+**And the gap is already occupied by a merged revision, which the plant only
+made visible.** `7f2a9d6c4e18` builds all seventeen of its tables in raw SQL: it
+imports `alembic.op` and nothing else, holds no `Table` and names no declaration
+module, so `_emitted` returns `None` for it and the readability test above skips
+it rather than failing it. It appears in neither `ALLOWED` nor `FROZEN`. Its
+emitted DDL carries fifteen closed-set expressions in seven distinct
+vocabularies — counted with this module's own `_CLOSED_SET` and `_LITERAL` — and
+**three of those seven are exactly equal to a live closed set**
+(`ResolutionAction`, `EvidenceAuthority`, and
+`personal_fixture._ALLOWED_DOMAINS`). By the doctrine stated at the top of this
+file, that equality is the signature this module exists to find, and here it
+finds nothing.
+
+**What that does and does not mean, stated at measurement rather than above it.**
+Read by hand, `7f2a9d6c4e18` writes literals; it imports no enum and derives
+nothing, so it complies with `D-69` today. What is missing is not compliance but
+*verification*: that compliance rests on someone having read the file, and a
+later edit joining one of those three vocabularies out of its enum would restore
+the exact `D-69` defect with this module still green. **Closing it belongs to a
+package that owns this module** (`D-109`): it needs a rule that reads each
+revision's emitted SQL text and attributes vocabularies to live closed sets,
+which is a different parse from the object-graph read below and not an extension
+of it.
+
+**It reads sets, not single values.** This module reads a constraint whose
+admitted vocabulary is a whole closed *set*. Nine constraints instead embed a
+single enum **value**, and every one of them is outside this guard's coverage:
 
 - `a_job_is_running_exactly_while_leased` and
   `a_capture_job_is_running_exactly_while_leased`, from `JobState.RUNNING`;
@@ -191,12 +244,14 @@ _CLOSED_SET = re.compile(r"IN \(([^)]*)\)|<@ ARRAY\[([^\]]*)\]")
 _LITERAL = re.compile(r"'([^']*)'")
 
 #: Every still-derived site, with the revision that emits it, the closed set it
-#: tracks, and the exact vocabulary it emits today. Fifteen sites carried by
-#: three revisions, none of which this package edits — freezing them is a
-#: separate package (`D-81`), and no package here changes the membership of any
-#: of these sets, so none of them fires.
+#: tracks, and the exact vocabulary it emits today. Carried by three revisions,
+#: none of which this package edits — freezing them is a separate package
+#: (`D-81`), and no package here changes the membership of any of these sets, so
+#: none of them fires. The size is asserted in
+#: `test_the_allowlist_names_only_revisions_this_package_does_not_edit` and is
+#: not restated here, for the reason the module docstring gives.
 #:
-#: **The last five are new to the list and not new to the schema.** They were
+#: **`4b9f0d27ac31`'s rows are new to the list and not new to the schema.** They were
 #: emitted by `4b9f0d27ac31` all along; what changed is that this module can now
 #: see them, because `_declaration_modules` discovers declaration modules by
 #: shape instead of hard-coding one name. Listing them is the weakest true thing

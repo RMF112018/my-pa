@@ -19,25 +19,32 @@ for the whole chain at once, and the chain is walked rather than listed — the
 revisions, the constraint names and the vocabularies all come out of the SQL
 Alembic renders, so a revision added tomorrow is covered with no edit here.
 
-Measured at the head that introduced this module: **six** `CHECK` constraints are
-restated by a `downgrade` anywhere in the chain — `extraction_status_is_known` by
-`9d4e7a3b1c62`, `capability_is_known` by `3c8f1e2a5b74`, `2b7e9f4c1a83` and
-`1a4c9e77b2d5`, and `purpose_is_known` by `3c8f1e2a5b74` and `1a4c9e77b2d5`.
-`KNOWN_RESTATED` holds that as a **floor** rather than restating it as a fact, so
-a seventh is covered automatically and a drop to five is a failure.
+**The universe, named rather than counted.** Every `CHECK` a `downgrade` restates
+anywhere in the chain, measured at the head that introduced this module:
+`extraction_status_is_known` by `9d4e7a3b1c62`; `capability_is_known` by
+`3c8f1e2a5b74`, `2b7e9f4c1a83` and `1a4c9e77b2d5`; `purpose_is_known` by
+`3c8f1e2a5b74` and `1a4c9e77b2d5`. `KNOWN_RESTATED` holds that list as a
+**floor** rather than as a description, so a restatement added later is covered
+automatically and one that disappears is a failure. It is a list and not a
+spelled figure on purpose: a written-down count of a current set is the defect
+`D-108` had to correct twice, once inside the guard whose subject it is.
 
-**What was unguarded, stated as a negative result with its universe**, because
-"nothing else is broken" is worth something only when the universe is named. Of
-those six, the five that are not `9d4e7a3b1c62`'s already emitted the correct
-text. But *correct* and *guarded* are different claims, and only two of the five
-were guarded: `1a4c9e77b2d5`'s pair is pinned by
+**What was unguarded, stated as a negative result over that universe**, because
+"nothing else is broken" is worth something only when the universe is named.
+Every restatement that is not `9d4e7a3b1c62`'s already emitted the correct text.
+But *correct* and *guarded* are different claims, and most of them were not
+guarded. `1a4c9e77b2d5`'s pair is pinned by
 `test_capture_schema_migration.py::test_downgrading_this_revision_restores_the_previous_vocabulary`
-in the database tier. `2b7e9f4c1a83`'s `capability_is_known` and `3c8f1e2a5b74`'s
-pair were pinned by nothing —
+in the database tier — that is the whole of the prior coverage.
+`2b7e9f4c1a83`'s `capability_is_known` and `3c8f1e2a5b74`'s pair were pinned by
+nothing:
 `test_review_schema_migration.py::test_downgrading_this_revision_leaves_the_chain_below_it_intact`
 downgrades across `3c8f1e2a5b74` but asserts over tables, not vocabularies. So
-the reviewer's plant would have gone green in three of the four restating
-revisions, not one. This module covers all six.
+the reviewer's plant would have gone green in every restating revision except
+`1a4c9e77b2d5`'s — not only in the one it was aimed at. Planted rather than
+argued: `zz_reviewer_probe` in `2b7e9f4c1a83`'s and in `3c8f1e2a5b74`'s downgrade
+constants left the whole FAST tier green with this module removed, and reddens it
+with this module present. This module covers the whole list.
 
 **Offline, and therefore in FAST.** Nothing here connects: `command.upgrade` and
 `command.downgrade` with `sql=True` render the DDL both ways, which is exactly

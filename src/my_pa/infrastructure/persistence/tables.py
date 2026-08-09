@@ -522,6 +522,23 @@ jobs = Table(
 #: authority, and a column that can only be `source_bound_derived` means no
 #: writer, hand-run statement, or later revision can file derived text as
 #: original.
+#:
+#: **`status`'s storage vocabulary is a strict subset of the outcome vocabulary,
+#: and the two are different things.** `ExtractionStatus` has three members
+#: because three things can happen to an object, and `record_outcome` dispatches
+#: on all three. Only two of them are ever *filed here*: the quarantined branch
+#: returns a `quarantine_records` row before it reaches the insert, so no
+#: production path can produce `status = 'quarantined'` in this table. The
+#: constraint below is therefore written against the two, not derived from the
+#: enum. Admitting the third would be the schema asserting a state no writer can
+#: reach — and this table's own rule, stated for `trust_level` above and for
+#: `_refuse_an_unauthorized_object` in `persistence.extraction`, is that the
+#: price of a state being *impossible* rather than merely unreported is worth
+#: paying. `test_the_stored_status_vocabulary_is_the_outcome_vocabulary_less
+#: _quarantined` in `tests/schema/test_extraction_schema_migration.py` is what
+#: makes the subset relation a checked claim rather than a comment: a fourth
+#: outcome member reddens there, at the declaration, instead of being refused by
+#: the server at some later run.
 extractions = Table(
     "extractions",
     METADATA,
@@ -555,7 +572,13 @@ extractions = Table(
     Column("is_truncated", Boolean, nullable=False, server_default="false"),
     Column("observed_at", DateTime(timezone=True), nullable=False),
     Column("processed_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
-    _one_of("status", ExtractionStatus, name="extraction_status_is_known"),
+    # An inline literal, deliberately not a module-level named `frozenset`. A
+    # named one would be discovered as a live closed set by
+    # `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`,
+    # and `8b3f5c17d904` emits this table, so the already-merged revision would
+    # go on silently tracking whatever that name held — the exact hazard `D-81`
+    # exists to control, moved rather than removed.
+    _one_of("status", frozenset({"extracted", "unsupported"}), name="extraction_status_is_known"),
     CheckConstraint(
         f"trust_level = '{TrustLevel.SOURCE_BOUND_DERIVED.value}'",
         name="derived_text_is_never_source_original",

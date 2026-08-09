@@ -265,13 +265,6 @@ ALLOWED: Final[frozenset[tuple[str, str, str, str, tuple[str, ...]]]] = frozense
         (
             "8b3f5c17d904",
             "extractions",
-            "extraction_status_is_known",
-            "my_pa.domain.extraction.text.ExtractionStatus",
-            ("extracted", "quarantined", "unsupported"),
-        ),
-        (
-            "8b3f5c17d904",
-            "extractions",
             "only_a_supported_media_type_is_extracted",
             "my_pa.application.capabilities.SUPPORTED_MEDIA_TYPES",
             ("text/markdown", "text/plain"),
@@ -855,13 +848,24 @@ def test_the_allowlist_names_only_revisions_this_package_does_not_edit() -> None
     and is listed here for the first time because it is reachable for the first
     time. Every one of the three is a revision no package in this campaign edits,
     which is the property the assertion is actually about.
+
+    **Fourteen rather than fifteen since `D-108`**, and the row that went is the
+    one way off this list that is neither a freeze nor a lie: `extractions.status`
+    stopped agreeing with `ExtractionStatus`. Narrowing the storage vocabulary to
+    `('extracted', 'unsupported')` — the two a writer can actually file — left
+    `8b3f5c17d904` emitting a set that equals no live closed set, so the site
+    drops out of `_derived_sites()` by measurement rather than by excuse, and
+    `8b3f5c17d904` keeps its other four rows so the revision set above is
+    unchanged. The narrowed literal is inline at the declaration for that reason:
+    a module-level `frozenset` holding the same two values would be discovered
+    here as a live closed set and the site would still be derived.
     """
     assert {revision for revision, *_ in ALLOWED} == {
         "7e5a1fb93d62",
         "8b3f5c17d904",
         "4b9f0d27ac31",
     }
-    assert len(ALLOWED) == 15
+    assert len(ALLOWED) == 14
     assert not {revision for revision, *_ in ALLOWED} & set(FROZEN)
 
 

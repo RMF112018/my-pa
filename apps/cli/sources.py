@@ -77,10 +77,7 @@ EXIT_REFUSED = 1
 
 
 def _engine() -> Engine:
-    settings = load_settings()
-    return create_database_engine(
-        settings.database_url, statement_timeout_ms=settings.statement_timeout_ms
-    )
+    return create_database_engine(load_settings().parsed_database_url())
 
 
 def _register(args: argparse.Namespace) -> int:

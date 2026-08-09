@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import traceback
+
 import pytest
-from sqlalchemy.engine import make_url
+from pydantic import ValidationError
+from sqlalchemy.engine import URL
 
 from my_pa.bootstrap.settings import (
     DATABASE_URL_SCHEME,
-    DEFAULT_STATEMENT_TIMEOUT_MS,
     ENV_PREFIX,
     MAX_FETCH_BYTES_CEILING,
     Environment,
@@ -269,125 +271,6 @@ def test_a_database_url_without_a_database_is_rejected(raw: str) -> None:
         load_settings({DATABASE_URL: DATABASE_URL_SCHEME + raw})
 
 
-#: URLs that set the one libpq parameter `create_database_engine` writes.
-#:
-#: The upper-cased row is there because the check is case-insensitive: SQLAlchemy
-#: passes a query key through unchanged, so `OPTIONS=` would reach psycopg as an
-#: unknown keyword and fail there instead of here.
-#:
-#: **The fragment row is the one that matters.** It passed the first version of
-#: this refusal, which parsed with `urlsplit`. `urlsplit` honours `#` as a
-#: fragment delimiter and SQLAlchemy's own regex does not, so `urlsplit` saw a
-#: query of `x=1` while `make_url` — the parser the engine actually uses — yielded
-#: `options='-c statement_timeout=0'`: past the refusal, and to the exact value
-#: `statement_timeout_ms`'s `gt=0` exists to forbid. The fix was not to special-
-#: case `#`; it was to ask the engine's parser, so that agreement is structural
-#: rather than a punctuation list somebody maintains.
-_URLS_SETTING_OPTIONS = [
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=-c%20search_path%3Dmine",
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=-c%20statement_timeout%3D0",
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?sslmode=require&options=-c%20x%3D1",
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?OPTIONS=-c%20x%3D1",
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?x=1#&options=-c%20statement_timeout%3D0",
-]
-
-
-@pytest.mark.parametrize("raw", _URLS_SETTING_OPTIONS)
-def test_a_database_url_that_sets_libpq_options_is_refused(raw: str) -> None:
-    """The engine writes `options`, so a URL that also writes it is refused.
-
-    SQLAlchemy merges a URL's query string into the driver's connect arguments
-    and lets `connect_args` win, so this URL's parameter would be **discarded**
-    rather than combined — measured, not inferred: a URL carrying
-    `options=-c search_path=mine` reaches psycopg as
-    `options='-c statement_timeout=30000'`. Silently dropping an operator's
-    configuration is the failure; refusing to start is the answer.
-
-    Refused rather than merged, and merging is the tempting wrong answer: libpq
-    lets a later `-c` override an earlier one, so concatenating the two strings
-    would let the second URL above configure the statement timeout to `0` — the
-    value `statement_timeout_ms`'s `gt=0` exists to make unreachable, reached
-    through a different door. That case is in the table rather than described.
-    """
-    with pytest.raises(SettingsError, match="must not set the libpq options parameter"):
-        load_settings({DATABASE_URL: raw})
-
-
-def test_the_options_refusal_names_the_setting_that_replaces_it() -> None:
-    """A refusal that does not say what to do instead is a refusal to start.
-
-    The message names the parameter and the setting and nothing else — no URL,
-    no host, no credential, which is the rule the whole of this function follows.
-    """
-    url = f"{DATABASE_URL_SCHEME}://my_pa:SUPERSECRETVALUE@db.invalid:5432/somewhere?options=-c%20x%3D1"
-    with pytest.raises(SettingsError) as caught:
-        load_settings({DATABASE_URL: url})
-    message = str(caught.value)
-    assert f"{ENV_PREFIX}STATEMENT_TIMEOUT_MS" in message
-    assert "SUPERSECRETVALUE" not in message
-    assert "db.invalid" not in message
-    assert url not in message
-
-
-#: URLs that must still load. The first four are ordinary libpq parameters an
-#: operator may need; a check that refused the query string wholesale would take
-#: them with it.
-#:
-#: **The last two are accepted deliberately, and both were measured rather than
-#: reasoned about.** Neither reaches psycopg as an `options` parameter, so
-#: neither is the override this rule exists to prevent:
-#:
-#: - `?options=` — SQLAlchemy drops an empty-valued query parameter entirely, so
-#:   `make_url(...).query` is `{}` and the driver is handed nothing. The first
-#:   version of this refusal used `parse_qs(..., keep_blank_values=True)` and
-#:   rejected it. That rejection is withdrawn on purpose: catching a value the
-#:   engine never receives would need a *second* parser beside the engine's, which
-#:   is precisely the divergence the fragment row above was caused by. A no-op is
-#:   not worth reintroducing the class for.
-#: - `?a=1#options=…`, with no `&` — `make_url` yields `{'a': '1#options=…'}`, one
-#:   parameter named `a`. The fragment row in the refusal table differs by a
-#:   single `&`, and that this table and that one disagree about two nearly
-#:   identical strings is the point: neither was decided by reading the
-#:   punctuation, both were decided by asking the parser that decides.
-_URLS_WITHOUT_OPTIONS = [
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere",
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?sslmode=require",
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?connect_timeout=5",
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?application_name=my_pa",
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?options=",
-    f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere?a=1#options=-c%20x%3D1",
-]
-
-
-@pytest.mark.parametrize("raw", _URLS_WITHOUT_OPTIONS)
-def test_every_other_connection_parameter_is_still_accepted(raw: str) -> None:
-    """The control, and it is what keeps the refusal from being a ban on queries."""
-    assert load_settings({DATABASE_URL: raw}).database_url == raw
-
-
-@pytest.mark.parametrize("raw", _URLS_SETTING_OPTIONS + _URLS_WITHOUT_OPTIONS)
-def test_the_validator_and_the_engine_read_the_same_url_the_same_way(raw: str) -> None:
-    """The rule behind the rule: refused exactly when the driver would be handed one.
-
-    Both tables are run through this, so it is a biconditional and not a
-    one-directional check — a validator that refused everything would satisfy the
-    refusal table and fail here. `make_url` is the engine's parser, which is what
-    makes agreement structural rather than a coincidence maintained by hand.
-
-    This is the assertion that would have caught the fragment bypass without
-    anybody thinking of `#`, because it never mentions punctuation.
-    """
-    reaches_the_driver = any(name.lower() == "options" for name in make_url(raw).query)
-    refused = False
-    try:
-        load_settings({DATABASE_URL: raw})
-    except SettingsError:
-        refused = True
-    assert refused == reaches_the_driver, (
-        "the validator and the engine disagree about whether this URL supplies an options parameter"
-    )
-
-
 def test_an_invalid_database_url_error_never_echoes_the_url() -> None:
     """A rejected URL is the one setting value most likely to hold a password."""
     url = "postgresql+psycopg2://my_pa:SUPERSECRETVALUE@localhost:5433/my_pa"
@@ -397,37 +280,202 @@ def test_an_invalid_database_url_error_never_echoes_the_url() -> None:
     assert url not in str(caught.value)
 
 
-def test_the_statement_timeout_is_configured_and_defaults_to_a_bound() -> None:
-    """A bound exists without configuration, and configuration can change it.
+def test_a_rejected_database_url_is_absent_from_the_whole_exception_chain() -> None:
+    """The message was quiet; the chain behind it was not.
 
-    Both halves matter and neither implies the other. PostgreSQL's own default
-    is `0` — no bound at all — so an unconfigured process is exactly the state
-    this setting exists to leave: the default has to *be* a bound. And a bound
-    an operator cannot move is a constant with a longer name, which is what
-    `D-24` corrected for the four limit fields.
+    Every other disclosure test here reads `str(exc)`, and reading only the
+    top-level message is exactly what let this survive. `load_settings` used to
+    raise `SettingsError(…) from exc`, and `exc` is Pydantic's `ValidationError`,
+    which renders `input_value=` — for a model validator, the whole settings
+    mapping. So the DSN was one `logging.exception` or one unhandled traceback
+    away, on `__cause__`, while `str` stayed clean.
+
+    A *short* URL is what makes this visible, and the first assertion below is
+    what keeps that true. Pydantic elides the middle of a long input and keeps the
+    head and the tail, so a long DSN renders with the password cut out — which is
+    how this channel passed for closed. Length is therefore load-bearing, and a
+    later pydantic that elides more aggressively would quietly turn every
+    assertion here green against unfixed code. So the leak is proved renderable
+    for this exact input before it is asserted absent.
+
+    `raise … from None` is not sufficient either, though not for the reason it is
+    usually given: it sets `__suppress_context__`, so `traceback.format_exception`
+    and `logging.exception` do *not* print the context. It leaves the
+    `ValidationError` reachable on `__context__`, where anything that walks the
+    chain itself — a structured-log serializer, an error reporter, a debugger, the
+    explicit walk below — still reads the DSN out of it. Only leaving the handler
+    before raising empties both links, so this fails if the `raise` moves back
+    inside the `except` under either spelling.
+
+    The URL is built into a local rather than written inline in the call below,
+    because a rendered traceback prints the *source line* of each frame: an
+    inline literal would appear in the chain by way of this test's own text and
+    make the assertions unfalsifiable.
     """
-    assert load_settings({DATABASE_URL: _A_URL}).statement_timeout_ms == (
-        DEFAULT_STATEMENT_TIMEOUT_MS
+    synthetic_credential = "NOTAREALPW"
+    url = f"mysql://u:{synthetic_credential}@h/d"
+
+    # Non-vacuity, asserted rather than assumed: pydantic must render this input
+    # whole. `Settings(...)` raises the same `ValidationError` `load_settings`
+    # used to attach, so this is the exact text the chain would have carried.
+    with pytest.raises(ValidationError) as raw:
+        Settings(database_url=url)
+    assert synthetic_credential in str(raw.value), (
+        "pydantic elided the password out of this input, so the assertions below "
+        "would hold against the unfixed code too — shorten the URL"
     )
-    assert DEFAULT_STATEMENT_TIMEOUT_MS > 0
-    configured = load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}STATEMENT_TIMEOUT_MS": "5000"})
-    assert configured.statement_timeout_ms == 5000
+
+    with pytest.raises(SettingsError) as caught:
+        load_settings({DATABASE_URL: url})
+    error = caught.value
+
+    # The chain is severed at both links, not just the one `from None` clears.
+    assert error.__cause__ is None, "the ValidationError is still on __cause__"
+    assert error.__context__ is None, "the ValidationError is still on __context__"
+
+    # Walk the links explicitly as well as rendering, so a future chain that is
+    # non-empty but happens to render harmlessly is still caught.
+    walked: list[str] = [str(error)]
+    seen: set[int] = {id(error)}
+    pending: list[BaseException] = [error]
+    while pending:
+        current = pending.pop()
+        for link in (current.__cause__, current.__context__):
+            if link is not None and id(link) not in seen:
+                seen.add(id(link))
+                walked.append(str(link))
+                pending.append(link)
+
+    rendered = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+
+    for text, where in ((rendered, "the rendered traceback"), ("\n".join(walked), "the chain")):
+        assert synthetic_credential not in text, f"the password reached {where}"
+        assert url not in text, f"the URL reached {where}"
+
+    # Bought with severance, not with silence: the top-level message must still
+    # say which setting was rejected and why, or this test would pass against a
+    # `SettingsError("")`.
+    assert DATABASE_URL in str(error)
+    assert DATABASE_URL_SCHEME in str(error)
 
 
-@pytest.mark.parametrize("raw", ["0", "-1"])
-def test_the_statement_timeout_cannot_be_configured_away(raw: str) -> None:
-    """`0` is how PostgreSQL spells "no timeout", so `0` is refused.
+def test_severing_the_chain_keeps_every_field_named_with_its_reason() -> None:
+    """Diagnostics survive the fix, including for settings that are not the URL.
 
-    The one value that would turn this setting into the absence of the thing it
-    configures is not reachable through configuration, which is the same
-    fail-closed shape as `MY_PA_REDACTION_ENABLED=false`. A process that must
-    run unbounded is exempted in code, where the exemption is reviewable.
+    The chain was severed to keep a password out of a traceback. If that had cost
+    the other fields their diagnosis, the trade would be a bad one and this is
+    where it would show: two unrelated bad values plus the credential-bearing one,
+    and all three still named in the single top-level message.
     """
-    with pytest.raises(SettingsError, match="STATEMENT_TIMEOUT_MS"):
-        load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}STATEMENT_TIMEOUT_MS": raw})
+    with pytest.raises(SettingsError) as caught:
+        load_settings(
+            {
+                DATABASE_URL: f"{DATABASE_URL_SCHEME}://someone@db.invalid/somewhere",
+                f"{ENV_PREFIX}MAX_PAGE_SIZE": "0",
+                f"{ENV_PREFIX}MAX_ENROLLMENT_DEPTH": "-1",
+            }
+        )
+    message = str(caught.value)
+
+    assert f"{ENV_PREFIX}MAX_PAGE_SIZE" in message
+    assert f"{ENV_PREFIX}MAX_ENROLLMENT_DEPTH" in message
+    assert "greater than 0" in message
+    assert "greater than or equal to 0" in message
 
 
-def test_a_misspelled_statement_timeout_is_not_silently_ignored() -> None:
-    """The fail-closed unknown-name check covers the new field like every other."""
-    with pytest.raises(SettingsError, match="unknown MY_PA_ settings"):
-        load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}STATEMENT_TIMEOUT": "5000"})
+def test_an_accepted_database_url_is_absent_from_the_settings_repr() -> None:
+    """The rejected URL was guarded. The accepted one is the one that has a password.
+
+    Every test above is about a URL that failed validation, and each asserts the
+    error message stays quiet. Nothing asserted anything about the URL that
+    *succeeded*, and Pydantic's generated `repr` printed it — so a `Settings`
+    built from a real environment carried a live DSN into anything that rendered
+    it. `str` is the same rendering, which is why both are asserted here.
+
+    The channel that makes this more than theoretical is this suite. Pytest's
+    assertion rewriting prints the `repr` of the operands of a failing
+    comparison, so any unrelated failing assertion holding a `Settings` object
+    would publish the credential in CI output.
+
+    `SUPERSECRETVALUE` is an obviously synthetic password and `db.invalid` is a
+    reserved name that cannot resolve, so nothing here can connect anywhere.
+    Removing `repr=False` from the field fails this test.
+    """
+    synthetic_credential = "SUPERSECRETVALUE"
+    url = f"{DATABASE_URL_SCHEME}://someone:{synthetic_credential}@db.invalid:5432/somewhere"
+    settings = load_settings({DATABASE_URL: url})
+
+    assert settings.database_url == url, "the value is kept; only its rendering is suppressed"
+    for rendering, name in ((repr(settings), "repr"), (str(settings), "str")):
+        assert synthetic_credential not in rendering, f"the password reached {name}(Settings)"
+        assert url not in rendering, f"the URL reached {name}(Settings)"
+        # The other fields must still render, or this bought secrecy with
+        # silence: a `repr` that showed nothing would pass the two assertions
+        # above and destroy every unrelated diagnostic that uses one.
+        assert "max_page_size=200" in rendering
+        assert "redaction_enabled=True" in rendering
+
+
+# The URL a process connects to is decided once
+# ---------------------------------------------
+#
+# `create_engine` reads a URL string with SQLAlchemy's own parser. If settings
+# validated the same string with a different parser, the scheme, host and
+# database that were approved would be one reading of the text and the ones
+# connected to would be another, and nothing would hold the two together — two
+# parsers that agree on ordinary input have still each answered separately.
+#
+# These are invariants rather than examples, and deliberately so: they assert
+# that there is exactly one answer and that it is the one used, which does not
+# depend on knowing an input for which two answers would differ. The other half
+# — that the composition root hands that answer to the engine rather than
+# handing over the text — is asserted in `test_gateway_composition.py`, where
+# the engines are.
+
+
+def test_settings_parses_the_database_url_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One parse, kept — not one parser, re-run.
+
+    Two assertions, because the name needs both and for a while it only had the
+    second. Object identity across accessor calls says the accessor is stable,
+    which is necessary but is not what "exactly once" claims: an implementation
+    that parsed twice during validation and stored the second parse would satisfy
+    it, and the name would still read as a guarantee nobody was checking. So the
+    parser is counted directly. `make_url` is the only reading of the string that
+    happens anywhere — `_parse_database_url` calls it and `create_engine` returns
+    a `URL` untouched — so one call to it over a whole `load_settings`, accessor
+    included, is the claim stated as a number rather than as a name.
+    """
+    import my_pa.bootstrap.settings as settings_module
+
+    real_make_url = settings_module.make_url
+    readings: list[str] = []
+
+    def counting_make_url(value: str) -> URL:
+        readings.append(value)
+        return real_make_url(value)
+
+    monkeypatch.setattr(settings_module, "make_url", counting_make_url)
+
+    settings = load_settings({DATABASE_URL: _A_URL})
+    assert readings == [_A_URL], f"the URL was read {len(readings)} times, not once"
+
+    assert settings.parsed_database_url() is settings.parsed_database_url()
+    assert readings == [_A_URL], "the accessor re-read the string instead of returning the parse"
+
+
+def test_a_url_the_engine_cannot_parse_is_refused_without_naming_it() -> None:
+    """Well-formedness is decided by the parser that has to use the URL.
+
+    A port that is not a number is the plain case: whatever the engine's parser
+    refuses is refused at startup, and it is refused in this repository's own
+    error type with a message that names the defect. Letting the parser's own
+    exception out would put a fragment of the URL in the traceback of a value
+    that can carry a password.
+    """
+    url = f"{DATABASE_URL_SCHEME}://someone:SUPERSECRETVALUE@db.invalid:not-a-port/somewhere"
+    with pytest.raises(SettingsError) as caught:
+        load_settings({DATABASE_URL: url})
+    assert "SUPERSECRETVALUE" not in str(caught.value)
+    assert "not-a-port" not in str(caught.value)
+    assert url not in str(caught.value)

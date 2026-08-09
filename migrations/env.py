@@ -31,7 +31,7 @@ if config.config_file_name is not None:
     # configured by whatever called us.
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-database_url = load_settings().database_url
+database_url = load_settings().parsed_database_url()
 
 
 def run_migrations_offline() -> None:

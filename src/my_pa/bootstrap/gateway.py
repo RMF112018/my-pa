@@ -169,12 +169,8 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     derives. The unit of work is built per invocation, as `ApplicationService`
     requires: one transaction per request, never a shared open one.
     """
-    work_engine = create_database_engine(
-        settings.database_url, statement_timeout_ms=settings.statement_timeout_ms
-    )
-    audit_engine = create_database_engine(
-        settings.database_url, statement_timeout_ms=settings.statement_timeout_ms
-    )
+    work_engine = create_database_engine(settings.parsed_database_url())
+    audit_engine = create_database_engine(settings.parsed_database_url())
     audit = SqlAlchemyAuditSink(audit_engine)
 
     def unit_of_work() -> UnitOfWork:

@@ -185,10 +185,11 @@ VERIFIED_CALLER_STATEMENTS: Final = {
 #: each one its trust. Everything not named here and not in `CALLER_SUPPLIED` is
 #: an internal object.
 #:
-#: **A name on this list is trusted for what it is bound from, never for how it
-#: is spelled**, and the mapping is what makes that literally true rather than
-#: aspirational. There are exactly three ways a name gets bound in a module this
-#: scan reads, and each is checked:
+#: **A name on this list is trusted for what it is bound from, not merely for
+#: how it is spelled.** The mapping is what makes that substantially true. It is
+#: a measurement of the binding routes this scan checks, not a proof that no
+#: unchecked route exists — the routes below are the ones checked, and the
+#: limits recorded at the end of this comment are the ones known to remain:
 #:
 #: * *Assignment.* `rebound_from_caller_input` withdraws any entry the module
 #:   assigns from caller data, so `context = request_metadata` followed by
@@ -199,11 +200,23 @@ VERIFIED_CALLER_STATEMENTS: Final = {
 #:   This was a live bypass: `def _x(context): return context.principal_id`,
 #:   called with a request document, was invisible to *both* detectors, because
 #:   `rebound_from_caller_input` reads assignment targets and a parameter is not
-#:   one. The annotation is not a second spelling — it is a declared type that
-#:   `mypy` checks over this whole tree, so a helper cannot claim `Principal` and
-#:   be handed an envelope.
+#:   one. The annotation raises the cost from one spelling to two — a parameter
+#:   must now spell both a trusted name and a matching type name — and `mypy`
+#:   rejects the mismatch wherever the incoming value is not `Any` and the type
+#:   name is not rebound locally. It is *not* an impossibility proof: a value
+#:   typed `Any` (which `Mapping[str, Any]` subscripts produce freely) satisfies
+#:   any annotation, and a module-local `Principal = dict[str, str]` buys the
+#:   trusted spelling outright. Both are mypy-clean and would pass here.
+#: * *Comprehension.* `_local_bindings` reads comprehension targets, so the
+#:   comprehension form of a caller-rooted read is caught like the `for` form.
 #: * *Import or module-level definition.* Neither can be a caller's document:
 #:   both are fixed before a request exists.
+#:
+#: Known unchecked routes, recorded rather than implied away: `except ... as`
+#: and `match ... case` captures bind without passing through the rules above,
+#: and an accessor bound to a local alias (`read = payload.get`) splits the read
+#: across two statements that neither detector joins. None is exercised in this
+#: tree; each is a way a future module could spell a read this scan would miss.
 #:
 #: Without this, the mapping would be a list of names an attacker may pick.
 #: `context` is the clearest case, because "a PrincipalContext or an application
@@ -306,6 +319,15 @@ def _local_bindings(tree: ast.AST) -> tuple[tuple[str, ast.expr], ...]:
         elif isinstance(node, ast.withitem) and node.optional_vars is not None:
             bindings.extend((name, node.context_expr) for name in _bound_names(node.optional_vars))
         elif isinstance(node, ast.For | ast.AsyncFor):
+            bindings.extend((name, node.iter) for name in _bound_names(node.target))
+        elif isinstance(node, ast.comprehension):
+            # A comprehension target binds exactly as `for` does, and `ast.walk`
+            # does not reach it through the `For` branch above because a
+            # comprehension is its own node. Without this, the identical read is
+            # caught as a statement and missed as a comprehension:
+            # `[context.principal_id for context in payload["accounts"]]`. That
+            # asymmetry is not hypothetical — `row` and `account` are bound by
+            # comprehension dozens of times in this tree today.
             bindings.extend((name, node.iter) for name in _bound_names(node.target))
     return tuple(bindings)
 
@@ -595,10 +617,12 @@ def receivers_bound_by_an_unearned_parameter(tree: ast.AST) -> frozenset[str]:
     invisible to both detectors.
 
     A parameter earns the trust by declaring one of the types
-    `_DERIVED_RECEIVERS` lists for its name. That is a fact about the binding
-    rather than a second spelling, because `mypy` checks these annotations over
-    the whole tree: a helper cannot annotate `Principal` and be handed an
-    envelope. `self` earns it differently — as the leading parameter of a method
+    `_DERIVED_RECEIVERS` lists for its name. That raises the cost from one
+    spelling to two and is checked by `mypy` over the whole tree wherever the
+    incoming value is not `Any` and the type name is not rebound locally. It is
+    not an impossibility proof: `Any` satisfies any annotation, and a
+    module-local alias of a trusted type name buys the spelling outright. The
+    module comment records both. `self` earns it differently — as the leading parameter of a method
     defined in a class body, where the call protocol does the binding — and a
     module-level `def _x(self)` earns nothing.
 

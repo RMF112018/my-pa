@@ -160,9 +160,18 @@ _CLOSED_SET = re.compile(r"IN \(([^)]*)\)|<@ ARRAY\[([^\]]*)\]")
 _LITERAL = re.compile(r"'([^']*)'")
 
 #: Every still-derived site, with the revision that emits it, the closed set it
-#: tracks, and the exact vocabulary it emits today. WP-12 freezes the five sites
-#: in the knowledge-schema revision because it expands two of their vocabularies;
-#: the five extraction sites remain derived and unchanged.
+#: tracks, and the exact vocabulary it emits today. WP-12 freezes the sites in
+#: the knowledge-schema revision because it expands two of their vocabularies;
+#: the extraction sites listed here remain derived and unchanged.
+#:
+#: **Its size is asserted in
+#: `test_the_allowlist_names_only_revisions_this_package_does_not_edit` and is
+#: not restated here.** It lost `extractions.extraction_status_is_known` when
+#: WP-03 narrowed that constraint to an inline literal, and a spelled count of a
+#: shrinking set beside the set itself is the next stale claim — inside the guard
+#: whose whole subject is a written-down vocabulary drifting from the thing it
+#: describes. A count of a current set belongs next to an assertion that fails
+#: when it moves, or nowhere.
 #:
 #: The independent reviewer's list named nine sites and eight sources. Both
 #: numbers were low: `quarantine_review_state_is_known` derives from
@@ -173,13 +182,6 @@ _LITERAL = re.compile(r"'([^']*)'")
 #: error code added to `v1` changes what `7e5a1fb93d62` emits.
 ALLOWED: Final[frozenset[tuple[str, str, str, str, tuple[str, ...]]]] = frozenset(
     {
-        (
-            "8b3f5c17d904",
-            "extractions",
-            "extraction_status_is_known",
-            "my_pa.domain.extraction.text.ExtractionStatus",
-            ("extracted", "quarantined", "unsupported"),
-        ),
         (
             "8b3f5c17d904",
             "extractions",
@@ -557,8 +559,8 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 21
-    assert len({revision for revision, _ in revisions}) == 21
+    assert len(revisions) == 22
+    assert len({revision for revision, _ in revisions}) == 22
     assert {"9c6b4a18ed72", "1a4c9e77b2d5", "2b7e9f4c1a83", "7e5a1fb93d62", "8b3f5c17d904"} <= {
         revision for revision, _ in revisions
     }
@@ -630,7 +632,7 @@ def test_the_allowlist_names_only_revisions_this_package_does_not_edit() -> None
     undone and the residual class has grown rather than shrunk.
     """
     assert {revision for revision, *_ in ALLOWED} == {"8b3f5c17d904"}
-    assert len(ALLOWED) == 5
+    assert len(ALLOWED) == 4
     assert not {revision for revision, *_ in ALLOWED} & set(FROZEN)
 
 

@@ -70,6 +70,15 @@ PLAN = ROOT / "docs" / "plans" / "mcv-completion-plan.md"
 #: its rows say what was true when they were written.
 SWEPT_ROOTS = ("apps", "ops", "src", "tests")
 
+#: Swept files that sit under none of those roots. `README.md` states current
+#: capability and schema figures in the same prose shapes the roots are read
+#: for, and it lives at the repository root, so until this constant existed
+#: every count in it was bound to nothing — including one this repository's own
+#: package added. A root-relative file list rather than a fifth entry in
+#: `SWEPT_ROOTS`, because sweeping `.` would pull in the plan's register and
+#: every other document whose rows are history rather than current state.
+SWEPT_FILES = ("README.md",)
+
 SKIPPED_DIRECTORIES = frozenset({"__pycache__", ".ruff_cache", ".mypy_cache", ".pytest_cache"})
 
 #: `src/my_pa.egg-info/` is a build artifact, untracked, and holds a stale copy
@@ -320,6 +329,15 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "a delta this package applied, not the size of the set",
     ),
     (
+        "README.md",
+        "four capabilities",
+        "was in the not-implemented list below",
+        "the size of the `capture.*` subset, which the sentence names in full "
+        "(`capture.create`, `capture.revise`, `capture.read`, `capture.list`), "
+        "not the size of `Capability`; surfaced the first time this guard swept "
+        "the repository root",
+    ),
+    (
         "ops/runbooks/mcp-and-cli-operations.md",
         "four capabilities",
         "WP-6 added four capabilities and this list grew by four",
@@ -387,6 +405,10 @@ def swept_files() -> list[Path]:
                 continue
             if path == Path(__file__).resolve():
                 continue
+            found.append(path)
+    for file_name in SWEPT_FILES:
+        path = ROOT / file_name
+        if path.is_file():
             found.append(path)
     return sorted(found)
 

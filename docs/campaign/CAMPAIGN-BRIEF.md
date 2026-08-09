@@ -8,13 +8,13 @@ validated_audit_package: MYPA-CURRENT-STATE-PACKAGE-20260809-001
 repository: RMF112018/my-pa
 remote: https://github.com/RMF112018/my-pa.git
 operating_lineage: recovery/pre-20260805-utc-rollback-c9fb513
-operating_lineage_head: c9fb513a2afadf98f29b6d5ec3ad69db69e5ec1a
-operating_lineage_tree: 9975318c731ac6150f251df7bdee5475c3b529d8
+operating_lineage_head: b0be48ca83481dd1f22ea2b8b9a3c2011211096f
+operating_lineage_tree: d1bc78bc073f2980fa547507e996b94156e5e75e
 reauthentication_date: "2026-08-09"
-active_work_package: WP-01
-active_work_package_name: Lineage, Goal-State, and Repository Current-State Correction Foundation
+active_work_package: WP-03
+active_work_package_name: Persistence and Alembic Migration-Chain Reconciliation
 supersedes: WP-N01
-completed_work_packages: []
+completed_work_packages: [WP-01, WP-02]
 milestone_ms0: WP-01 -> WP-02 -> WP-03
 ```
 
@@ -139,9 +139,40 @@ The in-flight WP-12E slice-E work that was uncommitted in the primary checkout (
 
 1. Repository governance (`AGENTS.md`) governs execution; the canonical completion plan governs product/roadmap intent; authenticated runtime and repository evidence outranks both when facts conflict.
 2. No whole-branch merge of the three long-lived `bf/*` branches named above.
-3. No push, no PR, no branch/worktree deletion under WP-01.
+3. No force-push and no history rewrite. Branch/worktree deletion remains an operator decision.
 4. Extreme-risk actions remain reserved to the operator (`AGENTS.md` §8.2).
 
 ## State update protocol
 
 Update this brief's frontmatter and decision log at every material transition (work-package start, PR open, merge, blocker, invalidation). Superseded decisions move to history with their replacement identified — they are not silently rewritten.
+
+### D-05 — WP-01 integrated into the operating lineage by fast-forward
+
+- **Decision:** WP-01 was integrated into `recovery/pre-20260805-utc-rollback-c9fb513`, advancing it `c9fb513a… -> 49b6f034…` as a true fast-forward rather than by the squash that `CONTRIBUTING.md` sets as the default.
+- **Rationale:** brief §34 requires the target lineage to advance per completed package, and leaving WP-01 unintegrated would force every later package to branch off a feature branch — the exact fragmentation this campaign exists to remove. Fast-forward was chosen over squash because squash mints a SHA that neither of WP-01's two independent exact-head reviews examined; fast-forward preserves the reviewed identity `49b6f034…` byte for byte.
+- **Evidence:** push reported `c9fb513..49b6f03` (two-dot, non-forced); resulting tree `6bd5da8292acfa62a503f90bb6b7e31217226b9f` equals the reviewed WP-01 tree. PR #54 was opened as the repository-native record and GitHub marked it merged from the fast-forward. Architecture suite 1342 passed at the new head.
+- **Invalidation:** none outstanding.
+
+### D-06 — WP-02 squash-merged, deliberately, for a security reason
+
+- **Decision:** WP-02 was squash-merged into the operating lineage rather than merged with a merge commit, and no pull request was opened for `bf/wp-02-selective-branch-reconciliation`.
+- **Rationale:** an intermediate commit on that branch, `39db97d1adfc32360a0dee4bc2b562a7468cfd4d`, carries reproduction detail for an unpatched defect. Squashing keeps it from becoming a permanent ancestor of this public lineage; opening a pull request would have minted a permanent public `refs/pull/N/head` carrying the same blob. The merged tree `d1bc78bc…` is byte-identical to the independently reviewed tree, so the review carries over on content despite the new SHA.
+- **Evidence:** `git merge-base --is-ancestor 39db97d… origin/recovery/…` returns false; merged tree equals reviewed tree `d1bc78bc073f2980fa547507e996b94156e5e75e`.
+- **Invalidation:** superseded if the operator authorizes a history purge, after which the ordinary pull-request route resumes.
+
+### D-07 — WP-02 ported 8 of 29 ahead-commits; the rest are declined or deferred with reasons
+
+- **Decision:** of 29 unique ahead-commits across the four retained branches, 8 were ported, 6 declined as direction-incompatible or false-at-target, and 15 deferred to WP-03. No branch was merged wholesale and no migration file was touched.
+- **Rationale:** `bf/extractions-quarantined-debt` strictly contains `bf/mcv-neutral-remainder` (identical SHAs), so the true unique population is 29, not the 36 a naive per-branch sum suggests. Every commit is accounted for exactly once.
+- **Evidence:** `docs/campaign/WP-02-INTEGRATION-RECORD.md`; independently recomputed by the reviewer as 8 + 6 + 15 = 29 with zero unaccounted and zero phantom entries.
+- **Invalidation:** any of the four source branch heads moves.
+
+## Triaged backlog carried out of WP-02
+
+These are recorded decisions, not oversights. None blocks WP-03.
+
+1. **Unpatched URL-parser divergence in `src/my_pa/bootstrap/settings.py`** — `_validate_database_url` and `create_database_engine` do not use the same parser, so the configuration the validator approves is not necessarily the one the engine connects to. Live at head. Exposure requires control of the deployment database URL, so it is a configuration-integrity defect rather than a remotely reachable one. **Belongs to neither WP-02 nor WP-03; schedule as its own bounded work package.** Reproduction detail is withheld from this public repository under `SECURITY.md` and has been escalated to the operator.
+2. **The conditional split of `6e491c24…` was declined** as not cleanly separable — its `settings.py` hunk and all five of its tests are welded to statement-timeout machinery WP-02 was not authorized to port. 21 files of that commit are unported and enumerated in the integration record.
+3. **`docs/plans/mcv-completion-plan.md` is deliberately untouched** beyond a single re-derived count. It still presents the superseded MCV work-package order as current while remaining linked from `README.md`. This is a documentation-reconciliation item and is **not** WP-03 scope (WP-03 is the migration chain only).
+4. **WP-03 acceptance condition:** WP-12E's baseline tables were authored before principal partitioning existed and carry no `principal_id`. Any re-authoring of those migrations into the single chain must address this.
+5. **The database tier has never been executed in this environment** (no PostgreSQL reachable). The `search.py` redaction fix carried by WP-02 is covered here only by an AST guard; its two end-to-end tests were not observed to pass and no claim is made that they do. WP-03 needs a live PostgreSQL to discharge its own acceptance criteria.

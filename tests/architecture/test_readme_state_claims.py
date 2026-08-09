@@ -46,6 +46,24 @@ _BACKTICKED = re.compile(r"`([A-Za-z][A-Za-z0-9_.-]*)`")
 #: Nothing connects; the limits are what this test is after.
 _A_URL = f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere"
 
+#: The paragraph naming the frontend's personal-data ingestion posture:
+#: Apple-first, and Microsoft Graph retained but off by default. Anchored on
+#: its opening words and read to the next blank line, for the same reason the
+#: state paragraph is: reflowing it is safe, moving or dropping it is not silent.
+INGESTION_CLAIM = re.compile(r"^A frontend exists under.+?\n\n", re.DOTALL | re.MULTILINE)
+
+
+def frontend_paragraph() -> str:
+    """The paragraph stating the ingestion posture, or a loud failure if it moved."""
+    match = INGESTION_CLAIM.search(README.read_text(encoding="utf-8"))
+    assert match is not None, (
+        "The README paragraph beginning 'A frontend exists under' is gone. It is "
+        "the only place the Apple-first / Graph-off-by-default ingestion posture "
+        "is stated, and these tests are what keeps that statement true. Move the "
+        "anchor deliberately, not by watching this pass."
+    )
+    return match.group(0)
+
 
 def claimed_tokens() -> set[str]:
     """Every backticked token in the README's state paragraph."""
@@ -165,3 +183,58 @@ def test_wp12_stays_provisional_and_operator_authorized_without_boundary_inferen
     assert "mcv is not complete" in normalized
     assert "wp-12 is post-mcv" not in normalized
     assert "no repository wp-12 exists" not in normalized
+
+
+def test_readme_declares_the_operating_lineage_branch_and_denies_main_authority() -> None:
+    """WP-01 exists to establish exactly this pair; guard both halves of it.
+
+    A stale README predating WP-01 names no operating lineage at all, so both
+    assertions must hold against the actual `## Operating lineage` section
+    rather than anywhere in the file.
+    """
+    readme = README.read_text(encoding="utf-8")
+    assert "## Operating lineage" in readme, "The README's 'Operating lineage' section is gone."
+    section = readme.split("## Operating lineage", 1)[1].split("## Current state", 1)[0]
+    assert "recovery/pre-20260805-utc-rollback-c9fb513" in section, (
+        "The README's Operating lineage section no longer names the operating "
+        "lineage branch `recovery/pre-20260805-utc-rollback-c9fb513`."
+    )
+    assert "`main` is not the current operating lineage" in section, (
+        "The README's Operating lineage section no longer states that GitHub's "
+        "default `main` branch is not operating-lineage authority."
+    )
+
+
+def test_readme_declares_apple_first_personal_data_ingestion() -> None:
+    """The four Apple source families must all still be named, by name."""
+    paragraph = frontend_paragraph()
+    assert "Personal-data ingestion is Apple-first" in paragraph, (
+        "The README's frontend paragraph no longer states that personal-data "
+        "ingestion is Apple-first."
+    )
+    for source in ("Apple Mail", "Calendar", "Contacts", "Tasks/To-Do"):
+        assert source in paragraph, (
+            f"The README's frontend paragraph no longer names {source!r} among "
+            "the Apple source families ingestion is drawn from."
+        )
+    assert "native Apple architecture" in paragraph, (
+        "The README's frontend paragraph no longer attributes ingestion to the "
+        "native Apple architecture."
+    )
+
+
+def test_readme_declares_graph_off_by_default_and_entra_separate_from_activation() -> None:
+    """Retained-but-inactive is a specific, invertible claim; guard the wording
+    that makes it specific rather than a generic mention of Microsoft Graph."""
+    paragraph = frontend_paragraph()
+    assert "off by default and not an active personal-data ingestion path" in paragraph, (
+        "The README's frontend paragraph no longer states that Microsoft Graph "
+        "is off by default and not an active personal-data ingestion path."
+    )
+    assert "Entra authentication" in paragraph, (
+        "The README's frontend paragraph no longer mentions Entra authentication."
+    )
+    assert "separate concern from Graph connector activation" in paragraph, (
+        "The README's frontend paragraph no longer states that Entra "
+        "authentication is a separate concern from Graph connector activation."
+    )

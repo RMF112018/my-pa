@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import io
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
@@ -233,25 +233,48 @@ def _snapshot(connection: Connection) -> dict[str, list[tuple[object, ...]]]:
     }
 
 
-def _outcome(call: object) -> tuple[str, str]:
-    """What one call did, as a comparable pair: exception class and message.
+def _attempt(
+    engine: Engine, principal_id: str, action: Callable[[SqlRelationshipRepository], object]
+) -> tuple[str, str]:
+    """Run one operation on its own connection, roll it back, report what it did.
 
-    A returned value is reported as its own class and repr, so "returned `None`"
-    and "raised `IdentityResolutionError(...)`" are the same shape of answer and
-    can be compared directly. This is what makes "a foreign identifier is
-    indistinguishable from an absent one" an equality rather than two separate
-    `pytest.raises` blocks that happen to agree.
+    The answer is a comparable pair: either `("returned", repr(value))` or
+    `(exception class name, message)`. Making a return and a raise the same
+    shape of answer is what turns "a foreign identifier is indistinguishable
+    from an absent one" into an equality rather than two `pytest.raises` blocks
+    that happen to agree.
+
+    **Its own connection, and that is not tidiness.** Two attempts on one
+    connection are not independent: the first one to fail aborts the
+    transaction, and every attempt after it reports PostgreSQL's
+    `InFailedSqlTransaction` instead of its own outcome. A controlled violation
+    of the ownership check was caught by this file comparing an `IntegrityError`
+    against exactly that contamination — a difference that was real but not the
+    one the assertion claimed to be measuring. One connection per attempt, and
+    a rollback after each, so every pair below compares two first failures.
     """
-    assert callable(call)
-    try:
-        return ("returned", repr(call()))
-    except Exception as error:  # the class is the measurement
-        return (type(error).__name__, str(error))
+    with engine.connect() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=principal_id)
+        try:
+            return ("returned", repr(action(repository)))
+        except Exception as error:  # the class is the measurement
+            return (type(error).__name__, str(error))
+        finally:
+            connection.rollback()
 
 
 @pytest.fixture
-def seeded(engine: Engine) -> tuple[str, str]:
-    """Principal A owns one canonical person, one organization, one mention."""
+def seeded(engine: Engine) -> tuple[str, str, str]:
+    """Principal A owns *two* canonical people, one organization, one mention.
+
+    Two, not one, and the reason is a controlled violation this fixture had to
+    survive. With one person, every merge B could attempt named A's person and
+    one that exists nowhere, so the refusal fired on the invented half and an
+    implementation with no partition on its ownership check passed the test
+    unchanged. Two of A's own people let B attempt a merge in which *every*
+    identifier is real and none is B's, which is the case that distinguishes a
+    partitioned ownership check from an unpartitioned one.
+    """
     with engine.begin() as connection:
         a = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_A)
         observations = (_observation(1, source_ordinal=1), _observation(2, source_ordinal=1))
@@ -277,27 +300,35 @@ def seeded(engine: Engine) -> tuple[str, str]:
                 observed_at=WHEN,
             )
         )
-    return person_id, _id("org", 1)
+        second = (_observation(3, source_ordinal=1),)
+        a.record_observations("email", second)
+        second_person_id = _link_person(
+            a, principal_id=PRINCIPAL_A, person_ordinal=2, observations=second
+        )
+    return person_id, second_person_id, _id("org", 1)
 
 
 def test_a_foreign_person_reads_exactly_as_an_absent_one(
-    engine: Engine, seeded: tuple[str, str]
+    engine: Engine, seeded: tuple[str, str, str]
 ) -> None:
     """MU-AC-01/MU-AC-04: B's profile read of A's person answers `None`.
 
     Compared against B's read of a person that exists nowhere, so the answer is
     the *same* answer rather than merely a falsy one.
     """
-    person_id, organization_id = seeded
-    with engine.connect() as connection:
-        b = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_B)
-        foreign = _outcome(lambda: b.profile(person_id, expected_domains=("contacts",)))
-        absent = _outcome(lambda: b.profile(_id("per", 999), expected_domains=("contacts",)))
-        foreign_org = _outcome(lambda: b.organization_profile(organization_id))
-        absent_org = _outcome(lambda: b.organization_profile(_id("org", 999)))
+    person_id, _second_person_id, organization_id = seeded
+    foreign = _attempt(
+        engine, PRINCIPAL_B, lambda r: r.profile(person_id, expected_domains=("contacts",))
+    )
+    absent = _attempt(
+        engine, PRINCIPAL_B, lambda r: r.profile(_id("per", 999), expected_domains=("contacts",))
+    )
+    foreign_org = _attempt(engine, PRINCIPAL_B, lambda r: r.organization_profile(organization_id))
+    absent_org = _attempt(engine, PRINCIPAL_B, lambda r: r.organization_profile(_id("org", 999)))
 
-        # The control: A's read of A's own person is not `None`, so the two
-        # `None`s above are a partition rather than an empty database.
+    # The control: A's read of A's own person is not `None`, so the two `None`s
+    # above are a partition rather than an empty database.
+    with engine.connect() as connection:
         a = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_A)
         held = a.profile(person_id, expected_domains=("contacts",))
 
@@ -309,56 +340,57 @@ def test_a_foreign_person_reads_exactly_as_an_absent_one(
 
 
 def test_principal_b_cannot_review_merge_or_split_principal_a_s_people(
-    engine: Engine, seeded: tuple[str, str]
+    engine: Engine, seeded: tuple[str, str, str]
 ) -> None:
     """Every governed correction over A's records is refused, identically to absent."""
-    person_id, _organization = seeded
-    with engine.connect() as connection:
-        b = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_B)
+    person_id, second_person_id, _organization = seeded
 
-        def _merge_review(target: str) -> object:
-            return b.open_identity_review(
+    def _review(
+        action: ResolutionAction, *, people: tuple[str, ...], observations: tuple[str, ...]
+    ) -> Callable[[SqlRelationshipRepository], object]:
+        def _run(repository: SqlRelationshipRepository) -> object:
+            return repository.open_identity_review(
                 IdentityCandidateSet(
                     candidate_set_id=_id("dups", 50),
-                    person_ids=(target, _id("per", 51)),
-                    observation_ids=(),
+                    person_ids=people,
+                    observation_ids=observations,
                     created_at=WHEN,
                 ),
-                ResolutionAction.MERGE_PERSON,
-                retained_person_id=target,
-                prior_person_id=_id("per", 51),
+                action,
+                retained_person_id=people[0] if people else None,
+                prior_person_id=people[1] if len(people) > 1 else None,
             )
 
-        def _split_review(target: str) -> object:
-            return b.open_identity_review(
-                IdentityCandidateSet(
-                    candidate_set_id=_id("dups", 52),
-                    person_ids=(target, _id("per", 53)),
-                    observation_ids=(),
-                    created_at=WHEN,
-                ),
-                ResolutionAction.SPLIT_PERSON,
-                retained_person_id=target,
-                prior_person_id=_id("per", 53),
-            )
+        return _run
 
-        def _link_review(observation: str) -> object:
-            return b.open_identity_review(
-                IdentityCandidateSet(
-                    candidate_set_id=_id("dups", 54),
-                    person_ids=(),
-                    observation_ids=(observation,),
-                    created_at=WHEN,
-                ),
-                ResolutionAction.LINK_OBSERVATION,
-            )
-
-        merge_foreign = _outcome(lambda: _merge_review(person_id))
-        merge_absent = _outcome(lambda: _merge_review(_id("per", 999)))
-        split_foreign = _outcome(lambda: _split_review(person_id))
-        split_absent = _outcome(lambda: _split_review(_id("per", 998)))
-        link_foreign = _outcome(lambda: _link_review(_id("iobs", 1)))
-        link_absent = _outcome(lambda: _link_review(_id("iobs", 997)))
+    # Both halves of the merge are people A really owns, so nothing in this
+    # candidate set is absent: the only thing wrong with it is whose records
+    # they are. This is the case an unpartitioned ownership check passes.
+    merge = ResolutionAction.MERGE_PERSON
+    split = ResolutionAction.SPLIT_PERSON
+    link = ResolutionAction.LINK_OBSERVATION
+    merge_foreign = _attempt(
+        engine, PRINCIPAL_B, _review(merge, people=(person_id, second_person_id), observations=())
+    )
+    merge_absent = _attempt(
+        engine,
+        PRINCIPAL_B,
+        _review(merge, people=(_id("per", 999), _id("per", 998)), observations=()),
+    )
+    split_foreign = _attempt(
+        engine, PRINCIPAL_B, _review(split, people=(person_id, second_person_id), observations=())
+    )
+    split_absent = _attempt(
+        engine,
+        PRINCIPAL_B,
+        _review(split, people=(_id("per", 997), _id("per", 996)), observations=()),
+    )
+    link_foreign = _attempt(
+        engine, PRINCIPAL_B, _review(link, people=(), observations=(_id("iobs", 1),))
+    )
+    link_absent = _attempt(
+        engine, PRINCIPAL_B, _review(link, people=(), observations=(_id("iobs", 997),))
+    )
 
     assert merge_foreign == merge_absent
     assert split_foreign == split_absent
@@ -372,32 +404,33 @@ def test_principal_b_cannot_review_merge_or_split_principal_a_s_people(
 
 
 def test_principal_b_cannot_decide_or_resolve_principal_a_s_review(
-    engine: Engine, seeded: tuple[str, str]
+    engine: Engine, seeded: tuple[str, str, str]
 ) -> None:
     """A decision and a resolution aimed at A's governed review are both refused."""
-    _person_id, _organization = seeded
+    _person_id, _second, _organization = seeded
     with engine.connect() as connection:
         case_id = connection.execute(
             select(relationship_identity_review_cases.c.review_case_id)
+            .order_by(relationship_identity_review_cases.c.review_case_id)
+            .limit(1)
         ).scalar_one()
         decision_id = connection.execute(
             select(relationship_identity_review_decisions.c.decision_id)
+            .order_by(relationship_identity_review_decisions.c.decision_id)
+            .limit(1)
         ).scalar_one()
-        b = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_B)
 
-        decide_foreign = _outcome(
-            lambda: b.decide_identity_review(
-                str(case_id), disposition="accept", principal_id=PRINCIPAL_B, decided_at=WHEN
+    def _decide(case: str) -> Callable[[SqlRelationshipRepository], object]:
+        def _run(repository: SqlRelationshipRepository) -> object:
+            return repository.decide_identity_review(
+                case, disposition="accept", principal_id=PRINCIPAL_B, decided_at=WHEN
             )
-        )
-        decide_absent = _outcome(
-            lambda: b.decide_identity_review(
-                _id("rvw", 999), disposition="accept", principal_id=PRINCIPAL_B, decided_at=WHEN
-            )
-        )
 
-        def _resolve(case: str, decision: str) -> object:
-            b.apply_resolution(
+        return _run
+
+    def _resolve(case: str, decision: str) -> Callable[[SqlRelationshipRepository], object]:
+        def _run(repository: SqlRelationshipRepository) -> object:
+            repository.apply_resolution(
                 IdentityResolution(
                     resolution_id=_id("ires", 60),
                     action=ResolutionAction.LINK_OBSERVATION,
@@ -412,8 +445,12 @@ def test_principal_b_cannot_decide_or_resolve_principal_a_s_review(
             )
             return None
 
-        resolve_foreign = _outcome(lambda: _resolve(str(case_id), str(decision_id)))
-        resolve_absent = _outcome(lambda: _resolve(_id("rvw", 999), _id("rdec", 999)))
+        return _run
+
+    decide_foreign = _attempt(engine, PRINCIPAL_B, _decide(str(case_id)))
+    decide_absent = _attempt(engine, PRINCIPAL_B, _decide(_id("rvw", 999)))
+    resolve_foreign = _attempt(engine, PRINCIPAL_B, _resolve(str(case_id), str(decision_id)))
+    resolve_absent = _attempt(engine, PRINCIPAL_B, _resolve(_id("rvw", 999), _id("rdec", 999)))
 
     assert decide_foreign == decide_absent
     assert decide_foreign[0] == "IdentityResolutionError"
@@ -422,13 +459,15 @@ def test_principal_b_cannot_decide_or_resolve_principal_a_s_review(
 
 
 def test_a_caller_supplied_deciding_principal_is_refused(
-    engine: Engine, seeded: tuple[str, str]
+    engine: Engine, seeded: tuple[str, str, str]
 ) -> None:
     """MU-AC-02: the deciding Principal is the repository's, verified not trusted."""
     with engine.connect() as connection:
         case_id = str(
             connection.execute(
                 select(relationship_identity_review_cases.c.review_case_id)
+                .order_by(relationship_identity_review_cases.c.review_case_id)
+                .limit(1)
             ).scalar_one()
         )
         a = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_A)
@@ -439,7 +478,7 @@ def test_a_caller_supplied_deciding_principal_is_refused(
 
 
 def test_no_attempt_by_b_changes_a_single_row_of_a_s_partition(
-    engine: Engine, seeded: tuple[str, str]
+    engine: Engine, seeded: tuple[str, str, str]
 ) -> None:
     """Fails closed at the rows: every crossing attempt writes nothing at all.
 
@@ -447,51 +486,45 @@ def test_no_attempt_by_b_changes_a_single_row_of_a_s_partition(
     rewrote the wrong row both leave without raising, so the exceptions above
     are not the measurement. The rows are.
     """
-    person_id, organization_id = seeded
+    person_id, _second_person_id, organization_id = seeded
     with engine.connect() as connection:
         before = _snapshot(connection)
 
-    attempts: list[tuple[str, object]] = []
-    with engine.connect() as connection:
-        b = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_B)
-        for name, call in (
-            ("profile", lambda: b.profile(person_id, expected_domains=("contacts",))),
-            ("organization_profile", lambda: b.organization_profile(organization_id)),
-            (
-                "affiliation",
-                lambda: b.record_source_affiliation(
-                    organization_id=organization_id,
-                    organization_name="Renamed By Another Principal",
-                    affiliation_id=_id("aff", 70),
-                    person_id=person_id,
-                    observation_id=_id("iobs", 1),
-                    role="member",
-                    effective_from=WHEN,
-                    effective_to=None,
-                ),
+    crossings: tuple[tuple[str, Callable[[SqlRelationshipRepository], object]], ...] = (
+        ("profile", lambda r: r.profile(person_id, expected_domains=("contacts",))),
+        ("organization_profile", lambda r: r.organization_profile(organization_id)),
+        (
+            "affiliation",
+            lambda r: r.record_source_affiliation(
+                organization_id=organization_id,
+                organization_name="Renamed By Another Principal",
+                affiliation_id=_id("aff", 70),
+                person_id=person_id,
+                observation_id=_id("iobs", 1),
+                role="member",
+                effective_from=WHEN,
+                effective_to=None,
             ),
-            (
-                "conversation_participant",
-                lambda: b.attach_conversation_participant(
-                    _id("conv", 70),
-                    person_id=person_id,
-                    observation_ids=(_id("iobs", 1),),
-                ),
+        ),
+        (
+            "conversation_participant",
+            lambda r: r.attach_conversation_participant(
+                _id("conv", 70), person_id=person_id, observation_ids=(_id("iobs", 1),)
             ),
-            (
-                "unresolved_mention_rebind",
-                lambda: b.record_unresolved_mention(
-                    UnresolvedMention(
-                        unresolved_mention_id=_id("umen", 1),
-                        source_object_id=_id("obj", 70),
-                        source_version=_id("ver", 70),
-                        observed_at=WHEN,
-                    )
-                ),
+        ),
+        (
+            "unresolved_mention_rebind",
+            lambda r: r.record_unresolved_mention(
+                UnresolvedMention(
+                    unresolved_mention_id=_id("umen", 1),
+                    source_object_id=_id("obj", 70),
+                    source_version=_id("ver", 70),
+                    observed_at=WHEN,
+                )
             ),
-        ):
-            attempts.append((name, _outcome(call)))
-        connection.rollback()
+        ),
+    )
+    attempts = [(name, _attempt(engine, PRINCIPAL_B, call)) for name, call in crossings]
 
     with engine.connect() as connection:
         after = _snapshot(connection)
@@ -506,10 +539,10 @@ def test_no_attempt_by_b_changes_a_single_row_of_a_s_partition(
 
 
 def test_the_owning_principal_can_still_do_everything_b_was_refused(
-    engine: Engine, seeded: tuple[str, str]
+    engine: Engine, seeded: tuple[str, str, str]
 ) -> None:
     """The control. Isolation that also blocked the owner would pass every test above."""
-    person_id, organization_id = seeded
+    person_id, _second_person_id, organization_id = seeded
     with engine.begin() as connection:
         a = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_A)
         assert a.profile(person_id, expected_domains=("contacts",)) is not None
@@ -517,18 +550,18 @@ def test_the_owning_principal_can_still_do_everything_b_was_refused(
         assert organization is not None
         assert organization.affiliations[0][0] == person_id
 
-        # A second person for A, linked from A's own further observations.
-        further = (_observation(3, source_ordinal=1),)
+        # A third person for A, linked from A's own further observations.
+        further = (_observation(4, source_ordinal=1),)
         assert a.record_observations("email", further) == 1
-        second = _link_person(a, principal_id=PRINCIPAL_A, person_ordinal=2, observations=further)
-        assert a.profile(second, expected_domains=("email",)) is not None
+        third = _link_person(a, principal_id=PRINCIPAL_A, person_ordinal=3, observations=further)
+        assert a.profile(third, expected_domains=("email",)) is not None
 
 
 def test_b_owns_its_own_partition_in_the_same_database(
-    engine: Engine, seeded: tuple[str, str]
+    engine: Engine, seeded: tuple[str, str, str]
 ) -> None:
     """The other direction: B's records are B's, and A cannot see them either."""
-    person_id, _organization = seeded
+    person_id, _second_person_id, _organization = seeded
     with engine.begin() as connection:
         b = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_B)
         observations = (_observation(11, source_ordinal=2),)

@@ -135,7 +135,11 @@ class Authorization:
 
 
 def _requested_scope(
-    unit_of_work: UnitOfWork, command: Command, enrollments: tuple[Enrollment, ...]
+    unit_of_work: UnitOfWork,
+    command: Command,
+    enrollments: tuple[Enrollment, ...],
+    *,
+    principal_id: str,
 ) -> frozenset[str]:
     """The sources this command would read, derived from the command itself."""
     match command:
@@ -165,7 +169,7 @@ def _requested_scope(
         case SearchKnowledge() | ReadKnowledge():
             return _scope_of_enrollment(command.enrollment_id, enrollments)
         case GetSourceStatus():
-            return _status_scope(unit_of_work, command, enrollments)
+            return _status_scope(unit_of_work, command, enrollments, principal_id=principal_id)
 
 
 def _scope_of_enrollment(enrollment_id: str, enrollments: tuple[Enrollment, ...]) -> frozenset[str]:
@@ -180,15 +184,30 @@ def _scope_of_enrollment(enrollment_id: str, enrollments: tuple[Enrollment, ...]
 
 
 def _status_scope(
-    unit_of_work: UnitOfWork, command: GetSourceStatus, enrollments: tuple[Enrollment, ...]
+    unit_of_work: UnitOfWork,
+    command: GetSourceStatus,
+    enrollments: tuple[Enrollment, ...],
+    *,
+    principal_id: str,
 ) -> frozenset[str]:
-    """The source behind whichever single subject a status request named."""
+    """The source behind whichever single subject a status request named.
+
+    `principal_id` is the *resolved* Principal — `authorize`'s own argument, the
+    one `enrollments` was read for — and never anything the command carries. It
+    reaches the operation queue because the queue is partitioned by it (WP-04):
+    the enrollment branch was already confined to the caller's own enrollments,
+    and this makes the operation branch answer `None` for a foreign job at the
+    persistence layer rather than resolving it and then failing to place it in a
+    scope.
+    """
     if command.source_id is not None:
         return frozenset({command.source_id})
     if command.enrollment_id is not None:
         return _scope_of_enrollment(command.enrollment_id, enrollments)
     if command.operation_id is not None:
-        operation = unit_of_work.operations.operation(command.operation_id)
+        operation = unit_of_work.operations.operation(
+            command.operation_id, principal_id=principal_id
+        )
         if operation is None:
             return frozenset()
         return _scope_of_enrollment(operation.enrollment_id, enrollments)
@@ -235,7 +254,9 @@ def authorize(
     """
     validate_identifier(correlation_id, IdKind.CORRELATION)
     enrollments = unit_of_work.enrollments.for_principal(principal.principal_id)
-    requested = _requested_scope(unit_of_work, command, enrollments)
+    requested = _requested_scope(
+        unit_of_work, command, enrollments, principal_id=principal.principal_id
+    )
     decision = evaluate(
         PolicyRequest(
             principal=principal,

@@ -708,7 +708,7 @@ def test_a_worker_that_crashes_on_its_final_attempt_reaches_a_terminal_state(
             )
             is None
         )
-        assert job_state(connection, operation_id) is JobState.FAILED
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.FAILED
         # Terminal in the column, not only in the answer.
         assert _stored_row(connection, operation_id) == ("failed", None, "unavailable")
 
@@ -733,14 +733,14 @@ def test_an_abandoned_final_attempt_reads_as_failed_before_anything_reclaims_it(
         _expire_lease(connection, operation_id)
 
         # Reported terminal immediately, without a write.
-        assert job_state(connection, operation_id) is JobState.FAILED
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.FAILED
         assert _stored_row(connection, operation_id)[0] == "running"
 
         assert reap_abandoned_jobs(connection, principal_id=QUEUE_PRINCIPAL) == 1
         assert _stored_row(connection, operation_id) == ("failed", None, "unavailable")
         # Idempotent: the first call left nothing for the second.
         assert reap_abandoned_jobs(connection, principal_id=QUEUE_PRINCIPAL) == 0
-        assert job_state(connection, operation_id) is JobState.FAILED
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.FAILED
 
 
 @pytest.mark.database
@@ -758,7 +758,7 @@ def test_a_live_lease_is_not_reaped_however_many_attempts_it_has_used(
         )
 
         assert reap_abandoned_jobs(connection, principal_id=QUEUE_PRINCIPAL) == 0
-        assert job_state(connection, operation_id) is JobState.RUNNING
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.RUNNING
         assert _stored_row(connection, operation_id)[0] == "running"
         assert complete_job(connection, operation_id, owner="worker-one") is True
 
@@ -785,7 +785,7 @@ def test_a_job_is_claimed_once_and_an_expired_lease_is_reclaimed(
         assert first is not None
         assert first.operation_id == operation_id
         assert first.attempt == 1
-        assert job_state(connection, operation_id) is JobState.RUNNING
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.RUNNING
 
         # A live lease is not claimable by anyone else.
         assert (
@@ -812,7 +812,9 @@ def test_a_job_is_claimed_once_and_an_expired_lease_is_reclaimed(
         # The worker that lost the lease cannot report on the work.
         assert complete_job(connection, operation_id, owner="worker-one") is False
         assert complete_job(connection, operation_id, owner="worker-two") is True
-        assert job_state(connection, operation_id) is JobState.SUCCEEDED
+        assert (
+            job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.SUCCEEDED
+        )
 
 
 @pytest.mark.database
@@ -864,7 +866,7 @@ def test_attempts_are_bounded_and_end_in_a_terminal_state(knowledge_engine: Engi
             )
             is None
         )
-        assert job_state(connection, operation_id) is JobState.FAILED
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.FAILED
 
 
 #: Long enough that a healthy claim never trips it, short enough that a claim

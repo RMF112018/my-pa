@@ -43,7 +43,7 @@ import pytest
 from sqlalchemy import Engine, Table, func, select, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
-from tests.pipeline.conftest import RICH_NOTE, drain, save
+from tests.pipeline.conftest import PRINCIPAL_ID, RICH_NOTE, drain, save
 
 from my_pa.domain.capture.pipeline import PipelineStage
 from my_pa.infrastructure.jobs import capture_pipeline
@@ -196,7 +196,9 @@ def test_a_failure_inside_proposal_persistence_leaves_the_capture_and_its_versio
         assert proposal_count(connection, saved.version_id) == 0
 
         # 3. The job is retryable, with a public error code, and attempts spent.
-        record = job_for(connection, saved.operation_id, plane=CAPTURE_JOBS)
+        record = job_for(
+            connection, saved.operation_id, principal_id=PRINCIPAL_ID, plane=CAPTURE_JOBS
+        )
         assert record is not None and record.state is JobState.QUEUED
         code = connection.execute(
             select(capture_jobs.c.last_error_code, capture_jobs.c.attempt_count).where(

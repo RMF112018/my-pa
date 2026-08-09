@@ -249,8 +249,10 @@ def test_the_operation_port_returns_the_grant_and_the_state_together(
         operation_id = opened.operations.enqueue(corpus.enrollment.enrollment_id)
     work, _ = unit_of_work(engine)
     with work as opened:
-        found = opened.operations.operation(operation_id)
-        missing = opened.operations.operation(issue_identifier(IdKind.OPERATION))
+        found = opened.operations.operation(operation_id, principal_id=corpus.principal_id)
+        missing = opened.operations.operation(
+            issue_identifier(IdKind.OPERATION), principal_id=corpus.principal_id
+        )
     assert found is not None
     assert found.enrollment_id == corpus.enrollment.enrollment_id
     assert found.state is SourceStatusState.QUEUED
@@ -384,7 +386,9 @@ def test_the_unit_of_work_commits_on_a_normal_exit(engine: Engine) -> None:
         operation_id = opened.operations.enqueue(corpus.enrollment.enrollment_id)
     work, _ = unit_of_work(engine)
     with work as opened:
-        assert opened.operations.operation(operation_id) is not None
+        assert (
+            opened.operations.operation(operation_id, principal_id=corpus.principal_id) is not None
+        )
 
 
 def test_the_unit_of_work_rolls_back_when_the_block_raises(engine: Engine) -> None:
@@ -397,7 +401,7 @@ def test_the_unit_of_work_rolls_back_when_the_block_raises(engine: Engine) -> No
     assert captured is not None
     work, _ = unit_of_work(engine)
     with work as opened:
-        assert opened.operations.operation(captured) is None
+        assert opened.operations.operation(captured, principal_id=corpus.principal_id) is None
 
 
 def test_a_repository_is_unavailable_outside_a_transaction(engine: Engine) -> None:
@@ -486,6 +490,6 @@ def test_the_enqueue_writer_and_the_operation_port_agree(engine: Engine) -> None
         operation_id = enqueue_job(connection, corpus.enrollment.enrollment_id)
     work, _ = unit_of_work(engine)
     with work as opened:
-        found = opened.operations.operation(operation_id)
+        found = opened.operations.operation(operation_id, principal_id=corpus.principal_id)
     assert found is not None
     assert found.operation_id == operation_id

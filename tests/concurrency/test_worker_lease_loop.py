@@ -397,7 +397,7 @@ def test_poison_work_stops_being_claimed_once_its_attempts_are_spent(engine: Eng
             )
             is None
         )
-        assert job_state(connection, operation_id) is JobState.FAILED
+        assert job_state(connection, operation_id, principal_id=WORKER_PRINCIPAL) is JobState.FAILED
 
 
 @pytest.mark.database

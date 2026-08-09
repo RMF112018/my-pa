@@ -190,7 +190,9 @@ def test_a_capture_whose_extraction_failed_is_still_searchable(
     monkeypatch.setattr(capture_pipeline, "record_proposal", real_record_proposal)
 
     with engine.connect() as connection:
-        state = job_for(connection, failed.operation_id, plane=CAPTURE_JOBS)
+        state = job_for(
+            connection, failed.operation_id, principal_id=PRINCIPAL_ID, plane=CAPTURE_JOBS
+        )
         assert state is not None and state.state is JobState.FAILED, (
             f"the failed capture's job is {state} rather than terminal, so the next "
             "drain would claim it and this test would not be about a failure"

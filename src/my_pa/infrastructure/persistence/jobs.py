@@ -539,9 +539,13 @@ def release_job(
 
 
 def job_for(
-    connection: Connection, operation_id: str, *, plane: JobPlane = ENROLLMENT_JOBS
+    connection: Connection,
+    operation_id: str,
+    *,
+    principal_id: str,
+    plane: JobPlane = ENROLLMENT_JOBS,
 ) -> JobRecord | None:
-    """Return what a job is about and the state it is in, or `None`.
+    """Return what one of `principal_id`'s jobs is about and its state, or `None`.
 
     Reports an abandoned final attempt as `failed` from the moment its lease
     expires, rather than from the moment some later claim happens to write that
@@ -554,12 +558,30 @@ def job_for(
     has to be able to authorize the question it is asking, and the scope it runs
     in is the subject's. Two reads could return a state and a subject from two
     different statement snapshots; one cannot.
+
+    `principal_id` is required and has **no default**, for the reason
+    `claim_job` and `reap_abandoned_jobs` take it the same way: a default would
+    silently restore the global read this argument exists to remove, and would
+    do it for every call site that had not been visited. It is a keyword, so no
+    caller can supply it by position and mean something else.
+
+    The partition is a predicate here rather than a check afterwards, so a job
+    in another Principal's partition and a job that does not exist produce the
+    same `None` from the same statement. `application.authorization._status_scope`
+    already refuses to resolve a foreign operation into a scope, which makes this
+    defence in depth rather than the only thing standing there — and defence in
+    depth is worth having exactly where the layer below stops being able to
+    assume the layer above was consulted.
     """
     validate_identifier(operation_id, IdKind.OPERATION)
+    validate_identifier(principal_id, IdKind.PRINCIPAL)
     table = plane.table
     reported = case((_abandoned(plane), JobState.FAILED.value), else_=table.c.state)
     row: Row[tuple[str, str]] | None = connection.execute(
-        select(table.c[plane.subject], reported).where(table.c.operation_id == operation_id)
+        select(table.c[plane.subject], reported).where(
+            partition_criterion(table, capture_context(principal_id)),
+            table.c.operation_id == operation_id,
+        )
     ).one_or_none()
     if row is None:
         return None
@@ -567,12 +589,18 @@ def job_for(
 
 
 def job_state(
-    connection: Connection, operation_id: str, *, plane: JobPlane = ENROLLMENT_JOBS
+    connection: Connection,
+    operation_id: str,
+    *,
+    principal_id: str,
+    plane: JobPlane = ENROLLMENT_JOBS,
 ) -> JobState | None:
-    """Return the state of `operation_id`, or `None` when there is no such job.
+    """Return the state of one of `principal_id`'s jobs, or `None` when there is none.
 
     Derived from `job_for` rather than from a second statement, so the two
-    cannot answer differently about the same row.
+    cannot answer differently about the same row — and so the partition is
+    stated once. `principal_id` is required for the same reason it is required
+    there.
     """
-    found = job_for(connection, operation_id, plane=plane)
+    found = job_for(connection, operation_id, principal_id=principal_id, plane=plane)
     return None if found is None else found.state

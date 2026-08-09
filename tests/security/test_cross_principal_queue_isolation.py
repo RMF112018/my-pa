@@ -27,7 +27,14 @@ exists for, on both planes:
   item cannot be filed into a partition its subject does not belong to, and a
   subject with no stored owner is refused rather than defaulted;
 * the reap is partitioned too — B cannot make A's abandoned job terminal, which
-  would be a write into A's partition dressed as maintenance.
+  would be a write into A's partition dressed as maintenance;
+* a *status read* is partitioned as well: `job_for` and `job_state` take the
+  Principal as a required argument, so B asking about A's operation gets the
+  same `None` B gets for an operation that does not exist. That one is defence
+  in depth rather than a live leak — `application.authorization._status_scope`
+  already resolves an operation only inside the caller's own enrollments — and
+  it is here because the persistence layer must not depend on having been
+  called through the layer that checks.
 
 Every identity and every identifier here is synthetic. No path is opened and no
 source is reached.
@@ -50,6 +57,8 @@ from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.jobs import (
     CAPTURE_JOBS,
@@ -58,8 +67,11 @@ from my_pa.infrastructure.persistence.jobs import (
     UnownedJobSubjectError,
     claim_job,
     enqueue_job,
+    job_for,
+    job_state,
     reap_abandoned_jobs,
 )
+from my_pa.infrastructure.persistence.tables import JobState
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 DISPOSABLE_DATABASE: Final = "my_pa_queue_isolation_test"
@@ -363,3 +375,73 @@ def test_one_principal_cannot_reap_another_s_abandoned_job(
 
         # The control: the owner's reap does what B's could not.
         assert reap_abandoned_jobs(connection, principal_id=PRINCIPAL_A, plane=plane) == 1
+
+
+@pytest.mark.parametrize("plane,subject", PLANES, ids=lambda value: getattr(value, "subject", ""))
+def test_another_principal_s_operation_is_indistinguishable_from_an_absent_one(
+    engine: Engine, plane: JobPlane, subject: str
+) -> None:
+    """A status read is a read, and it is partitioned like every other one.
+
+    `job_for` and `job_state` took an operation identifier and nothing else, and
+    returned the subject and the state of whatever row carried it. Nothing
+    reachable exploited that — `application.authorization._status_scope` resolves
+    an operation's enrollment only within the caller's own, so a request naming
+    another Principal's operation is denied `scope_not_authorized` before this
+    code runs — which is exactly why it is worth closing here as well: the
+    persistence layer's answer should not depend on the application layer having
+    been consulted.
+
+    The assertion is *indistinguishability*, not refusal. B asking about A's
+    operation and B asking about an identifier that names nothing must produce
+    the same value, because a different answer would confirm that A's operation
+    exists — and existence is the thing the identifier alone would otherwise
+    reveal.
+
+    Both controls matter: A's own read must still return the record, or this
+    would pass because the read is broken; and B's `None` must not be the `None`
+    of an empty table, so A's row is present throughout.
+    """
+    with engine.begin() as connection:
+        operation_id = enqueue_job(connection, subject.format(1), plane=plane)
+    absent = issue_identifier(IdKind.OPERATION)
+
+    with engine.connect() as connection:
+        assert job_for(connection, operation_id, principal_id=PRINCIPAL_B, plane=plane) is None
+        assert job_for(connection, absent, principal_id=PRINCIPAL_B, plane=plane) is None
+        assert job_state(connection, operation_id, principal_id=PRINCIPAL_B, plane=plane) is None
+        assert job_state(connection, absent, principal_id=PRINCIPAL_B, plane=plane) is None
+
+        # The control at both ends: the row is there, and its owner reads it.
+        own = job_for(connection, operation_id, principal_id=PRINCIPAL_A, plane=plane)
+        assert own is not None, "A cannot read its own job, so B's `None` proves nothing"
+        assert own.operation_id == operation_id
+        assert own.subject_id == subject.format(1)
+        assert own.state is JobState.QUEUED
+        assert job_state(connection, operation_id, principal_id=PRINCIPAL_A, plane=plane) is (
+            JobState.QUEUED
+        )
+
+
+@pytest.mark.parametrize("plane,subject", PLANES, ids=lambda value: getattr(value, "subject", ""))
+def test_a_status_read_will_not_run_without_a_principal(
+    engine: Engine, plane: JobPlane, subject: str
+) -> None:
+    """The argument is required and unvalidated input does not become a partition.
+
+    `principal_id` has no default on purpose: a default would restore the global
+    read for every call site that had not been visited, and it would do it
+    silently. A malformed one is refused before a statement is built, so a caller
+    cannot reach the plane with a value the identifier vocabulary does not
+    recognise.
+    """
+    with engine.begin() as connection:
+        operation_id = enqueue_job(connection, subject.format(1), plane=plane)
+
+    with engine.connect() as connection:
+        with pytest.raises(TypeError):
+            job_for(connection, operation_id, plane=plane)  # type: ignore[call-arg]
+        with pytest.raises(TypeError):
+            job_state(connection, operation_id, plane=plane)  # type: ignore[call-arg]
+        with pytest.raises(ValueError, match="identifier"):
+            job_for(connection, operation_id, principal_id="not-a-principal", plane=plane)

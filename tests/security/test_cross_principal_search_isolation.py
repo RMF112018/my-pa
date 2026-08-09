@@ -25,9 +25,9 @@ one:
   that differed between the two would tell B that A's enrollment exists, which
   is the fact the partition is there to withhold.
 
-Both are asserted for `SearchKnowledge` and for `ReadKnowledge`, because they are
-two capabilities resolving through the same function and a change could break one
-without the other.
+Both are asserted for `SearchKnowledge` and for `ReadKnowledge`, because both resolve
+their scope through the same function and a change could break one without the
+other.
 
 Every identity, source, and enrollment here is synthetic. No path is opened, no
 source is reached, and no query is run against a real corpus.
@@ -187,7 +187,7 @@ def _outcome(
 
 
 def _commands(enrollment_id: str) -> tuple[object, ...]:
-    """The two capabilities that resolve a scope through an enrollment identifier."""
+    """Both commands that resolve a scope through an enrollment identifier."""
     return (
         SearchKnowledge(enrollment_id=enrollment_id, query="synthetic"),
         ReadKnowledge(enrollment_id=enrollment_id, knowledge_id="kn_0000000000000001"),

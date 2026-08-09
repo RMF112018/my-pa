@@ -34,31 +34,39 @@ because the class is *"a text I did not anticipate"* and no regular expression
 closes it. **A parser can only ever enumerate what it knows; the server parses
 everything by definition.** So this module runs the migrations and asks
 PostgreSQL what it ended up holding, and the only shape that matters is the one
-the server accepted. That is also where `README.md` says migration behaviour
-belongs — "applied and rolled back in the database tier; only SQL generation is
-checked by FAST" — and putting the claim in FAST was the mistake underneath all
-four rounds.
+the server accepted. That is also where `README.md` puts migration
+behaviour: applied and rolled back in the database tier, with only SQL generation
+checked by FAST. Siting the claim in FAST was the mistake underneath all four
+rounds.
 
-**What it compares.** Every constraint in every non-system schema, as
-`schema.table.constraint = <definition>` straight from `pg_get_constraintdef`.
-Not just `CHECK`s, and nothing enumerated: a `UNIQUE` a downgrade forgot, a
-`FOREIGN KEY` it restored over different columns, a default it changed on the way
-down, all fall out of the same comparison. Nothing is listed, so nothing can be
-forgotten — the property `test_head_round_trip.py` establishes at `base`, held at
-every revision instead of only the last one.
+**What it compares.** Four kinds of fact about every table in every non-system
+schema, straight out of the catalogue: constraints
+(`pg_get_constraintdef`), columns (type, `NOT NULL`, and `DEFAULT`), indexes
+(`pg_get_indexdef`), and non-internal triggers (`pg_get_triggerdef`). So a
+`UNIQUE` a downgrade forgot, a `FOREIGN KEY` it restored over different columns,
+a `NOT NULL` it dropped, a default it changed, an index it left behind and a
+trigger it failed to remove all fail the same comparison. Nothing inside those
+four kinds is enumerated, so nothing inside them can be forgotten — the property
+`test_head_round_trip.py` establishes at `base`, held at every revision instead of
+only the last one.
 
-**What it does NOT compare**, at demonstrated capability. Constraints only:
-column types, indexes, triggers, functions and sequences are outside it, and two
-databases could still differ in one of those. `test_head_round_trip.py` compares
-schemas, extensions and relations, and only between `head` and `base`. Neither
-subsumes the other and both are needed.
+**What it does NOT compare**, at demonstrated capability and no higher, and
+listed because the first version of this module claimed a default was covered
+when a plant showed it was not. The four kinds above are what it reads, so
+everything else about a database is outside it: table and column *comments*,
+privileges and ownership, collations, sequence parameters, functions and
+procedures other than the triggers that call them, row-level security policies,
+publications, and anything about *rows*. Two databases at one revision can still
+differ in any of those and this test will pass.
 
 **`public.alembic_version` is excluded by name, for the reason
 `test_head_round_trip.py` gives**: Alembic creates it and no revision owns it, so
 it appears the moment the first `upgrade` runs and no `downgrade` can drop it.
-Without the exclusion every revision's comparison would differ by that table's
-primary key. Measured: with it excluded the whole walk is clean, and the only
-difference it hid was that one constraint.
+Measured rather than asserted, and the earlier version of this sentence
+overstated it: without the exclusion exactly **one** revision's comparison
+differs — the first, where the table does not exist in the "fresh" snapshot and
+does afterwards. From the second revision on it is in both sides and cancels. The
+only fact the exclusion hides is that table's own primary key.
 """
 
 from __future__ import annotations
@@ -92,18 +100,48 @@ DISPOSABLE_DATABASE = "my_pa_revision_denotation_test"
 #: appear in every comparison after the first `upgrade` and in none before.
 VERSION_TABLE: Final = ("public", "alembic_version")
 
-#: Every constraint in every schema PostgreSQL did not reserve for itself, as one
-#: comparable line each. System schemas are excluded by pattern rather than by
-#: name so a session's temporary schema cannot enter the snapshot and make the
-#: result depend on which backend happened to run it.
-_CONSTRAINTS = text(
-    "SELECT n.nspname || '.' || c.relname || '.' || con.conname "
-    "       || ' = ' || pg_get_constraintdef(con.oid) "
-    "FROM pg_constraint con "
-    "JOIN pg_class c ON c.oid = con.conrelid "
-    "JOIN pg_namespace n ON n.oid = c.relnamespace "
-    "WHERE n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema' "
-    "  AND NOT (n.nspname = :version_schema AND c.relname = :version_table) "
+#: Everything about a table this comparison can reach, as one comparable line
+#: each, in four kinds: constraints, columns (type, nullability and default),
+#: indexes, and non-internal triggers.
+#:
+#: **Four kinds rather than one, because a review found the one.** The first
+#: version read `pg_constraint` alone, and the reviewer measured what that misses:
+#: `NOT NULL` lives in `pg_attribute.attnotnull` and a default in `pg_attrdef`,
+#: neither of which produces a `pg_constraint` row. A `downgrade` that dropped a
+#: `NOT NULL` left two databases at one revision disagreeing about whether a
+#: column could be null — the identical shape as `D-109`'s own defect — with the
+#: whole tier green. A stray index survived the same way. All three now fail.
+#:
+#: System schemas are excluded by pattern rather than by name so a session's
+#: temporary schema cannot enter the snapshot and make the result depend on which
+#: backend happened to run it. Columns are read only for relations that have
+#: them; `attisdropped` columns are skipped because a dropped column leaves a
+#: tombstone whose name is not stable.
+_SNAPSHOT = text(
+    "WITH visible AS ("
+    "  SELECT c.oid, n.nspname, c.relname, c.relkind"
+    "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+    "  WHERE n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema'"
+    "    AND NOT (n.nspname = :version_schema AND c.relname = :version_table)"
+    ") "
+    "SELECT 'constraint ' || v.nspname||'.'||v.relname||'.'||con.conname"
+    "       ||' = '||pg_get_constraintdef(con.oid) "
+    "FROM pg_constraint con JOIN visible v ON v.oid = con.conrelid "
+    "UNION ALL "
+    "SELECT 'column ' || v.nspname||'.'||v.relname||'.'||a.attname"
+    "       ||' = '||format_type(a.atttypid, a.atttypmod)"
+    "       ||' notnull='||a.attnotnull"
+    "       ||' default='||coalesce(pg_get_expr(d.adbin, d.adrelid), '<none>') "
+    "FROM pg_attribute a JOIN visible v ON v.oid = a.attrelid "
+    "LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum "
+    "WHERE a.attnum > 0 AND NOT a.attisdropped AND v.relkind IN ('r', 'p', 'm', 'f') "
+    "UNION ALL "
+    "SELECT 'index ' || v.nspname||'.'||v.relname||' = '||pg_get_indexdef(i.indexrelid) "
+    "FROM pg_index i JOIN visible v ON v.oid = i.indrelid "
+    "UNION ALL "
+    "SELECT 'trigger ' || v.nspname||'.'||v.relname||'.'||t.tgname"
+    "       ||' = '||pg_get_triggerdef(t.oid) "
+    "FROM pg_trigger t JOIN visible v ON v.oid = t.tgrelid WHERE NOT t.tgisinternal "
     "ORDER BY 1"
 )
 
@@ -112,10 +150,10 @@ def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO())
 
 
-def _constraints(engine: Engine) -> tuple[str, ...]:
+def _schema_facts(engine: Engine) -> tuple[str, ...]:
     with engine.connect() as connection:
         rows = connection.execute(
-            _CONSTRAINTS,
+            _SNAPSHOT,
             {"version_schema": VERSION_TABLE[0], "version_table": VERSION_TABLE[1]},
         ).scalars()
         return tuple(str(row) for row in rows)
@@ -168,10 +206,10 @@ def test_every_revision_returns_the_database_to_what_the_one_below_it_denotes(
     what keeps a whole-chain claim down to a few seconds.
 
     Three controls, because a comparison of two identical nothings passes
-    perfectly. The walk must cover every revision file; the constraint count must
-    grow from nothing to something real, which is what proves the snapshot can
-    see anything at all; and each revision's own comparison is reported with the
-    exact constraints that differ rather than as a count.
+    perfectly. The walk must cover every revision file; the snapshot must grow from
+    nothing to something real, which is what proves it can see anything at all;
+    and each revision's comparison is reported with the exact facts that differ
+    rather than as a count.
     """
     engine = create_database_engine(disposable_database)
     revisions = list(reversed(list(ScriptDirectory(str(ROOT / "migrations")).walk_revisions())))
@@ -181,7 +219,7 @@ def test_every_revision_returns_the_database_to_what_the_one_below_it_denotes(
             "this walk would silently skip a revision"
         )
 
-        empty = _constraints(engine)
+        empty = _schema_facts(engine)
         assert empty == (), (
             f"a database nothing has migrated already holds {len(empty)} constraints"
         )
@@ -190,24 +228,24 @@ def test_every_revision_returns_the_database_to_what_the_one_below_it_denotes(
             parent = revision.down_revision or "base"
             assert isinstance(parent, str)
 
-            fresh = _constraints(engine)
+            fresh = _schema_facts(engine)
             command.upgrade(_config(), revision.revision)
             command.downgrade(_config(), parent)
-            returned = _constraints(engine)
+            returned = _schema_facts(engine)
 
             assert returned == fresh, (
                 f"{revision.revision}'s downgrade does not return the database to "
-                f"what {parent} denotes, so two databases at {parent} would hold "
-                "different constraints depending on how each arrived.\n"
+                f"what {parent} denotes, so two databases at {parent} would differ "
+                "depending on how each arrived.\n"
                 f"  only after the round trip: {sorted(set(returned) - set(fresh))}\n"
                 f"  only in the fresh build  : {sorted(set(fresh) - set(returned))}"
             )
 
             command.upgrade(_config(), revision.revision)
 
-        at_head = _constraints(engine)
+        at_head = _schema_facts(engine)
         assert len(at_head) > len(empty), (
-            "the chain added no constraint at all, so every comparison above "
+            "the chain added no schema fact at all, so every comparison above "
             "compared two empty sets and proved nothing"
         )
 

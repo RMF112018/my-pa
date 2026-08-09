@@ -931,8 +931,8 @@ def test_a_frozen_revision_emits_its_recorded_vocabulary(revision: str) -> None:
     """The other end of the property, so a plant proves something.
 
     A member added to `Capability`, `DenialReason`, `JobState`, any of the six
-    capture sets, or any of the thirteen the proposal revision freezes must
-    leave all twenty-five constraint texts exactly where they are. That is what
+    capture sets, or any set the proposal revision freezes must leave every
+    recorded constraint text exactly where it is. That is what
     "the revision goes on denoting one schema" means, and it is the half the
     reviewer measured as broken for `denial_reason`.
     """

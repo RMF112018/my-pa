@@ -364,7 +364,22 @@ rediscovered.
   paragraph and scheduled here again.
 - **No `statement_timeout` is configured anywhere.** The functional index removes
   the sequential scan as the only possibility without bounding what a query can
-  cost. WP-4 owns process and connection configuration.
+  cost. WP-4 owns process and connection configuration. *Corrected 2026-08-08:
+  **this bullet is false at `6e491c2`.** `statement_timeout` is configured, on
+  the connection rather than in the server, and it cannot be configured away.
+  `src/my_pa/bootstrap/settings.py:244` carries `statement_timeout_ms` as a
+  validated `MY_PA_` field with `gt=0` and a `DEFAULT_STATEMENT_TIMEOUT_MS`
+  default (`:109`); `src/my_pa/bootstrap/gateway.py:163` and `:166` pass it to
+  **both** engines as a libpq `options` connection parameter. A `database_url`
+  smuggling its own `options=-c statement_timeout=0` is refused rather than
+  honoured — the four cases are pinned in `tests/unit/test_settings.py`
+  (`test_the_statement_timeout_cannot_be_configured_away`,
+  `test_a_misspelled_statement_timeout_is_not_silently_ignored`) and the
+  both-engines property in `tests/unit/test_gateway_composition.py:175`. Closed
+  by #52 at `6e491c2`, which is the change that also wrote this correction's
+  subject into existence. The superseded wording is kept and negated rather than
+  deleted, per the `D-78`/`D-81` shape. No new `D-` identifier is minted — see
+  the identifier-reservation note under section 13's decision table.*
 - **`eligible` is a required integer in the `v1` disclosure** and no integer is
   true for an unmeasured scope. Making it absent is a contract change gated by
   `P00-OD-004`.
@@ -374,6 +389,50 @@ rediscovered.
   (it is `observe_object`); `INDEXED_CONFIGURATIONS` is read as a rebindable
   module global; the offline DDL test asserts constraint names but not index
   names; and `mypy` is configured over a wider tree than the gate runs.
+  *Corrected 2026-08-08: **three of these five are closed at `6e491c2` and this
+  bullet still asserts all five.** Taken in the order written. **(1) The
+  `extractions` check constraint — open**, and the only one of the five whose
+  wording still holds exactly as written. **(2) `record_object`
+  — closed.** No `record_object` symbol occurs anywhere in the repository; the
+  function is `observe_object` at
+  `src/my_pa/infrastructure/persistence/registry.py:246`, and the comment that
+  named the wrong one is gone. Closed by #52 at `6e491c2`. **(3)
+  `INDEXED_CONFIGURATIONS` — closed, and closed more strongly than this bullet
+  asked.** Rebindability was the wrong property to chase: the value is resolved
+  once at import into the `literal_column` every statement in the module holds,
+  so rebinding the global after import changes no statement, and the guard in
+  `_configuration` (`src/my_pa/infrastructure/persistence/search.py:330`) refuses
+  any name outside the closed set before it can reach SQL interpolation.
+  `src/my_pa/infrastructure/persistence/capture_search.py:186` carries the same
+  guard for the second plane. Closed by #52 at `6e491c2`. **(4) The offline DDL
+  test — open, and narrower than this bullet says.** The bullet reads as though
+  index names are unpinned; they are not. Both functional GIN indexes are pinned
+  online by `EXPLAIN`-plan assertion —
+  `tests/search_quality/test_lexical_search.py:3727` for `extractions_full_text`
+  and `tests/search_quality/test_capture_search.py:285` for
+  `capture_versions_full_text`, with the index *definition* additionally checked
+  at `tests/schema/test_capture_schema_migration.py:783`. The residue is the
+  **offline `--sql` review artifact alone**:
+  `test_offline_mode_emits_the_knowledge_ddl_without_connecting`
+  (`tests/schema/test_knowledge_schema_migration.py:182`) asserts the schema, the
+  tables, the unique constraints and the check constraints, and asserts nothing
+  about indexes — so the artifact a reviewer reads without a server does not
+  attest them. That is a disclosure gap in one artifact, not an unpinned index,
+  and it should be stated that way rather than as a wider hole. **(5) `mypy` —
+  closed, and closed before either of the two pull requests that have since
+  restated it as open.** `D-64` widened both workflow jobs to a bare
+  `python -m mypy` at `08e7c81` (#33); `pyproject.toml:204` holds
+  `files = ["src", "migrations", "apps"]` and
+  `.github/workflows/repository-checks.yml:101` and `:248` invoke `mypy` with no
+  path argument, so the configured tree and the gated tree agree by construction
+  rather than by a maintained number. **#51's body restated this item as
+  remaining, and #52 did not correct it** — in both cases the list was inherited
+  from this bullet rather than recomputed, which is the defect this correction
+  exists to stop propagating. Neither pull request's history is rewritten; the
+  correction is recorded here, where the list they inherited from lives, and as a
+  comment on #51. The superseded wording is kept and negated rather than deleted,
+  per the `D-78`/`D-81` shape. No new `D-` identifier is minted — see the
+  identifier-reservation note under section 13's decision table.*
 
 ### What the WP-3 reviews cost, and what they bought
 

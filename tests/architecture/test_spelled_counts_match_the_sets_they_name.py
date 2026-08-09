@@ -332,10 +332,11 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "README.md",
         "four capabilities",
         "was in the not-implemented list below",
-        "the size of the `capture.*` subset, which the sentence names in full "
-        "(`capture.create`, `capture.revise`, `capture.read`, `capture.list`), "
-        "not the size of `Capability`; surfaced the first time this guard swept "
-        "the repository root",
+        "the same WP-6 delta, in the entry recording what one not-implemented "
+        "item became; not the size of any set. Stated as a delta because the "
+        "first version of this row called it the size of the `capture.*` subset "
+        '"named in full", and that was false: `capture.*` holds five members, '
+        "not four, once `capture.search` is counted",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",

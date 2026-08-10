@@ -12,8 +12,8 @@
  * `callGateway`, the real envelope construction, the real disclosure mapping,
  * the real `surfaceAnswer` classification. What is faked is one HTTP response.
  *
- * Three answers are asserted for each page and they are three different HTTP
- * facts, not three shapes of the same one:
+ * At least three answers are asserted for each page and they are three different
+ * HTTP facts, not three shapes of the same one:
  *
  * 1. a `200` carrying rows -> records;
  * 2. a `200` carrying **no** rows and a complete coverage -> empty;
@@ -26,6 +26,13 @@
  * A transport failure is asserted too, because "the socket never answered" and
  * "the backend said it could not search" are both unavailable but arrive by
  * completely different paths through `callGateway`.
+ *
+ * Situations adds a fifth: a `200` carrying no rows whose disclosure says the
+ * answer was **partial**. That is not an empty record either — the rows may
+ * exist and simply not have been returned — and the board has two halves, so a
+ * whole half's emptiness must still be stated while a partial half's must not.
+ * System is here for a related reason: a successful response that omitted its
+ * `readiness` block must not be rendered as a readiness of zero.
  *
  * Every identifier below is synthetic and well-formed under the domain's own
  * opaque-identifier patterns. No real capture, no real person, no real text.
@@ -58,6 +65,8 @@ vi.mock("@/lib/auth/principal", () => ({
 import LibraryPage from "@/app/(app)/library/page";
 import ReviewPage from "@/app/(app)/review/page";
 import TodayPage from "@/app/(app)/today/page";
+import SituationsPage from "@/app/(app)/situations/page";
+import SystemPage from "@/app/(app)/system/page";
 
 /** A disclosure whose coverage says the answer is whole. */
 function whole(overrides: Record<string, unknown> = {}) {
@@ -180,6 +189,16 @@ const PULSE_ITEM = {
   generated_at: "2026-01-01T00:00:00Z",
 };
 
+const PROJECT = {
+  project_id: "prj_aaaa0001aaaa0001aaaa0001",
+  name: "North slab pour",
+  state: "active",
+  description: null,
+  participants: [],
+  opened_at: "2026-01-01T00:00:00Z",
+  closed_at: null,
+};
+
 const NO_PARAMS = Promise.resolve({});
 
 describe("Library reaches the record instead of asserting about it", () => {
@@ -294,6 +313,113 @@ describe("Today distinguishes a quiet day from a failed derivation", () => {
     await renderServerPage(() => TodayPage());
     expect(screen.getByTestId("today-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(screen.queryByTestId("today-empty")).toBeNull();
+  });
+});
+
+describe("Situations never calls a partial answer an empty board", () => {
+  it("says the board is empty only when both halves were read whole", async () => {
+    answerWith({ situations: [], projects: [] }, whole());
+    await renderServerPage(() => SituationsPage());
+    const empty = screen.getByTestId("situations-empty");
+    expect(empty).toHaveAttribute("data-state", "empty");
+    expect(empty.textContent).toMatch(/read successfully/i);
+  });
+
+  it("does NOT claim emptiness when a partial answer carried no rows", async () => {
+    // Byte-identical payload to the case above; only the backend's own
+    // `partial_result` differs. Rows may exist and simply not have come back.
+    answerWith({ situations: [], projects: [] }, partial());
+    await renderServerPage(() => SituationsPage());
+    const state = screen.getByTestId("situations-degraded-empty");
+    expect(state).toHaveAttribute("data-state", "degraded");
+    expect(screen.getByTestId("degraded-banner")).toBeTruthy();
+    // Neither the page's empty card nor the board's two emptiness sentences.
+    expect(screen.queryByTestId("situations-empty")).toBeNull();
+    expect(screen.queryByTestId("projects-empty")).toBeNull();
+    expect(screen.queryByText(/you hold no situations yet/i)).toBeNull();
+    expect(screen.queryByText(/you hold no projects yet/i)).toBeNull();
+  });
+
+  it("does NOT claim one half is empty because the other half carried rows", async () => {
+    // The projects half answered with a row, so the board renders; the
+    // situations half answered partial and carried none, and that half's
+    // emptiness is therefore not established.
+    answerWith({ situations: [], projects: [PROJECT] }, partial());
+    await renderServerPage(() => SituationsPage());
+    expect(screen.getByTestId("project-card")).toBeTruthy();
+    expect(screen.getByTestId("situations-partial-empty").textContent).toMatch(/partial/i);
+    expect(screen.queryByTestId("situations-empty")).toBeNull();
+    expect(screen.queryByText(/you hold no situations yet/i)).toBeNull();
+  });
+
+  it("still says a whole answer's empty half is empty", async () => {
+    // The counterpart to the case above, so the guard cannot be satisfied by
+    // never making the claim at all: a complete answer that carried no
+    // situations beside a real project still states that emptiness plainly.
+    answerWith({ situations: [], projects: [PROJECT] }, whole());
+    await renderServerPage(() => SituationsPage());
+    expect(screen.getByTestId("project-card")).toBeTruthy();
+    expect(screen.getByTestId("situations-empty").textContent).toMatch(
+      /you hold no situations yet/i,
+    );
+    expect(screen.queryByTestId("situations-partial-empty")).toBeNull();
+  });
+
+  it("does NOT say empty when the backend answered that it did not search", async () => {
+    answerWith({ situations: [], projects: [] }, notSearched());
+    await renderServerPage(() => SituationsPage());
+    expect(screen.getByTestId("situations-unavailable")).toHaveAttribute(
+      "data-state",
+      "unavailable",
+    );
+    expect(screen.queryByTestId("situations-empty")).toBeNull();
+    expect(screen.queryByTestId("situations-degraded-empty")).toBeNull();
+  });
+});
+
+describe("System reports what it was told, and says so when it was told nothing", () => {
+  const MANIFEST = { contract_version: "v1", capabilities: [] };
+
+  it("prints the readiness count the application actually returned", async () => {
+    answerWith(
+      {
+        manifest: MANIFEST,
+        readiness: { state: "degraded", implemented_capabilities: 24, total_capabilities: 26 },
+      },
+      whole(),
+    );
+    await renderServerPage(() => SystemPage());
+    expect(screen.getByTestId("system-readiness").textContent).toMatch(/24 of 26/);
+    expect(screen.queryByTestId("system-readiness-unknown")).toBeNull();
+  });
+
+  it("does NOT render '0 of 0' for a response that carried no readiness", async () => {
+    // A successful answer with the `readiness` key simply absent. `?? 0` on both
+    // halves turned that into a confident claim that nothing is implemented.
+    answerWith({ manifest: MANIFEST }, whole());
+    await renderServerPage(() => SystemPage());
+    expect(screen.queryByTestId("system-readiness")).toBeNull();
+    const unknown = screen.getByTestId("system-readiness-unknown");
+    expect(unknown.textContent).toMatch(/unknown/i);
+    expect(document.body.textContent).not.toMatch(/0 of 0/);
+  });
+
+  it("shows a gateway auth mode it cannot read as a misconfiguration", async () => {
+    vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "");
+    answerWith({ manifest: MANIFEST }, whole());
+    await renderServerPage(() => SystemPage());
+    const alert = screen.getByTestId("system-auth-mode-misconfigured");
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(alert.textContent).toMatch(/MYPA_GATEWAY_AUTH_MODE is not set/);
+    // And the disclosure it replaces is not silently substituted for it.
+    expect(screen.queryByTestId("system-local-operator")).toBeNull();
+  });
+
+  it("still discloses the local_operator limit when the mode is readable", async () => {
+    answerWith({ manifest: MANIFEST }, whole());
+    await renderServerPage(() => SystemPage());
+    expect(screen.getByTestId("system-local-operator").textContent).toMatch(/one fixed principal/);
+    expect(screen.queryByTestId("system-auth-mode-misconfigured")).toBeNull();
   });
 });
 

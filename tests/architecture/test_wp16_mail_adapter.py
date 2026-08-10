@@ -113,15 +113,77 @@ MECHANISM_OPERATIONS: Final = (
     "messageSummaries",
 )
 
+#: The closed set of *properties* the seam may offer, every one of them
+#: `{ get }`-only. A `{ get }` property is a read and stays legal; a `{ get set }`
+#: property is an assignment into somebody's mailbox that the operation set above
+#: cannot see, because it is not a `func`.
+MECHANISM_PROPERTIES: Final = ("descriptor",)
+
 
 def test_the_mail_mechanism_seam_declares_only_read_operations() -> None:
+    """The seam is closed, and closed against every way Swift declares a member.
+
+    **A `func` is not the only kind of operation a protocol can carry, and the
+    first version of this guard only looked at `func`.** Both of
+
+        var readStatus: Bool { get set }
+        subscript(deleteMessage key: String) -> Bool { get set }
+
+    compile as members of `MailMechanism`, are mutation paths into a mailbox in
+    exactly the sense the failure message below describes, and were invisible to
+    the operation regex. So the settable half of a property and the subscript
+    form are checked here too.
+    """
     body = _source(MECHANISM).split("public protocol MailMechanism", 1)[1]
+
+    # The seam inherits `Sendable` and nothing else. A protocol inherits its
+    # parents' requirements, so `MailMechanism: Sendable, SomeMutatingSeam` puts
+    # every operation of that parent on this seam while every assertion below —
+    # which reads only the text between `public protocol MailMechanism` and the
+    # end of the file — sees an unchanged five-operation protocol.
+    inherited = sorted(
+        part.strip() for part in body.split("{", 1)[0].lstrip(": ").split(",") if part.strip()
+    )
+    assert inherited == ["Sendable"], (
+        f"the mail mechanism seam now inherits {inherited}. A parent protocol's "
+        "requirements are this seam's requirements, and they arrive without "
+        "appearing between the braces the rest of this test reads"
+    )
+
     operations = sorted(set(re.findall(r"func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", body)))
     assert operations == sorted(MECHANISM_OPERATIONS), (
         f"the mail mechanism seam now offers {operations}. Every operation on it "
         "must be a read: this seam is the only thing a live mail mechanism would "
         "be asked for, so an operation that is not a read is a mutation path into "
         "somebody's mailbox"
+    )
+
+    # `[^{}]+` rather than `[^\n{]+` for the type: Swift admits the accessor
+    # block on the following line, and a regex anchored to one line would not
+    # see `var readStatus: Bool\n{ get set }` at all.
+    properties = re.findall(r"var\s+([A-Za-z_][A-Za-z0-9_]*)\s*:[^{}]+\{([^}]*)\}", body)
+    settable = sorted(name for name, accessors in properties if "set" in accessors.split())
+    assert settable == [], (
+        f"the mail mechanism seam declares the settable properties {settable}. A "
+        "`{ get }` property is a read and is legal here; `{ get set }` is an "
+        "assignment into somebody's mailbox — `readStatus`, `deletedStatus`, "
+        "`junkMailStatus` are all one-line properties in Apple Mail's own "
+        "dictionary — and it is not a `func`, so the operation set above never "
+        "sees it"
+    )
+    assert sorted(name for name, _ in properties) == sorted(MECHANISM_PROPERTIES), (
+        f"the mail mechanism seam now declares the properties "
+        f"{sorted(name for name, _ in properties)}. The property set is closed for "
+        "the same reason the operation set is: every member of this seam is "
+        "something a live mail mechanism will be asked for, and adding one is a "
+        "decision rather than a line in a diff"
+    )
+    assert "subscript" not in body, (
+        "the mail mechanism seam declares a subscript. A subscript is an "
+        "operation with no name for the closed set above to hold, and a "
+        "`{ get set }` subscript is a write into a mailbox keyed by a string. "
+        "There is no read this seam needs that one of its five named operations "
+        "cannot express"
     )
 
 
@@ -323,6 +385,19 @@ def test_every_mail_content_bound_is_enforced_on_the_decode_path_too() -> None:
     A bound enforced only on the memberwise initialiser holds for values built in
     Swift and not for the same values arriving as JSON, which is the shape the
     host would actually be handed.
+
+    **A decoder that exists is not a decoder that validates**, and the first
+    version of this guard asserted only the first of those. A decoder rewritten
+    to assign its stored properties directly compiles, keeps the literal string
+    this test looked for, and skips every `guard` in the throwing initialiser —
+    so an over-ceiling attachment mislabelled `metadata_only` would decode off
+    the wire. The routing is therefore asserted as well: the decoder must reach
+    the validating initialiser (`try self.init(…)`, or `Self(rawValue:)` for the
+    failable one) and must assign no stored property of its own.
+
+    This remains a *static* check, and the runtime one is the one that matters:
+    `AppleSourceHostContractChecks::checkMailAttachmentDescriptorBoundsHoldOffTheWire`
+    decodes the malformed JSON and requires the failure.
     """
     for path, types in (
         (ADAPTER, ("MailContentCompleteness", "MailRecordContent")),
@@ -338,6 +413,21 @@ def test_every_mail_content_bound_is_enforced_on_the_decode_path_too() -> None:
                 f"{type_name} carries an invariant and decodes off the wire with no "
                 "validating decoder of its own; the bound would hold only for "
                 "values built in Swift"
+            )
+            decoder = body.split("public init(from decoder: Decoder)", 1)[1].split("\n    }", 1)[0]
+            assert "try self.init(" in decoder or "Self(rawValue:" in decoder, (
+                f"{type_name}'s decoder no longer routes through its validating "
+                "initialiser. A decoder that builds the value some other way is a "
+                "decoder that skips every guard the initialiser holds, and the "
+                "bound then applies only to values built in Swift — which is the "
+                "defect this test was written to catch, in the one shape it could "
+                "not see"
+            )
+            assigned = sorted(set(re.findall(r"self\.([A-Za-z_][A-Za-z0-9_]*)\s*=[^=]", decoder)))
+            assert assigned == [], (
+                f"{type_name}'s decoder assigns {assigned} directly. Direct "
+                "assignment is exactly how a decoder keeps its shape and loses its "
+                "validation: the fields arrive off the wire unchecked"
             )
 
 
@@ -465,6 +555,55 @@ def test_apple_mail_consent_cannot_withhold_the_mutation_surface() -> None:
     would be wrong.
     """
     root = _sdef_root()
+    terms = _probe_terms("mutationTermsConsentCannotWithhold")
+
+    # **A floor, because without one this test measures nothing.** The body of
+    # this check is a loop over the probe's table, and an empty table is a loop
+    # that runs zero times and passes: emptying
+    # `mutationTermsConsentCannotWithhold` to `[Term] = [\n    ]` leaves this
+    # module at 13 passed while the record still calls this "the control-6
+    # finding, stated as a measurement".
+    #
+    # **Ten, and not fewer.** Ten is the whole table, not a sample of it, and
+    # the two halves carry different halves of the finding: the five commands
+    # are the mutation a grant carries in its own right — `delete` (`coredelo`),
+    # `move` (`coremove`) and `duplicate` (`coreclon`) are the three §A names as
+    # destructive — and the five settable properties are the mutation the same
+    # grant carries *at a message*, which is the half a reader is least likely
+    # to believe without seeing it measured. Any floor below ten would let one
+    # of those halves be deleted with this guard still green. The sibling
+    # read-shape floor is `>= 12` over sixteen terms because that table's job is
+    # to establish a *shape* and a shape survives losing an entry; this table's
+    # job is to establish a *finding*, and a finding measured from a shrinking
+    # table is a different finding.
+    assert len(terms) >= 10, (
+        f"the probe's mutation table parsed to {len(terms)} terms. This test is "
+        "a loop over that table, so a short table is a quiet way to stop "
+        "measuring the finding that control 6 rests on: that a TCC Automation "
+        "grant which permits reading `date received` is the same grant that "
+        "permits `coredelo` at a mailbox"
+    )
+    assert len(set(terms)) == len(terms), (
+        f"the probe's mutation table holds {len(terms)} entries and only "
+        f"{len(set(terms))} distinct ones. A repeated term satisfies the floor "
+        "above without adding a measurement, which is the obvious way past it"
+    )
+    commands_listed = {member for scripting_class, member, _ in terms if scripting_class == ""}
+    properties_listed = {(cls, member) for cls, member, _ in terms if cls != ""}
+    assert {"delete", "move", "duplicate"} <= commands_listed, (
+        f"the probe's mutation table lists the commands {sorted(commands_listed)} "
+        "and no longer names all three of `delete`, `move` and `duplicate`. Those "
+        "are the three commands §A reads out of Mail's dictionary as "
+        '`<access-group identifier="*"/>`, and they are the reason the automation '
+        "framework is kept out of everything that ships"
+    )
+    assert properties_listed, (
+        "the probe's mutation table now lists commands only. The settable "
+        "properties are the half that shows the grant mutates *a message* — "
+        "`read status`, `deleted status`, `junk mail status` — and dropping them "
+        "leaves the finding resting on the half nobody doubts"
+    )
+
     commands = {
         element.get("name", ""): element.get("code", "")
         for suite in root.iter("suite")

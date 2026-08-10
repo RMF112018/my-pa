@@ -18,7 +18,7 @@ wp_05_status: complete, reviewed clean, PR open against the lineage, not merged;
 wp_06_status: complete, reviewed clean, PR open against the lineage, not merged; stacks on #58
 wp_07_status: complete, reviewed clean, PR #60 open against the lineage, not merged; stacks on #59
 wp_08_status: complete, reviewed clean (zero blockers, six NOTEs), PR #61 open against the lineage, not merged; stacks on #60
-wp_09_status: complete, reviewed clean (zero blockers, eight NOTEs), PR #<PR> open against the lineage, not merged; stacks on #61
+wp_09_status: complete, reviewed clean (zero blockers, eight NOTEs), PR #62 open against the lineage, not merged; stacks on #61
 supersedes: WP-N01
 completed_work_packages: [WP-01, WP-02, WP-S01, WP-03, WP-04, WP-05, WP-06, WP-07, WP-08, WP-09]
 milestone_ms0: WP-01 -> WP-02 -> WP-S01 -> WP-03

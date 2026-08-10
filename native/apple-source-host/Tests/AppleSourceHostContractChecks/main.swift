@@ -38,6 +38,7 @@ struct AppleSourceHostContractChecks {
             Darwin._exit(lockProbeExitStatus(path: CommandLine.arguments[2]))
         }
         try checkProtocolVersionAndValueValidation()
+        try checkFrozenPageAndCursorBoundsRefuseRatherThanClamp()
         try checkAllThreeSyntheticAdapters()
         try checkSyntheticDenials()
         try checkIntegratedHostBoundary()
@@ -50,7 +51,7 @@ struct AppleSourceHostContractChecks {
         try checkSpoolItemsAreOwnerOnlyRegularFiles()
         try checkHostLifecycleRefusesIllegalTransitionsAndVersionDrift()
         try checkOperationalTelemetryIsContentFree()
-        print("AppleSourceHostContractChecks: PASS (13 checks)")
+        print("AppleSourceHostContractChecks: PASS (14 checks)")
     }
 
     private static func require(_ condition: Bool, _ message: String) throws {
@@ -156,6 +157,135 @@ struct AppleSourceHostContractChecks {
         try requireError(.invalidPageLimit) {
             try NativeReadRequest(bucketID: bucketID, limit: 0)
         }
+    }
+
+    /// The frozen page and cursor bounds, checked at the boundary that would be
+    /// tempted to clamp them.
+    ///
+    /// The failure mode this exists for is not "the bound is missing" — that is
+    /// visible by reading — it is "the bound is honoured by truncation". A host
+    /// that answers a `limit: 5000` read with the first 100 records and no signal
+    /// has silently lost 4900 records, and the caller cannot tell that from a
+    /// bucket that genuinely held 100. So every over-bound input below is
+    /// asserted to *throw*, and every at-bound input is asserted to survive with
+    /// its full size intact.
+    private static func checkFrozenPageAndCursorBoundsRefuseRatherThanClamp() throws {
+        try require(
+            NativeSourceProtocolV1.maximumPageSize == 100,
+            "Frozen page size drifted from 100"
+        )
+        try require(
+            NativeSourceProtocolV1.maximumCursorBytes == 512,
+            "Frozen cursor byte ceiling drifted from 512"
+        )
+
+        let bucketID = try opaque("bounded-bucket")
+
+        // The request limit: accepted at the ceiling, refused above it, never
+        // rewritten down to it.
+        let atCeiling = try NativeReadRequest(
+            bucketID: bucketID,
+            limit: NativeSourceProtocolV1.maximumPageSize
+        )
+        try require(
+            atCeiling.limit == NativeSourceProtocolV1.maximumPageSize,
+            "Request limit at the ceiling was altered"
+        )
+        try requireError(.invalidPageLimit) {
+            try NativeReadRequest(
+                bucketID: bucketID,
+                limit: NativeSourceProtocolV1.maximumPageSize + 1
+            )
+        }
+        try requireError(.invalidPageLimit) {
+            try NativeReadRequest(bucketID: bucketID, limit: 5000)
+        }
+        // …and the same refusal off the wire, where a clamp would be invisible.
+        try requireDecodeFailure(
+            NativeReadRequest.self,
+            data: try mutatedJSON(atCeiling) { $0["limit"] = 5000 }
+        )
+
+        // The cursor ceiling is counted in UTF-8 bytes, not characters, so a
+        // multi-byte cursor is bounded by what it actually costs to store.
+        let ascii = String(repeating: "c", count: NativeSourceProtocolV1.maximumCursorBytes)
+        let atCursorCeiling = try requireValue(
+            NativeReadCursor(rawValue: ascii),
+            "Cursor at the byte ceiling rejected"
+        )
+        try require(
+            atCursorCeiling.rawValue == ascii,
+            "Cursor at the byte ceiling was truncated rather than kept whole"
+        )
+        try require(
+            NativeReadCursor(rawValue: ascii + "c") == nil,
+            "Over-long cursor admitted"
+        )
+        let multibyte = String(
+            repeating: "\u{00E9}",
+            count: NativeSourceProtocolV1.maximumCursorBytes / 2
+        )
+        try require(
+            multibyte.count < multibyte.utf8.count,
+            "The multi-byte cursor probe is not actually multi-byte"
+        )
+        try require(
+            NativeReadCursor(rawValue: multibyte) != nil,
+            "Multi-byte cursor at exactly the byte ceiling rejected"
+        )
+        try require(
+            NativeReadCursor(rawValue: multibyte + "\u{00E9}") == nil,
+            "Multi-byte cursor one character — two bytes — over the ceiling admitted"
+        )
+
+        // The page itself. An over-bound page is refused whole; it is not served
+        // as its first `maximumPageSize` records.
+        let record = NativeSourceRecord(
+            id: try opaque("bounded-record"),
+            bucketID: bucketID,
+            kind: .mail,
+            sourceRevision: "synthetic-v1",
+            sourceModifiedUnixMilliseconds: nil,
+            payload: [0x73]
+        )
+        let full = try NativeReadPage(
+            records: Array(repeating: record, count: NativeSourceProtocolV1.maximumPageSize),
+            nextCursor: atCursorCeiling
+        )
+        try require(
+            full.records.count == NativeSourceProtocolV1.maximumPageSize,
+            "A page at the ceiling lost records"
+        )
+        try requireError(.invalidPageLimit) {
+            try NativeReadPage(
+                records: Array(
+                    repeating: record,
+                    count: NativeSourceProtocolV1.maximumPageSize + 1
+                ),
+                nextCursor: nil
+            )
+        }
+        // Decoding refuses too, so the bound cannot be walked around by handing
+        // the host a JSON page instead of building one.
+        let encodedPage = try JSONEncoder().encode(full)
+        var pageObject = try jsonDictionary(
+            try JSONSerialization.jsonObject(with: encodedPage)
+        )
+        var records = try jsonDictionaryArray(pageObject["records"])
+        records.append(records[0])
+        pageObject["records"] = records
+        try requireDecodeFailure(
+            NativeReadPage.self,
+            data: try JSONSerialization.data(withJSONObject: pageObject, options: [.sortedKeys])
+        )
+        pageObject["records"] = try jsonDictionaryArray(
+            try jsonDictionary(try JSONSerialization.jsonObject(with: encodedPage))["records"]
+        )
+        pageObject["nextCursor"] = ascii + "c"
+        try requireDecodeFailure(
+            NativeReadPage.self,
+            data: try JSONSerialization.data(withJSONObject: pageObject, options: [.sortedKeys])
+        )
     }
 
     private static func checkAllThreeSyntheticAdapters() throws {
@@ -1341,7 +1471,7 @@ struct AppleSourceHostContractChecks {
             sourceModifiedUnixMilliseconds: 1_700_000_000_000,
             payload: [0x73, 0x79, 0x6E]
         )
-        let page = NativeReadPage(records: [record], nextCursor: nil)
+        let page = try NativeReadPage(records: [record], nextCursor: nil)
         let fixture = SyntheticPageFixture(bucketID: bucketID, requestCursor: nil, page: page)
         let request = try NativeReadRequest(bucketID: bucketID, limit: 50)
         return FixtureSet(snapshot: snapshot, fixture: fixture, request: request)
@@ -1389,7 +1519,7 @@ struct AppleSourceHostContractChecks {
             return SyntheticPageFixture(
                 bucketID: bucket.id,
                 requestCursor: nil,
-                page: NativeReadPage(records: [record], nextCursor: nil)
+                page: try NativeReadPage(records: [record], nextCursor: nil)
             )
         }
         return CollisionFixtureSet(snapshot: snapshot, fixtures: fixtures)

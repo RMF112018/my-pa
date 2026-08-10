@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -26,6 +27,8 @@ from my_pa.application.native_sources import (
 )
 from my_pa.contracts.ports import AuditSink
 from my_pa.contracts.v1.native_sources import (
+    NATIVE_SOURCE_MAX_CURSOR_BYTES,
+    NATIVE_SOURCE_MAX_PAGE_SIZE,
     NATIVE_SOURCE_PROTOCOL_V1,
     NativeAdmissionEnvelope,
     NativeBucketProgress,
@@ -801,6 +804,88 @@ def test_contract_rejects_unknown_fields_scope_drift_and_content_in_progress() -
         )
 
 
+def test_admission_envelope_refuses_an_over_bound_page_or_cursor_rather_than_trimming() -> None:
+    """The application half of the frozen host bound, and it must *refuse*.
+
+    A page ceiling that is honoured by trimming is worse than no ceiling: the
+    caller receives a short page it cannot distinguish from a genuinely short
+    one, and `nextCursor` then describes a position the records do not reach.
+    Pydantic's failure mode here is the correct one — nothing is admitted at all
+    — so these assertions are that the model *raises*, and that a page and a
+    cursor exactly at the ceiling survive with every record and every byte.
+    """
+    record: dict[str, Any] = {
+        "id": "message.1",
+        "bucketID": "bucket.a",
+        "kind": "mail",
+        "sourceRevision": "revision-1",
+        "sourceModifiedUnixMilliseconds": None,
+        "payload": [1],
+    }
+
+    def _wire(count: int, cursor: str | None) -> dict[str, Any]:
+        return {
+            "metadata": _metadata(),
+            "requestID": "read.1",
+            "kind": "mail",
+            "accountID": "account.a",
+            "bucketID": "bucket.a",
+            "records": [dict(record, id=f"message.{ordinal}") for ordinal in range(count)],
+            "nextCursor": cursor,
+        }
+
+    at_ceiling = NativeAdmissionEnvelope.model_validate(
+        _wire(NATIVE_SOURCE_MAX_PAGE_SIZE, "c" * NATIVE_SOURCE_MAX_CURSOR_BYTES)
+    )
+    assert len(at_ceiling.records) == NATIVE_SOURCE_MAX_PAGE_SIZE, (
+        "the page at the ceiling lost records, which is the truncation this "
+        "bound exists to make impossible"
+    )
+    assert at_ceiling.next_cursor is not None
+    assert len(at_ceiling.next_cursor) == NATIVE_SOURCE_MAX_CURSOR_BYTES
+
+    with pytest.raises(ValueError, match="at most"):
+        NativeAdmissionEnvelope.model_validate(_wire(NATIVE_SOURCE_MAX_PAGE_SIZE + 1, None))
+    with pytest.raises(ValueError, match="at most"):
+        NativeAdmissionEnvelope.model_validate(_wire(1, "c" * (NATIVE_SOURCE_MAX_CURSOR_BYTES + 1)))
+
+    # The host counts cursor bytes, not characters. 257 two-byte characters is
+    # far under a 512-*character* ceiling and two bytes over the host's, so a
+    # character ceiling alone would admit a cursor the host would have refused.
+    multibyte = "é" * (NATIVE_SOURCE_MAX_CURSOR_BYTES // 2)
+    assert len(multibyte) < len(multibyte.encode())
+    assert NativeAdmissionEnvelope.model_validate(_wire(1, multibyte)).next_cursor == multibyte
+    with pytest.raises(ValueError, match="invalid shape"):
+        NativeAdmissionEnvelope.model_validate(_wire(1, multibyte + "é"))
+
+
+def test_the_frozen_bounds_are_the_same_literals_on_both_sides_of_the_boundary() -> None:
+    """A bound the two sides disagree about is not a bound.
+
+    Read out of the Swift source rather than out of a second Python constant,
+    because the drift that matters is between the host binary and this package.
+    """
+    swift = (
+        ROOT
+        / "native"
+        / "apple-source-host"
+        / "Sources"
+        / "AppleSourceHost"
+        / "NativeSourceProtocolV1.swift"
+    ).read_text(encoding="utf-8")
+    declared = dict(
+        re.findall(r"public static let (maximumPageSize|maximumCursorBytes) = (\d+)", swift)
+    )
+    assert declared == {
+        "maximumPageSize": str(NATIVE_SOURCE_MAX_PAGE_SIZE),
+        "maximumCursorBytes": str(NATIVE_SOURCE_MAX_CURSOR_BYTES),
+    }, (
+        f"the host declares {declared} while this package bounds admission at "
+        f"{NATIVE_SOURCE_MAX_PAGE_SIZE}/{NATIVE_SOURCE_MAX_CURSOR_BYTES}. One "
+        "side would then accept a page the other would refuse"
+    )
+
+
 def test_admission_refuses_non_adapter_and_preflight_drift() -> None:
     controller, store, host, _, _ = _controller()
     store.append_configuration(_configuration(), expected_prior_revision=0)
@@ -1053,9 +1138,12 @@ def test_merged_swift_synthetic_host_drives_discovery_preflight_and_admission() 
     configuration = replace(_configuration(), selection=ExactBucketSelection((BUCKET_A,)))
     store.append_configuration(configuration, expected_prior_revision=0)
     authority = controller.lifecycle(
+        # Deliberately the minimum: this configuration selects only BUCKET_A, so
+        # SOURCE_A alone must suffice. Widening it here would quietly stop this
+        # being the one place that shows single-source authority is enough.
         _context(
             purpose=Purpose.CONTENT_EXTRACTION,
-            sources=frozenset({SOURCE_A, SOURCE_B}),
+            sources=frozenset({SOURCE_A}),
         ),
         capability=NativeSourceCapability.SYNC,
         configuration_id=CONFIGURATION,

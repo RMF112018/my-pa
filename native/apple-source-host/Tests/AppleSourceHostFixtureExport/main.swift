@@ -53,7 +53,7 @@ private func fixture(
         SyntheticPageFixture(
             bucketID: bucketID,
             requestCursor: nil,
-            page: NativeReadPage(records: [source], nextCursor: nil)
+            page: try NativeReadPage(records: [source], nextCursor: nil)
         )
     )
 }

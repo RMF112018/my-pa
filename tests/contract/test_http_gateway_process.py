@@ -376,21 +376,58 @@ def test_the_gateway_binds_loopback_and_offers_no_way_not_to() -> None:
     assert addresses == {"127.0.0.1"}, f"the composition root names {addresses}"
 
 
-def test_the_gateway_issues_reads_and_requires_no_credential() -> None:
-    """`P00-OD-010` is open, so no authentication mechanism is selected."""
-    forbidden = (
-        "ssl_",
-        "certfile",
-        "keyfile",
-        "ssl_certfile",
-        "password",
-        "token",
-        "api_key",
-        "Authorization",
-        "authenticate",
-    )
+def test_the_gateway_terminates_no_tls_and_holds_no_secret() -> None:
+    """The composition root configures no transport security and no key material.
+
+    `D-30` unchanged: this process binds loopback, so there is nothing here for
+    a certificate, a key file, or a password to configure — and a build that
+    grew one would have grown an ingress path nobody authorized.
+    """
+    forbidden = ("ssl_", "certfile", "keyfile", "ssl_certfile", "password", "api_key")
     for name in forbidden:
         assert name not in GATEWAY_SOURCE, f"the gateway names {name!r}"
+
+
+def test_the_gateway_selects_an_authenticator_and_implements_none() -> None:
+    """`P00-OD-010`'s mechanism is answered; the composition root is not where.
+
+    This test used to forbid the words `token`, `authenticate` and
+    `Authorization` outright, on the ground that no authentication mechanism was
+    selected at all. WP-05 selected one — `MY_PA_AUTH_MODE=entra` — so that
+    claim is no longer true and asserting it would be asserting a fact about a
+    build that no longer exists.
+
+    What replaces it is narrower in words and stronger in property: this file
+    *chooses between two compositions `bootstrap.gateway` already built* and
+    implements neither. It parses no header, decodes no token, names no key, and
+    reads no claim. `token` and `authenticate` therefore appear here only in one
+    branch and in the comments explaining it, and everything that would mean the
+    mechanism had leaked into the composition root is still forbidden.
+
+    No credential is issued or held either way, and no live tenant, application
+    registration, or key is named anywhere in this repository: the four `entra`
+    settings are blank in `.env.example` and are the operator's to supply.
+    """
+    mechanism = (
+        r"\bjwt\b",
+        r"PyJWK",
+        r"\bBearer\b",
+        r"\bdecode\b",
+        r"\bheaders\b",
+        r"\bclaims\b",
+        r"\btid\b",
+        r"\boid\b",
+        r"Authorization",
+        r"algorithms",
+    )
+    for pattern in mechanism:
+        assert not re.search(pattern, GATEWAY_SOURCE), (
+            f"the gateway matches {pattern!r}; verifying a credential belongs behind "
+            "`bootstrap.gateway`, not in the process that runs a server"
+        )
+    # And the positive half, or the rule above is satisfied by a build with no
+    # authenticated mode at all.
+    assert "runtime.authenticate" in GATEWAY_SOURCE
 
 
 def test_the_gateway_configures_the_server_the_harness_mirrors() -> None:

@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
-import { SESSION_COOKIE_NAME, verifySession } from "@/lib/auth/session";
+import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { acceptedTimeline, syntheticPersonId } from "@/lib/fixtures/situation";
 import { RelationshipTimeline } from "@/components/relationship/relationship-timeline";
 
@@ -12,7 +13,7 @@ export default async function RelationshipPage({
   params: Promise<{ personId: string }>;
 }) {
   const cookieStore = await cookies();
-  const principal = await verifySession(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+  const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
 
   const { personId } = await params;

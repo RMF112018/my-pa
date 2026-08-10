@@ -86,8 +86,6 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
                 self = .nonCanonicalOrder
             case .invalidPageLimit:
                 self = .invalidPageLimit
-            case .mailConsentAbsent:
-                self = .providerPermissionDenied
             case .mailGenerationUnavailable, .mailDateBoundNotSourceSide:
                 self = .mailMechanismUnsupported
             case .mailIdentityTooLong, .mailHeaderTooLarge, .mailBodyTooLarge,

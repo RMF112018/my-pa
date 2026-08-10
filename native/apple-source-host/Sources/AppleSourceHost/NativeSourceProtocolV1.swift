@@ -350,7 +350,6 @@ public enum NativeSourceContractError: Error, Equatable, Sendable {
     case inconsistentEnvelope
     case invalidRecurrence
     case recurrenceLimitExceeded
-    case mailConsentAbsent
     case mailGenerationUnavailable
     case mailIdentityTooLong
     case mailInvalidIdentityComponent

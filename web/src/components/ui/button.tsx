@@ -8,7 +8,7 @@ const VARIANT_CLASSES: Record<Variant, string> = {
   secondary:
     "border border-moss-green text-moss-green bg-surface hover:bg-moss-sand disabled:opacity-50",
   ghost: "text-moss-slate hover:bg-moss-sand disabled:opacity-50",
-  danger: "bg-moss-coral text-white hover:opacity-90 disabled:opacity-50",
+  danger: "bg-moss-coral-strong text-white hover:opacity-90 disabled:opacity-50",
 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

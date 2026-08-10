@@ -50,7 +50,7 @@ export function OfflineQueueStatus({ principalId }: { principalId: string }) {
 
   if (failure) {
     return (
-      <p role="alert" data-testid="offline-queue-failure" className="text-sm text-moss-coral">
+      <p role="alert" data-testid="offline-queue-failure" className="text-sm text-moss-coral-strong">
         Held notes could not be read on this device: {failure}
       </p>
     );

@@ -10,6 +10,39 @@
   --moss-slate: #1f3038;
   --moss-lime: #67a64a;
 
+  /*
+   * Two brand tones darkened for *text*, and the reason they exist.
+   *
+   * `--moss-coral` measures 3.61:1 against white and 3.26:1 against the sand
+   * background, and `--moss-gold` measures 4.41:1 against sand. WCAG 2.2 AA
+   * requires 4.5:1 for body text, so every failure message, every held-note
+   * warning, and every gold badge label was below the line — and those are
+   * precisely the sentences a person must be able to read, because they are the
+   * ones that say a note was not saved.
+   *
+   * The brand tones are unchanged and still carry every fill, border and rule,
+   * where the 3:1 non-text threshold applies and both clear it. These two are
+   * the same hues taken darker until the text ratio passes:
+   *
+   *   --moss-coral-strong  5.76:1 on white, 5.21:1 on sand
+   *   --moss-gold-strong   6.26:1 on white, 5.66:1 on sand
+   *
+   * Both are darker than the smallest value that clears 4.5:1 on a plain
+   * background, and deliberately so: these two tones are also the *badge* text,
+   * where the background is the same hue at 10% or 15% over the surface. On that
+   * tint the margin is what disappears first — the first attempt at this cleared
+   * 4.5 on white and measured **4.37** inside a gold badge, which axe caught in
+   * the browser. The values below clear 4.5 against every background they are
+   * used on, tinted or not: worst case 4.73:1 (gold on a 15% gold tint over
+   * sand).
+   *
+   * Colour is never the only carrier in any case — every state also has a word,
+   * a distinct heading, and a `data-state` attribute — but a state whose text
+   * cannot be read is not saved by being labelled.
+   */
+  --moss-coral-strong: #ab462e;
+  --moss-gold-strong: #725d40;
+
   --background: var(--moss-sand);
   --foreground: var(--moss-slate);
   --surface: #ffffff;
@@ -30,6 +63,8 @@
   --color-moss-coral: var(--moss-coral);
   --color-moss-slate: var(--moss-slate);
   --color-moss-lime: var(--moss-lime);
+  --color-moss-coral-strong: var(--moss-coral-strong);
+  --color-moss-gold-strong: var(--moss-gold-strong);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -44,4 +79,24 @@ body {
 :focus-visible {
   outline: 2px solid var(--moss-green);
   outline-offset: 2px;
+}
+
+/*
+ * Motion is honoured as a preference, not overridden as a style.
+ *
+ * The chrome here uses transitions rather than animation, so this is short — but
+ * "we do not animate much" is not the same promise as "we respect the setting",
+ * and the second is the one WCAG 2.3.3 asks for. Transitions are reduced to a
+ * duration a vestibular disorder cannot be triggered by rather than removed
+ * outright, so a state change is still perceptible as a change.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

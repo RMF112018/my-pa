@@ -5,9 +5,9 @@ type Tone = "neutral" | "green" | "gold" | "coral" | "synthetic";
 const TONE_CLASSES: Record<Tone, string> = {
   neutral: "bg-moss-sand text-moss-slate border-border",
   green: "bg-moss-green/10 text-moss-everglade border-moss-green/30",
-  gold: "bg-moss-gold/10 text-moss-gold border-moss-gold/30",
-  coral: "bg-moss-coral/10 text-moss-coral border-moss-coral/30",
-  synthetic: "bg-moss-gold/15 text-moss-gold border-moss-gold/40",
+  gold: "bg-moss-gold/10 text-moss-gold-strong border-moss-gold/30",
+  coral: "bg-moss-coral/10 text-moss-coral-strong border-moss-coral/30",
+  synthetic: "bg-moss-gold/15 text-moss-gold-strong border-moss-gold/40",
 };
 
 export function Badge({ tone = "neutral", children }: { tone?: Tone; children: ReactNode }) {

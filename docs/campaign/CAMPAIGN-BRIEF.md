@@ -11,13 +11,14 @@ operating_lineage: recovery/pre-20260805-utc-rollback-c9fb513
 operating_lineage_head: 81589cc851905f9d63f5faf0690322682d1e8b85
 operating_lineage_tree: 7eb87fa18f7a9f6718c6c9441dbecdf98453d543
 reauthentication_date: "2026-08-09"
-active_work_package: WP-07
-active_work_package_name: Quick Capture Durable-First Completion
+active_work_package: WP-08
+active_work_package_name: PWA Offline Capture and Principal-Bound Replay
 wp_04_status: complete, reviewed, PR #57 open against the lineage, not merged
 wp_05_status: complete, reviewed clean, PR open against the lineage, not merged; stacks on #57
 wp_06_status: complete, reviewed clean, PR open against the lineage, not merged; stacks on #58
+wp_07_status: complete, reviewed clean, PR #60 open against the lineage, not merged; stacks on #59
 supersedes: WP-N01
-completed_work_packages: [WP-01, WP-02, WP-S01, WP-03, WP-04, WP-05, WP-06]
+completed_work_packages: [WP-01, WP-02, WP-S01, WP-03, WP-04, WP-05, WP-06, WP-07]
 milestone_ms0: WP-01 -> WP-02 -> WP-S01 -> WP-03
 ```
 

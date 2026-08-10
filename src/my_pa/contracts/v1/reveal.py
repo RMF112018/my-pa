@@ -194,11 +194,16 @@ class RevealAssertionView(StrictModel):
 class RevealView(StrictModel):
     """The evidence behind one subject, in one of three distinguishable states.
 
-    The validator restates `domain.capture.reveal.Reveal`'s own rules on the
+    The validator restates `domain.capture.reveal.Reveal`'s state rules on the
     wire, and that duplication is deliberate: the domain object refuses to be
-    *built* wrongly and this refuses to be *published* wrongly, so a future
-    assembly path that skipped the domain type could not reach a client with an
-    empty answer labelled `no_evidence` over an unsearched scope.
+    *built* wrongly and this refuses to be *published* wrongly.
+
+    **Neither of them covers the empty-success shape.** Like
+    `Reveal.__post_init__`, this validator has no rule tying `no_evidence` to
+    completed derivation, so it would publish `no_evidence` over an unsearched
+    scope if one were handed to it. That invariant is enforced by
+    `infrastructure.persistence.reveal._state_and_gap`, which every assembly path
+    in this build goes through, and nowhere else.
     """
 
     subject_id: str

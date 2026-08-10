@@ -7,13 +7,19 @@ module applies the same reasoning one level down, to a question that has no
 coverage counts: **"we looked and there is no evidence" and "we could not look"
 are different answers, and an empty list is neither of them.**
 
-Three states, and the constructor refuses every combination that would let one
-pass for another:
+Three states, and the constructor refuses most of the combinations that would let
+one pass for another:
 
 * `EVIDENCE` — spans were found. A reveal in this state carries at least one.
-* `NO_EVIDENCE` — the scope was searched to completion and holds none. Reachable
-  only when every version of the subject has a *completed* derivation stage, so
-  it is a measurement rather than a default.
+* `NO_EVIDENCE` — the scope was searched to completion and holds none, and it is
+  meant to be a measurement rather than a default. **The constructor does not
+  enforce that.** `__post_init__` has no rule tying `NO_EVIDENCE` to completed
+  derivation, so this type can be built in that state over a version whose
+  derivation has not completed. The guarantee holds one layer out, in
+  `infrastructure.persistence.reveal._state_and_gap`, which tests the derivation
+  gap before `NO_EVIDENCE` can be returned and which every assembly path in this
+  build goes through. A future path that bypassed it would not be caught here,
+  and no test covers that gap.
 * `UNAVAILABLE` — the scope could not be searched, and `gap` says which of the
   two reasons applies. **This is not an error and not an absence**: the subject
   may well have evidence that this build cannot reach yet, and reporting it as
@@ -250,8 +256,8 @@ class RevealedAssertion:
 class Reveal:
     """One answer to "what is the evidence behind this subject?".
 
-    **The constructor is where the honesty lives.** Each rule below removes a way
-    of reporting one of the three states while holding the rows of another:
+    **The constructor carries most of the honesty.** Each rule below removes a
+    way of reporting one of the three states while holding the rows of another:
 
     * `UNAVAILABLE` requires a `gap` and every other state forbids one, so a
       reveal cannot be unavailable for no stated reason and cannot state a
@@ -266,9 +272,14 @@ class Reveal:
       complete, so the gap is a measurement of the rows in hand rather than a
       label a caller could attach to a scope that was fully searched.
 
-    Together those make the empty-success shape unconstructible: an unprocessed
-    scope with no spans **cannot** be built as `NO_EVIDENCE`, and the type
-    system, not a reviewer, is what refuses it.
+    **What those rules do not include, stated plainly:** none of them forbids
+    `NO_EVIDENCE` over a version whose derivation has not completed, so the
+    empty-success shape *is* constructible through this type. It is refused where
+    reveals are assembled — `infrastructure.persistence.reveal._state_and_gap`
+    checks the derivation gap before it may return `NO_EVIDENCE` — and that
+    repository path is the layer the guarantee actually holds at. An assembly
+    path that did not go through it would not be caught here, and no test covers
+    that gap.
     """
 
     subject_id: str

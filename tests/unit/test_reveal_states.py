@@ -1,14 +1,23 @@
-"""`Reveal` refuses every shape that would let one answer pass for another.
+"""The shapes `Reveal`'s constructor refuses — and the one it does not.
 
 The three-way distinction WP-09 rests on is only worth having if it cannot be
-faked, and the place it is made unfakeable is the constructor: an unsearched
-scope **cannot be built** as `no_evidence`, a reveal claiming evidence cannot be
-built over nothing, and a gap cannot be attached to a scope that was in fact
-searched to completion. Each rule below is one of those, and each test is written
-so that removing the rule reddens it — which is the property a guard has to have
-to be worth its lines.
+faked, and the constructor makes most of it unfakeable: a reveal claiming
+evidence cannot be built over nothing, a `no_evidence` reveal cannot carry rows,
+and a gap cannot be attached to a scope that was in fact searched to completion.
+Each rule below is one of those, and each test is written so that removing the
+rule reddens it — which is the property a guard has to have to be worth its
+lines.
 
-The last one matters most and is the least obvious: a `DERIVATION_HAS_NOT_COMPLETED`
+**One shape is not refused here, and nothing in this file tests it:** an
+unsearched scope with no spans *can* be built as `no_evidence`, because
+`__post_init__` has no rule tying that state to completed derivation. The
+invariant is enforced a layer out, by
+`infrastructure.persistence.reveal._state_and_gap`, which every assembly path in
+this build goes through; neither this file nor `RevealView` would catch a path
+that did not.
+
+Of the rules that *are* enforced here, the last listed above matters most and is
+the least obvious: a `DERIVATION_HAS_NOT_COMPLETED`
 gap must be a *measurement of the versions in hand*, not a label. Without it, a
 future assembly path could attach the gap to a fully-derived scope and report
 "we could not search" about something it had searched — the mirror image of the

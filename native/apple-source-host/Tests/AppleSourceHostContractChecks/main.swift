@@ -57,8 +57,9 @@ struct AppleSourceHostContractChecks {
         try checkMailReadRefusesAMechanismThatPublishesNoGeneration()
         try checkMailDateBoundIsSourceSideOrRefused()
         try checkMailBodyAndAttachmentBoundsOmitMarkAndRefuse()
+        try checkMailAttachmentDescriptorBoundsHoldOffTheWire()
         try checkMailPageCursorAndOrderingBounds()
-        print("AppleSourceHostContractChecks: PASS (21 checks)")
+        print("AppleSourceHostContractChecks: PASS (22 checks)")
     }
 
     private static func require(_ condition: Bool, _ message: String) throws {
@@ -2124,6 +2125,106 @@ struct AppleSourceHostContractChecks {
                     "attachmentCount": 0,
                     "attachmentsDescribed": 0,
                 ]
+            }
+        )
+    }
+
+    /// Control 4's attachment bound, on the decode path, at runtime.
+    ///
+    /// **The gap this closes.** `MailAttachmentDescriptor` is where the
+    /// attachment ceiling turns into a *label*: over `maximumMailAttachmentBytes`
+    /// the descriptor must say `omittedOversize`, because a descriptor that says
+    /// `metadataOnly` about a 26 MB attachment tells a consumer the bytes are
+    /// fetchable when the host has already decided they are not. The throwing
+    /// initialiser enforces that, and until this check existed **nothing
+    /// enforced it off the wire**. The architecture guard covering the decode
+    /// path asserted that a decoder *existed*; a decoder rewritten to assign its
+    /// four fields directly instead of routing through `try self.init(…)`
+    /// compiles, keeps that literal string, and admits exactly the mislabelled
+    /// descriptor above. That guard now asserts the routing too — but a static
+    /// assertion about the shape of a decoder is a weaker thing than decoding
+    /// the malformed bytes and requiring the failure, so this is the check that
+    /// carries the claim.
+    ///
+    /// Every case is asserted in both directions. A descriptor that *is*
+    /// correctly labelled must still decode, or this check would pass by
+    /// refusing everything and would prove nothing about the bound.
+    private static func checkMailAttachmentDescriptorBoundsHoldOffTheWire() throws {
+        let ceiling = NativeSourceProtocolV1.maximumMailAttachmentBytes
+        let described = try MailAttachmentDescriptor(
+            id: try opaque("attachment-wire-000"),
+            mimeType: "application/octet-stream",
+            byteSize: ceiling,
+            disposition: .metadataOnly
+        )
+
+        // The positive control first: an unmutated descriptor round-trips, so a
+        // refusal below is a refusal of the mutation and not of the encoding.
+        let roundTripped = try JSONDecoder().decode(
+            MailAttachmentDescriptor.self,
+            from: try JSONEncoder().encode(described)
+        )
+        try require(roundTripped == described, "A valid attachment descriptor did not round-trip")
+
+        // Over the ceiling and still labelled fetchable: the mislabel the
+        // initialiser refuses, arriving as JSON instead.
+        try requireDecodeFailure(
+            MailAttachmentDescriptor.self,
+            data: try mutatedJSON(described) { object in
+                object["byteSize"] = ceiling + 1
+            }
+        )
+        // A negative size is not a size.
+        try requireDecodeFailure(
+            MailAttachmentDescriptor.self,
+            data: try mutatedJSON(described) { object in
+                object["byteSize"] = -1
+            }
+        )
+        // The same value, honestly labelled, is admitted — which is what makes
+        // the two refusals above statements about the label rather than about
+        // the number.
+        let labelled = try JSONDecoder().decode(
+            MailAttachmentDescriptor.self,
+            from: try mutatedJSON(described) { object in
+                object["byteSize"] = ceiling + 1
+                object["disposition"] = MailAttachmentDisposition.omittedOversize.rawValue
+            }
+        )
+        try require(
+            labelled.byteSize == ceiling + 1 && labelled.disposition == .omittedOversize,
+            "An oversize attachment labelled omitted_oversize was not admitted off the wire"
+        )
+
+        // And nested, which is the shape that actually reaches the host: a
+        // descriptor never arrives alone, it arrives inside a record's payload.
+        // A record decoder that validated its own fields and took its
+        // attachments on trust would pass every check above.
+        let identity = MailMessageIdentity(
+            mailboxID: try fixtureMailbox(),
+            generation: try mailComponent("gen-0001"),
+            providerKey: try providerKey(1)
+        )
+        let content = try MailRecordContent(
+            identity: identity,
+            receivedUnixMilliseconds: 1_700_000_000_000,
+            sentUnixMilliseconds: nil,
+            headers: mailHeaders(1),
+            body: nil,
+            attachments: [described],
+            completeness: try MailContentCompleteness(
+                bodyIncluded: false,
+                bodyByteSize: 0,
+                attachmentCount: 1,
+                attachmentsDescribed: 1
+            )
+        )
+        try requireDecodeFailure(
+            MailRecordContent.self,
+            data: try mutatedJSON(content) { object in
+                var attachments = try jsonDictionaryArray(object["attachments"])
+                attachments[0]["byteSize"] = ceiling + 1
+                object["attachments"] = attachments
             }
         )
     }

@@ -274,7 +274,7 @@ describe("no Principal is ever supplied by the browser", () => {
     expect(sent[0].body.principal_id).toMatch(/^prn_[0-9a-f]{32}$/);
   });
 
-  it("ignores a foreign principal in a header, and two sessions derive two identifiers", async () => {
+  it("ignores a foreign principal in a header", async () => {
     const cookieA = await signIn("synthetic-a");
     stubGateway({ captures: [] });
     const requestA = get(cookieA, "/api/library");
@@ -282,13 +282,37 @@ describe("no Principal is ever supplied by the browser", () => {
     requestA.headers.set("x-ms-client-principal-id", FOREIGN);
     expect((await library(requestA)).status).toBe(200);
 
-    resetSessionRegistry();
-    const cookieB = await signIn("synthetic-b");
-    expect((await library(get(cookieB, "/api/library"))).status).toBe(200);
-
-    expect(sent).toHaveLength(2);
+    expect(sent).toHaveLength(1);
     expect(JSON.stringify(sent)).not.toContain(FOREIGN);
-    expect(sent[0].body.principal_id).not.toBe(sent[1].body.principal_id);
+    expect(sent[0].body.principal_id).toMatch(/^prn_[0-9a-f]{32}$/);
+  });
+
+  /**
+   * This assertion used to sign in as `synthetic-b` as well, and check that the
+   * two sessions put two different `principal_id` values on the wire. It cannot,
+   * because `D-15` removed the second session: these routes run against a
+   * `local_operator` gateway, which serves one fixed process principal whoever is
+   * signed in, and the web tier now admits exactly one principal in that
+   * configuration. That is the point rather than a loss — the two-identifier
+   * scenario over a one-identity backend was the defect.
+   *
+   * The derivation's distinctness is not left unproved: `lib/api/gateway.test.ts`
+   * asserts `correlationPrincipalId` differs for a different identity, at the
+   * level the property actually lives. What is asserted here is the new fact —
+   * that there is no second session to derive a second identifier from.
+   */
+  it("admits no second session over a local_operator gateway", async () => {
+    stubGateway({ captures: [] });
+    const refused = await signInRoute(
+      new NextRequest(`${ORIGIN}/api/session`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: ORIGIN },
+        body: JSON.stringify({ syntheticPrincipal: "synthetic-b" }),
+      }),
+    );
+    expect(refused.status).toBe(403);
+    expect((await refused.json()).error.code).toBe("principal_not_admissible");
+    expect(sent).toEqual([]);
   });
 });
 

@@ -340,7 +340,51 @@ describe("the capture receipt is the backend's own", () => {
     expect(body.created).toBe(true);
     // The note itself is never echoed back.
     expect(raw).not.toContain("a note");
-    expect(sent[0].body.payload).toEqual({ text: "a note", idempotency_key: "k1" });
+    // The kind travels with the note and defaults rather than being required.
+    expect(sent[0].body.payload).toEqual({
+      text: "a note",
+      idempotency_key: "k1",
+      capture_kind: "quick_note",
+    });
+  });
+
+  it("carries an explicitly selected conversation log through to the gateway", async () => {
+    const cookie = await signIn();
+    stubGateway({
+      receipt_id: "rcpt_aaaaaaaa11111111",
+      capture_id: "cap_aaaaaaaa11111111",
+      version_id: "capver_aaaaaaaa11111111",
+      version_number: 1,
+      idempotency_key: "k3",
+      content_sha256: "0".repeat(64),
+      issued_at: "2026-08-09T12:00:00Z",
+      created: true,
+    });
+    const response = await capture(
+      post(cookie, "/api/capture", {
+        text: "a note",
+        idempotencyKey: "k3",
+        captureKind: "conversation_log",
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(sent[0].body.payload).toMatchObject({ capture_kind: "conversation_log" });
+  });
+
+  it("refuses a kind it does not know rather than defaulting it silently", async () => {
+    const cookie = await signIn();
+    stubGateway({});
+    const response = await capture(
+      post(cookie, "/api/capture", {
+        text: "a note",
+        idempotencyKey: "k4",
+        captureKind: "voice_memo",
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("unknown_capture_kind");
+    // A refused request reaches no backend at all.
+    expect(sent).toEqual([]);
   });
 
   it("still says acknowledged_not_persisted on the synthetic path, where it is true", async () => {

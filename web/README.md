@@ -39,7 +39,8 @@ Delivered:
   (`src/lib/auth/msal.config.ts`) and is inert until one exists.
 - **Canonical TypeScript contracts** (`src/contracts/`) — parity mirror of the Python
   contract and domain vocabulary; see `src/contracts/README.md`.
-- **Capture** and **Reveal** affordances posting to stub API routes that acknowledge
+- **Capture**, wired to the durable `capture.create` path, with the four outcomes
+  below kept apart, and a **Reveal** affordance posting to a stub API route that acknowledges
   with `coverage: "synthetic"` disclosures; a principal-scoped synthetic **Pulse** on
   Today; honest "not yet connected" states on Situations and Library; full
   disclosure on System.
@@ -106,6 +107,36 @@ finished.
 | Reveal | `/api/reveal` | **not wired** — `not_implemented` | none exists |
 | Projects | `/api/projects` | **not wired** — `not_implemented` | none exists |
 | Relationship timeline | `/api/relationships/:id/timeline` | **not wired** — `not_implemented` | none exists |
+
+### What the capture surface says, and what it refuses to say
+
+The screen's job is to tell a person which of four things happened, because that
+is what they act on, and the dangerous direction is asymmetric: saying "saved"
+for something that was not stored tells someone to stop worrying about a note
+that is gone, while saying "refused" about a note that was stored merely annoys
+them. So the four are kept apart and the recognition is positive —
+`status: "persisted"` is the **only** condition that renders as a save, and an
+answer whose shape the screen does not recognise understates rather than
+overstates.
+
+| Outcome | What is true | What the screen does |
+|---|---|---|
+| durable | the Python transaction committed and issued the receipt | says **saved**, clears the field |
+| acknowledged, not persisted | the explicitly-enabled synthetic provider minted an in-process receipt | says **not stored**, keeps the note in the field |
+| refused | validation, conflict, authorization, policy — nothing stored | names the reason, keeps the note |
+| unavailable | the backend could not be reached — nothing stored | says retrying is worth it, keeps the note and the same attempt key |
+
+**No enrichment state, and the absence is deliberate.** A save is durable before
+any processing runs, and no capability this tier can call reports how that
+processing went — `POST /v1/{capability}` dispatches fifteen and none of them
+answers "what happened to the job". So the screen says the note is safe and that
+proposals appear in Review when they exist. Inventing an "enrichment degraded"
+badge here would be a claim with nothing behind it.
+
+**One non-empty field is the whole precondition.** No title, no tags. The kind
+defaults to `quick_note` and `conversation_log` is a selection rather than a
+step; `POST /api/capture` refuses any other value instead of defaulting it, so a
+caller that misspelled the kind is told rather than quietly given something else.
 
 ### Why the last five are not wired, precisely
 

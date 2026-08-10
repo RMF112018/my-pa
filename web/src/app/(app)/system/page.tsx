@@ -83,11 +83,18 @@ export default async function SystemPage() {
 
   const msal = msalSeamConfig();
   const synthetic = syntheticDataEnabled();
-  let authMode: string;
+  // **A gateway auth mode this build cannot read is a misconfiguration, and it
+  // is shown as one.** The previous default of `"not configured"` fell through
+  // every branch below, which meant a build that had not said how its gateway
+  // establishes an acting Principal simply stopped disclosing the
+  // `local_operator` limit — the page grew quieter exactly as it became less
+  // trustworthy. The refusal `gatewayAuthMode` raises is surfaced instead.
+  let authMode: string | null = null;
+  let authModeRefusal: string | null = null;
   try {
     authMode = gatewayAuthMode();
-  } catch {
-    authMode = "not configured";
+  } catch (error) {
+    authModeRefusal = error instanceof Error ? error.message : String(error);
   }
 
   const outcome = synthetic
@@ -132,7 +139,15 @@ export default async function SystemPage() {
             your browser can send names a principal, and a request that tries to is refused rather
             than ignored.
           </p>
-          {authMode === "local_operator" ? (
+          {authModeRefusal !== null ? (
+            <p className="mt-2" role="alert" data-testid="system-auth-mode-misconfigured">
+              <strong>This build is misconfigured, and that is worse than either mode.</strong> It
+              cannot say how the gateway it talks to establishes an acting principal, so it cannot
+              tell you whether what you are shown is partitioned by who is signed in to this
+              browser. Nothing here is claimed to be yours alone until an operator fixes it.{" "}
+              {authModeRefusal}
+            </p>
+          ) : authMode === "local_operator" ? (
             <p className="mt-2" data-testid="system-local-operator">
               <strong>And here is the limit of that.</strong> The application gateway this build
               talks to runs in <code>local_operator</code> mode: it serves one fixed principal for
@@ -204,12 +219,30 @@ export default async function SystemPage() {
               </Badge>
             </div>
             <CardBody>
-              <p data-testid="system-readiness">
-                {readiness?.implemented_capabilities ?? 0} of{" "}
-                {readiness?.total_capabilities ?? 0} contracted capabilities are implemented in the
-                application this shell is talking to. The count is derived from the
-                application&rsquo;s own dispatch table, not written down here.
-              </p>
+              {/*
+                **A missing count is unknown, never zero.** `?? 0` on both halves
+                rendered "0 of 0 contracted capabilities are implemented" for a
+                successful response that simply carried no `readiness` — a
+                specific, alarming, and entirely invented claim about the build,
+                and one that satisfies a `\d+ of \d+` assertion perfectly. Both
+                numbers must be present or neither is printed.
+              */}
+              {typeof readiness?.implemented_capabilities === "number" &&
+              typeof readiness?.total_capabilities === "number" ? (
+                <p data-testid="system-readiness">
+                  {readiness.implemented_capabilities} of {readiness.total_capabilities} contracted
+                  capabilities are implemented in the application this shell is talking to. The
+                  count is derived from the application&rsquo;s own dispatch table, not written
+                  down here.
+                </p>
+              ) : (
+                <p role="alert" data-testid="system-readiness-unknown">
+                  The application answered, and its answer carried no readiness count. How many
+                  contracted capabilities are implemented is therefore <strong>unknown</strong>. It
+                  is not reported as none, and it is not reported as zero of zero &mdash; neither
+                  is something this page was told.
+                </p>
+              )}
               {(readiness?.limitations ?? []).length > 0 ? (
                 <ul className="mt-2 list-inside list-disc" data-testid="system-limitations">
                   {(readiness?.limitations ?? []).map((limitation) => (

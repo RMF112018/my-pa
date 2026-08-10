@@ -14,8 +14,11 @@
  * statement cannot commit it.
  *
  * **The principal binding is immutable and is checked at replay, not at
- * enqueue.** `replay.ts` compares the currently authenticated principal against
- * the entry's own and refuses when they differ. It quarantines; it does not
+ * enqueue.** `replay.ts` compares the Principal the surface was rendered for
+ * against the entry's own and refuses when they differ. That is a rendered
+ * identity, not the session that authenticates the replay — see the note on
+ * `replayQueuedCaptures`, which states the limit rather than implying a stronger
+ * check than the code performs. It quarantines; it does not
  * rebind, does not delete, and does not send. `quarantineForeignEntries` is the
  * same rule applied eagerly at a sign-in boundary so the state a person sees is
  * right before anything tries to replay.

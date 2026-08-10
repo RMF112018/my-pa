@@ -144,11 +144,21 @@ function isStaleSession(response: ReplayResponse): boolean {
 }
 
 /**
- * Replay everything the currently authenticated principal queued.
+ * Replay everything queued under `currentPrincipalId`.
  *
  * `key` is that principal's content key. It is only ever used on entries whose
  * stored `principalId` equals `currentPrincipalId`, so it is never asked to
  * decrypt bytes it did not seal.
+ *
+ * **`currentPrincipalId` is the Principal this surface was rendered for, not the
+ * Principal that will authenticate the request.** The caller passes a prop from a
+ * server render; `httpCaptureTransport` posts with `credentials: "same-origin"`
+ * and therefore carries whatever cookie the browser holds when it fires. The two
+ * normally agree, and nothing here can tell when they do not — so this function
+ * refuses on a *rendered* identity mismatch and must not be described as refusing
+ * on a session mismatch. Closing that gap means comparing against the
+ * authenticating session, and it becomes necessary the moment two identities can
+ * hold sessions while the backend serves durable writes.
  */
 export async function replayQueuedCaptures(
   db: IDBDatabase,

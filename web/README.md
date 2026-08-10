@@ -536,6 +536,30 @@ sign-in path imports or starts a Graph connector, delta worker, or webhook.
    and dispositions distinct even while the pipeline is a stub.
 4. A note held offline is bound to the Principal that was authenticated when it
    was queued, and that binding is written once and never rewritten. Replay
-   refuses when the signed-in Principal differs — it quarantines, and never
-   rebinds, deletes, or sends. The service worker caches no `/api` response, so
-   nothing principal-bound is ever served out of a shared cache.
+   refuses when that binding differs from the Principal the surface was
+   **rendered for** — it quarantines, and never rebinds, deletes, or sends.
+
+   **State the check precisely, because the two are not the same thing.** The
+   comparison is against `principalId`, a prop supplied by a server render. It is
+   *not* a comparison against the session that will actually authenticate the
+   replay: `httpCaptureTransport` posts with `credentials: "same-origin"`, so the
+   request carries whichever cookie the browser holds at that moment. A rendered
+   prop and a live cookie can in principle disagree — an open tab whose session
+   changed underneath it is the obvious way — and this check would not catch that
+   case. Saying "refuses when the signed-in Principal differs" would overstate
+   it, so this document does not say that.
+
+   What makes the gap unreachable at this head is the tier below, not this check:
+   no configuration serves a durable cross-principal write. Under
+   `MYPA_GATEWAY_AUTH_MODE=local_operator` exactly one Principal is admissible
+   (D-15); with the mode unset or `entra` the backend refuses. The one reachable
+   variant answers `shape: "synthetic"`, which receipt verification rejects
+   outright — the ciphertext is retained rather than deleted — and the synthetic
+   provider is refused when `NODE_ENV=production`.
+
+   **This becomes release-blocking the moment two identities can hold sessions
+   while the backend serves.** At that point the comparison must be made against
+   the authenticating session rather than a rendered prop.
+
+   The service worker caches no `/api` response, so nothing principal-bound is
+   ever served out of a shared cache.

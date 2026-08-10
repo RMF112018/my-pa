@@ -1053,7 +1053,10 @@ def test_merged_swift_synthetic_host_drives_discovery_preflight_and_admission() 
     configuration = replace(_configuration(), selection=ExactBucketSelection((BUCKET_A,)))
     store.append_configuration(configuration, expected_prior_revision=0)
     authority = controller.lifecycle(
-        _context(purpose=Purpose.CONTENT_EXTRACTION, sources=frozenset({SOURCE_A})),
+        _context(
+            purpose=Purpose.CONTENT_EXTRACTION,
+            sources=frozenset({SOURCE_A, SOURCE_B}),
+        ),
         capability=NativeSourceCapability.SYNC,
         configuration_id=CONFIGURATION,
         bucket_id=BUCKET_A,
@@ -1070,3 +1073,205 @@ def test_merged_swift_synthetic_host_drives_discovery_preflight_and_admission() 
     )
     assert receipt.admitted_count == 1
     assert receipt.bucket_id == BUCKET_A
+
+
+# --- WP-15: the host foundation's application half ---------------------------
+
+
+@pytest.mark.connector
+def test_wp15_a_replayed_protected_spool_item_admits_once_and_names_the_duplicate() -> None:
+    """Replay proved on the spool's own bytes, not on a fixture resembling them.
+
+    WP-12C already proves that admitting the same *envelope* twice yields one
+    version. What that leaves open is the step in between: the host does not hand
+    the application an envelope, it writes one into the protected spool and the
+    spool is what is replayed after a crash, a retry, or an acknowledgement that
+    did not land. So the bytes admitted here are read back out of a real
+    `ProtectedSpool` — enqueued, refused a byte-identical duplicate by the spool
+    itself, and read through `item(_:)` — before they ever reach Python.
+    """
+    completed = subprocess.run(  # noqa: S603 - fixed executable and synthetic fixture args
+        [
+            SWIFT,
+            "run",
+            "--package-path",
+            str(ROOT / "native/apple-source-host"),
+            "--scratch-path",
+            "/private/tmp/my-pa-wp12c-swift-fixture-test",
+            "AppleSourceHostFixtureExport",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    exported = json.loads(completed.stdout)
+    spool_item = exported["spoolItem"]
+
+    # The spool stores the admission envelope as opaque payload bytes and adds no
+    # field of its own beyond identity and version, so what the application
+    # admits is exactly what the host emitted.
+    assert spool_item["protocolVersion"] == NATIVE_SOURCE_PROTOCOL_V1
+    spooled = json.loads(bytes(spool_item["payload"]).decode())
+    assert spooled == exported["admission"], "the spool altered the envelope it stored"
+    assert exported["spoolHealth"]["pendingItemCount"] == 1
+    assert exported["spoolHealth"]["maximumItems"] >= 1
+
+    controller, store, host, audit, _ = _controller()
+    store.append_configuration(_configuration(), expected_prior_revision=0)
+    authority = controller.lifecycle(
+        _context(
+            purpose=Purpose.CONTENT_EXTRACTION,
+            sources=frozenset({SOURCE_A, SOURCE_B}),
+        ),
+        capability=NativeSourceCapability.SYNC,
+        configuration_id=CONFIGURATION,
+        bucket_id=BUCKET_A,
+    )
+    assert isinstance(authority, NativeSyncAuthority)
+    adapter = _context(
+        purpose=Purpose.CONTENT_EXTRACTION,
+        sources=frozenset(),
+        kind=PrincipalKind.SOURCE_PROVIDER_ADAPTER,
+    )
+    first = controller.admit(adapter, authority=authority, wire_envelope=spooled)
+    replayed = controller.admit(adapter, authority=authority, wire_envelope=spooled)
+
+    assert (first.admitted_count, first.duplicate_count) == (1, 0)
+    assert (replayed.admitted_count, replayed.duplicate_count) == (0, 1)
+    assert len(store.persisted) == 1, "a replayed spool item created a second version"
+    assert first.evidence_digest == replayed.evidence_digest
+    # The duplicate is reported, never swallowed: a caller that acknowledges its
+    # spool item on a silent success would have no way to tell the two apart.
+    assert replayed.duplicate_count == 1
+    assert host.preflight_calls == 3
+    # One audit row, written by the SYNC grant before any host call. Admission
+    # itself is authorized by the durable grant rather than by a second policy
+    # decision, which is why a replay cannot mint authority it was not issued.
+    assert len(audit.events) == 1
+
+
+@pytest.mark.connector
+def test_wp15_the_spool_item_carries_no_provider_locator_or_display_label() -> None:
+    """The host's storage holds opaque identity, not the account it came from."""
+    completed = subprocess.run(  # noqa: S603 - fixed executable and synthetic fixture args
+        [
+            SWIFT,
+            "run",
+            "--package-path",
+            str(ROOT / "native/apple-source-host"),
+            "--scratch-path",
+            "/private/tmp/my-pa-wp12c-swift-fixture-test",
+            "AppleSourceHostFixtureExport",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    exported = json.loads(completed.stdout)
+    item = exported["spoolItem"]
+    assert set(item) == {
+        "envelopeID",
+        "protocolVersion",
+        "kind",
+        "accountID",
+        "bucketID",
+        "payload",
+    }
+    # The discovery snapshot does carry display labels; the spooled handoff does
+    # not, so a spool inspected on disk cannot name the human's accounts.
+    labels = {account["displayLabel"] for account in exported["discovery"]["snapshot"]["accounts"]}
+    assert labels, "the discovery fixture carries no label, so the check is vacuous"
+    rendered = json.dumps({key: item[key] for key in item if key != "payload"})
+    for label in labels:
+        assert label not in rendered
+    for punctuation in ("@", "/", "\\"):
+        assert punctuation not in item["accountID"] + item["bucketID"] + item["envelopeID"]
+
+
+def test_wp15_admission_telemetry_and_receipts_carry_no_record_content() -> None:
+    """WP-15 control 6 on the application side, planted rather than asserted.
+
+    The marker below is obviously-synthetic stand-in content occupying the same
+    field a real message body would. It is planted in the payload of an admitted
+    record and then looked for in every operational artefact the admission path
+    produces — the receipt, the audit events, and the text of the exceptions the
+    refusal paths raise.
+    """
+    marker = "SYNTHETIC-BODY-MARKER-c0ffee"
+    payload = list(marker.encode())
+    controller, store, host, audit, _ = _controller()
+    store.append_configuration(_configuration(), expected_prior_revision=0)
+    operator = _context(
+        purpose=Purpose.CONTENT_EXTRACTION,
+        sources=frozenset({SOURCE_A, SOURCE_B}),
+    )
+    authority = controller.lifecycle(
+        operator,
+        capability=NativeSourceCapability.SYNC,
+        configuration_id=CONFIGURATION,
+        bucket_id=BUCKET_A,
+    )
+    assert isinstance(authority, NativeSyncAuthority)
+    adapter = _context(
+        purpose=Purpose.CONTENT_EXTRACTION,
+        sources=frozenset(),
+        kind=PrincipalKind.SOURCE_PROVIDER_ADAPTER,
+    )
+    wire: dict[str, Any] = {
+        "metadata": _metadata(authority.envelope_id),
+        "requestID": authority.request_id,
+        "kind": "mail",
+        "accountID": "account.a",
+        "bucketID": "bucket.a",
+        "records": [
+            {
+                "id": "message.1",
+                "bucketID": "bucket.a",
+                "kind": "mail",
+                "sourceRevision": "revision-1",
+                "sourceModifiedUnixMilliseconds": 1_775_563_200_000,
+                "payload": payload,
+            }
+        ],
+        "nextCursor": None,
+    }
+
+    envelope = NativeAdmissionEnvelope.model_validate(wire)
+    assert marker.encode() == bytes(envelope.records[0].payload), (
+        "the planted marker is not in the admitted record, so its absence "
+        "downstream would prove nothing"
+    )
+
+    receipt = controller.admit(adapter, authority=authority, wire_envelope=wire)
+    assert receipt.admitted_count == 1
+
+    emissions = [repr(receipt), str(receipt)]
+    emissions.extend(repr(event) for event in audit.events)
+    emissions.extend(str(event) for event in audit.events)
+    observer = _context(
+        purpose=Purpose.STATUS_OBSERVATION,
+        sources=frozenset({SOURCE_A, SOURCE_B}),
+    )
+    emissions.append(repr(controller.status(observer, configuration_id=CONFIGURATION)))
+
+    # Every refusal path the adapter can reach, because an error message is where
+    # content escapes when a receipt does not.
+    for rejected_wire, expected in (
+        (dict(wire, bucketID="bucket.outside"), ValueError),
+        (dict(wire, accountID="account.b"), AdmissionDeniedError),
+        (dict(wire, requestID="request.9"), AdmissionDeniedError),
+    ):
+        with pytest.raises((ValueError, AdmissionDeniedError)) as raised:
+            controller.admit(adapter, authority=authority, wire_envelope=rejected_wire)
+        assert isinstance(raised.value, expected)
+        emissions.append(str(raised.value))
+        emissions.append(repr(raised.value))
+
+    for emission in emissions:
+        assert marker not in emission, (
+            "an operational artefact of native admission carried the content of "
+            "an admitted record. Receipts, audit events and error text carry "
+            "counts, identifiers, types and error classes only"
+        )
+        assert "account.a" not in emission or "locator" not in emission
+    assert host.preflight_calls >= 2

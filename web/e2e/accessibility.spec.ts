@@ -109,7 +109,15 @@ test.describe("what axe cannot decide", () => {
     await expect(outcome.first()).toBeVisible();
   });
 
-  test("interactive targets meet the 44px touch minimum", async ({ page }, testInfo) => {
+  // **44px tall, 24px wide, and the two numbers are not the same rule.** WCAG
+  // 2.5.8 (AA) sets the minimum target at 24x24 CSS px, and that is the number
+  // the *width* is held to — inventing a stricter one here would be this suite
+  // asserting a standard nobody adopted. The height is held to 44px because this
+  // shell's own layout makes it free: the rail links and the capture button are
+  // full-width rows whose height is the only dimension a regression can shrink,
+  // so 44px there is a real floor rather than an aspiration. The title says both
+  // numbers so that neither can drift away from what is measured below.
+  test("interactive targets are 44px tall and clear WCAG 2.5.8's 24px width", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "mobile", "the touch target rule is measured on mobile");
     await page.goto("/library");
     // Scoped to the application's own landmarks, which excludes the Next.js dev
@@ -134,6 +142,6 @@ test.describe("what axe cannot decide", () => {
         undersized.push(`${(await target.textContent())?.trim().slice(0, 40)} ${box.width}x${box.height}`);
       }
     }
-    expect(undersized, "targets below the 44px height minimum").toEqual([]);
+    expect(undersized, "targets below 44px tall or below WCAG 2.5.8's 24px wide").toEqual([]);
   });
 });

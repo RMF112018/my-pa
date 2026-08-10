@@ -106,8 +106,25 @@ test("the worker never caches a principal-bound response", async ({ page }) => {
     return urls;
   });
 
-  // Not one `/api/*` response, and not one HTML document: both are
-  // session-derived, and a cache is shared by every session on this profile.
-  expect(cached.filter((url) => new URL(url).pathname.startsWith("/api"))).toEqual([]);
+  // **The cache is checked against an allowlist, not against `/api`.** Filtering
+  // for `/api` alone would have passed straight through the defect this package
+  // fixed: the worker was caching *rendered pages*, which are `/library`,
+  // `/today` and their `?_rsc=…` flight requests — never `/api/…`. So the whole
+  // key set is required to be nothing but the three things `sw.js` declares
+  // cacheable (`/_next/static/`, `/icons/`, and the manifest), and no cached key
+  // may carry a query string, because a query string is what an RSC payload
+  // request is distinguished by. This is the browser-level counterpart to the
+  // unit coverage in `lib/offline/sw.test.ts`.
+  const disallowed = cached.filter((url) => {
+    const parsed = new URL(url);
+    if (parsed.search !== "") return true;
+    return !(
+      parsed.pathname.startsWith("/_next/static/") ||
+      parsed.pathname.startsWith("/icons/") ||
+      parsed.pathname === "/manifest.webmanifest"
+    );
+  });
+  expect(disallowed, "the worker cached something outside its declared allowlist").toEqual([]);
+  // And the allowlist is not satisfied by caching nothing at all.
   expect(cached.some((url) => url.endsWith("/manifest.webmanifest"))).toBe(true);
 });

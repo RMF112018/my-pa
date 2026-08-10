@@ -8,7 +8,7 @@
  * only way that can happen is if it was committed.
  */
 import { test, expect } from "@playwright/test";
-import { signIn, syntheticNote, expectState, EMPTINESS_CLAIMS } from "./fixtures";
+import { signIn, syntheticNote, expectState } from "./fixtures";
 
 test.describe("an unauthenticated visitor reaches no destination", () => {
   test("every app route redirects to sign-in", async ({ page }) => {
@@ -80,10 +80,15 @@ test.describe("the signed-in surfaces", () => {
   test("System reports the build it is talking to, not a constant", async ({ page }) => {
     await page.goto("/system");
     await expect(page.getByRole("heading", { name: "System", level: 1 })).toBeVisible();
-    // Derived from `capabilities.get`, so it must name a real count.
+    // Derived from `capabilities.get`, so it must name a real count. The total
+    // is required to be non-zero: `\d+ of \d+` was satisfied by "0 of 0", which
+    // is what an absent `readiness` used to render, so the regex could not tell
+    // a described build from an undescribed one.
     await expect(page.getByTestId("system-readiness")).toContainText(
-      /\d+ of \d+ contracted capabilities/,
+      /\d+ of [1-9]\d* contracted capabilities/,
     );
+    // And the absent-readiness branch must not be the thing that is on screen.
+    await expect(page.getByTestId("system-readiness-unknown")).toHaveCount(0);
     // Graph is deliberately off, and is not presented as degraded or failing.
     const graph = page.getByTestId("system-graph");
     await expect(graph).toContainText(/deliberately/i);
@@ -131,20 +136,37 @@ test.describe("the signed-in surfaces", () => {
   });
 
   test("the same idempotency key is not a second capture", async ({ page }) => {
+    // **The dialog cannot demonstrate this and is deliberately not used.** It
+    // mints a fresh attempt key on every durable save, so saving the same text
+    // twice through the UI is two captures *by design*; a test driving it would
+    // be asserting the opposite of the name. The claim belongs to the boundary
+    // that enforces it — `UNIQUE (principal_id, idempotency_key)` in the Python
+    // capture plane — so the same submission is replayed against the real route
+    // through the browser's own session, which is the only way this suite can
+    // hold one key fixed across two attempts.
     const marker = `idem-${Date.now()}`;
-    await page.getByTestId("capture-button").click();
-    await page.getByTestId("capture-field").fill(syntheticNote(marker));
-    await page.getByRole("button", { name: "Save" }).click();
-    await expect(page.getByTestId("capture-durable")).toContainText(/Saved\./);
+    const submission = {
+      text: syntheticNote(marker),
+      idempotencyKey: `cap-e2e-${marker}`,
+    };
 
-    // The field is cleared on a durable save and a new attempt key is minted, so
-    // the same text saved again is a *second* capture by design. What must hold
-    // is that the first one is stored exactly once — asserted by counting the
-    // listing rows that carry this marker's capture, which is one.
-    await page.goto("/library?q=" + encodeURIComponent(marker.replace(/[^a-z0-9]/gi, "")));
-    // The search may legitimately match nothing (the marker is not a word in the
-    // stored text); what matters is that it never renders a failure as empty.
-    await expect(page.getByTestId("library-search-unavailable")).toHaveCount(0);
+    const first = await page.request.post("/api/capture", { data: submission });
+    expect(first.status(), "the first submission must be accepted").toBe(200);
+    const firstBody = await first.json();
+    expect(firstBody.status, "the capture must be persisted, not merely acknowledged").toBe(
+      "persisted",
+    );
+    expect(firstBody.created, "the first submission creates the capture").toBe(true);
+
+    const replay = await page.request.post("/api/capture", { data: submission });
+    expect(replay.status(), "a replay is answered, not refused").toBe(200);
+    const replayBody = await replay.json();
+
+    // The whole claim, in three assertions: the replay created nothing, and it
+    // named the *same* stored row and the same receipt rather than a new one.
+    expect(replayBody.created, "the replay must not create a second capture").toBe(false);
+    expect(replayBody.receipt.captureId).toBe(firstBody.receipt.captureId);
+    expect(replayBody.receipt.receiptId).toBe(firstBody.receipt.receiptId);
   });
 });
 
@@ -160,12 +182,16 @@ test.describe("keyboard-only navigation", () => {
     // inside `<nextjs-portal>` is skipped over; the first stop that belongs to
     // the page itself must be the skip link.
     await page.goto("/today");
-    const firstApplicationStop = await page.evaluate(async () => {
-      const inDevOverlay = (element: Element | null) =>
-        element !== null && element.closest("nextjs-portal") !== null;
-      return { start: inDevOverlay(document.activeElement) };
+    const focusStartsInDevOverlay = await page.evaluate(() => {
+      const active = document.activeElement;
+      return active !== null && active.closest("nextjs-portal") !== null;
     });
-    expect(firstApplicationStop).toBeTruthy();
+    // The precondition of the walk below: focus begins outside the overlay, so
+    // the first stop it reaches is the first stop the *application* offers.
+    expect(
+      focusStartsInDevOverlay,
+      "focus must not already be inside the dev overlay before the walk begins",
+    ).toBe(false);
 
     const skip = page.getByRole("link", { name: "Skip to main content" });
     let stopsWalked = 0;
@@ -246,18 +272,10 @@ test.describe("the page body reflows rather than scrolling sideways", () => {
   });
 });
 
-test.describe("the emptiness vocabulary never appears on a failed read", () => {
-  test("no surface claims emptiness it did not establish", async ({ page }) => {
-    await signIn(page);
-    for (const path of ["/today", "/library", "/situations", "/review"]) {
-      await page.goto(path);
-      const failure = page.locator('[data-state="unavailable"]');
-      for (let index = 0; index < (await failure.count()); index += 1) {
-        const text = (await failure.nth(index).textContent()) ?? "";
-        for (const claim of EMPTINESS_CLAIMS) {
-          expect(text, `${path} failure state used an emptiness claim`).not.toMatch(claim);
-        }
-      }
-    }
-  });
-});
+// **The emptiness-vocabulary sweep lives in `failure-states.spec.ts`, not here.**
+// It was written against this suite, which runs on a healthy stack where no
+// `[data-state="unavailable"]` element exists, so its loop body executed zero
+// times and it could never have failed. `failure-states.spec.ts` runs the same
+// vocabulary check against a gateway that is genuinely unreachable, where the
+// failure states really are on the page — the assertion has something to bite
+// on there and nothing to bite on here, so it is kept there and only there.

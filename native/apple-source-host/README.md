@@ -47,6 +47,32 @@ WP-15 adds the production-shaped foundation around that:
   enumeration or message query** — it is an extension-point framework, so
   compatibility there is not Mail readability.
 
+WP-16 adds the Mail adapter, over a mechanism seam rather than over a framework:
+
+- `MailMechanism.swift` — the closed, five-operation read seam a live mechanism
+  would implement, plus the identity, day-window and attachment values. A message
+  identity carries its **generation**, because a provider key means nothing
+  outside the generation that issued it, and a mechanism that publishes no
+  generation is refused before it is read from;
+- `BoundedMailReadAdapter.swift` — the adapter, which holds every refusal:
+  consent before the first read, a date bound that must reach the source or be
+  refused, strict key ordering for the cursor, and content bounds that omit and
+  mark or refuse and never trim. A carried body must equal its declared size, on
+  the wire as well as in Swift, so a truncated body is not a representable value;
+- `FixtureMailMechanism.swift` — the in-process fixture, IMAP-shaped, with three
+  injectable mechanism faults and call counters, so "nothing was read after a
+  refusal" is a measured number. Every fixture value is obviously synthetic;
+- `Compatibility/AppleMailAutomationShapeProbe` — a second compile-only probe, on
+  the same footing as the first, that imports `ScriptingBridge` and carries Apple
+  Mail's scripting terminology as a data table. It constructs no `SBApplication`,
+  compiles no script and **sends no Apple event**. Its table is checked against
+  Apple's own `Mail.sdef` by the repository's architecture tests.
+
+**Neither probe is a dependency of anything else in this package**, so the
+shipping target still links no Apple framework. See
+`docs/campaign/WP-16-MAIL-ADAPTER-RECORD.md` for the mechanism matrix and for why
+Apple Mail automation cannot be scoped to reading.
+
 The package declares `platforms: [.macOS(.v13)]` because `SMAppService` is macOS
 13+ and MailKit is macOS 12+.
 
@@ -66,15 +92,19 @@ swift build -c release --package-path native/apple-source-host
 
 The installed Swift 6.2 toolchain does not include `XCTest` or the Swift
 `Testing` module, so the contract checks are a dependency-free executable test
-target. A failure throws and exits nonzero. Thirteen checks cover version mismatch,
+target. A failure throws and exits nonzero. Twenty-one checks cover version mismatch,
 multi-account label collisions, exact preflight identity, deterministic
 handoff, recurrence exceptions/cancellation/bounds, atomic spool lifecycle,
 owner-only modes, idempotency, item/byte/payload backpressure, injected crash
 residue, recovery, acknowledgement, quarantine retention, malformed wire and
 storage bytes, recurrence-bound overflow, root/child-directory substitution, `stat`-verified
 0700/0600 owner-only modes with a refused enqueue leaving the inventory intact,
-lifecycle transition refusal, and content-free telemetry against a planted
-marker. Repository
+lifecycle transition refusal, content-free telemetry against a planted
+marker, and — for the Mail adapter — consent gating measured by call count,
+identity stability across reads and across a sync cycle with the generation
+change proving the negative, source-side date bounding with a lying mechanism
+caught, body and attachment bounds on the wire as well as in Swift, and cursor
+ordering. Repository
 architecture tests independently scan dependencies, imports, configuration and
 public surfaces.
 

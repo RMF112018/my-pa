@@ -450,9 +450,38 @@ export MYPA_GATEWAY_AUTH_MODE=local_operator           # required; no default; s
 npm run dev        # development server
 npm run lint       # eslint
 npm run typecheck  # tsc --noEmit
-npm test           # vitest (unit + component)
+npm test           # vitest (unit + component) — never the browser suite
 npm run build      # production build
+npm run e2e        # the browser suite; see below
 ```
+
+### `npm run e2e` — a real browser against the real stack
+
+`e2e/stack.sh` creates a **disposable** PostgreSQL database at head, starts
+`apps/gateway.py` on loopback, and hands over to Playwright, which starts two
+Next servers of its own and drives Chromium against them. The database is
+dropped afterwards, and dropped first as well, so an interrupted run is cleaned
+up by the next one. It needs the repository venv (`../.venv`) and the same
+PostgreSQL the Python suites use; it needs no credential.
+
+Three things about it are worth knowing before reading its results:
+
+* **It runs `next dev`, and that is forced rather than convenient.** The only
+  sign-in this build implements is the synthetic provider, and `lib/auth/mode.ts`
+  refuses it outright when `NODE_ENV === "production"`. `next start` sets that.
+  So a browser run that signs in has to be a dev run. The production build is
+  checked by `npm run build`, which is a separate and honest claim.
+* **The second Next server exists to fail.** Its `MYPA_GATEWAY_URL` names a port
+  nothing listens on, so `e2e/failure-states.spec.ts` reaches the genuine
+  connect-refused path through the real transport rather than a stub. A browser
+  cannot intercept the gateway call — it happens on the server — so this is the
+  only way that path can be exercised for real.
+* **It is not in the unit baseline.** `vitest.config.ts` includes `src/**` only
+  and these live in `e2e/`, so `npm test` neither collects nor reports them.
+
+A run reports 72 tests across two viewports — a 1280x800 desktop and a Pixel 7
+profile — of which one, the 44px touch-target rule, is skipped on desktop by
+design.
 
 ### Dependencies added here
 

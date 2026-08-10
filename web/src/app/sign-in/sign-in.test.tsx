@@ -9,7 +9,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import SignInPage from "@/app/sign-in/page";
+import SignInPage, { dynamic } from "@/app/sign-in/page";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -21,6 +21,14 @@ afterEach(() => {
 });
 
 describe("the sign-in screen", () => {
+  it("is rendered per request, so the admissible set is not baked in at build time", () => {
+    // `next build` reported this page as **static** before this export existed,
+    // which would have fixed the admissible set to whatever the build machine's
+    // `MYPA_GATEWAY_AUTH_MODE` was. Asserted here because the symptom only
+    // appears in a production build, where no test below would see it.
+    expect(dynamic).toBe("force-dynamic");
+  });
+
   it("offers one principal over a local_operator gateway", () => {
     vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "local_operator");
     render(<SignInPage />);

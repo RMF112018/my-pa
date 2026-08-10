@@ -19,6 +19,21 @@ import { SignInForm } from "@/app/sign-in/sign-in-form";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
+/**
+ * Rendered per request, and this line is load-bearing rather than a default
+ * anybody may tidy away.
+ *
+ * Without it Next prerenders this page at **build** time — `next build` reported
+ * it as static — so the admissible set would be fixed by whatever
+ * `MYPA_GATEWAY_AUTH_MODE` happened to be set to on the build machine. A build
+ * run without it and then deployed against a `local_operator` gateway would ship
+ * a page offering both principals, and the second button would be refused by
+ * `POST /api/session` on every press. The refusal is what actually prevents the
+ * cross-principal read, so nothing unsafe would be served either way; what would
+ * break is the honesty of the screen, which is the half `D-15` added it for.
+ */
+export const dynamic = "force-dynamic";
+
 export default function SignInPage() {
   const offered = admissibleSyntheticPrincipals().map((p) => ({ key: p.key, label: p.label }));
 

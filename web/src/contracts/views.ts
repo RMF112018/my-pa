@@ -54,6 +54,50 @@ export interface ReviewCase {
   readonly openedAt: IsoTimestamp;
 }
 
+/**
+ * One review case exactly as `review.list` emits it, and no more.
+ *
+ * Separate from `ReviewCase` above rather than merged with it, because the two
+ * carry genuinely different things. `ReviewCase` is the workbench's view and has
+ * `proposalSummary`, `evidence` and `impactSummary`; the backend listing has none
+ * of the three — it carries no capture or normalized-value content at all, by
+ * design, since a listing is not a read. Filling those fields with empty strings
+ * and empty arrays would report "no evidence" where the truth is "not returned
+ * by this capability", so the shapes stay distinct and `/api/review` says which
+ * one it is returning.
+ */
+export interface BackendReviewCase {
+  readonly reviewCaseId: OpaqueId;
+  readonly proposalId: OpaqueId;
+  readonly captureId: OpaqueId;
+  readonly versionId: OpaqueId;
+  readonly proposalType: string;
+  readonly proposalState: string;
+  readonly riskClass: string;
+  readonly openedAt: IsoTimestamp;
+  /** The version a `review.decide` must state to win the optimistic-concurrency check. */
+  readonly reviewVersion: number;
+  readonly latestDisposition: string | null;
+}
+
+/**
+ * The immutable receipt a real disposition produced, as `review.decide` emits it.
+ *
+ * `assertionId` and `receiptId` are null for a disposition that promotes nothing
+ * — a reject, defer or mark-unresolved records the decision without minting an
+ * assertion — and that null is the honest report of what happened rather than a
+ * missing field.
+ */
+export interface ReviewDecisionReceipt {
+  readonly reviewCaseId: OpaqueId;
+  readonly decisionId: OpaqueId;
+  readonly reviewVersion: number;
+  readonly disposition: string;
+  readonly proposalState: string;
+  readonly assertionId: OpaqueId | null;
+  readonly receiptId: OpaqueId | null;
+}
+
 export type ReviewDisposition = "accept" | "correct" | "reject" | "defer" | "unresolved";
 
 /** Situation lifecycle — parity with the Python `SituationState`. */

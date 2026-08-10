@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { SituationBoard } from "@/components/situation/situation-board";
 import { RelationshipTimeline } from "@/components/relationship/relationship-timeline";
@@ -23,6 +23,19 @@ const PRINCIPAL: PrincipalSession = {
 };
 
 const OTHER: PrincipalSession = { ...PRINCIPAL, principalId: "syn-bbbb0002" };
+
+
+/**
+ * This file's subject is the situation and timeline components, not which data provider is
+ * configured. WP-06 made the synthetic fixtures refuse unless
+ * `MYPA_DATA_PROVIDER=synthetic` is set explicitly, so the opt-in is stated here
+ * rather than assumed — which is the point of the switch. The default-build
+ * behaviour, where the fixtures refuse and the routes serve the backend or say
+ * they cannot, is asserted in `src/app/api/routes.test.ts`.
+ */
+beforeEach(() => {
+  vi.stubEnv("MYPA_DATA_PROVIDER", "synthetic");
+});
 
 afterEach(() => {
   cleanup();

@@ -1,0 +1,98 @@
+{
+  "_comment": [
+    "The cross-tier request contract for POST /v1/{capability} on the Python gateway.",
+    "This file is read by BOTH tiers and is the single place either may learn the",
+    "shape of a request. web/src/lib/api/gateway.ts imports it and builds every",
+    "document from it; tests/contract/test_bff_gateway_contract_parity.py loads the",
+    "same bytes and checks every entry against my_pa.domain.identity.operation,",
+    "my_pa.contracts.v1.envelope, my_pa.adapters.normalization and the command",
+    "dataclasses, then feeds each `probe` through normalize() to prove acceptance.",
+    "A hand-copied fixture on either side would drift silently; this cannot, because",
+    "there is only one copy and both ends fail when it stops matching.",
+    "Every value here is synthetic. No tenant, credential, path, or personal datum."
+  ],
+  "contractVersion": "v1",
+  "pathTemplate": "/v1/{capability}",
+  "payloadKey": "payload",
+  "routedField": "capability",
+  "envelopeFields": [
+    "contract_version",
+    "request_id",
+    "purpose",
+    "principal_id",
+    "requested_at"
+  ],
+  "capabilities": {
+    "capabilities.get": {
+      "purpose": "status_observation",
+      "payloadFields": [],
+      "probe": {}
+    },
+    "knowledge.search": {
+      "purpose": "knowledge_search",
+      "payloadFields": ["enrollment_id", "query", "page_size", "cursor", "snippet_words"],
+      "probe": { "enrollment_id": "enr_aaaaaaaa11111111", "query": "concrete pour" }
+    },
+    "knowledge.read": {
+      "purpose": "knowledge_read",
+      "payloadFields": ["knowledge_id", "enrollment_id", "metadata_only", "max_characters"],
+      "probe": { "knowledge_id": "kn_aaaaaaaa11111111", "enrollment_id": "enr_aaaaaaaa11111111" }
+    },
+    "capture.create": {
+      "purpose": "capture_authoring",
+      "payloadFields": [
+        "text",
+        "idempotency_key",
+        "capture_kind",
+        "context_source_object_id",
+        "context_source_version_id",
+        "client_created_at",
+        "occurred_at"
+      ],
+      "probe": { "text": "a synthetic capture", "idempotency_key": "idem-probe-0001" }
+    },
+    "capture.list": {
+      "purpose": "capture_review",
+      "payloadFields": ["page_size"],
+      "probe": { "page_size": 25 }
+    },
+    "capture.search": {
+      "purpose": "capture_review",
+      "payloadFields": ["query", "page_size"],
+      "probe": { "query": "concrete pour", "page_size": 25 }
+    },
+    "review.list": {
+      "purpose": "capture_review",
+      "payloadFields": ["page_size"],
+      "probe": { "page_size": 25 }
+    },
+    "review.decide": {
+      "purpose": "review_disposition",
+      "payloadFields": [
+        "review_case_id",
+        "expected_review_version",
+        "disposition",
+        "corrected_value"
+      ],
+      "probe": {
+        "review_case_id": "rvw_aaaaaaaa11111111",
+        "expected_review_version": 0,
+        "disposition": "accept"
+      }
+    }
+  },
+  "_dispositionComment": [
+    "The workbench's disposition vocabulary is not the domain's. Two verbs are",
+    "spelled differently on each side, and this map is the only place the",
+    "translation exists. The parity test asserts every value is a member of",
+    "my_pa.domain.capture.review.Disposition, so a rename on either side is a",
+    "failure rather than a request the gateway refuses in the field."
+  ],
+  "dispositions": {
+    "accept": "accept",
+    "correct": "correct_and_accept",
+    "reject": "reject",
+    "defer": "defer",
+    "unresolved": "mark_unresolved"
+  }
+}

@@ -10,9 +10,11 @@ So each control here is written as the narrowest executable statement that would
 break if the property broke:
 
 1. **source-read-only** — no Apple personal-data framework, no mutating symbol,
-   and no write-capable entitlement anywhere in the shipping target;
+   and no write-capable entitlement anywhere under `native/` except the
+   compile-only compatibility probe, which has its own test;
 2. **no database credential** — no DSN, no driver, no environment read, no
-   network or database client, and no package dependency at all;
+   network or database client down to the raw Darwin primitives, no package
+   dependency at all, and no second process for the host to delegate to;
 3. **bounded spool** — the bounds exist and the over-bound path *throws*; the
    runtime proof of owner-only modes and atomic rename lives in the Swift
    contract checks, which this module deliberately does not duplicate;
@@ -38,6 +40,13 @@ HOST: Final = ROOT / "native" / "apple-source-host"
 SHIPPING: Final = HOST / "Sources" / "AppleSourceHost"
 PROBE: Final = HOST / "Compatibility" / "AppleFrameworkCompatibilityProbe"
 MANIFEST: Final = HOST / "Package.swift"
+
+#: Every tree that runs in production. A wiring of the quarantined native plane
+#: would land in a composition root — `apps/gateway.py`, `apps/worker.py`, a CLI
+#: command — at least as readily as inside the package, so the reachability scan
+#: below has to see all of them. Mirrors `PRODUCTION_ROOTS` in
+#: `test_connections_open_on_the_single_validated_parse.py`, plus `ops`.
+PRODUCTION_ROOTS: Final = ("src", "apps", "scripts", "migrations", "ops")
 
 #: The frameworks the compile-only probe is allowed — and required — to name.
 PROBED_FRAMEWORKS: Final = ("EventKit", "Contacts", "MailKit", "ServiceManagement")
@@ -69,9 +78,36 @@ def _native_tree() -> tuple[Path, ...]:
     )
 
 
+def _swift_outside_the_probe() -> tuple[Path, ...]:
+    """Every Swift file under `native/` except the compile-only probe.
+
+    Control 1 scans this rather than `Sources/AppleSourceHost` alone. The
+    directory a mutating import would actually arrive in is the one nobody
+    thought to name — a second target, a helper tool, a new test executable — and
+    a guard hard-coded to one directory would stay green while it happened. The
+    probe is the single place these frameworks are permitted, and it is not
+    excused: `test_the_compatibility_probe_is_compile_only_and_never_linked_into_the_host`
+    holds it to metatype references, no instantiation and no TCC call.
+    """
+    return tuple(path for path in _swift_files(HOST) if PROBE not in path.parents)
+
+
+def _source_of(paths: tuple[Path, ...]) -> str:
+    return _without_comments("\n".join(path.read_text(encoding="utf-8") for path in paths))
+
+
 def _shipping_source() -> str:
-    return _without_comments(
-        "\n".join(path.read_text(encoding="utf-8") for path in _swift_files(SHIPPING))
+    return _source_of(_swift_files(SHIPPING))
+
+
+def _production_modules() -> tuple[Path, ...]:
+    return tuple(
+        sorted(
+            path
+            for root in PRODUCTION_ROOTS
+            for path in (ROOT / root).rglob("*.py")
+            if "__pycache__" not in path.parts
+        )
     )
 
 
@@ -88,6 +124,35 @@ def test_the_scan_is_reading_the_host_at_all() -> None:
     assert len(_swift_files(PROBE)) == 1
     assert "ProtectedSpool" in _shipping_source()
     assert len(_native_tree()) >= 10
+
+    # Control 1's basis is strictly wider than the shipping directory, and the
+    # probe — the one place the personal-data frameworks are allowed — is the
+    # only thing held out of it.
+    scanned = set(_swift_outside_the_probe())
+    assert set(shipping) < scanned, "control 1's scan is no wider than Sources/AppleSourceHost"
+    assert scanned.isdisjoint(_swift_files(PROBE))
+    assert scanned | set(_swift_files(PROBE)) == set(_swift_files(HOST)), (
+        "a Swift file under native/ is in neither control 1's scan nor the probe"
+    )
+
+
+def test_the_reachability_scan_reads_every_production_root() -> None:
+    """Non-vacuity for the quarantine guard below, which is the load-bearing one.
+
+    That guard measures why the WP-04 native quarantine is safe. Scanning only
+    `src/my_pa` would have let a composition root wire the controller in while
+    the guard stayed green, so the roots are asserted here by example: the two
+    entrypoints and the CLI are the places a wiring would actually land.
+    """
+    modules = _production_modules()
+    assert len(modules) >= 100, f"the production scan found {len(modules)} modules"
+    for expected in (
+        ROOT / "apps" / "gateway.py",
+        ROOT / "apps" / "worker.py",
+        ROOT / "apps" / "cli" / "sources.py",
+        PACKAGE / "application" / "native_sources.py",
+    ):
+        assert expected in modules, f"{expected} is outside the reachability scan"
 
 
 # --- control 1: the host cannot write to an Apple source ---------------------
@@ -125,13 +190,18 @@ MUTATING_APPLE_SURFACE: Final = (
 
 
 def test_the_shipping_host_holds_no_write_path_into_an_apple_source() -> None:
-    source = _shipping_source()
-    named = sorted(symbol for symbol in MUTATING_APPLE_SURFACE if symbol in source)
-    assert named == [], (
-        f"the shipping native host names {named}. WP-15's first control is that "
-        "the host can read an Apple source and cannot mutate one; a mutating "
-        "symbol or a personal-data framework import in the shipping target ends "
-        "that property whether or not the call site is reached today"
+    offenders: dict[str, list[str]] = {}
+    for path in _swift_outside_the_probe():
+        source = _without_comments(path.read_text(encoding="utf-8"))
+        named = sorted(symbol for symbol in MUTATING_APPLE_SURFACE if symbol in source)
+        if named:
+            offenders[str(path.relative_to(ROOT))] = named
+    assert offenders == {}, (
+        f"{offenders} name a mutating Apple symbol or a personal-data framework "
+        "import. WP-15's first control is that the host can read an Apple source "
+        "and cannot mutate one; naming one of these ends that property whether or "
+        "not the call site is reached today, and whether or not the file sits in "
+        "the shipping target directory"
     )
 
 
@@ -197,6 +267,30 @@ CREDENTIAL_SURFACE: Final = (
     "NSXPCConnection",
     "Security.framework",
     "SecItemCopyMatching",
+    # The raw Darwin primitives underneath every one of the framework names
+    # above. `import Darwin` is permitted here — the spool needs `open`, `lockf`
+    # and `fstat` — so a socket does not have to arrive via Network.framework to
+    # arrive, and a list that stops at the framework names is a list that only
+    # catches the convenient spelling.
+    "socket(",
+    "connect(",
+    "bind(",
+)
+
+#: Ways to start another process, which is the third route to a credential: a
+#: spawned helper can read an environment this host will not.
+#:
+#: Held separately because it is scanned over the host rather than over the whole
+#: native tree. `AppleSourceHostContractChecks` re-executes *itself* with
+#: `--lock-probe` to prove the spool's cross-process exclusion from a genuinely
+#: separate process, and there is no way to prove that without a second process.
+#: That harness is not the host; the host is what must not spawn.
+PROCESS_SPAWN_SURFACE: Final = (
+    "posix_spawn",
+    "Process(",
+    "NSTask",
+    "execve",
+    "fork(",
 )
 
 
@@ -221,6 +315,27 @@ def test_the_host_cannot_reach_a_database_or_read_a_credential() -> None:
         f"{offenders} put a database credential, driver, environment read or "
         "network client inside the native host. The host must reach PostgreSQL "
         "through the authenticated application and by no other route"
+    )
+
+
+def test_the_shipping_host_starts_no_second_process() -> None:
+    """The host cannot delegate the credential read to a child it spawns.
+
+    Scanned over the shipping target, not the whole tree: the contract-check
+    executable re-runs itself to prove the spool's cross-process lock, and a
+    cross-process property cannot be proved from one process. That harness never
+    ships; `AppleSourceHost` is the module a live host would link.
+    """
+    offenders: dict[str, list[str]] = {}
+    for path in _swift_files(SHIPPING):
+        text = _without_comments(path.read_text(encoding="utf-8"))
+        found = sorted(symbol for symbol in PROCESS_SPAWN_SURFACE if symbol in text)
+        if found:
+            offenders[str(path.relative_to(ROOT))] = found
+    assert offenders == {}, (
+        f"{offenders} start a second process from the shipping host. A child "
+        "process inherits an environment this host is forbidden to read, so "
+        "spawning is the same control-2 failure taken one hop further out"
     )
 
 
@@ -407,14 +522,19 @@ def test_the_native_source_plane_is_reachable_from_no_transport() -> None:
     `tests/architecture/test_user_owned_tables_are_partitioned.py` stops
     describing a vacuous residual and becomes a live isolation failure. This test
     is what turns that sentence into something that fails.
+
+    Scanned over every production root rather than over `src/my_pa`. A wiring
+    does not have to be inside the package to be a wiring — `apps/gateway.py`
+    and `apps/worker.py` are the composition roots, and an import there reaches
+    the same twenty-two unscoped tables.
     """
     owning = {
         PACKAGE / "application" / "native_sources.py",
         PACKAGE / "infrastructure" / "persistence" / "native_sources.py",
     }
     reaching = sorted(
-        str(path.relative_to(PACKAGE))
-        for path in PACKAGE.rglob("*.py")
+        str(path.relative_to(ROOT))
+        for path in _production_modules()
         if path not in owning and "NativeSourceController" in path.read_text(encoding="utf-8")
     )
     assert reaching == [], (

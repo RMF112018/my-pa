@@ -10,9 +10,11 @@
 /// Constraints this file must keep, and which the repository's WP-15 architecture
 /// tests enforce rather than trust:
 ///
-/// * every reference is to a **metatype** — `EKEventStore.self`, not
-///   `EKEventStore()`. Nothing is instantiated, so no store is created and no
-///   permission dialogue can be reached;
+/// * every reference to a **type** is to its metatype — `EKEventStore.self`, not
+///   `EKEventStore()`. The one exception is `calendarEntity`, which is a case of
+///   the `EKEntityType` enum rather than a metatype, because an enum case is how
+///   you prove that enum resolves. Either way nothing is instantiated: no store
+///   is created, and no permission dialogue can be reached;
 /// * there is no `requestAccess`, no `requestFullAccessTo…`, no `SMAppService`
 ///   `register`/`unregister` call. Compatibility is a link-and-typecheck
 ///   question, and answering it does not require touching TCC;

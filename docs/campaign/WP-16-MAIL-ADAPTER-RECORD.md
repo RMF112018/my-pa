@@ -40,10 +40,36 @@ Tools, which matters once below.
 | **MailKit** | 16 classes and 7 protocols across 23 headers, all extension-point: `MEExtension`, `MEMessageDecoder`, `MEMessageSecurityHandler`, `MEMessageActionHandler`, `MEContentBlocker`, `MEComposeSessionHandler`, `MEMessage`, `MEExtensionManager` | **No store. No account enumeration. No mailbox listing. No message query.** Messages arrive *as parameters to delegate callbacks Mail invokes*; nothing in the framework pulls | Full public surface enumerated from `MailKit.framework/Headers` in the installed SDK. Across all 23 headers the words `mailbox` and `account` occur only inside doc comments for `moveToTrashAction`, `moveToArchiveAction` and `moveToJunkAction`; `fetch` occurs only where Mail fetches headers *for* the extension. `MEExtensionManager` declares exactly two class methods, `reloadContentBlockerWithIdentifier:` and `reloadVisibleMessagesWithCompletionHandler:` | **NEGATIVE — confirmed** | Apple shipping a read API. Nothing an implementer can do |
 | **MailKit, read as a mutation surface** | `MEMessageActionDecision` applying `markAsRead`, `markAsUnread`, `moveToArchive`, `moveToJunk`, **`moveToTrash`**, flag and background-colour actions | — | Same headers | **Adverse finding.** MailKit is a *mutation* surface with no read surface. Adopting it would import the authority to move a message to trash while providing none of the authority to read one | — |
 | **`Message.framework`** | Nothing | Cannot be imported: the SDK ships `Message.tbd` and **no headers and no modulemap** | `Message.framework/Versions/B/Message.tbd` is 347 bytes and its `exports` list is exactly `_MessageVersionNumber, _MessageVersionString` | **NEGATIVE — a version-stamp husk** | Apple restoring headers. It has been header-less for many releases |
-| **ScriptingBridge / OSAKit / AppleScript over Mail.app** | Accounts (`id`, `account type`, `email addresses`, `enabled`), mailboxes (nested, with `account` and `container`), messages (`id`, `message id`, `date received`, `date sent`, `subject`, `sender`, `source`, `message size`, `all headers`), attachments (`id`, `MIME type`, `file size`, `downloaded`) | Cannot be reached without a **TCC Automation grant**, which is operator-gated (EXT-04). Cannot be scoped to reading — see the access-group finding below. Publishes no generation token, so no stable identity — see control 2 | `ScriptingBridge.framework` and `OSAKit.framework` are both present in the SDK with modulemaps and link. `Compatibility/AppleMailAutomationShapeProbe` compiles against ScriptingBridge on every build. The terminology is Apple's own `Mail.sdef`, SHA-256 `111b9291c502354106a320f6ba0a7e38ed29f09e443404679fb57778708b0722`, and the probe's table is checked against it by `tests/architecture/test_wp16_mail_adapter.py` | **PRESENT, OPERATOR-GATED, and not read-only** | A TCC Automation grant on a pilot Mac (EXT-04) plus a signed, notarized helper (EXT-03). Neither makes it read-only |
+| **ScriptingBridge / OSAKit / AppleScript over Mail.app** | Accounts (`id`, `account type`, `email addresses`, `enabled`), mailboxes (nested, with `account` and `container`), messages (`id`, `message id`, `date received`, `date sent`, `subject`, `sender`, `source`, `message size`, `all headers`), attachments (`id`, `MIME type`, `file size`, `downloaded`) | Cannot be reached without a **TCC Automation grant**, which is operator-gated (EXT-04). Cannot be scoped to reading — see the access-group finding below. Publishes no generation token, so no stable identity — see control 2 | `ScriptingBridge.framework` and `OSAKit.framework` are both present in this SDK, each with a `module.modulemap` and a `.tbd`. **Neither is link-proved, and only one of them is compile-proved.** `Compatibility/AppleMailAutomationShapeProbe` imports `ScriptingBridge` and resolves its metatypes on every `swift build`, so ScriptingBridge is proved to *compile*; **nothing in this tree imports `OSAKit`** — it is named in one doc comment and nowhere else — so its presence is a statement about the SDK's contents and nothing more. Neither is linked by anything: `swift package describe` reports both probes as `library` targets with **no product membership**, and the only two executables depend on `AppleSourceHost` alone. The terminology is Apple's own `Mail.sdef`, SHA-256 `111b9291c502354106a320f6ba0a7e38ed29f09e443404679fb57778708b0722`, and the probe's table is checked against it by `tests/architecture/test_wp16_mail_adapter.py` | **PRESENT, OPERATOR-GATED, and not read-only** | A TCC Automation grant on a pilot Mac (EXT-04) plus a signed, notarized helper (EXT-03). Neither makes it read-only |
+| **Accessibility API — `AXUIElement`** | Whatever Mail *renders*. `AXUIElementCreateApplication` makes an element for a running Mail, and `AXUIElementCopyAttributeValue` walks its window, outline and row hierarchy reading `AXTitle`, `AXValue` and the rest | **Enumerates no accounts and lists no mailboxes** — it has no account object and no mailbox object, only whatever the source list happens to be drawing, in the order the UI draws it, with no identity, no generation and no date bound. Requires Mail to be running and visible. **And it is a mutation surface**: the same element that answers `AXUIElementCopyAttributeValue` answers `AXUIElementSetAttributeValue` and `AXUIElementPerformAction`, and one of Mail's actions is Delete | **Documentation-level**, from `HIServices.framework/Headers/AXUIElement.h` in the installed SDK: `AXIsProcessTrustedWithOptions`, `AXUIElementCreateApplication`, `AXUIElementCopyAttributeValue`, `AXUIElementSetAttributeValue`, `AXUIElementPerformAction`; `AXError.h` declares `kAXErrorAPIDisabled` (−25211) as what every messaging function returns to a process that is not trusted. **Not settled by experiment on purpose**: the way to settle it is to become trusted, and an Accessibility trust prompt is a TCC grant that EXT-04 reserves to the operator | **NEGATIVE for discovery, and adverse besides** | A `kTCCServiceAccessibility` grant. It is per-process, it cannot be scoped to reading — the read and write calls are on one element — and it would still not produce an account list |
 | **Direct read of the on-disk Mail store** | — | Documented grounds only. **Not read, not listed, not stat-ed** | `~/Library/Mail` is inside the TCC-protected user-data set that requires Full Disk Access. **Apple publishes no format contract for the store**, which is the load-bearing half and is a claim about an absence rather than about a layout — so nothing about its bundle structure, its version directory or its index may be relied on across releases. This row is documentation-level by construction: settling it any other way would mean reading the operator's mailbox | **NEGATIVE on documented grounds** | Nothing short of Apple publishing a format contract. A Full Disk Access grant would make it *readable*, not *supported* |
+| **Spotlight — `NSMetadataQuery` / `MDQuery` / `mdfind`** | Indexed metadata for individual mail *messages*. `/System/Library/Spotlight/Mail.mdimporter` declares `com.apple.mail.emlx`, conforming to `public.email-message`, so a message in the store is an indexed item; `NSMetadataAttributes.h` declares `NSMetadataItemSubjectKey`, `NSMetadataItemAuthorEmailAddressesKey`, `NSMetadataItemRecipientEmailAddressesKey` and `NSMetadataItemAuthorsKey`, with `kMDItemSubject`, `kMDItemAuthorEmailAddresses` and `kMDItemRecipientEmailAddresses` as the C equivalents. This is a **public, supported** API, and it is the closest thing on this list to a read | **Enumerates no accounts and lists no mailboxes.** The metadata schema has no account object and no mailbox object; a query returns *items*, and a mailbox is not an item. It also carries no generation, so it cannot mint a stable identity (control 2), and it answers out of an index rather than the source, so it can be stale in ways it does not report. And the items it would return are files inside `~/Library/Mail`, which is TCC-protected | **Documentation-level**, from `Foundation.framework/Headers/NSMetadata.h` and `NSMetadataAttributes.h`, `CoreServices/Metadata.framework/Headers/MDQuery.h`, `MDItem.h` and `MDSchema.h` in the installed SDK, and the importer's own `Info.plist`. **Not settled by experiment on purpose**: the experiment is `mdfind` against those attributes, and that queries the operator's own indexed mail. It is the same refusal as the on-disk row above — a package about a public repository does not read a mailbox to learn something a header already says | **NEGATIVE for discovery** | Full Disk Access, and even then only for message metadata: no grant makes the index publish an account list or a mailbox tree, because it indexes files and neither of those is a file |
 | **IMAP against a loopback or fixture server** | The traversal contract in full: `UIDVALIDITY` as a generation, `UID` as a provider key, `SEARCH SINCE/BEFORE` as a server-side date bound, `FETCH BODY.PEEK[]` as a non-mutating read | **Cannot live in this host at all.** WP-15's control 2 forbids every networking primitive anywhere under `native/`, down to the raw Darwin calls. It also solves no part of *discovery*: accounts and credentials would have to come from somewhere else | `tests/architecture/test_wp15_native_host_admission.py::test_the_host_cannot_reach_a_database_or_read_a_credential` scans the whole `native/` tree | **Viable as a shape, structurally excluded as an implementation** | Moving IMAP to the application plane, where a credential and a socket are already permitted, and pairing it with a separate discovery mechanism |
 | **`sdp` / `sdef` header generation** | Would have produced a compile-checked ObjC interface for the whole Mail dictionary | Not available: `sdp` requires full Xcode | `xcode-select: error: tool 'sdp' requires Xcode, but active developer directory '/Library/Developer/CommandLineTools' is a command line tools instance` | **UNAVAILABLE here** | Installing Xcode. It would raise the automation probe from a checked data table to a compiled interface |
+
+### The two rows settled at documentation level only, and why
+
+The Spotlight and Accessibility rows were added because the first version of this
+matrix omitted them while reading as exhaustive, and a feasibility matrix that
+omits two public, supported mechanisms is a matrix a reader cannot rely on.
+Both are settled here **at documentation level and by nothing else**, and the
+reason is the same in both cases and is not proportionality:
+
+* settling Spotlight means running a metadata query for mail attributes, which
+  searches the operator's own indexed mail. That is the thing the on-disk row
+  refuses, arrived at through a different API;
+* settling Accessibility means becoming a trusted process, which is a TCC grant
+  and is EXT-04's to spend.
+
+**Neither changes the headline.** The central negative is about *discovery* —
+enumerating accounts and listing mailboxes — and neither mechanism does either
+one: Spotlight's schema has no account and no mailbox object, and the
+Accessibility API has no objects at all, only rendered UI. Both are additionally
+TCC-gated for an unsigned, unentitled process, Spotlight behind Full Disk Access
+and Accessibility behind `kTCCServiceAccessibility`, so neither is reachable from
+this host as it stands either. The honest statement is that they were **not
+disproved by experiment**, only shown by their own documented surfaces to have
+nothing to disprove on the half that matters.
 
 ### The access-group finding, which is the sharpest thing in this package
 
@@ -84,21 +110,50 @@ No Apple event was sent. No `osascript`, no `NSAppleScript`, no
 `SBApplication` constructed. **`~/Library/Mail` was not read, not listed, not
 enumerated and not stat-ed** — its directory names carry real account
 identifiers, and a package about a public repository does not go there to learn
-something a document already says. No TCC state was touched, so this package
-consumed none of the operator's EXT-04 budget.
+something a document already says. **No `mdfind` and no `NSMetadataQuery` was
+run**, for the same reason at one remove: a metadata query for
+`kMDItemAuthorEmailAddresses` returns the operator's own mail, and reading it out
+of the index rather than out of the store does not make it not theirs. No
+Accessibility trust was requested and no `AXUIElement` was created. No TCC state
+was touched, so this package consumed none of the operator's EXT-04 budget.
 
 ---
 
-## B. The six controls
+## B. The six controls, and the seventh criterion that has none
+
+The stated acceptance for this package names "permissions, **performance**,
+packaging/sandbox behavior…". Six of those became controls with evidence behind
+them. Performance did not, and the table below carries it as an explicit row
+rather than leaving a reader to audit §B against the acceptance and find a
+criterion silently missing. Row 7 claims nothing.
 
 | # | Control | Verdict | Proved at | Where |
 |---|---|---|---|---|
 | 1 | Mechanism feasibility | **Split: proven negative for headless discovery; the automation mechanism is present and operator-gated; traversal proven against the seam** | Header/SDK enumeration (documentation-level for the negatives), **Swift compile-time** for ScriptingBridge's presence, **Python + Apple's `Mail.sdef`** for the terminology table | This document; `AppleMailAutomationShapeProbe`; `test_the_probe_read_shape_is_read_only_in_apples_own_dictionary` |
 | 2 | Stable identity | **Proven, including the negative** | **Swift runtime, in-process** | `AppleSourceHostContractChecks::checkMailIdentityIsStableAcrossReadsAndChangesWithTheGeneration`, `::checkMailIdentityCompositionIsInjectiveAndRefusesToTrim`, `::checkMailReadRefusesAMechanismThatPublishesNoGeneration` |
 | 3 | Date-bounded reads | **Proven against the seam; source-side-ness is enforced rather than assumed. Unmeasured for the live automation mechanism** | **Swift runtime, in-process** | `::checkMailDateBoundIsSourceSideOrRefused` |
-| 4 | Body / attachment limits | **Proven, on the initialiser and on the decode path** | **Swift runtime, in-process**, plus static guards | `::checkMailBodyAndAttachmentBoundsOmitMarkAndRefuse`, `::checkMailPageCursorAndOrderingBounds`; `test_a_mail_body_is_carried_whole_or_omitted_whole_and_never_trimmed` |
+| 4 | Body / attachment limits | **Proven, on the initialiser and on the decode path** | **Swift runtime, in-process**, plus static guards | `::checkMailBodyAndAttachmentBoundsOmitMarkAndRefuse`, `::checkMailAttachmentDescriptorBoundsHoldOffTheWire`, `::checkMailPageCursorAndOrderingBounds`; `test_a_mail_body_is_carried_whole_or_omitted_whole_and_never_trimmed` |
 | 5 | Permissions / packaging / sandbox | **Shape proven; nothing granted, signed or notarized** | **Swift runtime** for the refusal path; **documentation** for the entitlement and packaging shape | `::checkMailDiscoveryIsConsentGatedBeforeAnyRead`; `test_no_entitlement_or_usage_declaration_was_added_for_the_mail_mechanism`; §D below |
 | 6 | Read-only surface | **Proven at Swift link time, unchanged from WP-15** | **Swift link-time** (the shipping target links no Apple framework) plus static guards over every Swift file under `native/` | `test_no_swift_outside_the_automation_probe_can_send_an_apple_event`, `test_the_mail_mechanism_seam_declares_only_read_operations`, `test_the_mail_automation_probe_sends_no_event_and_is_never_linked`; WP-15's `test_the_shipping_host_holds_no_write_path_into_an_apple_source` still passes unchanged |
+| 7 | **Performance** | **NOT PROVED. Nothing in this package measures it, and nothing in this package may be read as if it did.** The in-process fixture's timings are the fixture's, not a mail source's, and they are not reported here for that reason | **Nowhere.** Not at compile time, not at runtime, not at documentation level | — |
+
+**Row 7, stated plainly, because a blank is not a verdict.** Performance is named
+in the acceptance and it is out of reach of this package by construction. The
+mechanism that would have to be measured is Apple Mail's scripting terminology,
+and reaching it needs a TCC Automation grant (EXT-04) on a pilot Mac with a
+non-personal test account carrying seeded synthetic mail (EXT-06) — three
+operator gates, none of them spent here. Measuring against the fixture instead
+would be worse than not measuring: it would produce a number that looks like
+evidence and is a property of an in-process array.
+
+The two open questions a grant would settle are already named in the record and
+are not softened by this row: whether Apple Mail's `whose date received > …`
+filter is index-backed or a walk inside Mail (§A control 3), and whether
+enumeration is usable at real mailbox sizes at all (§D EXT-04). **What it would
+take to settle:** EXT-03's signed helper, EXT-04's grant for
+*(helper, `com.apple.mail`)*, EXT-06's seeded account, and a measurement
+protocol stated before the first event is sent — because on a per-application
+TCC grant the first measurement is also the first mutation-capable session.
 
 ### Control 1 — what "proven" means for each half
 
@@ -349,7 +404,8 @@ options are a per-account IMAP client on the application plane or Microsoft Grap
   page and cursor unchanged, so there is no second literal to hold equal.
 * **Two documentation edits that are corrections, not claims.** The native
   package's README said "Thirteen checks" and had said so since before WP-15
-  raised the count to fourteen; it now says twenty-one and describes the Mail
+  raised the count to fourteen; it now says twenty-two — twenty-one, plus the one
+  §H adds — and describes the Mail
   targets. And `docs/plans/mcv-completion-plan.md` spelled a test-module count
   that adding one module made stale — the same guard caught the same class of
   defect for WP-15, which is the guard working.
@@ -467,7 +523,7 @@ one tree rather than a comparison across two.
 | Command | Exit | Observed |
 |---|---|---|
 | `swift build` (after `rm -rf .build`) | 0 | `Build complete!` — **0 warnings, 0 errors**, 35 build steps including both probes |
-| `.build/debug/AppleSourceHostContractChecks` | 0 | `AppleSourceHostContractChecks: PASS (21 checks)` — was **14** at the base |
+| `.build/debug/AppleSourceHostContractChecks` | 0 | `AppleSourceHostContractChecks: PASS (22 checks)` — was **14** at the base, and **21** before §H's correction added one |
 | `.build/debug/AppleSourceHostFixtureExport` | 0 | unchanged export |
 | `pytest tests/architecture -q` | 1 | **2045 passed, 1 failed.** Base measured at this head with `--ignore` of the new module: **2032 passed, 1 failed**. 2032 + 13 = 2045 |
 | `pytest tests/schema tests/database -q` | 0 | **286 passed** — identical to the base; this package adds no test there |
@@ -481,3 +537,100 @@ one tree rather than a comparison across two.
 `test_ci_invokes_mypy_over_the_declared_tree.py::test_every_python_root_is_type_checked_or_named`,
 which is red at the base head for `web/node_modules` and is not this package's.
 No test was weakened, skipped, xfailed or deleted to reach any of these numbers.
+
+---
+
+## H. Corrections after independent review
+
+An independent review at head `5460898` returned **zero BLOCKERs and twelve
+NOTEs**. Seven were closed; the rest are carried forward and named at the end of
+this section. Nothing below weakens, skips or deletes an assertion.
+
+### The three that mattered: guards this package authored that could not fail
+
+The reviewer proved three of WP-16's own guards fully vacuous. **None of them had
+a violation in the tree**, so nothing shipped wrong — but §29 requires a guard to
+be non-vacuous, and the campaign's own lesson, *a guard you author is not a guard
+you are subject to*, is exactly what §F said and exactly what this package then
+failed to apply to three more of its guards. That is the finding, and it is
+worse than the three defects.
+
+| Correction | The vacuity, as the reviewer demonstrated it | What now holds it |
+|---|---|---|
+| **C1** | `test_apple_mail_consent_cannot_withhold_the_mutation_surface` is a loop over the probe's mutation table with no floor. Emptying that table to `[Term] = [\n    ]` left the module at **13 passed** — "the control-6 finding, stated as a measurement" had silently stopped measuring | A floor of **ten**, which is the whole table rather than a sample of it, plus a distinctness check so the floor cannot be met by repeating a term, plus a requirement that all three of `delete`, `move` and `duplicate` are named and that the settable-property half is non-empty. Ten and not fewer because the two halves carry different halves of the finding, and the half a reader is least likely to believe — that reading `date received` and setting `read status` are one grant — is the deletable one. The sibling read-shape floor is `>= 12` over sixteen because a *shape* survives losing an entry; a *finding* measured from a shrinking table is a different finding |
+| **C2** | `test_the_mail_mechanism_seam_declares_only_read_operations` regexed `func` and nothing else. Adding `var readStatus: Bool { get set }` and `subscript(deleteMessage key: String) -> Bool { get set }` to `MailMechanism` left the module at **13 passed** — while the test's own message says "an operation that is not a read is a mutation path into somebody's mailbox" | Settable properties are refused, the property name set is closed at `descriptor`, and a subscript on the seam is refused outright. A `{ get }` property is a read and stays legal, which is why `descriptor` is untouched. A subscript is refused rather than accessor-checked because it is an operation with no name for the closed operation set to hold, and the seam has no read its five named operations cannot express. The inheritance clause is closed at `Sendable` too — see the blind spots below |
+| **C3** | `test_every_mail_content_bound_is_enforced_on_the_decode_path_too` asserted a decoder *exists* — the literal `public init(from decoder: Decoder)`. Rewriting `MailAttachmentDescriptor.init(from:)` to assign its four fields directly instead of routing through `try self.init(…)` keeps that string, compiles, and lets an over-ceiling attachment mislabelled `metadata_only` decode off the wire. The reviewer got Swift **`PASS (21 checks)` exit 0** and Python **13 passed** | A **runtime** check, `AppleSourceHostContractChecks::checkMailAttachmentDescriptorBoundsHoldOffTheWire`, which decodes the malformed JSON and requires the failure — bare, and nested inside a `MailRecordContent`'s `attachments`, which is the shape that actually reaches the host. It asserts in both directions: the same oversize value *honestly* labelled `omitted_oversize` must still decode, so the refusals are statements about the label and not about the encoding. The static guard was widened too — the decoder must route through the validating initialiser and must assign no stored property — but that is the addition; the runtime check is the claim |
+
+### The re-plants, which is the only thing that makes the three corrections real
+
+Each is the reviewer's plant, re-applied by hand at this head, observed, and
+restored with `git checkout --`; each restored file was verified byte-identical
+to its pre-plant SHA-256. Architecture plants are read as
+`pytest tests/architecture/test_wp16_mail_adapter.py -q`, where a healthy plant
+is **1 failed, 12 passed**. A red Swift check exits **133**.
+
+| # | Plant | Observed | Exit / count |
+|---|---|---|---|
+| C1-P | `mutationTermsConsentCannotWithhold` emptied to `[Term] = [\n    ]` | `AssertionError: the probe's mutation table parsed to 0 terms. This test is a loop over that table, so a short table is a quiet way to stop measuring the finding that control 6 rests on…` — `assert 0 >= 10` | 1 failed, 12 passed. `MailAutomationShape.swift` restored, SHA-256 `1e2cf002…57a8` matched |
+| C2-P1 | `var readStatus: Bool { get set }` added to `MailMechanism` | `AssertionError: the mail mechanism seam declares the settable properties ['readStatus']. A { get } property is a read and is legal here; { get set } is an assignment into somebody's mailbox…` | 1 failed, 12 passed |
+| C2-P2 | `subscript(deleteMessage key: String) -> Bool { get set }` added to `MailMechanism` | `AssertionError: the mail mechanism seam declares a subscript. A subscript is an operation with no name for the closed set above to hold, and a { get set } subscript is a write into a mailbox keyed by a string…` | 1 failed, 12 passed |
+| C2-P3 | **The reviewer's exact plant**: both of the above at once | Same guard, reddening on the settable property first | 1 failed, 12 passed. `MailMechanism.swift` restored, SHA-256 `6be4242d…f726` matched |
+| C2-P4 | The same settable property with its accessor block on the **next line** — `var readStatus: Bool` then `{ get set }` — which the first draft of the correction could not see, because its regex was anchored to one line | Same guard, same message, after the property regex was widened from `[^\n{]+` to `[^{}]+` | 1 failed, 12 passed |
+| C2-P5 | `public protocol MailMechanism: Sendable, MailMutating` — a mutating **parent**, whose requirements are this seam's requirements and which arrives without appearing between the braces every other assertion reads | `AssertionError: the mail mechanism seam now inherits ['MailMutating', 'Sendable']. A parent protocol's requirements are this seam's requirements…` | 1 failed, 12 passed. `MailMechanism.swift` restored, SHA-256 `6be4242d…f726` matched |
+| C3-P | `MailAttachmentDescriptor.init(from:)` rewritten to assign `id`, `mimeType`, `byteSize` and `disposition` directly | **Swift**: `ContractCheckError.failed("Malformed MailAttachmentDescriptor decoded successfully")`. **Python**: `AssertionError: MailAttachmentDescriptor's decoder no longer routes through its validating initialiser…` | Swift exit **133** (was `PASS (21 checks)` exit 0 before the correction); Python 1 failed, 12 passed. `MailMechanism.swift` restored, SHA-256 `6be4242d…f726` matched |
+
+**The blind spots in the corrections themselves.** C2-P4 and C2-P5 are the point
+of this subsection: they are not the reviewer's plants, they are two ways past
+the *correction*, found by asking of each new assertion how it could be walked
+around rather than by waiting to be told.
+
+* **C2 could not see a two-line property declaration.** Swift admits the
+  accessor block on the line after the type, and the first draft's regex was
+  anchored to one line, so `var readStatus: Bool` followed by `{ get set }`
+  reproduced the exact defect the correction was written to close. Widened to
+  `[^{}]+` and re-planted as C2-P4.
+* **C2 could not see an inherited mutation surface.** Every other assertion in
+  it reads the text between `public protocol MailMechanism` and the end of the
+  file, and a parent protocol's requirements are this seam's requirements while
+  appearing nowhere in that text. The inheritance clause is now closed at
+  `Sendable`, and C2-P5 proves it.
+* **C1's distinctness assertion could not have explained itself.** Its first
+  draft rendered its own failure message as `sorted(set(terms) ^ set(terms))` —
+  the symmetric difference of a set with itself, empty for every input. The
+  assertion would still have fired; it would have reported nothing about why,
+  which is §F's R9 defect one layer down. Corrected before the plant.
+
+One hazard in C2 is left standing and is stated so the next owner inherits it
+rather than rediscovers it: the guard scans from `public protocol MailMechanism`
+to the end of the file, which is safe only because that protocol is the last
+declaration in `MailMechanism.swift`. A declaration added below it would be
+scanned as if it were part of the seam. That direction fails safe — it reddens on
+something legal rather than passing something illegal — and it is deliberately
+not bounded to the protocol's closing brace, because bounding it would stop a
+second protocol carrying `func delete()` from being seen at all.
+
+### The record's own honesty, which is the deliverable on a feasibility package
+
+| Correction | What was wrong | What it now says |
+|---|---|---|
+| **C4** | §A enumerated MailKit, `Message.framework`, ScriptingBridge/OSAKit, the on-disk store, IMAP and `sdp`, and read as exhaustive while omitting two public, supported mechanisms that can reach mail data: **Spotlight** (`NSMetadataQuery` / `MDQuery`) and the **Accessibility API** (`AXUIElement`) | A row each, with their SDK evidence, both marked documentation-level, both with the reason they were **not** settled by experiment stated in the row and again beneath the table. The central negative is unaffected and the row says why: neither enumerates accounts and neither lists mailboxes. Verified rather than accepted — `/System/Library/Spotlight/Mail.mdimporter` declares `com.apple.mail.emlx` conforming to `public.email-message`, so mail messages genuinely are indexed items, and `NSMetadataAttributes.h`, `MDItem.h`, `MDQuery.h`, `AXUIElement.h` and `AXError.h` were read in the installed SDK |
+| **C5** | The ScriptingBridge row's evidence cell said the two frameworks "are both present in the SDK with modulemaps **and link**". Neither is link-proved, and OSAKit is not even compile-proved | The cell now states the level exactly: ScriptingBridge compiles on every build because the probe imports it; **nothing imports OSAKit**, which appears in one doc comment and nowhere else; and neither is linked, because `swift package describe` reports both probes as `library` targets with no product membership while the only two executables depend on `AppleSourceHost` alone. §B row 1 and §A's control-1 explanation were already correct and are unchanged. **The same overstatement was found in the probe's own doc comment** — "present and *links*" — and corrected there too; a false claim left in the source while the record is fixed is half a correction |
+| **C6** | Performance is named in the stated acceptance and §B presented "the six controls" as the acceptance set, so a reader auditing §B against the acceptance found no performance row and no statement that the criterion was out of reach. The record declined it honestly twice in prose and never in the table | An explicit **row 7**: not proved, nowhere, with the three operator gates it would take to settle and an explicit refusal to report fixture timings as if they were a mechanism's. Nothing is softened and no performance coverage is claimed |
+| **C7** | `NativeSourceContractError.mailConsentAbsent` was declared and classified but never thrown — `requireConsent()` throws `NativeProviderFailure.permissionDenied`. AGENTS.md §2 requires dead code removed | Removed, along with its now-unreachable arm in `NativeHostErrorClass(_:)`. **The `providerPermissionDenied` class itself is kept**: it is still reached from `NativeProviderFailure.permissionDenied`, which is what the adapter actually throws and what `checkMailDiscoveryIsConsentGatedBeforeAnyRead` asserts. Only the arm died, not the classification |
+
+### The five NOTEs carried forward, and who owns each
+
+Named rather than closed, because closing them here would be the wrong hands:
+
+* **WP-15's `test_the_compatibility_probe_is_compile_only_and_never_linked_into_the_host`
+  is bypassable in its own right**, reproduced independently by the reviewer.
+  WP-16's count guard defends the invariant at this head; the test itself belongs
+  to whoever next owns `test_wp15_native_host_admission.py`, and it is **not
+  edited here** for the reason §F already gives.
+* Commit `bc95852`'s "seventeen classes" should read sixteen. Immutable history.
+* `MailDateBoundEnforcement.sourceSideExact` has no behaviour distinct from
+  `sourceSideDayGranular` today — both widen.
+* A trailing `-`, `.` or `_` in a `MailIdentityComponent` produces a
+  `mailIdentityTooLong` that misdescribes the cause.
+* `FixtureMailMechanism` ships inside `AppleSourceHost`, following the
+  pre-existing `SyntheticAdapters.swift` precedent.

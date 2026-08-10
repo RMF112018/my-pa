@@ -13,9 +13,12 @@
 /// dialogue**. So this target proves the two halves that can be proved without
 /// consent, and refuses the third:
 ///
-/// * the framework is *present and links* on this toolchain and SDK — every
+/// * the framework is *present and compiles* on this toolchain and SDK — every
 ///   `swift build` re-proves it, which is what separates "the mechanism does not
-///   exist" from "the mechanism exists and we do not have permission";
+///   exist" from "the mechanism exists and we do not have permission". **Not
+///   *links*.** This target is a library nothing depends on, so nothing links it
+///   and the claim stops at compilation, which is the level the record states;
+///   `OSAKit` is named above and imported nowhere, so it is not even that;
 /// * the *terminology* the mechanism would use is written down here as data,
 ///   with its four-character Apple Event codes, and
 ///   `tests/architecture/test_wp16_mail_adapter.py` checks that table against

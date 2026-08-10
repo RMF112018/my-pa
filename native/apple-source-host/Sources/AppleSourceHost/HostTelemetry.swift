@@ -48,6 +48,13 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
     case spoolIntegrityFailure = "spool_integrity_failure"
     case spoolFilesystemFailure = "spool_filesystem_failure"
     case lifecycleRefused = "lifecycle_refused"
+    /// A mail mechanism that cannot satisfy a control the adapter will not do
+    /// without: it publishes no generation, or it cannot bound by date at the
+    /// source. Distinct from `malformedEnvelope` because the operator's action
+    /// is different — nothing about the request can be fixed.
+    case mailMechanismUnsupported = "mail_mechanism_unsupported"
+    /// A mail record refused at one of the WP-16 content bounds.
+    case mailBoundRefused = "mail_bound_refused"
     case unclassified = "unclassified"
 
     /// Classify without quoting. `filesystemFailure` carries an `errno`, and even
@@ -79,9 +86,18 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
                 self = .nonCanonicalOrder
             case .invalidPageLimit:
                 self = .invalidPageLimit
+            case .mailConsentAbsent:
+                self = .providerPermissionDenied
+            case .mailGenerationUnavailable, .mailDateBoundNotSourceSide:
+                self = .mailMechanismUnsupported
+            case .mailIdentityTooLong, .mailHeaderTooLarge, .mailBodyTooLarge,
+                 .mailAttachmentLimitExceeded:
+                self = .mailBoundRefused
             case .inconsistentDiscovery, .inconsistentEnvelope, .invalidTimeRange,
                  .mismatchedSourceKind, .unknownBucket, .missingSyntheticPage,
-                 .duplicateSyntheticPage, .invalidRecurrence, .recurrenceLimitExceeded:
+                 .duplicateSyntheticPage, .invalidRecurrence, .recurrenceLimitExceeded,
+                 .mailInvalidIdentityComponent, .mailWindowNotDayAligned,
+                 .mailDateBoundViolated, .mailContentInconsistent:
                 self = .malformedEnvelope
             }
         case let provider as NativeProviderFailure:

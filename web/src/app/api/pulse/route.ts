@@ -1,40 +1,66 @@
 /**
- * Today / Pulse — **not backend-backed at this head, and it says so.**
+ * Today / Pulse — **real-backed as of WP-11.**
  *
- * The measurement, so the next reader does not have to repeat it: a real
- * principal-scoped Pulse read model *does* exist in Python.
- * `SqlPulseRepository.generate_pulse` reads `knowledge.pulse_items` filtered by
- * `principal_id`, returns only accepted and undismissed rows — the migration
- * CHECK `pulse_reads_only_accepted_records` pins that — and `SituationService`
- * routes to it. What does not exist is any way to *reach* it over the transport:
- * `POST /v1/{capability}` dispatches the fifteen members of `Capability`, and
- * none of them is a Pulse read. `SituationService` is deliberately not wired
- * behind `ApplicationService.invoke`.
+ * This route answered `501 not_implemented` until now, and the reason it gave
+ * was exact: a principal-scoped Pulse read model existed in Python and no member
+ * of the capability set reached it. `continuity.pulse` is that member, and
+ * revision `8f2b6c4d1a37` carries the forward `ALTER` that admits it to the
+ * audited vocabulary.
  *
- * Exposing it needs a new `Capability` member, and that is what puts it outside
- * this work package rather than a preference. `audit_events.capability` carries a
- * frozen `IN (...)` CHECK listing exactly fifteen names, widened by an explicit
- * forward `ALTER` each time the vocabulary grows (`3c8f1e2a5b74` did it last).
- * A member added without one leaves every test green — every test builds its
- * database from scratch — and is refused by the stored constraint on the first
- * audited operation in the field. So a sixteenth capability requires a migration,
- * and this work package is authorised to write none.
+ * **What comes back is a derivation, not a list.** The backend selects the
+ * Principal's *accepted*, open commitments, tasks and decisions and the
+ * obligations standing on the current frames of running Situations, and returns
+ * only those for which a named why-now condition holds — each with a closed
+ * `reason_code`, the `basis_refs` a reader can open to check it, a consequence,
+ * a next step, and an evidentiary urgency rank. An accepted object that is
+ * merely recent, and carries no due moment, no named authority point and no
+ * unmet obligation, is not in the answer at all.
  *
- * Until then this route answers `not_implemented` rather than serving fixtures
- * in a default build, and rather than returning an empty list that would read as
- * "nothing needs your attention today".
+ * The order the gateway returns is the ranked order, and this route **must not
+ * re-sort it**. `generatedAt` is identical on every item — it is the moment of
+ * the read — so a sort by it would be arbitrary rather than chronological, and a
+ * sort by anything else would discard the ranking that is the answer.
+ *
+ * **No browser Principal.** The envelope's `principal_id` is derived by
+ * `callGateway` from the verified session cookie and from nothing else; this
+ * route sends no payload at all, so there is nothing a caller could name.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
-import { notImplemented, resolveServing } from "@/lib/api/serving";
+import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticPulse, syntheticDisclosure } from "@/lib/fixtures/pulse";
+import type { BackendPulseItem } from "@/contracts/views";
 
 const SCOPE = "pulse";
 
-const NO_CAPABILITY =
-  "Today/Pulse has no backend capability. A principal-scoped Pulse read model exists in " +
-  "PostgreSQL, but no member of the v1 capability set exposes it over the gateway, and " +
-  "adding one requires widening a frozen audit CHECK constraint by migration.";
+interface PythonPulseItem {
+  readonly pulse_id: string;
+  readonly item_type: string;
+  readonly item_ref: string;
+  readonly reason_code: string;
+  readonly reason: string;
+  readonly basis_refs: readonly string[];
+  readonly consequence: string | null;
+  readonly next_step: string | null;
+  readonly priority: number;
+  readonly generated_at: string;
+}
+
+function toBackendItem(row: PythonPulseItem): BackendPulseItem {
+  return {
+    pulseId: row.pulse_id,
+    itemType: row.item_type,
+    itemRef: row.item_ref,
+    reasonCode: row.reason_code,
+    reason: row.reason,
+    basisRefs: row.basis_refs,
+    consequence: row.consequence,
+    nextStep: row.next_step,
+    priority: row.priority,
+    generatedAt: row.generated_at,
+  };
+}
 
 export async function GET(request: NextRequest) {
   const guard = await requirePrincipal(request);
@@ -42,11 +68,24 @@ export async function GET(request: NextRequest) {
 
   const serving = resolveServing();
   if (serving.kind === "refused") return serving.response;
-  if (serving.kind === "backend") return notImplemented(SCOPE, NO_CAPABILITY);
+
+  if (serving.kind === "synthetic") {
+    return NextResponse.json({
+      shape: "synthetic",
+      items: syntheticPulse(guard.principal),
+      disclosure: syntheticDisclosure(SCOPE),
+    });
+  }
+
+  const outcome = await callGateway<{ pulse_items?: readonly PythonPulseItem[] }>(
+    guard.principal,
+    "continuity.pulse",
+  );
+  if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
 
   return NextResponse.json({
-    shape: "synthetic",
-    items: syntheticPulse(guard.principal),
-    disclosure: syntheticDisclosure(SCOPE),
+    shape: "backend",
+    items: (outcome.result.pulse_items ?? []).map(toBackendItem),
+    disclosure: backendDisclosure(SCOPE, outcome.disclosure, transportLimitations()),
   });
 }

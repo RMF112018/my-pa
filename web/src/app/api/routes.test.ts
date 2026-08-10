@@ -155,11 +155,12 @@ describe("a default build produces no fixture data at all", () => {
   });
 
   it("answers not_implemented, not a fixture, on every route with no backend capability", async () => {
+    // WP-11 moved Pulse, Situations and Projects out of this list and into the
+    // backend-served one below: all three now reach a real `continuity.*`
+    // capability. The relationship timeline is what is left, and it is left
+    // rather than removed — a list that emptied would stop asserting anything.
     const cookie = await signIn();
     const responses = [
-      await pulse(get(cookie, "/api/pulse")),
-      await situations(get(cookie, "/api/situations")),
-      await projects(get(cookie, "/api/projects")),
       await timeline(get(cookie, "/api/relationships/p/timeline"), {
         params: Promise.resolve({ personId: "p" }),
       }),
@@ -174,12 +175,23 @@ describe("a default build produces no fixture data at all", () => {
 
   it("serves the backend, not fixtures, on every route that has a capability", async () => {
     const cookie = await signIn();
-    stubGateway({ manifest: {}, readiness: {}, review_cases: [], captures: [] });
+    stubGateway({
+      manifest: {},
+      readiness: {},
+      review_cases: [],
+      captures: [],
+      pulse_items: [],
+      situations: [],
+      projects: [],
+    });
     const responses = [
       await system(get(cookie, "/api/system")),
       await library(get(cookie, "/api/library")),
       await reviewList(get(cookie, "/api/review")),
       await reveal(post(cookie, "/api/reveal", { subjectId: "cap_aaaaaaaa11111111" })),
+      await pulse(get(cookie, "/api/pulse")),
+      await situations(get(cookie, "/api/situations")),
+      await projects(get(cookie, "/api/projects")),
     ];
     for (const response of responses) {
       expect(response.status).toBe(200);
@@ -190,6 +202,9 @@ describe("a default build produces no fixture data at all", () => {
       "http://127.0.0.1:8000/v1/capture.list",
       "http://127.0.0.1:8000/v1/review.list",
       "http://127.0.0.1:8000/v1/knowledge.reveal",
+      "http://127.0.0.1:8000/v1/continuity.pulse",
+      "http://127.0.0.1:8000/v1/continuity.situations",
+      "http://127.0.0.1:8000/v1/continuity.projects",
     ]);
   });
 

@@ -155,3 +155,64 @@ export interface PulseItem {
   readonly evidenceRefs: readonly OpaqueId[];
   readonly disclosure: DisclosureEnvelope;
 }
+
+/**
+ * The Pulse as the backend derives it, which is a different thing from the
+ * `PulseItem` above and therefore a different type.
+ *
+ * `PulseItem` is the fixture shape: a title, a reason, a consequence, a next
+ * step. A derived item has no title at all — nothing wrote one — and carries
+ * three things the fixture shape has no field for and which are the whole point
+ * of the derivation: a closed `reasonCode` naming *why now*, the `basisRefs` a
+ * reader can open to check that reason, and a bounded `priority` that is an
+ * evidentiary urgency rank rather than a position in a stream. Merging the two
+ * would mean inventing a title and dropping the basis, which is exactly the
+ * flattening that turns a Pulse back into a feed.
+ *
+ * `itemRef` names the accepted record the item is about; `generatedAt` is the
+ * moment of the read and is identical across every item in one answer, so it
+ * cannot be used to order them.
+ */
+export interface BackendPulseItem {
+  readonly pulseId: OpaqueId;
+  readonly itemType: string;
+  readonly itemRef: OpaqueId;
+  readonly reasonCode: string;
+  readonly reason: string;
+  readonly basisRefs: readonly OpaqueId[];
+  readonly consequence: string | null;
+  readonly nextStep: string | null;
+  readonly priority: number;
+  readonly generatedAt: IsoTimestamp;
+}
+
+/**
+ * A Situation as `continuity.situations` returns it.
+ *
+ * Separate from `Situation` above for the reason `BackendReviewCase` is
+ * separate from `ReviewCase`: the fixture shape carries a `disclosure` on every
+ * row and a `principalId`, and the backend listing carries neither — the
+ * disclosure belongs to the answer rather than to each row, and the Principal is
+ * the session's and is never echoed back.
+ */
+export interface BackendSituation {
+  readonly situationId: OpaqueId;
+  readonly title: string;
+  readonly state: SituationState;
+  readonly description: string | null;
+  readonly objectRefs: readonly OpaqueId[];
+  readonly openedAt: IsoTimestamp;
+  readonly closedAt: IsoTimestamp | null;
+  readonly outcome: string | null;
+}
+
+/** A Project as `continuity.projects` returns it. Same distinction as above. */
+export interface BackendProject {
+  readonly projectId: OpaqueId;
+  readonly name: string;
+  readonly state: ProjectState;
+  readonly description: string | null;
+  readonly participants: readonly string[];
+  readonly openedAt: IsoTimestamp;
+  readonly closedAt: IsoTimestamp | null;
+}

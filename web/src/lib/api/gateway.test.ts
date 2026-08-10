@@ -356,10 +356,28 @@ describe("the transport stays on the server", () => {
   });
 
   it("found the modules that do import it, so the rule is not describing nothing", () => {
+    // Three places may import the transport and no fourth: a route handler
+    // under `app/api`, a **server component** page under `app/(app)`, and
+    // `lib/api` itself. WP-11 added the second — `today` and `situations` reach
+    // `continuity.*` directly, which is the shape `lib/fixtures/gate.ts`
+    // describes for a server component and the reason the gate lives at the
+    // source of the data rather than in the route handlers. A page is only
+    // admissible here because it is *not* a client component, which the
+    // assertion below re-checks rather than assumes.
     const importers = sources(SRC).filter((path) =>
       /from "@\/lib\/api\/gateway"/.test(readFileSync(path, "utf8")),
     );
     expect(importers.length).toBeGreaterThan(0);
-    expect(importers.every((path) => path.includes(join("app", "api")) || path.includes(join("lib", "api")))).toBe(true);
+    expect(
+      importers.every(
+        (path) =>
+          path.includes(join("app", "api")) ||
+          path.includes(join("lib", "api")) ||
+          path.includes(join("app", "(app)")),
+      ),
+    ).toBe(true);
+    for (const path of importers) {
+      expect(/^\s*["']use client["']/m.test(readFileSync(path, "utf8"))).toBe(false);
+    }
   });
 });

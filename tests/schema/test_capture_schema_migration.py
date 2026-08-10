@@ -189,7 +189,7 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "native_sources.sync",
         # WP-9. `5e2c7b0a94f6` is the forward `ALTER` that admits it.
         "knowledge.reveal",
-        # WP-11. `8f2b6c4d1a37` is the forward `ALTER` that admits all three.
+        # WP-11. `8f2b6c4d1a37` is the forward `ALTER` that admits the trio below.
         "continuity.projects",
         "continuity.pulse",
         "continuity.situations",

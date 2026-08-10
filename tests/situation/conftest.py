@@ -251,9 +251,7 @@ class InMemoryProjectRepository(ProjectRepository):
         self._situations = situations
         self._rows: dict[str, Project] = {}
         self._links: set[tuple[str, str, str]] = set()
-        self.association_evidence: dict[
-            tuple[str, str, str], tuple[ClosureEvidenceKind, str]
-        ] = {}
+        self.association_evidence: dict[tuple[str, str, str], tuple[ClosureEvidenceKind, str]] = {}
 
     def add_project(
         self,

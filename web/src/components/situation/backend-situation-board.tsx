@@ -7,6 +7,12 @@
  * mean inventing both. What a real Situation carries instead — the objects it
  * *references without owning*, and, once closed, the outcome it recorded — is
  * shown here, and a closed Situation says when it closed.
+ *
+ * **A section with no rows is only called empty when the answer that produced it
+ * was whole.** The two halves come from two capabilities and either may come
+ * back partial on its own, so each is told whether its own answer was partial;
+ * a partial half with no rows says the read was incomplete instead of asserting
+ * that the Principal holds none.
  */
 import type { BackendProject, BackendSituation } from "@/contracts/views";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
@@ -28,9 +34,15 @@ const PROJECT_STATE_TONE = {
 export function BackendSituationBoard({
   situations,
   projects,
+  situationsPartial = false,
+  projectsPartial = false,
 }: {
   situations: readonly BackendSituation[];
   projects: readonly BackendProject[];
+  /** Whether the answer these situations came from said it was partial. */
+  situationsPartial?: boolean;
+  /** Whether the answer these projects came from said it was partial. */
+  projectsPartial?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-6">
@@ -38,7 +50,12 @@ export function BackendSituationBoard({
         <h2 id="board-situations" className="mb-2 text-sm font-semibold text-moss-slate">
           Situations
         </h2>
-        {situations.length === 0 ? (
+        {situations.length === 0 && situationsPartial ? (
+          <p className="text-sm text-muted" data-testid="situations-partial-empty">
+            This answer was partial and returned no situation, so whether you hold any is not
+            established here. What is shown may be incomplete.
+          </p>
+        ) : situations.length === 0 ? (
           <p className="text-sm text-muted" data-testid="situations-empty">
             You hold no situations yet.
           </p>
@@ -71,7 +88,12 @@ export function BackendSituationBoard({
         <h2 id="board-projects" className="mb-2 text-sm font-semibold text-moss-slate">
           Projects
         </h2>
-        {projects.length === 0 ? (
+        {projects.length === 0 && projectsPartial ? (
+          <p className="text-sm text-muted" data-testid="projects-partial-empty">
+            This answer was partial and returned no project, so whether you hold any is not
+            established here. What is shown may be incomplete.
+          </p>
+        ) : projects.length === 0 ? (
           <p className="text-sm text-muted" data-testid="projects-empty">
             You hold no projects yet.
           </p>

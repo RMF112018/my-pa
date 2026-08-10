@@ -183,18 +183,42 @@ export default async function SituationsPage() {
           }
         />
       ) : null}
-      {situations.length === 0 && projects.length === 0 && !degraded ? (
-        <SurfaceState
-          kind="empty"
-          title="You hold no situations or projects"
-          detail={
-            "Both were read successfully and both are empty. Nothing failed; there is simply " +
-            "nothing recorded yet."
-          }
-          testId="situations-empty"
-        />
+      {situations.length === 0 && projects.length === 0 ? (
+        // A partial answer that carried nothing is not an empty board, and the
+        // distinction is made here for the same reason Today, Library and Review
+        // make it: the rows may exist and simply not have been returned, so the
+        // only truthful thing to say is that the read was incomplete.
+        degraded ? (
+          <SurfaceState
+            kind="degraded"
+            title="The board was read incompletely and returned nothing"
+            detail={
+              "An empty board is not established by a partial read. Situations or projects may " +
+              "exist that this answer did not cover."
+            }
+            testId="situations-degraded-empty"
+          />
+        ) : (
+          <SurfaceState
+            kind="empty"
+            title="You hold no situations or projects"
+            detail={
+              "Both were read successfully and both are empty. Nothing failed; there is simply " +
+              "nothing recorded yet."
+            }
+            testId="situations-empty"
+          />
+        )
       ) : (
-        <BackendSituationBoard situations={situations} projects={projects} />
+        // One half may be empty while the other carried rows. Whether *that*
+        // half's emptiness was established is per-answer, not per-board, so each
+        // answer's own partiality is carried down rather than the board-wide OR.
+        <BackendSituationBoard
+          situations={situations}
+          projects={projects}
+          situationsPartial={situationsAnswer.kind === "degraded"}
+          projectsPartial={projectsAnswer.kind === "degraded"}
+        />
       )}
     </section>
   );

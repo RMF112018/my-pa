@@ -1657,6 +1657,18 @@ struct AppleSourceHostContractChecks {
         )
     }
 
+    /// Byte-level substring search. The planted marker has to be looked for in
+    /// bytes, because every byte-bearing field on the wire is a JSON array of
+    /// numbers and a text search over the payload can never find it.
+    private static func containsSubsequence(_ haystack: [UInt8], _ needle: [UInt8]) -> Bool {
+        guard !needle.isEmpty, haystack.count >= needle.count else { return false }
+        for start in 0...(haystack.count - needle.count)
+        where Array(haystack[start..<(start + needle.count)]) == needle {
+            return true
+        }
+        return false
+    }
+
     private static func decodedMailContent(_ record: NativeSourceRecord) throws -> MailRecordContent {
         try JSONDecoder().decode(MailRecordContent.self, from: Data(record.payload))
     }
@@ -2011,9 +2023,21 @@ struct AppleSourceHostContractChecks {
             "The omission did not record the body's true size"
         )
         try require(omitted.completeness.isPartial, "An omitted body was not marked partial")
-        let payloadText = String(decoding: page.records[1].payload, as: UTF8.self)
+        // Searched as **bytes**, in every byte-bearing field and in the raw
+        // payload. The obvious form of this check — decoding the payload as
+        // UTF-8 and looking for the marker as text — is vacuous, and a planted
+        // leak proved it: `[UInt8]` encodes to a JSON array of decimal numbers,
+        // so the marker's characters are never present as characters no matter
+        // what leaks. It is recorded in WP-16's reversion table rather than
+        // quietly corrected.
+        let markerBytes = Array(marker.utf8)
         try require(
-            !payloadText.contains(marker),
+            !containsSubsequence(omitted.headers, markerBytes),
+            "The oversize body's first bytes reached the record's headers; an "
+                + "omitted body must be omitted, not previewed somewhere else"
+        )
+        try require(
+            !containsSubsequence(page.records[1].payload, markerBytes),
             "The oversize body's first bytes reached the payload; the bound truncated "
                 + "rather than omitted"
         )

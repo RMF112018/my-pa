@@ -205,17 +205,35 @@ def test_the_mail_automation_probe_sends_no_event_and_is_never_linked() -> None:
     Mail inside the module that talks to the application.
     """
     manifest = _without_comments(MANIFEST.read_text(encoding="utf-8"))
-    assert 'name: "AppleMailAutomationShapeProbe"' in manifest
-    for target in (
-        "AppleSourceHost",
-        "AppleSourceHostContractChecks",
-        "AppleSourceHostFixtureExport",
-    ):
-        section = manifest.split(f'name: "{target}"', 1)[1].split("),", 1)[0]
-        assert "AppleMailAutomationShapeProbe" not in section, (
-            f"the {target} target now depends on the Mail automation probe, which "
-            "links the framework that can delete a message"
+    assert "let package = Package(" in manifest and manifest.count('"AppleSourceHost"') >= 3, (
+        "the manifest scan is not reading Package.swift"
+    )
+
+    # Counted, not walked. **The section-walking form of this guard does not
+    # work, and finding that out is why it is written this way.** Planting
+    # `dependencies: [...]` on the shipping target left both this test and
+    # WP-15's `test_the_compatibility_probe_is_compile_only_and_never_linked_into_the_host`
+    # green, because splitting on `name: "AppleSourceHost"` lands on the
+    # *product* declaration a few lines above the target, whose section ends
+    # before the plant. A count is immune to that: a probe named anywhere other
+    # than its own `name:` is a probe something depends on, whatever the
+    # manifest's formatting.
+    #
+    # `AppleFrameworkCompatibilityProbe` is covered here too. It is WP-15's
+    # probe and WP-15's guard is not weakened or edited — but the same plant
+    # slips past it, and a guard that could not see EventKit arriving in the
+    # shipping module was measuring the wrong thing.
+    for probe_target in ("AppleFrameworkCompatibilityProbe", "AppleMailAutomationShapeProbe"):
+        occurrences = manifest.count(f'"{probe_target}"')
+        assert occurrences == 1, (
+            f"{probe_target} is named {occurrences} times in Package.swift as a "
+            "quoted token. Exactly one is legitimate — its own target's `name:`. A "
+            "second is a dependency, a product membership, or a target list, and "
+            "any of those links an Apple framework into something that ships. The "
+            "shipping module linking none of them is WP-15's control 1, proved at "
+            "link time, and it is the strongest guarantee in this package"
         )
+        assert f'name: "{probe_target}"' in manifest
 
     probe = _source(AUTOMATION_PROBE / "MailAutomationShape.swift")
     assert "import ScriptingBridge" in probe, (

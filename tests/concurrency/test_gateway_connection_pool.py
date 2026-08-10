@@ -86,7 +86,10 @@ from my_pa.contracts.ports import (
     EnrollmentRepository,
     KnowledgeRepository,
     OperationQueue,
+    ProjectRepository,
+    PulseRepository,
     ReviewRepository,
+    SituationRepository,
     SourceProviders,
     SourceRepository,
     UnitOfWork,
@@ -203,6 +206,18 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def reviews(self) -> ReviewRepository:
         return self._inner.reviews
+
+    @property
+    def situations(self) -> SituationRepository:
+        return self._inner.situations
+
+    @property
+    def projects(self) -> ProjectRepository:
+        return self._inner.projects
+
+    @property
+    def pulse(self) -> PulseRepository:
+        return self._inner.pulse
 
     @property
     def audit(self) -> AuditSink:

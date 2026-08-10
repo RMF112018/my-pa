@@ -188,6 +188,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     # declared here so the structural guard covers it exactly as it covers a
     # revision that copies the declaration.
     "7a1e5f3c9d24": frozenset({"capture_clients"}),
+    # WP-11's continuity objects and the one append-only record that carries
+    # their lifecycle and their associations. Raw SQL again, and declared here
+    # for the same reason.
+    "8f2b6c4d1a37": frozenset(
+        {
+            "commitments",
+            "decisions",
+            "tasks",
+            "continuity_lifecycle_events",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

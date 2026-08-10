@@ -37,7 +37,13 @@ from my_pa.application.commands import (
 )
 from my_pa.application.situation_service import SituationService
 from my_pa.domain.relationship.event import RelationshipEventType
-from my_pa.domain.situation.situation import PulseItem, PulseItemType, SituationState
+from my_pa.domain.situation.continuity import ClosureEvidenceKind
+from my_pa.domain.situation.situation import (
+    PulseItem,
+    PulseItemType,
+    PulseReasonCode,
+    SituationState,
+)
 
 WHEN = datetime(2026, 8, 5, 12, tzinfo=UTC)
 
@@ -74,6 +80,8 @@ def test_close_situation_sets_state_closed(
             principal_id=PRINCIPAL_A,
             situation_id=opened.situation_id,
             outcome="carried the open commitment forward",
+            evidence_kind=ClosureEvidenceKind.PRINCIPAL_STATEMENT,
+            evidence_ref="rdec_closure0001closure0001",
         ),
     )
     assert closed.state is SituationState.CLOSED
@@ -82,6 +90,15 @@ def test_close_situation_sets_state_closed(
     # the migration CHECK `a_closed_situation_records_when_it_closed` agree).
     assert closed.closed_at is not None
     assert closed.principal_id == PRINCIPAL_A
+    # WP-11: the close appended one lifecycle row carrying the evidence, in the
+    # same call. A status field that flipped with no trace would leave this empty.
+    assert situations.lifecycle == [
+        (
+            opened.situation_id,
+            ClosureEvidenceKind.PRINCIPAL_STATEMENT,
+            "rdec_closure0001closure0001",
+        )
+    ]
 
 
 def test_enter_frame_binds_situation_and_principal(
@@ -157,6 +174,8 @@ def test_pulse_item_accepted_only_is_always_true() -> None:
         item_type=PulseItemType.COMMITMENT,
         item_ref="cmt_ref_000000000001",
         reason="due tomorrow",
+        reason_code=PulseReasonCode.COMMITMENT_DUE_SOON,
+        basis_refs=("cmt_ref_000000000001",),
         generated_at=WHEN,
     )
     assert accepted.accepted_only is True
@@ -168,6 +187,8 @@ def test_pulse_item_accepted_only_is_always_true() -> None:
             item_type=PulseItemType.COMMITMENT,
             item_ref="cmt_ref_000000000001",
             reason="due tomorrow",
+            reason_code=PulseReasonCode.COMMITMENT_DUE_SOON,
+            basis_refs=("cmt_ref_000000000001",),
             generated_at=WHEN,
             accepted_only=False,
         )

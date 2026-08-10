@@ -225,6 +225,8 @@ def test_readme_derives_the_current_alembic_count_and_head() -> None:
         23: "Twenty-three",
         24: "Twenty-four",
         25: "Twenty-five",
+        26: "Twenty-six",
+        27: "Twenty-seven",
     }
     count, head = _alembic_identity()
     assert count in words, "extend the readable README count vocabulary"

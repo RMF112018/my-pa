@@ -45,6 +45,7 @@ from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, vali
 from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.event import RelationshipEventType
+from my_pa.domain.situation.continuity import ClosureEvidenceKind
 
 __all__ = [
     "AddProjectCommand",
@@ -56,11 +57,14 @@ __all__ = [
     "EnterFrameCommand",
     "FetchSource",
     "GetCapabilities",
+    "GetPulse",
     "GetSourceMetadata",
     "GetSourceStatus",
     "LinkSituationToProjectCommand",
     "ListCaptures",
+    "ListProjects",
     "ListReviewCases",
+    "ListSituations",
     "ListSources",
     "OpenSituationCommand",
     "ReadCapture",
@@ -600,6 +604,43 @@ class DecideReviewCase:
             raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
 
 
+@dataclass(frozen=True, slots=True)
+class GetPulse:
+    """`continuity.pulse`: the Principal's why-now list, derived at request time.
+
+    **No payload at all, and that is the shape rather than an omission.** The
+    Pulse is not a query: there is nothing for a caller to filter, page, or sort
+    by, because the ranking is the answer. A `sort` parameter would be the first
+    step back to an activity feed, and there is no field one could put it in.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_PULSE
+
+
+@dataclass(frozen=True, slots=True)
+class ListSituations:
+    """`continuity.situations`: one bounded page of the Principal's Situations."""
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_SITUATIONS
+
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class ListProjects:
+    """`continuity.projects`: one bounded page of the Principal's Projects."""
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS
+
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
 type Command = (
@@ -619,6 +660,9 @@ type Command = (
     | SearchCaptures
     | ListReviewCases
     | DecideReviewCase
+    | GetPulse
+    | ListSituations
+    | ListProjects
 )
 
 
@@ -669,17 +713,30 @@ class OpenSituationCommand:
 
 @dataclass(frozen=True, slots=True)
 class CloseSituationCommand:
-    """Close one Situation, recording its outcome. Never deletes referenced objects."""
+    """Close one Situation with its outcome and its evidence. Deletes nothing.
+
+    **`evidence_kind` and `evidence_ref` are required (WP-11)** and have no
+    default, because a default would be this command supplying the evidence its
+    caller did not. An outcome sentence with nothing under it is a status field
+    changing with no trace; the pair is what the append-only `closed` lifecycle
+    row is built from.
+    """
 
     principal_id: str
     situation_id: str
     outcome: str
+    evidence_kind: ClosureEvidenceKind
+    evidence_ref: str
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.situation_id, IdKind.SITUATION)
         if not self.outcome.strip():
             raise ValueError("closing a situation records a non-blank outcome")
+        if not isinstance(self.evidence_kind, ClosureEvidenceKind):
+            raise ValueError("closing a situation names one kind of closure evidence")
+        if not self.evidence_ref.strip():
+            raise ValueError("closing a situation cites the evidence that closed it")
 
 
 @dataclass(frozen=True, slots=True)
@@ -728,16 +785,27 @@ class AddProjectCommand:
 
 @dataclass(frozen=True, slots=True)
 class LinkSituationToProjectCommand:
-    """Bind one Situation into one Project. Unique per (project, situation)."""
+    """Bind one Situation into one Project, citing what justified the binding.
+
+    Unique per (project, situation). The evidence pair is required for the reason
+    `CloseSituationCommand`'s is: an association with no recorded justification is
+    one a later reader can only infer.
+    """
 
     principal_id: str
     project_id: str
     situation_id: str
+    evidence_kind: ClosureEvidenceKind
+    evidence_ref: str
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.project_id, IdKind.PROJECT)
         validate_identifier(self.situation_id, IdKind.SITUATION)
+        if not isinstance(self.evidence_kind, ClosureEvidenceKind):
+            raise ValueError("an association names one kind of evidence")
+        if not self.evidence_ref.strip():
+            raise ValueError("an association cites the evidence that justifies it")
 
 
 @dataclass(frozen=True, slots=True)

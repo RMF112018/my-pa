@@ -69,10 +69,13 @@ from my_pa.contracts.ports import (
     KnowledgeRepository,
     Operation,
     OperationQueue,
+    ProjectRepository,
+    PulseRepository,
     RepositoryFailureError,
     ReviewDecisionRequest,
     ReviewRepository,
     SearchOutcome,
+    SituationRepository,
     SourceProviders,
     SourceRepository,
     UnitOfWork,
@@ -119,6 +122,11 @@ from my_pa.infrastructure.persistence.search import (
     SearchUnavailableError,
     UnknownEnrollmentError,
     search_extractions,
+)
+from my_pa.infrastructure.persistence.situation_repository import (
+    SqlProjectRepository,
+    SqlPulseRepository,
+    SqlSituationRepository,
 )
 from my_pa.infrastructure.persistence.tables import JobState
 from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
@@ -553,6 +561,18 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def reviews(self) -> ReviewRepository:
         return _Reviews(self._open)
+
+    @property
+    def situations(self) -> SituationRepository:
+        return SqlSituationRepository(self._open)
+
+    @property
+    def projects(self) -> ProjectRepository:
+        return SqlProjectRepository(self._open)
+
+    @property
+    def pulse(self) -> PulseRepository:
+        return SqlPulseRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

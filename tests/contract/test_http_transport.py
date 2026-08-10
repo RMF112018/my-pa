@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the sixteen capabilities is addressable over HTTP
+**Reachability.** Every one of the nineteen capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a seventeenth capability added to the domain arrives as a failing row instead
+here, so a twentieth capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -60,10 +60,13 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListProjects,
     ListReviewCases,
+    ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
@@ -165,6 +168,9 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CAPTURE_SEARCH: {"query": "synthetic"},
         Capability.KNOWLEDGE_REVEAL: {"subject_id": capture.capture_id},
         Capability.REVIEW_LIST: {},
+        Capability.CONTINUITY_PULSE: {},
+        Capability.CONTINUITY_SITUATIONS: {},
+        Capability.CONTINUITY_PROJECTS: {},
         Capability.REVIEW_DECIDE: {
             "review_case_id": review_case.review_case_id,
             "expected_review_version": 0,
@@ -227,6 +233,9 @@ def commands_for(
         Capability.CAPTURE_SEARCH: SearchCaptures(query="synthetic"),
         Capability.KNOWLEDGE_REVEAL: RevealSubject(subject_id=capture_id),
         Capability.REVIEW_LIST: ListReviewCases(),
+        Capability.CONTINUITY_PULSE: GetPulse(),
+        Capability.CONTINUITY_SITUATIONS: ListSituations(),
+        Capability.CONTINUITY_PROJECTS: ListProjects(),
         Capability.REVIEW_DECIDE: DecideReviewCase(
             review_case_id=staged_review_case(scene).review_case_id,
             expected_review_version=0,

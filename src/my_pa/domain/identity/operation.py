@@ -90,6 +90,29 @@ class Capability(StrEnum):
     # land together because `adapters/mcp/tools` derives its tool set at import.
     REVIEW_LIST = "review.list"
     REVIEW_DECIDE = "review.decide"
+    # The seventeenth, eighteenth and nineteenth, and `8f2b6c4d1a37` carries the
+    # forward `ALTER` that admits all three — written before the members, for the
+    # reason `5e2c7b0a94f6` records: a member with no `ALTER` leaves every test
+    # green, because every test builds its database from scratch, and is refused
+    # by the stored constraint on the first audited operation in the field.
+    #
+    # **`continuity.` rather than `knowledge.`** because these read the durable
+    # continuity plane — Situations, Projects, Commitments, Decisions, Tasks —
+    # which belongs to no enrollment and holds no extracted record. Reaching them
+    # under a `knowledge.` name would tell a caller that a grant issued over the
+    # extraction plane covers the Principal's own obligations, and it does not.
+    #
+    # **Three rather than one.** A single `continuity.read` would make the Pulse,
+    # the Situation board and the Project list one grant, and they are three
+    # different answers over three different row sets: Pulse *derives* and ranks,
+    # Situations lists a partition, Projects lists another. `D-91`'s test — does
+    # one name reach rows another does not — separates them.
+    #
+    # None is operator-only: each reads the acting Principal's own accepted
+    # records, grants nothing, and promotes nothing.
+    CONTINUITY_PULSE = "continuity.pulse"
+    CONTINUITY_SITUATIONS = "continuity.situations"
+    CONTINUITY_PROJECTS = "continuity.projects"
 
 
 class NativeSourceCapability(StrEnum):
@@ -196,6 +219,26 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # the enum above records.
         Capability.REVIEW_LIST: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.REVIEW_DECIDE: frozenset({Purpose.REVIEW_DISPOSITION}),
+        # The three continuity reads map to `CAPTURE_REVIEW`. **No purpose is
+        # widened, and the residual is stated rather than smoothed over.**
+        #
+        # `D-91`'s test asks whether reuse widens the grant. Honestly answered:
+        # partly. What the three reads return is the accepted end of the same
+        # chain `capture_review` already covers — a Situation, a Project, a
+        # Commitment is what a promoted proposal becomes — and they promote
+        # nothing, write nothing, grant nothing, and return only the acting
+        # Principal's own *accepted* rows. But `capture_review` did not reach the
+        # continuity tables before this package, and after it a grant issued for
+        # reviewing captures reaches them. That is the cost, and it is paid for
+        # the reason the alternative is worse in both directions: a
+        # `continuity_read` purpose would map one-to-three and separate nothing
+        # any authority in this build can act on (under `P00-OD-010` there is one
+        # local Principal), while reusing `KNOWLEDGE_READ` would be the
+        # escalation `purpose.py` refuses — that purpose is the *extraction*
+        # plane's and is scoped by enrollment, and continuity belongs to none.
+        Capability.CONTINUITY_PULSE: frozenset({Purpose.CAPTURE_REVIEW}),
+        Capability.CONTINUITY_SITUATIONS: frozenset({Purpose.CAPTURE_REVIEW}),
+        Capability.CONTINUITY_PROJECTS: frozenset({Purpose.CAPTURE_REVIEW}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

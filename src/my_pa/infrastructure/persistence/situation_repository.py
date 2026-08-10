@@ -34,11 +34,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import and_, insert, select, update
+from sqlalchemy import Column, Table, and_, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
 
 from my_pa.contracts.ports import (
+    ContinuityRepository,
     FrameRepository,
     ProjectRepository,
     PulseRepository,
@@ -47,9 +48,25 @@ from my_pa.contracts.ports import (
     TraceRepository,
     UnknownScopeError,
 )
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
+from my_pa.domain.situation.continuity import (
+    ClosureEvidenceKind,
+    Commitment,
+    CommitmentDirection,
+    CommitmentState,
+    ContinuityEvidenceState,
+    ContinuityLifecycleEvent,
+    ContinuityObjectKind,
+    Decision,
+    DecisionState,
+    LifecycleTransition,
+    Task,
+    TaskState,
+)
+from my_pa.domain.situation.pulse_derivation import FramedObligation, derive_pulse
 from my_pa.domain.situation.situation import (
     Frame,
     FrameState,
@@ -57,22 +74,29 @@ from my_pa.domain.situation.situation import (
     ProjectState,
     PulseItem,
     PulseItemType,
+    PulseReasonCode,
     Situation,
     SituationState,
     Trace,
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.tables import (
+    capture_review_decisions,
+    commitments,
+    continuity_lifecycle_events,
+    decisions,
     frames,
     project_situations,
     projects,
     pulse_items,
     relationship_events,
     situations,
+    tasks,
     traces,
 )
 
 __all__ = [
+    "SqlContinuityRepository",
     "SqlFrameRepository",
     "SqlProjectRepository",
     "SqlPulseRepository",
@@ -80,6 +104,73 @@ __all__ = [
     "SqlSituationRepository",
     "SqlTraceRepository",
 ]
+
+#: The dispositions that accepted something. `accept` and `correct_and_accept`
+#: and nothing else: a deferred, rejected, escalated or reprocessed decision
+#: promoted no proposal, and admitting one here would make "passed Review" mean
+#: "was looked at".
+_ACCEPTING_DISPOSITIONS: tuple[str, ...] = (
+    Disposition.ACCEPT.value,
+    Disposition.CORRECT_AND_ACCEPT.value,
+)
+
+
+#: Which table each continuity object kind lives in, and its identity column.
+#: A closed map rather than a name a caller could pass: nothing outside this
+#: module can name a table, so `object_kind` is a vocabulary and not a lever.
+_OBJECT_TABLE: dict[ContinuityObjectKind, tuple[Table, Column[str]]] = {
+    ContinuityObjectKind.COMMITMENT: (commitments, commitments.c.commitment_id),
+    ContinuityObjectKind.DECISION: (decisions, decisions.c.decision_id),
+    ContinuityObjectKind.TASK: (tasks, tasks.c.task_id),
+    ContinuityObjectKind.SITUATION: (situations, situations.c.situation_id),
+    ContinuityObjectKind.PROJECT: (projects, projects.c.project_id),
+}
+
+#: The kinds that carry a project/situation association of their own. A
+#: Situation's association to a Project is the `project_situations` link and is
+#: made through `SqlProjectRepository.link_situation`; a Project belongs to
+#: nothing above it.
+_ASSOCIABLE: frozenset[ContinuityObjectKind] = frozenset(
+    {ContinuityObjectKind.COMMITMENT, ContinuityObjectKind.DECISION, ContinuityObjectKind.TASK}
+)
+
+
+def _append_lifecycle_event(
+    connection: Connection,
+    *,
+    principal_id: str,
+    object_kind: ContinuityObjectKind,
+    object_id: str,
+    transition: LifecycleTransition,
+    evidence_kind: ClosureEvidenceKind,
+    evidence_ref: str | None,
+    occurred_at: datetime,
+    recorded_at: datetime,
+) -> str:
+    """Append one lifecycle row on the caller's connection, and return its id.
+
+    **On the caller's connection**, which is the whole of the same-transaction
+    guarantee: the state change and this row are written inside the unit of work
+    the caller opened, so a closure whose evidence did not commit closed nothing.
+    The server refuses a `closed` or `associated` row with a blank `evidence_ref`
+    (`a_closed_transition_carries_evidence`, `an_association_carries_evidence`),
+    so the guarantee does not rest on this function remembering to check.
+    """
+    event_id = issue_identifier(IdKind.LIFECYCLE_EVENT)
+    connection.execute(
+        insert(continuity_lifecycle_events).values(
+            event_id=event_id,
+            principal_id=principal_id,
+            object_kind=object_kind.value,
+            object_id=object_id,
+            transition=transition.value,
+            evidence_kind=evidence_kind.value,
+            evidence_ref=evidence_ref,
+            occurred_at=occurred_at,
+            recorded_at=recorded_at,
+        )
+    )
+    return event_id
 
 
 def _as_tuple(value: object) -> tuple[str, ...]:
@@ -143,7 +234,28 @@ class SqlSituationRepository(SituationRepository):
             object_refs=tuple(object_refs),
         )
 
-    def close_situation(self, *, principal_id: str, situation_id: str, outcome: str) -> Situation:
+    def close_situation(
+        self,
+        *,
+        principal_id: str,
+        situation_id: str,
+        outcome: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> Situation:
+        """Close one Situation and append the evidence that closed it, atomically.
+
+        **The evidence is required (WP-11) and it is written on this connection.**
+        Before this package a Situation closed by flipping `state` and recording
+        an outcome sentence, which is a status field changing with no trace: a
+        reader six months later had the word "resolved" and nothing to open. The
+        `closed` row in `continuity_lifecycle_events` is written inside the
+        caller's transaction, so a close whose evidence did not commit did not
+        close anything, and the server refuses the row outright if the reference
+        is blank.
+        """
+        if not evidence_ref.strip():
+            raise ValueError("closing a situation records the evidence that closed it")
         now = utc_now()
         # The WHERE clause carries `principal_id`, so an UPDATE against another
         # Principal's Situation matches no row and is reported as not-found.
@@ -165,6 +277,17 @@ class SqlSituationRepository(SituationRepository):
         ).one_or_none()
         if result is None:
             raise UnknownScopeError
+        _append_lifecycle_event(
+            self._connection,
+            principal_id=principal_id,
+            object_kind=ContinuityObjectKind.SITUATION,
+            object_id=situation_id,
+            transition=LifecycleTransition.CLOSED,
+            evidence_kind=evidence_kind,
+            evidence_ref=evidence_ref,
+            occurred_at=now,
+            recorded_at=now,
+        )
         return self._to_situation(result)
 
     def get_situation(self, principal_id: str, situation_id: str) -> Situation | None:
@@ -433,7 +556,26 @@ class SqlProjectRepository(ProjectRepository):
         ).all()
         return tuple(self._to_project(row) for row in rows)
 
-    def link_situation(self, *, principal_id: str, project_id: str, situation_id: str) -> None:
+    def link_situation(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        situation_id: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> None:
+        """Bind a Situation into a Project, citing what justified the binding.
+
+        **The evidence is required (WP-11).** A link row on its own says a
+        Situation belongs to a Project and says nothing about why, so
+        reconstructing the association meant inferring it. The reference is now
+        stored on the link *and* appended as an `associated` row in
+        `continuity_lifecycle_events`, in the caller's transaction, so the answer
+        to "why does this belong here" is a row rather than an inference.
+        """
+        if not evidence_ref.strip():
+            raise ValueError("linking a situation to a project records the evidence for it")
         # Both the Project and the Situation must be in this Principal's
         # partition; a link may never bridge two Principals, and may never be
         # forged from a record the caller cannot see.
@@ -457,16 +599,34 @@ class SqlProjectRepository(ProjectRepository):
             raise UnknownScopeError
         # Idempotent per (project, situation): a repeated link is a no-op, which
         # is what `a_situation_links_to_a_project_once` expresses in the schema.
-        self._connection.execute(
+        now = utc_now()
+        created = self._connection.execute(
             pg_insert(project_situations)
             .values(
                 project_situation_id=issue_identifier(IdKind.PROJECT_SITUATION),
                 project_id=project_id,
                 situation_id=situation_id,
                 principal_id=principal_id,
-                linked_at=utc_now(),
+                linked_at=now,
+                association_evidence_ref=evidence_ref,
             )
             .on_conflict_do_nothing(constraint="a_situation_links_to_a_project_once")
+            .returning(project_situations.c.project_situation_id)
+        ).one_or_none()
+        if created is None:
+            # The link already stood. Appending a second `associated` row would
+            # claim a second act of association that did not happen.
+            return
+        _append_lifecycle_event(
+            self._connection,
+            principal_id=principal_id,
+            object_kind=ContinuityObjectKind.SITUATION,
+            object_id=situation_id,
+            transition=LifecycleTransition.ASSOCIATED,
+            evidence_kind=evidence_kind,
+            evidence_ref=evidence_ref,
+            occurred_at=now,
+            recorded_at=now,
         )
 
     @staticmethod
@@ -616,6 +776,106 @@ class SqlPulseRepository(PulseRepository):
         if result is None:
             raise UnknownScopeError
 
+    def derive_pulse(self, principal_id: str, now: datetime) -> tuple[PulseItem, ...]:
+        """Derive the Pulse from accepted continuity. **Reads only.**
+
+        Four `SELECT`s and nothing else. Every one carries `principal_id` and,
+        for the three object tables, `evidence_state = 'accepted'` — so the
+        acceptance filter is a predicate the server applies rather than a
+        condition the caller is trusted to have applied. The rows go to
+        `domain.situation.pulse_derivation.derive_pulse`, which is a pure
+        function over them.
+
+        There is no `INSERT`, `UPDATE` or `DELETE` in this method and there must
+        never be one: a derivation that wrote its own output back as accepted
+        state would be automatic consequential promotion arriving through a
+        listing, which is the failure `QC-AC-020` names and the one nobody looks
+        for in a read path.
+        """
+        accepted = ContinuityEvidenceState.ACCEPTED.value
+        commitment_rows = self._connection.execute(
+            select(*commitments.c).where(
+                and_(
+                    commitments.c.principal_id == principal_id,
+                    commitments.c.evidence_state == accepted,
+                    commitments.c.state == CommitmentState.OPEN.value,
+                )
+            )
+        ).all()
+        task_rows = self._connection.execute(
+            select(*tasks.c).where(
+                and_(
+                    tasks.c.principal_id == principal_id,
+                    tasks.c.evidence_state == accepted,
+                    tasks.c.state == TaskState.OPEN.value,
+                )
+            )
+        ).all()
+        decision_rows = self._connection.execute(
+            select(*decisions.c).where(
+                and_(
+                    decisions.c.principal_id == principal_id,
+                    decisions.c.evidence_state == accepted,
+                    decisions.c.state == DecisionState.OPEN.value,
+                )
+            )
+        ).all()
+        # Obligations standing on the *current* frame of a Situation that is
+        # still running. Both sides of the join carry the partition predicate, so
+        # the join cannot be the place the partition is lost.
+        obligation_rows = self._connection.execute(
+            select(
+                frames.c.situation_id,
+                frames.c.frame_id,
+                func.jsonb_array_length(frames.c.obligations).label("obligation_count"),
+            )
+            .select_from(
+                frames.join(
+                    situations,
+                    and_(
+                        situations.c.situation_id == frames.c.situation_id,
+                        situations.c.principal_id == frames.c.principal_id,
+                    ),
+                )
+            )
+            .where(
+                and_(
+                    frames.c.principal_id == principal_id,
+                    frames.c.state == FrameState.CURRENT.value,
+                    situations.c.state.in_(
+                        (SituationState.OPEN.value, SituationState.ACTIVE.value)
+                    ),
+                    func.jsonb_array_length(frames.c.obligations) > 0,
+                )
+            )
+        ).all()
+        dismissed = frozenset(
+            self._connection.execute(
+                select(pulse_items.c.pulse_id).where(
+                    and_(
+                        pulse_items.c.principal_id == principal_id,
+                        pulse_items.c.dismissed_at.is_not(None),
+                    )
+                )
+            ).scalars()
+        )
+        return derive_pulse(
+            principal_id=principal_id,
+            now=now,
+            commitments=[SqlContinuityRepository._to_commitment(row) for row in commitment_rows],
+            tasks=[SqlContinuityRepository._to_task(row) for row in task_rows],
+            decisions=[SqlContinuityRepository._to_decision(row) for row in decision_rows],
+            obligations=[
+                FramedObligation(
+                    situation_id=row._mapping["situation_id"],
+                    frame_id=row._mapping["frame_id"],
+                    obligation_count=row._mapping["obligation_count"],
+                )
+                for row in obligation_rows
+            ],
+            dismissed_pulse_ids=dismissed,
+        )
+
     @staticmethod
     def _to_pulse_item(row: Row[Any]) -> PulseItem:
         mapping = row._mapping
@@ -625,10 +885,618 @@ class SqlPulseRepository(PulseRepository):
             item_type=PulseItemType(mapping["item_type"]),
             item_ref=mapping["item_ref"],
             reason=mapping["reason"],
+            reason_code=PulseReasonCode(mapping["reason_code"]),
+            basis_refs=_as_tuple(mapping["basis_refs"]),
             generated_at=mapping["generated_at"],
             consequence=mapping["consequence"],
             next_step=mapping["next_step"],
             priority=mapping["priority"],
             accepted_only=mapping["accepted_only"],
             dismissed_at=mapping["dismissed_at"],
+        )
+
+
+class SqlContinuityRepository(ContinuityRepository):
+    """Commitments, Decisions, Tasks, and their append-only lifecycle record.
+
+    Every statement in this class carries `principal_id`. A read for an object
+    another Principal owns adds the predicate and finds nothing; a write against
+    one matches no row and raises `UnknownScopeError`, which is the port
+    vocabulary's `not_found` — a cross-principal reference is answered exactly the
+    way a genuinely absent one is, so this class cannot be used to discover that
+    somebody else's commitment exists.
+
+    **`propose_*` cannot produce accepted continuity.** The three insert
+    `evidence_state = 'proposed'` as a literal and take no parameter that could
+    change it. `accept` is the only path to `'accepted'`, and it first resolves a
+    `capture_review_decisions` row in the caller's own partition whose disposition
+    accepted something — so promotion requires a review that happened, and a
+    derivation holding this repository cannot promote its own output.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    # --- proposing -------------------------------------------------------
+
+    def propose_commitment(
+        self,
+        *,
+        principal_id: str,
+        counterparty_person_id: str,
+        direction: CommitmentDirection,
+        summary: str,
+        origin_evidence_ref: str,
+        origin_evidence_kind: ClosureEvidenceKind,
+        due_at: datetime | None = None,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+    ) -> Commitment:
+        commitment_id = issue_identifier(IdKind.COMMITMENT)
+        now = utc_now()
+        self._connection.execute(
+            insert(commitments).values(
+                commitment_id=commitment_id,
+                principal_id=principal_id,
+                counterparty_person_id=counterparty_person_id,
+                direction=direction.value,
+                summary=summary,
+                state=CommitmentState.OPEN.value,
+                # A literal, not a parameter. There is no argument a caller can
+                # pass that makes this row accepted.
+                evidence_state=ContinuityEvidenceState.PROPOSED.value,
+                origin_evidence_ref=origin_evidence_ref,
+                project_id=project_id,
+                situation_id=situation_id,
+                due_at=due_at,
+                opened_at=now,
+                closed_at=None,
+                closure_evidence_ref=None,
+                accepted_by_review_decision_id=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        _append_lifecycle_event(
+            self._connection,
+            principal_id=principal_id,
+            object_kind=ContinuityObjectKind.COMMITMENT,
+            object_id=commitment_id,
+            transition=LifecycleTransition.OPENED,
+            evidence_kind=origin_evidence_kind,
+            evidence_ref=origin_evidence_ref,
+            occurred_at=now,
+            recorded_at=now,
+        )
+        self._record_associations(
+            principal_id=principal_id,
+            object_kind=ContinuityObjectKind.COMMITMENT,
+            object_id=commitment_id,
+            project_id=project_id,
+            situation_id=situation_id,
+            evidence_kind=origin_evidence_kind,
+            evidence_ref=origin_evidence_ref,
+            at=now,
+        )
+        return Commitment(
+            commitment_id=commitment_id,
+            principal_id=principal_id,
+            counterparty_person_id=counterparty_person_id,
+            direction=direction,
+            summary=summary,
+            state=CommitmentState.OPEN,
+            evidence_state=ContinuityEvidenceState.PROPOSED,
+            origin_evidence_ref=origin_evidence_ref,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            due_at=due_at,
+            project_id=project_id,
+            situation_id=situation_id,
+        )
+
+    def propose_decision(
+        self,
+        *,
+        principal_id: str,
+        question: str,
+        origin_evidence_ref: str,
+        origin_evidence_kind: ClosureEvidenceKind,
+        awaiting_authority_ref: str | None = None,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+    ) -> Decision:
+        decision_id = issue_identifier(IdKind.CONTINUITY_DECISION)
+        now = utc_now()
+        self._connection.execute(
+            insert(decisions).values(
+                decision_id=decision_id,
+                principal_id=principal_id,
+                question=question,
+                state=DecisionState.OPEN.value,
+                evidence_state=ContinuityEvidenceState.PROPOSED.value,
+                origin_evidence_ref=origin_evidence_ref,
+                awaiting_authority_ref=awaiting_authority_ref,
+                project_id=project_id,
+                situation_id=situation_id,
+                opened_at=now,
+                closed_at=None,
+                closure_evidence_ref=None,
+                accepted_by_review_decision_id=None,
+                outcome=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        _append_lifecycle_event(
+            self._connection,
+            principal_id=principal_id,
+            object_kind=ContinuityObjectKind.DECISION,
+            object_id=decision_id,
+            transition=LifecycleTransition.OPENED,
+            evidence_kind=origin_evidence_kind,
+            evidence_ref=origin_evidence_ref,
+            occurred_at=now,
+            recorded_at=now,
+        )
+        self._record_associations(
+            principal_id=principal_id,
+            object_kind=ContinuityObjectKind.DECISION,
+            object_id=decision_id,
+            project_id=project_id,
+            situation_id=situation_id,
+            evidence_kind=origin_evidence_kind,
+            evidence_ref=origin_evidence_ref,
+            at=now,
+        )
+        return Decision(
+            decision_id=decision_id,
+            principal_id=principal_id,
+            question=question,
+            state=DecisionState.OPEN,
+            evidence_state=ContinuityEvidenceState.PROPOSED,
+            origin_evidence_ref=origin_evidence_ref,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            awaiting_authority_ref=awaiting_authority_ref,
+            project_id=project_id,
+            situation_id=situation_id,
+        )
+
+    def propose_task(
+        self,
+        *,
+        principal_id: str,
+        title: str,
+        origin_evidence_ref: str,
+        origin_evidence_kind: ClosureEvidenceKind,
+        due_at: datetime | None = None,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+    ) -> Task:
+        task_id = issue_identifier(IdKind.TASK)
+        now = utc_now()
+        self._connection.execute(
+            insert(tasks).values(
+                task_id=task_id,
+                principal_id=principal_id,
+                title=title,
+                state=TaskState.OPEN.value,
+                evidence_state=ContinuityEvidenceState.PROPOSED.value,
+                origin_evidence_ref=origin_evidence_ref,
+                project_id=project_id,
+                situation_id=situation_id,
+                due_at=due_at,
+                opened_at=now,
+                closed_at=None,
+                closure_evidence_ref=None,
+                accepted_by_review_decision_id=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        _append_lifecycle_event(
+            self._connection,
+            principal_id=principal_id,
+            object_kind=ContinuityObjectKind.TASK,
+            object_id=task_id,
+            transition=LifecycleTransition.OPENED,
+            evidence_kind=origin_evidence_kind,
+            evidence_ref=origin_evidence_ref,
+            occurred_at=now,
+            recorded_at=now,
+        )
+        self._record_associations(
+            principal_id=principal_id,
+            object_kind=ContinuityObjectKind.TASK,
+            object_id=task_id,
+            project_id=project_id,
+            situation_id=situation_id,
+            evidence_kind=origin_evidence_kind,
+            evidence_ref=origin_evidence_ref,
+            at=now,
+        )
+        return Task(
+            task_id=task_id,
+            principal_id=principal_id,
+            title=title,
+            state=TaskState.OPEN,
+            evidence_state=ContinuityEvidenceState.PROPOSED,
+            origin_evidence_ref=origin_evidence_ref,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            due_at=due_at,
+            project_id=project_id,
+            situation_id=situation_id,
+        )
+
+    # --- the acceptance gate ---------------------------------------------
+
+    def accept(
+        self,
+        *,
+        principal_id: str,
+        object_kind: ContinuityObjectKind,
+        object_id: str,
+        review_decision_id: str,
+    ) -> None:
+        """Promote one proposal, and only on a review decision that accepted.
+
+        Two partitioned reads and one partitioned write. The review decision must
+        exist **in this Principal's partition** and must have accepted something;
+        a rejection, a deferral, another Principal's decision, and a well-formed
+        identifier naming nothing are all answered identically, as
+        `UnknownScopeError`, and the object stays a proposal.
+        """
+        table, id_column = _OBJECT_TABLE[object_kind]
+        decided = self._connection.execute(
+            select(capture_review_decisions.c.decision_id).where(
+                and_(
+                    capture_review_decisions.c.decision_id == review_decision_id,
+                    capture_review_decisions.c.principal_id == principal_id,
+                    capture_review_decisions.c.disposition.in_(_ACCEPTING_DISPOSITIONS),
+                )
+            )
+        ).one_or_none()
+        if decided is None:
+            raise UnknownScopeError
+        promoted = self._connection.execute(
+            update(table)
+            .where(
+                and_(
+                    id_column == object_id,
+                    table.c.principal_id == principal_id,
+                    table.c.evidence_state == ContinuityEvidenceState.PROPOSED.value,
+                )
+            )
+            .values(
+                evidence_state=ContinuityEvidenceState.ACCEPTED.value,
+                accepted_by_review_decision_id=review_decision_id,
+                updated_at=utc_now(),
+            )
+            .returning(id_column)
+        ).one_or_none()
+        if promoted is None:
+            raise UnknownScopeError
+
+    # --- closure with evidence -------------------------------------------
+
+    def close(
+        self,
+        *,
+        principal_id: str,
+        object_kind: ContinuityObjectKind,
+        object_id: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+        occurred_at: datetime,
+    ) -> None:
+        if not evidence_ref.strip():
+            raise ValueError("closing a continuity object records the evidence that closed it")
+        table, id_column = _OBJECT_TABLE[object_kind]
+        now = utc_now()
+        values: dict[str, Any] = {"state": "closed", "closed_at": now, "updated_at": now}
+        if "closure_evidence_ref" in table.c:
+            values["closure_evidence_ref"] = evidence_ref
+        closed = self._connection.execute(
+            update(table)
+            .where(
+                and_(
+                    id_column == object_id,
+                    table.c.principal_id == principal_id,
+                    table.c.state != "closed",
+                )
+            )
+            .values(**values)
+            .returning(id_column)
+        ).one_or_none()
+        if closed is None:
+            raise UnknownScopeError
+        _append_lifecycle_event(
+            self._connection,
+            principal_id=principal_id,
+            object_kind=object_kind,
+            object_id=object_id,
+            transition=LifecycleTransition.CLOSED,
+            evidence_kind=evidence_kind,
+            evidence_ref=evidence_ref,
+            occurred_at=occurred_at,
+            recorded_at=now,
+        )
+
+    # --- associations -----------------------------------------------------
+
+    def associate(
+        self,
+        *,
+        principal_id: str,
+        object_kind: ContinuityObjectKind,
+        object_id: str,
+        project_id: str | None,
+        situation_id: str | None,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> None:
+        if not evidence_ref.strip():
+            raise ValueError("an association records the evidence that justifies it")
+        if project_id is None and situation_id is None:
+            raise ValueError("an association names a project, a situation, or both")
+        if object_kind not in _ASSOCIABLE:
+            raise ValueError("only a commitment, decision or task carries an association here")
+        table, id_column = _OBJECT_TABLE[object_kind]
+        self._require_owned_context(principal_id, project_id, situation_id)
+        values: dict[str, Any] = {"updated_at": utc_now()}
+        if project_id is not None:
+            values["project_id"] = project_id
+        if situation_id is not None:
+            values["situation_id"] = situation_id
+        bound = self._connection.execute(
+            update(table)
+            .where(and_(id_column == object_id, table.c.principal_id == principal_id))
+            .values(**values)
+            .returning(id_column)
+        ).one_or_none()
+        if bound is None:
+            raise UnknownScopeError
+        self._record_associations(
+            principal_id=principal_id,
+            object_kind=object_kind,
+            object_id=object_id,
+            project_id=project_id,
+            situation_id=situation_id,
+            evidence_kind=evidence_kind,
+            evidence_ref=evidence_ref,
+            at=utc_now(),
+        )
+
+    def _require_owned_context(
+        self, principal_id: str, project_id: str | None, situation_id: str | None
+    ) -> None:
+        """Both ends of an association live in the caller's partition, or neither does."""
+        if project_id is not None:
+            owned = self._connection.execute(
+                select(projects.c.project_id).where(
+                    and_(
+                        projects.c.project_id == project_id,
+                        projects.c.principal_id == principal_id,
+                    )
+                )
+            ).one_or_none()
+            if owned is None:
+                raise UnknownScopeError
+        if situation_id is not None:
+            owned_situation = self._connection.execute(
+                select(situations.c.situation_id).where(
+                    and_(
+                        situations.c.situation_id == situation_id,
+                        situations.c.principal_id == principal_id,
+                    )
+                )
+            ).one_or_none()
+            if owned_situation is None:
+                raise UnknownScopeError
+
+    def _record_associations(
+        self,
+        *,
+        principal_id: str,
+        object_kind: ContinuityObjectKind,
+        object_id: str,
+        project_id: str | None,
+        situation_id: str | None,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+        at: datetime,
+    ) -> None:
+        """One `associated` row per context the object was bound to, with evidence."""
+        for context in (project_id, situation_id):
+            if context is None:
+                continue
+            _append_lifecycle_event(
+                self._connection,
+                principal_id=principal_id,
+                object_kind=object_kind,
+                object_id=object_id,
+                transition=LifecycleTransition.ASSOCIATED,
+                evidence_kind=evidence_kind,
+                evidence_ref=f"{context}|{evidence_ref}",
+                occurred_at=at,
+                recorded_at=at,
+            )
+
+    def association_evidence(
+        self, principal_id: str, object_id: str
+    ) -> tuple[ContinuityLifecycleEvent, ...]:
+        return tuple(
+            event
+            for event in self.lifecycle_events(principal_id, object_id)
+            if event.transition is LifecycleTransition.ASSOCIATED
+        )
+
+    def lifecycle_events(
+        self, principal_id: str, object_id: str
+    ) -> tuple[ContinuityLifecycleEvent, ...]:
+        rows = self._connection.execute(
+            select(*continuity_lifecycle_events.c)
+            .where(
+                and_(
+                    continuity_lifecycle_events.c.principal_id == principal_id,
+                    continuity_lifecycle_events.c.object_id == object_id,
+                )
+            )
+            .order_by(
+                continuity_lifecycle_events.c.recorded_at.asc(),
+                continuity_lifecycle_events.c.event_id.asc(),
+            )
+        ).all()
+        return tuple(self._to_lifecycle_event(row) for row in rows)
+
+    # --- reads -------------------------------------------------------------
+
+    def get_commitment(self, principal_id: str, commitment_id: str) -> Commitment | None:
+        row = self._connection.execute(
+            select(*commitments.c).where(
+                and_(
+                    commitments.c.commitment_id == commitment_id,
+                    commitments.c.principal_id == principal_id,
+                )
+            )
+        ).one_or_none()
+        return None if row is None else self._to_commitment(row)
+
+    def get_decision(self, principal_id: str, decision_id: str) -> Decision | None:
+        row = self._connection.execute(
+            select(*decisions.c).where(
+                and_(
+                    decisions.c.decision_id == decision_id,
+                    decisions.c.principal_id == principal_id,
+                )
+            )
+        ).one_or_none()
+        return None if row is None else self._to_decision(row)
+
+    def get_task(self, principal_id: str, task_id: str) -> Task | None:
+        row = self._connection.execute(
+            select(*tasks.c).where(
+                and_(tasks.c.task_id == task_id, tasks.c.principal_id == principal_id)
+            )
+        ).one_or_none()
+        return None if row is None else self._to_task(row)
+
+    def list_commitments(
+        self, principal_id: str, evidence_state: ContinuityEvidenceState | None = None
+    ) -> tuple[Commitment, ...]:
+        criteria = [commitments.c.principal_id == principal_id]
+        if evidence_state is not None:
+            criteria.append(commitments.c.evidence_state == evidence_state.value)
+        rows = self._connection.execute(
+            select(*commitments.c).where(and_(*criteria)).order_by(commitments.c.commitment_id)
+        ).all()
+        return tuple(self._to_commitment(row) for row in rows)
+
+    def list_decisions(
+        self, principal_id: str, evidence_state: ContinuityEvidenceState | None = None
+    ) -> tuple[Decision, ...]:
+        criteria = [decisions.c.principal_id == principal_id]
+        if evidence_state is not None:
+            criteria.append(decisions.c.evidence_state == evidence_state.value)
+        rows = self._connection.execute(
+            select(*decisions.c).where(and_(*criteria)).order_by(decisions.c.decision_id)
+        ).all()
+        return tuple(self._to_decision(row) for row in rows)
+
+    def list_tasks(
+        self, principal_id: str, evidence_state: ContinuityEvidenceState | None = None
+    ) -> tuple[Task, ...]:
+        criteria = [tasks.c.principal_id == principal_id]
+        if evidence_state is not None:
+            criteria.append(tasks.c.evidence_state == evidence_state.value)
+        rows = self._connection.execute(
+            select(*tasks.c).where(and_(*criteria)).order_by(tasks.c.task_id)
+        ).all()
+        return tuple(self._to_task(row) for row in rows)
+
+    # --- row mapping -------------------------------------------------------
+
+    @staticmethod
+    def _to_commitment(row: Row[Any]) -> Commitment:
+        mapping = row._mapping
+        return Commitment(
+            commitment_id=mapping["commitment_id"],
+            principal_id=mapping["principal_id"],
+            counterparty_person_id=mapping["counterparty_person_id"],
+            direction=CommitmentDirection(mapping["direction"]),
+            summary=mapping["summary"],
+            state=CommitmentState(mapping["state"]),
+            evidence_state=ContinuityEvidenceState(mapping["evidence_state"]),
+            origin_evidence_ref=mapping["origin_evidence_ref"],
+            opened_at=mapping["opened_at"],
+            created_at=mapping["created_at"],
+            updated_at=mapping["updated_at"],
+            due_at=mapping["due_at"],
+            project_id=mapping["project_id"],
+            situation_id=mapping["situation_id"],
+            closed_at=mapping["closed_at"],
+            closure_evidence_ref=mapping["closure_evidence_ref"],
+            accepted_by_review_decision_id=mapping["accepted_by_review_decision_id"],
+        )
+
+    @staticmethod
+    def _to_decision(row: Row[Any]) -> Decision:
+        mapping = row._mapping
+        return Decision(
+            decision_id=mapping["decision_id"],
+            principal_id=mapping["principal_id"],
+            question=mapping["question"],
+            state=DecisionState(mapping["state"]),
+            evidence_state=ContinuityEvidenceState(mapping["evidence_state"]),
+            origin_evidence_ref=mapping["origin_evidence_ref"],
+            opened_at=mapping["opened_at"],
+            created_at=mapping["created_at"],
+            updated_at=mapping["updated_at"],
+            awaiting_authority_ref=mapping["awaiting_authority_ref"],
+            project_id=mapping["project_id"],
+            situation_id=mapping["situation_id"],
+            closed_at=mapping["closed_at"],
+            closure_evidence_ref=mapping["closure_evidence_ref"],
+            outcome=mapping["outcome"],
+            accepted_by_review_decision_id=mapping["accepted_by_review_decision_id"],
+        )
+
+    @staticmethod
+    def _to_task(row: Row[Any]) -> Task:
+        mapping = row._mapping
+        return Task(
+            task_id=mapping["task_id"],
+            principal_id=mapping["principal_id"],
+            title=mapping["title"],
+            state=TaskState(mapping["state"]),
+            evidence_state=ContinuityEvidenceState(mapping["evidence_state"]),
+            origin_evidence_ref=mapping["origin_evidence_ref"],
+            opened_at=mapping["opened_at"],
+            created_at=mapping["created_at"],
+            updated_at=mapping["updated_at"],
+            due_at=mapping["due_at"],
+            project_id=mapping["project_id"],
+            situation_id=mapping["situation_id"],
+            closed_at=mapping["closed_at"],
+            closure_evidence_ref=mapping["closure_evidence_ref"],
+            accepted_by_review_decision_id=mapping["accepted_by_review_decision_id"],
+        )
+
+    @staticmethod
+    def _to_lifecycle_event(row: Row[Any]) -> ContinuityLifecycleEvent:
+        mapping = row._mapping
+        return ContinuityLifecycleEvent(
+            event_id=mapping["event_id"],
+            principal_id=mapping["principal_id"],
+            object_kind=ContinuityObjectKind(mapping["object_kind"]),
+            object_id=mapping["object_id"],
+            transition=LifecycleTransition(mapping["transition"]),
+            evidence_kind=ClosureEvidenceKind(mapping["evidence_kind"]),
+            occurred_at=mapping["occurred_at"],
+            recorded_at=mapping["recorded_at"],
+            evidence_ref=mapping["evidence_ref"],
         )

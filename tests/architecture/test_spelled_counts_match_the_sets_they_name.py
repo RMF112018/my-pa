@@ -139,6 +139,21 @@ _ORDINAL_UNITS = (
     "seventeenth",
     "eighteenth",
     "nineteenth",
+    # The twenties, added when the capability set reached nineteen and
+    # `a twentieth capability` became the ordinal a correct claim would use. The
+    # tuple is indexed by value, so it has to be dense and in order; the next
+    # boundary announces itself the same way this one did, with an `IndexError`
+    # in the green-half plant rather than with a false pass.
+    "twentieth",
+    "twenty-first",
+    "twenty-second",
+    "twenty-third",
+    "twenty-fourth",
+    "twenty-fifth",
+    "twenty-sixth",
+    "twenty-seventh",
+    "twenty-eighth",
+    "twenty-ninth",
 )
 
 

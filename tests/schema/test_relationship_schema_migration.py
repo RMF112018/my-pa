@@ -40,6 +40,7 @@ from my_pa.infrastructure.persistence.tables import (
     relationship_identity_review_cases,
     relationship_identity_review_decisions,
     relationship_observation_links,
+    relationship_organizations,
     relationship_people,
     relationship_resolution_observations,
     relationship_unresolved_mentions,
@@ -2772,3 +2773,88 @@ def test_an_ambiguous_mention_stays_ambiguous_and_never_attaches_to_a_best_match
             observation_ids=(),
             created_at=WHEN,
         )
+
+
+@pytest.mark.database
+def test_a_source_contact_row_asserts_nothing_about_a_person_without_governance(
+    relationship_engine: Engine,
+) -> None:
+    """A contact row is an observation. Its organization and role are not facts.
+
+    Ingesting a batch of source rows creates observations and nothing else — no
+    person, no link, no alias, no evidence — so the durable relationship state
+    is untouched by ingestion alone.
+
+    The organization half is the sharp edge, because a contact row is exactly
+    where an employer and a job title arrive. `record_source_affiliation` refuses
+    an observation that has not been through review, and refuses one that review
+    bound to a *different* person, so "Person Alpha works at Example Org One"
+    cannot become an asserted affiliation on the strength of the source row that
+    claimed it. Neither refusal leaves an organization behind, which matters:
+    creating the organization and then failing on the affiliation would still
+    have asserted that the organization is part of this Principal's world.
+    """
+    ungoverned = _observation(300, "contacts")
+    governed = _observation(301, "contacts")
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        assert repository.record_observations("contacts", (ungoverned, governed)) == 2
+
+    # Ingestion alone asserted nothing.
+    with relationship_engine.connect() as connection:
+        assert (
+            connection.execute(
+                select(func.count()).select_from(relationship_identity_observations)
+            ).scalar_one()
+            == 2
+        )
+        for table in (
+            relationship_people,
+            relationship_observation_links,
+            relationship_aliases,
+            relationship_evidence,
+            relationship_affiliations,
+            relationship_identity_resolutions,
+        ):
+            assert connection.execute(select(func.count()).select_from(table)).scalar_one() == 0, (
+                f"recording source observations wrote to {table.name}"
+            )
+
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        person_id = _link_person(repository, person_ordinal=301, observations=(governed,))
+
+    def _affiliate(ordinal: int, observation_id: str) -> str:
+        with relationship_engine.begin() as connection:
+            repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+            with pytest.raises(IdentityResolutionError) as refusal:
+                repository.record_source_affiliation(
+                    organization_id=_id("org", ordinal),
+                    organization_name="Example Org One",
+                    affiliation_id=_id("aff", ordinal),
+                    person_id=person_id,
+                    observation_id=observation_id,
+                    role="Synthetic Role",
+                    effective_from=WHEN,
+                    effective_to=None,
+                )
+            return str(refusal.value)
+
+    expected = "an affiliation requires a governed, source-bound identity observation"
+    # The contact row nobody reviewed.
+    assert _affiliate(300, ungoverned.observation_id) == expected
+    # A second person, and an observation review bound to the *first* one. The
+    # observation is governed; it just does not identify this person.
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        other = _observation(302, "contacts")
+        repository.record_observations("contacts", (other,))
+        _link_person(repository, person_ordinal=302, observations=(other,))
+    assert _affiliate(302, other.observation_id) == expected
+
+    # Neither refusal left an organization or an affiliation behind.
+    with relationship_engine.connect() as connection:
+        for table in (relationship_organizations, relationship_affiliations):
+            assert connection.execute(select(func.count()).select_from(table)).scalar_one() == 0, (
+                f"a refused affiliation still wrote to {table.name}"
+            )

@@ -1,8 +1,11 @@
-"""Principal-scoped persistence for the WP-06 (R5) continuity surface.
+"""Principal-scoped persistence for the R5 continuity surface (WP-06, WP-11).
 
-Six concrete repositories back the situation/frame/trace/project/relationship-
-event/pulse ports declared in `contracts.ports`. They share one discipline that
-is the whole point of the work package:
+Seven concrete repositories back the situation/frame/trace/project/relationship-
+event/pulse/continuity ports declared in `contracts.ports` — the six WP-06
+declared, and `SqlContinuityRepository`, which WP-11 adds for the commitments,
+decisions and tasks R5 named and had no table for, together with the append-only
+lifecycle record that carries their closures and their associations. They share
+one discipline that is the whole point of both work packages:
 
 **Every read filters by `principal_id` and every write stamps it.** WP-06's
 acceptance criteria require that relationship records and timelines are
@@ -14,8 +17,18 @@ A `situation_id` (or any other identifier) that belongs to another Principal is
 indistinguishable here from one that does not exist: the lookup adds
 `principal_id == <caller>` and finds nothing.
 
-`PulseRepository.generate_pulse` carries the second criterion — "Today/Pulse read
-only accepted records". It reads only rows whose `accepted_only` is true (which
+`PulseRepository.derive_pulse` carries the second criterion — "Today/Pulse read
+only accepted records" — at the boundary that can enforce it: every one of its
+four selects adds `evidence_state = 'accepted'` to the partition predicate, so a
+proposal is excluded by the server rather than by the caller. It writes nothing;
+`tests/architecture/test_derivation_proposes_and_never_promotes.py` holds that
+structurally and `tests/database/test_continuity_isolation.py` measures it.
+`SqlContinuityRepository.accept` is the one path to `accepted`, and it first
+resolves a `capture_review_decisions` row in the caller's own partition whose
+disposition accepted something — so a derivation cannot promote its own output.
+
+`PulseRepository.generate_pulse` carries the same criterion over *stored* rows.
+It reads only rows whose `accepted_only` is true (which
 the migration CHECK `pulse_reads_only_accepted_records` pins), and excludes
 dismissed items. `RelationshipEventRepository.list_accepted_events` is the
 relationship-timeline half of the same rule: it returns only events whose
@@ -1310,7 +1323,19 @@ class SqlContinuityRepository(ContinuityRepository):
         evidence_ref: str,
         at: datetime,
     ) -> None:
-        """One `associated` row per context the object was bound to, with evidence."""
+        """One `associated` row per context the object was bound to, with evidence.
+
+        **`evidence_ref` carries the context and the justification together**, as
+        `<context_id>|<evidence_ref>`, and that is a deliberate shape rather than
+        an encoding accident. `continuity_lifecycle_events` has no `context_id`
+        column and gains none here: adding one would make the table's meaning
+        depend on the transition — populated for `associated`, meaningless for
+        `opened` and `closed` — and a column that means nothing in two of three
+        cases is a column a reader has to guess about. The pair is what an
+        association *is*: this object, bound to that context, because of this.
+        A reader recovers both halves by splitting on the one separator, which no
+        opaque identifier can contain.
+        """
         for context in (project_id, situation_id):
             if context is None:
                 continue

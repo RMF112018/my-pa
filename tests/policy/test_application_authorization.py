@@ -64,6 +64,7 @@ from my_pa.application.commands import (
     ListSources,
     ReadCapture,
     ReadKnowledge,
+    RevealSubject,
     ReviseCapture,
     SearchCaptures,
     SearchKnowledge,
@@ -130,6 +131,9 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.CAPTURE_READ: ReadCapture(capture_id=issue_identifier(IdKind.CAPTURE)),
         Capability.CAPTURE_LIST: ListCaptures(),
         Capability.CAPTURE_SEARCH: SearchCaptures(query="synthetic"),
+        # A minted `cap_` for the same reason: the refusal happens before any
+        # handler, so what the subject names is irrelevant and its shape is not.
+        Capability.KNOWLEDGE_REVEAL: RevealSubject(subject_id=issue_identifier(IdKind.CAPTURE)),
         Capability.REVIEW_LIST: ListReviewCases(),
         Capability.REVIEW_DECIDE: DecideReviewCase(
             review_case_id=issue_identifier(IdKind.REVIEW_CASE),
@@ -276,6 +280,7 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.KNOWLEDGE_REVEAL,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
     }
@@ -340,6 +345,7 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.KNOWLEDGE_REVEAL,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
     }
@@ -354,8 +360,9 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
 
     scopeless = {c for c in Capability if _decision(c, frozenset(), frozenset())}
     assert scopeless == scopeless_capabilities, (
-        "the capabilities carrying no source scope are the interface description "
-        "and the capture plane, which belongs to no source"
+        "the capabilities carrying no source scope are the interface description, "
+        "the capture plane, and the evidence traversal over it, none of which "
+        "belongs to a source"
     )
 
 

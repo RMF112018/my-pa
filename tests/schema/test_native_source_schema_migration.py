@@ -53,8 +53,9 @@ ROOT = Path(__file__).resolve().parents[2]
 REVISION = "8c4d1e7a2b90"
 PRIOR_REVISION = "7f2a9d6c4e18"
 #: The single head this revision sits below. Updated whenever a revision is
-#: added — WP-04's `4f1a8b6d92e3` partitions the two job queues by Principal.
-HEAD_REVISION = "4f1a8b6d92e3"
+#: added — WP-09's `5e2c7b0a94f6` widens the audited capability vocabulary for
+#: `knowledge.reveal`.
+HEAD_REVISION = "5e2c7b0a94f6"
 DATABASE = "my_pa_native_sources_test"
 WHEN = datetime(2026, 8, 4, 12, tzinfo=UTC)
 

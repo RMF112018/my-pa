@@ -202,6 +202,7 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.SOURCES_ENROLL, Purpose.BOUNDED_ENROLLMENT),
         (Capability.KNOWLEDGE_SEARCH, Purpose.KNOWLEDGE_SEARCH),
         (Capability.KNOWLEDGE_READ, Purpose.KNOWLEDGE_READ),
+        (Capability.KNOWLEDGE_REVEAL, Purpose.CAPTURE_REVIEW),
         (Capability.CAPTURE_CREATE, Purpose.CAPTURE_AUTHORING),
         (Capability.CAPTURE_REVISE, Purpose.CAPTURE_AUTHORING),
         (Capability.CAPTURE_READ, Purpose.CAPTURE_REVIEW),
@@ -232,8 +233,8 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # empty the table below. The three numbers are written out rather than
     # derived from each other: the arithmetic is what makes the second a check on
     # the enums, and the literals are what make it a check on the arithmetic.
-    assert len(PERMITTED_PAIRS) == 17
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 17 == 133
+    assert len(PERMITTED_PAIRS) == 18
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 18 == 142
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

@@ -67,6 +67,7 @@ __all__ = [
     "ReadKnowledge",
     "RecordRelationshipEventCommand",
     "Representation",
+    "RevealSubject",
     "ReviseCapture",
     "SearchCaptures",
     "SearchKnowledge",
@@ -87,8 +88,15 @@ class Representation(StrEnum):
     NORMALIZED_TEXT = "normalized_text"
 
 
-def _identifier(value: str, kind: IdKind, detail: SafeDetail) -> str:
-    """Validate one identifier, reporting the field rather than the value."""
+def _identifier(value: str, kind: IdKind | None, detail: SafeDetail) -> str:
+    """Validate one identifier, reporting the field rather than the value.
+
+    `kind` may be `None`, which validates the *shape* — a known prefix and an
+    8-64 character opaque suffix — without requiring one particular prefix. One
+    command needs that: `RevealSubject` accepts more than one subject kind and
+    answers about the kinds it does not traverse rather than refusing them, so
+    pinning a kind here would turn a coverage answer into a validation error.
+    """
     try:
         return validate_identifier(value, kind)
     except InvalidIdentifierError:
@@ -361,6 +369,31 @@ class ReadKnowledge:
 
 
 @dataclass(frozen=True, slots=True)
+class RevealSubject:
+    """`knowledge.reveal`: the evidence behind one subject identifier.
+
+    **The subject is validated for shape and not for kind**, and the difference
+    is the point. `_identifier(…, IdKind.CAPTURE, …)` would refuse an `asrt_…`
+    here, and refusing an `enr_…` or a `kn_…` as *malformed* would tell a caller
+    its request was wrong when what is actually true is that this build does not
+    cover that plane. Shape is a request error; coverage is an answer, and
+    `EvidenceGap.SUBJECT_KIND_NOT_COVERED` is where it is given.
+
+    No page size and no cursor. A reveal is bounded by the subject rather than
+    by a page: the evidence behind one capture is however many spans that
+    capture's versions carry, and truncating it would be truncating the
+    explanation of why something is on screen.
+    """
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_REVEAL
+
+    subject_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.subject_id, None, SafeDetail.SUBJECT)
+
+
+@dataclass(frozen=True, slots=True)
 class CreateCapture:
     """`capture.create`: store one user-authored note as the first version of a new capture.
 
@@ -578,6 +611,7 @@ type Command = (
     | EnrollSource
     | SearchKnowledge
     | ReadKnowledge
+    | RevealSubject
     | CreateCapture
     | ReviseCapture
     | ReadCapture

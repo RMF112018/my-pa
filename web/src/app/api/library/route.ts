@@ -19,6 +19,13 @@
  * there, not here. What this route refuses is shape — an `enr_`-prefixed opaque
  * identifier — so a malformed value fails before a request is built.
  *
+ * **An unavailable scope is not an empty page.** The response carries a `state`
+ * discriminator beside the result, read off the coverage the gateway disclosed:
+ * a scope the backend reports `unavailable` was not searched, and returning its
+ * empty `result` without saying so would be the claim `INV-PKL-007` prohibits.
+ * The discriminator is a pass-through of the backend's own answer, never a
+ * measurement of how many rows came back.
+ *
  * **There is no synthetic Library fixture and none is invented.** With the
  * synthetic provider on, this surface answers `not_implemented` rather than
  * fabricating records, because a fixture written now would be a second thing to
@@ -109,13 +116,21 @@ export async function GET(request: NextRequest) {
   const outcome = await callGateway(guard.principal, capability, payload);
   if (!outcome.ok) return gatewayRefusal(`${SCOPE}:${capability}`, outcome.status, outcome.error);
 
+  const disclosure = backendDisclosure(
+    `${SCOPE}:${capability}`,
+    outcome.disclosure,
+    transportLimitations(),
+  );
   return NextResponse.json({
     capability,
+    // **Read off the backend's own coverage, never off the result's length.**
+    // A scope the gateway reports `unavailable` was not searched — `INV-PKL-007`
+    // forbids reporting that as empty — and a caller that counted `result` would
+    // show "nothing here" for it. The discriminator exists so a renderer does not
+    // have to know that `coverage` carries the distinction, and so a future one
+    // that stops reading `disclosure` cannot lose it.
+    state: disclosure.coverage === "unavailable" ? "unavailable" : "results",
     result: outcome.result,
-    disclosure: backendDisclosure(
-      `${SCOPE}:${capability}`,
-      outcome.disclosure,
-      transportLimitations(),
-    ),
+    disclosure,
   });
 }

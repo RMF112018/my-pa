@@ -1,4 +1,4 @@
-"""The ports the fifteen capability use cases call, and nothing else.
+"""The ports the sixteen capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -52,6 +52,7 @@ from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
+from my_pa.domain.capture.reveal import Reveal
 from my_pa.domain.capture.review import Disposition, ReviewCase, ReviewDecision
 from my_pa.domain.capture.submission import CaptureKind, CaptureReceipt
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
@@ -470,6 +471,15 @@ class CaptureSearchOutcome:
 class CaptureRepository(ABC):
     """The capture plane, as the five operations the capabilities need.
 
+    **`reveal` is the fifth, and it is here rather than behind a port of its
+    own.** It reads captures, versions, spans, proposals, review cases,
+    decisions, assertions and receipts — every one of them a row keyed, directly
+    or through a foreign key, to a capture this Principal owns. A second port
+    would be a second object over the same partition with the same context
+    translation, which is the speculative abstraction the module docstring above
+    forbids; the honest cost is that this interface is now the widest of the
+    five here, and that is stated rather than hidden.
+
     **No update and no delete, and their absence is the port's contribution to
     `QC-AC-010`.** A method that changed a stored version could not be added here
     without also defeating the `BEFORE UPDATE OR DELETE` trigger the schema
@@ -546,6 +556,23 @@ class CaptureRepository(ABC):
         `capture_versions.content`, which is written by the save, so a capture
         whose processing failed is searchable on the same terms as one whose
         processing succeeded.
+        """
+
+    @abstractmethod
+    def reveal(self, subject_id: str, *, principal_id: str) -> Reveal | None:
+        """The evidence behind one subject, or `None` when there is no subject.
+
+        `None` is the *one* absence with three causes, exactly as `version` has:
+        the subject does not exist, the subject belongs to another Principal, or
+        the identifier is well formed and names nothing. A caller that could tell
+        those apart could enumerate another Principal's records by asking, so it
+        cannot.
+
+        A subject kind this build cannot traverse is **not** `None`. It is a
+        `Reveal` in the `unavailable` state naming
+        `EvidenceGap.SUBJECT_KIND_NOT_COVERED`, because "we do not cover this
+        plane" is a fact about this build and says nothing about whether the
+        subject exists.
         """
 
 

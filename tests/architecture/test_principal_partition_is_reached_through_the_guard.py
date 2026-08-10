@@ -99,6 +99,14 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # partition comes from and so cannot itself be scoped by one.
         "infrastructure/persistence/jobs.py",
         "infrastructure/persistence/relationships.py",
+        # The evidence traversal. Every one of its six statements is rooted at a
+        # partitioned table — `captures`, `capture_versions`, `capture_assertions`
+        # or `capture_assertion_spans` — and constrained through `principal_scoped`
+        # before its joins are built, which is how `capture_spans`,
+        # `capture_proposals` and `capture_proposal_spans` are reached at all:
+        # none of the three carries a partition column, so the guard would refuse
+        # a statement rooted at one.
+        "infrastructure/persistence/reveal.py",
         "infrastructure/persistence/review.py",
     }
 )
@@ -171,6 +179,7 @@ STATEMENT_LEVEL: Final = frozenset(
     {
         "infrastructure/persistence/jobs.py",
         "infrastructure/persistence/relationships.py",
+        "infrastructure/persistence/reveal.py",
     }
 )
 
@@ -601,6 +610,113 @@ def test_every_relationship_statement_reaches_the_partition() -> None:
     )
 
 
+#: Statements in `reveal.py` that name a partitioned table without carrying the
+#: predicate themselves, as `function -> (statement count, reason)`.
+#:
+#: Exact and counted, the way `_UNPARTITIONED_JOB_STATEMENTS` is, so a second
+#: unscoped statement inside an already registered function reddens as loudly as
+#: a new function does. **Neither entry is a hole**: each is a fragment that only
+#: ever becomes a query inside a `principal_scoped(...)` call, and the test below
+#: asserts that composition rather than accepting the claim.
+_REVEAL_FRAGMENTS: Final[dict[str, tuple[int, str]]] = {
+    "_proposals": (
+        1,
+        "the correlated `latest_disposition` subquery over `capture_review_cases`, "
+        "composed into the scoped statement in the same function. Correlated to "
+        "the outer case, so it carries the partition its consumer imposes.",
+    ),
+    "_assertion_selection": (
+        1,
+        "the assertion column and join list, which is not a query: both callers "
+        "wrap it in `principal_scoped(..., capture_assertions, context)` before "
+        "it is executed.",
+    ),
+}
+
+
+def test_every_reveal_statement_reaches_the_partition() -> None:
+    """The evidence traversal, statement by statement.
+
+    Claim 1 says `reveal.py` uses `principal_scope` somewhere; this says every
+    statement in it does — which is the claim the capability's isolation actually
+    rests on, because a reveal walks eight tables and only five of them carry a
+    partition column at all.
+
+    **The three that do not are the point.** `capture_spans`,
+    `capture_proposals` and `capture_proposal_spans` have no `principal_id`, so
+    `principal_scoped` refuses a statement rooted at one — it raises
+    `UnpartitionedTableError` — and the only way to read them is to root the
+    statement at `capture_versions` and join outward. A statement here therefore
+    passes not by naming a partitioned table plus a filter, but by handing
+    `principal_scoped` a table that *can* carry the predicate. That makes "the
+    scope is at the query" a property of the shape rather than of a comparison
+    somebody remembered to write.
+
+    The unit is one top-level statement inside a function, the same unit
+    `test_every_relationship_statement_reaches_the_partition` uses, and the
+    non-zero floor below is what stops this passing over a module the walk
+    failed to parse.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "reveal.py"
+    partitioned = set(_partitioned_tables())
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+
+    checked = 0
+    offending: list[str] = []
+    fragments: dict[str, int] = {}
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        for statement in ast.walk(function):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
+                continue
+            rendered = ast.unparse(statement)
+            if not any(f"{table}.c" in rendered for table in partitioned):
+                continue
+            checked += 1
+            if "principal_scoped(" in rendered:
+                continue
+            if function.name in _REVEAL_FRAGMENTS:
+                fragments[function.name] = fragments.get(function.name, 0) + 1
+                continue
+            offending.append(f"{function.name}:{statement.lineno}")
+
+    assert checked >= 8, (
+        f"only {checked} reveal statements were examined; the walk is not "
+        "reaching the module's queries"
+    )
+    assert offending == [], (
+        f"{offending} build a statement over a principal-partitioned capture "
+        "table without reaching the partition through `principal_scope`"
+    )
+    assert fragments == {name: count for name, (count, _) in _REVEAL_FRAGMENTS.items()}, (
+        f"{fragments} unscoped statements were found where "
+        f"{ {name: count for name, (count, _) in _REVEAL_FRAGMENTS.items()} } are "
+        "registered; a fragment gained or lost a statement"
+    )
+    # And the registered fragments really are composed under the guard, rather
+    # than merely asserted to be. Without this the registry above would be an
+    # exemption list that could name anything.
+    bodies = {
+        node.name: ast.unparse(node) for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    }
+    for name in _REVEAL_FRAGMENTS:
+        composed_by_a_caller = re.search(rf"principal_scoped\(\s*{re.escape(name)}\(", source)
+        composed_in_place = "principal_scoped(" in bodies.get(name, "")
+        assert composed_by_a_caller or composed_in_place, (
+            f"{name} is registered as a fragment whose consumer imposes the "
+            "partition, but nothing composes it under principal_scoped"
+        )
+    # The control, and it is what makes the assertion above mean something: the
+    # module does read the three unpartitioned evidence tables, so "every
+    # statement is scoped" is a statement about a traversal that genuinely
+    # leaves the partitioned tables rather than one that never does.
+    for unscoped in ("capture_spans", "capture_proposals", "capture_proposal_spans"):
+        assert unscoped not in partitioned, f"{unscoped} now carries a partition column"
+        assert f"{unscoped}.c." in source, f"{unscoped} is no longer traversed here"
+
+
 #: The names `jobs.py` reaches a partitioned table through. It never names a
 #: declaration: every statement is built against `plane.table`, so a scan that
 #: looked for `jobs.c` — the way the relationship scan looks for its
@@ -799,12 +915,14 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
             {
                 "infrastructure/persistence/jobs.py",
                 "infrastructure/persistence/relationships.py",
+                "infrastructure/persistence/reveal.py",
             }
         )
         == STATEMENT_LEVEL
     ), (
         "a module was added to STATEMENT_LEVEL without a statement-level test; "
-        "`test_every_relationship_statement_reaches_the_partition` and "
-        "`test_every_job_statement_reaches_the_partition_or_is_registered` are "
-        "the two that exist"
+        "`test_every_relationship_statement_reaches_the_partition`, "
+        "`test_every_job_statement_reaches_the_partition_or_is_registered` and "
+        "`test_every_reveal_statement_reaches_the_partition` are the three that "
+        "exist"
     )

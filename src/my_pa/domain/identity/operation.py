@@ -42,6 +42,26 @@ class Capability(StrEnum):
     SOURCES_ENROLL = "sources.enroll"
     KNOWLEDGE_SEARCH = "knowledge.search"
     KNOWLEDGE_READ = "knowledge.read"
+    # The sixteenth, and `5e2c7b0a94f6` carries the forward `ALTER` that admits
+    # it — written before the member, for the reason the two below record.
+    #
+    # **A capability rather than a widening of `knowledge.read`.** `read`
+    # answers *what* one stored record says inside one enrollment's grant;
+    # `reveal` answers *why* a derived record exists, by returning the evidence
+    # spans under it, the version and capture they lie in, and the derivation
+    # trace from proposal through review case and decision to assertion and
+    # promotion receipt. Those are different rows, a different scope — a capture
+    # belongs to no enrollment — and a different answer, so one grant covering
+    # both would let a request issued to read a record also traverse lineage.
+    #
+    # **`knowledge.` rather than `capture.`** because the question is about the
+    # product's knowledge of a subject rather than about the capture plane's own
+    # storage, and a caller holding a subject identifier does not know which
+    # plane it came from. What the *build* can traverse is narrower than that
+    # name, and Reveal says so in its answer rather than in its name: a subject
+    # this evidence model does not cover is reported `unavailable` rather than
+    # answered with an empty result.
+    KNOWLEDGE_REVEAL = "knowledge.reveal"
     # The capture plane (`D-70`). `capture.create` is the name the canonical
     # package fixes in six places; the other three are this repository's choice
     # under `ADR-003:107`, which gives capability names to "an implementing work
@@ -115,6 +135,12 @@ type AuthorizedCapability = Capability | NativeSourceCapability
 #: `P00-OD-010` there is one local principal in any case, so making it
 #: operator-only would restrict nobody while implying an authority boundary this
 #: build cannot draw.
+#:
+#: `knowledge.reveal` is decided last and reaches the same answer for the
+#: narrowest reason: it grants nothing and reads nothing a permitted capability
+#: does not already return. Restricting the *explanation* of a record while
+#: leaving the record itself readable would tell a caller that understanding
+#: what it is looking at is more privileged than looking at it.
 _OPERATOR_ONLY: frozenset[AuthorizedCapability] = frozenset(
     {
         Capability.SOURCES_ENROLL,
@@ -144,6 +170,17 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.SOURCES_ENROLL: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         Capability.KNOWLEDGE_SEARCH: frozenset({Purpose.KNOWLEDGE_SEARCH}),
         Capability.KNOWLEDGE_READ: frozenset({Purpose.KNOWLEDGE_READ}),
+        # `CAPTURE_REVIEW` rather than a purpose of its own, and rather than
+        # `KNOWLEDGE_READ` despite the capability's name. The test is `D-91`'s:
+        # does the reuse widen the grant? Reveal reads exactly the rows
+        # `capture.read`, `capture.list`, `capture.search` and `review.list`
+        # already return to the same Principal, and returns no capture text at
+        # all — spans carry offsets, a basis and a digest, never a quote — so it
+        # widens nothing. `KNOWLEDGE_READ` would be the escalation this module
+        # refuses in the other direction: that purpose is the *extraction*
+        # plane's, and admitting a capture-plane traversal under it would make a
+        # grant issued for one plane reach the other.
+        Capability.KNOWLEDGE_REVEAL: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CAPTURE_CREATE: frozenset({Purpose.CAPTURE_AUTHORING}),
         Capability.CAPTURE_REVISE: frozenset({Purpose.CAPTURE_AUTHORING}),
         Capability.CAPTURE_READ: frozenset({Purpose.CAPTURE_REVIEW}),

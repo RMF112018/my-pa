@@ -79,6 +79,7 @@ from my_pa.contracts.ports import (
     UnknownScopeError,
 )
 from my_pa.contracts.v1.status import SourceStatusState
+from my_pa.domain.capture.reveal import Reveal
 from my_pa.domain.capture.review import ReviewCase, ReviewDecision
 from my_pa.domain.capture.version import CaptureVersion
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
@@ -111,6 +112,7 @@ from my_pa.infrastructure.persistence.registry import (
     get_source,
     source_of_object,
 )
+from my_pa.infrastructure.persistence.reveal import reveal_subject
 from my_pa.infrastructure.persistence.review import decide_review, review_cases
 from my_pa.infrastructure.persistence.search import (
     SearchInternalError,
@@ -250,9 +252,10 @@ class _Operations(OperationQueue):
 class _Captures(CaptureRepository):
     """The capture plane, over `persistence.capture`.
 
-    Four methods and no fifth. There is no `update` and no `delete` here
-    because there is none in the module below it and none the server would
-    accept: `capture_versions` carries a trigger that refuses both.
+    Five methods, and none of them writes over a stored version. There is no
+    `update` and no `delete` here because there is none in the module below it
+    and none the server would accept: `capture_versions` carries a trigger that
+    refuses both.
 
     `search` reaches a second module, `persistence.capture_search`, rather than
     `persistence.capture`: the capture plane's lexical index is its own concern
@@ -315,6 +318,20 @@ class _Captures(CaptureRepository):
         return _read(
             lambda: search_captures(
                 self._connection, request, context=capture_context(principal_id)
+            )
+        )
+
+    def reveal(self, subject_id: str, *, principal_id: str) -> Reveal | None:
+        """The evidence behind one subject, read through the same one context.
+
+        `persistence.reveal` rather than `persistence.capture`, for the reason
+        `search` reaches `persistence.capture_search`: the traversal spans the
+        proposal, review and promotion tables as well as the capture ones, and
+        the module that writes a capture has no reason to hold any of them.
+        """
+        return _read(
+            lambda: reveal_subject(
+                self._connection, subject_id, context=capture_context(principal_id)
             )
         )
 

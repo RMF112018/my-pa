@@ -100,6 +100,39 @@ stranded behind a principal that died with its process. What `P00-OD-010` still
 settles is authentication of *multiple* principals; the single local operator's
 name is no longer a per-run accident.
 
+## The remote capture client
+
+There is a **second credential plane** since WP-10, and calling it a second plane
+rather than a second mode is the whole of its design. `MY_PA_AUTH_MODE` decides
+how a *person* is established and has exactly two values; the remote ingress
+decides how a *device* is established and is orthogonal to both — a
+`local_operator` process may serve it and an `entra` process may serve it, and
+neither one changes what the other does.
+
+`MY_PA_REMOTE_INGRESS_ENABLED` is off by default, and off means
+`remote_client=None`, and `None` means the ingress route refuses inside its own
+handler. Nothing is inferred and nothing falls back.
+
+The two planes are disjoint by construction rather than by convention:
+
+* the schemes differ — `Bearer` for a person's token, `ClientCredential` for a
+  device's secret — and each authenticator refuses the other's scheme before it
+  reads the value, so a token presented at the ingress and a client secret
+  presented at `/v1/{capability}` are both refused for what they are;
+* the remote authenticator's signature takes the header and **not** the request
+  document, so remote identity cannot be influenced by a payload at all;
+* no browser session exists on this side. This process reads no cookie, mints
+  none, and holds no session secret; the web tier's session plane is in
+  `web/src/lib/auth` and this module imports nothing from it and could not.
+
+Under `local_operator` a client binds to the one process Principal and a client
+row naming another is refused at minting and at every authentication. That
+refusal is deliberate and is recorded as such: `D-15` pins the web tier to
+exactly one admissible Principal in that mode, and WP-08's NOTE 1 names "two
+identities can hold sessions while the backend serves" as its release blocker.
+Minting a credential for a second Principal is the cheapest way to create that
+condition, so this composition refuses to.
+
 ## The providers
 
 Nothing is wired here, and that is a stronger statement than the one it replaces
@@ -137,11 +170,14 @@ from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import AuthMode, Settings
 from my_pa.contracts.ports import UnitOfWork
+from my_pa.domain.capture.client import admit_client_binding, parse_client_credential
+from my_pa.domain.capture.errors import CaptureError
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.user_account import TokenClaimsError
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+from my_pa.infrastructure.persistence.capture_clients import authenticate_client
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
 from my_pa.infrastructure.security.principal_identity import PrincipalIdentityService
@@ -149,9 +185,11 @@ from my_pa.infrastructure.security.principal_identity import PrincipalIdentitySe
 __all__ = [
     "Authenticator",
     "GatewayRuntime",
+    "RemoteClientAuthenticator",
     "build_gateway_runtime",
     "entra_authenticator",
     "local_principal",
+    "remote_client_authenticator",
 ]
 
 #: How a transport asks the composition root who is calling. The first argument
@@ -165,8 +203,23 @@ __all__ = [
 #: interface would be the defect.
 Authenticator = Callable[[str | None, Mapping[str, Any]], Principal]
 
+#: How the remote capture ingress asks the composition root who is calling. One
+#: argument — the raw `Authorization` header value, or `None` — and no request
+#: document, deliberately: a remote submission's identity comes from the
+#: credential and from nothing the caller wrote in a body, and a signature that
+#: cannot see the body is a stronger statement of that than a rule saying so.
+RemoteClientAuthenticator = Callable[[str | None], Principal]
+
 #: The scheme a bearer credential is presented under, per RFC 6750.
 _BEARER = "bearer"
+
+#: The scheme a registered capture client presents its credential under. Not
+#: `Bearer` and not `Basic`, and that is the point: the two credential planes
+#: must be impossible to confuse, so each refuses the other's scheme before it
+#: reads a single byte of the value. RFC 7235 permits a private scheme name; a
+#: shared one would have made "a browser session cannot authenticate the ingress"
+#: an argument about what happens next instead of a fact about the header.
+_CLIENT_CREDENTIAL_SCHEME = "clientcredential"
 
 
 def local_principal() -> Principal:
@@ -198,6 +251,21 @@ def _bearer_token(credential: str | None) -> str:
     scheme, _, presented = credential.partition(" ")
     if scheme.strip().lower() != _BEARER or not presented.strip():
         raise TokenClaimsError("a bearer token is required; access is denied")
+    return presented.strip()
+
+
+def _client_credential(credential: str | None) -> str:
+    """The value inside an `Authorization: ClientCredential …` header, or a refusal.
+
+    Refuses an absent header, a different scheme — including `Bearer`, which is
+    the one that matters — and an empty value, all as the same `CaptureError`
+    the rest of the client path raises, so the caller cannot tell which.
+    """
+    if credential is None:
+        raise CaptureError("a client credential is required; access is denied")
+    scheme, _, presented = credential.partition(" ")
+    if scheme.strip().lower() != _CLIENT_CREDENTIAL_SCHEME or not presented.strip():
+        raise CaptureError("a client credential is required; access is denied")
     return presented.strip()
 
 
@@ -258,6 +326,91 @@ def entra_authenticator(settings: Settings, work_engine: Engine) -> Authenticato
     return authenticate
 
 
+def remote_client_authenticator(
+    settings: Settings, work_engine: Engine
+) -> RemoteClientAuthenticator:
+    """Compose the per-request authentication the remote capture ingress performs.
+
+    **A second credential plane, and disjoint from the first by construction.**
+    The credential is `Authorization: ClientCredential <client_id>:<secret>` — a
+    scheme neither `_bearer_token` nor any browser produces — so an Entra bearer
+    token presented here is refused for its scheme before anything is read, and a
+    client credential presented at `/v1/{capability}` is refused by
+    `_bearer_token` for the same reason. Nothing in this function reads a cookie,
+    mints a session, or touches the web tier's signing secret, and nothing in the
+    web tier can obtain a client credential: they are minted by an operator
+    command onto a terminal.
+
+    Four refusals and one answer, and the four are indistinguishable. A malformed
+    credential, an unknown client, a wrong secret, and a revoked client all raise
+    `TokenClaimsError`, which the transport renders as one `401` with one body.
+    The fifth refusal is `admit_client_binding`'s and is the same error for the
+    same reason: a caller learns that it is not authenticated, never which of the
+    five ways.
+
+    **The binding check is the WP-08 NOTE 1 avoidance, applied at authentication
+    and not only at minting.** Under `local_operator` this process may act as
+    exactly one Principal, so a stored client row naming another one — written
+    before a mode change, or by hand against the database — is refused rather
+    than served. Minting applies the same rule (`apps/cli/clients.py`), and
+    applying it twice is deliberate: a rule enforced only where rows are created
+    is a rule that a row created another way does not inherit.
+
+    **The transaction is this function's, not the request's**, exactly as
+    `entra_authenticator`'s is and for the same reason: `ApplicationService.invoke`
+    opens the request's transaction after it has been given a Principal. It takes
+    one work connection and returns it before the request takes its own, so no
+    request ever holds two at once and the pool arithmetic above is unchanged.
+    Unlike the Entra path it writes nothing at all — the client row already
+    exists, and authenticating does not update it.
+    """
+    admissible = settings.admissible_client_principal_id()
+
+    def authenticate(credential: str | None) -> Principal:
+        """Resolve one presented client credential, or refuse it identically.
+
+        The signature takes **only** the header, and that is the property rather
+        than an omission: `entra_authenticator` receives the request document
+        because it has to refuse an identity field inside it, and this one cannot
+        receive it at all — so remote identity structurally cannot be influenced
+        by anything the caller sent in a body. `metadata.principal_id` stays read
+        nowhere (`D-13`/`D-14`) on this plane for a reason a reader can check
+        from the type.
+        """
+        resolved: Principal | None = None
+        try:
+            parsed = parse_client_credential(_client_credential(credential))
+            with work_engine.begin() as connection:
+                client = authenticate_client(
+                    connection, client_id=parsed.client_id, secret=parsed.secret
+                )
+            if client is not None:
+                # Refused here rather than at the row, and refused as the same
+                # error as everything else: a caller must not be able to tell a
+                # rejected *binding* from a rejected *credential*, because the
+                # difference is "this client is real but belongs to another
+                # Principal", which is exactly the existence fact the refusal
+                # exists to withhold.
+                admit_client_binding(bound=client.principal_id, admissible=admissible)
+                resolved = Principal(
+                    principal_id=client.principal_id,
+                    kind=PrincipalKind.OPERATOR,
+                    authenticated=True,
+                )
+        except CaptureError:
+            # A malformed credential and a refused binding are both `CaptureError`
+            # and both become the one refusal. Raised below rather than here, as
+            # everywhere else in this repository: the original would otherwise sit
+            # on `__context__` for a rendered traceback to read, and a malformed
+            # credential's message is a caller-supplied string.
+            resolved = None
+        if resolved is None:
+            raise TokenClaimsError("a registered capture client is required; access is denied")
+        return resolved
+
+    return authenticate
+
+
 @dataclass(frozen=True, slots=True)
 class GatewayRuntime:
     """The application, the principal, and the two engines behind them.
@@ -277,6 +430,18 @@ class GatewayRuntime:
     #: How a request is authenticated, in `entra` mode, and `None` in
     #: `local_operator` mode. Exactly one of this and `principal` is set.
     authenticate: Authenticator | None
+    #: How a *remote capture client* is authenticated, and `None` whenever
+    #: `MY_PA_REMOTE_INGRESS_ENABLED` is off — which is its default and therefore
+    #: the state of every process that has not deliberately turned it on. It is
+    #: independent of the two fields above rather than a third alternative to
+    #: them: the ingress is a second credential plane and either mode may run
+    #: with or without it.
+    #:
+    #: `None` is not the whole kill switch, only the composition half. The
+    #: transport mounts the ingress route unconditionally and refuses inside the
+    #: handler when this is `None`, so "disabled" is something a request meets
+    #: rather than something a routing table hides.
+    remote_client: RemoteClientAuthenticator | None
     work_engine: Engine
     audit_engine: Engine
 
@@ -308,6 +473,15 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
         ),
         principal=None if entra else local_principal(),
         authenticate=entra_authenticator(settings, work_engine) if entra else None,
+        # Composed only when the operator turned the ingress on. There is no
+        # `or`, no fallback and no third state: an unset variable produces
+        # `False` and `False` produces `None`, so a process that was never
+        # configured for remote capture cannot serve it.
+        remote_client=(
+            remote_client_authenticator(settings, work_engine)
+            if settings.remote_ingress_enabled
+            else None
+        ),
         work_engine=work_engine,
         audit_engine=audit_engine,
     )

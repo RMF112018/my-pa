@@ -186,7 +186,7 @@ from my_pa.domain.capture.review import (
     ReviewNotFoundError,
     ReviewUnsupportedError,
 )
-from my_pa.domain.capture.submission import CaptureKind
+from my_pa.domain.capture.submission import CaptureKind, CaptureTransport
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
@@ -456,7 +456,12 @@ class ApplicationService:
         self._clock = clock
 
     def invoke(
-        self, metadata: RequestMetadata, command: Command, *, principal: Principal
+        self,
+        metadata: RequestMetadata,
+        command: Command,
+        *,
+        principal: Principal,
+        transport: CaptureTransport = CaptureTransport.LOCAL,
     ) -> ResponseEnvelope:
         """Execute one request and return the envelope describing what happened.
 
@@ -464,6 +469,16 @@ class ApplicationService:
         `metadata.principal_id` is correlation input and is deliberately not
         consulted: a caller-supplied identity is never trusted alone
         (`docs/specs` section 8.2).
+
+        `transport` is the second thing the composition root supplies and the
+        caller cannot (WP-10): how the request reached this process. It defaults
+        to `LOCAL`, which is what the loopback gateway, MCP over stdio and the
+        CLI all are, and the authenticated remote ingress passes
+        `REMOTE_CLIENT`. It is provenance the capture plane stores and it
+        authorizes nothing — the whole point of routing a remote submission
+        through this method is that it takes the *same* path as a local one, and
+        a transport that could change what a request is permitted to do would be
+        a second capture path wearing the first one's name.
 
         **No exception leaves this method.** The first two handlers classify what
         this layer already understands. The third is a terminal catch, and it is
@@ -494,7 +509,12 @@ class ApplicationService:
         unclassified = False
         try:
             result = self._run(
-                metadata, command, principal=principal, correlation_id=correlation_id, at=started_at
+                metadata,
+                command,
+                principal=principal,
+                correlation_id=correlation_id,
+                at=started_at,
+                transport=transport,
             )
         except ApplicationError as error:
             failure = error
@@ -534,6 +554,7 @@ class ApplicationService:
         principal: Principal,
         correlation_id: str,
         at: datetime,
+        transport: CaptureTransport = CaptureTransport.LOCAL,
     ) -> _Result:
         """Authorize, then execute, then commit — or refuse and still commit.
 
@@ -583,6 +604,7 @@ class ApplicationService:
                     correlation_id=correlation_id,
                     request_id=metadata.request_id,
                     at=at,
+                    transport=transport,
                 )
                 if authorization.allowed:
                     return _HANDLERS[command.capability](self, unit_of_work, authorization, command)
@@ -1465,6 +1487,12 @@ class ApplicationService:
             capture_kind=capture_kind,
             context_source_object_id=context_source_object_id,
             context_source_version_id=context_source_version_id,
+            # Provenance, not a decision. It arrived on `invoke`'s own parameter
+            # from the composition root and reaches the submission row unchanged;
+            # nothing between here and the INSERT reads it, and no branch in this
+            # method depends on it. That is what makes a remote submission the
+            # same transaction rather than a parallel one.
+            transport=authorization.transport,
         )
         admission: CaptureAdmission | None = None
         conflict: ApplicationError | None = None

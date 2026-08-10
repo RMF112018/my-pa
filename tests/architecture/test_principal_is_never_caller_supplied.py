@@ -240,6 +240,15 @@ _DERIVED_RECEIVERS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
         "resolved": frozenset({"PrincipalContext"}),
         # A registered account on the identity plane or a native source.
         "account": frozenset({"UserAccount", "NativeSourceAccount"}),
+        # A registered remote capture client (WP-10), read out of
+        # `knowledge.capture_clients` by `persistence.capture_clients`. Its
+        # `principal_id` is the binding an operator minted, so reading it is how
+        # the composition root learns *which* Principal a credential acts for —
+        # the opposite of trusting a caller, and the value a caller cannot state
+        # at all on that plane. `RegisteredCaptureClient` is constructed in
+        # exactly two places, both from a database row or from `issue_client_secret`'s
+        # own output, and never from a request document.
+        "client": frozenset({"RegisteredCaptureClient"}),
         # A domain audit event.
         "event": frozenset({"AuditEvent"}),
         # A database row.

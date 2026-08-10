@@ -19,10 +19,20 @@ been a third place for the composition to drift.
 
 **Loopback, and nothing else** (`D-30`). The host is a constant rather than a
 flag. There is no option to bind elsewhere, because a flag that can be set wrong
-is the mechanism by which a service reaches a network nobody authorized, and
-`P00-OD-010` — which authentication mechanism this uses — is open and reserved
-to the operator. No credential is issued, read, or required, and there is no TLS
-or ingress path to configure.
+is the mechanism by which a service reaches a network nobody authorized.
+
+That sentence used to continue "no credential is issued, read, or required, and
+there is no TLS or ingress path to configure", and two thirds of that stopped
+being true and are corrected here rather than left standing. WP-05 made a bearer
+token required in `entra` mode; WP-10 adds an authenticated remote capture
+ingress, off by default. **The part that has not changed is the part that
+matters**: the host is still a constant, so both credentials are read on a socket
+bound to `127.0.0.1` and this process still reaches no network. There is still no
+TLS option and no bind option, and there will not be one here — terminating TLS
+and publishing the ingress is a deployment act, reserved to the operator under
+`AGENTS.md` section 8.2, and a flag in this file would be this file performing
+it. Turning `MY_PA_REMOTE_INGRESS_ENABLED` on makes the ingress answer on
+loopback; it exposes nothing.
 
 **Shutdown, and what actually happens.** Uvicorn installs its own `SIGINT` and
 `SIGTERM` handlers when the server runs on the main thread, and its shutdown
@@ -64,7 +74,7 @@ from typing import Final
 
 import uvicorn
 
-from my_pa.adapters.http import create_http_app
+from my_pa.adapters.http import REMOTE_CAPTURE_PATH, create_http_app
 from my_pa.adapters.mcp import serve_stdio
 from my_pa.adapters.mcp.server import SERVER_NAME
 from my_pa.bootstrap.gateway import build_gateway_runtime
@@ -117,9 +127,13 @@ def _run(args: argparse.Namespace) -> int:
     settings = load_settings()
     runtime = build_gateway_runtime(settings)
     application = (
-        create_http_app(runtime.service, principal=runtime.principal)
+        create_http_app(
+            runtime.service, principal=runtime.principal, remote_client=runtime.remote_client
+        )
         if runtime.authenticate is None
-        else create_http_app(runtime.service, authenticate=runtime.authenticate)
+        else create_http_app(
+            runtime.service, authenticate=runtime.authenticate, remote_client=runtime.remote_client
+        )
     )
     server = uvicorn.Server(
         uvicorn.Config(
@@ -136,6 +150,15 @@ def _run(args: argparse.Namespace) -> int:
         )
     )
     print(f"serving     http://{HOST}:{args.port}/v1/<capability>")
+    print(
+        f"remote      {REMOTE_CAPTURE_PATH} "
+        + (
+            "is serving; it accepts a registered client credential and nothing else, "
+            "and it is bound to loopback like everything else this process serves"
+            if runtime.remote_client is not None
+            else "is refused; set MY_PA_REMOTE_INGRESS_ENABLED to serve it"
+        )
+    )
     print(_SOURCE_PROVIDER_NOTICE, flush=True)
     try:
         server.run()

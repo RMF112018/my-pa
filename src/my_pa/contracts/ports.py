@@ -54,7 +54,7 @@ from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
 from my_pa.domain.capture.reveal import Reveal
 from my_pa.domain.capture.review import Disposition, ReviewCase, ReviewDecision
-from my_pa.domain.capture.submission import CaptureKind, CaptureReceipt
+from my_pa.domain.capture.submission import CaptureKind, CaptureReceipt, CaptureTransport
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -330,6 +330,23 @@ class CaptureAdmissionRequest:
     capture_kind: CaptureKind = CaptureKind.QUICK_NOTE
     context_source_object_id: str | None = None
     context_source_version_id: str | None = None
+    #: How the submission reached this process, established by the transport and
+    #: never stated by the caller (WP-10). It defaults to `LOCAL` because that is
+    #: what every path that does not say otherwise is: the loopback gateway, MCP
+    #: over stdio, and the CLI are all the composition root's own process
+    #: principal. The remote ingress is the one caller that says otherwise, and
+    #: it says so through `ApplicationService.invoke`'s own parameter — the same
+    #: trust channel the acting `Principal` arrives on — rather than through any
+    #: field of any command, payload, or envelope.
+    #:
+    #: **It is deliberately outside `payload_digest`.** The digest decides
+    #: whether a replayed idempotency key carries the same request, and two
+    #: submissions of the same note under the same key from the same Principal
+    #: are the same request whether one arrived over loopback and the other over
+    #: the ingress. Including the transport would turn a device retrying over a
+    #: different route into a `409` conflict, which is exactly the failure
+    #: `QC-AC-031` exists to prevent.
+    transport: CaptureTransport = CaptureTransport.LOCAL
 
     @property
     def payload_digest(self) -> str:
@@ -349,6 +366,8 @@ class CaptureAdmissionRequest:
     def __post_init__(self) -> None:
         if not isinstance(self.capture_kind, CaptureKind):
             raise ValueError("an admission names one capture kind")
+        if not isinstance(self.transport, CaptureTransport):
+            raise ValueError("an admission names one transport")
         if (self.context_source_object_id is None) is not (self.context_source_version_id is None):
             raise ValueError("a launch context names both object and version")
         if self.context_source_object_id is not None:

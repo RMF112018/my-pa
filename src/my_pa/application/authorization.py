@@ -69,6 +69,7 @@ from my_pa.application.commands import (
 )
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.audit.events import audit_event_for
+from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.identity.operation import Capability
@@ -111,6 +112,18 @@ class Authorization:
     decision: PolicyDecision
     requested_source_ids: frozenset[str]
     enrollments: tuple[Enrollment, ...]
+    #: How the request reached this process (WP-10). Established by the
+    #: composition root and carried here for the same reason `request_id` is:
+    #: a use case that records an admission has to record how it arrived, and
+    #: handing every handler the transport separately would be a second channel
+    #: for something the request context already knows.
+    #:
+    #: **It authorizes nothing.** `evaluate` never sees it and no branch below
+    #: reads it; it is provenance the capture plane stores, exactly as
+    #: `request_id` is correlation the capture plane stores. A future rule that
+    #: *did* decide on it would be a policy about transports, and it would
+    #: belong in `domain.policy.decision` with the rest of them.
+    transport: CaptureTransport = CaptureTransport.LOCAL
 
     @property
     def allowed(self) -> bool:
@@ -233,6 +246,7 @@ def authorize(
     request_id: str,
     at: datetime,
     classification: Classification = Classification.PRIVATE_LOCAL,
+    transport: CaptureTransport = CaptureTransport.LOCAL,
 ) -> Authorization:
     """Decide one request, record the decision, and return what was decided.
 
@@ -253,6 +267,10 @@ def authorize(
     `correlation_id` is issued by the caller rather than here, because the same
     identifier has to appear on the response envelope of a request that never
     reached this function at all.
+
+    `transport` is carried through onto the `Authorization` and is read by
+    nothing in this module. See the field's own comment: it is provenance, not
+    authority, and the policy decision is computed without it.
     """
     validate_identifier(correlation_id, IdKind.CORRELATION)
     enrollments = unit_of_work.enrollments.for_principal(principal.principal_id)
@@ -297,4 +315,5 @@ def authorize(
         decision=decision,
         requested_source_ids=requested,
         enrollments=enrollments,
+        transport=transport,
     )

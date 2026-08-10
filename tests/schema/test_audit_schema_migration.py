@@ -118,6 +118,7 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "capture_promotion_receipts",
         "capture_context_links",
         "capture_conversations",
+        "capture_clients",
         "relationship_people",
         "relationship_organizations",
         "relationship_identity_observations",

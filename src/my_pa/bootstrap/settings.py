@@ -60,6 +60,7 @@ from sqlalchemy.exc import ArgumentError
 from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
+from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_DEPTH
 
 __all__ = [
@@ -216,6 +217,23 @@ class Settings(StrictModel):
     entra_client_id: str = Field(default="", repr=False)
     entra_issuer: str = Field(default="", repr=False)
     entra_jwks_uri: str = Field(default="", repr=False)
+    #: Whether the authenticated remote capture ingress serves at all (WP-10).
+    #:
+    #: **Off by default, and the default is the fail-closed one.** An
+    #: unconfigured process — no variable set, a typo in the name, a `.env` that
+    #: was not loaded — serves no remote ingress, because `False` is what the
+    #: absent value produces. There is no third state and no inference: the
+    #: alternative default would mean a deployment acquires a credential-bearing
+    #: ingress by forgetting something, which is the direction `AGENTS.md`
+    #: section 5 forbids.
+    #:
+    #: **It is not the only gate, and it is not the one that reaches a network.**
+    #: `apps/gateway.py` binds `127.0.0.1` as a constant with no flag (`D-30`),
+    #: so turning this on exposes the ingress to the loopback interface and to
+    #: nothing else. Publishing it — a TLS-terminating reverse proxy, a tunnel,
+    #: a port forward — is an operator act outside this repository and is
+    #: reserved to them under `AGENTS.md` section 8.2.
+    remote_ingress_enabled: bool = False
     redaction_enabled: bool = True
     contract_strict_mode: bool = True
     max_page_size: int = Field(default=200, gt=0, le=1000)
@@ -296,6 +314,35 @@ class Settings(StrictModel):
                 f"{AuthMode.LOCAL_OPERATOR.value!r}: an unconfigured authenticated "
                 "mode would serve every request as the local operator"
             )
+
+    def admissible_client_principal_id(self) -> str | None:
+        """The single Principal this process may bind a capture client to, or `None`.
+
+        `local_operator` is the mode that has an answer: the process serves one
+        fixed Principal, so a client minted here belongs to that Principal and a
+        client row naming any other one is refused — at minting *and* at every
+        authentication. That refusal is what keeps a remote credential from
+        introducing a **second** Principal holding real data on a web tier that
+        `D-15` pins to exactly one, which is the condition WP-08's NOTE 1 names
+        as its release blocker. This package's decision is to not create it.
+
+        `entra` has no answer *here*, and `None` says so rather than guessing:
+        that mode authenticates real people per request, two real Principals are
+        two real datasets, and a client binds to whichever Principal was
+        authenticated when it was minted. `domain.capture.client.admit_client_binding`
+        reads `None` as "any authenticated Principal", which is the only reading
+        that does not either forbid the mode outright or pin it to a Principal
+        it never established.
+
+        Derived rather than stored, from the same `domain.identity.binding`
+        namespace `bootstrap.gateway.local_principal` derives the process
+        principal from — so the two cannot disagree about who the local operator
+        is. `tests/unit/test_remote_ingress_settings.py` asserts the equality
+        rather than leaving it to this sentence.
+        """
+        if self.auth_mode is not AuthMode.LOCAL_OPERATOR:
+            return None
+        return capture_principal_id(LOCAL_OPERATOR_UUID)
 
     def parsed_database_url(self) -> URL:
         """`database_url` as validation read it, for `create_database_engine`.

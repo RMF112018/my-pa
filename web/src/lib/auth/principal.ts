@@ -6,8 +6,9 @@
  *
  * 1. the cookie verifies against the session secret and is inside its absolute
  *    expiry (`verifySessionEnvelope`);
- * 2. its `sid` is still registered — it has not been signed out, superseded by a
- *    later sign-in, or lost to a restart;
+ * 2. its `sid` is still registered **to the principal the envelope names** — it
+ *    has not been signed out, superseded by a later sign-in, lost to a restart,
+ *    or paired with a different identity than the one the server registered;
  * 3. it has been used inside the idle window.
  *
  * `src/middleware.ts` checks only the first, because the Edge runtime cannot
@@ -26,6 +27,6 @@ export async function resolveSessionPrincipal(
 ): Promise<PrincipalSession | null> {
   const envelope = await verifySessionEnvelope(token);
   if (!envelope) return null;
-  if (!touchSession(envelope.sid)) return null;
+  if (!touchSession(envelope.sid, envelope.principal.principalId)) return null;
   return envelope.principal;
 }

@@ -44,8 +44,9 @@ Delivered:
   with `coverage: "synthetic"` disclosures; a principal-scoped synthetic **Pulse** on
   Today; honest "not yet connected" states on Situations and Library; full
   disclosure on System.
-- **PWA install surface**: web manifest plus a minimal network-only service worker.
-  No offline queue — that is WP-04 (R3).
+- **PWA install surface**: web manifest plus a service worker that caches static
+  assets only and **never** anything under `/api/*`. The offline capture queue is
+  in `src/lib/offline/` and is described under "Offline capture" below.
 
 WP-05 (R4) adds the **Review workbench**: a principal-scoped listing (`/api/review`) and
 per-case disposition route (`/api/review/:id/decide`) that turn a proposal into a
@@ -72,10 +73,11 @@ not backed by the Python read models**, which do exist and are unreachable over 
 in a default build they answer `not_implemented` rather than serving fixtures. See "What is
 wired, and what is not" below.
 
-Not delivered here: capture persistence and the processing pipeline, offline support,
-AI processing, and the To-Do projection. These were sequenced as WP-03, WP-04, WP-08
-and WP-09 of the superseded Moss v4.0 campaign; that sequencing is not a current
-delivery schedule.
+Not delivered here: AI processing and the To-Do projection. Capture persistence and
+the processing pipeline are the Python side's and are wired; offline capture is
+delivered and is described under "Offline capture" below. These were sequenced as
+WP-03, WP-04, WP-08 and WP-09 of the superseded Moss v4.0 campaign; that
+sequencing is not a current delivery schedule.
 
 **Personal-data ingestion is Apple-first.** Apple Mail, Calendar, Contacts, and
 Tasks/To-Do through the first-party native Apple architecture
@@ -124,7 +126,13 @@ overstates.
 | durable | the Python transaction committed and issued the receipt | says **saved**, clears the field |
 | acknowledged, not persisted | the explicitly-enabled synthetic provider minted an in-process receipt | says **not stored**, keeps the note in the field |
 | refused | validation, conflict, authorization, policy — nothing stored | names the reason, keeps the note |
-| unavailable | the backend could not be reached — nothing stored | says retrying is worth it, keeps the note and the same attempt key |
+| unavailable | the backend answered that it could not serve — nothing stored | says retrying is worth it, keeps the note and the same attempt key |
+| queued | the request never reached the server; the note is encrypted and held **on this device only** | says held on this device and **not saved on the server**, clears the field |
+| not held | the note could not even be queued — no offline storage, no storable non-extractable key, or the device queue is at its bound | names the reason, keeps the note in the field |
+
+`queued` is never rendered as a save, and the copy says so in the same sentence
+that reports it. The asymmetry is the same one that governs the first four: a
+person who reads "held" as "filed" closes the tab on the only copy of their note.
 
 **No enrichment state, and the absence is deliberate.** A save is durable before
 any processing runs, and no capability this tier can call reports how that
@@ -175,6 +183,135 @@ route. They were not rewired here. In a default build they now fail closed rathe
 than rendering fixtures, because the refusal lives in the fixture modules
 themselves rather than in the route handlers. Rewiring those four pages onto the
 routes is follow-on work and is not done.
+
+## Offline capture
+
+`src/lib/offline/` holds a note that could not be sent, encrypted, on this
+device, and replays it when the connection returns. Nothing about it is a
+substitute for the server: a queued note is not saved anywhere the server knows
+about, and every surface says so.
+
+### The seven controls, and where each lives
+
+| Control | Where | Proved by |
+|---|---|---|
+| queued and saved are visibly different states | `components/shell/capture-dialog.tsx` | `components/shell/capture-offline.test.tsx` |
+| a queued entry never rebinds Principal | `lib/offline/replay.ts` | `lib/offline/replay.test.ts` |
+| an account switch quarantines rather than replays | `lib/offline/queue.ts`, `lib/offline/replay.ts` | `lib/offline/queue.test.ts`, `components/offline/offline-status.test.tsx` |
+| a stale session fails closed to `needs_reauth` | `lib/offline/replay.ts` | `lib/offline/replay.test.ts` |
+| the local payload is deleted only for a verified receipt | `lib/offline/replay.ts` | `lib/offline/replay.test.ts` |
+| append-only and bounded | `lib/offline/queue.ts` | `lib/offline/queue.test.ts` |
+| idempotent replay | `lib/offline/queue.ts`, `lib/offline/replay.ts` | `lib/offline/replay.test.ts` |
+
+**These are unit and integration proofs, not end-to-end browser proofs, and the
+distinction is not a formality.** The queue, the keys, the fold, the replay
+function and IndexedDB are all real in those tests; the network transport is
+faked. A browser run of "sign in as A, capture offline, sign in as B, observe the
+quarantine" is **not constructible at this head**: under
+`MYPA_GATEWAY_AUTH_MODE=local_operator` the web tier admits exactly one Principal
+(`D-15`), and with the gateway mode unset or `entra` every backend route refuses,
+so no reachable configuration admits two identities *and* serves backend data.
+None was performed and none is implied.
+
+### What a verified receipt is
+
+A local payload is deleted for a receipt that has been checked, never for an
+HTTP 200. All four of these must hold:
+
+1. `shape === "backend"` — the synthetic provider's `acknowledged_not_persisted`
+   answer has a different shape and **never** deletes anything;
+2. `status === "persisted"`;
+3. `receipt.receiptId` is present and non-empty, and `receipt.idempotencyKey`
+   equals the key this entry was minted with;
+4. `receipt.contentSha256` equals a SHA-256 computed here over the same bytes the
+   backend hashes.
+
+The fourth is checkable because the backend's digest is reproducible from this
+tier: `my_pa.domain.capture.version.digest_of` is
+`hashlib.sha256(text.encode("utf-8")).hexdigest()` over the capture text **as
+stored**, with no normalisation anywhere on the Python path, and
+`POST /api/capture` sends `text.trim()` which the Python side stores verbatim.
+The test carries the interpreter's own output for a fixed string, so the two
+implementations are compared rather than left to agree with themselves.
+
+Anything else — a transport failure, a non-2xx, a malformed body, a partially
+shaped receipt, a mismatched digest — leaves the ciphertext exactly where it was.
+
+### The bound refuses; it never evicts
+
+At 50 held entries or 1,000,000 held ciphertext bytes a new enqueue raises
+`OfflineQueueFullError` and the dialog keeps the note in the field with the bound
+named. Nothing is evicted and nothing is dropped: deleting a note somebody
+believes is held is the one outcome a queue must never produce.
+
+### Replay is a foreground path
+
+It runs when the shell mounts and when the browser fires `online`. **Background
+Sync is not used and no background-sync guarantee is claimed** — a note queued in
+a tab that is then closed stays queued until the app is opened again.
+
+### The service worker caches static assets and never `/api/*`
+
+A cache is shared by every session using this browser profile, while every `/api`
+response was produced for one signed-in Principal, so a cached `/api` response
+served to a later session would be a cross-Principal disclosure with the worker
+as the carrier. `public/sw.js` refuses `/api` explicitly, and also refuses HTML
+documents, because a server-rendered page here can carry the signed-in
+principal's display name. `src/lib/offline/sw.test.ts` evaluates the real
+`public/sw.js` against a recording scope and asserts that no cache operation
+occurs for any `/api` path.
+
+**Consequently this does not make the app cold-start offline, and it is not
+described as doing so.** What it buys is that an already-open tab keeps its
+assets when the network drops. The worker holds no queue and no key.
+
+### OD-COMP-004: device-local protected key — what it is, and what it is not
+
+The queued payload is encrypted with AES-GCM 256. The key is generated by
+`crypto.subtle.generateKey(..., extractable: false, ...)`, is stored as a
+`CryptoKey` in IndexedDB, is **per principal** — one key record per
+`principalId`, so a note queued by A is not decryptable with B's key — and is
+never exported, never serialised, never sent anywhere, and never logged. A fresh
+random 96-bit IV is drawn for every record.
+
+**If a non-extractable key cannot be established or stored, the enqueue is
+refused.** There is no fallback to an extractable key, none to a key held only in
+memory, and none to plaintext; a stored key that reads back `extractable === true`
+is refused rather than used. `src/lib/offline/key.test.ts` proves the
+no-downgrade property directly, including the case where `generateKey` is made to
+return an extractable key and the case where the store refuses to hold one.
+
+**The limitations are real and are stated rather than implied away. This raises
+the bar against casual local inspection and against offline disk access. It is
+not a confidentiality guarantee against an attacker with same-origin execution.**
+
+- **Not hardware-backed** in most browsers. `extractable: false` is enforced by
+  the browser's object model, not by a secure element or a TPM, and this code
+  cannot tell the difference.
+- **Same-origin script reaches the decryption capability.** An XSS, a compromised
+  dependency, a browser extension with host access, or a devtools console can
+  open the same database, obtain the same `CryptoKey` handle, and call `decrypt`.
+  `extractable: false` stops the raw bytes being read out; it does not stop the
+  key being *used*. Against that attacker the encryption buys close to nothing.
+- **Local profile access is a partial defence, not a total one.** Reading the raw
+  IndexedDB files with an unrelated tool does not yield plaintext; using the
+  browser's own tooling against the same profile may.
+- **No protection against a compromised device** — keylogger, hostile OS account,
+  malicious extension, or a disk image taken while the profile is unlocked.
+- **Storage is evictable.** The browser may clear this database under storage
+  pressure, in private browsing, or when the user clears site data. If the key is
+  evicted the queued ciphertext is permanently undecryptable; if the database is
+  evicted the queued notes are gone. There is no copy anywhere else and neither
+  is recoverable.
+
+### Known limitation: quarantine is terminal for automatic replay
+
+A quarantined entry keeps its bytes and stays visible as a count and a state, but
+nothing in this package releases it — not even signing back in as the principal
+that queued it. Releasing one would need a user-initiated control that does not
+exist here, so a quarantined entry occupies its share of the bound indefinitely.
+There is also no user-initiated discard: the only removal is the receipt-verified
+deletion above.
 
 ## The BFF transport
 
@@ -293,6 +430,16 @@ npm test           # vitest (unit + component)
 npm run build      # production build
 ```
 
+### Dependencies added here
+
+`fake-indexeddb` (devDependency, test-only). jsdom exposes no IndexedDB, and the
+offline queue is IndexedDB — inventing an abstraction so the tests could avoid it
+would be the speculative layer `AGENTS.md` section 2 forbids and would mean the
+tests exercised the wrapper rather than the store. It is required by no runtime
+code path, is imported only from `*.test.ts(x)`, and removing it means removing
+the offline tests. It round-trips a non-extractable `CryptoKey` in this
+environment, so the real key path is exercised rather than approximated.
+
 ### `MYPA_SESSION_SECRET` is required, and there is no default
 
 The session cookie carries `principalId` and is trusted by `src/middleware.ts`
@@ -338,10 +485,24 @@ decline, and the property that matters is that replaying the exact same cookie
 value after sign-out is refused. An idle timeout applies on top of the absolute
 expiry.
 
+A `sid` is live **for one principal**, and `touchSession` checks that as well as
+liveness. Until WP-08 it checked liveness only, so a session envelope naming
+principal B while carrying principal A's live `sid` resolved to B. Reaching that
+state requires the HMAC signing secret — which permits forging any identity
+outright — so it was never a reachable isolation hole; it is closed anyway
+because it is one comparison. `src/lib/auth/session-binding.test.ts` holds it.
+
 The registry (`src/lib/auth/session-registry.ts`) is an in-memory `Map` in the
 Node runtime. It is **process-local and lost on restart** — the web tier has no
 durable store at this head — and that limitation is stated in the module rather
 than implied away.
+
+Note also that the `D-15` admissible-Principal pin is enforced at **sign-in**,
+not at session verification: `resolveSessionPrincipal` re-checks the signature,
+the registry, the idle window and now the principal binding, but it does not
+re-check admissibility. A `synthetic-b` cookie minted before the pin existed
+therefore fails `401` because the registry is process-local and lost on restart,
+not because admissibility was re-evaluated. WP-08 did not widen that pin.
 
 `src/middleware.ts` runs in the **Edge** runtime and cannot see that registry, so
 it is a cheap signature-and-expiry pre-filter and **not** the authority. The
@@ -373,3 +534,8 @@ sign-in path imports or starts a Graph connector, delta worker, or webhook.
    is. Neither label is reachable from the other's code path.
 3. Nothing is asserted on the user's behalf; the shell language keeps proposals
    and dispositions distinct even while the pipeline is a stub.
+4. A note held offline is bound to the Principal that was authenticated when it
+   was queued, and that binding is written once and never rewritten. Replay
+   refuses when the signed-in Principal differs — it quarantines, and never
+   rebinds, deletes, or sends. The service worker caches no `/api` response, so
+   nothing principal-bound is ever served out of a shared cache.

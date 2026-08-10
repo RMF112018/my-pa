@@ -27,6 +27,16 @@ import { CaptureDialog } from "@/components/shell/capture-dialog";
 
 const NOTE = "synthetic note epsilon — flange tolerance review";
 
+/**
+ * The signed-in principal the shell supplies.
+ *
+ * Required by the dialog since WP-08: a note that has to be held offline is
+ * bound to the principal that was authenticated when it was queued, and there is
+ * no path that queues one without an identity to bind it to. The outcomes below
+ * are unchanged — this prop is only read on the offline path.
+ */
+const PRINCIPAL_ID = "syn-aaaa0001";
+
 function respond(body: unknown, status = 200) {
   return vi
     .spyOn(globalThis, "fetch")
@@ -35,7 +45,7 @@ function respond(body: unknown, status = 200) {
 
 async function saveOnce(note = NOTE) {
   const user = userEvent.setup();
-  render(<CaptureDialog open onClose={() => {}} />);
+  render(<CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />);
   await user.type(screen.getByTestId("capture-field"), note);
   await user.click(screen.getByRole("button", { name: "Save" }));
   return user;
@@ -164,7 +174,7 @@ describe("an unreachable backend", () => {
 describe("one field is the whole precondition", () => {
   it("disables Save on an empty field and enables it on any text", async () => {
     const user = userEvent.setup();
-    render(<CaptureDialog open onClose={() => {}} />);
+    render(<CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     await user.type(screen.getByTestId("capture-field"), "x");
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
@@ -178,7 +188,7 @@ describe("one field is the whole precondition", () => {
       receipt: { receiptId: "rcpt_aaaaaaaa11111111" },
     });
     const user = userEvent.setup();
-    render(<CaptureDialog open onClose={() => {}} />);
+    render(<CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />);
     expect(screen.getByTestId("capture-kind-quick_note")).toBeChecked();
 
     await user.type(screen.getByTestId("capture-field"), NOTE);

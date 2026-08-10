@@ -51,7 +51,14 @@ struct AppleSourceHostContractChecks {
         try checkSpoolItemsAreOwnerOnlyRegularFiles()
         try checkHostLifecycleRefusesIllegalTransitionsAndVersionDrift()
         try checkOperationalTelemetryIsContentFree()
-        print("AppleSourceHostContractChecks: PASS (14 checks)")
+        try checkMailDiscoveryIsConsentGatedBeforeAnyRead()
+        try checkMailIdentityCompositionIsInjectiveAndRefusesToTrim()
+        try checkMailIdentityIsStableAcrossReadsAndChangesWithTheGeneration()
+        try checkMailReadRefusesAMechanismThatPublishesNoGeneration()
+        try checkMailDateBoundIsSourceSideOrRefused()
+        try checkMailBodyAndAttachmentBoundsOmitMarkAndRefuse()
+        try checkMailPageCursorAndOrderingBounds()
+        print("AppleSourceHostContractChecks: PASS (21 checks)")
     }
 
     private static func require(_ condition: Bool, _ message: String) throws {
@@ -1542,6 +1549,613 @@ struct AppleSourceHostContractChecks {
     private static func temporaryDirectory(_ suffix: String) -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("my-pa-wp12d-\(suffix)-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    // MARK: - WP-16: the Mail adapter's six controls, at runtime
+    //
+    // Every fixture value below is obviously synthetic. `.invalid` is the
+    // reserved TLD and nothing here has ever been near a mailbox.
+
+    private static let dayMilliseconds = MailDayWindow.millisecondsPerDay
+
+    private static func mailComponent(_ value: String) throws -> MailIdentityComponent {
+        try requireValue(
+            MailIdentityComponent(rawValue: value),
+            "Mail identity component rejected: \(value)"
+        )
+    }
+
+    /// Provider keys are compared **lexicographically**, so a mechanism whose
+    /// keys are numeric has to zero-pad them or the cursor resumes in the wrong
+    /// place — `10` sorts before `9`. The fixture pads, and the record says so.
+    private static func providerKey(_ number: Int) throws -> MailIdentityComponent {
+        try mailComponent(String(format: "uid-%06d", number))
+    }
+
+    private static func fixtureMailbox() throws -> NativeSourceOpaqueID {
+        try opaque("mailbox-inbox-a")
+    }
+
+    private static func fixtureAccount() throws -> NativeSourceOpaqueID {
+        try opaque("account-a")
+    }
+
+    private static func mailHeaders(_ index: Int) -> [UInt8] {
+        Array(
+            """
+            From: person-a@example.invalid
+            To: person-b@example.invalid
+            Subject: Fixture Subject \(String(format: "%03d", index))
+            """.utf8
+        )
+    }
+
+    private static func fixtureMessage(
+        _ number: Int,
+        receivedUnixMilliseconds: Int64,
+        bodyBytes: [UInt8]? = nil,
+        attachments: [MailAttachmentDescriptor] = []
+    ) throws -> FixtureMailMessage {
+        FixtureMailMessage(
+            providerKey: try providerKey(number),
+            receivedUnixMilliseconds: receivedUnixMilliseconds,
+            sentUnixMilliseconds: receivedUnixMilliseconds - 1000,
+            headerBytes: mailHeaders(number),
+            bodyBytes: bodyBytes ?? Array("Fixture body \(number)".utf8),
+            attachments: attachments
+        )
+    }
+
+    private static func mailMechanism(
+        messages: [FixtureMailMessage],
+        generation: String = "gen-0001",
+        dateBound: MailDateBoundEnforcement = .sourceSideDayGranular,
+        publishesGeneration: Bool = true,
+        consent: MailConsentState = .granted
+    ) throws -> FixtureMailMechanism {
+        FixtureMailMechanism(
+            descriptor: MailMechanismDescriptor(
+                mechanism: .fixtureImapShaped,
+                dateBound: dateBound,
+                publishesGeneration: publishesGeneration,
+                requiresOperatorConsent: false
+            ),
+            accounts: [
+                MailAccountDescriptor(id: try fixtureAccount(), displayLabel: "Fixture Account A"),
+            ],
+            mailboxes: [
+                MailMailboxDescriptor(
+                    id: try fixtureMailbox(),
+                    accountID: try fixtureAccount(),
+                    displayLabel: "Fixture Inbox",
+                    isSelectable: true
+                ),
+                MailMailboxDescriptor(
+                    id: try opaque("mailbox-archive-a"),
+                    accountID: try fixtureAccount(),
+                    parentID: try fixtureMailbox(),
+                    displayLabel: "Fixture Archive",
+                    isSelectable: true
+                ),
+            ],
+            messages: messages,
+            generation: try mailComponent(generation),
+            consent: consent
+        )
+    }
+
+    private static func mailRequest(
+        limit: Int = NativeSourceProtocolV1.maximumPageSize,
+        timeRange: NativeTimeRange? = nil,
+        cursor: NativeReadCursor? = nil
+    ) throws -> NativeReadRequest {
+        try NativeReadRequest(
+            bucketID: try fixtureMailbox(),
+            timeRange: timeRange,
+            cursor: cursor,
+            limit: limit
+        )
+    }
+
+    private static func decodedMailContent(_ record: NativeSourceRecord) throws -> MailRecordContent {
+        try JSONDecoder().decode(MailRecordContent.self, from: Data(record.payload))
+    }
+
+    private static func requireProviderFailure(
+        _ expected: NativeProviderFailure,
+        operation: () throws -> some Any
+    ) throws {
+        do {
+            _ = try operation()
+            throw ContractCheckError.failed("Expected provider failure \(expected)")
+        } catch let failure as NativeProviderFailure {
+            try require(failure == expected, "Expected \(expected), received \(failure)")
+        }
+    }
+
+    /// Control 5, and control 1's consent half. Consent is read **before** the
+    /// first read, and a refusal is measured rather than argued: the fixture
+    /// counts every call the adapter makes to it, so "nothing was read" is a
+    /// number and not a claim about the source.
+    private static func checkMailDiscoveryIsConsentGatedBeforeAnyRead() throws {
+        let mechanism = try mailMechanism(messages: [
+            try fixtureMessage(1, receivedUnixMilliseconds: 1_700_000_000_000),
+        ])
+        let adapter = BoundedMailReadAdapter(mechanism: mechanism)
+
+        let snapshot = try adapter.discoverMail()
+        try require(snapshot.kind == .mail, "Mail discovery returned the wrong kind")
+        try require(snapshot.accounts.count == 1, "Mail discovery lost the account")
+        try require(snapshot.buckets.count == 2, "Mail discovery lost a mailbox")
+        try require(
+            snapshot.buckets.contains { $0.parentID != nil },
+            "Mail discovery flattened the mailbox hierarchy"
+        )
+        try require(
+            snapshot.protocolVersion == NativeSourceProtocolV1.identifier,
+            "Mail discovery drifted from the frozen protocol identifier"
+        )
+
+        // Every state that is not `granted` stops the adapter, and the two that
+        // mean "we have not asked" are treated exactly like refusal — on macOS
+        // the asking is what raises the dialogue, and a TCC grant is the
+        // operator's to give (EXT-04).
+        for state in [MailConsentState.denied, .notDetermined] {
+            mechanism.setConsent(state)
+            mechanism.resetCallCounters()
+            try requireProviderFailure(.permissionDenied) { try adapter.discoverMail() }
+            try requireProviderFailure(.permissionDenied) { try adapter.readMail(try mailRequest()) }
+            try require(
+                mechanism.readCalls == 0,
+                "The adapter made \(mechanism.readCalls) reads with consent \(state.rawValue)"
+            )
+            try require(
+                mechanism.consentCalls == 2,
+                "Consent was not consulted once per operation"
+            )
+        }
+
+        mechanism.setConsent(.targetUnavailable)
+        mechanism.resetCallCounters()
+        try requireProviderFailure(.accountUnavailable) { try adapter.discoverMail() }
+        try require(mechanism.readCalls == 0, "An unavailable target was still read from")
+    }
+
+    /// Control 2, first half: the identifier a message composes to is injective
+    /// and is refused rather than trimmed.
+    private static func checkMailIdentityCompositionIsInjectiveAndRefusesToTrim() throws {
+        // The component alphabet excludes `:`, which is what makes the composed
+        // identifier decomposable from the right and therefore injective.
+        try require(
+            MailIdentityComponent(rawValue: "gen:0001") == nil,
+            "A colon in an identity component would make composition ambiguous"
+        )
+        try require(MailIdentityComponent(rawValue: "") == nil, "Empty component admitted")
+        let atCeiling = String(
+            repeating: "u",
+            count: NativeSourceProtocolV1.maximumMailIdentityComponentBytes
+        )
+        try require(
+            MailIdentityComponent(rawValue: atCeiling) != nil,
+            "Component at the byte ceiling rejected"
+        )
+        try require(
+            MailIdentityComponent(rawValue: atCeiling + "u") == nil,
+            "Over-long component admitted"
+        )
+        try requireDecodeFailure(
+            MailIdentityComponent.self,
+            data: Data("\"gen:0001\"".utf8)
+        )
+
+        // Injectivity, demonstrated on the pair that would collide if the
+        // separator were allowed inside a component.
+        let left = MailMessageIdentity(
+            mailboxID: try opaque("mailbox-a:extra"),
+            generation: try mailComponent("gen-0001"),
+            providerKey: try providerKey(7)
+        )
+        let right = MailMessageIdentity(
+            mailboxID: try opaque("mailbox-a"),
+            generation: try mailComponent("extra"),
+            providerKey: try mailComponent("gen-0001")
+        )
+        try require(
+            try left.recordIdentifier() != right.recordIdentifier(),
+            "Two distinct mail identities composed to one record identifier"
+        )
+
+        // Over the opaque identifier's own ceiling the composition is refused.
+        // Trimming here would alias two messages onto one record, which is the
+        // one truncation with no honest partial form.
+        let longMailbox = try opaque(String(repeating: "m", count: 190))
+        let overflowing = MailMessageIdentity(
+            mailboxID: longMailbox,
+            generation: try mailComponent("gen-0001"),
+            providerKey: try providerKey(7)
+        )
+        try requireError(.mailIdentityTooLong) { try overflowing.recordIdentifier() }
+    }
+
+    /// Control 2, and the negative half is the point. Identity is stable across
+    /// repeated reads and across a sync cycle that preserves the generation, and
+    /// it **changes** when the generation changes, because a provider key means
+    /// nothing outside the generation that issued it.
+    private static func checkMailIdentityIsStableAcrossReadsAndChangesWithTheGeneration() throws {
+        let base: Int64 = 1_700_000_000_000
+        let mechanism = try mailMechanism(messages: [
+            try fixtureMessage(1, receivedUnixMilliseconds: base),
+            try fixtureMessage(2, receivedUnixMilliseconds: base + 60_000),
+            try fixtureMessage(3, receivedUnixMilliseconds: base + 120_000),
+        ])
+        let adapter = BoundedMailReadAdapter(mechanism: mechanism)
+
+        let first = try adapter.readMail(try mailRequest()).records.map(\.id.rawValue)
+        let second = try adapter.readMail(try mailRequest()).records.map(\.id.rawValue)
+        try require(first.count == 3, "The fixture mailbox did not traverse")
+        try require(first == second, "A repeated read produced different identities")
+        try require(Set(first).count == first.count, "Identities repeated inside one page")
+
+        // A sync cycle that adds mail without re-keying: existing identities are
+        // untouched, and the new message gets its own.
+        mechanism.syncPreservingGeneration(adding: [
+            try fixtureMessage(4, receivedUnixMilliseconds: base + 180_000),
+        ])
+        let afterSync = try adapter.readMail(try mailRequest()).records.map(\.id.rawValue)
+        try require(
+            Array(afterSync.prefix(3)) == first,
+            "A sync cycle that preserved the generation moved existing identities"
+        )
+        try require(afterSync.count == 4, "The synced message did not appear")
+
+        // The generation moves — IMAP's `UIDVALIDITY` bump. Every identity must
+        // change; a stable identity here would be the failure, because the same
+        // provider key now names a different message.
+        mechanism.regenerate(as: try mailComponent("gen-0002"))
+        let afterRegeneration = try adapter.readMail(try mailRequest()).records
+        try require(
+            Set(afterRegeneration.map(\.id.rawValue)).isDisjoint(with: Set(afterSync)),
+            "A generation change left identities unchanged; a stale key would now "
+                + "resolve to a different message"
+        )
+        try require(
+            afterRegeneration.allSatisfy { $0.sourceRevision == "gen-0002" },
+            "The record does not carry the generation it was read under"
+        )
+        try require(
+            try decodedMailContent(afterRegeneration[0]).identity.generation.rawValue == "gen-0002",
+            "The payload identity does not carry the generation"
+        )
+    }
+
+    /// Control 1's honest half. A mechanism that cannot name its generation is
+    /// refused before it is read from at all — which is exactly the position
+    /// Apple Mail's scripting terminology is in, since it publishes no
+    /// `UIDVALIDITY` equivalent.
+    private static func checkMailReadRefusesAMechanismThatPublishesNoGeneration() throws {
+        let mechanism = try mailMechanism(
+            messages: [try fixtureMessage(1, receivedUnixMilliseconds: 1_700_000_000_000)],
+            publishesGeneration: false
+        )
+        let adapter = BoundedMailReadAdapter(mechanism: mechanism)
+        mechanism.resetCallCounters()
+        try requireError(.mailGenerationUnavailable) { try adapter.readMail(try mailRequest()) }
+        try require(
+            mechanism.summaryCalls == 0 && mechanism.contentCalls == 0,
+            "A generation-less mechanism was read from before being refused"
+        )
+        try require(
+            NativeHostErrorClass(NativeSourceContractError.mailGenerationUnavailable)
+                == .mailMechanismUnsupported,
+            "The generation refusal is not classified for an operator"
+        )
+    }
+
+    /// Control 3. The bound reaches the source, the widening is outward, the
+    /// refinement is exact, and a mechanism that cannot bound at the source is
+    /// refused rather than scanned.
+    private static func checkMailDateBoundIsSourceSideOrRefused() throws {
+        // Three days, one message per day, at midday UTC.
+        let dayZero: Int64 = 1_700_000_000_000 - (1_700_000_000_000 % dayMilliseconds)
+        let midday = dayMilliseconds / 2
+        let messages = try (0..<3).map { offset in
+            try fixtureMessage(
+                offset + 1,
+                receivedUnixMilliseconds: dayZero + Int64(offset) * dayMilliseconds + midday
+            )
+        }
+
+        // The widening is outward and day-aligned, and a window that is not
+        // day-aligned cannot be constructed at all.
+        let exact = try NativeTimeRange(
+            startUnixMilliseconds: dayZero + midday,
+            endUnixMilliseconds: dayZero + dayMilliseconds + midday
+        )
+        let widened = try MailDayWindow.widening(exact)
+        try require(
+            widened.startUnixMilliseconds <= exact.startUnixMilliseconds
+                && widened.endUnixMilliseconds >= exact.endUnixMilliseconds,
+            "The day widening narrowed the requested interval"
+        )
+        try requireError(.mailWindowNotDayAligned) {
+            try MailDayWindow(
+                startUnixMilliseconds: dayZero + 1,
+                endUnixMilliseconds: dayZero + dayMilliseconds - 1
+            )
+        }
+        try requireDecodeFailure(
+            MailDayWindow.self,
+            data: try mutatedJSON(widened) { $0["startUnixMilliseconds"] = dayZero + 1 }
+        )
+        // Floor division, so an instant before 1970 rounds down rather than
+        // toward zero. Truncating division would lose the boundary day.
+        try require(
+            MailDayWindow.dayFloor(-1) == -dayMilliseconds,
+            "The day floor rounds toward zero for pre-epoch instants"
+        )
+
+        // The bound is applied at the source and refined here. Day two's message
+        // is inside the widened window and outside the exact one, so it proves
+        // the refinement actually refines.
+        let mechanism = try mailMechanism(messages: messages)
+        let adapter = BoundedMailReadAdapter(mechanism: mechanism)
+        let bounded = try adapter.readMail(try mailRequest(timeRange: exact))
+        try require(
+            bounded.records.count == 2,
+            "Date-bounded traversal returned \(bounded.records.count) records, expected 2"
+        )
+        try require(
+            bounded.records.allSatisfy {
+                ($0.sourceModifiedUnixMilliseconds ?? 0) >= exact.startUnixMilliseconds
+                    && ($0.sourceModifiedUnixMilliseconds ?? 0) <= exact.endUnixMilliseconds
+            },
+            "A record outside the requested interval was admitted"
+        )
+
+        // A mechanism that ignores the window it was handed is caught, not
+        // believed. The adapter re-checks the answer against the bound.
+        mechanism.setFault(.ignoreTheWindow)
+        try requireError(.mailDateBoundViolated) {
+            try adapter.readMail(try mailRequest(timeRange: exact))
+        }
+
+        // A mechanism that satisfies the bound by walking the whole mailbox is
+        // refused: "date-bounded without enumerating the store" is the
+        // acceptance, and a full scan is precisely not it.
+        mechanism.setFault(.declareWholeMailboxScan)
+        try requireError(.mailDateBoundNotSourceSide) {
+            try adapter.readMail(try mailRequest(timeRange: exact))
+        }
+        mechanism.setFault(.none)
+
+        // …and a mechanism that declares up front that it cannot bound at the
+        // source is refused before it is asked anything.
+        let clientSide = try mailMechanism(
+            messages: messages,
+            dateBound: .clientSideAfterFullScan
+        )
+        let clientSideAdapter = BoundedMailReadAdapter(mechanism: clientSide)
+        clientSide.resetCallCounters()
+        try requireError(.mailDateBoundNotSourceSide) {
+            try clientSideAdapter.readMail(try mailRequest(timeRange: exact))
+        }
+        try require(
+            clientSide.summaryCalls == 0,
+            "A client-side-only mechanism was enumerated before being refused"
+        )
+        // An unbounded read against the same mechanism is still allowed: the
+        // refusal is about the *bound*, not about the mechanism.
+        try require(
+            try clientSideAdapter.readMail(try mailRequest()).records.count == 3,
+            "The client-side refusal leaked into unbounded traversal"
+        )
+    }
+
+    /// Control 4. A body is carried whole or omitted whole and never trimmed; an
+    /// omission is marked and quantified; a header block with no honest partial
+    /// form refuses the record; and attachment bytes have nowhere to live.
+    private static func checkMailBodyAndAttachmentBoundsOmitMarkAndRefuse() throws {
+        let base: Int64 = 1_700_000_000_000
+        let marker = "OVERSIZE-BODY-MARKER-person-a-at-example-invalid"
+        var oversizeBody = Array(marker.utf8)
+        oversizeBody.append(
+            contentsOf: Array(
+                repeating: UInt8(ascii: "x"),
+                count: NativeSourceProtocolV1.maximumMailBodyBytes + 1 - oversizeBody.count
+            )
+        )
+        try require(
+            oversizeBody.count == NativeSourceProtocolV1.maximumMailBodyBytes + 1,
+            "The oversize body probe is not actually oversize"
+        )
+        let atCeiling = Array(
+            repeating: UInt8(ascii: "y"),
+            count: NativeSourceProtocolV1.maximumMailBodyBytes
+        )
+
+        let attachments = try (0..<40).map { index in
+            try MailAttachmentDescriptor(
+                id: try opaque("attachment-\(String(format: "%03d", index))"),
+                mimeType: "application/octet-stream",
+                byteSize: 1024,
+                disposition: .metadataOnly
+            )
+        }
+        let mechanism = try mailMechanism(messages: [
+            try fixtureMessage(1, receivedUnixMilliseconds: base, bodyBytes: atCeiling),
+            try fixtureMessage(2, receivedUnixMilliseconds: base + 1000, bodyBytes: oversizeBody),
+            try fixtureMessage(
+                3,
+                receivedUnixMilliseconds: base + 2000,
+                attachments: attachments
+            ),
+        ])
+        let adapter = BoundedMailReadAdapter(mechanism: mechanism)
+        let page = try adapter.readMail(try mailRequest())
+        try require(page.records.count == 3, "The bounded mail page lost a record")
+
+        // At the ceiling the body is carried whole.
+        let kept = try decodedMailContent(page.records[0])
+        try require(kept.completeness.bodyIncluded, "A body at the ceiling was omitted")
+        try require(kept.body?.count == atCeiling.count, "A body at the ceiling was trimmed")
+        try require(!kept.completeness.isPartial, "A complete record was marked partial")
+
+        // Over the ceiling it is omitted, marked, and its true size recorded —
+        // and none of it reaches the payload. The marker is planted at the front
+        // of the body precisely so a `prefix`-style truncation would leak it.
+        let omitted = try decodedMailContent(page.records[1])
+        try require(!omitted.completeness.bodyIncluded, "An oversize body was carried")
+        try require(omitted.body == nil, "An oversize body was carried in part")
+        try require(
+            omitted.completeness.bodyByteSize == oversizeBody.count,
+            "The omission did not record the body's true size"
+        )
+        try require(omitted.completeness.isPartial, "An omitted body was not marked partial")
+        let payloadText = String(decoding: page.records[1].payload, as: UTF8.self)
+        try require(
+            !payloadText.contains(marker),
+            "The oversize body's first bytes reached the payload; the bound truncated "
+                + "rather than omitted"
+        )
+
+        // Attachments: descriptors bounded and the shortfall recorded, bytes
+        // nowhere at any size.
+        let described = try decodedMailContent(page.records[2])
+        try require(
+            described.attachments.count == NativeSourceProtocolV1.maximumMailAttachmentDescriptors,
+            "The attachment descriptor bound was not applied"
+        )
+        try require(
+            described.completeness.attachmentCount == 40,
+            "The true attachment count was not recorded"
+        )
+        try require(described.completeness.isPartial, "A shortened descriptor list was not marked")
+        try require(
+            described.attachments.allSatisfy { $0.byteSize <= NativeSourceProtocolV1.maximumMailAttachmentBytes },
+            "An oversize attachment was described as if it were fetchable"
+        )
+        // An attachment above the fetch ceiling must be labelled as such.
+        try requireError(.mailContentInconsistent) {
+            try MailAttachmentDescriptor(
+                id: try opaque("attachment-huge"),
+                mimeType: "application/octet-stream",
+                byteSize: NativeSourceProtocolV1.maximumMailAttachmentBytes + 1,
+                disposition: .metadataOnly
+            )
+        }
+        _ = try MailAttachmentDescriptor(
+            id: try opaque("attachment-huge"),
+            mimeType: "application/octet-stream",
+            byteSize: NativeSourceProtocolV1.maximumMailAttachmentBytes + 1,
+            disposition: .omittedOversize
+        )
+
+        // A header block has no honest partial form, so the record is refused.
+        let hugeHeaders = try mailMechanism(messages: [
+            FixtureMailMessage(
+                providerKey: try providerKey(9),
+                receivedUnixMilliseconds: base,
+                sentUnixMilliseconds: nil,
+                headerBytes: Array(
+                    repeating: UInt8(ascii: "h"),
+                    count: NativeSourceProtocolV1.maximumMailHeaderBytes + 1
+                ),
+                bodyBytes: []
+            ),
+        ])
+        try requireError(.mailHeaderTooLarge) {
+            try BoundedMailReadAdapter(mechanism: hugeHeaders).readMail(try mailRequest())
+        }
+
+        // And the whole of it again off the wire. A bound enforced only on the
+        // initialiser is a bound that can be walked around by handing the host
+        // JSON — WP-15's lesson, applied to the content bounds.
+        try requireDecodeFailure(
+            MailRecordContent.self,
+            data: try mutatedJSON(kept) { object in
+                // A body trimmed to half its declared size: the truncation that
+                // would otherwise be invisible.
+                object["body"] = Array(atCeiling.prefix(atCeiling.count / 2)).map { Int($0) }
+            }
+        )
+        try requireDecodeFailure(
+            MailRecordContent.self,
+            data: try mutatedJSON(kept) { object in
+                object["completeness"] = [
+                    "bodyIncluded": true,
+                    "bodyByteSize": atCeiling.count,
+                    "attachmentCount": 0,
+                    "attachmentsDescribed":
+                        NativeSourceProtocolV1.maximumMailAttachmentDescriptors + 1,
+                ]
+            }
+        )
+        try requireDecodeFailure(
+            MailRecordContent.self,
+            data: try mutatedJSON(omitted) { object in
+                // "The body was included" with no body: an inconsistent claim.
+                object["completeness"] = [
+                    "bodyIncluded": true,
+                    "bodyByteSize": omitted.completeness.bodyByteSize,
+                    "attachmentCount": 0,
+                    "attachmentsDescribed": 0,
+                ]
+            }
+        )
+    }
+
+    /// Controls 3 and 4 where they meet the frozen protocol bounds: the page
+    /// ceiling, the cursor, and the strict ordering the cursor depends on.
+    private static func checkMailPageCursorAndOrderingBounds() throws {
+        let base: Int64 = 1_700_000_000_000
+        let messages = try (1...5).map { number in
+            try fixtureMessage(number, receivedUnixMilliseconds: base + Int64(number) * 1000)
+        }
+        let mechanism = try mailMechanism(messages: messages)
+        let adapter = BoundedMailReadAdapter(mechanism: mechanism)
+
+        // A page at the request limit carries a cursor; a short page does not,
+        // because a cursor on a short page invites an extra empty round trip and
+        // makes "the bucket is exhausted" unrepresentable.
+        let firstPage = try adapter.readMail(try mailRequest(limit: 2))
+        try require(firstPage.records.count == 2, "The page limit was not honoured")
+        let cursor = try requireValue(firstPage.nextCursor, "A full page carried no cursor")
+        let secondPage = try adapter.readMail(try mailRequest(limit: 2, cursor: cursor))
+        try require(secondPage.records.count == 2, "The cursor did not resume")
+        try require(
+            Set(firstPage.records.map(\.id)).isDisjoint(with: Set(secondPage.records.map(\.id))),
+            "The cursor replayed a record it had already served"
+        )
+        let lastPage = try adapter.readMail(
+            try mailRequest(limit: 2, cursor: try requireValue(secondPage.nextCursor, "no cursor"))
+        )
+        try require(lastPage.records.count == 1, "The final page is the wrong size")
+        try require(lastPage.nextCursor == nil, "A short final page still carried a cursor")
+
+        // The protocol's own page ceiling is inherited, not re-implemented.
+        try requireError(.invalidPageLimit) {
+            try MailTraversalQuery(
+                mailboxID: try fixtureMailbox(),
+                window: nil,
+                afterProviderKey: nil,
+                limit: NativeSourceProtocolV1.maximumPageSize + 1
+            )
+        }
+        // A cursor the protocol admits but the identity alphabet does not is
+        // refused rather than coerced.
+        let punctuated = try requireValue(
+            NativeReadCursor(rawValue: "uid:000001"),
+            "The punctuated cursor probe is not a valid protocol cursor"
+        )
+        try requireError(.mailInvalidIdentityComponent) {
+            try adapter.readMail(try mailRequest(cursor: punctuated))
+        }
+
+        // Order is the cursor's only guarantee, so a mechanism that returns keys
+        // out of order is refused rather than paged over.
+        mechanism.setFault(.returnKeysOutOfOrder)
+        try requireError(.nonCanonicalOrder) { try adapter.readMail(try mailRequest(limit: 3)) }
+        mechanism.setFault(.none)
     }
 
 }

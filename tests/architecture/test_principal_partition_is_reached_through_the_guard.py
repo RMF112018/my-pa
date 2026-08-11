@@ -902,6 +902,23 @@ def table_reference(node: ast.AST, names: frozenset[str]) -> str | None:
     return None
 
 
+def _is_the_table_a_guard_call_names(node: ast.AST, parent: ast.AST | None) -> bool:
+    """Whether this mention *is* the table argument of a guard call.
+
+    `partition_criterion(enrollments, context)` names the table in order to
+    partition it, so the mention inside the call is reached by definition. Held
+    separately from the chain rule because a criterion bound to a name —
+    `mine = partition_criterion(table, context)`, which is how `jobs.py` writes
+    it — is applied by a `.where()` somewhere else entirely, and a rule that
+    demanded the filtering call be in the same expression would refuse the one
+    spelling this repository already treats as correct.
+    """
+    if not isinstance(parent, ast.Call) or not isinstance(parent.func, ast.Name):
+        return False
+    position = _GUARD_TABLE_ARGUMENT.get(parent.func.id)
+    return position is not None and len(parent.args) > position and parent.args[position] is node
+
+
 def _tables_the_guard_reaches(chain: ast.AST) -> set[str]:
     reached: set[str] = set()
     for node in ast.walk(chain):
@@ -957,6 +974,8 @@ def unpartitioned_references(
         if named is None:
             continue
         checked += 1
+        if _is_the_table_a_guard_call_names(node, parents.get(id(node))):
+            continue
         chain = _enclosing_expression(node, parents)
         if named not in _tables_the_guard_reaches(chain):
             offending.append(f"{getattr(node, 'lineno', 0)}:{ast.unparse(node)}")
@@ -1090,6 +1109,28 @@ def test_the_corpus_scan_reports_a_read_that_really_is_unscoped() -> None:
     )
     _checked, offending = unpartitioned_references(tree, partitioned)
     assert offending, "a criterion written outside a filtering call laundered the read"
+
+    # And the exemption for a mention that *is* a guard call's table argument
+    # does not extend to the read beside it. Both directions, because an
+    # exemption nothing can be caught next to is an exemption that swallows the
+    # rule: `mine = partition_criterion(enrollments, context)` alone is reached,
+    # and the same line followed by an unscoped read is not.
+    bound = "    mine = partition_criterion(enrollments, context)\n"
+    _checked, exempt = unpartitioned_references(
+        ast.parse(source.replace(anchor, anchor + bound, 1)), partitioned
+    )
+    assert exempt == [], "binding a criterion to a name is how `jobs.py` writes it"
+    _checked, beside_it = unpartitioned_references(
+        ast.parse(
+            source.replace(
+                anchor,
+                anchor + bound + "    leaked = select(enrollments.c.source_id)\n",
+                1,
+            )
+        ),
+        partitioned,
+    )
+    assert beside_it, "a bound criterion laundered the unscoped read written beside it"
 
     # A table fetched by string key has no name node to find, and the string rule
     # is what catches it. Both directions are asserted, because a rule nothing

@@ -28,6 +28,24 @@ root. That is the strongest form of the attack — the attacker wins the race ev
 time — so a refusal here is a refusal under conditions no real attacker could
 improve on.
 
+**"From inside `_publish`" is checked rather than assumed, and the correction is
+why.** One `put` makes five `_verify_contained` calls, and the first is inside
+`_object_path` — before a directory has been created and before a temporary
+exists. A wrapper that fired on whichever call came first fired *there*, and the
+`put` was then refused at `_ensure_directory`, which is a genuine refusal of a
+different window: every assertion below would have held for the wrong reason, and
+the "nothing half-written" one would have held vacuously because there was
+nothing to write yet. So the wrapper is armed with the name of the function the
+swap must be called from, reads its caller off the stack frame, and records where
+it went off; the claim test asserts that it was `_publish`.
+
+**What is left behind at that window is asserted rather than tidied.** A refusal
+inside `_publish` comes from `_anchored`, which raises `ManagedStoreError`, and
+`put` catches only `FileExistsError` and `OSError` — so the `.part` temporary
+survives. It is an orphan inside the root, holding no object name, reported by
+`verify` in `unreadable_entries`, and never reclaimed automatically. The test
+says so, because the alternative is an assertion that reads well and is false.
+
 ## The two halves, and why both are here
 
 **The control**, `test_the_swap_really_lands_bytes_outside_the_root`, performs the
@@ -37,8 +55,11 @@ with the store reporting success. Without it, the refusal below would be evidenc
 that something failed, not evidence that *this* was prevented.
 
 **The claim**, `test_the_anchored_publication_refuses_the_swapped_component`,
-performs the same publication through the store as it is now and shows the write
-refused with nothing outside the root.
+performs the same publication through the store as it is now, at the `_publish`
+window, and shows the write refused with nothing outside the root and nothing
+published inside it. Reverting `_publish` to the two lines WP-27 shipped makes it
+fail with `DID NOT RAISE`, which is what says it is about the anchoring rather
+than about the swap.
 
 Everything runs under `tmp_path` and is removed with the test. No configured root
 is read, no environment variable is set, and every value is synthetic.
@@ -46,6 +67,7 @@ is read, no environment variable is set, and every value is synthetic.
 
 from __future__ import annotations
 
+import inspect
 import os
 from pathlib import Path
 from typing import Final
@@ -91,6 +113,16 @@ class _SwapsTheShardOnce:
     Firing once is what makes this the attack rather than a broken filesystem: the
     check passes on a real directory, and the directory stops being one
     immediately afterwards.
+
+    **Which check it fires on is the whole fidelity of this module.**
+    `_verify_contained` is called five times during one `put`, and the *first* is
+    inside `_object_path`, before any temporary exists and before any directory
+    has been created. A swap fired there is refused at `_ensure_directory`, which
+    is a true refusal of a different window — and a test that fired there while
+    saying it fired in `_publish` would be asserting nothing about the window the
+    finding names. So `arm` takes the name of the function the swap must be called
+    *from*, the caller is read off the stack frame, and `fired_in` records where it
+    actually went off so a test can assert it rather than assume it.
     """
 
     def __init__(self, store: FilesystemManagedByteStore, shard: Path, escape: Path) -> None:
@@ -99,14 +131,26 @@ class _SwapsTheShardOnce:
         self._escape = escape
         self.armed = False
         self.fired = False
+        self.window: str | None = None
+        self.fired_in: str | None = None
+
+    def arm(self, window: str | None) -> None:
+        """Fire on the next `_verify_contained` made from `window`, or from anywhere."""
+        self.window = window
+        self.armed = True
 
     def __call__(self, path: Path) -> None:
         self._inner(path)
         if not self.armed or self.fired:
             return
+        frame = inspect.currentframe()
+        caller = frame.f_back.f_code.co_name if frame is not None and frame.f_back else ""
+        if self.window is not None and caller != self.window:
+            return
         if not self._shard.is_dir() or self._shard.is_symlink():
             return
         self.fired = True
+        self.fired_in = caller
         for entry in self._shard.iterdir():
             entry.unlink()
         self._shard.rmdir()
@@ -155,7 +199,9 @@ def test_the_swap_really_lands_bytes_outside_the_root(roots: tuple[Path, Path]) 
     temporary.write_bytes(CONTENT)
 
     target = _shard_of(root, version_id) / version_id
-    swap.armed = True
+    # Fired wherever it is called from, because the caller here is this test
+    # standing in for `_publish`: the two lines below *are* what `_publish` was.
+    swap.arm(None)
     # This is the check the shipped code made...
     store._verify_contained(target)  # type: ignore[attr-defined]
     assert swap.fired, "the window did not open, so this test is measuring nothing"
@@ -175,24 +221,67 @@ def test_the_swap_really_lands_bytes_outside_the_root(roots: tuple[Path, Path]) 
 def test_the_anchored_publication_refuses_the_swapped_component(
     roots: tuple[Path, Path],
 ) -> None:
-    """The claim: the same swap, through the store as WP-28 leaves it.
+    """The claim: the same swap, at the window the finding names, through the store.
 
-    `put` refuses, nothing lands outside the root, and no object appears under
-    it either — the write is refused rather than half-performed. The temporary is
-    removed on the failure path, which is the store's own contract.
+    **Fired only from inside `_publish`**, which is the disclosed window: the
+    check has passed, the temporary is written and fsynced, and the very next
+    thing that happens is the `linkat` that publishes it. An earlier firing —
+    from `_object_path`, which is the first of the five `_verify_contained` calls
+    a `put` makes — is refused at `_ensure_directory` before a temporary exists,
+    which is a real refusal of a *different* window and would leave every
+    assertion here true for the wrong reason.
+
+    What is asserted at that window:
+
+    * `put` refuses. The swapped shard is a symbolic link, and `_publish`'s
+      `_anchored(target.parent)` walks the chain with `O_DIRECTORY | O_NOFOLLOW`
+      and cannot open it, so the `linkat` is never reached.
+    * Nothing is outside the root. The escape directory the link points at is
+      empty, which is the whole finding.
+    * Nothing is published inside it either: `has` is false and the object tree
+      holds no file for this version.
+    * **The temporary is still there**, and that is stated rather than tidied
+      away. `_anchored` raises `ManagedStoreError`; `put` catches
+      `FileExistsError` and `OSError`, so the cleanup branch does not run and the
+      `.part` file survives the refusal. It is an orphan *inside* the root,
+      carrying no object name, reported by `verify` in `unreadable_entries`, and
+      never reclaimed automatically — WP-27's disclosed model exactly. Asserting
+      the opposite would be asserting something convenient rather than something
+      true.
     """
     root, escape = roots
     version_id = issue_identifier(IdKind.MANAGED_DOCUMENT_VERSION)
     store, swap = _armed_store(root, escape, version_id)
+    before = {path.name for path in (root / "objects").rglob("*") if path.is_file()}
 
-    swap.armed = True
+    swap.arm("_publish")
     with pytest.raises(ManagedStoreError):
         store.put(version_id, CONTENT)
 
     assert swap.fired, "the window did not open, so this test is measuring nothing"
+    assert swap.fired_in == "_publish", (
+        f"the swap fired from {swap.fired_in!r}, so this is not the disclosed window"
+    )
     assert _outside(escape) == [], "bytes were written outside the managed root"
-    # And nothing is left half-written inside it either.
-    assert not list((root / "incoming").glob("*.part"))
+    # Nothing was published: the object tree holds exactly what the warm-up write
+    # left in it, and this version is not in it.
+    assert {path.name for path in (root / "objects").rglob("*") if path.is_file()} == before
+    assert version_id not in before
+    # `has` is asked through the swapped component too, and refuses rather than
+    # answering — the component walk sees the link. The read side of the same
+    # refusal rather than a second finding, and recorded because a reader would
+    # otherwise expect `has` to return `False` here.
+    with pytest.raises(ManagedStoreError):
+        store.has(version_id)
+
+    # The temporary survives, inside the root, and `verify` is what reports it.
+    leftovers = sorted((root / "incoming").glob("*.part"))
+    assert len(leftovers) == 1, leftovers
+    assert leftovers[0].read_bytes() == CONTENT
+    assert leftovers[0].is_relative_to(store.root)
+    assert leftovers[0].name in {Path(entry).name for entry in store.unreadable_entries()}, (
+        "the surviving temporary is not reported by the integrity check"
+    )
 
 
 def test_an_unswapped_write_still_succeeds(roots: tuple[Path, Path]) -> None:

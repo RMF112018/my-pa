@@ -181,7 +181,8 @@ from my_pa.infrastructure.managed_document_stores.filesystem.store import (
     FilesystemManagedByteStore,
 )
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
-from my_pa.infrastructure.persistence.capture_clients import authenticate_client
+from my_pa.infrastructure.persistence.capture_clients import authenticate_client, clients_of
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.registry import configured_source_roots
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
@@ -446,6 +447,48 @@ def managed_byte_store(settings: Settings, work_engine: Engine) -> ManagedByteSt
     )
 
 
+def mcp_surface_enabled(
+    settings: Settings, work_engine: Engine, principal: Principal | None
+) -> bool:
+    """Whether the MCP surface serves at all, decided once at composition (WP-28).
+
+    Two independent reasons to answer `False`, and both fail closed:
+
+    * **The kill switch is engaged.** `MY_PA_MCP_SURFACE_DISABLED` is off by
+      default and the surface serves; engaging it withdraws the surface from a
+      client already using it, without stopping the gateway. `adapters.mcp.server`
+      then publishes no tool *and* refuses every `tools/call`.
+    * **The bound client is gone or revoked.** `MY_PA_MCP_CLIENT_ID` names a row
+      in `knowledge.capture_clients` — WP-10's registry, and the same one
+      `revoke_client` writes to. An identifier naming no client, one belonging to
+      another Principal, and one that has been revoked are **one answer**, on the
+      registry's own rule that "this credential used to work" is exactly what a
+      refusal must not disclose. Empty means no client is bound, which is every
+      process this build has run so far.
+
+    **Binding is identification, not authentication, and the difference is not
+    cosmetic.** stdio carries no credential (`D-30`), so this process presents no
+    secret and verifies none; what it does is refuse to serve *as* a client the
+    operator has withdrawn. Authenticating an external MCP client needs an ingress
+    that carries a credential, which is EXT-07/EXT-08 and does not exist. Nothing
+    here should be read as per-client authentication.
+
+    In `entra` mode there is no process principal, so there is no partition to
+    look a bound client up in; a bound client is refused rather than resolved
+    against a guess. The surface itself is unaffected when nothing is bound.
+    """
+    if settings.mcp_surface_disabled:
+        return False
+    bound = settings.mcp_client_id.strip()
+    if not bound:
+        return True
+    if principal is None:
+        return False
+    with work_engine.connect() as connection:
+        held = clients_of(connection, context=capture_context(principal.principal_id))
+    return any(client.client_id == bound and client.usable for client in held)
+
+
 @dataclass(frozen=True, slots=True)
 class GatewayRuntime:
     """The application, the principal, and the two engines behind them.
@@ -477,6 +520,11 @@ class GatewayRuntime:
     #: handler when this is `None`, so "disabled" is something a request meets
     #: rather than something a routing table hides.
     remote_client: RemoteClientAuthenticator | None
+    #: Whether the MCP surface serves at all (WP-28). Decided once at
+    #: composition by `mcp_surface_enabled`, which reads the kill switch and the
+    #: bound client's state; `apps/gateway.py mcp` passes it straight through and
+    #: the transport holds a boolean and no configuration.
+    mcp_enabled: bool
     work_engine: Engine
     audit_engine: Engine
 
@@ -501,13 +549,14 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
         return SqlAlchemyUnitOfWork(work_engine, audit=audit)
 
     entra = settings.auth_mode is AuthMode.ENTRA
+    principal = None if entra else local_principal()
     return GatewayRuntime(
         service=ApplicationService(
             unit_of_work=unit_of_work,
             limits=settings.effective_limits(),
             managed_store=managed_byte_store(settings, work_engine),
         ),
-        principal=None if entra else local_principal(),
+        principal=principal,
         authenticate=entra_authenticator(settings, work_engine) if entra else None,
         # Composed only when the operator turned the ingress on. There is no
         # `or`, no fallback and no third state: an unset variable produces
@@ -518,6 +567,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             if settings.remote_ingress_enabled
             else None
         ),
+        mcp_enabled=mcp_surface_enabled(settings, work_engine, principal),
         work_engine=work_engine,
         audit_engine=audit_engine,
     )

@@ -261,6 +261,48 @@ class Settings(StrictModel):
     #: one. Adding an unused credential field today would be the speculative
     #: configuration `AGENTS.md` section 2 rules out.
     managed_document_root: str = ""
+    #: The Frontier MCP surface's kill switch (WP-28).
+    #:
+    #: **The switch is off by default and the surface serves**, which is the
+    #: opposite default from `remote_ingress_enabled` and is the right one for a
+    #: different reason. The remote ingress reaches a *network*, so an
+    #: unconfigured process must not serve it. This surface reaches a **pipe**:
+    #: `apps/gateway.py mcp` is a process an operator starts deliberately, on
+    #: stdio, with no socket and no credential (`D-26`, `D-30`), so "serving" is
+    #: already an act rather than an accident and a second flag to turn it on
+    #: would only mean the operator who started it has to say so twice.
+    #:
+    #: What this is for is the other direction: **withdrawing** the surface from a
+    #: client that is already using it, without stopping the gateway, changing a
+    #: source root or touching the database. Engaging it makes `tools/list`
+    #: publish nothing *and* `tools/call` refuse — a switch that only hid the
+    #: tools would leave every name a client already knows reachable, and a client
+    #: that has spoken to this server before knows all of them.
+    #:
+    #: **A malformed value fails closed by refusing to start.** `_coerce` accepts
+    #: only the boolean spellings and raises `SettingsError` for anything else, so
+    #: `MY_PA_MCP_SURFACE_DISABLED=maybe` is a process that does not run rather
+    #: than a switch silently read as `False`.
+    mcp_surface_disabled: bool = False
+    #: Which registered capture client this MCP process serves as, or empty for
+    #: none (WP-28).
+    #:
+    #: **Empty is the default and means what it says: no client is bound**, which
+    #: is every process this build has ever run. Setting it binds the surface to a
+    #: row in `knowledge.capture_clients` — the registry WP-10 built and the same
+    #: one `revoke_client` writes to — and the composition root refuses to serve
+    #: when that row is absent or revoked. So revoking a client through the
+    #: existing operator path withdraws this surface at the next start, with no
+    #: second registry and no second revocation vocabulary.
+    #:
+    #: **It is an identifier and never a secret.** A client identifier is public
+    #: to whoever holds it; the secret digest stays in the database and this
+    #: process neither reads nor presents one, because stdio carries no
+    #: credential (`D-30`). Binding is therefore *identification* and not
+    #: authentication, and the module docstring of `bootstrap.gateway` says so
+    #: where an operator reads it. Authenticating an external MCP client requires
+    #: an ingress that does not exist (EXT-07/EXT-08).
+    mcp_client_id: str = ""
     remote_ingress_enabled: bool = False
     redaction_enabled: bool = True
     contract_strict_mode: bool = True

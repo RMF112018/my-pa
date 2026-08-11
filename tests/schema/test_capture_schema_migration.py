@@ -195,7 +195,7 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "continuity.situations",
         # WP-23. `2d9f4a7c1e58` is the forward `ALTER` that admits it.
         "knowledge.coverage",
-        # WP-28. `6b3d9a2f8c14` is the forward `ALTER` that admits all six, and
+        # WP-28. `6b3d9a2f8c14` is the forward `ALTER` that admits the plane, and
         # the same revision widens `purpose_is_known` for the pair they map to.
         "documents.archive",
         "documents.create",

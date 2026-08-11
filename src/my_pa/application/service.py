@@ -1930,6 +1930,12 @@ class ApplicationService:
         than a guess.
         """
         page_size = self._page_size(command.limit)
+        # Composed or not composed: the plane is one thing. A listing or a
+        # lifecycle transition needs no bytes, but answering one in a build
+        # with no managed root would be answering about a plane that does not
+        # exist — and would make `tools/list` and `tools/call` disagree, since
+        # `available_capabilities` withholds all six together.
+        self._managed_store()
         with _translated(), _managed_translated():
             found = self._managed.list_documents(
                 unit_of_work.managed_documents,
@@ -1974,6 +1980,12 @@ class ApplicationService:
         command: ArchiveManagedDocument,
     ) -> _Result:
         """`documents.archive`: withdraw one document from the active set. Destroys nothing."""
+        # Composed or not composed: the plane is one thing. A listing or a
+        # lifecycle transition needs no bytes, but answering one in a build
+        # with no managed root would be answering about a plane that does not
+        # exist — and would make `tools/list` and `tools/call` disagree, since
+        # `available_capabilities` withholds all six together.
+        self._managed_store()
         with _translated(), _managed_translated():
             changed = self._managed.archive(
                 unit_of_work.managed_documents,
@@ -1991,6 +2003,12 @@ class ApplicationService:
         command: RestoreManagedDocument,
     ) -> _Result:
         """`documents.restore`: return one archived document to the active set."""
+        # Composed or not composed: the plane is one thing. A listing or a
+        # lifecycle transition needs no bytes, but answering one in a build
+        # with no managed root would be answering about a plane that does not
+        # exist — and would make `tools/list` and `tools/call` disagree, since
+        # `available_capabilities` withholds all six together.
+        self._managed_store()
         with _translated(), _managed_translated():
             changed = self._managed.restore(
                 unit_of_work.managed_documents,

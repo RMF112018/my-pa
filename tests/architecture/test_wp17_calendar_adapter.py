@@ -94,6 +94,84 @@ def _source(path: Path) -> str:
     return _without_comments(path.read_text(encoding="utf-8"))
 
 
+#: `\b` rather than a bare prefix: `CalendarMechanismKind` and
+#: `CalendarMechanismDescriptor` both start with the seam's name, and an
+#: `extension CalendarMechanismDescriptor` is not an extension of the seam.
+SEAM_DECLARATION: Final = re.compile(r"public protocol CalendarMechanism\b")
+SEAM_EXTENSION: Final = re.compile(r"\bextension\s+CalendarMechanism\b")
+
+
+#: Multiline first, then raw, then plain — a `"""` block matched as three plain
+#: literals would blank the wrong spans.
+STRING_LITERAL: Final = re.compile(r'"""[\s\S]*?"""' + r'|#+"[\s\S]*?"#+' + r'|"(?:[^"\\\n]|\\.)*"')
+
+
+def _without_string_literals(source: str) -> str:
+    """Blank the *contents* of Swift string literals, preserving every offset.
+
+    Found by attacking this file's own new brace matcher, which is the failure
+    WP-16's correction Worker hit four times: a `}` inside a string literal
+    closes a brace Swift never opened, so
+    `extension CalendarMechanism { static let closer = "}" … }` truncated the
+    body and hid the `removeOccurrence` declared underneath it. Blanking is
+    length-preserving because the match offsets are used to slice the source.
+    """
+
+    def blank(match: re.Match[str]) -> str:
+        return "".join(character if character == "\n" else " " for character in match.group(0))
+
+    return STRING_LITERAL.sub(blank, source)
+
+
+def _balanced_body(source: str, start: int) -> str:
+    """The brace-balanced block beginning at the first `{` after `start`.
+
+    Used for extensions rather than the declaration's scan-to-end-of-file,
+    because an extension is not the last declaration in an arbitrary file and a
+    scan to the end of one would redden on every unrelated type below it. An
+    unbalanced source falls back to the rest of the file — over-reading fails
+    safe, reading nothing does not.
+    """
+    opened = source.find("{", start)
+    if opened < 0:
+        return source[start:]
+    depth = 0
+    for index in range(opened, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opened + 1 : index]
+    return source[opened + 1 :]
+
+
+def _seam_segments() -> tuple[tuple[str, str, str], ...]:
+    """Every place a member can be added to `CalendarMechanism`, tree-wide.
+
+    Scoped to `CalendarMechanism.swift`, this scan was vacuous against the shape
+    that actually arrives: a protocol extension in a **different** file adds
+    `removeOccurrence` to every conformer of the seam without touching the file
+    holding the protocol at all, and WP-17's reviewer proved it by planting one
+    and watching the suite stay green. So the scan is the whole native tree —
+    wider than `Sources/AppleSourceHost` on purpose, for WP-15's reason that the
+    file a violation arrives in is the one nobody named.
+
+    Returns `(kind, file, body)` triples so the declaration keeps its own
+    assertions — inheritance is a property of the declaration and of nothing
+    else — while every member assertion reads the union.
+    """
+    segments: list[tuple[str, str, str]] = []
+    for path in _swift_files(HOST):
+        source = _without_string_literals(_source(path))
+        name = str(path.relative_to(ROOT))
+        for match in SEAM_DECLARATION.finditer(source):
+            segments.append(("declaration", name, source[match.end() :]))
+        for match in SEAM_EXTENSION.finditer(source):
+            segments.append(("extension", name, _balanced_body(source, match.end())))
+    return tuple(segments)
+
+
 def _stored_property_lines(source: str, type_name: str) -> list[str]:
     body = source.split(f"public struct {type_name}", 1)[1].split("\n    public init", 1)[0]
     return [line.strip() for line in body.splitlines() if line.strip().startswith("public let ")]
@@ -163,8 +241,43 @@ EVENT_KIT_SURFACE: Final = (
     "reset(",
 )
 
+#: The symbols the table above may never lose. A count floor alone is defeated by
+#: swapping eighteen real spellings for eighteen that never occur; these are the
+#: ones whose absence would let a genuine EventKit client through unnamed.
+EVENT_KIT_SURFACE_FLOOR: Final = (
+    "import EventKit",
+    "EKEventStore",
+    "EKEvent",
+    "EKCalendar",
+    "EKAuthorizationStatus",
+)
+
 
 def test_no_swift_outside_the_probes_can_reach_an_event_store() -> None:
+    # **The table is the whole content of the assertion below, so it gets the
+    # floor `PROBE_TARGETS` and the decode-path `subjects` already have.** WP-16's
+    # reviewer found this exact shape in three separate guards and WP-17's found
+    # it here: emptied to one never-occurring token, the loop finds nothing to
+    # name and a shipping file with a real `import EventKit` and a real
+    # `EKEventStore` passes. A count is not enough on its own — eighteen junk
+    # tokens count the same as eighteen real ones — so the load-bearing spellings
+    # are named as well.
+    assert len(EVENT_KIT_SURFACE) >= 18, (
+        f"the EventKit surface table names {len(EVENT_KIT_SURFACE)} symbols and the "
+        "floor is 18. Shrinking it does not narrow this guard, it empties it: the "
+        "assertion below can only report what this table told it to look for"
+    )
+    assert len(set(EVENT_KIT_SURFACE)) == len(EVENT_KIT_SURFACE), (
+        "the EventKit surface table repeats a symbol, which meets the floor above "
+        "without covering another way to reach a store"
+    )
+    missing = [symbol for symbol in EVENT_KIT_SURFACE_FLOOR if symbol not in EVENT_KIT_SURFACE]
+    assert missing == [], (
+        f"the EventKit surface table no longer names {missing}. The count floor is "
+        "met by any eighteen strings; these five are the ones a real EventKit "
+        "client cannot be written without"
+    )
+
     offenders: dict[str, list[str]] = {}
     for path in _swift_outside_the_probes():
         source = _without_comments(path.read_text(encoding="utf-8"))
@@ -227,8 +340,22 @@ def test_the_calendar_mechanism_seam_declares_only_read_operations() -> None:
     somebody's calendar. Inherited requirements are closed too — a mutating
     parent protocol puts its operations on this seam without appearing between
     the braces every other assertion reads.
+
+    And closed against every *file*, which is WP-17's own correction. Reading
+    only `CalendarMechanism.swift` left the cheapest opening of all: a protocol
+    extension elsewhere in the tree puts `removeOccurrence` on every conformer
+    without editing the protocol. `_seam_segments` finds the declaration and each
+    extension wherever they are; the member assertions below read the union.
     """
-    body = _source(MECHANISM).split("public protocol CalendarMechanism", 1)[1]
+    segments = _seam_segments()
+    declarations = [name for kind, name, _ in segments if kind == "declaration"]
+    assert declarations == [str(MECHANISM.relative_to(ROOT))], (
+        f"the calendar mechanism seam is declared in {declarations}. It must be "
+        "declared exactly once and in CalendarMechanism.swift; a second "
+        "declaration is a second seam and this guard would hold neither of them "
+        "to the closed sets below"
+    )
+    body = next(text for kind, _, text in segments if kind == "declaration")
     assert len(body) > 100, "the seam scan read an empty protocol body"
 
     inherited = sorted(
@@ -240,35 +367,257 @@ def test_the_calendar_mechanism_seam_declares_only_read_operations() -> None:
         "without appearing between the braces the rest of this test reads"
     )
 
-    operations = sorted(set(re.findall(r"func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", body)))
+    # Every member assertion from here reads the declaration *and* every
+    # extension of the seam, joined. A default implementation in an extension is
+    # a member of this seam on every conformer, so it belongs to the same closed
+    # sets as the requirements between the protocol's own braces.
+    where = sorted({name for _, name, _ in segments})
+    members = "\n".join(text for _, _, text in segments)
+
+    operations = sorted(set(re.findall(r"func\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", members)))
     assert operations == sorted(MECHANISM_OPERATIONS), (
-        f"the calendar mechanism seam now offers {operations}. Every operation on "
-        "it must be a read: this seam is the only thing a live calendar mechanism "
-        "would be asked for, so an operation that is not a read is a mutation "
-        "path into somebody's calendar"
+        f"the calendar mechanism seam now offers {operations}, declared across "
+        f"{where}. Every operation on it must be a read: this seam is the only "
+        "thing a live calendar mechanism would be asked for, so an operation that "
+        "is not a read is a mutation path into somebody's calendar"
     )
 
     # `[^{}]+` rather than `[^\n{]+` for the type: Swift admits the accessor
     # block on the following line, and a regex anchored to one line would not see
     # `var isAllDay: Bool\n{ get set }` at all.
-    properties = re.findall(r"var\s+([A-Za-z_][A-Za-z0-9_]*)\s*:[^{}]+\{([^}]*)\}", body)
+    properties = re.findall(r"var\s+([A-Za-z_][A-Za-z0-9_]*)\s*:[^{}]+\{([^}]*)\}", members)
     settable = sorted(name for name, accessors in properties if "set" in accessors.split())
     assert settable == [], (
-        f"the calendar mechanism seam declares the settable properties {settable}. "
-        "A `{ get }` property is a read and is legal here; `{ get set }` is an "
-        "assignment into somebody's calendar, and it is not a `func`, so the "
-        "operation set above never sees it"
+        f"the calendar mechanism seam declares the settable properties {settable} "
+        f"across {where}. A `{{ get }}` property is a read and is legal here; "
+        "`{ get set }` is an assignment into somebody's calendar, and it is not a "
+        "`func`, so the operation set above never sees it"
     )
     assert sorted(name for name, _ in properties) == sorted(MECHANISM_PROPERTIES), (
         f"the calendar mechanism seam now declares the properties "
-        f"{sorted(name for name, _ in properties)}. The property set is closed for "
-        "the same reason the operation set is"
+        f"{sorted(name for name, _ in properties)} across {where}. The property "
+        "set is closed for the same reason the operation set is"
     )
-    assert "subscript" not in body, (
-        "the calendar mechanism seam declares a subscript. A subscript is an "
-        "operation with no name for the closed set above to hold, and a "
-        "`{ get set }` subscript is a write into a calendar keyed by a string"
+    assert "subscript" not in members, (
+        f"the calendar mechanism seam declares a subscript, across {where}. A "
+        "subscript is an operation with no name for the closed set above to hold, "
+        "and a `{ get set }` subscript is a write into a calendar keyed by a string"
     )
+
+
+#: The **closed set** of `EKEventStore` members the probe may name, rather than a
+#: list of forbidden ones.
+#:
+#: A forbidden list forbids exactly the spellings whoever wrote it thought of,
+#: and WP-17's reviewer proved that against the first draft: it rejected
+#: `EKEventStore.save(` and `EKEventStore.remove(` and admitted `EKEventStore.save`
+#: and `EKEventStore.remove` — valid *unapplied* method references, because the
+#: parentheses are optional once a type annotation disambiguates the overload —
+#: and both compiled and passed every guard in this repository. A closed set has
+#: no such gap: a member that is not one of these six is a member that has to be
+#: argued for here.
+#:
+#: The equality is deliberate in both directions. Padding this tuple with `save`
+#: does not admit `save` — it demands the probe name it, and the probe naming it
+#: is what the assertion is about.
+EVENT_STORE_MEMBERS: Final = (
+    "Type",
+    "authorizationStatus",
+    "calendars",
+    "events",
+    "predicateForEvents",
+    "self",
+)
+
+#: EventKit's mutating half by name. None of it belongs in a read-only probe, and
+#: `EKEventEditViewController` is on the list because a view controller that saves
+#: an event is a save whatever it is spelled.
+EVENT_KIT_MUTATION_SURFACE: Final = (
+    "EKCalendarChooser",
+    "EKEventEditViewController",
+    "EKEventStoreChanged",
+    "refreshSourcesIfNecessary",
+    "removeCalendar",
+    "removeEvent",
+    "removeReminder",
+    "saveCalendar",
+    "saveEvent",
+    "saveReminder",
+)
+
+#: The closed set of modules the probe may import. `"import EventKit" in probe` is
+#: not this assertion and never was: `import EventKitUI` contains it as a
+#: substring, so the substring test admits the framework whose whole purpose is
+#: an editing view controller. Found by attacking this file's own first draft.
+PROBE_IMPORTS: Final = ("EventKit",)
+
+#: Every spelling that would put a live `EKEventStore` **instance** in scope, with
+#: what each one is. `(EKEventStore) -> …` and `EKEventStore.Type` are excluded by
+#: construction: the first is the parameter of the curried function type an
+#: unapplied reference already has, and the second is a metatype. Neither is a
+#: store.
+#:
+#: The parameter row was added after attacking the first draft of this list,
+#: which caught construction and missed the shorter route:
+#: `func leak(_ handed: EKEventStore) { _ = handed.save }` names no member *of the
+#: type*, constructs nothing, and is an unapplied reference to the save the whole
+#: package exists to be without.
+#:
+#: Every row here names `EKEventStore`, which is what makes them safe to scan the
+#: **whole** native tree with rather than only the calendar probe — and the
+#: probe's docstring needed exactly that, because it claims no event store is
+#: constructed *anywhere in this repository* and the string turns out to be named
+#: in two Swift files, not one: WP-15's multi-framework probe holds
+#: `EKEventStore.self` too, and nothing held *it* to any of this.
+EVENT_STORE_CONSTRUCTION: Final = (
+    (r"EKEventStore\s*\(", "constructs an event store"),
+    (r"EKEventStore\s*\.\s*init\b", "names the event store's initialiser"),
+    (
+        r"\b(?:let|var)\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*EKEventStore\b(?!\s*\.\s*Type)",
+        "declares a variable whose type is an event store",
+    ),
+    (r"->\s*EKEventStore\b(?!\s*\.\s*Type)", "declares a function returning an event store"),
+    (
+        r"[(,]\s*(?:_|[A-Za-z_][A-Za-z0-9_]*)(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*"
+        r":\s*EKEventStore\b(?!\s*\.\s*Type)",
+        "declares a parameter whose type is an event store, which hands it an "
+        "instance without constructing one",
+    ),
+)
+
+#: The rows the **calendar probe alone** is held to. Each is ordinary Swift that
+#: the shipping module and the contract checks use correctly — `try self.init(…)`
+#: is the decode-path routing every other guard in this file *requires*, and
+#: `FileManager.removeItem` is how a temporary directory is cleaned up — so
+#: scanning the tree with them would redden on correct code. Inside a probe whose
+#: entire body is metatypes, key paths and unapplied references, none of them has
+#: a legitimate use.
+PROBE_LOCAL_ACTIVATION: Final = (
+    (r"\.\s*init\s*\(", "calls an initialiser, which is a construction under another name"),
+    (
+        r"\.\s*(?:save|remove|commit|reset|delete)[A-Za-z]*\b",
+        "names a mutating member on something, and an instance member reference "
+        "needs no event-store spelling in front of it to be a write",
+    ),
+    (
+        r"\btypealias\b",
+        "introduces an alias, and an alias is a spelling of a forbidden symbol that "
+        "no scan above this line can see",
+    ),
+)
+
+
+def test_the_event_kit_probe_reaches_no_store_in_any_spelling() -> None:
+    """The constraints the probe's own docstring claims, actually enforced.
+
+    Split out from the resolution floors below because it is the half that was
+    *trusted* rather than enforced until WP-17's correction, and it is the half
+    that matters: the resolution floors say the probe still proves something, and
+    these say the probe still costs nothing.
+
+    Note what is deliberately **not** enforced. Comment lines are stripped before
+    scanning, so the probe's own docstring may keep discussing `save`, `remove`
+    and `EKEventStore` in prose. That is WP-15's rule and it is a choice: a guard
+    that reddens on the paragraph explaining it is a guard somebody deletes to
+    get their paragraph back. The cost is that a trailing comment on a line of
+    code is not stripped, which is a wider hole in the other direction and is
+    accepted for the same reason.
+    """
+    # The whole directory rather than the one file it holds today: a second file
+    # beside it is caught by the exemption-set floor in the first test above, and
+    # this guard should not depend on that one to be reading everything.
+    probe = "\n".join(_source(path) for path in _swift_files(EVENT_KIT_PROBE))
+    assert "EKEventStore" in probe, "the probe scan is reading no event-store reference at all"
+
+    imports = sorted(
+        set(re.findall(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)", probe, re.MULTILINE))
+    )
+    assert imports == sorted(PROBE_IMPORTS), (
+        f"the EventKit probe imports {imports} and the closed set is "
+        f"{sorted(PROBE_IMPORTS)}. EventKitUI is the editing half of this framework "
+        "and every other Apple module is WP-15's control 1; the probe's exemption "
+        "is from one framework, not from the rule"
+    )
+
+    named = sorted(set(re.findall(r"EKEventStore\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)", probe)))
+    assert named == sorted(EVENT_STORE_MEMBERS), (
+        f"the EventKit probe names the event-store members {named} and the closed "
+        f"set is {sorted(EVENT_STORE_MEMBERS)}. Every member here is read-only or a "
+        "metatype; `save`, `remove`, `commit`, `reset` and `init` are not, and the "
+        "unapplied spelling of each — no parentheses, disambiguated by the return "
+        "type — is as real a reference as the applied one"
+    )
+
+    for pattern, what in EVENT_STORE_CONSTRUCTION + PROBE_LOCAL_ACTIVATION:
+        found = re.search(pattern, probe)
+        assert found is None, (
+            f"the EventKit probe {what} (`{found.group(0) if found else ''}`). It "
+            "exists to answer a compile-and-typecheck question without consent, and "
+            "an event store that exists is one line from a TCC dialogue EXT-04 "
+            "reserves to the operator and one more from an enumeration of somebody's "
+            "calendar"
+        )
+
+    mutating = sorted(symbol for symbol in EVENT_KIT_MUTATION_SURFACE if symbol in probe)
+    assert mutating == [], (
+        f"the EventKit probe names {mutating}. A save or a remove would end the "
+        "read-only claim outright, and it would do so even here, in a target "
+        "nothing links: the claim WP-17 makes is about what this repository names, "
+        "not only about what it runs"
+    )
+
+
+def test_no_swift_in_the_native_tree_constructs_an_event_store() -> None:
+    """The probe docstring's widest claim, scanned as widely as it is stated.
+
+    `test_no_swift_outside_the_probes_can_reach_an_event_store` exempts all three
+    compile-only probes, and the guard above holds only the calendar one. That
+    left the other two exempt from everything: `EKEventStore` is named in **two**
+    Swift files, not the one §J of the record claimed, because WP-15's
+    multi-framework probe holds `EKEventStore.self` as well — and WP-15's own
+    activation list forbids `EKEventStore(` and not `EKEventStore.save`, which is
+    the paren-suffixed gap WP-17's reviewer found here.
+
+    So this scans **every** Swift file under `native/`, probes included, in the
+    shape `test_the_calendar_seam_cannot_ask_for_an_authorization_it_does_not_have`
+    already uses for the same reason: a store constructed in a
+    compiled-but-never-called function is one edit away from being read from.
+    """
+    scanned = _swift_files(HOST)
+    assert len(scanned) >= 24, f"the native scan found {len(scanned)} Swift files"
+
+    naming = {}
+    for path in scanned:
+        source = _source(path)
+        if "EKEventStore" not in source:
+            continue
+        name = str(path.relative_to(ROOT))
+        for pattern, what in EVENT_STORE_CONSTRUCTION:
+            found = re.search(pattern, source)
+            assert found is None, (
+                f"{name} {what} (`{found.group(0) if found else ''}`). No Swift file "
+                "in this repository may hold a live event store: an instance is one "
+                "line from the TCC dialogue EXT-04 reserves to the operator, and the "
+                "target it sits in being linked by nothing is a property of today's "
+                "Package.swift rather than of the code"
+            )
+        named = set(re.findall(r"EKEventStore\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)", source))
+        unexpected = sorted(named - set(EVENT_STORE_MEMBERS))
+        assert unexpected == [], (
+            f"{name} names the event-store members {unexpected}, which are not in "
+            f"the read-only closed set {sorted(EVENT_STORE_MEMBERS)}. The unapplied "
+            "spelling — `EKEventStore.save`, no parentheses — is as real a reference "
+            "as the applied one, and this scan sees both"
+        )
+        naming[name] = sorted(named)
+
+    # Non-vacuity: the loop above skips files that never name the type, so it is
+    # worth nothing unless some file does. Two do, and both are compile-only
+    # probes — which is the fact §J of the record now states.
+    assert sorted(naming) == [
+        "native/apple-source-host/Compatibility/AppleCalendarEventKitProbe/CalendarEventKitShape.swift",
+        "native/apple-source-host/Compatibility/AppleFrameworkCompatibilityProbe/FrameworkCompatibility.swift",
+    ], f"the Swift files naming an event store are now {sorted(naming)}"
 
 
 def test_the_event_kit_probe_resolves_symbols_and_reaches_no_store() -> None:

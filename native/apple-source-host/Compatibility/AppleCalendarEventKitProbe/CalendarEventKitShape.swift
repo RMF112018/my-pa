@@ -9,7 +9,13 @@
 ///
 /// Constraints this file must keep, and which
 /// `tests/architecture/test_wp17_calendar_adapter.py` enforces rather than
-/// trusts:
+/// trusts. That sentence was itself overstated until WP-17's correction: the
+/// guard forbade only the paren-suffixed spellings, so `EKEventStore.save` and
+/// `EKEventStore.remove` — valid *unapplied* references, whose parentheses are
+/// optional once a type annotation disambiguates — and `EKEventStore.init()`
+/// compiled here and passed every guard in the repository. What replaced it is a
+/// **closed set**: a member of the store that is not one of the six named below
+/// is a member this file may not spell, in any form.
 ///
 /// * **nothing is instantiated and nothing is called.** Types are referenced as
 ///   metatypes, instance members as key paths, and methods as *unapplied*
@@ -17,7 +23,11 @@
 ///   never invoked, which is the strongest form of "resolves" that costs
 ///   nothing at runtime. No `EKEventStore` is constructed anywhere in this
 ///   repository, so no consent dialogue can be reached and no calendar can be
-///   enumerated;
+///   enumerated. Enforced by
+///   `test_no_swift_in_the_native_tree_constructs_an_event_store`, over **every**
+///   Swift file under `native/`, probes included — because the string is named
+///   in two of them, WP-15's multi-framework probe being the other, and holding
+///   only this one to the rule left the other exempt from everything;
 /// * **no authorization is requested.** `EKEventStore.authorizationStatus(for:)`
 ///   is named as an unapplied reference and never called; the request APIs are
 ///   named nowhere at all. A TCC grant is operator-gated (EXT-04) and asking is
@@ -26,11 +36,22 @@
 ///   `commit`, no `EKEventEditViewController`. A read-only adapter needs none of
 ///   them, and naming one would end WP-15's control 1 as a *structural* claim
 ///   even in a target nothing links;
+/// * **only EventKit is imported.** The import set is closed too, and it had to
+///   be: `"import EventKit" in source` is satisfied by `import EventKitUI`,
+///   which is the half of this framework that exists to edit an event;
 /// * **this target is a dependency of nothing.** A `swift build` compiles it, so
 ///   the compatibility claim is re-proved on every build, while the shipping
 ///   `AppleSourceHost` module keeps importing only `Foundation` and linking no
 ///   Apple framework. That link-time property is WP-15's control 1 and is the
 ///   strongest guarantee in this package.
+///
+/// **What is still trusted, stated plainly.** The guard reads text, not a parsed
+/// Swift program: it strips whole-line comments and matches patterns. So a
+/// forbidden symbol written in prose is deliberately invisible to it — a guard
+/// that reddens on the paragraph explaining it is a guard somebody deletes — and
+/// the price of that choice is that a *trailing* comment on a line of code is not
+/// stripped either. Nothing here is proof against a spelling nobody has thought
+/// of; it is proof against every spelling that has been.
 ///
 /// **What this proves:** EventKit exists in this SDK, exposes these types, these
 /// members and these read methods, and typechecks against them on this

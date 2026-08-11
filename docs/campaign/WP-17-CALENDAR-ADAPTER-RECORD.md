@@ -319,8 +319,15 @@ declaration, an inherited mutation surface, a decoder that keeps its signature a
 loses its validation — and a **control** plant that must stay green.
 
 A red Swift check exits **133** because an uncaught error at top level traps. A
-healthy architecture plant is **1 failed, 13 passed** in
-`tests/architecture/test_wp17_calendar_adapter.py`.
+healthy architecture plant was **1 failed, 13 passed** in
+`tests/architecture/test_wp17_calendar_adapter.py` when this table was produced;
+the module holds sixteen tests after the correction in §K, so the same shape now
+reads **1 failed, 15 passed**.
+
+**This table did not save the package from the review.** It is left exactly as it
+was written, because the honest reading of it is the point: every plant in it
+reddened, and four of the guards it vouched for were still incomplete. §K is what
+that cost.
 
 ### The Swift contract checks — eleven plants
 
@@ -417,6 +424,23 @@ in §I.
   bounded to the protocol's closing brace, for WP-16's reason: bounding it would
   stop a second protocol carrying `func delete()` from being seen at all.
 
+  **What this bullet did not disclose, and what the correction changed.** The
+  scan read *one file*. A Swift protocol is not confined to the file that
+  declares it: `extension CalendarMechanism { func removeOccurrence(…) }` in any
+  other file puts that operation on every conformer of the seam without touching
+  `CalendarMechanism.swift`, and WP-17's reviewer planted exactly that and
+  watched the suite stay green. The guard now finds the declaration and every
+  protocol extension of it across the whole native tree, and holds the union to
+  the same closed operation and property sets. The declaration keeps its
+  scan-to-end-of-file behaviour, above; an extension is read to its own balanced
+  closing brace instead, because an extension is not the last declaration in an
+  arbitrary file and scanning to the end of one would redden on unrelated code.
+
+  **What is still trusted here.** The scan covers `native/apple-source-host`,
+  which is every Swift file in this repository. A protocol extension declared in
+  some future Swift package outside that directory would not be seen. Nothing
+  today can be in that position, and no guard asserts that nothing ever will be.
+
 ---
 
 ## I. Verification at this head
@@ -426,18 +450,30 @@ re-derived at `fd333da` before any edit rather than copied from WP-16's record.
 
 | Command | Exit | Observed |
 |---|---|---|
-| `swift build --package-path native/apple-source-host` (after `rm -rf .build`) | 0 | `Build complete!` — **0 warnings, 0 errors**, 39 build steps including all three probes |
+| `swift build --package-path native/apple-source-host` (after `rm -rf .build`) | 0 | `Build complete!` — **0 warnings, 0 errors**, all three probes compiled. The run ends at **`[44/44]`**, and the figure needs the caveat below rather than a bare number |
 | `otool -L` on both linked products | 0 | libSystem, Foundation, libobjc and the Swift runtime. **No Apple framework** — see §B |
 | `.build/debug/AppleSourceHostContractChecks` | 0 | `AppleSourceHostContractChecks: PASS (30 checks)` — was **22** at the base |
 | `.build/debug/AppleSourceHostFixtureExport` | 0 | unchanged export |
-| `pytest tests/architecture -q` | 1 | **2059 passed, 1 failed.** Base measured at `fd333da`: **2045 passed, 1 failed**. 2045 + 14 = 2059 |
+| `pytest tests/architecture -q` | 1 | **2061 passed, 1 failed.** Base measured at `fd333da`: **2045 passed, 1 failed**. 2045 + 16 = 2061 |
 | `pytest tests/schema tests/database -q` | 0 | **286 passed** — identical to the base; this package adds no test there |
-| `pytest -q` (full) | 1 | **4663 passed, 1 failed, 0 errors.** Base at `fd333da`: **4649 passed, 1 failed**. 4649 + 14 = 4663, and the 14 are the new architecture module in full |
+| `pytest -q` (full) | 1 | **4665 passed, 1 failed, 0 errors.** Base at `fd333da`: **4649 passed, 1 failed**. 4649 + 16 = 4665, and the 16 are the new architecture module in full |
 | `ruff check .` | 0 | All checks passed |
 | `ruff format --check .` | 0 | **588 files** already formatted — 587 at the base plus the one module added. Measured over a clean `git archive` of each commit the figures are **586 → 587**; the extra file in the working tree is the single Python file under the gitignored `web/node_modules`, which is the same unowned root the one failing test below is about |
 | `mypy` per repo config | 0 | no issues in **177 source files** — unchanged, because no Python source was added |
 | Alembic revisions | — | single head `8f2b6c4d1a37` over **26** revision files — unchanged |
 | Capability seats | — | **19** — unchanged |
+
+**On the build-step figure.** This record said "39 build steps" at the first head
+and that was a misreading, which is worth stating rather than silently editing:
+SwiftPM revises the denominator *during* a single run as it discovers work, and
+one clean build here prints `[13/40]`, `[25/40]`, `[33/44]` and finally `[44/44]`
+— the numbers 15, 39, 40 and 44 all appear as denominators in one run. Reading a
+mid-build line gives 39. Two clean builds at this head both end at `[44/44]`,
+which is the total and the only figure worth quoting. It is still a
+toolchain- and machine-dependent number: **treat it as evidence the build
+completed with three probes compiled and no warnings, not as a constant.** The
+stable facts are the exit code, the zero warnings, the zero errors, and the three
+`Compiling …Probe` lines.
 
 **The one failure is the pre-existing, unowned one**,
 `test_ci_invokes_mypy_over_the_declared_tree.py::test_every_python_root_is_type_checked_or_named`,
@@ -454,9 +490,22 @@ test modules rather than one hundred and sixty, which is what
 
 ## J. The privacy boundary, stated as a fact rather than an intention
 
-* No `EKEventStore` was constructed, anywhere, at any point. The string appears in
-  one file in this repository — the compile-only probe — and only as a metatype
-  and as the receiver of unapplied method references.
+* No `EKEventStore` was constructed, anywhere, at any point. **This bullet was
+  wrong in two ways at the first head and is corrected here.** The string appears
+  in **two** Swift files, not one — this package's EventKit probe and WP-15's
+  multi-framework probe, which holds `EKEventStore.self` as well — and in the
+  calendar probe it appears in three positions, not two: as a metatype
+  (`EKEventStore.self`, `EKEventStore.Type`), as the receiver of unapplied method
+  references (`EKEventStore.events(matching:)` and its three siblings), **and as
+  the parameter of the curried function types those unapplied references
+  necessarily have** (`(EKEventStore) -> (NSPredicate) -> [EKEvent]`). The third
+  is a type annotation and not a store, but it is a position and the earlier
+  wording did not name it. What is true without qualification: no event store is
+  constructed, no variable anywhere holds one, and
+  `test_no_swift_in_the_native_tree_constructs_an_event_store` now scans every
+  Swift file under `native/` — probes included — to keep all three facts true.
+  The set of members of that type named anywhere in the tree is closed at six,
+  every one of them a read or a metatype.
 * No authorization was requested. `requestFullAccessToEvents` and every sibling
   are named nowhere in the tree, and a guard scans the **whole** native tree,
   probes included, to keep it that way.
@@ -465,3 +514,189 @@ test modules rather than one hundred and sixty, which is what
 * Every fixture value is obviously synthetic: `account-alpha`, `calendar-beta`,
   `Calendar Beta`, `series-alpha`. There is no title, attendee or location field
   in any calendar type, so there is nothing for a real one to be mistaken for.
+
+---
+
+## K. Correction after independent review
+
+An independent review of the first head returned **0 BLOCKERs and 4 NOTEs**. All
+four were guard-coverage or accuracy findings: no production code, migration,
+schema or capability seat changed, and `git diff fd333da..HEAD -- src/ apps/
+scripts/ migrations/ ops/ web/` is still empty. Two files changed —
+`tests/architecture/test_wp17_calendar_adapter.py` and the probe's own docstring —
+plus this record.
+
+The common shape of all four is the one the campaign keeps re-learning: **a guard
+that lists what is forbidden only forbids the spellings its author thought of.**
+Three of the four corrections replace a forbidden list with a closed set.
+
+### NOTE 1 — the probe's constraints were trusted, not enforced
+
+The probe's docstring claimed the architecture test "enforces rather than trusts"
+that nothing is instantiated and no mutating symbol appears. It did not. The
+guard forbade `.save(`, `.remove(`, `EKEventStore(` and their siblings — the
+**paren-suffixed** spellings only — so the reviewer planted `EKEventStore.save`
+and `EKEventStore.remove` (valid *unapplied* method references; the parentheses
+are optional once a type annotation disambiguates the overload) and
+`EKEventStore.init()` (an actual construction). All three compiled and passed
+every guard in the repository. That is a genuine enforcement failure and the
+docstring's wording was the more serious half of it.
+
+What replaced it:
+
+* a **closed set of six members** of `EKEventStore` — `Type`, `self`, `events`,
+  `calendars`, `predicateForEvents`, `authorizationStatus` — matched with
+  `EKEventStore\s*\.\s*(\w+)`, so applied and unapplied spellings, whitespace
+  variants and two-line forms are all one case rather than four. The equality is
+  two-way: padding the allowlist with `save` does not admit `save`, it demands
+  the probe name it;
+* a **construction list** covering `EKEventStore(`, `EKEventStore.init`, a `let`
+  or `var` of store type, a function *returning* a store, and a *parameter* of
+  store type. `(EKEventStore) -> …` and `EKEventStore.Type` are excluded by
+  construction: the first is the parameter of the curried function type an
+  unapplied reference necessarily has, the second is a metatype;
+* a **closed import set**. `"import EventKit" in source` is satisfied by
+  `import EventKitUI` — the editing half of the framework — so the substring test
+  was never the assertion it read as;
+* `typealias`, `.init(` and any mutating member (`.save…`, `.remove…`,
+  `.commit…`, `.reset…`, `.delete…`) forbidden **inside the probe only**. These
+  are ordinary Swift elsewhere — `try self.init(…)` is the decode-path routing
+  this very file requires, `FileManager.removeItem` is how a temporary directory
+  is cleaned up — so scanning the tree with them would redden on correct code.
+
+The docstring was rewritten to say what is now enforced, to name the failure that
+made the rewrite necessary, and to state plainly what is **still trusted**: the
+guard reads text, not a parsed program; whole-line comments are stripped on
+purpose, so a forbidden symbol in prose is deliberately invisible, and the price
+is that a trailing comment on a line of code is not stripped either.
+
+### NOTE 2 — the seam-closure guard read one file
+
+`test_the_calendar_mechanism_seam_declares_only_read_operations` split
+`CalendarMechanism.swift` on the protocol name and read from there. A Swift
+protocol is not confined to its file: the reviewer put
+`extension CalendarMechanism { … removeOccurrence … saveOccurrence … }` in a
+different file under `Sources/AppleSourceHost/` and the suite stayed green.
+
+The guard now collects the declaration and **every protocol extension of the
+seam** across the whole native tree, and holds the union to the same closed
+operation and property sets. §H, which disclosed the scan-to-end-of-file property
+and not this one, has been corrected.
+
+### NOTE 3 — `EVENT_KIT_SURFACE` had no floor
+
+Unlike `PROBE_TARGETS` (`== 3`) and the decode-path `subjects` (`== 8`), the
+EventKit symbol table could be emptied, which made
+`test_no_swift_outside_the_probes_can_reach_an_event_store` **fully vacuous** — a
+real `import EventKit` plus a real `EKEventStore` in the shipping directory
+passed it. This is the shape WP-16's reviewer found in three separate guards, and
+finding it again one package later is the argument for the floor being a habit
+rather than a fix.
+
+The table now carries a count floor of eighteen, a no-duplicates assertion (a
+repeated token meets a count floor without covering anything), and a named
+membership floor — because eighteen never-occurring tokens count the same as
+eighteen real ones.
+
+### NOTE 4 — the build-step figure
+
+Corrected in §I, with the reason it was wrong rather than a new number quietly
+substituted: SwiftPM revises the denominator mid-run, and 39 is one of the values
+it passes through on the way to 44.
+
+### A fifth finding, not in the review
+
+Enforcing NOTE 1's claim surfaced one the review did not raise. §J stated that
+`EKEventStore` "appears in one file in this repository". It appears in **two**:
+this package's probe and WP-15's multi-framework probe, which holds
+`EKEventStore.self`. Because `_swift_outside_the_probes()` exempts all three
+compile-only probes and the WP-17 guard held only the calendar one, the other two
+were exempt from everything — and WP-15's own activation list has the same
+paren-suffixed gap the reviewer found here, forbidding `EKEventStore(` and not
+`EKEventStore.save`. `test_no_swift_in_the_native_tree_constructs_an_event_store`
+now scans **every** Swift file under `native/`, probes included, for the
+construction spellings and the closed member set, and asserts which two files name
+the type at all so the scan cannot go quiet. §J is corrected.
+
+### Non-vacuity of the corrections — and four blind spots in them
+
+**A guard you author is not a guard you are subject to.** WP-16's correction
+Worker found four fresh blind spots in its own new guards, one of which
+reproduced the exact defect it was closing. So did this one. Every correction was
+attacked with the shapes that historically defeat this kind of guard, *after* the
+reviewer's three plants already reddened:
+
+| # | Attack on the correction's own guard | First result | Closed by |
+|---|---|---|---|
+| B1 | `func leak(_ handed: EKEventStore) { _ = handed.save }` — an unapplied reference to `save` on a **parameter**, naming no member of the type and constructing nothing | **GREEN** | a parameter-of-store-type row in the construction list, and a mutating-member row that needs no store spelling in front of it |
+| B2 | the same parameter with no use at all | **GREEN** | same |
+| B3 | `import EventKitUI` added to the probe | **GREEN** — `"import EventKit" in probe` is a substring test and `EventKitUI` contains it | the closed import set |
+| B4 | `extension CalendarMechanism { static let closer = "}" ; func removeOccurrence() {} }` — a brace inside a **string literal** closing a brace Swift never opened, truncating the extension body and hiding the member below it | **GREEN** | string-literal contents blanked, length-preservingly, before brace matching |
+
+B4 is the one worth dwelling on: it is the same class of defect as the
+line-anchored regex that could not see a two-line declaration, arriving in the
+brace matcher written to fix a *different* incompleteness. A correction is where
+these are most likely, not least.
+
+Five further shapes were tried against the corrected seam guard and **all five
+reddened**, so they are reported as attempts rather than findings: a
+`static func` on the extension; a declaration split so the name and its
+parenthesis sit on different lines; the `public extension` spelling; an extension
+wrapped in `#if os(macOS)`; and an extension declared in the **`Tests/`** target
+rather than `Sources/`. The last is the reason the scan is `native/` rather than
+`Sources/AppleSourceHost`, which is what the NOTE asked for.
+
+### The plants — twenty-four, plus the four attacks above, all reverted
+
+`tests/architecture/test_wp17_calendar_adapter.py` holds **16** tests at this
+head. A healthy plant is `1 failed, 15 passed`; a plant that trips two guards
+reads `2 failed, 14 passed`.
+
+| # | Plant | Result |
+|---|---|---|
+| C-P2 | **the reviewer's plant**: `EKEventStore.save`, `EKEventStore.remove` unapplied and `EKEventStore.init()` — verified to still **compile** (`swift build`, exit 0) before the guard was run | RED, closed member set: `…names the event-store members ['Type', …, 'init', …, 'remove', 'save', 'self']` |
+| C-P2a | `EKEventStore.save` alone, no parentheses | RED, same assertion |
+| C-P2b | `EKEventStore . save` — whitespace around the dot | RED, same assertion |
+| C-P2c | `EKEventStore` and `.save` on **two lines** | RED, same assertion |
+| C-P2d | `typealias Store = EKEventStore` then `Store.save` — the aliased spelling no member regex can see | RED, on the `typealias` row |
+| C-P2e | `let store: EKEventStore = handed` — a store variable never constructed here | RED, on the variable row |
+| C-P2f | `func pass(_ handed: EKEventStore) -> EKEventStore` — a store returned, no constructor named | RED, on the parameter row |
+| C-P2g | `EKEventEditViewController` | RED, on the mutation surface |
+| C-P2h | **CONTROL**: all three forbidden spellings in a **comment line only** | correctly **GREEN — 16 passed**. Deliberate: a guard that reddens on the paragraph explaining it is a guard somebody deletes |
+| C-P2i | `EKEventStore.reset` unapplied | RED, closed member set |
+| C-P2j | `EKEventStore.save` planted in **WP-15's** framework probe | RED, `…FrameworkCompatibility.swift names the event-store members ['save']` — the fifth finding, closed |
+| C-P2k | `EKEventStore()` constructed in WP-15's framework probe | RED, `…constructs an event store` |
+| C-P8 | **the reviewer's plant**: `extension CalendarMechanism` with `removeOccurrence` and `saveOccurrence` in a **new** file, `Sources/AppleSourceHost/CalendarMechanismExtras.swift` | RED: `…now offers ['accounts', 'authorizationState', 'calendars', 'occurrences', 'removeOccurrence', 'saveOccurrence'], declared across [CalendarMechanism.swift, CalendarMechanismExtras.swift]` |
+| C-P8a | the same extension appended to an **existing** unrelated file, `HostTelemetry.swift` | RED, same assertion, naming that file |
+| C-P8b | `var isCancelled: Bool { get {…} set {…} }` on the seam from another file | RED, on the closed property set |
+| C-P8c | `subscript(cancel key: String) -> Bool { get set }` on the seam from another file | RED, on the subscript assertion |
+| C-P8d | `extension CalendarMechanism where Self: Sendable` with the brace **on the next line** | RED, on the operation set |
+| C-P8e | a **second** `public protocol CalendarMechanism` declared in another file | RED: `…is declared in [CalendarMechanism.swift, HostTelemetry.swift]` |
+| C-P8f | **CONTROL**: `extension CalendarMechanismDescriptor` with a `removeOccurrence`, a settable `var` and a `subscript` | correctly **GREEN — 16 passed**. It is not the seam, and `\b` is why the guard knows that |
+| C-P8g | **CONTROL**: `extension FixtureCalendarMechanism` — a conformer, not the protocol | correctly **GREEN — 16 passed** |
+| C-P17 | **the reviewer's plant**: `EVENT_KIT_SURFACE` emptied to one never-occurring token **and** a real `import EventKit` / `EKEventStore` added under `Sources/AppleSourceHost/` | RED: `…names 1 symbols and the floor is 18` |
+| C-P17a | the table padded back to **eighteen never-occurring** tokens, leak still present | RED: `…no longer names ['import EventKit', 'EKEventStore', 'EKEvent', 'EKCalendar', 'EKAuthorizationStatus']` |
+| C-P17b | the table padded to eighteen by **repeating** one real token | RED: `…repeats a symbol, which meets the floor above without covering another way to reach a store` |
+| C-P17c | **CONTROL**: the real EventKit leak with the table left **intact** | RED for the original reason — `{CalendarLiveMechanism.swift: ['EKEvent', 'EKEventStore', 'import EventKit']} name an EventKit symbol`. The floor is an addition to a working guard, not a replacement for one |
+
+Every plant was reverted — `git checkout --` for modified files, `rm` for the two
+created ones (`CalendarMechanismExtras.swift`, `CalendarLiveMechanism.swift`) —
+and every restored file verified **byte-identical by SHA-256** before and after.
+**No plant remains in the tree** and no plant file was left behind.
+
+### What the corrected guards enforce, and what they do not
+
+Enforced, statically, on every Swift file under `native/`: no event store is
+constructed, held in a variable, returned, or taken as a parameter; the members of
+`EKEventStore` named anywhere are a closed set of six reads and metatypes; the
+seam's operations and properties are closed across the declaration and every
+protocol extension of it, in any file; the EventKit symbol table cannot be
+emptied, padded with junk, or padded by repetition.
+
+Trusted, and named as trusted rather than dressed as enforced: these are **text**
+scans, not parses. Whole-line comments are stripped by choice, which makes prose
+invisible to them and trailing comments invisible too. A Swift file outside
+`native/apple-source-host` would be outside every scan here; none exists. And the
+strongest guarantee in the package remains the one that is not a text scan at
+all — `otool -L` on both built products shows no Apple framework, which is a
+link-time fact and is what WP-15's control 1 has always rested on.

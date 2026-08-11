@@ -193,6 +193,8 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "continuity.projects",
         "continuity.pulse",
         "continuity.situations",
+        # WP-23. `2d9f4a7c1e58` is the forward `ALTER` that admits it.
+        "knowledge.coverage",
     }
 )
 

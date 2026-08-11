@@ -55,7 +55,7 @@ PRIOR_REVISION = "7f2a9d6c4e18"
 #: The single head this revision sits below. Updated whenever a revision is
 #: added — WP-09's `5e2c7b0a94f6` widens the audited capability vocabulary for
 #: `knowledge.reveal`.
-HEAD_REVISION = "8f2b6c4d1a37"
+HEAD_REVISION = "2d9f4a7c1e58"
 DATABASE = "my_pa_native_sources_test"
 WHEN = datetime(2026, 8, 4, 12, tzinfo=UTC)
 

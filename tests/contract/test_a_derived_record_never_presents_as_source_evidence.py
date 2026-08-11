@@ -107,9 +107,9 @@ WRITERS: Final = frozenset({"insert", "update", "delete", "pg_insert"})
 def test_the_family_this_guard_covers_is_the_domains_own() -> None:
     """The mapping covers every `knowledge.*` capability, not a chosen subset.
 
-    Derived from `Capability` rather than written out, so a fifth member of the
-    family arrives here as a failing row instead of being silently unexamined —
-    which is how a capability comes to return an unlabelled derived record.
+    Derived from `Capability` rather than written out, so a new member of the
+    `knowledge.` family arrives here as a failing row instead of being silently
+    unexamined — which is how one comes to return an unlabelled derived record.
     """
     family = {capability for capability in Capability if capability.value.startswith("knowledge.")}
     assert set(EXPECTED_TRUST) == family

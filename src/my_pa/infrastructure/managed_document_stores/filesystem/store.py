@@ -68,7 +68,22 @@ outside the threat model — the same conclusion, for the same reason,
 `infrastructure.providers.fixture` records for the read side. A hard link inside
 the root pointing at a file outside it is refused on the write side by the
 publishing link (the target must not exist) and on the read side by the link
-count of the open descriptor.
+count of the open descriptor. **An intermediate directory component swapped
+between the check and the syscall is not closed either.** `O_NOFOLLOW`
+constrains the *final* component and says nothing about the directories above
+it, and `_publish`'s `Path.hardlink_to` carries no symlink protection at all.
+Every *pre-planted* version of such a link is refused — the component walk
+reaches it first and stops — so the window is exclusively the interval between
+`_verify_contained` returning and the syscall running: a directory component
+replaced by a symlink inside that interval sends the write outside the resolved
+root, transiently by way of `incoming/` and durably by way of a swapped
+`objects/<shard>`, while `put` reports success. Reaching it requires write
+access *inside the product's own managed root*, which is the UID this product
+runs as — the same precondition the bind mount above is excluded under. The
+hardening is known and is not done here: open the shard directory once with
+`O_DIRECTORY | O_NOFOLLOW` and perform the create and the link with `openat` and
+`linkat` relative to that descriptor, so that no component is resolved by name
+again after the check.
 
 **What no test here can isolate, measured rather than asserted.** Three of the
 layers above are redundant with one another for every case a test can construct,
@@ -76,9 +91,10 @@ and each was *measured* by removing it and watching the suite stay green: the
 resolved-parent comparison in `_verify_contained` (the component walk refuses the
 same cases first), `O_NOFOLLOW` on the read (the component walk again), and
 `O_NOFOLLOW` on the create. They are kept because each closes a window the others
-cannot — a component swapped between the walk and the `open`, and a derivation a
-later edit changes — and `tests/security/test_managed_document_containment.py`
-records the measurement rather than implying coverage that does not exist.
+cannot — the *final* component swapped between the walk and the `open`, and a
+derivation a later edit changes — and
+`tests/security/test_managed_document_containment.py` records the measurement
+rather than implying coverage that does not exist.
 """
 
 from __future__ import annotations

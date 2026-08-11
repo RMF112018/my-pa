@@ -367,13 +367,23 @@ unreachable, reclaimable, reported by `verify` as an orphan, and never cleaned u
 automatically. The reverse, a row naming absent bytes, is what the ordering
 refuses to produce.
 
+**Archive withdraws a document from the active set; it does not lock it.** The
+two lifecycle transitions are reversible state changes and nothing more, so
+revising an archived document succeeds — the revision creates the next version
+and the document stays `archived`. This is the specified behaviour rather than a
+gap in the checks: there is no seal, and no operation refuses a write on the
+strength of the current state. An operator who reads "archived" as "frozen" will
+be wrong.
+
 **Not implemented, deliberately:** hard delete of a managed document (out of
 scope, and irreversible destruction of canonical data is reserved to the operator
 under `AGENTS.md` section 8.2); automatic reclamation of orphaned bytes; comments
 on a managed document; copy and relocate — neither has a caller, and a location
 is not something this plane exposes at all. A backup carries versions and their
-bytes and **not** the lifecycle rows, so a restored plane is active and a document
-that was archived comes back active.
+bytes and **not** the lifecycle rows, the submissions, or the receipts. A
+restored plane is **active**: a document that was archived when the backup was
+taken comes back active and has to be archived again, and an idempotency key used
+before the restore is free again afterwards.
 
 **Nothing here has run against a real managed root.** Every test writes into
 `tmp_path`; pointing the plane at an operator's real storage is `EXT-10` and

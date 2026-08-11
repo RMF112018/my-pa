@@ -28,6 +28,15 @@ and restoring returns it. Hard deletion is deliberately absent from this module 
 the register puts it out of scope and `AGENTS.md` section 8.2 reserves
 irreversible destruction of canonical data to the operator — so there is no
 domain vocabulary for it to be written against.
+
+**Archive is also not a write lock, and that is the design rather than an
+oversight.** Withdrawing a document from the active set is a reversible state
+transition and nothing more, so revising an archived document succeeds: the
+revision creates the next version and the document stays `archived`. Sealing is a
+different property from withdrawal, `LifecycleTransition` has no member for it,
+and no operation here refuses a write on the strength of the current state. A
+deployment that needs a document to stop accepting versions has no mechanism for
+that in this build.
 """
 
 from __future__ import annotations

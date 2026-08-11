@@ -356,10 +356,16 @@ Use correlation IDs, opaque IDs, event types, outcome categories, bounded counts
 Bound page size, source depth/items/bytes, file size, parser time/memory/output, query length/complexity, response size, concurrent jobs, retries, and operation rate. Use cursors, bounded snippets, parameterized/time-bounded DB operations, bounded worker concurrency, no recursive discovery/retry loops, and low-cardinality payload-free metrics.
 
 
-### 10.13 Future managed writes
+### 10.13 Managed writes (implemented by WP-27, seated and exposed by WP-28)
 
 
-Remain excluded. Before activation require separate root/store/credentials, expected-version preconditions, immutable versions, reversible archive, retention, backup/restore tests, operator authorization, audit, rollback, containment, and no source-port reuse. Threat model update and independent review are mandatory.
+No longer excluded, and the conditions this section set are met rather than waived. A designated managed root separate from every source root and refused if it is, contains, or lies inside one after resolution; expected-version preconditions; immutable versions enforced by `BEFORE UPDATE OR DELETE` triggers; a reversible archive that destroys nothing; backup and restore exercised against a live server; per-Principal idempotency; and no reuse of the read-only source port, which has no write method to reuse. Operator authorization for pointing the plane at real storage remains `EXT-10`.
+
+**Audit.** Six `documents.` capabilities under two purposes of their own reach the plane through `ApplicationService.invoke`, so every managed request writes a `knowledge.audit_events` row on the audit sink's own connection, committed before the handler runs and therefore surviving a rollback of the work. A policy refusal records `denied` with its reason. A refusal raised by the handler — a stale expected version, a rebound idempotency key, a document another Principal owns — leaves a durable row recording that authorization was **granted**, because it was; nothing writes a second event to say the work then failed, for this plane or any other. That is the residual and it is recorded here rather than described as full outcome auditing.
+
+**Containment against a check-to-syscall race.** Every write and every read is performed relative to a directory descriptor obtained by walking the chain once with `O_DIRECTORY | O_NOFOLLOW`. WP-27's disclosed intermediate-component TOCTOU — a directory component swapped between the containment check and the syscall, which landed bytes outside the root while `put` reported success — is closed by this and is reproduced-then-refused in `tests/security/test_managed_store_toctou.py`. The managed root itself is opened by name once per operation and is the one component no descriptor sits above.
+
+**Transport.** stdio only, no socket, no credential. The surface has a kill switch that empties `tools/list` and refuses `tools/call`, and may be bound to a registered client whose revocation withdraws it. **No OAuth authorization server, no PKCE, no resource indicators and no per-client profile conformance exist**, because no ingress exists to carry them; `EXT-07`/`EXT-08` remain operator-gated. Threat model update and independent review remain mandatory before any ingress is activated.
 
 
 ### 10.14 User-authored records

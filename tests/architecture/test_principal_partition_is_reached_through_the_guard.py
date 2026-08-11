@@ -114,6 +114,10 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # by — its whole subject is "every enrollment this Principal holds" — so
         # the partition is the query's own, through `partition_criterion`.
         "infrastructure/persistence/knowledge.py",
+        # WP-27's managed-document plane. Every statement but one reaches the
+        # partition; the exception is the orphan sweep's identifier read, which
+        # is registered with its reason in `_UNPARTITIONED_MANAGED_STATEMENTS`.
+        "infrastructure/persistence/managed_documents.py",
         "infrastructure/persistence/relationships.py",
         # The evidence traversal. Every one of its six statements is rooted at a
         # partitioned table — `captures`, `capture_versions`, `capture_assertions`
@@ -197,6 +201,7 @@ STATEMENT_LEVEL: Final = frozenset(
     {
         "infrastructure/persistence/jobs.py",
         "infrastructure/persistence/knowledge.py",
+        "infrastructure/persistence/managed_documents.py",
         "infrastructure/persistence/relationships.py",
         "infrastructure/persistence/reveal.py",
     }
@@ -1402,6 +1407,7 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
             {
                 "infrastructure/persistence/jobs.py",
                 "infrastructure/persistence/knowledge.py",
+                "infrastructure/persistence/managed_documents.py",
                 "infrastructure/persistence/relationships.py",
                 "infrastructure/persistence/reveal.py",
             }
@@ -1411,7 +1417,139 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
         "a module was added to STATEMENT_LEVEL without a statement-level test; "
         "`test_every_relationship_statement_reaches_the_partition`, "
         "`test_every_job_statement_reaches_the_partition_or_is_registered`, "
-        "`test_every_reveal_statement_reaches_the_partition` and "
-        "`test_every_corpus_coverage_statement_reaches_the_partition` are the "
-        "four that exist"
+        "`test_every_reveal_statement_reaches_the_partition`, "
+        "`test_every_corpus_coverage_statement_reaches_the_partition` and "
+        "`test_every_managed_document_statement_reaches_the_partition_or_is_registered` "
+        "are the five that exist"
+    )
+
+
+#: Statements in `managed_documents.py` that name a partitioned managed table
+#: *without* reaching the partition, as `function -> (statement count, reason)`.
+#:
+#: Exact, and counted, in the shape `UNPARTITIONED_JOB_STATEMENTS` uses, so a
+#: second unpartitioned statement inside an already registered function reddens
+#: as loudly as a new function does. One entry, and it is a residual with a reason
+#: rather than a hole: WP-27's reconciliation asks the *reverse* question — which
+#: stored objects belong to no row at all — and a partitioned answer to that
+#: question reports every other Principal's objects as orphans, which is how a
+#: reclamation deletes live data.
+_UNPARTITIONED_MANAGED_STATEMENTS: Final[dict[str, tuple[int, str]]] = {
+    "all_managed_version_identifiers": (
+        1,
+        "reads every managed version identifier across Principals, for the "
+        "orphan sweep. It returns opaque identifiers and nothing else — no "
+        "title, no digest, no owner, no content — and its one caller is the "
+        "operator reconciliation path, never a request.",
+    ),
+}
+
+
+#: Statements in `managed_documents.py` that name a partitioned managed table
+#: and are **not** queries: each is a fragment its own function composes into a
+#: `principal_scoped` statement, in the shape `_REVEAL_FRAGMENTS` records for the
+#: evidence traversal. Neither entry is a hole, and the test below asserts the
+#: composition rather than accepting the claim.
+_MANAGED_FRAGMENTS: Final[dict[str, tuple[int, str]]] = {
+    "managed_version": (
+        2,
+        "the two refinements — the head's `ORDER BY … LIMIT 1` and the named "
+        "version's predicate — applied to the statement `principal_scoped` "
+        "returned three lines above, in the same function.",
+    ),
+    "managed_document_page": (
+        1,
+        "the `max(version_number)` column expression, selected inside the scoped "
+        "statement in the same function. A column expression is not a query.",
+    ),
+}
+
+
+def test_every_managed_document_statement_reaches_the_partition_or_is_registered() -> None:
+    """WP-27's write plane, statement by statement.
+
+    The claim this plane's isolation actually rests on. It is the first plane in
+    the product whose rows name bytes on a filesystem, so a statement that read
+    or wrote across the partition would hand one Principal another's document —
+    and claim 1 above would have been satisfied by any single statement in the
+    module calling the guard.
+
+    A statement is one `Expr`/`Assign`/`Return` inside a function that renders a
+    partitioned managed table. It must name `principal_scoped(`,
+    `principal_bound_values(` or `partition_criterion(` — or its function must be
+    registered above with a reason and an exact count.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "managed_documents.py"
+    managed = {
+        name
+        for name, table in vars(declarations).items()
+        if isinstance(table, Table) and str(table.name).startswith("managed_document")
+    }
+    assert len(managed) == 5, f"the managed plane declares {len(managed)} tables, not five"
+
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    checked = 0
+    offending: list[str] = []
+    unpartitioned: dict[str, int] = {}
+    fragments: dict[str, int] = {}
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        for statement in ast.walk(function):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
+                continue
+            rendered = ast.unparse(statement)
+            if not any(f"{table}.c" in rendered or f"({table}," in rendered for table in managed):
+                continue
+            checked += 1
+            if any(
+                call in rendered
+                for call in ("principal_scoped(", "principal_bound_values(", "partition_criterion(")
+            ):
+                continue
+            if function.name in _UNPARTITIONED_MANAGED_STATEMENTS:
+                unpartitioned[function.name] = unpartitioned.get(function.name, 0) + 1
+                continue
+            if function.name in _MANAGED_FRAGMENTS:
+                fragments[function.name] = fragments.get(function.name, 0) + 1
+                continue
+            offending.append(f"{function.name}:{statement.lineno}")
+
+    # A fragment is excused only because its own function composes it into a
+    # scoped statement. Asserted rather than accepted: without this, registering
+    # a function here would excuse every statement in it.
+    for name in _MANAGED_FRAGMENTS:
+        owner = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == name
+        )
+        assert "principal_scoped(" in ast.unparse(owner), (
+            f"{name} is registered as building fragments, but composes none of "
+            "them into a `principal_scoped` statement"
+        )
+
+    assert checked >= 12, (
+        f"only {checked} managed-document statements were examined; the walk is "
+        "not reaching the module's queries"
+    )
+    assert offending == [], (
+        f"{offending} build a statement over a principal-partitioned managed "
+        "table without reaching the partition through `principal_scope`. Every "
+        "read goes through `principal_scoped`; every insert goes through "
+        "`principal_bound_values`"
+    )
+    assert fragments == {name: count for name, (count, _reason) in _MANAGED_FRAGMENTS.items()}, (
+        f"the composed managed fragments are now {fragments}. Each entry is a "
+        "statement that only becomes a query inside a `principal_scoped` call in "
+        "the same function; the counts are exact so a fourth cannot appear inside "
+        "an already registered function"
+    )
+    assert unpartitioned == {
+        name: count for name, (count, _reason) in _UNPARTITIONED_MANAGED_STATEMENTS.items()
+    }, (
+        f"the unpartitioned managed statements are now {unpartitioned}. Each one "
+        "is a place a Principal boundary is not enforced by the guard; the "
+        "registry above is exact so a second one cannot appear inside an already "
+        "registered function"
     )

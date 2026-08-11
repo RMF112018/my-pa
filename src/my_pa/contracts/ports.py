@@ -60,6 +60,15 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.documents.managed import (
+    DocumentState,
+    LifecycleTransition,
+    ManagedDocument,
+    ManagedDocumentReceipt,
+    ManagedDocumentVersion,
+    validate_managed_media_type,
+    validate_managed_title,
+)
 from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
@@ -113,6 +122,10 @@ __all__ = [
     "FrameRepository",
     "KnowledgeRecord",
     "KnowledgeRepository",
+    "ManagedAdmission",
+    "ManagedByteStore",
+    "ManagedDocumentRepository",
+    "ManagedWriteRequest",
     "Operation",
     "OperationQueue",
     "PortError",
@@ -1396,3 +1409,256 @@ class ContinuityRepository(ABC):
         self, principal_id: str, evidence_state: ContinuityEvidenceState | None = None
     ) -> tuple[Task, ...]:
         """This Principal's tasks, optionally only the accepted ones."""
+
+
+# --- WP-27 the managed-document plane ---------------------------------------
+#
+# One port, and it is deliberately *not* a property of `UnitOfWork`. The shape is
+# `FrameRepository`'s and `TraceRepository`'s: the caller resolves the
+# authenticated Principal, opens a transaction, and hands the repository to
+# `application.managed_documents.ManagedDocumentService`. Adding it to the unit
+# of work would put the managed write plane on the same object every read
+# capability already holds, which is the reach `AGENTS.md` section 4 separates —
+# source providers and managed-document stores are separate capabilities.
+#
+# `principal_id` is a parameter on every method and it is the authenticated
+# caller's partition, never a caller-supplied field: the concrete repository
+# stamps every write with it and filters every read by it.
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedWriteRequest:
+    """One request to write a managed document version, already normalized.
+
+    **The version identifier is minted by the caller and travels in the request**,
+    which is unusual here and is the ordering the transactional boundary requires:
+    the bytes have to be on the device under some identifier before the row that
+    names them is inserted, so the identifier is issued first and the same value
+    reaches both. `application.managed_documents` is the only thing that mints
+    one, and the store derives a location from it rather than being told one.
+
+    **No bytes.** The digest and the size are what the row records; the bytes went
+    to the byte store, which is the only component that holds them. A request
+    value carrying the content would put a document body on an interface that is
+    logged, compared, and rendered in test failures.
+
+    `document_id` absent means "create", present means "revise" — a difference in
+    the value rather than in a flag, so no request can be ambiguous about which it
+    is. `expected_version_number` is required exactly when revising, because a
+    revision without one is a blind write.
+    """
+
+    document_id: str | None
+    expected_version_number: int | None
+    version_id: str
+    title: str
+    media_type: str
+    content_sha256: str
+    byte_size: int
+    idempotency_key: str
+    correlation_id: str
+    principal_id: str
+    server_received_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.version_id, IdKind.MANAGED_DOCUMENT_VERSION)
+        validate_identifier(self.correlation_id, IdKind.CORRELATION)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if self.document_id is not None:
+            validate_identifier(self.document_id, IdKind.MANAGED_DOCUMENT)
+        if (self.document_id is None) is not (self.expected_version_number is None):
+            raise ValueError(
+                "a managed revision names the version it expects; a creation names none"
+            )
+        if self.expected_version_number is not None and self.expected_version_number < 1:
+            raise ValueError("an expected managed version number starts at one")
+        validate_managed_title(self.title)
+        validate_managed_media_type(self.media_type)
+        if not self.idempotency_key:
+            raise ValueError("a managed write carries an idempotency key")
+        if self.byte_size < 1:
+            raise ValueError("a managed write carries bytes")
+        ensure_utc(self.server_received_at)
+
+    @property
+    def payload_digest(self) -> str:
+        """What makes a replay decidable without a second copy of the content.
+
+        Every field a caller supplied that could differ between two requests
+        carrying one key, and none this layer added: the minted version
+        identifier and the correlation identifier are excluded because they
+        differ on every attempt by construction, and including either would make
+        every retry a conflict.
+        """
+        payload = {
+            "document_id": self.document_id,
+            "expected_version_number": self.expected_version_number,
+            "title": self.title,
+            "media_type": self.media_type,
+            "content_sha256": self.content_sha256,
+            "byte_size": self.byte_size,
+        }
+        return sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedAdmission:
+    """The outcome of one managed write: the receipt, and whether it is new."""
+
+    receipt: ManagedDocumentReceipt
+    created: bool
+
+
+class ManagedDocumentRepository(ABC):
+    """The managed-document plane, inside one transaction.
+
+    Every method is principal-scoped. A document another Principal owns answers
+    exactly what a document that does not exist answers, so a refusal cannot be
+    used to learn that an identifier names something.
+    """
+
+    @abstractmethod
+    def admit(self, request: ManagedWriteRequest) -> ManagedAdmission:
+        """Admit one managed write, or return the receipt its key is bound to.
+
+        Raises `ManagedDocumentConflictError` when the key is bound to a
+        materially different request, `StaleExpectedVersionError` when the named
+        expected version is no longer the head, and `UnknownScopeError` when the
+        request names no document this Principal owns.
+        """
+
+    @abstractmethod
+    def replay_for(
+        self, idempotency_key: str, payload_digest: str, *, principal_id: str
+    ) -> ManagedDocumentReceipt | None:
+        """The receipt this Principal's key is already bound to, or `None`.
+
+        Read before bytes are written, so an ordinary replay stores no second
+        copy of them. It is an optimisation and never the decision: `admit` still
+        relies on the unique constraint, so two concurrent writers that both read
+        `None` still produce one version.
+
+        **It takes the digest, and that is not an optimisation.** A lookup on the
+        key alone would answer a *conflicting* request — the same key carrying a
+        different document — with the original receipt, silently reporting a
+        write that never happened as durable. So a key bound to a different
+        digest raises `ManagedDocumentConflictError` here, exactly as `admit`
+        does when it meets the same case at the unique constraint.
+        """
+
+    @abstractmethod
+    def version(
+        self, document_id: str, *, version_id: str | None = None, principal_id: str
+    ) -> ManagedDocumentVersion | None:
+        """One stored version of a document this Principal owns, or `None`.
+
+        `version_id` omitted returns the head, which is the greatest version
+        number the document holds — read from the rows rather than from a pointer
+        column that could disagree with them.
+        """
+
+    @abstractmethod
+    def versions(
+        self, document_id: str, *, principal_id: str
+    ) -> tuple[ManagedDocumentVersion, ...]:
+        """Every stored version of one document this Principal owns, oldest first."""
+
+    @abstractmethod
+    def documents(
+        self, *, limit: int, principal_id: str, include_archived: bool = False
+    ) -> tuple[ManagedDocument, ...]:
+        """One bounded page of this Principal's documents, newest first."""
+
+    @abstractmethod
+    def state(self, document_id: str, *, principal_id: str) -> DocumentState | None:
+        """Whether a document this Principal owns is active or archived, or `None`."""
+
+    @abstractmethod
+    def transition(
+        self,
+        document_id: str,
+        *,
+        transition: LifecycleTransition,
+        principal_id: str,
+        correlation_id: str,
+    ) -> bool:
+        """Append one lifecycle row, and report whether it changed anything.
+
+        `False` means the document is already in the state the transition would
+        produce, and no row is appended — archiving an archived document is a
+        no-op rather than a second event. Raises `UnknownScopeError` when the
+        identifier names no document this Principal owns.
+        """
+
+    @abstractmethod
+    def restore_version(self, version: ManagedDocumentVersion, *, principal_id: str) -> None:
+        """Insert one version exactly as a backup recorded it.
+
+        The restore path, and the only writer that supplies its own timestamps
+        and version numbers. It refuses a version whose owner is not the
+        Principal being restored, so a tampered backup cannot move a document
+        between partitions.
+        """
+
+    @abstractmethod
+    def known_version_identifiers(self) -> frozenset[str]:
+        """Every managed version identifier the database holds, across Principals.
+
+        **The one unpartitioned read on this plane, and it is unpartitioned on
+        purpose.** Its whole subject is the reverse direction — bytes in the store
+        that no row claims — and a partitioned answer would report every other
+        Principal's objects as orphans, which is how a reclamation deletes live
+        data. It returns opaque identifiers and nothing else: no title, no digest,
+        no owner, no content. Operator use only, from the reconciliation path.
+        """
+
+
+class ManagedByteStore(ABC):
+    """Durable storage for the bytes of managed document versions.
+
+    **No method takes a path, and that absence is the port's whole security
+    property.** Every operation names an opaque `mdver_…` or nothing at all; where
+    the bytes actually live is derived by the implementation from that identifier.
+    A port with a location parameter would put the choice of location on the
+    caller, and the caller is where a traversal enters.
+
+    Separate from `SourceProvider` rather than an extension of it, because
+    `AGENTS.md` section 4 makes source providers and managed-document stores
+    separate capabilities: the source port has no write method and must not gain
+    one, and this port has no read of any source.
+    """
+
+    @abstractmethod
+    def put(self, version_id: str, content: bytes) -> None:
+        """Store `content` as the bytes of `version_id`, durably, exactly once.
+
+        Returns only once the bytes and the name that reaches them are on the
+        device. A second call for the same identifier raises: bytes are written
+        once, and overwriting is the operation this plane does not have.
+        """
+
+    @abstractmethod
+    def read(self, version_id: str) -> bytes:
+        """Return the stored bytes of `version_id`, or raise."""
+
+    @abstractmethod
+    def has(self, version_id: str) -> bool:
+        """Whether `version_id`'s bytes are present as a plain readable file."""
+
+    @abstractmethod
+    def stored_version_ids(self) -> tuple[str, ...]:
+        """Every version identifier this store currently holds bytes for."""
+
+    @abstractmethod
+    def unreadable_entries(self) -> tuple[str, ...]:
+        """Entries in the store that are not well-formed managed version objects."""
+
+    @abstractmethod
+    def put_manifest(self, content: bytes) -> None:
+        """Store the backup manifest at this store's one fixed artifact location."""
+
+    @abstractmethod
+    def read_manifest(self) -> bytes:
+        """Return the backup manifest this store holds."""

@@ -342,6 +342,52 @@ Evidence: `src/my_pa/domain/relationship/`,
 `tests/provider_conformance/test_personal_fixture_provider.py::test_personal_source_port_and_adapter_expose_no_mutation_method`,
 `docs/plans/mcv-completion-plan.md`.
 
+## 13. Managed documents are a canonical service with no transport, and their two stores are not one transaction
+
+WP-27 implements the product-owned write plane: a designated managed root, stable
+document identity, immutable versions, expected-version checking, idempotency,
+receipts, archive/restore, backup/restore and an integrity check. Source roots
+stay read-only, and the byte store refuses a managed root that is, contains, or
+lies inside a configured source root, after resolving both.
+
+**It is reached only through `ManagedDocumentService`, which a composition root
+calls with a resolved Principal.** It adds no member to `Capability`, appears in
+no capability manifest, and is reachable over no transport — the same posture the
+WP-06/WP-11 continuity write plane has. Exposing managed writes over MCP is
+WP-28's package. The consequence worth stating: a managed operation writes **no
+`audit_events` row**, because that table's `capability` is constrained to the
+public capability set and this plane holds no seat in it. What it does record is
+append-only and per operation: the version row, the lifecycle row, and the
+receipt.
+
+**The filesystem and the database are not one transaction, and the product does
+not claim they are.** Bytes are written and fsynced before the metadata rows are
+inserted, so the failure that survives a crash is **bytes with no row** —
+unreachable, reclaimable, reported by `verify` as an orphan, and never cleaned up
+automatically. The reverse, a row naming absent bytes, is what the ordering
+refuses to produce.
+
+**Not implemented, deliberately:** hard delete of a managed document (out of
+scope, and irreversible destruction of canonical data is reserved to the operator
+under `AGENTS.md` section 8.2); automatic reclamation of orphaned bytes; comments
+on a managed document; copy and relocate — neither has a caller, and a location
+is not something this plane exposes at all. A backup carries versions and their
+bytes and **not** the lifecycle rows, so a restored plane is active and a document
+that was archived comes back active.
+
+**Nothing here has run against a real managed root.** Every test writes into
+`tmp_path`; pointing the plane at an operator's real storage is `EXT-10` and
+remains an operator action.
+
+Evidence: `src/my_pa/domain/documents/managed.py`,
+`src/my_pa/infrastructure/managed_document_stores/filesystem/store.py`,
+`src/my_pa/application/managed_documents.py`,
+`ops/runbooks/managed-document-operations.md`,
+`tests/security/test_managed_document_containment.py::test_no_managed_store_method_accepts_a_path`,
+`tests/architecture/test_managed_writes_are_contained.py::test_every_filesystem_write_is_the_managed_store_or_is_registered`,
+`tests/database/test_managed_documents.py::test_a_rolled_back_write_leaves_bytes_with_no_row_and_verify_finds_them`,
+`tests/database/test_managed_documents.py::test_a_backup_restores_into_a_fresh_root_and_an_emptied_database`.
+
 ---
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy

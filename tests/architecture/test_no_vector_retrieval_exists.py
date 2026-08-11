@@ -15,13 +15,19 @@ looking for and asserts the detector finds it.
    `METADATA` — every table, every column, every column type, every index — not
    off `tables.py` as text, so a declaration built by a helper is examined the
    same as one written out.
-2. **No revision installs a vector extension, an ANN index, or a vector
-   operator.** Every revision file's SQL strings, plus the extension list the
-   foundation revision declares.
+2. **No revision installs a vector extension, an ANN index, a vector operator,
+   or a column or index *named* for one.** Every revision file's SQL strings,
+   read with the operator vocabulary *and* the schema-name vocabulary, plus the
+   extension list the foundation revision declares. The name half is what rule 1
+   structurally cannot supply: `op.execute("ALTER TABLE ... ADD COLUMN
+   note_embedding real[]")` installs a column no `Table` object in this process
+   has ever heard of, so `METADATA` reports nothing and the migration is the
+   whole of the evidence there is.
 3. **No module imports an embedding or model provider.** Every `import` in
    `src/` and `apps/`, read as a syntax tree, matched against a closed list of
-   distributions — and against the declared dependencies, so a provider that
-   arrived as a dependency without an import yet still reddens.
+   distributions — and against every requirement in every dependency block of
+   `pyproject.toml`, runtime, extra or group alike, so a provider that arrived as
+   a dependency without an import yet still reddens.
 4. **No similarity operator or similarity function is written anywhere.**
    `pg_trgm` *is* installed, and `persistence.search` records that it is
    deliberately unused because similarity is a different question from lexical
@@ -49,6 +55,7 @@ from __future__ import annotations
 
 import ast
 import re
+import tomllib
 from pathlib import Path
 from typing import Final
 
@@ -125,6 +132,9 @@ PROVIDER_DISTRIBUTIONS: Final = frozenset(
         "langchain",
         "haystack",
         "ollama",
+        "litellm",
+        "huggingface_hub",
+        "sklearn",
     }
 )
 
@@ -257,6 +267,96 @@ def _string_literals(path: Path, *, executable_only: bool = False) -> list[tuple
     ]
 
 
+def folded(node: ast.expr) -> str | None:
+    """The string one expression is known to produce, or `None` if it is not one.
+
+    Public, because a control below folds each shape and asserts the result, so
+    the sweep that uses it is measured rather than assumed.
+
+    Adjacent literals — `"note_" "embedding"` — need nothing here: CPython's own
+    parser joins them into a single constant before this file ever sees them.
+    What does need folding is the three shapes that survive parsing. `"note_" +
+    "embedding"` stays a `BinOp`, so a per-literal sweep reads two harmless
+    halves. An f-string stays a `JoinedStr` whose constant parts are separate
+    nodes, so DDL assembled around a substituted name is read the same way.
+    `"".join(("embed", "ding"))` stays a `Call` over two literals that are each
+    innocent. All three are how a statement gets written without any one literal
+    spelling it, and the third is the one this file's own first fix still let
+    through.
+
+    A substituted value is dropped rather than guessed at, which makes the fold
+    an under-approximation: `f"USING {method}"` folds to `USING `, and a word
+    split *across* a substitution is not reconstructed. That is the fail-open
+    residual of this helper and it is stated rather than left to be found —
+    `test_the_universes_this_guard_quantifies_over_are_not_empty` and the
+    per-literal sweep still read every constant part on its own.
+    """
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = folded(node.left), folded(node.right)
+        return None if left is None or right is None else left + right
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            part.value
+            for part in node.values
+            if isinstance(part, ast.Constant) and isinstance(part.value, str)
+        )
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "join"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.List | ast.Tuple)
+    ):
+        separator = folded(node.func.value)
+        parts = [folded(item) for item in node.args[0].elts]
+        if separator is not None and all(part is not None for part in parts):
+            return separator.join(part for part in parts if part is not None)
+    return None
+
+
+def _assembled_strings(path: Path) -> list[tuple[int, str]]:
+    """Every string a module builds, including the ones no single literal spells."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    assembled: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.BinOp | ast.JoinedStr):
+            text = folded(node)
+            if text:
+                assembled.append((node.lineno, text))
+    return assembled
+
+
+def _ddl_bearing_files() -> tuple[Path, ...]:
+    """Every file in this repository that can hand a statement to the server.
+
+    The revisions, the Alembic environment beside them, and every module of
+    `src/` and `apps/`. Derived rather than listed, and wider than "the
+    revisions" on purpose: `migrations/env.py` is a sibling of the chain that no
+    `versions/*.py` glob reaches, and a `CREATE INDEX` issued from a runtime
+    module is the same index as one issued from a migration. A rule that read
+    only the directory where the plant was found would be a rule against that
+    plant rather than against the thing it is an instance of.
+    """
+    support = tuple(sorted(REVISIONS.parent.glob("*.py")))
+    return (*_revision_files(), *support, *_modules())
+
+
+def _statement_texts(path: Path) -> list[tuple[int, str]]:
+    """Every string one file could execute, per literal and per assembly.
+
+    Docstrings are excluded, and the exclusion is load-bearing in one direction
+    only: a revision's prose explains what it does, and
+    `2b7e9f4c1a83` uses the word *embedding* in the ordinary English sense while
+    describing a literal it declines to hoist into a constant. A sweep that read
+    prose would report that paragraph and the vocabulary would have to be
+    narrowed to survive it, which is how a guard loses the word that matters. A
+    docstring executes nothing, so nothing is lost by not reading them here.
+    """
+    return [*_string_literals(path, executable_only=True), *_assembled_strings(path)]
+
+
 def test_the_universes_this_guard_quantifies_over_are_not_empty() -> None:
     """Guards every rule below: an empty sweep satisfies all of them."""
     assert len(_tables()) >= 40, "the schema scan is not reading the schema"
@@ -275,7 +375,11 @@ def test_the_vocabularies_are_closed_at_the_sizes_they_declare() -> None:
     packages found in guards of their own.
     """
     assert len(SCHEMA_WORDS) == 13
-    assert len(PROVIDER_DISTRIBUTIONS) == 23
+    assert len(PROVIDER_DISTRIBUTIONS) == 26
+    assert len(_NORMALISED_PROVIDERS) == 26, (
+        "two providers normalise to one name, so the set the dependency scan "
+        "compares against is smaller than the set this file declares"
+    )
     assert len(SQL_FRAGMENTS) == 14
     assert len(INSTALLED_EXTENSIONS) == 2
     assert len(PROVIDER_NEUTRAL_LAYERS) == 3
@@ -332,6 +436,109 @@ def test_no_revision_installs_a_vector_extension_or_an_ann_index() -> None:
     )
 
 
+def test_no_executed_statement_names_vector_machinery() -> None:
+    """Property 2's other half, and it is the half `METADATA` cannot supply.
+
+    Rule 1 reads the live declaration, which is the right place to look for a
+    column `tables.py` declares and the *only* place a column declared there can
+    hide. It is also blind by construction to DDL a revision executes as text:
+    `op.execute("ALTER TABLE ... ADD COLUMN note_embedding real[]")` installs a
+    column that no `Table` object in this process has ever heard of, and an
+    `extractions_semantic_index` beside it is an ANN index in everything but the
+    access method it happens to name.
+
+    Rule 2 as first written was blind to both, because it matched only
+    `SQL_FRAGMENTS` — a list of *access methods and operators* — against revision
+    text, and never `SCHEMA_WORDS`, the list of names. A reviewer planted exactly
+    the two statements above, unobfuscated, and the whole of `tests/architecture`
+    and `tests/schema` stayed green. This is that hole closed: the full
+    vocabulary, over every string anything in this repository executes,
+    including the strings no single literal spells.
+
+    **Wider than the plant, deliberately.** The sweep is over every revision,
+    over `migrations/env.py` beside them, and over every module of `src/` and
+    `apps/` — because `versions/*.py` is where the reviewer put it and not where
+    the property lives. A `CREATE INDEX ... USING hnsw` issued from a runtime
+    module installs the same index as one issued from a migration, and a guard
+    written to the directory the plant was found in is a guard against that
+    plant. Docstrings are excluded and the exclusion is measured rather than
+    assumed: `2b7e9f4c1a83` uses *embedding* in the ordinary English sense while
+    describing a literal it declines to hoist, and `persistence.search` explains
+    at length why `pg_trgm`'s *similarity* stays unused. Prose that explains why
+    a thing is absent must not be the reason the guard cannot name it.
+
+    Section 23 forbids staging vector infrastructure at all, so the rule is on
+    the *name* and not on the type: `real[]` is a perfectly ordinary PostgreSQL
+    array and a column called `note_embedding` holding one is a vector store with
+    the label filed off.
+    """
+    scanned = _ddl_bearing_files()
+    assert len(scanned) >= 130, f"only {len(scanned)} statement-bearing files were read"
+    offending: list[str] = []
+    for path in scanned:
+        for lineno, statement in _statement_texts(path):
+            found = schema_words_in(statement)
+            if found:
+                offending.append(f"{path.relative_to(ROOT)}:{lineno} {list(found)}")
+    assert offending == [], (
+        f"{offending} name vector-retrieval machinery in DDL a revision executes. A "
+        "column or index installed by a migration is invisible to the `METADATA` "
+        "scan above, which is what makes this the load-bearing half: section 23 "
+        "gates semantic retrieval behind a benchmark and a security review, and a "
+        "migration is how that gate gets opened without a declaration to notice"
+    )
+
+
+def test_the_revision_ddl_scan_finds_each_shape_a_statement_can_be_written_in() -> None:
+    """The control for the rule above, over the shapes that defeat a naive sweep.
+
+    Four plants, and the last three exist because the first one is the only shape
+    an author who is not hiding anything would use. A guard that read only whole
+    literals would pass every one of the others.
+    """
+    for planted in (
+        "ALTER TABLE knowledge.extractions ADD COLUMN note_embedding real[]",
+        "CREATE INDEX extractions_semantic_index ON knowledge.extractions (note_embedding)",
+        "CREATE INDEX notes_ann ON knowledge.notes USING hnsw (v)",
+    ):
+        assert schema_words_in(planted), planted
+
+    # Assembly, one shape per node kind the fold understands. The implicit
+    # concatenation is here to record that the *parser* closes it, not this file.
+    for source, expected in (
+        ('"note_" "embedding"', "note_embedding"),
+        ('"note_" + "embedding"', "note_embedding"),
+        ('f"ADD COLUMN {name}_embedding real[]"', "ADD COLUMN _embedding real[]"),
+        ('"ALTER TABLE t " + f"ADD COLUMN {name}_embedding real[]"', None),
+        ('"".join(("embed", "ding"))', "embedding"),
+        ('"_".join(["note", "embedding"])', "note_embedding"),
+    ):
+        node = ast.parse(source, mode="eval").body
+        assembled = folded(node)
+        assert assembled is not None, source
+        assert expected is None or assembled == expected, (source, assembled)
+        assert schema_words_in(assembled), source
+
+    # And it distinguishes: the DDL the chain really does execute is not vector
+    # machinery, or the rule above would be reporting the whole chain to itself.
+    for allowed in (
+        'ALTER TABLE knowledge.audit_events DROP CONSTRAINT "capability_is_known"',
+        "CREATE INDEX extractions_full_text ON knowledge.extractions USING gin "
+        "(to_tsvector('english', text))",
+        "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+    ):
+        assert schema_words_in(allowed) == (), allowed
+
+    # The fold is an under-approximation and says so; this is where that is
+    # recorded as a measurement rather than a claim. A word split across a
+    # substitution is not reconstructed, and the per-literal sweep is what still
+    # reads each half.
+    split = ast.parse('f"note_{prefix}embedding"', mode="eval").body
+    assert folded(split) == "note_embedding"
+    assert folded(ast.parse('f"embed{x}ding"', mode="eval").body) == "embedding"
+    assert folded(ast.parse("value + other", mode="eval").body) is None
+
+
 def test_the_installed_extensions_are_the_two_the_foundation_declares() -> None:
     """The list itself, so a third arriving is visible rather than inferred.
 
@@ -372,25 +579,126 @@ def test_no_module_imports_an_embedding_or_model_provider() -> None:
     )
 
 
+def distribution_named(requirement: str) -> str:
+    """The normalised distribution name one requirement string declares.
+
+    PEP 503's normalisation, because the packaging ecosystem treats `-`, `_` and
+    `.` as the same character and this rule must too: `sentence-transformers` is
+    the distribution and `sentence_transformers` is the import, and a comparison
+    that read one spelling would miss a declaration of the other. Extras and
+    version specifiers are cut, so `psycopg[binary]>=3.2,<4` is `psycopg`.
+    """
+    head = re.split(r"[\[<>=!~;\s]", requirement.strip(), maxsplit=1)[0]
+    return re.sub(r"[-_.]+", "_", head).lower()
+
+
+#: `PROVIDER_DISTRIBUTIONS` under the same normalisation, so the two sides of
+#: every comparison are spelled the same way.
+_NORMALISED_PROVIDERS: Final = frozenset(
+    distribution_named(name) for name in PROVIDER_DISTRIBUTIONS
+)
+
+
+def declared_requirements(document: object, *, within: bool = False) -> tuple[str, ...]:
+    """Every requirement string the project declares, from every block that declares one.
+
+    Public, because a control below runs it over a document that declares a
+    provider in each of the shapes a real `pyproject.toml` has.
+
+    Derived by walking the parsed document for *any* list of strings reached
+    through a key that names dependencies, rather than by slicing the one block
+    somebody remembered. The first version of this rule read
+    `[project.dependencies]` and nothing else, and a reviewer put `openai` and
+    `pgvector` under `[project.optional-dependencies]` — where `pip install
+    .[retrieval]` would resolve them — and left all fifteen rules of this file
+    green. An extra is a dependency; so is a dependency group; so is whatever
+    the next packaging standard calls one. Quantifying over the shape of the
+    value instead of over the names of the blocks is what makes the next one
+    arrive already covered.
+    """
+    found: list[str] = []
+    if isinstance(document, dict):
+        for name, value in document.items():
+            named = "depend" in str(name) or "requires" in str(name)
+            # Sticky, because the key that names dependencies is rarely the key
+            # the list hangs off: an extra is `optional-dependencies.retrieval`
+            # and a group is `dependency-groups.ml`, and a walk that only looked
+            # at the *immediate* key would read neither.
+            found.extend(declared_requirements(value, within=within or named))
+    elif isinstance(document, list):
+        if within:
+            found.extend(item for item in document if isinstance(item, str))
+        else:
+            for item in document:
+                found.extend(declared_requirements(item))
+    return tuple(found)
+
+
 def test_no_provider_is_a_declared_dependency() -> None:
     """Property 3's other half: a provider can arrive before anything imports it."""
-    declared = PYPROJECT.read_text(encoding="utf-8")
-    start = declared.index("\ndependencies = [")
-    # Terminated on a line that is exactly `]`, not on the first `]`: an extra
-    # such as `psycopg[binary]` carries one inside a requirement string, and
-    # stopping there read two of the eight declarations and called it the block.
-    end = declared.index("\n]", start)
-    block = declared[start : end + 2]
-    assert "SQLAlchemy" in block and "mcp" in block, "the dependency block was not located"
+    document = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    requirements = declared_requirements(document)
+    # The floor and the two named requirements together are what stop this
+    # passing over a document the walk failed to read: an empty sweep offends
+    # nobody.
+    assert len(requirements) >= 12, f"only {len(requirements)} requirements were read"
+    assert {"sqlalchemy", "mcp"} <= {distribution_named(name) for name in requirements}, (
+        "the dependency blocks were not located"
+    )
     offending = sorted(
-        name
-        for name in PROVIDER_DISTRIBUTIONS
-        if re.search(rf'"{re.escape(name)}[><=\[",]', block, re.IGNORECASE)
+        requirement
+        for requirement in requirements
+        if distribution_named(requirement) in _NORMALISED_PROVIDERS
     )
     assert offending == [], (
-        f"{offending} are declared runtime dependencies. A provider in the "
-        "dependency list is vector infrastructure one import away"
+        f"{offending} are declared dependencies. A provider in any dependency "
+        "block — runtime, extra, or group — is vector infrastructure one import "
+        "away, and an extra is the shape that installs on a real machine while "
+        "looking optional in the file"
     )
+
+
+def test_the_dependency_scan_reads_every_block_a_provider_could_arrive_in() -> None:
+    """The control for the rule above, one plant per block shape.
+
+    The extra is the case that was open, so it is written out here rather than
+    covered by a loop, and the group beside it is the block this project does
+    not use today and would be read the same way if it did.
+    """
+    planted = tomllib.loads(
+        "[project]\n"
+        'dependencies = ["SQLAlchemy>=2.0.20,<3"]\n'
+        "[project.optional-dependencies]\n"
+        'retrieval = ["openai>=1.40", "pgvector>=0.3"]\n'
+        "[dependency-groups]\n"
+        'ml = ["sentence-transformers>=3"]\n'
+        "[build-system]\n"
+        'requires = ["setuptools>=77"]\n'
+    )
+    requirements = declared_requirements(planted)
+    assert set(requirements) == {
+        "SQLAlchemy>=2.0.20,<3",
+        "openai>=1.40",
+        "pgvector>=0.3",
+        "sentence-transformers>=3",
+        "setuptools>=77",
+    }
+    named = {
+        distribution_named(requirement)
+        for requirement in requirements
+        if distribution_named(requirement) in _NORMALISED_PROVIDERS
+    }
+    # `sentence-transformers` is the plant that matters most here: the import
+    # name is `sentence_transformers` and the *distribution* name is spelled
+    # with a hyphen, so a comparison that did not normalise the separator would
+    # read the declaration and not recognise it.
+    assert named == {"openai", "pgvector", "sentence_transformers"}
+
+    # And it distinguishes, in the direction that matters: a requirement whose
+    # name merely *starts* with a provider's is not that provider, or the rule
+    # would report a dependency for the letters it shares.
+    for innocent in ("openai-compatible-nothing", "torchless", "faiss-stub-typing", "mcp>=2.0,<3"):
+        assert distribution_named(innocent) not in _NORMALISED_PROVIDERS, innocent
 
 
 def test_no_similarity_operator_or_function_is_written_in_the_tree() -> None:

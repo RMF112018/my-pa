@@ -49,7 +49,7 @@ Principal has not enrolled would be a fact about the operator's registry and, in
 a multi-Principal deployment, about another Principal's enrollments. That is the
 side channel above with extra steps, so it is not counted. What is counted is the
 territory inside the held sources that no grant of this Principal's reaches, and
-`CORPUS_IS_BOUNDED_TO_HELD_SOURCES` is published unconditionally so the answer
+`CORPUS_COVERS_ONLY_ENROLLED_SOURCES` is published unconditionally so the answer
 cannot be read as "this is everything that exists".
 """
 

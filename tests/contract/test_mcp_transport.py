@@ -31,7 +31,7 @@ import sys
 import threading
 from contextlib import AbstractContextManager
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import apps.gateway as gateway
 import pytest
@@ -348,6 +348,137 @@ def _framed(message: dict[str, Any]) -> bytes:
     return (json.dumps(message) + "\n").encode()
 
 
+def _child_tool_list(**settings: str) -> tuple[list[str], bytes]:
+    """Spawn `apps/gateway.py mcp`, handshake, `tools/list`, and return the names.
+
+    Factored out because WP-28 gave the surface two composition-time switches,
+    and the only honest way to test a switch that is read at startup is to start
+    the process with it set. Everything about the child is the same in each
+    case except the environment, so the differences below are the settings and
+    nothing else.
+    """
+    environment = {
+        **os.environ,
+        "MY_PA_DATABASE_URL": "postgresql+psycopg://someone@127.0.0.1:1/nothing",
+        **settings,
+    }
+    process = subprocess.Popen(  # noqa: S603 - fixed argument list, no shell
+        [sys.executable, str(Path(gateway.__file__)), "mcp"],
+        cwd=Path(gateway.__file__).resolve().parents[1],
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        assert process.stdin is not None and process.stdout is not None
+        process.stdin.write(
+            _framed(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "0"},
+                    },
+                }
+            )
+        )
+        process.stdin.flush()
+        first = process.stdout.readline()
+        process.stdin.write(_framed({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+        process.stdin.write(_framed({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}))
+        process.stdin.flush()
+        second = process.stdout.readline()
+    finally:
+        process.terminate()
+        try:
+            _, errors = process.communicate(timeout=30)
+        except subprocess.TimeoutExpired:  # pragma: no cover - a failure path
+            process.kill()
+            _, errors = process.communicate(timeout=30)
+
+    handshake = json.loads(first)
+    assert handshake["id"] == 1, first
+    assert handshake["result"]["serverInfo"]["name"] == mcp_module.SERVER_NAME
+    listed = json.loads(second)
+    assert listed["id"] == 2
+    return [tool["name"] for tool in listed["result"]["tools"]], errors
+
+
+#: The capabilities a process must be *composed* for, rather than merely
+#: built with. Derived from the enum rather than written out, so another joins
+#: without editing this file — and asserted non-empty below, because an empty set
+#: would make both halves of the claim vacuous.
+_COMPOSED_CAPABILITIES: Final = frozenset(
+    capability for capability in Capability if capability.value.startswith("documents.")
+)
+
+
+def test_a_real_child_process_publishes_only_what_it_was_composed_with() -> None:
+    """What `tools/list` publishes is what the process can serve, in a real child.
+
+    **Two children, and the difference between them is one environment
+    variable.**
+
+    * *Unconfigured* — no `MY_PA_MANAGED_DOCUMENT_ROOT`, so no byte store is
+      composed and the `documents.` names are withheld. This is the state every
+      process this build has run in; what WP-28 changed is that capabilities now
+      exist which a process can lack the composition for, so "the tool list is
+      the capability set" stopped being true and "the tool list is what this
+      process can serve" took its place.
+    * *Kill switch engaged* — nothing at all, in the transport an operator
+      actually runs rather than in an in-memory session. A switch proved only
+      against a memory stream would be a switch proved about a code path rather
+      than about a process.
+
+    Both children keep the unreachable database URL this module uses
+    deliberately: neither composition reads a row. The *third* case — a process
+    with a managed root, publishing all twenty-six — does read one, because the
+    store is constructed with the configured source roots to refuse an
+    overlapping root, so it is proved in
+    `test_a_child_with_a_managed_root_publishes_every_capability` against a real
+    server instead.
+    """
+    assert _COMPOSED_CAPABILITIES, "no capability needs composition, so this proves nothing"
+
+    unconfigured, _errors = _child_tool_list()
+    assert unconfigured == [
+        capability.value for capability in Capability if capability not in _COMPOSED_CAPABILITIES
+    ]
+    assert not any(name.startswith("documents.") for name in unconfigured)
+
+    killed, _errors = _child_tool_list(MY_PA_MCP_SURFACE_DISABLED="true")
+    assert killed == [], "the kill switch left tools published in a real child process"
+
+
+@pytest.mark.database
+def test_a_child_with_a_managed_root_publishes_every_capability(tmp_path: Path) -> None:
+    """The other half: composed for the managed plane, the child publishes all of it.
+
+    Marked `database` because composing the byte store reads the configured
+    source roots — the check that refuses a managed root which is, contains, or
+    lies inside one — so a process with a managed root and no database refuses to
+    start rather than composing a store that compared against nothing. That is
+    the fail-closed direction and it is the reason this case cannot join the two
+    above.
+
+    The managed root is a `tmp_path` directory removed with the test. Nothing is
+    written into it: no request is made, only a handshake and a listing.
+    """
+    root = tmp_path / "managed"
+    root.mkdir()
+    composed, _errors = _child_tool_list(
+        MY_PA_DATABASE_URL=os.environ["MY_PA_DATABASE_URL"],
+        MY_PA_MANAGED_DOCUMENT_ROOT=str(root),
+    )
+    assert composed == [capability.value for capability in Capability]
+    assert {capability.value for capability in _COMPOSED_CAPABILITIES} <= set(composed)
+    assert not any(root.iterdir()), "a listing wrote into the managed root"
+
+
 def test_the_stdio_transport_serves_a_real_child_process() -> None:
     """`D-26` and `D-30`: the transport an operator actually runs, over pipes.
 
@@ -414,7 +545,11 @@ def test_the_stdio_transport_serves_a_real_child_process() -> None:
     assert handshake["result"]["serverInfo"]["name"] == mcp_module.SERVER_NAME
     listed = json.loads(second)
     assert listed["id"] == 2
-    assert [tool["name"] for tool in listed["result"]["tools"]] == [c.value for c in Capability]
+    # *What* the list contains is the composition claim above, because it depends
+    # on how the child was composed. What matters here is that a list came back
+    # at all over real pipes: the framing worked and the stream was not
+    # corrupted.
+    assert listed["result"]["tools"], "the child published no tool at all"
     # And the operator's notice was on standard error, where it cannot corrupt
     # the stream the client is parsing.
     assert b"serving     mcp on stdio" in errors

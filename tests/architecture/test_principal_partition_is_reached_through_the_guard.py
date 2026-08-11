@@ -40,8 +40,11 @@ Four claims, separated because they fail for different reasons:
    only checked as a whole.** Claim 1 asks whether a module calls the guard
    *anywhere*, and `jobs.py` answered yes on the strength of `claim_job` and
    `enqueue_job` while `job_for` and `job_state` read the plane with nothing but
-   an operation id — visible to neither the guarded set nor `QUARANTINED`. Two
-   modules now account for every statement; the rest say so.
+   an operation id — visible to neither the guarded set nor `QUARANTINED`. Four
+   modules now account for every statement; the rest say so. `knowledge.py`'s
+   account is quantified over every *mention* of a partitioned table rather than
+   over a list of statement kinds, because the list-of-kinds form left three
+   unpartitioned reads of `enrollments` invisible to this whole suite.
 
 Nothing here opens a connection, reaches a source, or touches a database. It
 parses the source tree, so a violation is caught even when nothing executes the
@@ -771,62 +774,393 @@ def test_every_reveal_statement_reaches_the_partition() -> None:
         assert f"{unscoped}.c." in source, f"{unscoped} is no longer traversed here"
 
 
+#: The expression nodes a reference may sit inside without leaving the query it
+#: belongs to.
+#:
+#: **This enumeration is the fail-closed one, and that is why it is allowed to be
+#: an enumeration.** Ascending stops the moment a parent is not one of these, so
+#: a node kind nobody thought of makes the expression this rule inspects
+#: *smaller* — and a smaller expression is one the partition predicate is less
+#: likely to appear inside, which reddens. The enumeration that was not
+#: fail-closed is the one this rule replaces: a list of *statement* kinds, where
+#: a shape nobody thought of was skipped entirely and passed in silence.
+_CHAIN_LINKS: Final = (
+    ast.Attribute,
+    ast.Call,
+    ast.keyword,
+    ast.Starred,
+    ast.Subscript,
+    ast.Compare,
+    ast.BoolOp,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Await,
+)
+
+#: The calls that apply a predicate to a statement. A `partition_criterion(...)`
+#: has to be an argument of one of these to count: written anywhere else in the
+#: expression it is a value nothing filters by, and a rule that accepted the mere
+#: presence of the text would accept `connection.execute(select(...),
+#: partition_criterion(enrollments, context))`.
+_FILTERING_CALLS: Final = ("where", "having", "filter")
+
+#: Which argument of each guard call names the table it partitions.
+#: `partition_criterion(table, context)` builds the predicate; `principal_scoped`
+#: takes the statement first and the table second and imposes it, which is how
+#: `reveal.py` scopes a traversal it cannot root at a partitioned table.
+_GUARD_TABLE_ARGUMENT: Final = {"partition_criterion": 0, "principal_scoped": 1}
+
+
+def _parents(tree: ast.AST) -> dict[int, ast.AST]:
+    return {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+
+def executable_literals(tree: ast.Module) -> list[tuple[int, str]]:
+    """Every string constant that is not a docstring.
+
+    Public, because the rule below is stated over it. Docstrings are excluded and
+    the exclusion is the point: `knowledge.py`'s own docstring explains the
+    partition at length and names `enrollments` a dozen times, so prose that
+    explains a rule must not be the reason the rule cannot be written.
+    """
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            docstrings.add(id(first.value))
+    return [
+        (node.lineno, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    ]
+
+
+def tables_named_in_strings(tree: ast.Module, partitioned: dict[str, str]) -> list[str]:
+    """Where a partitioned table is named in a string rather than in an expression.
+
+    The reference scan follows `Name` and `Attribute` nodes, and there is no such
+    node in `METADATA.tables["enrollments"]` or in a `text()` block. Both are ways
+    of reaching the table that the scan structurally cannot see, so the rule is
+    that the module does not write the name at all in anything it executes —
+    which is a property a reader can check by eye and a scan can check exactly.
+    """
+    wanted = set(partitioned) | set(partitioned.values())
+    return [
+        f"{lineno}:{name}"
+        for lineno, literal in executable_literals(tree)
+        for name in sorted(wanted)
+        if name in literal
+    ]
+
+
+def _enclosing_expression(node: ast.AST, parents: dict[int, ast.AST]) -> ast.AST:
+    """The whole chained expression one node belongs to."""
+    current = node
+    while isinstance(parents.get(id(current)), _CHAIN_LINKS):
+        current = parents[id(current)]
+    return current
+
+
+def local_names_for(tree: ast.Module, partitioned: frozenset[str]) -> frozenset[str]:
+    """Every name this module can reach a partitioned table by.
+
+    The declared names plus whatever the module renamed them to on import.
+    Public, because a scan that read only the canonical spelling would be
+    defeated by `from ...tables import enrollments as e`, which is one line and
+    changes nothing else about the read.
+    """
+    renamed = {
+        alias.asname
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if alias.asname and alias.name in partitioned
+    }
+    return partitioned | frozenset(renamed)
+
+
+def table_reference(node: ast.AST, names: frozenset[str]) -> str | None:
+    """The partitioned table one node names, however it names it.
+
+    Public: a control below runs it over each spelling. A bare `enrollments`, an
+    `enrollments` renamed on import, and a `tables.enrollments` read through the
+    declaration module are the same table, and the rendering returned is what the
+    guard call has to name for the reference to count as reached.
+    """
+    if isinstance(node, ast.Name) and node.id in names:
+        return node.id
+    if isinstance(node, ast.Attribute) and node.attr in names:
+        return ast.unparse(node)
+    return None
+
+
+def _tables_the_guard_reaches(chain: ast.AST) -> set[str]:
+    reached: set[str] = set()
+    for node in ast.walk(chain):
+        if not isinstance(node, ast.Call):
+            continue
+        name = node.func.attr if isinstance(node.func, ast.Attribute) else None
+        if isinstance(node.func, ast.Name) and node.func.id == "principal_scoped":
+            position = _GUARD_TABLE_ARGUMENT["principal_scoped"]
+            if len(node.args) > position:
+                reached.add(ast.unparse(node.args[position]))
+            continue
+        if name not in _FILTERING_CALLS:
+            continue
+        for argument in node.args:
+            applied = argument.value if isinstance(argument, ast.Starred) else argument
+            if (
+                isinstance(applied, ast.Call)
+                and isinstance(applied.func, ast.Name)
+                and applied.func.id == "partition_criterion"
+                and applied.args
+            ):
+                reached.add(ast.unparse(applied.args[_GUARD_TABLE_ARGUMENT["partition_criterion"]]))
+    return reached
+
+
+def unpartitioned_references(
+    tree: ast.Module, partitioned: frozenset[str]
+) -> tuple[int, list[str]]:
+    """Every mention of a partitioned table that no guard call in its expression reaches.
+
+    Public, because a control below runs it over a module with the partition
+    predicates removed, so the zero it reports for the real module is a
+    measurement rather than a scan that matched nothing.
+
+    The unit is the *reference*, not the statement. A statement-kind enumeration
+    is what let three unpartitioned `SELECT`s over `enrollments` — one annotated
+    assignment, one through `enrollments.alias()`, one as a `for` iterator — pass
+    the whole of this suite while a plain assignment beside them reddened. A
+    module cannot reach a table it never names, so quantifying over the names
+    leaves nothing for a statement shape to hide behind: the alias case is caught
+    at `alias = enrollments.alias()` itself, which is where the table is named,
+    and no chain of rebinding can reach the table without that line existing.
+
+    What is *not* covered here is a table named in raw SQL rather than in Python,
+    which is claim 3's, and a module other than this one, which is claim 1's.
+    """
+    parents = _parents(tree)
+    names = local_names_for(tree, partitioned)
+    checked = 0
+    offending: list[str] = []
+    for node in ast.walk(tree):
+        named = table_reference(node, names)
+        if named is None:
+            continue
+        checked += 1
+        chain = _enclosing_expression(node, parents)
+        if named not in _tables_the_guard_reaches(chain):
+            offending.append(f"{getattr(node, 'lineno', 0)}:{ast.unparse(node)}")
+    return checked, offending
+
+
 def test_every_corpus_coverage_statement_reaches_the_partition() -> None:
-    """WP-23's corpus read, statement by statement.
+    """WP-23's corpus read, one mention of the partitioned table at a time.
 
     Claim 1 says `knowledge.py` uses `principal_scope` somewhere; this says every
-    statement in it that names a partitioned table does. That is the claim the
-    corpus capability's isolation rests on, and it is a stronger claim here than
-    elsewhere in this module because `corpus_coverage` is the one read in the
-    extraction plane with no enrollment identifier to be narrowed by: the
+    place in it that names a partitioned table reaches the partition. That is the
+    claim the corpus capability's isolation rests on, and it is a stronger claim
+    here than elsewhere in this module because `corpus_coverage` is the one read
+    in the extraction plane with no enrollment identifier to be narrowed by: the
     authorization path confines every *other* read here to the caller's own
     enrollments before it runs, and confines this one to nothing at all, because
     its subject is every enrollment at once.
 
-    The unit is one top-level statement inside a function, the same unit
-    `test_every_relationship_statement_reaches_the_partition` uses. The floor is
-    what stops this passing over a module the walk failed to parse, and the
-    control below is what stops it passing over a module that simply never names
-    the partitioned table.
+    **The unit is the reference and not the statement, and the difference is the
+    whole of this rule's history.** As first written it inspected
+    `ast.Expr | ast.Assign | ast.Return` — the three statement kinds the queries
+    in this module happened to be written as — and a review planted three
+    unpartitioned reads of `enrollments` in the shapes that list omits: an
+    annotated assignment, a select over `enrollments.alias()`, and a `select`
+    evaluated as a `for` loop's iterator. All three passed the whole of
+    `tests/architecture`; the plain assignment planted as a control reddened. The
+    sibling scan over `jobs.py`, in this same file, already included
+    `ast.AnnAssign`, so the newer rule was strictly weaker than the older one it
+    was copied from — which is the way this class of hole is actually born.
+
+    Enumerating more node kinds would have closed those three plants and left the
+    fourth open. Quantifying over the mentions of the table closes the class: a
+    statement of any shape that reads `enrollments` has to name `enrollments`.
+
+    The floor is what stops this passing over a module the walk failed to parse,
+    and the control below is what stops it passing over a module that simply
+    never names the partitioned table.
     """
     path = PACKAGE / "infrastructure" / "persistence" / "knowledge.py"
-    partitioned = set(_partitioned_tables())
+    partitioned = frozenset(_partitioned_tables())
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
 
-    checked = 0
-    offending: list[str] = []
-    for function in ast.walk(tree):
-        if not isinstance(function, ast.FunctionDef):
-            continue
-        for statement in ast.walk(function):
-            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
-                continue
-            rendered = ast.unparse(statement)
-            if not any(f"{table}.c" in rendered for table in partitioned):
-                continue
-            checked += 1
-            if "partition_criterion(" not in rendered:
-                offending.append(f"{function.name}:{statement.lineno}")
-
-    assert checked >= 5, (
-        f"only {checked} corpus statements were examined; the walk is not reaching "
-        "the module's queries"
+    checked, offending = unpartitioned_references(tree, partitioned)
+    assert checked >= 12, (
+        f"only {checked} mentions of a partitioned table were examined; the walk "
+        "is not reaching the module's queries"
     )
     assert offending == [], (
-        f"{offending} build a statement over `enrollments` without reaching the "
+        f"{offending} name a principal-partitioned table without reaching the "
         "partition through `principal_scope`. A corpus answer is bounded by the "
-        "acting Principal and by nothing else, so a statement here that lost its "
+        "acting Principal and by nothing else, so a read here that lost its "
         "predicate would return another Principal's enrollments under this "
         "Principal's name"
     )
+    in_strings = tables_named_in_strings(tree, _partitioned_tables())
+    assert in_strings == [], (
+        f"{in_strings} name a partitioned table inside a string this module "
+        "executes. A table fetched by key or written into raw SQL has no `Name` "
+        "node for the rule above to find, so the partition it carries — if any — "
+        "would be unreadable to every scan in this file"
+    )
     # The control, and it is what makes the count above a measurement: this
     # module really does read unpartitioned tables beside the partitioned one, so
-    # "every statement is scoped" is a claim about a module that queries more
-    # than `enrollments` rather than one that barely queries it.
+    # "every read is scoped" is a claim about a module that queries more than
+    # `enrollments` rather than one that barely queries it.
     for unpartitioned in ("enrollment_objects", "source_objects", "extractions"):
         assert unpartitioned not in partitioned, f"{unpartitioned} gained a partition column"
         assert f"{unpartitioned}.c." in source, f"{unpartitioned} is no longer read here"
+
+
+def test_the_corpus_scan_reports_a_read_that_really_is_unscoped() -> None:
+    """The control for the rule above, over the shapes that defeated its first draft.
+
+    Three of these four were planted by an independent review and passed; the
+    plain assignment is their control, which reddened. All four are here so that
+    a future narrowing of the scan has to explain which of them it stopped
+    catching.
+
+    The four are *added* to the real module's source rather than written as a
+    synthetic function, so the fixture the scan is measured against is the code
+    it actually guards.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "knowledge.py"
+    partitioned = frozenset(_partitioned_tables())
+    source = path.read_text(encoding="utf-8")
+    anchor = "    validate_identifier(principal_id, IdKind.PRINCIPAL)\n"
+    assert source.count(anchor) >= 1, "the function this control plants into has moved"
+
+    plants = {
+        "annotated assignment": (
+            "    leaked: Select[tuple[str]] = select(enrollments.c.source_id)\n"
+        ),
+        "alias": (
+            "    every_row = enrollments.alias()\n"
+            "    leaked = connection.execute(select(every_row.c.source_id)).scalars().all()\n"
+        ),
+        "for iterator": (
+            "    for _row in connection.execute(select(enrollments.c.enrollment_id)):\n"
+            "        pass\n"
+        ),
+        "plain assignment": "    leaked = select(enrollments.c.source_id)\n",
+        # Not one of the review's: a different spelling of the same read, found
+        # by attacking the fix for the three above. One line renames the table
+        # and every scan written around the word `enrollments` stops seeing it.
+        "renamed import": (
+            "    from my_pa.infrastructure.persistence.tables import enrollments as e\n"
+            "    leaked = select(e.c.source_id)\n"
+        ),
+        # And through the declaration module rather than through a name bound
+        # from it, which is the other way to touch the table without writing it
+        # as a bare word.
+        "attribute of the declaration module": (
+            "    from my_pa.infrastructure.persistence import tables\n"
+            "    leaked = select(tables.enrollments.c.source_id)\n"
+        ),
+    }
+    for shape, planted in plants.items():
+        tree = ast.parse(source.replace(anchor, anchor + planted, 1))
+        _checked, offending = unpartitioned_references(tree, partitioned)
+        assert offending, f"the scan did not report the {shape} plant"
+
+    # And a criterion that filters nothing does not launder the read it sits
+    # beside, which is the shape a text search for `partition_criterion(` would
+    # have accepted.
+    beside = "    leaked = connection.execute(select(enrollments.c.source_id), mine)\n"
+    tree = ast.parse(
+        source.replace(
+            anchor, anchor + beside.replace("mine", "partition_criterion(enrollments, context)"), 1
+        )
+    )
+    _checked, offending = unpartitioned_references(tree, partitioned)
+    assert offending, "a criterion written outside a filtering call laundered the read"
+
+    # A table fetched by string key has no name node to find, and the string rule
+    # is what catches it. Both directions are asserted, because a rule nothing
+    # can trip is a rule that says nothing.
+    by_key = '    leaked = select(METADATA.tables["enrollments"].c.source_id)\n'
+    keyed = ast.parse(source.replace(anchor, anchor + by_key, 1))
+    _checked, missed = unpartitioned_references(keyed, partitioned)
+    assert missed == [], "the reference scan is claiming to follow a string key; it cannot"
+    assert tables_named_in_strings(keyed, _partitioned_tables()), (
+        "a table named only in a string reached neither rule"
+    )
+
+    # And it distinguishes: the real module reports nothing, or every assertion
+    # above would be satisfied by a scan that reports everything.
+    parsed = ast.parse(source)
+    _checked, clean = unpartitioned_references(parsed, partitioned)
+    assert clean == []
+    assert tables_named_in_strings(parsed, _partitioned_tables()) == []
+
+
+def test_the_corpus_scan_reads_each_spelling_of_the_table_it_guards() -> None:
+    """`table_reference` finds the table however the module happens to name it.
+
+    A renamed import and an attribute read through the declaration module are the
+    two ways to touch `enrollments` without writing the bare word, and a scan
+    that read only the bare word would be a scan against one spelling.
+    """
+    partitioned = frozenset(_partitioned_tables())
+    assert "enrollments" in partitioned, "the table this control is written around is gone"
+    for source, expected in (
+        ("enrollments", "enrollments"),
+        ("tables.enrollments", "tables.enrollments"),
+        ("declarations.enrollments.c.source_id", "declarations.enrollments"),
+    ):
+        found = [
+            table_reference(node, partitioned)
+            for node in ast.walk(ast.parse(source, mode="eval"))
+            if table_reference(node, partitioned) is not None
+        ]
+        assert found == [expected], source
+
+    # And it distinguishes: an unpartitioned table and a column that merely
+    # shares a name are not references to a partitioned table.
+    for ignored in ("extractions.c.enrollment_id", "row.enrollment_id", "source_objects.c.kind"):
+        assert [
+            node
+            for node in ast.walk(ast.parse(ignored, mode="eval"))
+            if table_reference(node, partitioned) is not None
+        ] == [], ignored
+
+    # A rename on import is a spelling, not an escape.
+    renamed = ast.parse("from x.tables import enrollments as e\nselect(e.c.source_id)\n")
+    assert local_names_for(renamed, partitioned) == partitioned | {"e"}
+    assert "e" not in local_names_for(
+        ast.parse("from x.tables import extractions as e"), partitioned
+    )
+
+
+def test_the_vocabularies_the_corpus_scan_uses_are_closed_at_the_sizes_they_declare() -> None:
+    """A vocabulary with no floor passes when it is emptied.
+
+    Exact equalities: emptying `_FILTERING_CALLS` would make every criterion
+    invisible and every read offending, which is safe, but emptying
+    `_CHAIN_LINKS` would shrink every expression to the bare name and emptying
+    `_GUARD_TABLE_ARGUMENT` would raise rather than pass — so the sizes are
+    pinned and growing one is a decision recorded here.
+    """
+    assert len(_CHAIN_LINKS) == 10
+    assert len(_FILTERING_CALLS) == 3
+    assert len(_GUARD_TABLE_ARGUMENT) == 2
+    assert set(_GUARD_TABLE_ARGUMENT) <= GUARD_CALLS
 
 
 #: The names `jobs.py` reaches a partitioned table through. It never names a

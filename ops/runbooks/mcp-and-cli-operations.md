@@ -32,6 +32,44 @@ error-code-to-status table, and the connection pools. Everything it says about
 configuration, the audit trail, and what is *not* covered applies here too: the
 three transports are one composition, and the differences are protocol only.
 
+## Withdrawing the MCP surface (WP-28)
+
+Two independent switches, both read once at startup and neither consulted per
+request.
+
+`MY_PA_MCP_SURFACE_DISABLED` is the kill switch. It is **off by default and the
+surface serves**, which is the opposite default from the remote capture ingress
+and is deliberate: this surface is a pipe an operator starts with
+`apps/gateway.py mcp`, on stdio, with no socket and no credential, so serving is
+already an act rather than an accident. The switch exists to *withdraw* the
+surface from a client already using it. Engaged, `tools/list` publishes nothing
+**and** `tools/call` is refused before the application is reached — a switch that
+only hid the tools would leave every name a client already knows reachable. A
+value that is not a boolean spelling refuses to start rather than being read as
+`false`.
+
+```
+MY_PA_MCP_SURFACE_DISABLED=true apps/gateway.py mcp   # publishes nothing, refuses every call
+```
+
+`MY_PA_MCP_CLIENT_ID` binds the surface to a row in the existing capture-client
+registry. Empty means no client is bound, which is the default. When it is set,
+the process refuses to serve if that client is absent, belongs to another
+Principal, or has been **revoked** — so `apps/cli/clients.py revoke` withdraws
+this surface at the next start, with no second registry and nothing else to
+remember.
+
+**This is identification, not authentication.** stdio carries no credential, so
+the process presents no secret and verifies none. Authenticating an external MCP
+client needs an ingress that does not exist in this build (`EXT-07`/`EXT-08`,
+operator-gated). There is no OAuth authorization server, no PKCE, no resource
+indicators and no per-client profile conformance testing; see
+`docs/operations/mcv-limitations.md` §13a.
+
+**Restart is required for either switch to take effect.** Both are composed once
+in `bootstrap.gateway`, and an already-running process keeps whatever it was
+started with. To withdraw a surface immediately, stop the process.
+
 ## What is the same, and why that matters
 
 All three transports call one function — `adapters/normalization.normalize` —

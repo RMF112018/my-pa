@@ -36,7 +36,10 @@ blanket rule that would either mislabel a capture or let an extraction slip
 through.
 
 **And nothing on this plane writes.** The read module builds no `insert`,
-`update` or `delete`, so a derived record cannot promote itself on the way out —
+`update` or `delete`, *and* hands the server no SQL text it did not build — the
+second half matters because `execute` is how every read here runs, so a
+statement wrapped in `text()` is a write that no builder name would reveal. A
+derived record therefore cannot promote itself on the way out —
 which is the failure section 24 names, and which
 `tests/architecture/test_derivation_proposes_and_never_promotes.py` holds for the
 continuity plane on the same terms.
@@ -45,10 +48,14 @@ continuity plane on the same terms.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from typing import Final
 
 import pytest
+from tests.architecture.test_derivation_proposes_and_never_promotes import (
+    WRITERS as PROMOTION_WRITERS,
+)
 from tests.conftest import WHEN as SOME_MOMENT
 from tests.conftest import (
     Scene,
@@ -101,7 +108,39 @@ PURPOSES: Final[dict[Capability, Purpose]] = {
 #: `test_derivation_proposes_and_never_promotes.py` names, for the same reason:
 #: "does this expression write" is not decidable in general, and these are what
 #: this repository's persistence layer uses.
-WRITERS: Final = frozenset({"insert", "update", "delete", "pg_insert"})
+#:
+#: **Imported rather than restated.** This comment used to say "the same five"
+#: beside a set of four: `execute` was missing, and with it missing a raw-SQL
+#: `UPDATE knowledge.extractions SET trust_level='source_original'` planted in
+#: the read plane passed this test and the whole architecture suite — acceptance
+#: control 4 failing open on the sentence that describes it. A correspondence
+#: worth writing down is a correspondence worth checking, so the set is now the
+#: sibling's own object and the two cannot drift.
+WRITERS: Final = PROMOTION_WRITERS
+
+#: Calls that put SQL text into a statement, bypassing the expression language.
+#: `execute` cannot be forbidden here — every read in the module executes — so
+#: what is forbidden instead is a statement the builders above did not build.
+RAW_SQL_CALLS: Final = frozenset({"text", "exec_driver_sql", "literal_column"})
+
+#: Verbs that change state, matched on word boundaries against every string this
+#: module executes. `is_truncated` is a column of `extractions` and is why the
+#: match is not a substring one.
+WRITE_VERBS: Final = frozenset(
+    {
+        "insert",
+        "update",
+        "delete",
+        "merge",
+        "truncate",
+        "alter",
+        "drop",
+        "create",
+        "grant",
+        "revoke",
+        "vacuum",
+    }
+)
 
 
 def test_the_family_this_guard_covers_is_the_domains_own() -> None:
@@ -248,28 +287,166 @@ def test_the_storage_refuses_it_too_and_defaults_to_the_truthful_value() -> None
     assert extractions.c.trust_level.nullable is False
 
 
+def called_names(tree: ast.Module) -> frozenset[str]:
+    """Every name this module calls, however the call names it."""
+    return frozenset(
+        node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name | ast.Attribute)
+    )
+
+
+def executed_strings(tree: ast.Module) -> list[tuple[int, str]]:
+    """Every string constant that is not a docstring.
+
+    The read module's docstring describes what it does not do — "nothing in this
+    module can create, change, or remove a row" — so a sweep that read prose
+    would be reporting the promise as if it were the breach.
+    """
+    docstrings: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            docstrings.add(id(first.value))
+    return [
+        (node.lineno, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    ]
+
+
+def raw_sql_writes(tree: ast.Module) -> list[str]:
+    """Where this module could hand the server a statement it did not build.
+
+    Three ways, and the rule refuses all three rather than the one that was
+    planted: a call that wraps SQL text, an import of the name that makes one,
+    and a state-changing verb in any string the module executes. The first two
+    are what catch text assembled from pieces no single literal spells; the third
+    is what catches the plain case even if SQLAlchemy grows a fourth way to
+    execute a string.
+    """
+    found = sorted(f"calls {name}" for name in called_names(tree) & RAW_SQL_CALLS)
+    found.extend(
+        f"imports {alias.name}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom | ast.Import)
+        for alias in node.names
+        if alias.name in RAW_SQL_CALLS
+    )
+    found.extend(
+        f"{lineno} writes {verb.upper()}"
+        for lineno, literal in executed_strings(tree)
+        for verb in sorted(WRITE_VERBS)
+        if re.search(rf"\b{verb}\b", literal, re.IGNORECASE)
+    )
+    return sorted(found)
+
+
 def test_the_read_module_builds_no_write_at_all() -> None:
     """Nothing on this plane can promote its own output on the way out.
 
     Section 24's failure is a derivation writing its output back as established
     fact, and it is easy to open by accident because it looks like a read. Held
     structurally: the module every knowledge-plane read goes through builds none
-    of the five statement kinds that write.
+    of the statement kinds that write, and hands the server no statement it did
+    not build.
+
+    **`execute` is in `WRITERS` and cannot be refused here**, which is exactly
+    how the hole this rule now closes was opened. The sibling names five writers
+    including `execute` and subtracts it where a read path legitimately executes;
+    this file named four, dropped `execute` silently, and described the four as
+    "the same five". A raw-SQL `UPDATE knowledge.extractions SET
+    trust_level='source_original'` planted in this module therefore passed both
+    this test and the whole architecture suite — a derived record promoting
+    itself to source evidence, which is the one thing section 24 names. So the
+    builder rule subtracts `execute` and states why, and `raw_sql_writes` is what
+    covers the statements a builder did not build.
     """
     tree = ast.parse(READS.read_text(encoding="utf-8"), filename=str(READS))
-    called = {
-        node.func.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    } | {
-        node.func.attr
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-    }
+    called = called_names(tree)
     assert "select" in called, "the guard is not reading a module that queries anything"
-    writes = sorted(called & WRITERS)
+    assert "execute" in called, (
+        "the module no longer executes anything, so the subtraction below is "
+        "excusing a call that is not there and this rule has stopped measuring"
+    )
+    writes = sorted(called & (WRITERS - {"execute"}))
     assert writes == [], (
         f"{READS.name} builds {writes}. Every capability that reads the extraction "
         "plane goes through this module; a write here is a read path that can change "
         "state, which is the shape section 24 forbids"
     )
+    raw = raw_sql_writes(tree)
+    assert raw == [], (
+        f"{READS.name} {raw}. `execute` is permitted here because every read uses "
+        "it, so what is refused instead is a statement the expression language did "
+        "not build: raw SQL is where a read plane acquires an UPDATE that no "
+        "builder name would reveal"
+    )
+
+
+def test_the_raw_sql_rule_reports_a_promotion_that_really_is_written() -> None:
+    """The control for the rule above, on the exact plant that got through.
+
+    Added to the real module's source rather than written as a synthetic
+    function, and asserted in both directions: the plant is reported, and the
+    module as it stands is not.
+    """
+    source = READS.read_text(encoding="utf-8")
+    anchor = "    validate_identifier(extraction_id, IdKind.KNOWLEDGE)\n"
+    assert anchor in source, "the function this control plants into has moved"
+
+    plants = {
+        "the planted raw UPDATE": (
+            "    connection.execute(\n"
+            "        text(\"UPDATE knowledge.extractions SET trust_level='source_original'\")\n"
+            "    )\n"
+        ),
+        "the driver escape hatch": (
+            "    connection.exec_driver_sql(\n"
+            "        \"UPDATE knowledge.extractions SET trust_level='source_original'\"\n"
+            "    )\n"
+        ),
+        "text assembled from halves": (
+            '    statement = text("UPD" + "ATE knowledge.extractions SET x = 1")\n'
+            "    connection.execute(statement)\n"
+        ),
+        "an import of the escape hatch": ("    from sqlalchemy import text\n"),
+    }
+    for shape, planted in plants.items():
+        tree = ast.parse(source.replace(anchor, anchor + planted, 1))
+        assert raw_sql_writes(tree), f"the rule did not report {shape}"
+
+    # And the builder half still reports a builder, or the subtraction of
+    # `execute` above would have quietly removed the only thing it checks.
+    with_builder = ast.parse(
+        source.replace(anchor, anchor + "    connection.execute(extractions.update())\n", 1)
+    )
+    assert sorted(called_names(with_builder) & (WRITERS - {"execute"})) == ["update"]
+
+    # And it distinguishes: the module as written reports nothing, or every
+    # assertion above would be satisfied by a rule that reports everything.
+    assert raw_sql_writes(ast.parse(source)) == []
+
+
+def test_the_writer_vocabularies_are_closed_at_the_sizes_they_declare() -> None:
+    """A vocabulary with no floor passes when it is emptied.
+
+    `WRITERS` is checked by identity against the module that owns it rather than
+    by size, which is the stronger form: the two sets cannot differ at all.
+    """
+    assert WRITERS == PROMOTION_WRITERS
+    assert len(WRITERS) == 5
+    assert "execute" in WRITERS, (
+        "the writer list dropped `execute` again. That is the omission that let a "
+        "raw-SQL promotion through both this test and the architecture suite"
+    )
+    assert len(RAW_SQL_CALLS) == 3
+    assert len(WRITE_VERBS) == 11

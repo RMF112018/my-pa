@@ -456,7 +456,7 @@ inferred.
 | `pytest tests/architecture -q` | 1 | **2080 passed, 1 failed.** Base measured at `06282a3`: **2061 passed, 1 failed**. 2061 + 19 = 2080, and the 19 are the new architecture module in full |
 | `pytest tests/schema tests/database -q` | 0 | **286 passed** — identical to the base; this package adds no test there |
 | `ruff check .` | 0 | All checks passed |
-| `ruff format --check .` | 0 | **589 files** already formatted — 588 at the base plus the one module added |
+| `ruff format --check .` | 0 | **590 files** already formatted — 588 at the base plus **two**, and the second is worth naming rather than hand-waving: measured per directory over a clean `git archive` of each commit, `tests` moves 188 → 189 for the new architecture module and `docs` moves 92 → 93 for this record, because ruff's file count includes Markdown as well as Python. Base and head archives were both measured with `--no-cache`, since a cached run reports a different figure |
 | `mypy` per repo config | 0 | no issues in **177 source files** — unchanged, because no Python source was added |
 | Alembic revisions | — | single head `8f2b6c4d1a37` over **26** revision files — unchanged |
 | Capability seats | — | **19** — unchanged |

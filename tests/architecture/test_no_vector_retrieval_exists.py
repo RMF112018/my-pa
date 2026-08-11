@@ -22,7 +22,11 @@ looking for and asserts the detector finds it.
    structurally cannot supply: `op.execute("ALTER TABLE ... ADD COLUMN
    note_embedding real[]")` installs a column no `Table` object in this process
    has ever heard of, so `METADATA` reports nothing and the migration is the
-   whole of the evidence there is.
+   whole of the evidence there is. Three revisions write no DDL literal at all
+   and execute `migrations/sql/*.sql` instead; those twenty-four thousand lines
+   are swept too, and the two ported legacy tables named for embeddings and
+   similarity are registered by name in `PORTED_VECTOR_NAMES` rather than left
+   for a reader to discover.
 3. **No module imports an embedding or model provider.** Every `import` in
    `src/` and `apps/`, read as a syntax tree, matched against a closed list of
    distributions — and against every requirement in every dependency block of
@@ -188,6 +192,57 @@ DISTANCE_OPERATOR: Final = "<->"
 #: `vector` would arrive.
 INSTALLED_EXTENSIONS: Final = ("pg_trgm", "unaccent")
 
+#: Every object in the ported target schema whose *name* carries one of
+#: `SCHEMA_WORDS`, as an exact registry.
+#:
+#: **These are not this system's retrieval machinery and they are not nothing
+#: either, so they are written down.** `1e6c0a94f3b7` and the two revisions after
+#: it create 484 tables ported from the legacy SQLite database, and the DDL lives
+#: in `migrations/sql/*.sql` rather than in a Python literal — twenty-four
+#: thousand lines that no rule in this file read until the registry below existed.
+#: Two of those tables are named for embeddings and similarity: `content_embeddings`
+#: is the legacy system's own embedding ledger and `candidate_similarity_edges` is
+#: its clustering output, and everything else here is a constraint, index, key or
+#: column of one of them.
+#:
+#: What makes them not a hole is the rule beside this one:
+#: `test_no_sql_file_the_chain_executes_installs_a_vector_space` reads the same
+#: files for `SQL_FRAGMENTS` and for `<->` and finds none, so there is no vector
+#: type, no ANN access method, no distance operator and no extension anywhere in
+#: them. A ported table with a `similarity_score` column that nothing computes
+#: and nothing queries is inherited data shape, not staged infrastructure. The
+#: registry is exact so that a twenty-eighth name is a decision someone writes
+#: down rather than a diff nobody reads.
+PORTED_VECTOR_NAMES: Final = (
+    "candidate_similarity_edges",
+    "candidate_similarity_edges_calendar_mutation_performed_ck13",
+    "candidate_similarity_edges_download_url_persisted_ck8",
+    "candidate_similarity_edges_email_send_performed_ck12",
+    "candidate_similarity_edges_external_writeback_performed_ck9",
+    "candidate_similarity_edges_graph_writeback_performed_ck10",
+    "candidate_similarity_edges_pkey",
+    "candidate_similarity_edges_procore_writeback_performed_ck11",
+    "candidate_similarity_edges_raw_calendar_payload_persisted_ck3",
+    "candidate_similarity_edges_raw_document_text_persisted_ck2",
+    "candidate_similarity_edges_raw_email_body_persisted_ck1",
+    "candidate_similarity_edges_raw_procore_payload_persisted_ck4",
+    "candidate_similarity_edges_raw_prompt_persisted_ck5",
+    "candidate_similarity_edges_raw_response_persisted_ck6",
+    "candidate_similarity_edges_signed_url_persisted_ck7",
+    "content_embeddings",
+    "content_embeddings_fk0",
+    "content_embeddings_pkey",
+    "content_embeddings_uq1",
+    "ix_candidate_similarity_edges_a",
+    "ix_candidate_similarity_edges_b",
+    "ix_candidate_similarity_edges_cluster",
+    "ix_candidate_similarity_edges_date",
+    "name_similarity",
+    "similarity_edge_id",
+    "similarity_method",
+    "similarity_score",
+)
+
 
 def _modules() -> tuple[Path, ...]:
     return tuple(sorted(PACKAGE.rglob("*.py"))) + tuple(sorted(APPS.rglob("*.py")))
@@ -195,6 +250,21 @@ def _modules() -> tuple[Path, ...]:
 
 def _revision_files() -> tuple[Path, ...]:
     return tuple(sorted(REVISIONS.glob("*.py")))
+
+
+def _sql_files() -> tuple[Path, ...]:
+    """The `.sql` files three revisions read and execute statement by statement."""
+    return tuple(sorted((REVISIONS.parent / "sql").glob("*.sql")))
+
+
+def quoted_identifiers(text: str) -> frozenset[str]:
+    """Every double-quoted identifier in a block of SQL.
+
+    Public, because the registry below is measured with it. The generated target
+    DDL quotes every identifier it writes, which is what makes the set readable
+    without parsing SQL.
+    """
+    return frozenset(re.findall(r'"([A-Za-z0-9_]+)"', text))
 
 
 def _tables() -> tuple[Table, ...]:
@@ -383,6 +453,7 @@ def test_the_vocabularies_are_closed_at_the_sizes_they_declare() -> None:
     assert len(SQL_FRAGMENTS) == 14
     assert len(INSTALLED_EXTENSIONS) == 2
     assert len(PROVIDER_NEUTRAL_LAYERS) == 3
+    assert len(PORTED_VECTOR_NAMES) == 27
 
 
 def test_no_table_column_or_index_in_the_live_schema_is_vector_machinery() -> None:
@@ -537,6 +608,102 @@ def test_the_revision_ddl_scan_finds_each_shape_a_statement_can_be_written_in() 
     assert folded(split) == "note_embedding"
     assert folded(ast.parse('f"embed{x}ding"', mode="eval").body) == "embedding"
     assert folded(ast.parse("value + other", mode="eval").body) is None
+
+
+def test_no_sql_file_the_chain_executes_installs_a_vector_space() -> None:
+    """Property 2 over the DDL that is not written in Python at all.
+
+    `1e6c0a94f3b7`, `2f7d1ba05c48` and `3a8e2cb16d59` do not write their
+    statements as literals: they read `migrations/sql/*.sql` and execute what is
+    in them. That is twenty-four thousand lines of DDL the chain runs against a
+    real database, and until this rule existed every sweep in this file walked
+    past it, because none of them opens a file that is not Python.
+
+    This is the *whole* vocabulary — the access methods, the operator forms, and
+    `<->` — over the whole of those files. Prose is not a concern here: a `.sql`
+    file is executable by definition, so nothing is excluded and nothing needs to
+    be.
+    """
+    files = _sql_files()
+    assert len(files) == 6, f"{len(files)} SQL files were found; the chain reads six"
+    lines = sum(len(path.read_text(encoding="utf-8").splitlines()) for path in files)
+    assert lines >= 20000, f"only {lines} lines of DDL were read"
+
+    offending: list[str] = []
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        found = [*sql_fragments_in(text)]
+        if DISTANCE_OPERATOR in text:
+            found.append(DISTANCE_OPERATOR)
+        if found:
+            offending.append(f"{path.name} {found}")
+    assert offending == [], (
+        f"{offending} install or query a vector or similarity space in DDL the "
+        "chain executes from a file. The ported target schema carries two tables "
+        "named for embeddings and similarity — `PORTED_VECTOR_NAMES` records them "
+        "— and what makes those inherited data shape rather than staged "
+        "infrastructure is precisely that this list is empty"
+    )
+
+
+def test_the_ported_schema_names_vector_machinery_only_where_it_is_registered() -> None:
+    """The other half: the names, against an exact registry rather than a ban.
+
+    A ban would be false — `content_embeddings` and `candidate_similarity_edges`
+    are in the legacy database and the port carries them — and silence would be
+    worse, because a reader of this file would conclude that no object anywhere
+    in this repository is named for an embedding. So the twenty-seven names are
+    written out, and a twenty-eighth reddens.
+    """
+    found: set[str] = set()
+    for path in _sql_files():
+        found |= {
+            identifier
+            for identifier in quoted_identifiers(path.read_text(encoding="utf-8"))
+            if schema_words_in(identifier)
+        }
+    assert tuple(sorted(found)) == PORTED_VECTOR_NAMES, (
+        f"{sorted(found ^ set(PORTED_VECTOR_NAMES))} is named for vector machinery "
+        "in the ported target schema and is not registered, or is registered and "
+        "is gone. Section 23 gates semantic retrieval; a new object named for it "
+        "arriving through the port is that gate opened by inheritance"
+    )
+    # And the registry is two tables and their parts, not an open list: every
+    # registered name belongs to one of them, so "twenty-seven" cannot quietly
+    # become a third subject.
+    roots = ("content_embeddings", "candidate_similarity_edges", "similarity_", "name_similarity")
+    unaccounted = [name for name in PORTED_VECTOR_NAMES if not any(root in name for root in roots)]
+    assert unaccounted == [], unaccounted
+    assert len(PORTED_VECTOR_NAMES) == 27
+
+
+def test_the_sql_file_scan_reads_a_file_that_really_names_one(tmp_path: Path) -> None:
+    """The control for the two rules above, in both halves.
+
+    Run over a file rather than a string, because "the sweep opens the file" is
+    the part that was missing and the part a string plant would not exercise.
+    """
+    planted = tmp_path / "target_indexes.up.sql"
+    planted.write_text(
+        'CREATE INDEX "notes_ann" ON "core"."notes" USING hnsw ("note_embedding" '
+        'vector_cosine_ops);\nCREATE TABLE "core"."semantic_index_probe" ();\n',
+        encoding="utf-8",
+    )
+    text = planted.read_text(encoding="utf-8")
+    assert sql_fragments_in(text)
+    assert {name for name in quoted_identifiers(text) if schema_words_in(name)} == {
+        "note_embedding",
+        "semantic_index_probe",
+    }
+
+    # And it distinguishes: ordinary ported DDL is neither.
+    ordinary = tmp_path / "target_tables.up.sql"
+    ordinary.write_text(
+        'CREATE TABLE "core"."documents" ("document_id" text PRIMARY KEY);\n', encoding="utf-8"
+    )
+    plain = ordinary.read_text(encoding="utf-8")
+    assert sql_fragments_in(plain) == ()
+    assert {name for name in quoted_identifiers(plain) if schema_words_in(name)} == set()
 
 
 def test_the_installed_extensions_are_the_two_the_foundation_declares() -> None:

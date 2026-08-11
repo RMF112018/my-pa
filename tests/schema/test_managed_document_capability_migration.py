@@ -68,7 +68,7 @@ SCHEMA: Final = "knowledge"
 MANAGED_REVISION: Final = "6b3d9a2f8c14"
 PREVIOUS_REVISION: Final = "4c7b2e91d8a5"
 
-#: The six names this revision admits, and the two purposes beside them.
+#: The names this revision admits, and the purposes beside them.
 CAPABILITIES_ADDED: Final[frozenset[str]] = frozenset(
     {
         "documents.archive",

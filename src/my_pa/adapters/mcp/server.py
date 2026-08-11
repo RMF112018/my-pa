@@ -82,7 +82,13 @@ from typing import Any
 from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, TextContent
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    ListToolsResult,
+    TextContent,
+    Tool,
+)
 from mcp.types import PaginatedRequestParams as ListToolsParams
 
 from my_pa import __version__
@@ -92,6 +98,7 @@ from my_pa.application.errors import (
     ApplicationError,
     InternalError,
     InvalidRequestError,
+    UnsupportedError,
     problem_detail,
 )
 from my_pa.application.service import ApplicationService
@@ -100,7 +107,7 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.source.registry import issue_identifier
 
-__all__ = ["SERVER_NAME", "create_mcp_server", "serve_stdio"]
+__all__ = ["SERVER_NAME", "create_mcp_server", "published_tools", "serve_stdio"]
 
 #: What this server calls itself in `initialize`. Neutral, as `AGENTS.md`
 #: section 4 requires of every external and MCP name.
@@ -183,24 +190,67 @@ def _answer(
     return envelope.to_canonical_json(), envelope.error is not None
 
 
-def create_mcp_server(service: ApplicationService, *, principal: Principal) -> Server[object]:
+def published_tools(service: ApplicationService) -> tuple[Tool, ...]:
+    """The tools this *composed* process can actually serve.
+
+    `TOOLS` is derived from the capability set at import and is what the build
+    implements. This is what the running process can serve, which is smaller
+    whenever a capability needs something the composition root did not supply —
+    today, the `documents.` names in a process with no managed root. The filter
+    reads `ApplicationService.available_capabilities` and decides nothing:
+    publishing a tool a caller is then refused for would make `tools/list` a
+    second, wrong statement of the capability set, which is exactly what
+    `adapters/mcp/tools.py` exists to prevent.
+
+    Not a policy filter, and it must not become one. Which purposes may invoke a
+    capability, and whether it is operator-only, stay behind `invoke`; this reads
+    only whether the process was composed with what the capability needs.
+    """
+    available = {capability.value for capability in service.available_capabilities}
+    return tuple(tool for tool in TOOLS if tool.name in available)
+
+
+def create_mcp_server(
+    service: ApplicationService, *, principal: Principal, enabled: bool = True
+) -> Server[object]:
     """The MCP server serving `service` as the one local `principal`.
 
     `principal` is the authenticated context the composition root established
     and is fixed for the life of the process, because the process is what the
     trust boundary is: one local operator behind a pipe (`D-30`).
+
+    **`enabled` is the kill switch, and it kills both halves.** A surface that
+    only stopped publishing tools would still answer `tools/call` for a name a
+    client already knew, and a client that has spoken to this server before knows
+    every one of them. So `tools/list` publishes nothing *and* `tools/call` is
+    refused before the service is reached — the refusal is built here, from the
+    application's own error vocabulary, and no `invoke` happens.
+
+    The switch is composed rather than read here: `bootstrap.gateway` decides,
+    from `MY_PA_MCP_SURFACE_DISABLED` and from whether the bound client is still
+    usable. This module holds a boolean and no configuration.
     """
 
     async def _list_tools(
         context: ServerRequestContext[object], params: ListToolsParams | None
     ) -> ListToolsResult:
         """`tools/list`. Derived; see `adapters/mcp/tools.py`."""
-        return ListToolsResult(tools=list(TOOLS))
+        return ListToolsResult(tools=[] if not enabled else list(published_tools(service)))
 
     async def _call_tool(
         context: ServerRequestContext[object], params: CallToolRequestParams
     ) -> CallToolResult:
         """`tools/call`. The one `await` in this package."""
+        if not enabled:
+            # No thread, no service, no envelope. There is no request identity to
+            # build one from and nothing to correlate a disabled surface against
+            # beyond the refusal itself.
+            return CallToolResult(
+                content=[
+                    TextContent(type="text", text=_problem(UnsupportedError()).to_canonical_json())
+                ],
+                is_error=True,
+            )
         loop = asyncio.get_running_loop()
         text, failed = await loop.run_in_executor(
             None, _answer, service, principal, params.name, params.arguments
@@ -221,7 +271,7 @@ async def _serve(server: Server[object]) -> None:
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
-def serve_stdio(service: ApplicationService, *, principal: Principal) -> None:
+def serve_stdio(service: ApplicationService, *, principal: Principal, enabled: bool = True) -> None:
     """Serve `service` over standard input and output until the client goes away.
 
     Synchronous, and that is the boundary: this owns an event loop for the
@@ -232,4 +282,4 @@ def serve_stdio(service: ApplicationService, *, principal: Principal) -> None:
     protocol stream, which is why the composition root sends its startup notice
     to standard error and why nothing in the application prints.
     """
-    asyncio.run(_serve(create_mcp_server(service, principal=principal)))
+    asyncio.run(_serve(create_mcp_server(service, principal=principal, enabled=enabled)))

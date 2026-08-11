@@ -230,7 +230,9 @@ def http_transport(service: ApplicationService, principal: Principal) -> Iterato
 
 
 @contextmanager
-def mcp_transport(service: ApplicationService, principal: Principal) -> Iterator[McpTransport]:
+def mcp_transport(
+    service: ApplicationService, principal: Principal, *, enabled: bool = True
+) -> Iterator[McpTransport]:
     """A running MCP server and an initialized client, on a private event loop.
 
     The server is configured exactly as `serve_stdio` configures it — the same
@@ -249,7 +251,7 @@ def mcp_transport(service: ApplicationService, principal: Principal) -> Iterator
 
     async def session() -> None:
         async with create_client_server_memory_streams() as (client_streams, server_streams):
-            server = create_mcp_server(service, principal=principal)
+            server = create_mcp_server(service, principal=principal, enabled=enabled)
             serving = asyncio.create_task(
                 server.run(
                     server_streams[0], server_streams[1], server.create_initialization_options()

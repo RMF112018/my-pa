@@ -214,9 +214,9 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.CONTINUITY_SITUATIONS, Purpose.CAPTURE_REVIEW),
         (Capability.CONTINUITY_PROJECTS, Purpose.CAPTURE_REVIEW),
         (Capability.KNOWLEDGE_COVERAGE, Purpose.STATUS_OBSERVATION),
-        # WP-28's managed-document plane. Two purposes of its own rather than a
-        # reuse of the capture or knowledge pair, and the writes and the reads are
-        # separated: a purpose wide enough to cover both would grant both.
+        # WP-28's managed-document plane. A purpose pair of its own rather than
+        # a reuse of the capture or knowledge pair, and the writes and the reads
+        # are separated: a purpose wide enough to cover both would grant both.
         (Capability.DOCUMENTS_CREATE, Purpose.DOCUMENT_AUTHORING),
         (Capability.DOCUMENTS_REVISE, Purpose.DOCUMENT_AUTHORING),
         (Capability.DOCUMENTS_ARCHIVE, Purpose.DOCUMENT_AUTHORING),

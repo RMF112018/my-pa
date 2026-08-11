@@ -203,7 +203,7 @@ def _mcp(args: argparse.Namespace) -> int:
     print(f"serving     mcp on stdio as {SERVER_NAME}", file=sys.stderr)
     print(_SOURCE_PROVIDER_NOTICE, file=sys.stderr, flush=True)
     try:
-        serve_stdio(runtime.service, principal=runtime.principal)
+        serve_stdio(runtime.service, principal=runtime.principal, enabled=runtime.mcp_enabled)
     finally:
         runtime.close()
     return 0

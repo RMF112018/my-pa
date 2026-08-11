@@ -286,7 +286,7 @@ def test_a_successful_managed_write_leaves_an_audit_row(runtime: _Runtime) -> No
 
 
 def test_every_managed_capability_leaves_a_row_naming_itself(runtime: _Runtime) -> None:
-    """All six, so the seat is not proved for `create` and assumed for the rest."""
+    """Every one of them, so the seat is not proved for `create` and assumed for the rest."""
     receipt = _created(runtime)
     document_id = receipt["document_id"]
     runtime.invoke(

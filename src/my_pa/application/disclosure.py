@@ -53,11 +53,13 @@ from my_pa.contracts.v1.disclosure import (
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.provenance import TrustLevel
+from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.source.enrollment import Enrollment
 
 __all__ = [
     "Limitation",
+    "corpus_disclosure",
     "disclosure_for",
     "unavailable_disclosure",
     "unenrolled_disclosure",
@@ -105,6 +107,30 @@ class Limitation(StrEnum):
     #: is no field a quote could go in. A caller acts on it by reading the
     #: version through `capture.read`, under that capability's own audit event.
     EVIDENCE_SPANS_CARRY_NO_QUOTED_TEXT = "evidence_spans_carry_offsets_and_digests_only"
+    #: A corpus answer's totals are sums of what each enrollment stated, so an
+    #: object two enrollments both enumerate is counted once per enrollment.
+    #: Published only when there is more than one enrollment to sum, because with
+    #: one the sum *is* that enrollment's own statement. The alternative —
+    #: deduplicating into a distinct-object total — would report a number nobody
+    #: measured, which is the global inference `docs/specs` section 12 forbids.
+    CORPUS_TOTALS_ARE_PER_ENROLLMENT_SUMS = "corpus_totals_are_sums_of_per_enrollment_statements"
+    #: A corpus answer covers the sources this Principal has enrolled and no
+    #: others. Unconditional on that capability, because the property is: a source
+    #: nobody enrolled is not in `enrollments`, `knowledge.sources` carries no
+    #: `principal_id` to bound a wider count by, and counting the operator's whole
+    #: registry would disclose another Principal's enrollments in aggregate. The
+    #: token is what stops the answer reading as "this is everything that exists".
+    CORPUS_COVERS_ONLY_ENROLLED_SOURCES = "corpus_covers_only_sources_this_principal_enrolled"
+    #: **A search answered inside one enrollment while the Principal holds scope
+    #: outside it.** The result is correct for the enrollment it names and is not
+    #: an answer about the corpus, and without this token a caller has no way to
+    #: tell those apart — which is section 23's named failure: a search that
+    #: silently omits unindexed scope and returns a confident answer. Emitted from
+    #: a measurement, never from a constant, and beside `partial_result=True`.
+    #: It says *that* there is scope outside the question and never how much or
+    #: what, so it is not a channel for the size of a scope the request did not
+    #: name.
+    SEARCH_DOES_NOT_SPAN_THE_CORPUS = "search_does_not_span_this_principals_corpus"
     #: **The token that makes "unavailable" different from "empty".** The scope
     #: was not searched — a subject kind this evidence model does not cover, or
     #: a version whose derivation has not completed — so the absence of results
@@ -262,6 +288,68 @@ def unenrolled_disclosure(
         truncation=truncation,
         limitations=tuple(sorted(token.value for token in dict.fromkeys(extra_limitations))),
         partial_result=truncation.is_truncated,
+        classification=Classification.PRIVATE_LOCAL,
+        cloud_eligible=False,
+    )
+
+
+def corpus_disclosure(
+    corpus: CorpusCoverage,
+    *,
+    trust_basis: tuple[str, ...] = ("composed_enrollment_coverage",),
+) -> Disclosure:
+    """The envelope for a Principal-wide corpus coverage answer.
+
+    **Every number in it is a sum of statements, and the envelope says so.** The
+    coverage block carries the summed counts because `Coverage` requires
+    integers and a caller rendering the envelope should see the same figures the
+    payload does; `CORPUS_TOTALS_ARE_PER_ENROLLMENT_SUMS` is what stops those
+    figures being read as a distinct-object corpus total, and the per-enrollment
+    breakdown in the payload is where the unmerged statements are.
+
+    **The state is `CorpusCoverage`'s and is not recomputed here.** That type
+    refuses to be constructed claiming a complete corpus while anything lies
+    outside the enrollments, anything awaits an outcome, or any enrollment is
+    less than processed — so `partial_result` follows from a value that could not
+    have lied about it, rather than from arithmetic this function performs a
+    second time.
+
+    `Scope` names the enrollments and no source. A corpus answer is about
+    everything the Principal holds, and listing the sources would say which
+    sources those are in a field a caller may treat as the authorized scope of
+    the *result*; the enrollments are the grants the answer is composed from, and
+    each of them is one the Principal already holds.
+    """
+    state = corpus.state()
+    tokens: list[Limitation] = [Limitation.CORPUS_COVERS_ONLY_ENROLLED_SOURCES]
+    if corpus.totals_are_per_enrollment_sums:
+        tokens.append(Limitation.CORPUS_TOTALS_ARE_PER_ENROLLMENT_SUMS)
+    return Disclosure(
+        scope=Scope(
+            enrollment_ids=tuple(
+                sorted(
+                    counts.enrollment_id
+                    for counts in corpus.enrollments
+                    if counts.enrollment_id is not None
+                )
+            )
+        ),
+        coverage=Coverage(
+            state=state,
+            eligible=corpus.stated_eligible,
+            processed=corpus.stated_processed,
+            quarantined=corpus.stated_quarantined,
+            unsupported=corpus.stated_unsupported,
+        ),
+        freshness=Freshness(
+            observed_at=corpus.observed_at, state=FreshnessState.CURRENT_FOR_OBSERVED_VERSION
+        ),
+        trust=Trust(level=TrustLevel.SOURCE_BOUND_DERIVED, basis=trust_basis),
+        limitations=(
+            *sorted(token.value for token in dict.fromkeys(tokens)),
+            *corpus.disclosed_limitations,
+        ),
+        partial_result=state in _PARTIAL_STATES,
         classification=Classification.PRIVATE_LOCAL,
         cloud_eligible=False,
     )

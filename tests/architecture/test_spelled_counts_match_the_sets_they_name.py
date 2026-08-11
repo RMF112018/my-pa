@@ -835,12 +835,22 @@ def test_a_planted_claim_of_every_shape_is_caught(tmp_path: Path) -> None:
 
 
 def test_a_correct_claim_of_every_shape_passes(tmp_path: Path) -> None:
-    """The green half. A rule that flagged every number would prove nothing."""
+    """The green half. A rule that flagged every number would prove nothing.
+
+    The cardinals come from `SPELLED` rather than from `_UNITS`, and that is the
+    boundary this module's own note on `SPELLED` predicted: `_UNITS` is dense
+    from zero to nineteen and the capability set reached twenty in WP-23, so the
+    bare index raised `IndexError` — a refusal rather than a false pass, which is
+    the direction it was built to fail in. `SPELLED` is the inverse of the
+    *built* cardinal map and so keeps spelling past every boundary the map
+    itself covers. `_ORDINAL_UNITS` is still indexed directly, because it is a
+    written tuple whose next boundary announces itself the same way this one did.
+    """
     planted = tmp_path / "planted.md"
     planted.write_text(
-        f"The set is closed at {_UNITS[capability_count()]}. There are "
-        f"{_UNITS[capability_count()]} capability names and "
-        f"{_UNITS[purpose_count()]} purposes, so a "
+        f"The set is closed at {SPELLED[capability_count()]}. There are "
+        f"{SPELLED[capability_count()]} capability names and "
+        f"{SPELLED[purpose_count()]} purposes, so a "
         f"{_ORDINAL_UNITS[capability_count() + 1]} capability would be new.\n",
         encoding="utf-8",
     )

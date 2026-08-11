@@ -113,6 +113,38 @@ class Capability(StrEnum):
     CONTINUITY_PULSE = "continuity.pulse"
     CONTINUITY_SITUATIONS = "continuity.situations"
     CONTINUITY_PROJECTS = "continuity.projects"
+    # The twentieth, and `2d9f4a7c1e58` carries the forward `ALTER` that admits
+    # it — written before the member, for the reason `5e2c7b0a94f6` records: a
+    # member with no `ALTER` leaves every test green, because every test builds
+    # its database from scratch, and is refused by the stored constraint on the
+    # first audited operation in the field.
+    #
+    # **A capability rather than a widening of `sources.status`.** `D-91`'s test
+    # is whether one name reaches rows another does not. `sources.status` answers
+    # about **one named subject** — a source, an enrollment, an operation or an
+    # object — inside a scope the Principal already holds, and its requested
+    # scope is derived from that subject. `knowledge.coverage` names no subject at
+    # all: it reads every enrollment the acting Principal holds at once, and it
+    # reads `source_objects` rows that lie *outside* every one of them, which no
+    # status request can reach through any subject it is able to name. Widening
+    # `sources.status` to answer it would mean a request that named one source
+    # returning counts about all of them, which is the silent scope escalation
+    # `_requested_scope` exists to prevent.
+    #
+    # **And not a widening of `knowledge.search`.** That capability is scoped by
+    # the enrollment the request names, and WP-23 makes a search *say* that its
+    # answer does not span the corpus rather than letting it reach past the
+    # enrollment to find out. Admitting the corpus read under the search name
+    # would authorize exactly the reach that token exists to deny.
+    #
+    # **`knowledge.` rather than `sources.` or `continuity.`** because the answer
+    # is about the extraction plane's coverage of what the Principal holds —
+    # enrollments, enumerated objects, and outcomes — and not about a configured
+    # source's own state, which is what the `sources.` family answers.
+    #
+    # Not operator-only: it grants nothing, writes nothing, and returns counts
+    # over the acting Principal's own enrollments and no one else's.
+    KNOWLEDGE_COVERAGE = "knowledge.coverage"
 
 
 class NativeSourceCapability(StrEnum):
@@ -239,6 +271,25 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.CONTINUITY_PULSE: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CONTINUITY_SITUATIONS: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CONTINUITY_PROJECTS: frozenset({Purpose.CAPTURE_REVIEW}),
+        # `STATUS_OBSERVATION`, reused, and the residual is stated rather than
+        # smoothed over. `D-91`'s test asks whether the reuse widens the grant.
+        # Honestly answered: partly. Corpus coverage is a status observation —
+        # how far processing has got, over the extraction plane — which is
+        # exactly what that purpose already admits for `sources.status`. But
+        # `sources.status` answers about one named subject and this answers about
+        # every enrollment the Principal holds plus the objects outside them all,
+        # so after this package a grant issued to observe status reaches a wider
+        # row set than it did.
+        #
+        # It is paid because both alternatives are worse. A `corpus_observation`
+        # purpose would map one-to-one, separate nothing any authority in this
+        # build can act on — under `P00-OD-010` there is one local Principal —
+        # and cost a frozen-constraint `ALTER` on `purpose_is_known` for a
+        # distinction nobody could enforce. `KNOWLEDGE_SEARCH` would be the
+        # escalation this module refuses in the other direction: that purpose is
+        # bound to the enrollment a search names, and admitting a corpus-wide read
+        # under it would make a grant issued to search one scope reach every scope.
+        Capability.KNOWLEDGE_COVERAGE: frozenset({Purpose.STATUS_OBSERVATION}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

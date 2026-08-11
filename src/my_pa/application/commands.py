@@ -57,6 +57,7 @@ __all__ = [
     "EnterFrameCommand",
     "FetchSource",
     "GetCapabilities",
+    "GetCorpusCoverage",
     "GetPulse",
     "GetSourceMetadata",
     "GetSourceStatus",
@@ -641,6 +642,22 @@ class ListProjects:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
 
 
+@dataclass(frozen=True, slots=True)
+class GetCorpusCoverage:
+    """`knowledge.coverage`: how much of everything this Principal holds was covered.
+
+    **No payload at all, and that is the shape rather than an omission.** The
+    subject is the acting Principal, which the gateway established and no request
+    may state; there is no enrollment to name, because naming one would produce
+    the per-enrollment answer `sources.status` already gives, and no source to
+    filter by, because a corpus answer filtered to one source is not a corpus
+    answer. A field here would be a way to ask a narrower question under a name
+    that promises a wider one.
+    """
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_COVERAGE
+
+
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
 type Command = (
@@ -663,6 +680,7 @@ type Command = (
     | GetPulse
     | ListSituations
     | ListProjects
+    | GetCorpusCoverage
 )
 
 

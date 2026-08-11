@@ -85,6 +85,7 @@ from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.capture.reveal import Reveal
 from my_pa.domain.capture.review import ReviewCase, ReviewDecision
 from my_pa.domain.capture.version import CaptureVersion
+from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.search.query import SearchRequest
@@ -105,6 +106,7 @@ from my_pa.infrastructure.persistence.enrollment import (
 from my_pa.infrastructure.persistence.extraction import coverage_for
 from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
 from my_pa.infrastructure.persistence.knowledge import (
+    corpus_coverage,
     latest_limitations,
     outcome_for_object,
     read_extraction,
@@ -395,6 +397,27 @@ class _Knowledge(KnowledgeRepository):
             # left as an untyped crash, and raised outside the handler so a
             # traceback does not render the frames of a coverage read.
             failure = RepositoryFailureError("the coverage read could not be completed")
+        raise failure
+
+    def corpus(self, principal_id: str, *, observed_at: datetime) -> CorpusCoverage:
+        """The Principal's whole corpus, translated like every other read here.
+
+        The `ValueError` guard is `coverage`'s and for the same reasons plus one
+        of its own: `CorpusCoverage` refuses a composition whose parts contradict
+        each other — an enrollment stated twice, more objects outside the
+        enrollments than the sources hold, or a state that claims a complete
+        corpus while something is outstanding. Each of those is a broken store or
+        a broken derivation rather than a request problem, and retrying reads the
+        same rows and fails the same way.
+        """
+
+        def statement() -> CorpusCoverage:
+            return corpus_coverage(self._connection, principal_id, observed_at=observed_at)
+
+        try:
+            return _read(statement)
+        except ValueError:
+            failure = RepositoryFailureError("the corpus coverage read could not be completed")
         raise failure
 
     def limitations(self, enrollment_id: str) -> tuple[AggregateLimitation, ...]:

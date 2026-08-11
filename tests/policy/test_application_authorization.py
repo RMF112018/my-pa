@@ -57,6 +57,7 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCorpusCoverage,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
@@ -141,6 +142,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.CONTINUITY_PULSE: GetPulse(),
         Capability.CONTINUITY_SITUATIONS: ListSituations(),
         Capability.CONTINUITY_PROJECTS: ListProjects(),
+        Capability.KNOWLEDGE_COVERAGE: GetCorpusCoverage(),
         Capability.REVIEW_DECIDE: DecideReviewCase(
             review_case_id=issue_identifier(IdKind.REVIEW_CASE),
             expected_review_version=0,
@@ -295,6 +297,11 @@ SCOPED_CAPABILITIES = [
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        # The corpus coverage read names a Principal, not a source. The scope it
+        # reports is derived from `enrollments.principal_id` in the repository,
+        # so a request that named one would be asking a corpus-wide question
+        # about a single source (WP-23).
+        Capability.KNOWLEDGE_COVERAGE,
     }
 ]
 
@@ -363,6 +370,7 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.KNOWLEDGE_COVERAGE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

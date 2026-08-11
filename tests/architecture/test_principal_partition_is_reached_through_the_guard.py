@@ -104,6 +104,13 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # `capture_versions` — to *read* that owner, which is where the
         # partition comes from and so cannot itself be scoped by one.
         "infrastructure/persistence/jobs.py",
+        # WP-23's corpus coverage read, and the only statement in this module that
+        # names a partitioned table at all: every other read here is scoped by an
+        # enrollment identifier the authorization path already confined to the
+        # caller's own grants. `corpus_coverage` has no enrollment to be confined
+        # by — its whole subject is "every enrollment this Principal holds" — so
+        # the partition is the query's own, through `partition_criterion`.
+        "infrastructure/persistence/knowledge.py",
         "infrastructure/persistence/relationships.py",
         # The evidence traversal. Every one of its six statements is rooted at a
         # partitioned table — `captures`, `capture_versions`, `capture_assertions`
@@ -186,6 +193,7 @@ QUARANTINED: Final = {
 STATEMENT_LEVEL: Final = frozenset(
     {
         "infrastructure/persistence/jobs.py",
+        "infrastructure/persistence/knowledge.py",
         "infrastructure/persistence/relationships.py",
         "infrastructure/persistence/reveal.py",
     }
@@ -763,6 +771,64 @@ def test_every_reveal_statement_reaches_the_partition() -> None:
         assert f"{unscoped}.c." in source, f"{unscoped} is no longer traversed here"
 
 
+def test_every_corpus_coverage_statement_reaches_the_partition() -> None:
+    """WP-23's corpus read, statement by statement.
+
+    Claim 1 says `knowledge.py` uses `principal_scope` somewhere; this says every
+    statement in it that names a partitioned table does. That is the claim the
+    corpus capability's isolation rests on, and it is a stronger claim here than
+    elsewhere in this module because `corpus_coverage` is the one read in the
+    extraction plane with no enrollment identifier to be narrowed by: the
+    authorization path confines every *other* read here to the caller's own
+    enrollments before it runs, and confines this one to nothing at all, because
+    its subject is every enrollment at once.
+
+    The unit is one top-level statement inside a function, the same unit
+    `test_every_relationship_statement_reaches_the_partition` uses. The floor is
+    what stops this passing over a module the walk failed to parse, and the
+    control below is what stops it passing over a module that simply never names
+    the partitioned table.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "knowledge.py"
+    partitioned = set(_partitioned_tables())
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+
+    checked = 0
+    offending: list[str] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        for statement in ast.walk(function):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
+                continue
+            rendered = ast.unparse(statement)
+            if not any(f"{table}.c" in rendered for table in partitioned):
+                continue
+            checked += 1
+            if "partition_criterion(" not in rendered:
+                offending.append(f"{function.name}:{statement.lineno}")
+
+    assert checked >= 5, (
+        f"only {checked} corpus statements were examined; the walk is not reaching "
+        "the module's queries"
+    )
+    assert offending == [], (
+        f"{offending} build a statement over `enrollments` without reaching the "
+        "partition through `principal_scope`. A corpus answer is bounded by the "
+        "acting Principal and by nothing else, so a statement here that lost its "
+        "predicate would return another Principal's enrollments under this "
+        "Principal's name"
+    )
+    # The control, and it is what makes the count above a measurement: this
+    # module really does read unpartitioned tables beside the partitioned one, so
+    # "every statement is scoped" is a claim about a module that queries more
+    # than `enrollments` rather than one that barely queries it.
+    for unpartitioned in ("enrollment_objects", "source_objects", "extractions"):
+        assert unpartitioned not in partitioned, f"{unpartitioned} gained a partition column"
+        assert f"{unpartitioned}.c." in source, f"{unpartitioned} is no longer read here"
+
+
 #: The names `jobs.py` reaches a partitioned table through. It never names a
 #: declaration: every statement is built against `plane.table`, so a scan that
 #: looked for `jobs.c` — the way the relationship scan looks for its
@@ -960,6 +1026,7 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
         frozenset(
             {
                 "infrastructure/persistence/jobs.py",
+                "infrastructure/persistence/knowledge.py",
                 "infrastructure/persistence/relationships.py",
                 "infrastructure/persistence/reveal.py",
             }
@@ -968,7 +1035,8 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
     ), (
         "a module was added to STATEMENT_LEVEL without a statement-level test; "
         "`test_every_relationship_statement_reaches_the_partition`, "
-        "`test_every_job_statement_reaches_the_partition_or_is_registered` and "
-        "`test_every_reveal_statement_reaches_the_partition` are the three that "
-        "exist"
+        "`test_every_job_statement_reaches_the_partition_or_is_registered`, "
+        "`test_every_reveal_statement_reaches_the_partition` and "
+        "`test_every_corpus_coverage_statement_reaches_the_partition` are the "
+        "four that exist"
     )

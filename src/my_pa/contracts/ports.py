@@ -1,4 +1,4 @@
-"""The ports the twenty capability use cases call, and nothing else.
+"""The ports the twenty-six capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -992,6 +992,37 @@ class UnitOfWork(ABC):
 
     @property
     @abstractmethod
+    def managed_documents(self) -> ManagedDocumentRepository:
+        """The managed-document rows, inside this transaction (WP-28).
+
+        **WP-27 deliberately kept this off the unit of work and WP-28 puts it
+        on, so the reversal is argued rather than quietly made.** WP-27's reason
+        was reach: the managed write plane would sit on the same object every
+        read capability already holds. What changed is that the plane now has a
+        capability seat, so it is reached the same way every other plane is —
+        through `ApplicationService.invoke`, behind `authorize`, inside the one
+        transaction a request owns — and a handler that had to open a *second*
+        transaction to write a document would put the rows outside the
+        transaction whose rollback is what makes a failed request leave nothing.
+        Reach is bounded by dispatch, not by which object holds the property:
+        `_HANDLERS` gives each capability exactly one handler, and only the
+        `documents.` handlers name this.
+
+        **The byte store is still not here, and that is `AGENTS.md` section 4's
+        actual line.** It separates source providers from managed-document
+        *stores*; this is a repository over `knowledge.managed_documents` and its
+        four sibling tables, which is PostgreSQL like every other repository
+        above. The store — the thing that writes bytes to a filesystem — is
+        composed once at the composition root and handed to `ApplicationService`,
+        so a process with no configured managed root has no store, and the
+        capabilities it serves are not published at all.
+
+        `principal_id` remains a parameter on every method of the port and is
+        the authenticated caller's partition, never a caller-supplied field.
+        """
+
+    @property
+    @abstractmethod
     def audit(self) -> AuditSink:
         """The audit sink, inside this transaction.
 
@@ -1413,13 +1444,17 @@ class ContinuityRepository(ABC):
 
 # --- WP-27 the managed-document plane ---------------------------------------
 #
-# One port, and it is deliberately *not* a property of `UnitOfWork`. The shape is
-# `FrameRepository`'s and `TraceRepository`'s: the caller resolves the
-# authenticated Principal, opens a transaction, and hands the repository to
-# `application.managed_documents.ManagedDocumentService`. Adding it to the unit
-# of work would put the managed write plane on the same object every read
-# capability already holds, which is the reach `AGENTS.md` section 4 separates —
-# source providers and managed-document stores are separate capabilities.
+# One port. WP-27 kept it off `UnitOfWork` and WP-28 put it on, once the plane
+# acquired a capability seat and began being reached through
+# `ApplicationService.invoke` inside the request's own transaction; the property's
+# own docstring argues the reversal. The *byte store* is still not on the unit of
+# work and is composed at the composition root, which is the separation
+# `AGENTS.md` section 4 actually draws — source providers and managed-document
+# stores are separate capabilities.
+#
+# The operator paths (`verify`, `back_up`, `restore_from_backup`) still take the
+# repository directly from a connection `apps/cli/managed_documents.py` opens,
+# because they are not requests and have no authorization behind them.
 #
 # `principal_id` is a parameter on every method and it is the authenticated
 # caller's partition, never a caller-supplied field: the concrete repository

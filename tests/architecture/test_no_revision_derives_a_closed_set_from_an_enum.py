@@ -620,11 +620,20 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 28
-    assert len({revision for revision, _ in revisions}) == 28
-    assert {"9c6b4a18ed72", "1a4c9e77b2d5", "2b7e9f4c1a83", "7e5a1fb93d62", "8b3f5c17d904"} <= {
-        revision for revision, _ in revisions
-    }
+    assert len(revisions) == 29
+    assert len({revision for revision, _ in revisions}) == 29
+    assert {
+        "9c6b4a18ed72",
+        "1a4c9e77b2d5",
+        "2b7e9f4c1a83",
+        "7e5a1fb93d62",
+        "8b3f5c17d904",
+        # WP-28's widening of both `audit_events` closed sets. Named here for the
+        # reason the five above are: this module's whole subject is revisions that
+        # install a closed set, and one that installs two must be one this scan
+        # actually opened.
+        "6b3d9a2f8c14",
+    } <= {revision for revision, _ in revisions}
 
 
 def test_the_live_closed_sets_are_discovered() -> None:

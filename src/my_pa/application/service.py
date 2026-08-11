@@ -115,8 +115,12 @@ from typing import Any, Final, assert_never
 from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.commands import (
+    ArchiveManagedDocument,
+    ArchiveManagedDocumentCommand,
     Command,
     CreateCapture,
+    CreateManagedDocument,
+    CreateManagedDocumentCommand,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -126,15 +130,23 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListManagedDocuments,
+    ListManagedDocumentsCommand,
     ListProjects,
     ListReviewCases,
     ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
+    ReadManagedDocument,
+    ReadManagedDocumentCommand,
     Representation,
+    RestoreManagedDocument,
+    RestoreManagedDocumentCommand,
     RevealSubject,
     ReviseCapture,
+    ReviseManagedDocument,
+    ReviseManagedDocumentCommand,
     SearchCaptures,
     SearchKnowledge,
 )
@@ -160,6 +172,7 @@ from my_pa.application.errors import (
     UnsupportedError,
     problem_detail,
 )
+from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.contracts.ports import (
     Acceptance,
     CaptureAdmission,
@@ -167,6 +180,7 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
     EvidenceUnavailableError,
+    ManagedByteStore,
     PortError,
     ReviewDecisionRequest,
     SearchOutcome,
@@ -176,6 +190,11 @@ from my_pa.contracts.ports import (
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
 from my_pa.contracts.v1.disclosure import Disclosure, SourceReference, Truncation
+from my_pa.contracts.v1.documents import (
+    ManagedDocumentListEntry,
+    ManagedDocumentReceiptView,
+    ManagedDocumentVersionView,
+)
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.status import SourceStatusState
@@ -199,6 +218,15 @@ from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.common.time import format_rfc3339, utc_now
+from my_pa.domain.documents.managed import (
+    DocumentState,
+    ManagedDocumentConflictError,
+    ManagedDocumentError,
+    ManagedDocumentReceipt,
+    MediaTypeNotManagedError,
+    StaleExpectedVersionError,
+    UnmanageableTitleError,
+)
 from my_pa.domain.extraction.coverage import CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus, extract_text
 from my_pa.domain.identity.operation import Capability
@@ -454,6 +482,66 @@ def _translated() -> Iterator[None]:
         raise failure
 
 
+@contextmanager
+def _managed_translated() -> Iterator[None]:
+    """Run a managed-document call, classifying what WP-27's plane refuses.
+
+    Inside `_translated`, deliberately, so this sees a `PortError` before that
+    one turns it into the enrollment-shaped `not_found` every other capability
+    wants. `UnknownScopeError` from the managed plane means "no such document in
+    this partition", and reporting `enrollment_id` for it would name a field the
+    request does not have.
+
+    Three refusals, three public codes, and none of them is invented here: a
+    stale expectation and a bound idempotency key are both `conflict` because
+    the request contradicts state that already exists, and a document that
+    exceeds a domain bound or carries nothing is `invalid_request`. **This is
+    classification, not decision** — every one of these was raised by WP-27's
+    domain or repository, and nothing in this layer decides whether a write is
+    permitted.
+
+    A refusal from the *byte store* is not here. `ManagedByteStore` declares no
+    exception vocabulary — `ManagedStoreError` is an infrastructure class the
+    application may not import — so a store failure reaches
+    `invoke`'s terminal catch and answers `internal_error`. That is honest for
+    what those failures are (a full device, a lost root, an object that already
+    exists) and is recorded as a limit rather than papered over with a guess.
+
+    The `raise` is outside the handlers, as everywhere else here: the domain
+    errors carry titles and identifiers in their messages and leaving the
+    handler first is what actually clears `__context__`.
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except UnknownScopeError:
+        failure = NotFoundError(SafeDetail.DOCUMENT_ID)
+    except StaleExpectedVersionError:
+        failure = ConflictError(SafeDetail.EXPECTED_VERSION_NUMBER)
+    except ManagedDocumentConflictError:
+        failure = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+    except UnmanageableTitleError:
+        failure = InvalidRequestError(SafeDetail.TITLE)
+    except MediaTypeNotManagedError:
+        failure = InvalidRequestError(SafeDetail.MEDIA_TYPE)
+    except ManagedDocumentError:
+        # `EmptyDocumentError` and `ManagedDocumentBoundsError`, and any sibling
+        # a later revision of the domain adds. Named as the base rather than as
+        # two leaves so a new bound is refused as a bad request rather than
+        # escaping as `internal_error`.
+        failure = InvalidRequestError(SafeDetail.CONTENT)
+    if failure is not None:
+        raise failure
+
+
+#: What a managed-document answer's trust rests on. `principal_partition`
+#: because every statement under it carries the authenticated partition, and
+#: `product_managed_custody` because the bytes are the product's own — written
+#: into the designated managed root by this product and never read from a source
+#: system. Not `user_authored`: a managed document is not an ADR-003 record.
+_MANAGED_TRUST_BASIS: Final = ("principal_partition", "product_managed_custody")
+
+
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
 
@@ -463,10 +551,37 @@ class ApplicationService:
         unit_of_work: Callable[[], UnitOfWork],
         limits: EffectiveLimits,
         clock: Callable[[], datetime] = utc_now,
+        managed_store: ManagedByteStore | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._limits = _effective_limits(limits)
         self._clock = clock
+        #: The managed-document byte store, or `None` in a process that was never
+        #: told where managed bytes go. `None` is the default because that is
+        #: what an unconfigured `MY_PA_MANAGED_DOCUMENT_ROOT` produces, and a
+        #: build with no managed plane must publish no managed capability rather
+        #: than publish six a caller cannot reach.
+        self._managed_store_or_none = managed_store
+        #: WP-27's application service, held rather than built per request: it is
+        #: stateless, takes its ports as arguments, and constructing one per call
+        #: would say it held something.
+        self._managed = ManagedDocumentService()
+
+    @property
+    def available_capabilities(self) -> frozenset[Capability]:
+        """What this composed process can actually execute.
+
+        `_HANDLERS` is what this build *implements* and is fixed at import. This
+        is what it can *serve*, which is smaller whenever a capability needs
+        something the composition root did not supply — today, the six
+        `documents.` names in a process with no managed root. It is one answer
+        with two readers: `capabilities.get` publishes it, and the MCP transport
+        publishes the tools derived from it, so a client's tool list and the
+        manifest cannot disagree about what exists.
+        """
+        if self._managed_store_or_none is not None:
+            return frozenset(_HANDLERS)
+        return frozenset(_HANDLERS) - _MANAGED_CAPABILITIES
 
     def invoke(
         self,
@@ -632,8 +747,16 @@ class ApplicationService:
     def _capabilities_get(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetCapabilities
     ) -> _Result:
-        """What this build supports, derived from what it has wired."""
-        manifest = build_capability_manifest(implemented=frozenset(_HANDLERS), limits=self._limits)
+        """What this build supports, derived from what it has wired *and composed*.
+
+        `available_capabilities` rather than `_HANDLERS`: a process with no
+        managed root has the six `documents.` handlers compiled in and cannot
+        serve one, and publishing a name a caller is then refused for would be
+        the manifest describing a different build than the one running.
+        """
+        manifest = build_capability_manifest(
+            implemented=self.available_capabilities, limits=self._limits
+        )
         return _Result(
             payload={
                 "manifest": manifest.to_canonical_dict(),
@@ -1657,6 +1780,261 @@ class ApplicationService:
             ),
         )
 
+    # ---- the managed-document plane ----------------------------------------
+    #
+    # Six handlers, and every one of them is the same three lines: resolve the
+    # byte store, build the WP-27 command with the Principal the authorization
+    # already resolved, and hand both to `ManagedDocumentService`. **No managed
+    # rule is restated here.** Expected-version checking, idempotency, the
+    # replay pre-read, the write ordering, the partition predicate on every
+    # statement and the containment of every byte all stay in WP-27's service,
+    # its repository and its store. What this layer adds is the seat: a
+    # `documents.` request is authorized, audited and refused by exactly the
+    # machinery every other capability meets, which is the whole of what WP-27
+    # left for WP-28 to do.
+    #
+    # `principal_id=authorization.principal.principal_id` is the one thing these
+    # handlers say about identity, and it is the only spelling
+    # `tests/architecture/test_principal_is_never_caller_supplied.py` claim 3
+    # admits. The transport-facing commands have no `principal_id` field at all,
+    # so there is nothing a caller could have supplied for this to be confused
+    # with.
+
+    def _managed_store(self) -> ManagedByteStore:
+        """The composed byte store, or a refusal that this build has no managed plane.
+
+        `unsupported` rather than `internal_error`: a process started with no
+        `MY_PA_MANAGED_DOCUMENT_ROOT` has no managed plane, which is a fact about
+        the build and not a fault in the request. It is also unreachable through
+        a transport — `available_capabilities` withholds every `documents.` name from
+        `capabilities.get` and from the MCP tool list — so this is the floor
+        under that rather than the gate. Two ways to be told the same true thing,
+        and neither is a path that writes bytes somewhere unconfigured.
+        """
+        store = self._managed_store_or_none
+        if store is None:
+            raise UnsupportedError()
+        return store
+
+    def _documents_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateManagedDocument,
+    ) -> _Result:
+        """`documents.create`: the first immutable version of a new managed document."""
+        store = self._managed_store()
+        with _translated(), _managed_translated():
+            receipt = self._managed.create(
+                unit_of_work.managed_documents,
+                store,
+                CreateManagedDocumentCommand(
+                    principal_id=authorization.principal.principal_id,
+                    title=command.title,
+                    media_type=command.media_type,
+                    content=command.content,
+                    idempotency_key=command.idempotency_key,
+                ),
+                at=authorization.at,
+            )
+        return self._managed_receipt(authorization, receipt)
+
+    def _documents_revise(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReviseManagedDocument,
+    ) -> _Result:
+        """`documents.revise`: append a successor version, refusing a stale expectation."""
+        store = self._managed_store()
+        with _translated(), _managed_translated():
+            receipt = self._managed.revise(
+                unit_of_work.managed_documents,
+                store,
+                ReviseManagedDocumentCommand(
+                    principal_id=authorization.principal.principal_id,
+                    document_id=command.document_id,
+                    expected_version_number=command.expected_version_number,
+                    title=command.title,
+                    media_type=command.media_type,
+                    content=command.content,
+                    idempotency_key=command.idempotency_key,
+                ),
+                at=authorization.at,
+            )
+        return self._managed_receipt(authorization, receipt)
+
+    def _documents_read(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadManagedDocument,
+    ) -> _Result:
+        """`documents.read`: one stored version, with its bytes when they were asked for.
+
+        A document this Principal does not own, one that does not exist, and a
+        version identifier belonging to another document are one answer:
+        `not_found`, naming the field and no identifier. WP-27's service collapses
+        the three so the read cannot map identifiers this Principal may not see,
+        and this preserves the collapse rather than re-deriving it.
+        """
+        store = self._managed_store()
+        with _translated(), _managed_translated():
+            found = self._managed.read(
+                unit_of_work.managed_documents,
+                store,
+                ReadManagedDocumentCommand(
+                    principal_id=authorization.principal.principal_id,
+                    document_id=command.document_id,
+                    version_id=command.version_id,
+                    include_bytes=command.include_bytes,
+                ),
+            )
+        if found is None:
+            raise NotFoundError(SafeDetail.DOCUMENT_ID)
+        version = found.version
+        view = ManagedDocumentVersionView(
+            document_id=version.document_id,
+            version_id=version.version_id,
+            version_number=version.version_number,
+            supersedes_version_id=version.supersedes_version_id,
+            title=version.title,
+            media_type=version.media_type,
+            content_sha256=version.content_sha256,
+            byte_size=version.byte_size,
+            recorded_at=version.recorded_at,
+            is_current=found.is_current,
+            state=found.state,
+            content_base64=(
+                None
+                if found.content is None
+                else base64.b64encode(found.content.bytes_).decode("ascii")
+            ),
+        )
+        return _Result(
+            payload={"version": view.to_canonical_dict()},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MANAGED_TRUST_BASIS),
+        )
+
+    def _documents_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListManagedDocuments,
+    ) -> _Result:
+        """`documents.list`: one bounded page of this Principal's documents, newest first.
+
+        Bounded by the same published page size every other listing here uses
+        (`D-24`), so `capabilities.get` states the limit a caller will actually
+        get. One row past the page is read so that truncation is a fact rather
+        than a guess.
+        """
+        page_size = self._page_size(command.limit)
+        with _translated(), _managed_translated():
+            found = self._managed.list_documents(
+                unit_of_work.managed_documents,
+                ListManagedDocumentsCommand(
+                    principal_id=authorization.principal.principal_id,
+                    limit=page_size + 1,
+                    include_archived=command.include_archived,
+                ),
+            )
+        truncated = len(found) > page_size
+        return _Result(
+            payload={
+                "documents": [
+                    ManagedDocumentListEntry(
+                        document_id=document.document_id,
+                        state=document.state,
+                        title=document.title,
+                        media_type=document.media_type,
+                        version_count=document.version_count,
+                        latest_version_id=document.latest_version_id,
+                        latest_version_number=document.latest_version_number,
+                        created_at=document.created_at,
+                        latest_recorded_at=document.latest_recorded_at,
+                    ).to_canonical_dict()
+                    for document in found[:page_size]
+                ]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_MANAGED_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated, reason="page_size_reached" if truncated else None
+                ),
+                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
+            ),
+        )
+
+    def _documents_archive(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ArchiveManagedDocument,
+    ) -> _Result:
+        """`documents.archive`: withdraw one document from the active set. Destroys nothing."""
+        with _translated(), _managed_translated():
+            changed = self._managed.archive(
+                unit_of_work.managed_documents,
+                ArchiveManagedDocumentCommand(
+                    principal_id=authorization.principal.principal_id,
+                    document_id=command.document_id,
+                ),
+            )
+        return self._managed_transition(authorization, DocumentState.ARCHIVED, changed=changed)
+
+    def _documents_restore(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RestoreManagedDocument,
+    ) -> _Result:
+        """`documents.restore`: return one archived document to the active set."""
+        with _translated(), _managed_translated():
+            changed = self._managed.restore(
+                unit_of_work.managed_documents,
+                RestoreManagedDocumentCommand(
+                    principal_id=authorization.principal.principal_id,
+                    document_id=command.document_id,
+                ),
+            )
+        return self._managed_transition(authorization, DocumentState.ACTIVE, changed=changed)
+
+    def _managed_receipt(
+        self, authorization: Authorization, receipt: ManagedDocumentReceipt
+    ) -> _Result:
+        """One managed write's receipt, as the contract publishes it."""
+        view = ManagedDocumentReceiptView(
+            receipt_id=receipt.receipt_id,
+            document_id=receipt.document_id,
+            version_id=receipt.version_id,
+            version_number=receipt.version_number,
+            idempotency_key=receipt.idempotency_key,
+            content_sha256=receipt.content_sha256,
+            byte_size=receipt.byte_size,
+            issued_at=receipt.issued_at,
+            created=receipt.created,
+        )
+        return _Result(
+            payload={"receipt": view.to_canonical_dict()},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MANAGED_TRUST_BASIS),
+        )
+
+    def _managed_transition(
+        self, authorization: Authorization, state: DocumentState, *, changed: bool
+    ) -> _Result:
+        """The answer both lifecycle transitions give: the resulting state, and whether it moved.
+
+        `changed=False` is a success and not a refusal. Archiving an archived
+        document leaves it archived, which is what the caller asked for; reporting
+        a conflict would make an idempotent retry look like a failure.
+        """
+        return _Result(
+            payload={"state": state.value, "changed": changed},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MANAGED_TRUST_BASIS),
+        )
+
     def _admit(
         self,
         unit_of_work: UnitOfWork,
@@ -2084,5 +2462,25 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CONTINUITY_PULSE: ApplicationService._continuity_pulse,
         Capability.CONTINUITY_SITUATIONS: ApplicationService._continuity_situations,
         Capability.CONTINUITY_PROJECTS: ApplicationService._continuity_projects,
+        Capability.DOCUMENTS_CREATE: ApplicationService._documents_create,
+        Capability.DOCUMENTS_REVISE: ApplicationService._documents_revise,
+        Capability.DOCUMENTS_READ: ApplicationService._documents_read,
+        Capability.DOCUMENTS_LIST: ApplicationService._documents_list,
+        Capability.DOCUMENTS_ARCHIVE: ApplicationService._documents_archive,
+        Capability.DOCUMENTS_RESTORE: ApplicationService._documents_restore,
+    }
+)
+
+#: Which capabilities need a composed byte store. Written out rather than
+#: derived from a name prefix, so admitting another is a decision here and not a
+#: spelling that happens to start with `documents.`.
+_MANAGED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_READ,
+        Capability.DOCUMENTS_LIST,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
     }
 )

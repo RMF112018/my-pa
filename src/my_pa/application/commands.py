@@ -43,17 +43,23 @@ from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
-from my_pa.domain.documents.managed import validate_managed_media_type, validate_managed_title
+from my_pa.domain.documents.managed import (
+    ManagedDocumentError,
+    validate_managed_media_type,
+    validate_managed_title,
+)
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.situation.continuity import ClosureEvidenceKind
 
 __all__ = [
     "AddProjectCommand",
+    "ArchiveManagedDocument",
     "ArchiveManagedDocumentCommand",
     "CloseSituationCommand",
     "Command",
     "CreateCapture",
+    "CreateManagedDocument",
     "CreateManagedDocumentCommand",
     "DecideReviewCase",
     "EnrollSource",
@@ -66,6 +72,7 @@ __all__ = [
     "GetSourceStatus",
     "LinkSituationToProjectCommand",
     "ListCaptures",
+    "ListManagedDocuments",
     "ListManagedDocumentsCommand",
     "ListProjects",
     "ListReviewCases",
@@ -74,12 +81,15 @@ __all__ = [
     "OpenSituationCommand",
     "ReadCapture",
     "ReadKnowledge",
+    "ReadManagedDocument",
     "ReadManagedDocumentCommand",
     "RecordRelationshipEventCommand",
     "Representation",
+    "RestoreManagedDocument",
     "RestoreManagedDocumentCommand",
     "RevealSubject",
     "ReviseCapture",
+    "ReviseManagedDocument",
     "ReviseManagedDocumentCommand",
     "SearchCaptures",
     "SearchKnowledge",
@@ -164,6 +174,50 @@ def _positive(value: int | None, detail: SafeDetail) -> int | None:
     if value < 1:
         raise InvalidRequestError(detail)
     return value
+
+
+def _idempotency_key(value: str) -> str:
+    """A write carries a non-empty idempotency key, and the key never reaches a message."""
+    if not value:
+        raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+    return value
+
+
+def _managed_title(value: str) -> str:
+    """The domain's own title rule, reported as a public refusal naming the field.
+
+    The rule stays in `domain.documents.managed` — one place — and this converts
+    its domain error into the transport-facing one, exactly as `_identifier`
+    converts `InvalidIdentifierError`. The domain error's message renders the
+    rejected title, so it is left behind rather than chained.
+    """
+    try:
+        return validate_managed_title(value)
+    except ManagedDocumentError:
+        pass
+    raise InvalidRequestError(SafeDetail.TITLE)
+
+
+def _managed_media_type(value: str) -> str:
+    """The closed managed media-type set, as a public refusal naming the field."""
+    try:
+        return validate_managed_media_type(value)
+    except ManagedDocumentError:
+        pass
+    raise InvalidRequestError(SafeDetail.MEDIA_TYPE)
+
+
+def _managed_content(value: bytes) -> bytes:
+    """Check that a managed write carries bytes, without reading them into a message.
+
+    Presence and type only. The size bound belongs to
+    `domain.documents.managed.ManagedContent`, which the handler builds, for the
+    reason `_text` gives: a bound checked twice is a bound that can drift. The
+    transport's own `MAX_REQUEST_BYTES` refuses a larger document earlier still.
+    """
+    if not isinstance(value, bytes | bytearray):
+        raise InvalidRequestError(SafeDetail.CONTENT)
+    return bytes(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -665,6 +719,159 @@ class GetCorpusCoverage:
     capability: ClassVar[Capability] = Capability.KNOWLEDGE_COVERAGE
 
 
+# --- WP-28 the managed-document plane, over a transport ----------------------
+#
+# Six commands, one per `documents.` capability, and **not one of them carries a
+# `principal_id`**. That is the whole of how this family differs from the six
+# `…ManagedDocumentCommand` dataclasses further down, and the difference is the
+# reason both exist rather than one being folded into the other:
+#
+# * these are *requests* — built by `adapters.normalization` from a caller's
+#   payload, published field by field in the MCP tool input schema, and holding
+#   only what a caller is allowed to say;
+# * those are *resolved instructions* — built inside
+#   `ApplicationService`'s handlers with
+#   `principal_id=authorization.principal.principal_id`, and consumed by
+#   `application.managed_documents.ManagedDocumentService`.
+#
+# Folding them together would put `principal_id` on the wire. The tool schema is
+# derived from the command dataclass, so a field here is a field a client may
+# send; a required `principal_id` would be a caller naming the partition its
+# write lands in, which is exactly the cross-Principal write `docs/specs`
+# section 8.2 and operating-brief section 18 forbid. Keeping it off the type
+# makes it unspellable rather than merely ignored, and
+# `tests/architecture/test_principal_is_never_caller_supplied.py` claim 3 —
+# written by WP-27 against the day this family was wired — now has real
+# constructions to quantify over.
+#
+# **`content` is `bytes` and `repr=False`**, for the reason `CreateCapture.text`
+# carries it: a document body reaches a traceback, a log record and a pytest
+# assertion message through a dataclass `repr` without anyone deciding it should.
+# On the wire it is base64 text, which `adapters.normalization` decodes and
+# `adapters.mcp.tools` publishes as `contentEncoding: base64`.
+#
+# **No command carries a path, a filename, or a location**, and neither does the
+# port beneath them. `title` is metadata bound for a text column.
+
+
+@dataclass(frozen=True, slots=True)
+class CreateManagedDocument:
+    """`documents.create`: write the first immutable version of a new document.
+
+    Names no document, because creating names nothing that exists. That is the
+    whole difference from `ReviseManagedDocument`, and it is a difference in the
+    type rather than in a nullable field.
+    """
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_CREATE
+
+    title: str
+    media_type: str
+    content: bytes = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _managed_title(self.title)
+        _managed_media_type(self.media_type)
+        _managed_content(self.content)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseManagedDocument:
+    """`documents.revise`: append a successor version to a document.
+
+    `expected_version_number` is required and has no default. A revision that did
+    not state what it was revising would be a blind write, and WP-27's whole
+    expected-version control is that a writer says which version it read.
+    """
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_REVISE
+
+    document_id: str
+    expected_version_number: int
+    title: str
+    media_type: str
+    content: bytes = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.document_id, IdKind.MANAGED_DOCUMENT, SafeDetail.DOCUMENT_ID)
+        if type(self.expected_version_number) is not int or self.expected_version_number < 1:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION_NUMBER)
+        _managed_title(self.title)
+        _managed_media_type(self.media_type)
+        _managed_content(self.content)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadManagedDocument:
+    """`documents.read`: one stored version of one managed document.
+
+    `version_id` omitted means the current version. Named, it means that version —
+    including a superseded one, which is what makes an immutable chain worth
+    keeping. `include_bytes` is false by default so that reading metadata is not
+    silently a read of a document body.
+    """
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_READ
+
+    document_id: str
+    version_id: str | None = None
+    include_bytes: bool = False
+
+    def __post_init__(self) -> None:
+        _identifier(self.document_id, IdKind.MANAGED_DOCUMENT, SafeDetail.DOCUMENT_ID)
+        if self.version_id is not None:
+            _identifier(self.version_id, IdKind.MANAGED_DOCUMENT_VERSION, SafeDetail.VERSION_ID)
+        if not isinstance(self.include_bytes, bool):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ListManagedDocuments:
+    """`documents.list`: one bounded page of this Principal's documents, newest first.
+
+    Carries no bytes at all, which is the line between this capability and
+    `documents.read`: one reaches a body and the other cannot.
+    """
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_LIST
+
+    limit: int | None = None
+    include_archived: bool = False
+
+    def __post_init__(self) -> None:
+        _positive(self.limit, SafeDetail.LIMIT)
+        if not isinstance(self.include_archived, bool):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveManagedDocument:
+    """`documents.archive`: withdraw one document from the active set. Destroys nothing."""
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_ARCHIVE
+
+    document_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.document_id, IdKind.MANAGED_DOCUMENT, SafeDetail.DOCUMENT_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreManagedDocument:
+    """`documents.restore`: return one archived document to the active set."""
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_RESTORE
+
+    document_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.document_id, IdKind.MANAGED_DOCUMENT, SafeDetail.DOCUMENT_ID)
+
+
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
 type Command = (
@@ -688,6 +895,12 @@ type Command = (
     | ListSituations
     | ListProjects
     | GetCorpusCoverage
+    | CreateManagedDocument
+    | ReviseManagedDocument
+    | ReadManagedDocument
+    | ListManagedDocuments
+    | ArchiveManagedDocument
+    | RestoreManagedDocument
 )
 
 

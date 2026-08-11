@@ -145,6 +145,58 @@ class Capability(StrEnum):
     # Not operator-only: it grants nothing, writes nothing, and returns counts
     # over the acting Principal's own enrollments and no one else's.
     KNOWLEDGE_COVERAGE = "knowledge.coverage"
+    # The managed-document plane (WP-28), and `6b3d9a2f8c14` carries the forward
+    # `ALTER` that admits all six — written before the members, for the reason
+    # `5e2c7b0a94f6` records: a member with no `ALTER` leaves every test green,
+    # because every test builds its database from scratch, and is refused by the
+    # stored constraint on the first audited operation in the field.
+    #
+    # **Why they exist at all.** WP-27 shipped the managed-document write plane
+    # with no seat, so `ManagedDocumentService` was reachable only from a
+    # composition root and a managed write left no `knowledge.audit_events` row
+    # — not even for a refusal. That was disclosed and bounded because nothing
+    # could reach it; exposing the plane over a transport removes the bound, so
+    # the seat lands before the transport does. `authorize()` writes the audit
+    # row in the request's own transaction, so a seat *is* the audit.
+    #
+    # **`documents.` rather than `knowledge.` or `capture.`.** These reach
+    # `knowledge.managed_documents` and its four sibling tables, which belong to
+    # no enrollment, hold no extracted record and hold no user-authored capture.
+    # A `knowledge.` name would tell a caller that a grant issued over the
+    # extraction plane covers the product's own document custody, and a
+    # `capture.` name would say the same of ADR-003's append-only records. Two
+    # neutral segments of `noun.verb`, as `AGENTS.md` section 4 requires of every
+    # external and MCP name.
+    #
+    # **Six rather than fewer, by `D-91`'s own test — does one name reach rows
+    # another does not.** `create` writes a document that did not exist and
+    # `revise` appends to one that did, which is the difference
+    # `CreateManagedDocumentCommand` and `ReviseManagedDocumentCommand` already
+    # make in the type rather than in a nullable field; conflating them would let
+    # a grant issued to start a document rewrite every document the Principal
+    # holds. `read` returns one version's metadata and, when asked, its bytes,
+    # while `list` returns a page of documents and no bytes at all — one reaches
+    # a body the other cannot. `archive` withdraws a document from the active set
+    # and `restore` returns it: opposite transitions, and one grant covering both
+    # would mean a request permitted to hide a document is also permitted to
+    # un-hide one somebody else's session hid. And no write shares a name with a
+    # read, which is the line `domain/identity/purpose.py` draws for the capture
+    # plane and this plane is no different.
+    #
+    # None is operator-only. The test `_OPERATOR_ONLY` applies is whether the
+    # capability *grants authority* — widens the scope a later request is
+    # evaluated against — and none of these does: they write, read and transition
+    # the acting Principal's own documents inside the acting Principal's own
+    # partition, exactly as `capture.create` does for the capture plane. Archive
+    # is a reversible transition and destroys nothing; there is no delete on this
+    # plane at all, and `AGENTS.md` section 8.2 keeps irreversible destruction of
+    # canonical data with the operator whether or not a seat exists for it.
+    DOCUMENTS_CREATE = "documents.create"
+    DOCUMENTS_REVISE = "documents.revise"
+    DOCUMENTS_READ = "documents.read"
+    DOCUMENTS_LIST = "documents.list"
+    DOCUMENTS_ARCHIVE = "documents.archive"
+    DOCUMENTS_RESTORE = "documents.restore"
 
 
 class NativeSourceCapability(StrEnum):
@@ -290,6 +342,35 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # bound to the enrollment a search names, and admitting a corpus-wide read
         # under it would make a grant issued to search one scope reach every scope.
         Capability.KNOWLEDGE_COVERAGE: frozenset({Purpose.STATUS_OBSERVATION}),
+        # The managed-document plane maps to a purpose pair of its own, and neither
+        # is a reuse. `D-91`'s test asks whether reuse would widen the grant, and
+        # here it plainly would in both directions: `capture_authoring` is
+        # ADR-003's append-only user-authored plane and admitting a managed write
+        # under it would let a grant issued to write a Quick Note write a document
+        # into the managed root, while `knowledge_read` is the extraction plane's
+        # and admitting a managed read under it would let a grant issued to read
+        # an extracted record return a document body. Different tables, different
+        # custody, different bytes.
+        #
+        # **Writing and reading are separated, and the transitions travel with
+        # the writes.** A purpose wide enough to cover both is a purpose that
+        # grants both, which is the rule `purpose.py` states for the capture
+        # plane. `archive` and `restore` sit under `document_authoring` rather
+        # than under a purpose of their own: they write, they touch only the acting
+        # Principal's own documents, they destroy nothing and each undoes the
+        # other, so a further purpose would map one-to-two, separate nothing any
+        # authority in this build can act on — under `P00-OD-010` there is one
+        # local Principal — and cost a third frozen-constraint literal. The
+        # residual is stated rather than smoothed over: a grant issued to write a
+        # document also reaches the reversible lifecycle state of every document
+        # that Principal holds. It does not reach a *read* of any of them, which
+        # is the separation that matters, and it reaches no other plane at all.
+        Capability.DOCUMENTS_CREATE: frozenset({Purpose.DOCUMENT_AUTHORING}),
+        Capability.DOCUMENTS_REVISE: frozenset({Purpose.DOCUMENT_AUTHORING}),
+        Capability.DOCUMENTS_ARCHIVE: frozenset({Purpose.DOCUMENT_AUTHORING}),
+        Capability.DOCUMENTS_RESTORE: frozenset({Purpose.DOCUMENT_AUTHORING}),
+        Capability.DOCUMENTS_READ: frozenset({Purpose.DOCUMENT_READ}),
+        Capability.DOCUMENTS_LIST: frozenset({Purpose.DOCUMENT_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

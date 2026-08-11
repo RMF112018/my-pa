@@ -762,11 +762,29 @@ def test_the_managed_root_setting_is_its_own_and_reaches_only_the_store() -> Non
         for path in _python_files()
         if "managed_document_root" in path.read_text(encoding="utf-8")
     )
+    # WP-28 added the third and last of these. `bootstrap/gateway.py` is the
+    # composition root, and giving the managed plane a capability seat meant the
+    # served process had to build a store rather than only the operator CLI. It
+    # is held to the same rule as the other two and meets it: `managed_byte_store`
+    # reads the setting, refuses an empty one by composing nothing, and constructs
+    # `FilesystemManagedByteStore` with the configured source roots — so the
+    # containment resolution and the source-root refusal both run there.
     assert readers == [
         "apps/cli/managed_documents.py",
+        "src/my_pa/bootstrap/gateway.py",
         "src/my_pa/bootstrap/settings.py",
     ], (
         f"{readers} read the managed root setting. Every reader is a place a "
         "managed root can be pointed somewhere; each has to construct the store, "
         "which is where the containment and the source-root refusal live"
+    )
+    composition = (ROOT / "src/my_pa/bootstrap/gateway.py").read_text(encoding="utf-8")
+    assert "FilesystemManagedByteStore(" in composition, (
+        "the composition root reads the managed root setting without building the "
+        "store from it, which is the one thing every reader of this setting must do"
+    )
+    assert "source_roots=" in composition, (
+        "the composition root builds the managed store without giving it the "
+        "configured source roots, so the source-root overlap refusal compares "
+        "against nothing"
     )

@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes twenty capability names and none of them mutates a source,
+  ends: the transport routes twenty-six capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -37,6 +37,7 @@ person.
 from __future__ import annotations
 
 import logging
+from base64 import b64encode
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -55,6 +56,7 @@ from tests.conftest import (
     build_service,
     operator,
     staged_capture,
+    staged_managed_document,
     staged_review_case,
     staged_search,
 )
@@ -195,6 +197,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     """
     capture = staged_capture(marked, text=MARKER_CONTENT)
     review_case = staged_review_case(marked, capture)
+    document = staged_managed_document(marked, body=MARKER_CONTENT.encode())
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -244,6 +247,32 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "expected_review_version": 0,
             "disposition": "reject",
         },
+        # The managed-document plane, and its bodies carry the marker for the
+        # reason the capture payloads do — more so, in fact: a managed write is
+        # the only request in this build that sends *bytes*, so the redaction
+        # scans below are checking a path whose input is a document body and
+        # whose storage is a filesystem.
+        Capability.DOCUMENTS_CREATE: {
+            "title": "Synthetic marked document",
+            "media_type": "text/markdown",
+            "content": b64encode(MARKER_CONTENT.encode()).decode("ascii"),
+            "idempotency_key": "wire-document-0001",
+        },
+        Capability.DOCUMENTS_REVISE: {
+            "document_id": document.document_id,
+            "expected_version_number": document.version_number,
+            "title": "Synthetic marked document, revised",
+            "media_type": "text/markdown",
+            "content": b64encode(MARKER_CONTENT.encode()).decode("ascii"),
+            "idempotency_key": "wire-document-revise-0001",
+        },
+        Capability.DOCUMENTS_READ: {
+            "document_id": document.document_id,
+            "include_bytes": True,
+        },
+        Capability.DOCUMENTS_LIST: {},
+        Capability.DOCUMENTS_ARCHIVE: {"document_id": document.document_id},
+        Capability.DOCUMENTS_RESTORE: {"document_id": document.document_id},
     }
 
 
@@ -378,6 +407,16 @@ SCOPED_CAPABILITIES = [
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
         Capability.KNOWLEDGE_COVERAGE,
+        # The managed-document plane names a document, not a source: its rows
+        # carry no `source_id` and no `enrollment_id`, so there is no scope for a
+        # request to name (WP-28). `tests/policy` re-derives this partition from
+        # `evaluate` rather than from a list.
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_READ,
+        Capability.DOCUMENTS_LIST,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
     }
 ]
 
@@ -454,6 +493,21 @@ MUTATING_NAMES = ("write", "create", "update", "delete", "remove", "rename", "mo
 #: `capture.*`, this exemption is a hole; the guard beside it is what says so.
 CAPTURE_CAPABILITIES = frozenset(c for c in Capability if c.value.startswith("capture."))
 
+#: The second exemption, and it is deliberately **one name** rather than a family
+#: (WP-28). `documents.create` is the only `documents.` name the substring proxy
+#: refuses, and it is refused for the same reason `capture.create` is: it writes
+#: a *product-owned* record, not a source. `AGENTS.md` section 4 makes managed
+#: writes a third authority class confined to the designated managed root, and
+#: source roots stay read-only — which is not asserted here by exemption but by
+#: `tests/architecture/test_managed_writes_are_contained.py` structurally and by
+#: `test_no_capability_over_either_transport_calls_anything_but_a_read`
+#: behaviourally, the same guard that carries the property for `capture.*`.
+#:
+#: `documents.revise`, `documents.archive` and `documents.restore` are **not**
+#: exempt: they pass the name check on their own, so exempting them would widen
+#: the hole for nothing. A future `documents.delete` is still caught here.
+MANAGED_DOCUMENT_EXEMPTION = frozenset({Capability.DOCUMENTS_CREATE})
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -480,8 +534,9 @@ def test_the_transport_routes_no_mutating_capability() -> None:
 
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over HTTP"
     assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
-    checked = [c for c in _BUILDERS if c not in CAPTURE_CAPABILITIES]
-    assert len(checked) == len(Capability) - len(CAPTURE_CAPABILITIES)
+    exempt = CAPTURE_CAPABILITIES | MANAGED_DOCUMENT_EXEMPTION
+    checked = [c for c in _BUILDERS if c not in exempt]
+    assert len(checked) == len(Capability) - len(exempt)
     for capability in checked:
         assert not any(verb in capability.value for verb in MUTATING_NAMES)
     assert {c.value for c in CAPTURE_CAPABILITIES} == {

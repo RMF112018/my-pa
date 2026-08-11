@@ -165,6 +165,24 @@ def _admitted(engine: Engine, table: str, constraint: str) -> frozenset[str]:
     return frozenset(re.findall(r"'([^']+)'::text", str(definition)))
 
 
+def _frozen_literals(revision: str, constant: str) -> frozenset[str]:
+    """The quoted names one revision module writes out under `constant`.
+
+    Read as *text* rather than by importing the module, deliberately: importing
+    would run the file, and what is being checked is what the file says. The
+    revision is located by its identifier appearing in the filename, which is the
+    naming every revision in `migrations/versions/` follows.
+    """
+    matches = [
+        path for path in (ROOT / "migrations" / "versions").glob("*.py") if revision in path.name
+    ]
+    assert len(matches) == 1, f"{revision} names {len(matches)} revision files"
+    text_of = matches[0].read_text(encoding="utf-8")
+    start = text_of.index(f"{constant}: Final = (")
+    end = text_of.index("\n)", start)
+    return frozenset(re.findall(r"'([^']+)'", text_of[start:end]))
+
+
 def _record(engine: Engine, capability: str) -> None:
     with engine.begin() as connection:
         connection.execute(
@@ -188,15 +206,33 @@ def test_the_corpus_revision_is_in_the_chain_on_the_continuity_revision() -> Non
 
 
 def test_the_widened_vocabulary_is_the_frozen_one_plus_exactly_this_capability() -> None:
-    """Guards the downgrade assertion below: equal sets would make it vacuous."""
+    """Guards the downgrade assertion below: equal sets would make it vacuous.
+
+    **Read off this revision's own frozen literals, not off the live domain.**
+    Until WP-28 this revision was the head, so "what the domain declares" and
+    "what this revision installs" were the same set and the test compared the
+    domain. They are no longer the same set — `6b3d9a2f8c14` widened both closed
+    sets again — and continuing to compare the domain would have made this test
+    a statement about whichever revision happens to be head rather than about
+    this one. What it is *for* is that `2d9f4a7c1e58` admits exactly one name
+    more than the revision below it, which is a property of the two frozen texts
+    in the revision file and of nothing else, and is therefore true forever.
+    """
+    admitted = _frozen_literals(CORPUS_REVISION, "_CAPABILITIES_AT_THIS_REVISION")
+    before = _frozen_literals(CORPUS_REVISION, "_CAPABILITIES_BEFORE_THIS_REVISION")
+    assert before == CAPABILITIES_BEFORE
+    assert admitted > before
+    assert admitted - before == {CAPABILITY_ADDED}
+    assert len(before) == 30
+    assert len(admitted) == 31
+    # The live domain is still checked, one direction only: this revision's names
+    # must all still exist. It may hold more — WP-28's six do — and a name that
+    # vanished from the enum while the constraint still admitted it would be the
+    # drift this says nothing else about.
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
-    assert declared > CAPABILITIES_BEFORE
-    assert declared - CAPABILITIES_BEFORE == {CAPABILITY_ADDED}
-    assert len(CAPABILITIES_BEFORE) == 30
-    assert len(declared) == 31
-    assert len(Capability) == 20
+    assert admitted <= declared
 
 
 @pytest.mark.database

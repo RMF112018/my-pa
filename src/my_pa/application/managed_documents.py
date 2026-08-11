@@ -167,11 +167,23 @@ class ManagedDocumentService:
         repository: ManagedDocumentRepository,
         store: ManagedByteStore,
         command: CreateManagedDocumentCommand,
+        *,
+        at: datetime | None = None,
     ) -> ManagedDocumentReceipt:
-        """Store the first immutable version of a new managed document."""
+        """Store the first immutable version of a new managed document.
+
+        `at` is the moment the request was received, supplied by the caller when
+        the caller has one. `ApplicationService` does — `authorization.at` is the
+        moment every other capability stamps its rows with, and it comes from the
+        service's injected clock — so a managed write recorded through a
+        transport carries the request's own time rather than a second reading of
+        the wall clock taken a few statements later. `None` keeps the operator
+        and composition-root callers, which have no request, on `utc_now()`.
+        """
         return self._write(
             repository,
             store,
+            at=at,
             principal_id=command.principal_id,
             document_id=None,
             expected_version_number=None,
@@ -186,11 +198,17 @@ class ManagedDocumentService:
         repository: ManagedDocumentRepository,
         store: ManagedByteStore,
         command: ReviseManagedDocumentCommand,
+        *,
+        at: datetime | None = None,
     ) -> ManagedDocumentReceipt:
-        """Append a successor version, refusing a stale expected version."""
+        """Append a successor version, refusing a stale expected version.
+
+        `at` is the request's own moment; see `create`.
+        """
         return self._write(
             repository,
             store,
+            at=at,
             principal_id=command.principal_id,
             document_id=command.document_id,
             expected_version_number=command.expected_version_number,
@@ -403,6 +421,7 @@ class ManagedDocumentService:
         media_type: str,
         content: ManagedContent,
         idempotency_key: str,
+        at: datetime | None,
     ) -> ManagedDocumentReceipt:
         """The one write path both `create` and `revise` take. See the module docstring."""
         version_id = issue_identifier(IdKind.MANAGED_DOCUMENT_VERSION)
@@ -417,7 +436,7 @@ class ManagedDocumentService:
             idempotency_key=idempotency_key,
             correlation_id=issue_identifier(IdKind.CORRELATION),
             principal_id=principal_id,
-            server_received_at=utc_now(),
+            server_received_at=utc_now() if at is None else ensure_utc(at),
         )
         # The replay pre-read happens *after* the request is built, because the
         # payload digest is what decides whether a key in use is a replay or a

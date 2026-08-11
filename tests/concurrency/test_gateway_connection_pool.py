@@ -85,6 +85,7 @@ from my_pa.contracts.ports import (
     CaptureRepository,
     EnrollmentRepository,
     KnowledgeRepository,
+    ManagedDocumentRepository,
     OperationQueue,
     ProjectRepository,
     PulseRepository,
@@ -218,6 +219,10 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def pulse(self) -> PulseRepository:
         return self._inner.pulse
+
+    @property
+    def managed_documents(self) -> ManagedDocumentRepository:
+        return self._inner.managed_documents
 
     @property
     def audit(self) -> AuditSink:

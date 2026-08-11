@@ -174,6 +174,19 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # reads is therefore not caller-stated at all, which is what puts it here
         # rather than under the held-scope rule below.
         Capability.KNOWLEDGE_COVERAGE,
+        # The managed-document plane names a document, not a source. A managed
+        # document is the product's own custody under `AGENTS.md` section 4 —
+        # written into the designated managed root and never into a source root —
+        # so its rows carry no `source_id` and no `enrollment_id` for a scope to
+        # be compared against, exactly as a capture's do not. Requiring one would
+        # make the whole plane permanently unusable; naming one would be naming a
+        # grant this plane cannot hold.
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_READ,
+        Capability.DOCUMENTS_LIST,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
     }
 )
 

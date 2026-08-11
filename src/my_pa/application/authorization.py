@@ -49,8 +49,10 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from my_pa.application.commands import (
+    ArchiveManagedDocument,
     Command,
     CreateCapture,
+    CreateManagedDocument,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -60,14 +62,18 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListManagedDocuments,
     ListProjects,
     ListReviewCases,
     ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
+    ReadManagedDocument,
+    RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
+    ReviseManagedDocument,
     SearchCaptures,
     SearchKnowledge,
 )
@@ -185,6 +191,19 @@ def _requested_scope(
             # nothing for this function to resolve; `_SCOPELESS` is where that
             # empty set is read as a measurement rather than as a failed lookup.
             | GetCorpusCoverage()
+            # A managed document belongs to no configured source and no
+            # enrollment: it is the product's own custody under `AGENTS.md`
+            # section 4, written into the designated managed root and never into
+            # a source root, and its rows carry no `source_id` for a scope to be
+            # compared against. The same measurement a capture makes, for the
+            # same reason, and `_SCOPELESS` in `domain.policy.decision` is where
+            # all six are read that way rather than denied for resolving nothing.
+            | CreateManagedDocument()
+            | ReviseManagedDocument()
+            | ReadManagedDocument()
+            | ListManagedDocuments()
+            | ArchiveManagedDocument()
+            | RestoreManagedDocument()
         ):
             return frozenset()
         case CreateCapture():

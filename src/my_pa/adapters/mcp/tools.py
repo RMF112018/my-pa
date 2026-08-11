@@ -81,6 +81,17 @@ def _schema_for(annotation: Any) -> dict[str, Any] | None:  # noqa: ANN401 - a t
         # has a name for which kind, so this publishes the wire shape rather than
         # the Python type.
         return {"type": "string", "format": "date-time"}
+    if annotation is bytes:
+        # A command holds real `bytes` — a managed document body — and JSON has
+        # no byte string, so the wire form is base64 and
+        # `adapters.normalization` is what decodes it, exactly as it converts a
+        # string into a `datetime`. This publishes the wire shape rather than the
+        # Python type, and `contentEncoding` is JSON Schema's own name for which
+        # kind of string it is. Nothing here says how large one may be: the
+        # request ceiling belongs to `adapters.normalization` and the document
+        # ceiling to `domain.documents.managed`, and restating either as a
+        # `maxLength` would be a third copy able to disagree with both.
+        return {"type": "string", "contentEncoding": "base64"}
     origin = get_origin(annotation)
     if origin is UnionType or origin is Union:
         optional = [member for member in get_args(annotation) if member is not type(None)]

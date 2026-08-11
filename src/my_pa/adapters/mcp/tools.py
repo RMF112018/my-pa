@@ -97,16 +97,17 @@ def _schema_for(annotation: Any) -> dict[str, Any] | None:  # noqa: ANN401 - a t
         optional = [member for member in get_args(annotation) if member is not type(None)]
         return _schema_for(optional[0]) if len(optional) == 1 else None
     if origin is tuple:
-        # `type_arguments` rather than `arguments`: `arguments` is what a caller's
-        # request document is called throughout this package, and
-        # `tests/architecture/test_mcp_is_a_thin_adapter.py` forbids reading a
-        # field out of one by name. A local that borrows the name would make that
-        # guard report a type-introspection read as a request read, and the way
-        # that gets resolved is by widening the guard rather than renaming the
-        # local. Renamed here so the guard can stay exact.
-        type_arguments = get_args(annotation)
-        if len(type_arguments) == 2 and type_arguments[1] is Ellipsis:
-            item = _schema_for(type_arguments[0])
+        # `arguments` is also what a caller's request document is called in
+        # `server.py`, and `tests/architecture/test_mcp_is_a_thin_adapter.py`
+        # forbids reading a field out of one. That guard follows the *value* — a
+        # request taints only the parameters it arrives in and the locals it flows
+        # into — so a local this module binds to a tuple of type arguments is not
+        # a request whatever it is called. The plain name is kept deliberately: a
+        # guard rewritten to match names again would report this line, which is
+        # the regression showing up as a failure rather than as a rename.
+        arguments = get_args(annotation)
+        if len(arguments) == 2 and arguments[1] is Ellipsis:
+            item = _schema_for(arguments[0])
             return None if item is None else {"type": "array", "items": item}
         return None
     if isinstance(annotation, type) and issubclass(annotation, StrEnum):
@@ -167,11 +168,11 @@ def input_schema_for(command: type) -> dict[str, Any]:
     required only when the command has a field that is.
     """
     properties, required, definitions = _envelope_schema()
-    # `payload_schema` rather than `payload`, for the reason `type_arguments`
-    # above carries: this is a generated JSON Schema, not a caller's payload.
-    payload_schema = payload_schema_for(command)
-    properties[PAYLOAD_KEY] = payload_schema
-    if payload_schema["required"]:
+    # `payload` for the reason `arguments` above carries: this is a generated
+    # JSON Schema built from a command type, and nothing a caller sent reaches it.
+    payload = payload_schema_for(command)
+    properties[PAYLOAD_KEY] = payload
+    if payload["required"]:
         required.append(PAYLOAD_KEY)
     schema: dict[str, Any] = {
         "type": "object",

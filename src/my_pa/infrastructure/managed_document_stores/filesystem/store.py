@@ -92,8 +92,13 @@ exact instant the window opens, shows the *previous* publication landing bytes
 outside the root under that attack, and shows this one refusing it.
 
 **What that claim does not extend to, said plainly rather than implied away.**
-The *root itself* is opened by name once per operation, so it is the one
-component no descriptor sits above; a root replaced between two operations is a
+The *root itself* is opened by name, and it is the one component no descriptor
+sits above. It is opened afresh by every anchored step rather than once per
+public call: a single `put` opens it **five** times — once in each of the two
+`_ensure_directory` calls, once in `_write_exclusive`'s `_anchored`, and twice
+more inside `_publish`. That count does not change the security statement and is
+written down because "once per operation" was wrong and a reader counting
+syscalls would find it so. A root replaced between any two of those opens is a
 different root, and the constructor's refusal of a symlinked root plus the fact
 that replacing it needs the same local write access as replacing any component is
 the whole of what stands there. A platform that cannot perform a syscall relative
@@ -289,9 +294,24 @@ class FilesystemManagedByteStore(ManagedByteStore):
         is on the device. A second call for the same identifier raises: bytes are
         written once, and an overwrite is the operation this plane does not have.
 
-        The temporary file is removed on any failure, so a refused or interrupted
-        write leaves no partial object under `incoming/`. A process killed
-        between the two can leave one, which `orphaned_version_ids` reports.
+        **The temporary is removed on some failures and not on others, and the
+        difference is which exception the failure arrives as.** The `_publish`
+        call below is wrapped for `FileExistsError` and `OSError`, and both of
+        those discard it. A refusal raised as `ManagedStoreError` is not caught
+        here: `_anchored` raises one when a component of the chain is not a
+        directory reachable without following a link, and WP-28 put two
+        `_anchored` calls inside `_publish` — so that refusal propagates with the
+        `.part` file still in `incoming/`. A process killed between the write and
+        the publication leaves one for the same reason.
+
+        What survives is an orphan **inside** the root: bytes carrying no object
+        name, named by no row, and unreadable as a version. `verify` reports it
+        under `unreadable_entries`, which lists every file in `incoming/` — not
+        under `orphaned_version_ids`, which is derived from the object tree alone
+        and never sees `incoming/` at all. Nothing reclaims it automatically.
+        That is WP-27's already-disclosed model for orphaned bytes rather than a
+        new failure mode, and `tests/security/test_managed_store_toctou.py`
+        asserts the surviving temporary rather than asserting it away.
         """
         target = self._object_path(version_id)
         self._ensure_directory(target.parent)
@@ -521,12 +541,13 @@ class FilesystemManagedByteStore(ManagedByteStore):
     # checked.
     #
     # **What this does not close, stated exactly.** The *root itself* is opened by
-    # name once per operation, so a root swapped between two operations is a
-    # different root — unchanged from before, and covered by the constructor's
-    # refusal of a symlinked root plus the fact that replacing the configured
-    # root requires the same local write access as replacing any component. And a
-    # component swapped *before* `_anchored` opens it is not a race at all: it is
-    # a link that is already there, which the walk refuses.
+    # name — once for every anchored step rather than once per public call, which
+    # is five times during a single `put` — so a root swapped between any two of
+    # those opens is a different root. Unchanged from before, and covered by the
+    # constructor's refusal of a symlinked root plus the fact that replacing the
+    # configured root requires the same local write access as replacing any
+    # component. And a component swapped *before* `_anchored` opens it is not a
+    # race at all: it is a link that is already there, which the walk refuses.
 
     def _anchored(self, directory: Path) -> int:
         """A descriptor for `directory`, opened one component at a time from the root.

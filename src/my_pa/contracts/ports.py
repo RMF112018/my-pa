@@ -798,6 +798,23 @@ class KnowledgeRepository(ABC):
         """
 
     @abstractmethod
+    def scope_beyond_enrollment(self, principal_id: str, *, enrollment_id: str) -> bool:
+        """Whether `principal_id` holds scope that `enrollment_id` does not cover.
+
+        **A boolean and not a count, and that is the contract rather than a
+        simplification.** Its one caller is `knowledge.search`, which is
+        authorized for the enrollment it names and for nothing else; a number
+        here would tell that caller the size of a scope its request never
+        authorized, which is the side channel the aggregate-limitation rule
+        permits only for the scope actually in question. "There is scope outside
+        this answer" is what a caller can act on, and it is all of it.
+
+        This does not widen what a search may read. It is asked *beside* the
+        search, answers about the enrollment set the acting Principal already
+        holds, and reaches no row of any enrollment the search does not name.
+        """
+
+    @abstractmethod
     def limitations(self, enrollment_id: str) -> tuple[AggregateLimitation, ...]:
         """The aggregate limitations recorded at the enrollment's latest snapshot.
 

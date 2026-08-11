@@ -115,6 +115,7 @@ __all__ = [
     "outcome_for_object",
     "pending_objects",
     "read_extraction",
+    "scope_beyond_enrollment",
 ]
 
 _RECORD_COLUMNS = (
@@ -312,6 +313,79 @@ def _enumerated_objects(context: PrincipalContext) -> Select[tuple[str]]:
     )
 
 
+def _enumerable(context: PrincipalContext) -> tuple[ColumnElement[bool], ...]:
+    """Which rows of `source_objects` an enrollment of this Principal could hold.
+
+    Restricted to `ENUMERABLE_KINDS`, which is the domain's own statement of what
+    `ApplicationService._enumerate` records rather than descends into. A container
+    counted here would be territory no enrollment was ever going to cover, so the
+    corpus could never report `processed` for a source that has a folder in it.
+    """
+    return (
+        source_objects.c.source_id.in_(_held_sources(context)),
+        source_objects.c.kind.in_(sorted(kind.value for kind in ENUMERABLE_KINDS)),
+    )
+
+
+def _outside_every_enrollment(context: PrincipalContext) -> tuple[ColumnElement[bool], ...]:
+    """Which objects of the held sources no enrollment of this Principal enumerates.
+
+    One definition with two callers: `corpus_coverage` counts these rows and
+    `scope_beyond_enrollment` asks whether any exists. Written once so the count a
+    caller is shown and the token a search carries cannot disagree about what
+    "outside" means.
+    """
+    return (
+        *_enumerable(context),
+        source_objects.c.source_object_id.not_in(_enumerated_objects(context)),
+    )
+
+
+def _unenrolled_object(context: PrincipalContext) -> ColumnElement[bool]:
+    """Whether any object of a held source lies outside every one of the enrollments."""
+    return select(literal(1)).where(*_outside_every_enrollment(context)).exists()
+
+
+def scope_beyond_enrollment(
+    connection: Connection, principal_id: str, *, enrollment_id: str
+) -> bool:
+    """Whether this Principal holds scope the named enrollment does not cover.
+
+    **A boolean, deliberately, and it is the narrowest true answer.** A search is
+    answered inside the one enrollment it names, and this is what lets the
+    envelope say that the answer is not an answer about the corpus. It says
+    *that* there is scope outside the question and never how much or which, so it
+    cannot become a channel for the size of a scope the request did not name —
+    which a count would be, since the request never authorized that scope.
+
+    Two conditions, and between them they cover the three ways scope escapes one
+    enrollment. Another enrollment of this Principal is the first. An object of a
+    held source that no enrollment enumerates is the second. The third — work
+    still awaiting an outcome — needs nothing here: pending work *inside* the
+    named enrollment already leaves its own coverage state `partially_processed`,
+    and pending work in another enrollment is that other enrollment, which the
+    first condition already found.
+
+    Both conditions reach `enrollments` through `partition_criterion`, so a
+    Principal cannot learn from this that *another* Principal holds something.
+    """
+    validate_identifier(principal_id, IdKind.PRINCIPAL)
+    validate_identifier(enrollment_id, IdKind.ENROLLMENT)
+    context = capture_context(principal_id)
+    another = (
+        select(literal(1))
+        .where(
+            partition_criterion(enrollments, context),
+            enrollments.c.enrollment_id != enrollment_id,
+        )
+        .exists()
+    )
+    found = connection.execute(
+        select(another.self_group() | _unenrolled_object(context).self_group())
+    ).scalar_one()
+    return bool(found)
+
+
 def corpus_coverage(
     connection: Connection, principal_id: str, *, observed_at: datetime
 ) -> CorpusCoverage:
@@ -377,18 +451,14 @@ def corpus_coverage(
         )
     ).scalar_one()
 
-    in_scope_kinds = source_objects.c.kind.in_(sorted(kind.value for kind in ENUMERABLE_KINDS))
     observed = connection.execute(
         select(func.count(func.distinct(source_objects.c.source_object_id))).where(
-            source_objects.c.source_id.in_(_held_sources(context)),
-            in_scope_kinds,
+            *_enumerable(context)
         )
     ).scalar_one()
     outside = connection.execute(
         select(func.count(func.distinct(source_objects.c.source_object_id))).where(
-            source_objects.c.source_id.in_(_held_sources(context)),
-            in_scope_kinds,
-            source_objects.c.source_object_id.not_in(_enumerated_objects(context)),
+            *_outside_every_enrollment(context)
         )
     ).scalar_one()
     awaiting = connection.execute(

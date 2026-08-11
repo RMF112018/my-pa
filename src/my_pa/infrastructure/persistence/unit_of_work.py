@@ -110,6 +110,7 @@ from my_pa.infrastructure.persistence.knowledge import (
     latest_limitations,
     outcome_for_object,
     read_extraction,
+    scope_beyond_enrollment,
 )
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.registry import (
@@ -419,6 +420,13 @@ class _Knowledge(KnowledgeRepository):
         except ValueError:
             failure = RepositoryFailureError("the corpus coverage read could not be completed")
         raise failure
+
+    def scope_beyond_enrollment(self, principal_id: str, *, enrollment_id: str) -> bool:
+        return _read(
+            lambda: scope_beyond_enrollment(
+                self._connection, principal_id, enrollment_id=enrollment_id
+            )
+        )
 
     def limitations(self, enrollment_id: str) -> tuple[AggregateLimitation, ...]:
         return _read(lambda: latest_limitations(self._connection, enrollment_id))

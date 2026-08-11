@@ -144,6 +144,7 @@ from my_pa.application.disclosure import (
     disclosure_for,
     unavailable_disclosure,
     unenrolled_disclosure,
+    with_corpus_caveat,
 )
 from my_pa.application.errors import (
     AmbiguousRequestError,
@@ -956,6 +957,25 @@ class ApplicationService:
         to render itself, every message these constructors raise names the rule
         rather than the value, and the public error carries a code and a field
         name and nothing else.
+
+        **A search over partial coverage says so, and that is the one thing added
+        to the envelope here.** A Principal holding another enrollment, or objects
+        of a held source that no enrollment enumerates, gets an answer that is
+        correct for the enrollment it named and is *not* an answer about
+        everything they hold. Without a token there is nothing in the reply that
+        distinguishes those two, which is `docs/specs` section 23's named failure:
+        a search that silently omits unindexed scope and returns a confident
+        answer. `with_corpus_caveat` adds one closed token and sets
+        `partial_result`; it changes no count, no state and no scope, because
+        nothing here measured a wider scope.
+
+        **It is not a widening of this capability's authorization.** The extra
+        read answers about the enrollment set the acting Principal already holds
+        and returns a boolean; no row outside `command.enrollment_id` reaches the
+        page, the coverage, or the disclosure. The search itself is untouched: the
+        envelope below is still the one the search produced, because rebuilding
+        the coverage from a second read would replace a consistent answer with a
+        plausible one.
         """
         self._required_enrollment(authorization, command.enrollment_id)
         request = self._search_request(command)
@@ -976,6 +996,12 @@ class ApplicationService:
         if outcome is None:
             raise InternalError()
 
+        with _translated():
+            beyond = unit_of_work.knowledge.scope_beyond_enrollment(
+                authorization.principal.principal_id, enrollment_id=command.enrollment_id
+            )
+        disclosure = with_corpus_caveat(outcome.disclosure) if beyond else outcome.disclosure
+
         return _Result(
             payload={
                 "matches": [
@@ -991,7 +1017,7 @@ class ApplicationService:
                     for match in outcome.matches
                 ]
             },
-            disclosure=outcome.disclosure,
+            disclosure=disclosure,
         )
 
     def _knowledge_coverage(

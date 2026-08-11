@@ -531,6 +531,29 @@ class _Knowledge(KnowledgeRepository):
             objects_awaiting_an_outcome=len(awaiting),
         )
 
+    def scope_beyond_enrollment(self, principal_id: str, *, enrollment_id: str) -> bool:
+        """Whether this Principal holds scope the named enrollment does not cover.
+
+        The store's two conditions, reproduced rather than approximated: another
+        enrollment of the same Principal, or an object of a held source that no
+        enrollment of theirs enumerates.
+        """
+        self._world.fail("scope_beyond_enrollment")
+        mine = [e for e in self._world.enrollments if e.principal_id == principal_id]
+        if any(e.enrollment_id != enrollment_id for e in mine):
+            return True
+        enumerated = {
+            object_id
+            for enrollment in mine
+            for object_id in self._world.scopes.get(enrollment.enrollment_id, ())
+        }
+        sources = {e.source_id for e in mine}
+        return any(
+            object_id not in enumerated
+            for object_id, source_id in self._world.objects.items()
+            if source_id in sources
+        )
+
     def limitations(self, enrollment_id: str) -> tuple[AggregateLimitation, ...]:
         self._world.fail("limitations")
         return self._world.limitations.get(enrollment_id, ())

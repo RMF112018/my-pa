@@ -57,7 +57,11 @@ from my_pa.infrastructure.persistence.extraction import (
     quarantine_object,
     record_outcome,
 )
-from my_pa.infrastructure.persistence.knowledge import corpus_coverage, pending_objects
+from my_pa.infrastructure.persistence.knowledge import (
+    corpus_coverage,
+    pending_objects,
+    scope_beyond_enrollment,
+)
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
 
 pytestmark = pytest.mark.database
@@ -444,3 +448,49 @@ def test_two_enrollments_over_one_source_are_stated_separately_and_only_summed(
     assert answer.objects_in_held_sources == 4
     assert answer.objects_outside_every_enrollment == 1
     assert answer.objects_awaiting_an_outcome == 0
+
+
+def test_scope_beyond_an_enrollment_is_this_principals_own_and_no_one_elses(
+    engine: Engine,
+) -> None:
+    """The boolean a search carries its caveat from, at the query boundary.
+
+    Three arrangements, and the third is the one a lost partition predicate would
+    turn true. A Principal whose single enrollment covers its whole source holds
+    nothing outside it; the same Principal with an object left unenrolled does;
+    and a Principal whose corpus is complete must not be told "there is more"
+    because *another* Principal holds something.
+    """
+    whole = Holding(engine, "beyond-whole", enrolled=("alpha", "beta", "gamma", "delta"))
+    partial = Holding(engine, "beyond-partial", enrolled=("alpha", "beta"))
+
+    with engine.begin() as connection:
+        assert (
+            scope_beyond_enrollment(
+                connection, whole.principal_id, enrollment_id=whole.enrollment_id
+            )
+            is False
+        ), "another Principal's unenrolled objects are not this Principal's unknown territory"
+        assert (
+            scope_beyond_enrollment(
+                connection, partial.principal_id, enrollment_id=partial.enrollment_id
+            )
+            is True
+        )
+
+    second = whole.enroll_again(("alpha",))
+    with engine.begin() as connection:
+        assert (
+            scope_beyond_enrollment(
+                connection, whole.principal_id, enrollment_id=whole.enrollment_id
+            )
+            is True
+        ), "a second enrollment of this Principal is scope the first does not cover"
+        assert (
+            scope_beyond_enrollment(
+                connection,
+                whole.principal_id,
+                enrollment_id=second.enrollment_id,  # type: ignore[attr-defined]
+            )
+            is True
+        )

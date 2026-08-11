@@ -178,6 +178,9 @@ class _FailingKnowledge(KnowledgeRepository):
     def corpus(self, principal_id: str, *, observed_at: datetime) -> CorpusCoverage:
         return self._inner.corpus(principal_id, observed_at=observed_at)
 
+    def scope_beyond_enrollment(self, principal_id: str, *, enrollment_id: str) -> bool:
+        return self._inner.scope_beyond_enrollment(principal_id, enrollment_id=enrollment_id)
+
     def limitations(self, enrollment_id: str) -> tuple[AggregateLimitation, ...]:
         raise EvidenceUnavailableError("the limitation read was made to fail by this test")
 

@@ -63,6 +63,7 @@ __all__ = [
     "disclosure_for",
     "unavailable_disclosure",
     "unenrolled_disclosure",
+    "with_corpus_caveat",
 ]
 
 
@@ -352,6 +353,43 @@ def corpus_disclosure(
         partial_result=state in _PARTIAL_STATES,
         classification=Classification.PRIVATE_LOCAL,
         cloud_eligible=False,
+    )
+
+
+def with_corpus_caveat(disclosure: Disclosure) -> Disclosure:
+    """The same envelope, saying that the answer does not span the Principal's corpus.
+
+    **Additive, and additive in exactly two places.** One limitation token and
+    `partial_result=True`. Nothing else moves: the coverage block still states
+    what the enrollment's own coverage read measured, the scope still names only
+    the enrollment the request named, and no count changes — because nothing here
+    measured a wider scope and a number that appeared to would be an answer about
+    rows the request never authorized.
+
+    **Rebuilt through the constructor rather than copied.** `model_copy` skips
+    validation, and the whole point of the change is to set `partial_result`
+    truthfully; a copy that could carry a state and a flag which contradict each
+    other would defeat `Disclosure._check_partial_is_truthful`, the one rule in
+    the envelope that makes a complete-looking partial answer unconstructible.
+    Every field is forwarded explicitly, and
+    `test_the_caveat_forwards_every_field_the_envelope_has` compares the forwarded
+    set against `Disclosure`'s own so that a field added later cannot be dropped
+    here in silence.
+    """
+    return Disclosure(
+        scope=disclosure.scope,
+        coverage=disclosure.coverage,
+        freshness=disclosure.freshness,
+        trust=disclosure.trust,
+        truncation=disclosure.truncation,
+        limitations=tuple(
+            sorted({*disclosure.limitations, Limitation.SEARCH_DOES_NOT_SPAN_THE_CORPUS.value})
+        ),
+        source_references=disclosure.source_references,
+        unavailable_evidence=disclosure.unavailable_evidence,
+        partial_result=True,
+        classification=disclosure.classification,
+        cloud_eligible=disclosure.cloud_eligible,
     )
 
 

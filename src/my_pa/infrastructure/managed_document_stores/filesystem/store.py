@@ -38,11 +38,17 @@ assuming:
   link planted inside the root from redirecting a write outside it.
 * **Writes are create-exclusive at both ends, and never follow a link.**
   `O_CREAT | O_EXCL` on the temporary refuses a leftover part-file rather than
-  overwriting it; `Path.hardlink_to` publishes the object and fails outright if
-  that location is already taken, so "a version's bytes are written once" is a
+  overwriting it; `os.link` publishes the object and fails outright if that
+  location is already taken, so "a version's bytes are written once" is a
   property of the syscall rather than of an `exists()` check with a window in it.
   `O_NOFOLLOW` refuses a final component that became a symlink between the check
   and the open.
+* **Every write and every read is performed relative to a directory descriptor
+  (WP-28).** The chain from the root down is opened one component at a time with
+  `O_DIRECTORY | O_NOFOLLOW`, and the create, the link, the unlink and the read
+  are then `openat`/`linkat`/`unlinkat` against the descriptor that walk
+  produced. After the walk returns there is no path component left for anything
+  to swap, which is what closes the check-to-syscall window recorded below.
 
 **Durability, and the failure window it leaves.** A write goes to a temporary
 file inside the root, is `fsync`ed, and is then linked onto the derived
@@ -56,9 +62,10 @@ repair. The window is real, it is stated here and in
 `ops/runbooks/managed-document-operations.md`, and this module claims no atomicity
 across the filesystem and the database because there is none.
 
-**Reads are read-only and refuse a link too.** `O_RDONLY | O_NOFOLLOW`, and the
-same component check, so a stored object swapped for a link to a source file
-reads as a refusal rather than as the source file's contents.
+**Reads are read-only and refuse a link too.** `O_RDONLY | O_NOFOLLOW`, the same
+component check, and the same directory descriptor the writes use, so a stored
+object swapped for a link to a source file reads as a refusal rather than as the
+source file's contents.
 
 **What this does not close, stated rather than left to be found.** A bind mount
 or any filesystem mounted inside the resolved root exposes an outside subtree at
@@ -68,22 +75,34 @@ outside the threat model — the same conclusion, for the same reason,
 `infrastructure.providers.fixture` records for the read side. A hard link inside
 the root pointing at a file outside it is refused on the write side by the
 publishing link (the target must not exist) and on the read side by the link
-count of the open descriptor. **An intermediate directory component swapped
-between the check and the syscall is not closed either.** `O_NOFOLLOW`
-constrains the *final* component and says nothing about the directories above
-it, and `_publish`'s `Path.hardlink_to` carries no symlink protection at all.
-Every *pre-planted* version of such a link is refused — the component walk
-reaches it first and stops — so the window is exclusively the interval between
-`_verify_contained` returning and the syscall running: a directory component
-replaced by a symlink inside that interval sends the write outside the resolved
-root, transiently by way of `incoming/` and durably by way of a swapped
-`objects/<shard>`, while `put` reports success. Reaching it requires write
-access *inside the product's own managed root*, which is the UID this product
-runs as — the same precondition the bind mount above is excluded under. The
-hardening is known and is not done here: open the shard directory once with
-`O_DIRECTORY | O_NOFOLLOW` and perform the create and the link with `openat` and
-`linkat` relative to that descriptor, so that no component is resolved by name
-again after the check.
+count of the open descriptor.
+
+**The intermediate-component window WP-27 disclosed is closed, and here is
+exactly what "closed" means.** WP-27 shipped with `_verify_contained` checking a
+chain *by name* and the syscall that followed resolving the same chain by name a
+second time; a directory component replaced by a symlink inside that interval
+sent the write outside the resolved root — transiently by way of `incoming/` and
+durably by way of a swapped `objects/<shard>` — while `put` reported success. It
+was reproduced twice with real bytes. WP-28 implements the remedy WP-27 recorded:
+the chain is walked once with `O_DIRECTORY | O_NOFOLLOW`, holding a descriptor at
+each level, and every subsequent syscall is anchored to that descriptor. A
+descriptor names an inode; a swap after it is held changes nothing the call can
+reach. `tests/security/test_managed_store_toctou.py` reproduces the attack at the
+exact instant the window opens, shows the *previous* publication landing bytes
+outside the root under that attack, and shows this one refusing it.
+
+**What that claim does not extend to, said plainly rather than implied away.**
+The *root itself* is opened by name once per operation, so it is the one
+component no descriptor sits above; a root replaced between two operations is a
+different root, and the constructor's refusal of a symlinked root plus the fact
+that replacing it needs the same local write access as replacing any component is
+the whole of what stands there. A platform that cannot perform a syscall relative
+to a directory descriptor cannot hold this guarantee at all, and this module
+**refuses rather than reverting** to name-based syscalls, so such a build fails
+loudly instead of silently holding a weaker property. And the precondition for
+the original attack is unchanged and was never the point: it always required
+write access inside the product's own managed root, as the UID this product runs
+as.
 
 **What no test here can isolate, measured rather than asserted.** Three of the
 layers above are redundant with one another for every case a test can construct,
@@ -173,6 +192,28 @@ _READ_FLAGS: Final = os.O_RDONLY | _NOFOLLOW
 
 #: Bytes per `os.read`. A ceiling on one syscall's buffer, not on the read.
 _CHUNK_BYTES: Final = 1 << 20
+
+#: How a directory is opened when it is going to be used as an anchor. Read-only,
+#: refusing anything that is not a directory, and refusing a final component that
+#: is a symbolic link. Every component of the chain is opened with these flags, so
+#: a link anywhere between the root and a shard is refused by the kernel rather
+#: than by a check the kernel is not party to.
+_DIRECTORY_FLAGS: Final = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _NOFOLLOW
+
+#: Whether this platform can perform a syscall relative to a directory
+#: descriptor. Checked rather than assumed, and checked per operation: `dir_fd`
+#: support is per function in CPython and per system call underneath it.
+#:
+#: **This is a capability check, not a fallback switch.** A platform without it
+#: cannot close the intermediate-component window at all, and this module refuses
+#: to *pretend* it did: `_anchored` raises rather than quietly reverting to
+#: name-based syscalls, so a build that cannot hold the guarantee fails loudly
+#: instead of silently holding a weaker one. Every platform this product is built
+#: for has it; the check exists so that a platform that does not is a startup
+#: failure rather than a security regression.
+_ANCHORING_IS_AVAILABLE: Final = all(
+    call in os.supports_dir_fd for call in (os.open, os.link, os.unlink, os.mkdir, os.stat)
+)
 
 
 def _resolved_directory(candidate: Path, what: str) -> Path:
@@ -299,11 +340,7 @@ class FilesystemManagedByteStore(ManagedByteStore):
         layout.
         """
         path = self._object_path(version_id)
-        descriptor: int | None = None
-        try:
-            descriptor = os.open(path, _READ_FLAGS)
-        except OSError:
-            descriptor = None
+        descriptor = self._open_anchored(path, _READ_FLAGS)
         if descriptor is None:
             raise StoredBytesMissingError("the managed object's bytes are not readable")
         try:
@@ -322,11 +359,7 @@ class FilesystemManagedByteStore(ManagedByteStore):
         """Return the backup manifest stored at the root's fixed artifact location."""
         path = self._root / _MANIFEST
         self._verify_contained(path)
-        descriptor: int | None = None
-        try:
-            descriptor = os.open(path, _READ_FLAGS)
-        except OSError:
-            descriptor = None
+        descriptor = self._open_anchored(path, _READ_FLAGS)
         if descriptor is None:
             raise StoredBytesMissingError("the managed manifest is not readable")
         try:
@@ -338,9 +371,15 @@ class FilesystemManagedByteStore(ManagedByteStore):
         """Whether `version_id`'s bytes are present as a plain file."""
         path = self._object_path(version_id)
         try:
-            status = path.lstat()
+            anchor = self._anchored(path.parent)
+        except ManagedStoreError:
+            return False
+        try:
+            status = os.stat(path.name, dir_fd=anchor, follow_symlinks=False)
         except OSError:
             return False
+        finally:
+            os.close(anchor)
         return S_ISREG(status.st_mode)
 
     def stored_version_ids(self) -> tuple[str, ...]:
@@ -448,68 +487,237 @@ class FilesystemManagedByteStore(ManagedByteStore):
             raise ManagedStoreError("the derived managed location is outside the root")
 
     # ---- the syscalls ----------------------------------------------------
+    #
+    # **Every write and every read below is performed relative to a directory
+    # descriptor, and that is what closes WP-27's disclosed TOCTOU window.**
+    #
+    # The window was this. `_verify_contained` walks the components between the
+    # root and a target and refuses any that is already a symbolic link — a real
+    # check, and one made *by name*. The syscall that followed was also made by
+    # name, so the kernel resolved every component a second time; a directory
+    # component swapped for a symlink in between landed the write outside the
+    # root while `put()` reported success. `O_NOFOLLOW` constrains only the
+    # **final** component and `Path.hardlink_to` carries no link protection at
+    # all, so neither covered it. It was reproduced twice with real bytes.
+    #
+    # The remedy is the one WP-27 recorded: resolve the chain **once**, holding a
+    # descriptor for each directory as it is opened, and then perform the create,
+    # the link and the unlink with `openat`/`linkat`/`unlinkat` relative to that
+    # descriptor. A descriptor names an inode, not a path, so after `_anchored`
+    # returns there is no component left for anything to swap — the name the
+    # kernel resolves is a single leaf inside a directory this process is already
+    # holding open.
+    #
+    # **Every existing layer is kept, and none of them is now redundant.** The
+    # component walk and the resolved-parent comparison still run first and still
+    # refuse a link that is *already* there, which is the common case and the one
+    # that produces a clear refusal rather than an `ENOTDIR`. `O_EXCL` still makes
+    # a second write fail rather than overwrite. `linkat` still fails outright on
+    # an existing target, which is what makes byte-level immutability a property
+    # of the call. `O_NOFOLLOW` still refuses a final component that became a
+    # link. The `st_nlink` read refusal still refuses an object carrying a second
+    # name. What anchoring adds is the one thing none of them could: the
+    # guarantee that the directory the syscall acts in is the directory that was
+    # checked.
+    #
+    # **What this does not close, stated exactly.** The *root itself* is opened by
+    # name once per operation, so a root swapped between two operations is a
+    # different root — unchanged from before, and covered by the constructor's
+    # refusal of a symlinked root plus the fact that replacing the configured
+    # root requires the same local write access as replacing any component. And a
+    # component swapped *before* `_anchored` opens it is not a race at all: it is
+    # a link that is already there, which the walk refuses.
+
+    def _anchored(self, directory: Path) -> int:
+        """A descriptor for `directory`, opened one component at a time from the root.
+
+        Each component is opened with `O_DIRECTORY | O_NOFOLLOW` relative to the
+        descriptor of the one above it, so a symbolic link anywhere in the chain
+        is refused by the kernel. The caller owns the returned descriptor and
+        must close it.
+
+        The root is opened by name — there is nothing above it to anchor against —
+        and it is the one component this cannot cover; see the section comment.
+        """
+        if not _ANCHORING_IS_AVAILABLE:  # pragma: no cover - every supported platform has it
+            raise ManagedStoreError(
+                "this platform cannot perform a directory-anchored write, so the "
+                "managed store cannot hold its containment guarantee"
+            )
+        try:
+            relative = directory.relative_to(self._root)
+        except ValueError:
+            raise ManagedStoreError("the derived managed location is outside the root") from None
+        # The root itself has no components below the root, and
+        # `_verify_contained` is a statement about a *derived* location: asked of
+        # the root it would compare the root's own parent, which is outside by
+        # construction. `put_manifest` anchors on the root, which is the one call
+        # that reaches this branch.
+        if relative.parts:
+            self._verify_contained(directory)
+        try:
+            current = os.open(self._root, _DIRECTORY_FLAGS)
+        except OSError:
+            raise ManagedStoreError("the managed root could not be opened") from None
+        for part in relative.parts:
+            try:
+                nested = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+            except OSError:
+                os.close(current)
+                raise ManagedStoreError(
+                    "the derived managed location is not a directory reachable "
+                    "without following a link"
+                ) from None
+            os.close(current)
+            current = nested
+        return current
 
     def _ensure_directory(self, path: Path) -> None:
-        """Create one derived directory chain, refusing a link at any component."""
+        """Create one derived directory chain, refusing a link at any component.
+
+        Each level is created with `mkdirat` relative to the level above, so the
+        directory a component is created *in* is one this process is holding open
+        rather than one the kernel is asked to find again by name.
+        """
         self._verify_contained(path)
-        path.mkdir(parents=True, exist_ok=True)
+        try:
+            relative = path.relative_to(self._root)
+        except ValueError:
+            raise ManagedStoreError("the derived managed location is outside the root") from None
+        try:
+            current = os.open(self._root, _DIRECTORY_FLAGS)
+        except OSError:
+            raise ManagedStoreError("the managed root could not be opened") from None
+        try:
+            for part in relative.parts:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=current)
+                except FileExistsError:
+                    # Already there, which is the ordinary case. It is opened
+                    # below with `O_NOFOLLOW`, so an existing *link* by that name
+                    # is refused there rather than accepted here.
+                    pass
+                except OSError:
+                    raise ManagedStoreError("the managed directory could not be created") from None
+                try:
+                    nested = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+                except OSError:
+                    raise ManagedStoreError(
+                        "the derived managed location is not a directory reachable "
+                        "without following a link"
+                    ) from None
+                os.close(current)
+                current = nested
+        finally:
+            os.close(current)
 
     def _write_exclusive(self, path: Path, content: bytes) -> None:
-        """Create `path`, write `content`, and put both on the device."""
+        """Create `path`, write `content`, and put both on the device.
+
+        `openat` relative to the parent's descriptor, so the only name the kernel
+        resolves for this call is the leaf.
+        """
         self._verify_contained(path)
+        anchor = self._anchored(path.parent)
         descriptor: int | None = None
         try:
-            descriptor = os.open(path, _CREATE_FLAGS, 0o600)
-        except FileExistsError:
-            raise ManagedStoreError("the managed object already exists") from None
-        except OSError:
-            raise ManagedStoreError("the managed object could not be created") from None
-        try:
-            written = 0
-            view = memoryview(content)
-            while written < len(view):
-                written += os.write(descriptor, view[written:])
-            os.fsync(descriptor)
+            try:
+                descriptor = os.open(path.name, _CREATE_FLAGS, 0o600, dir_fd=anchor)
+            except FileExistsError:
+                raise ManagedStoreError("the managed object already exists") from None
+            except OSError:
+                raise ManagedStoreError("the managed object could not be created") from None
+            try:
+                written = 0
+                view = memoryview(content)
+                while written < len(view):
+                    written += os.write(descriptor, view[written:])
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
         finally:
-            os.close(descriptor)
+            os.close(anchor)
 
     def _publish(self, temporary: Path, target: Path, *, replace: bool = False) -> None:
         """Put a fsynced temporary at its derived location, exclusively, and durably.
 
-        **An object is published by `hardlink_to`, not by a rename, and the
-        difference is the whole of byte-level immutability.** `rename` replaces an
-        existing name silently on POSIX, so a rename guarded by a preceding
-        `exists()` check is a check-then-act with a window in it — and the check,
-        not the syscall, would be what refused a second write. `Path.hardlink_to`
-        fails with `FileExistsError` when the target is already there, atomically
-        and with no window, so "a version's bytes are written once" is a property
-        of the call rather than of a guard in front of it. The temporary is
-        unlinked afterwards, leaving the object with exactly one name, which is
-        what the read path's link-count refusal requires.
+        **An object is published by `linkat`, not by a rename, and the difference
+        is the whole of byte-level immutability.** `rename` replaces an existing
+        name silently on POSIX, so a rename guarded by a preceding `exists()`
+        check is a check-then-act with a window in it — and the check, not the
+        syscall, would be what refused a second write. `os.link` fails with
+        `FileExistsError` when the target is already there, atomically and with no
+        window, so "a version's bytes are written once" is a property of the call
+        rather than of a guard in front of it. The temporary is unlinked
+        afterwards, leaving the object with exactly one name, which is what the
+        read path's link-count refusal requires.
+
+        Both ends are anchored — `src_dir_fd` for the temporary and `dst_dir_fd`
+        for the object — so neither the `incoming` directory nor the shard is
+        resolved by name again after `_verify_contained` returned.
+        `follow_symlinks=False` refuses a *source* that has become a link, which
+        `Path.hardlink_to` could not express at all.
 
         `replace` is true only for the manifest, which a later backup is meant to
         supersede; it is the one call here that may land on an existing name, and
-        it uses `Path.replace` for exactly that.
+        it uses `renameat` for exactly that.
         """
         self._verify_contained(target)
-        if replace:
-            temporary.replace(target)
-        else:
-            target.hardlink_to(temporary)
-            temporary.unlink()
-        directory = os.open(target.parent, os.O_RDONLY)
+        source_anchor = self._anchored(temporary.parent)
         try:
-            os.fsync(directory)
+            target_anchor = self._anchored(target.parent)
+        except ManagedStoreError:
+            os.close(source_anchor)
+            raise
+        try:
+            if replace:
+                os.rename(
+                    temporary.name, target.name, src_dir_fd=source_anchor, dst_dir_fd=target_anchor
+                )
+            else:
+                os.link(
+                    temporary.name,
+                    target.name,
+                    src_dir_fd=source_anchor,
+                    dst_dir_fd=target_anchor,
+                    follow_symlinks=False,
+                )
+                os.unlink(temporary.name, dir_fd=source_anchor)
+            os.fsync(target_anchor)
         finally:
-            os.close(directory)
+            os.close(target_anchor)
+            os.close(source_anchor)
 
     def _discard(self, temporary: Path) -> None:
         """Remove a temporary this method created, ignoring an already-absent one."""
         self._verify_contained(temporary)
+        anchor = self._anchored(temporary.parent)
         try:
-            temporary.unlink()
+            os.unlink(temporary.name, dir_fd=anchor)
         except FileNotFoundError:
             return
+        finally:
+            os.close(anchor)
+
+    def _open_anchored(self, path: Path, flags: int) -> int | None:
+        """Open one derived file relative to its parent's descriptor, or `None`.
+
+        The read half of the same remedy. `None` rather than an exception for the
+        same reason `read` collapses its three absences into one: a caller that
+        reached here already knows the version exists, so distinguishing "absent"
+        from "not a regular file" from "reached through a link" would be a way to
+        probe the store's layout.
+        """
+        try:
+            anchor = self._anchored(path.parent)
+        except ManagedStoreError:
+            return None
+        try:
+            return os.open(path.name, flags, dir_fd=anchor)
+        except OSError:
+            return None
+        finally:
+            os.close(anchor)
 
     def _read_all(self, descriptor: int) -> bytes:
         chunks: list[bytes] = []

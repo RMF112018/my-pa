@@ -342,7 +342,7 @@ Evidence: `src/my_pa/domain/relationship/`,
 `tests/provider_conformance/test_personal_fixture_provider.py::test_personal_source_port_and_adapter_expose_no_mutation_method`,
 `docs/plans/mcv-completion-plan.md`.
 
-## 13. Managed documents are a canonical service with no transport, and their two stores are not one transaction
+## 13. Managed documents: a capability seat since WP-28, and two stores that are not one transaction
 
 WP-27 implements the product-owned write plane: a designated managed root, stable
 document identity, immutable versions, expected-version checking, idempotency,
@@ -350,15 +350,28 @@ receipts, archive/restore, backup/restore and an integrity check. Source roots
 stay read-only, and the byte store refuses a managed root that is, contains, or
 lies inside a configured source root, after resolving both.
 
-**It is reached only through `ManagedDocumentService`, which a composition root
-calls with a resolved Principal.** It adds no member to `Capability`, appears in
-no capability manifest, and is reachable over no transport — the same posture the
-WP-06/WP-11 continuity write plane has. Exposing managed writes over MCP is
-WP-28's package. The consequence worth stating: a managed operation writes **no
-`audit_events` row**, because that table's `capability` is constrained to the
-public capability set and this plane holds no seat in it. What it does record is
-append-only and per operation: the version row, the lifecycle row, and the
-receipt.
+**WP-28 gave it a capability seat, and that is what changed.** Six
+`documents.` capabilities under two purposes of their own reach
+`ManagedDocumentService` through `ApplicationService.invoke`, so a managed
+operation is authorized, audited and refused by the machinery every other
+capability meets. WP-27's statement that "a managed operation writes no
+`audit_events` row" is **superseded**: every managed request now writes one.
+
+**What the row says, exactly, because it is easy to over-read.** `authorize`
+records the *decision* on the audit sink's own connection and commits it there
+(`D-34`), before the handler runs. So a policy refusal — a purpose the capability
+does not permit — is recorded as `denied` with its reason. A refusal raised by the
+*handler* — a stale `expected_version_number`, an idempotency key bound to a
+different request, a document another Principal owns — rolls the work back and
+leaves a row that says `allowed`, because authorization *was* granted and that
+remains true. **Nothing writes a second event to say the work then failed**, for
+this plane or any other. An operator reading the audit sees that the Principal
+attempted the capability, with a correlation identifier, and must join the
+version and lifecycle rows to see whether anything landed.
+
+**A process with no `MY_PA_MANAGED_DOCUMENT_ROOT` publishes none of the six.**
+`capabilities.get` omits them and the MCP tool list omits them, and a call by name
+is refused `unsupported`. There is no default location and no inference.
 
 **The filesystem and the database are not one transaction, and the product does
 not claim they are.** Bytes are written and fsynced before the metadata rows are
@@ -385,6 +398,25 @@ restored plane is **active**: a document that was archived when the backup was
 taken comes back active and has to be archived again, and an idempotency key used
 before the restore is free again afterwards.
 
+**The intermediate-component TOCTOU window WP-27 disclosed is closed (WP-28).**
+Every write and every read is now performed relative to a directory descriptor:
+the chain from the root down is walked once with `O_DIRECTORY | O_NOFOLLOW`,
+holding a descriptor at each level, and the create, the link, the unlink and the
+read are `openat`/`linkat`/`unlinkat` against it. A descriptor names an inode, so
+after the walk there is no component left to swap.
+`tests/security/test_managed_store_toctou.py` reproduces the attack at the instant
+the window opens, shows the *previous* publication landing bytes outside the root
+under it, and shows this one refusing.
+
+**What that does not cover, stated so it is not read as more.** The managed root
+itself is opened by name once per operation and is the one component no descriptor
+sits above; a root replaced between two operations is a different root. A platform
+without directory-relative syscalls cannot hold the guarantee, and the store
+**refuses** rather than reverting to name-based calls, so such a build fails to
+write rather than writing less safely. The precondition for the original attack —
+local write access inside the managed root as the product's own UID — was never
+what made it a NOTE and is unchanged.
+
 **Nothing here has run against a real managed root.** Every test writes into
 `tmp_path`; pointing the plane at an operator's real storage is `EXT-10` and
 remains an operator action.
@@ -396,7 +428,51 @@ Evidence: `src/my_pa/domain/documents/managed.py`,
 `tests/security/test_managed_document_containment.py::test_no_managed_store_method_accepts_a_path`,
 `tests/architecture/test_managed_writes_are_contained.py::test_every_filesystem_write_is_the_managed_store_or_is_registered`,
 `tests/database/test_managed_documents.py::test_a_rolled_back_write_leaves_bytes_with_no_row_and_verify_finds_them`,
-`tests/database/test_managed_documents.py::test_a_backup_restores_into_a_fresh_root_and_an_emptied_database`.
+`tests/database/test_managed_documents.py::test_a_backup_restores_into_a_fresh_root_and_an_emptied_database`,
+`tests/database/test_managed_document_audit.py`,
+`tests/security/test_managed_store_toctou.py`,
+`tests/schema/test_managed_document_capability_migration.py`.
+
+## 13a. The Frontier MCP surface (WP-28)
+
+**Thin adapter, and the claim is a parse rather than a promise.**
+`tests/architecture/test_mcp_is_a_thin_adapter.py` reads every module under
+`src/my_pa/adapters/mcp/` and asserts a closed import allowlist, no forbidden
+operation in applied or unapplied form, exactly one `normalize` and one `invoke`,
+no capability name written anywhere in the package, and no read of a field out of
+a caller's request. The last two exist because a plant that wrote expected-version
+and idempotency logic inline in the transport passed every other claim.
+
+**stdio only.** No socket is opened and the SDK's SSE, streamable-HTTP and
+WebSocket servers are named and forbidden by import.
+
+**The kill switch.** `MY_PA_MCP_SURFACE_DISABLED` is **off by default and the
+surface serves** — it is a pipe an operator starts deliberately, not a network
+listener. Engaging it empties `tools/list` *and* refuses `tools/call` before the
+application is reached. A malformed value refuses to start.
+
+**Client binding is identification, not authentication.** `MY_PA_MCP_CLIENT_ID`
+binds the surface to a row in the existing `capture_clients` registry and the
+process refuses to serve when that row is absent, foreign or **revoked** — so
+`revoke_client` withdraws the surface at the next start. stdio carries no
+credential, so nothing is verified and nothing is presented.
+
+**Not built, and named rather than implied.** There is **no OAuth 2.1
+authorization server, no PKCE, no resource indicators and no per-external-client
+profile conformance testing**. Not because they were skipped: none of them has
+anything to run over. They are properties of an *ingress*, and this build has
+none — `EXT-07` (external ingress) and `EXT-08` (client activation) are
+operator-gated and untouched. Any statement that this surface is "OAuth-ready" or
+"conformance-tested against a client profile" would be false.
+
+**No live NAS source provider.** Source reads over MCP go through the existing
+`sources.*` capabilities and the fixture provider, which are read-only; a live
+NAS provider is `EXT-10`-gated and is not built.
+
+Evidence: `src/my_pa/adapters/mcp/server.py`, `src/my_pa/adapters/mcp/tools.py`,
+`tests/architecture/test_mcp_is_a_thin_adapter.py`,
+`tests/security/test_mcp_surface_controls.py`,
+`tests/security/test_mcp_and_cli_negative_evidence.py`.
 
 ---
 

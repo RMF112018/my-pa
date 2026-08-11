@@ -72,9 +72,31 @@ LEGACY_RECURRENCE: Final = SHIPPING / "Recurrence.swift"
 PROTOCOL: Final = SHIPPING / "NativeSourceProtocolV1.swift"
 
 
+#: A closed `/* … */` span, non-greedy so nested openers do not swallow code.
+BLOCK_COMMENT: Final = re.compile(r"/\*[\s\S]*?\*/")
+
+
 def _without_comments(source: str) -> str:
+    """Drop comment text, keeping every line that also carries code.
+
+    Whole-line `//` prose stays invisible on purpose: a guard that reddens on
+    the paragraph explaining it is a guard somebody deletes.
+
+    Closed `/* … */` **spans** are blanked before that line filter rather than
+    their lines being dropped whole. Dropping the line was fail-open: a comment
+    that ends mid-line leaves code after it, so `/* shape */ <forbidden code>`
+    compiled and was invisible to every text guard here. WP-18's reviewer proved
+    it against this helper's copy in `test_wp18_contacts_adapter.py`, and the
+    helper is shared by WP-15 through WP-18, so all four are corrected together.
+    Blanking preserves newlines, and an opener with no closer still starts its
+    line with `/*` and is dropped as before.
+    """
+    blanked = BLOCK_COMMENT.sub(
+        lambda match: "".join("\n" if character == "\n" else " " for character in match.group(0)),
+        source,
+    )
     return "\n".join(
-        line for line in source.splitlines() if not line.lstrip().startswith(("//", "*", "/*"))
+        line for line in blanked.splitlines() if not line.lstrip().startswith(("//", "*", "/*"))
     )
 
 

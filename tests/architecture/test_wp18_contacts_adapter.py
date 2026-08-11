@@ -77,9 +77,32 @@ CHECKS: Final = HOST / "Tests" / "AppleSourceHostContractChecks" / "main.swift"
 CONTACTS_FILES: Final = (MECHANISM, ADAPTER, IDENTITY, FIXTURE)
 
 
+#: A closed `/* … */` span, non-greedy so nested openers do not swallow code.
+BLOCK_COMMENT: Final = re.compile(r"/\*[\s\S]*?\*/")
+
+
 def _without_comments(source: str) -> str:
+    """Drop comment text, keeping every line that also carries code.
+
+    Whole-line `//` prose is dropped deliberately: a forbidden symbol named in
+    the paragraph that explains why it is forbidden must stay invisible, because
+    a guard that reddens on its own rationale is a guard somebody deletes.
+
+    Closed `/* … */` **spans** are blanked before that line filter rather than
+    their lines being dropped whole. Dropping the line was fail-open: a comment
+    that ends mid-line leaves code after it, so
+    `/* shape */ public static func plantedSave() -> CNSaveRequest.Type { … }`
+    compiled, named a forbidden symbol, and was invisible to every text guard
+    below. Blanking preserves newlines, so a multi-line span still leaves the
+    code around it on the lines it was written on, and an opener with no closer
+    still starts its line with `/*` and is dropped as before.
+    """
+    blanked = BLOCK_COMMENT.sub(
+        lambda match: "".join("\n" if character == "\n" else " " for character in match.group(0)),
+        source,
+    )
     return "\n".join(
-        line for line in source.splitlines() if not line.lstrip().startswith(("//", "*", "/*"))
+        line for line in blanked.splitlines() if not line.lstrip().startswith(("//", "*", "/*"))
     )
 
 
@@ -145,6 +168,25 @@ def _balanced_body(source: str, start: int) -> str:
             if depth == 0:
                 return source[opened + 1 : index]
     return source[opened + 1 :]
+
+
+PUBLIC_FUNCTION: Final = re.compile(r"\bpublic func\s+([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _public_functions(source: str) -> tuple[tuple[str, str], ...]:
+    """Every `public func` in `source`, paired with its first statement.
+
+    Quantifying over the entry points beats naming them. A guard that inspects
+    the operations it already knows about is green the moment a third one is
+    added, which is exactly the moment it needed to speak.
+    """
+    blanked = _without_string_literals(source)
+    functions: list[tuple[str, str]] = []
+    for match in PUBLIC_FUNCTION.finditer(blanked):
+        body = _balanced_body(blanked, match.start())
+        opening = next((line.strip() for line in body.splitlines() if line.strip()), "")
+        functions.append((match.group(1), opening))
+    return tuple(functions)
 
 
 def _seam_segments() -> tuple[tuple[str, str, str], ...]:
@@ -1073,11 +1115,29 @@ def test_a_revoked_contacts_grant_cannot_be_served_from_a_cache() -> None:
     type has nowhere to keep a page.
     """
     adapter = _source(ADAPTER)
-    assert adapter.count("try requireAuthorization()") == 2, (
-        f"authorization is called {adapter.count('try requireAuthorization()')} times "
-        "in the contacts adapter and there are two operations. One call per "
-        "operation, every time: a check that happens once is a check a revocation "
-        "outlives"
+
+    # Quantified over *every* public function rather than over the operations
+    # this package happens to have written. The counting form this replaced
+    # asserted `== 2`, and a third public read that reached the mechanism with
+    # no authorization check at all left the count at two: the guard was green
+    # on precisely the change it existed to catch. A fourth operation is caught
+    # by the assertion below without anyone remembering to edit it.
+    entry_points = _public_functions(adapter)
+    assert len(entry_points) >= 2, (
+        f"the public-entry-point scan found {len(entry_points)} functions in the "
+        "contacts adapter, so the check below is quantifying over nothing"
+    )
+    for name, opening in entry_points:
+        assert opening == "try requireAuthorization()", (
+            f"public func {name} opens with `{opening}` rather than "
+            "`try requireAuthorization()`. Every public operation consults "
+            "authorization first and on every call: an operation that skips the "
+            "check is the one a mid-session revocation outlives"
+        )
+    assert adapter.count("try requireAuthorization()") == len(entry_points), (
+        f"authorization is called {adapter.count('try requireAuthorization()')} "
+        f"times across {len(entry_points)} public operations. Exactly one call "
+        "per operation: a spare call is a call some other operation is not making"
     )
 
     stored = [

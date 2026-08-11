@@ -513,3 +513,107 @@ them would be a composed figure presented as a measured one.
   *collections*, never of a person, and they are not fetched through a key
   descriptor, so they are outside the key budget in §C. No live label was read to
   produce anything here.
+
+---
+
+## K. Post-review corrections — the two plants that went green
+
+An independent review of this package raised **no BLOCKER**. It planted
+twenty-four controlled violations against the guards; **twenty-two reddened
+correctly and two did not.** Both are recorded here rather than absorbed, and
+both corrections are **test-only**: no Swift implementation file changed, and the
+adapter, the mechanism, the identity types, the fixture and the probe are
+byte-identical to what the review read.
+
+### K1. A leading block comment made every text guard fail open
+
+**What the reviewer proved.** This line, planted in
+`Compatibility/AppleContactsShapeProbe/ContactsShape.swift`, **compiled**
+(`swift build`, exit 0) and passed **all 50 guards** plus
+`AppleSourceHostContractChecks`:
+
+```swift
+/* shape */ public static func plantedSave() -> CNSaveRequest.Type { CNSaveRequest.self }
+```
+
+**Cause.** `_without_comments(...)` dropped any line whose first non-space token
+was `/*`. A comment that ends mid-line leaves code after it, so a forbidden
+symbol written that way was invisible to every text guard — a **fail-open**
+direction, and the exact inverse of what §G3/A7 deliberately permits. This is
+**not a defect WP-18 introduced**: the helper is copied verbatim from WP-15 and
+was identical in WP-16's, WP-17's and WP-18's modules.
+
+**What changed.** `_without_comments` now blanks closed `/* … */` **spans**
+before the line filter, preserving newlines, so the code beside a comment stays
+on the line it was written on. An opener with no closer still starts its line
+with `/*` and is still dropped, and whole-line `//` prose is still dropped —
+§G3/A7's control is untouched by design. Because the helper is shared, **the
+identical correction was applied to all four modules**:
+`tests/architecture/test_wp15_native_host_admission.py`,
+`test_wp16_mail_adapter.py`, `test_wp17_calendar_adapter.py` and
+`test_wp18_contacts_adapter.py`. No other test changed its outcome.
+
+**Red then green.** The plant above was replanted, `swift build` exit **0**
+(`Build complete!`), and
+`test_no_swift_in_the_native_tree_names_a_contacts_mutation_symbol` went red:
+*"{'native/apple-source-host/Compatibility/AppleContactsShapeProbe/ContactsShape.swift':
+['CNSaveRequest']} name a contacts mutation symbol"* — **1 failed, 18 passed**.
+Reverted: **19 passed**, and the probe verified byte-identical by SHA-256
+(`91c27ec5…0565`). Run against the same source, the pre-correction helper reports
+`CNSaveRequest` **absent** and the corrected helper reports it **present**, which
+is the whole difference.
+
+**Prose is still invisible, verified rather than assumed.** A `///` line naming
+`CNSaveRequest` and `requestAccess` was planted in the contacts probe: `swift
+build` exit 0 and **63 passed** across the WP-15/16/17/18 modules, still green.
+Reverted and verified byte-identical. The tree already carries the same shape in
+`AppleFrameworkCompatibilityProbe/FrameworkCompatibility.swift`, which names both
+symbols in prose and is green at this head.
+
+### K2. A new public method with no authorization check passed everything
+
+**What the reviewer proved.** A **third** public read method in
+`BoundedContactsReadAdapter.swift` reaching `mechanism.contacts(query)` with no
+`try requireAuthorization()` compiled and passed everything — `50 passed`,
+harness `PASS (36 checks)`.
+
+**Cause.** `test_a_revoked_contacts_grant_cannot_be_served_from_a_cache`
+asserted `count("try requireAuthorization()") == 2`. An operation that never
+calls it leaves the count at two, so the guard was green on precisely the change
+it existed to catch; the fail-closed guard's per-entry-point loop inspected only
+the two method names it already knew.
+
+**What changed.** The count is replaced by a quantification over **every**
+`public func` in the adapter: each must **open** with `try
+requireAuthorization()`, and the total number of calls must equal the number of
+public operations. A fourth operation is caught by the same assertion without
+anyone remembering to edit it. Control 4 itself is unchanged and remains proved
+at runtime for both operations that exist; this closes a **guard-completeness**
+gap ahead of a method that does not exist yet.
+
+**Red then green.** A third public method was planted, calling
+`mechanism.contacts(query)` with no authorization check. `swift build` exit
+**0**. `test_a_revoked_contacts_grant_cannot_be_served_from_a_cache` went red:
+*"public func plantedReadContacts opens with `let container = try
+ContactsContainerIdentity(bucketID: request.bucketID)` rather than `try
+requireAuthorization()`…"* — **1 failed, 18 passed**, and it was the only guard
+that spoke. Reverted: **19 passed**, adapter byte-identical by SHA-256
+(`599c93ae…9a68`).
+
+### K3. Verification after the corrections
+
+| Command | Exit | Observed |
+|---|---|---|
+| `pytest tests/architecture -q` | 1 | **2080 passed, 1 failed** — unchanged, including the count. The failure is the same pre-existing, unowned `test_every_python_root_is_type_checked_or_named` |
+| `swift build` (after `rm -rf .build`) | 0 | `Build complete!`, **0 warnings** |
+| `AppleSourceHostContractChecks` | 0 | `PASS (36 checks)` |
+| `otool -L` on both built products | 0 | libSystem, Foundation, libobjc, Swift runtime. **No Apple framework** |
+| `ruff check .` / `ruff format --check .` | 0 / 0 | All checks passed / **590 files** already formatted |
+| `mypy` per repo config | 0 | no issues in **177 source files** |
+
+No test was weakened, skipped, xfailed or deleted. The one existing expectation
+that changed is the `== 2` count named in §K2, which is the defect itself. Every
+planted file was reverted and verified byte-identical by SHA-256, and `git status
+--porcelain --untracked-files=all` is empty. **No contact belonging to anyone was
+read to produce any part of this correction**, and no real name, address,
+number or identifier appears in it.

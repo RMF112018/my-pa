@@ -76,15 +76,32 @@ PRODUCTION_ROOTS: Final = ("src", "apps", "scripts", "migrations", "ops")
 PROBED_FRAMEWORKS: Final = ("EventKit", "Contacts", "MailKit", "ServiceManagement")
 
 
-def _without_comments(source: str) -> str:
-    """Drop whole-line comments, keeping string literals intact.
+#: A closed `/* … */` span, non-greedy so nested openers do not swallow code.
+BLOCK_COMMENT: Final = re.compile(r"/\*[\s\S]*?\*/")
 
-    Only whole-line comments are removed, so a DSN inside a string literal is
-    still visible to the credential scan below — which is the one place a literal
-    genuinely matters.
+
+def _without_comments(source: str) -> str:
+    """Drop comment text, keeping string literals — and code — intact.
+
+    Only whole-line `//` comments are removed, so a DSN inside a string literal
+    is still visible to the credential scan below — which is the one place a
+    literal genuinely matters.
+
+    Closed `/* … */` **spans** are blanked before that line filter rather than
+    their lines being dropped whole. Dropping the line was fail-open: a comment
+    that ends mid-line leaves code after it, so `/* shape */ <forbidden code>`
+    compiled and was invisible to every text guard here. WP-18's reviewer proved
+    it against this helper's copy in `test_wp18_contacts_adapter.py`, and the
+    helper is shared by WP-15 through WP-18, so all four are corrected together.
+    Blanking preserves newlines, and an opener with no closer still starts its
+    line with `/*` and is dropped as before.
     """
+    blanked = BLOCK_COMMENT.sub(
+        lambda match: "".join("\n" if character == "\n" else " " for character in match.group(0)),
+        source,
+    )
     return "\n".join(
-        line for line in source.splitlines() if not line.lstrip().startswith(("//", "*", "/*"))
+        line for line in blanked.splitlines() if not line.lstrip().startswith(("//", "*", "/*"))
     )
 
 

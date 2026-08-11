@@ -51,8 +51,10 @@ from tests.conftest import (
 )
 
 from my_pa.application.commands import (
+    ArchiveManagedDocument,
     Command,
     CreateCapture,
+    CreateManagedDocument,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -62,14 +64,18 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListManagedDocuments,
     ListProjects,
     ListReviewCases,
     ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
+    ReadManagedDocument,
+    RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
+    ReviseManagedDocument,
     SearchCaptures,
     SearchKnowledge,
 )
@@ -148,6 +154,34 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             expected_review_version=0,
             disposition=Disposition.REJECT,
         ),
+        # The managed-document plane (WP-28). Every identifier is minted rather
+        # than staged, for the reason this table exists: a denial test must fail
+        # on the authority and on nothing else, and a document that existed would
+        # let a `not_found` stand in for a `denied`.
+        Capability.DOCUMENTS_CREATE: CreateManagedDocument(
+            title="Synthetic denial-path document",
+            media_type="text/markdown",
+            content=b"# Synthetic denial-path document",
+            idempotency_key="denial-document-0001",
+        ),
+        Capability.DOCUMENTS_REVISE: ReviseManagedDocument(
+            document_id=issue_identifier(IdKind.MANAGED_DOCUMENT),
+            expected_version_number=1,
+            title="Synthetic denial-path document",
+            media_type="text/markdown",
+            content=b"# Synthetic denial-path document",
+            idempotency_key="denial-document-revise-0001",
+        ),
+        Capability.DOCUMENTS_READ: ReadManagedDocument(
+            document_id=issue_identifier(IdKind.MANAGED_DOCUMENT)
+        ),
+        Capability.DOCUMENTS_LIST: ListManagedDocuments(),
+        Capability.DOCUMENTS_ARCHIVE: ArchiveManagedDocument(
+            document_id=issue_identifier(IdKind.MANAGED_DOCUMENT)
+        ),
+        Capability.DOCUMENTS_RESTORE: RestoreManagedDocument(
+            document_id=issue_identifier(IdKind.MANAGED_DOCUMENT)
+        ),
     }
 
 
@@ -194,7 +228,31 @@ def test_the_service_offers_exactly_one_public_entry_point() -> None:
     and the exhaustiveness of the denial matrix stops being exhaustive.
     """
     public = sorted(name for name in dir(ApplicationService) if not name.startswith("_"))
-    assert public == ["invoke"], f"ApplicationService gained a second door: {public}"
+    assert public == ["available_capabilities", "invoke"], (
+        f"ApplicationService gained a second door: {public}"
+    )
+
+    # **The claim is unchanged and the guard is sharper.** WP-28 added
+    # `available_capabilities`, which is a read-only `property`: it executes no
+    # request, opens no transaction, reaches no repository and takes no
+    # `Principal`, so it is not a door — it answers "which capabilities can this
+    # composed process serve", which `capabilities.get` and the MCP tool list
+    # both need and neither may guess at.
+    #
+    # So the exhaustiveness of the denial matrix below now rests on two
+    # statements rather than one: exactly one public name is *callable*, and the
+    # set of public properties is exactly this one. A per-capability convenience,
+    # an "internal" variant, or a handler exposed for a transport's benefit fails
+    # the first; a second property — which is where a read that skipped
+    # `authorize` could hide — fails the second.
+    properties = sorted(
+        name for name in public if isinstance(getattr(ApplicationService, name), property)
+    )
+    assert properties == ["available_capabilities"], (
+        f"ApplicationService gained a second public property: {properties}"
+    )
+    callables = sorted(name for name in public if name not in properties)
+    assert callables == ["invoke"], f"ApplicationService gained a second door: {callables}"
 
 
 @pytest.mark.parametrize("capability", ALL_CAPABILITIES, ids=lambda c: c.value)
@@ -302,6 +360,16 @@ SCOPED_CAPABILITIES = [
         # so a request that named one would be asking a corpus-wide question
         # about a single source (WP-23).
         Capability.KNOWLEDGE_COVERAGE,
+        # The managed-document plane names a document, not a source. A managed
+        # document is the product's own custody: its rows carry no `source_id`
+        # and no `enrollment_id`, exactly as a capture's do not, so there is no
+        # scope for a request to name (WP-28).
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_READ,
+        Capability.DOCUMENTS_LIST,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
     }
 ]
 
@@ -371,6 +439,12 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
         Capability.KNOWLEDGE_COVERAGE,
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_READ,
+        Capability.DOCUMENTS_LIST,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

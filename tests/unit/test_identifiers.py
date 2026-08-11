@@ -21,7 +21,20 @@ def test_every_kind_round_trips(kind: IdKind) -> None:
 
 def test_contract_prefixes_are_stable() -> None:
     # These strings appear in the public contract; changing one is a breaking change.
+    #
+    # The five managed-document prefixes were added to `IdKind` by WP-27 and not
+    # to this set, so this test was red at `b2f6c7ba` before WP-28 touched
+    # anything — a pre-existing gap, found by running the suite rather than
+    # reported by anyone, and closed here rather than carried. WP-28 is the
+    # package that puts three of them on the wire (`mdoc`, `mdver`, `mdrcpt` all
+    # appear in `contracts/v1/documents.py`), which makes "these appear in the
+    # public contract" true of them in the strongest sense.
     assert {kind.value for kind in IdKind} == {
+        "mdoc",
+        "mdver",
+        "mdsub",
+        "mdrcpt",
+        "mdlce",
         "src",
         "obj",
         "ver",

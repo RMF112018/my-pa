@@ -67,6 +67,7 @@ from my_pa.contracts.ports import (
     EvidenceUnavailableError,
     KnowledgeRecord,
     KnowledgeRepository,
+    ManagedDocumentRepository,
     Operation,
     OperationQueue,
     ProjectRepository,
@@ -112,6 +113,7 @@ from my_pa.infrastructure.persistence.knowledge import (
     read_extraction,
     scope_beyond_enrollment,
 )
+from my_pa.infrastructure.persistence.managed_documents import SqlManagedDocumentRepository
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.registry import (
     UnknownSourceError,
@@ -604,6 +606,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def pulse(self) -> PulseRepository:
         return SqlPulseRepository(self._open)
+
+    @property
+    def managed_documents(self) -> ManagedDocumentRepository:
+        """The managed-document rows, on this transaction's connection (WP-28)."""
+        return SqlManagedDocumentRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

@@ -76,7 +76,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the twenty capabilities.
+the twenty-six capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -162,6 +162,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Engine
@@ -169,15 +170,19 @@ from sqlalchemy import Engine
 from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import AuthMode, Settings
-from my_pa.contracts.ports import UnitOfWork
+from my_pa.contracts.ports import ManagedByteStore, UnitOfWork
 from my_pa.domain.capture.client import admit_client_binding, parse_client_credential
 from my_pa.domain.capture.errors import CaptureError
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.user_account import TokenClaimsError
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.managed_document_stores.filesystem.store import (
+    FilesystemManagedByteStore,
+)
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.capture_clients import authenticate_client
+from my_pa.infrastructure.persistence.registry import configured_source_roots
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
 from my_pa.infrastructure.security.principal_identity import PrincipalIdentityService
@@ -411,6 +416,36 @@ def remote_client_authenticator(
     return authenticate
 
 
+def managed_byte_store(settings: Settings, work_engine: Engine) -> ManagedByteStore | None:
+    """The managed-document byte store, or `None` when no managed root is configured.
+
+    **`None` is the fail-closed default and the only inference made here.** An
+    unset, blank or mistyped `MY_PA_MANAGED_DOCUMENT_ROOT` produces an empty
+    string, an empty string produces `None`, and `None` means
+    `ApplicationService.available_capabilities` withholds all six `documents.`
+    names from `capabilities.get` and from the MCP tool list. A process that was
+    never told where managed bytes go therefore serves no managed capability at
+    all rather than serving one into a directory this function guessed.
+
+    **The overlap check runs at composition and refuses to start.** The store's
+    constructor resolves the root, compares it against every configured source
+    root — after full path resolution and through symbolic links — and raises
+    when the two trees intersect. Reading `knowledge.sources` here is what makes
+    that check real: a store built without the source roots would be a store that
+    had checked nothing. Raising rather than returning `None` is deliberate: an
+    overlapping managed root is a misconfiguration an operator must fix, and
+    quietly disabling the plane would hide it.
+    """
+    configured = settings.managed_document_root.strip()
+    if not configured:
+        return None
+    with work_engine.begin() as connection:
+        source_roots = configured_source_roots(connection)
+    return FilesystemManagedByteStore(
+        Path(configured), source_roots=[Path(root) for root in source_roots]
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class GatewayRuntime:
     """The application, the principal, and the two engines behind them.
@@ -470,6 +505,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
         service=ApplicationService(
             unit_of_work=unit_of_work,
             limits=settings.effective_limits(),
+            managed_store=managed_byte_store(settings, work_engine),
         ),
         principal=None if entra else local_principal(),
         authenticate=entra_authenticator(settings, work_engine) if entra else None,

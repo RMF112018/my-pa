@@ -215,10 +215,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
-    run = subcommands.add_parser("run", help="serve the twenty capabilities over HTTP")
+    run = subcommands.add_parser("run", help="serve the twenty-six capabilities over HTTP")
     run.add_argument("--port", type=int, default=DEFAULT_PORT)
 
-    subcommands.add_parser("mcp", help="serve the twenty capabilities over MCP on stdio")
+    subcommands.add_parser("mcp", help="serve the twenty-six capabilities over MCP on stdio")
     return parser
 
 

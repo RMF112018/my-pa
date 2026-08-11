@@ -89,6 +89,16 @@ class SafeDetail(StrEnum):
     SELECTOR = "selector"
     REPRESENTATION = "representation"
     SUBJECT = "subject"
+    #: The managed-document plane's own fields (WP-28). Each names a field and
+    #: never its value, exactly as every member above does — `TITLE` says the
+    #: title was refused and never what it said, and `CONTENT` says the bytes
+    #: were refused and carries none of them.
+    DOCUMENT_ID = "document_id"
+    EXPECTED_VERSION_NUMBER = "expected_version_number"
+    TITLE = "title"
+    MEDIA_TYPE = "media_type"
+    CONTENT = "content"
+    LIMIT = "limit"
     #: Which bound refused the request.
     MAX_ENROLLMENT_DEPTH = "max_enrollment_depth"
     MAX_CAPTURE_CHARACTERS = "max_capture_characters"

@@ -42,6 +42,8 @@ from typing import Final
 
 import pytest
 
+from my_pa.application.commands import CreateManagedDocumentCommand
+from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import (
     Acceptance,
@@ -56,6 +58,10 @@ from my_pa.contracts.ports import (
     EnrollmentRepository,
     KnowledgeRecord,
     KnowledgeRepository,
+    ManagedAdmission,
+    ManagedByteStore,
+    ManagedDocumentRepository,
+    ManagedWriteRequest,
     Operation,
     OperationQueue,
     PortError,
@@ -110,6 +116,15 @@ from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.documents.managed import (
+    DocumentState,
+    LifecycleTransition,
+    ManagedDocument,
+    ManagedDocumentConflictError,
+    ManagedDocumentReceipt,
+    ManagedDocumentVersion,
+    StaleExpectedVersionError,
+)
 from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
@@ -253,6 +268,31 @@ class World:
     derivation_states: dict[str, ProcessingState] = field(default_factory=dict)
     review_cases: list[ReviewCase] = field(default_factory=list)
     review_decisions: list[ReviewDecision] = field(default_factory=list)
+    #: The managed-document plane (WP-27, reachable behind a capability seat since
+    #: WP-28). Flat lists for the reason the continuity ones are: this fake's only
+    #: job is the partition predicate and the version chain, and a list a filter
+    #: runs over is the clearest place to see one missing. `managed_keys` stands
+    #: in for the unique index on `managed_document_submissions
+    #: (owner_principal_id, idempotency_key)` — per-Principal, so the same key
+    #: held by two Principals is two independent admissions and never a replay.
+    #:
+    #: **What this fake cannot prove, stated where it is built.** There is no
+    #: `BEFORE UPDATE OR DELETE` trigger on a Python list, so immutability is a
+    #: property of this class not writing and never of the storage; and there is
+    #: no unique constraint, so two concurrent writers producing one version is
+    #: not demonstrable here. Both claims belong to `tests/database`, against a
+    #: server that actually refuses.
+    managed_documents: list[ManagedDocument] = field(default_factory=list)
+    managed_versions: list[ManagedDocumentVersion] = field(default_factory=list)
+    managed_keys: dict[tuple[str, str], tuple[str, ManagedDocumentReceipt]] = field(
+        default_factory=dict
+    )
+    managed_states: dict[str, DocumentState] = field(default_factory=dict)
+    #: Where the managed bytes are. On the `World` rather than on the service so
+    #: that a test staging a document and the service reading one are looking at
+    #: the same objects, and so a deep copy of the world (which is how the parity
+    #: suite gives each transport its own) copies the bytes with the rows.
+    managed_store: ManagedByteStore = field(default_factory=lambda: _ManagedBytes())
     #: The continuity plane (WP-11). Held as flat lists because the fake's whole
     #: job is the partition predicate, and a list a filter runs over is the
     #: clearest place to see one missing. `commitments`, `continuity_tasks` and
@@ -1020,6 +1060,240 @@ class RecordingAudit(AuditSink):
         self.events.append(event)
 
 
+class _ManagedBytes(ManagedByteStore):
+    """Managed version bytes in a dict, for the transports that need a plane.
+
+    **Deliberately not a fake of containment.** `FilesystemManagedByteStore` is
+    where a path is resolved, refused, and proved to lie under the managed root,
+    and none of that is imitated here — there is no path in this class at all,
+    which is the honest position for a dict: a fake that grew a `_root` attribute
+    would let a containment test pass against something that never touched a
+    filesystem. Containment is proved in `tests/architecture` structurally and in
+    `tests/database` against the real store under a temporary directory.
+
+    What this *does* preserve is the two behaviours the application depends on:
+    bytes are written once — a second `put` for the same identifier raises, as
+    `O_CREAT|O_EXCL` does — and a read of an unstored identifier raises rather
+    than answering empty.
+    """
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.manifest: bytes | None = None
+
+    def put(self, version_id: str, content: bytes) -> None:
+        if version_id in self.objects:
+            raise FileExistsError("the managed object already exists")
+        self.objects[version_id] = bytes(content)
+
+    def read(self, version_id: str) -> bytes:
+        stored = self.objects.get(version_id)
+        if stored is None:
+            raise FileNotFoundError("the managed object is not stored")
+        return stored
+
+    def has(self, version_id: str) -> bool:
+        return version_id in self.objects
+
+    def stored_version_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self.objects))
+
+    def unreadable_entries(self) -> tuple[str, ...]:
+        return ()
+
+    def put_manifest(self, content: bytes) -> None:
+        self.manifest = bytes(content)
+
+    def read_manifest(self) -> bytes:
+        if self.manifest is None:
+            raise FileNotFoundError("no manifest is stored")
+        return self.manifest
+
+
+class _ManagedDocuments(ManagedDocumentRepository):
+    """The managed-document plane over a `World`, partition predicate written out.
+
+    Every method takes `principal_id` and every one of them filters on it, in the
+    same shape the SQL repository does: a document another Principal owns answers
+    exactly what a document that does not exist answers, so no method here can be
+    used to learn that an identifier names something.
+
+    Written out rather than delegated to a helper for a reason WP-23 bought: a
+    partition predicate factored into one place is a predicate one caller can
+    forget to use, and this fake exists so a missing filter is visible.
+
+    See `World`'s own comment for the two things a list cannot demonstrate —
+    trigger-enforced immutability and a unique constraint under concurrency —
+    both of which are proved in `tests/database` against a real server.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def admit(self, request: ManagedWriteRequest) -> ManagedAdmission:
+        key = (request.principal_id, request.idempotency_key)
+        bound = self._world.managed_keys.get(key)
+        if bound is not None:
+            digest, receipt = bound
+            if digest != request.payload_digest:
+                raise ManagedDocumentConflictError(
+                    "the idempotency key is bound to a different request"
+                )
+            return ManagedAdmission(receipt=receipt, created=False)
+
+        if request.document_id is None:
+            document_id = issue_identifier(IdKind.MANAGED_DOCUMENT)
+            previous: ManagedDocumentVersion | None = None
+            number = 1
+        else:
+            document_id = request.document_id
+            previous = self.version(document_id, principal_id=request.principal_id)
+            if previous is None:
+                raise UnknownScopeError("the request names no stored managed document")
+            if previous.version_number != request.expected_version_number:
+                raise StaleExpectedVersionError("the expected version is not this document's head")
+            number = previous.version_number + 1
+
+        version = ManagedDocumentVersion(
+            version_id=request.version_id,
+            document_id=document_id,
+            version_number=number,
+            supersedes_version_id=None if previous is None else previous.version_id,
+            owner_principal_id=request.principal_id,
+            title=request.title,
+            media_type=request.media_type,
+            content_sha256=request.content_sha256,
+            byte_size=request.byte_size,
+            idempotency_key=request.idempotency_key,
+            correlation_id=request.correlation_id,
+            recorded_at=request.server_received_at,
+        )
+        self._world.managed_versions.append(version)
+        if previous is None:
+            self._world.managed_states[document_id] = DocumentState.ACTIVE
+        receipt = ManagedDocumentReceipt(
+            receipt_id=issue_identifier(IdKind.MANAGED_RECEIPT),
+            document_id=document_id,
+            version_id=version.version_id,
+            version_number=version.version_number,
+            idempotency_key=request.idempotency_key,
+            content_sha256=request.content_sha256,
+            byte_size=request.byte_size,
+            issued_at=request.server_received_at,
+            created=True,
+        )
+        self._world.managed_keys[key] = (request.payload_digest, receipt)
+        return ManagedAdmission(receipt=receipt, created=True)
+
+    def replay_for(
+        self, idempotency_key: str, payload_digest: str, *, principal_id: str
+    ) -> ManagedDocumentReceipt | None:
+        bound = self._world.managed_keys.get((principal_id, idempotency_key))
+        if bound is None:
+            return None
+        digest, receipt = bound
+        if digest != payload_digest:
+            raise ManagedDocumentConflictError(
+                "the idempotency key is bound to a different request"
+            )
+        # `created=False`: a replay stored nothing new, and a caller retrying
+        # after a lost response has to be able to tell.
+        return replace(receipt, created=False)
+
+    def _owned(self, document_id: str, principal_id: str) -> list[ManagedDocumentVersion]:
+        return sorted(
+            (
+                row
+                for row in self._world.managed_versions
+                if row.document_id == document_id and row.owner_principal_id == principal_id
+            ),
+            key=lambda row: row.version_number,
+        )
+
+    def version(
+        self, document_id: str, *, version_id: str | None = None, principal_id: str
+    ) -> ManagedDocumentVersion | None:
+        owned = self._owned(document_id, principal_id)
+        if not owned:
+            return None
+        if version_id is None:
+            return owned[-1]
+        return next((row for row in owned if row.version_id == version_id), None)
+
+    def versions(
+        self, document_id: str, *, principal_id: str
+    ) -> tuple[ManagedDocumentVersion, ...]:
+        return tuple(self._owned(document_id, principal_id))
+
+    def documents(
+        self, *, limit: int, principal_id: str, include_archived: bool = False
+    ) -> tuple[ManagedDocument, ...]:
+        if limit < 1:
+            raise ValueError("a page holds at least one managed document")
+        found: list[ManagedDocument] = []
+        for document_id in {
+            row.document_id
+            for row in self._world.managed_versions
+            if row.owner_principal_id == principal_id
+        }:
+            owned = self._owned(document_id, principal_id)
+            state = self._world.managed_states.get(document_id, DocumentState.ACTIVE)
+            if state is DocumentState.ARCHIVED and not include_archived:
+                continue
+            head = owned[-1]
+            found.append(
+                ManagedDocument(
+                    document_id=document_id,
+                    owner_principal_id=principal_id,
+                    state=state,
+                    title=head.title,
+                    media_type=head.media_type,
+                    version_count=len(owned),
+                    latest_version_id=head.version_id,
+                    latest_version_number=head.version_number,
+                    created_at=owned[0].recorded_at,
+                    latest_recorded_at=head.recorded_at,
+                )
+            )
+        found.sort(key=lambda row: (row.latest_recorded_at, row.document_id), reverse=True)
+        return tuple(found[:limit])
+
+    def state(self, document_id: str, *, principal_id: str) -> DocumentState | None:
+        if not self._owned(document_id, principal_id):
+            return None
+        return self._world.managed_states.get(document_id, DocumentState.ACTIVE)
+
+    def transition(
+        self,
+        document_id: str,
+        *,
+        transition: LifecycleTransition,
+        principal_id: str,
+        correlation_id: str,
+    ) -> bool:
+        current = self.state(document_id, principal_id=principal_id)
+        if current is None:
+            raise UnknownScopeError("the request names no stored managed document")
+        wanted = (
+            DocumentState.ARCHIVED
+            if transition is LifecycleTransition.ARCHIVED
+            else DocumentState.ACTIVE
+        )
+        self._world.managed_states[document_id] = wanted
+        return current is not wanted
+
+    def restore_version(self, version: ManagedDocumentVersion, *, principal_id: str) -> None:
+        if version.owner_principal_id != principal_id:
+            raise UnknownScopeError("the request names no stored managed document")
+        if any(row.version_id == version.version_id for row in self._world.managed_versions):
+            return
+        self._world.managed_versions.append(version)
+        self._world.managed_states.setdefault(version.document_id, DocumentState.ACTIVE)
+
+    def known_version_identifiers(self) -> frozenset[str]:
+        return frozenset(row.version_id for row in self._world.managed_versions)
+
+
 class _Situations(SituationRepository):
     """Situations over the `World`, with the partition predicate written out.
 
@@ -1282,6 +1556,11 @@ class FakeUnitOfWork(UnitOfWork):
         return _Pulse(self._world)
 
     @property
+    def managed_documents(self) -> ManagedDocumentRepository:
+        """The managed-document plane over this `World` (WP-28)."""
+        return _ManagedDocuments(self._world)
+
+    @property
     def audit(self) -> AuditSink:
         return _Audit(self._world)
 
@@ -1414,7 +1693,10 @@ class Scene:
 
 
 def build_service(
-    world: World, providers: FakeProviders, limits: EffectiveLimits = DEFAULT_LIMITS
+    world: World,
+    providers: FakeProviders,
+    limits: EffectiveLimits = DEFAULT_LIMITS,
+    managed_store: ManagedByteStore | None = None,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -1430,6 +1712,11 @@ def build_service(
         unit_of_work=lambda: FakeUnitOfWork(world),
         limits=limits,
         clock=lambda: WHEN,
+        # Composed by default, because a service composed *without* one publishes
+        # a smaller capability set — and a suite that quantifies over `Capability`
+        # would then be quantifying over names its own service refuses. A test
+        # about the unconfigured build passes `None` explicitly and says so.
+        managed_store=world.managed_store if managed_store is None else managed_store,
     )
 
 
@@ -1523,6 +1810,45 @@ def staged_capture(scene: Scene, *, text: str = "a synthetic note") -> CaptureVe
     )
     assert stored is not None
     return stored
+
+
+def staged_managed_document(
+    scene: Scene,
+    *,
+    title: str = "Synthetic managed note",
+    body: bytes = b"# Synthetic managed note",
+) -> ManagedDocumentReceipt:
+    """One stored managed document inside `scene`'s world, so the reads have an answer.
+
+    Written through `ManagedDocumentService` and the fake ports rather than
+    pushed into `World` directly, for the reason `staged_capture` is: the version
+    number, the supersession link and the receipt are then the ones an admission
+    produces, and a test cannot stage a state the writer cannot reach.
+
+    The Principal is `scene.principal`'s and is passed as the resolved partition,
+    which is the same thing `ApplicationService`'s handlers pass.
+
+    One per scene, like `staged_review_case`: a payload table and a command table
+    that each staged their own would be naming two different documents, and the
+    comparison between them would then be measuring the staging rather than the
+    request.
+    """
+    for (owner, key), (_, receipt) in scene.world.managed_keys.items():
+        if owner == scene.principal.principal_id and key.startswith("staged-managed-"):
+            return receipt
+    unit_of_work = FakeUnitOfWork(scene.world)
+    store = scene.world.managed_store
+    return ManagedDocumentService().create(
+        unit_of_work.managed_documents,
+        store,
+        CreateManagedDocumentCommand(
+            principal_id=scene.principal.principal_id,
+            title=title,
+            media_type="text/markdown",
+            content=body,
+            idempotency_key=f"staged-managed-{len(scene.world.managed_keys)}",
+        ),
+    )
 
 
 def staged_review_case(scene: Scene, capture: CaptureVersion | None = None) -> ReviewCase:

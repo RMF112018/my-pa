@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-twenty capabilities. There are two ways to prove that and only one of them stays
+twenty-six capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -26,7 +26,7 @@ way to see what a transport *built* rather than what it returned — and compare
 as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
-**And the answers, over all twenty capabilities and ten refusals.** Each
+**And the answers, over all twenty-six capabilities and ten refusals.** Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
 `sources.enroll` alone would make the second and third callers idempotent
@@ -46,6 +46,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+from base64 import b64encode
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
@@ -59,6 +60,7 @@ from tests.conftest import (
     Scene,
     build_service,
     staged_capture,
+    staged_managed_document,
     staged_record,
     staged_review_case,
     staged_search,
@@ -136,6 +138,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     """
     capture = staged_capture(scene)
     review_case = staged_review_case(scene, capture)
+    document = staged_managed_document(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -207,6 +210,34 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "expected_review_version": 0,
             "disposition": "reject",
         },
+        # The managed-document plane (WP-28). `document` is staged before the
+        # world is copied per transport, so all three see the same stored chain
+        # and a revise is the same revise everywhere. `content` is base64 on the
+        # wire — JSON has no byte string — and no payload here carries a
+        # `principal_id`, because the commands have no such field: the partition
+        # comes from the authorization and cannot be stated.
+        Capability.DOCUMENTS_CREATE: {
+            "title": "Synthetic parity document",
+            "media_type": "text/markdown",
+            "content": b64encode(b"# Synthetic parity document").decode("ascii"),
+            "idempotency_key": "parity-document-0001",
+        },
+        Capability.DOCUMENTS_REVISE: {
+            "document_id": document.document_id,
+            "expected_version_number": document.version_number,
+            "title": "Synthetic parity document, revised",
+            "media_type": "text/markdown",
+            "content": b64encode(b"# Synthetic parity document, revised").decode("ascii"),
+            "idempotency_key": "parity-document-revise-0001",
+        },
+        Capability.DOCUMENTS_READ: {
+            "document_id": document.document_id,
+            "version_id": document.version_id,
+            "include_bytes": True,
+        },
+        Capability.DOCUMENTS_LIST: {"limit": 10, "include_archived": True},
+        Capability.DOCUMENTS_ARCHIVE: {"document_id": document.document_id},
+        Capability.DOCUMENTS_RESTORE: {"document_id": document.document_id},
     }
 
 
@@ -330,7 +361,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 21, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 27, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -1001,7 +1032,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: twenty capabilities answered from an empty world prove little."""
+    """Guard the matrix: twenty-six capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

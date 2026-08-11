@@ -43,3 +43,16 @@ class Purpose(StrEnum):
     # permits is denied for everything and reads as a mistake rather than as a
     # decision.
     REVIEW_DISPOSITION = "review_disposition"
+    # The managed-document plane's pair (WP-28), and revision `6b3d9a2f8c14`
+    # already carries the forward `ALTER` that admits both. They are purposes of
+    # their own rather than reuses of the capture or knowledge pair, and
+    # `domain/identity/operation.py` argues it beside the mapping: managed
+    # documents are a third custody plane over their own tables, so admitting a
+    # managed write under `capture_authoring` would let a grant issued for
+    # ADR-003's append-only records write bytes into the managed root, and
+    # admitting a managed read under `knowledge_read` would let a grant issued
+    # over the extraction plane return a document body. Two rather than one for
+    # the reason the capture pair is two: a purpose wide enough to cover writing
+    # and reading is a purpose that grants both.
+    DOCUMENT_AUTHORING = "document_authoring"
+    DOCUMENT_READ = "document_read"

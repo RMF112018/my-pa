@@ -364,10 +364,33 @@ does not permit — is recorded as `denied` with its reason. A refusal raised by
 *handler* — a stale `expected_version_number`, an idempotency key bound to a
 different request, a document another Principal owns — rolls the work back and
 leaves a row that says `allowed`, because authorization *was* granted and that
-remains true. **Nothing writes a second event to say the work then failed**, for
-this plane or any other. An operator reading the audit sees that the Principal
-attempted the capability, with a correlation identifier, and must join the
-version and lifecycle rows to see whether anything landed.
+remains true. `outcome` carries the **authorization decision** and not the result
+of the work, and that is `invoke`'s pre-existing semantics for **all 26**
+capabilities rather than anything the managed plane introduced. **Nothing writes
+a second event to say the work then failed**, for this plane or any other.
+
+**The join that would settle it does not exist, and an earlier version of this
+section said it did.** It told an operator to "join the version and lifecycle
+rows to see whether anything landed". That is not performable. No `managed_*`
+table carries an `audit_id` or a `request_id`; the only shared column name is
+`correlation_id`, and the value on `managed_document_versions`,
+`managed_document_submissions` and `managed_document_lifecycle_events` is minted
+inside `ManagedDocumentService` and is a **different value** from the one on the
+`audit_events` row `invoke` wrote for the same request. Neither is passed to the
+other. What is actually available is heuristic: the same `principal_id`, the same
+capability, and two timestamps close together. For an operator reconciling one
+request on a single-operator process that is usually enough to form a belief, and
+it is never enough to prove one — two `documents.create` calls from the same
+Principal in the same second cannot be told apart.
+
+**This must close before `EXT-08`.** Once a non-operator client drives this
+surface, the audit is the only record of what that client did, and "the Principal
+attempted `documents.create`, and a version appeared at about the same time" is
+an inference rather than a trail. Closing it means carrying one identifier across
+the boundary — the `invoke` correlation identifier into the managed rows, or the
+`audit_id` — and it is not carried today. It is a prerequisite of external client
+activation rather than of this package, and it is recorded here as an open item
+rather than described as a control that exists.
 
 **A process with no `MY_PA_MANAGED_DOCUMENT_ROOT` publishes none of the six.**
 `capabilities.get` omits them and the MCP tool list omits them, and a call by name
@@ -409,8 +432,10 @@ the window opens, shows the *previous* publication landing bytes outside the roo
 under it, and shows this one refusing.
 
 **What that does not cover, stated so it is not read as more.** The managed root
-itself is opened by name once per operation and is the one component no descriptor
-sits above; a root replaced between two operations is a different root. A platform
+itself is opened by name — once for every anchored step rather than once per
+public call, which is five times during a single `put` — and is the one component
+no descriptor sits above; a root replaced between any two of those opens is a
+different root. A platform
 without directory-relative syscalls cannot hold the guarantee, and the store
 **refuses** rather than reverting to name-based calls, so such a build fails to
 write rather than writing less safely. The precondition for the original attack —

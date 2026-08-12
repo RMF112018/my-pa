@@ -274,7 +274,7 @@ describe("no Principal is ever supplied by the browser", () => {
     expect(sent[0].body.principal_id).toMatch(/^prn_[0-9a-f]{32}$/);
   });
 
-  it("ignores a foreign principal in a header, and two sessions derive two identifiers", async () => {
+  it("ignores a foreign principal in a header", async () => {
     const cookieA = await signIn("synthetic-a");
     stubGateway({ captures: [] });
     const requestA = get(cookieA, "/api/library");
@@ -282,13 +282,37 @@ describe("no Principal is ever supplied by the browser", () => {
     requestA.headers.set("x-ms-client-principal-id", FOREIGN);
     expect((await library(requestA)).status).toBe(200);
 
-    resetSessionRegistry();
-    const cookieB = await signIn("synthetic-b");
-    expect((await library(get(cookieB, "/api/library"))).status).toBe(200);
-
-    expect(sent).toHaveLength(2);
+    expect(sent).toHaveLength(1);
     expect(JSON.stringify(sent)).not.toContain(FOREIGN);
-    expect(sent[0].body.principal_id).not.toBe(sent[1].body.principal_id);
+    expect(sent[0].body.principal_id).toMatch(/^prn_[0-9a-f]{32}$/);
+  });
+
+  /**
+   * This assertion used to sign in as `synthetic-b` as well, and check that the
+   * two sessions put two different `principal_id` values on the wire. It cannot,
+   * because `D-15` removed the second session: these routes run against a
+   * `local_operator` gateway, which serves one fixed process principal whoever is
+   * signed in, and the web tier now admits exactly one principal in that
+   * configuration. That is the point rather than a loss — the two-identifier
+   * scenario over a one-identity backend was the defect.
+   *
+   * The derivation's distinctness is not left unproved: `lib/api/gateway.test.ts`
+   * asserts `correlationPrincipalId` differs for a different identity, at the
+   * level the property actually lives. What is asserted here is the new fact —
+   * that there is no second session to derive a second identifier from.
+   */
+  it("admits no second session over a local_operator gateway", async () => {
+    stubGateway({ captures: [] });
+    const refused = await signInRoute(
+      new NextRequest(`${ORIGIN}/api/session`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: ORIGIN },
+        body: JSON.stringify({ syntheticPrincipal: "synthetic-b" }),
+      }),
+    );
+    expect(refused.status).toBe(403);
+    expect((await refused.json()).error.code).toBe("principal_not_admissible");
+    expect(sent).toEqual([]);
   });
 });
 
@@ -316,7 +340,51 @@ describe("the capture receipt is the backend's own", () => {
     expect(body.created).toBe(true);
     // The note itself is never echoed back.
     expect(raw).not.toContain("a note");
-    expect(sent[0].body.payload).toEqual({ text: "a note", idempotency_key: "k1" });
+    // The kind travels with the note and defaults rather than being required.
+    expect(sent[0].body.payload).toEqual({
+      text: "a note",
+      idempotency_key: "k1",
+      capture_kind: "quick_note",
+    });
+  });
+
+  it("carries an explicitly selected conversation log through to the gateway", async () => {
+    const cookie = await signIn();
+    stubGateway({
+      receipt_id: "rcpt_aaaaaaaa11111111",
+      capture_id: "cap_aaaaaaaa11111111",
+      version_id: "capver_aaaaaaaa11111111",
+      version_number: 1,
+      idempotency_key: "k3",
+      content_sha256: "0".repeat(64),
+      issued_at: "2026-08-09T12:00:00Z",
+      created: true,
+    });
+    const response = await capture(
+      post(cookie, "/api/capture", {
+        text: "a note",
+        idempotencyKey: "k3",
+        captureKind: "conversation_log",
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(sent[0].body.payload).toMatchObject({ capture_kind: "conversation_log" });
+  });
+
+  it("refuses a kind it does not know rather than defaulting it silently", async () => {
+    const cookie = await signIn();
+    stubGateway({});
+    const response = await capture(
+      post(cookie, "/api/capture", {
+        text: "a note",
+        idempotencyKey: "k4",
+        captureKind: "voice_memo",
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("unknown_capture_kind");
+    // A refused request reaches no backend at all.
+    expect(sent).toEqual([]);
   });
 
   it("still says acknowledged_not_persisted on the synthetic path, where it is true", async () => {

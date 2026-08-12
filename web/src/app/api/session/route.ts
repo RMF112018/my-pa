@@ -30,7 +30,10 @@ import {
   rejectCallerSuppliedPrincipal,
   TokenClaimsError,
 } from "@/lib/auth/claims";
-import { findSyntheticPrincipal } from "@/lib/auth/synthetic";
+import {
+  PrincipalNotAdmissibleError,
+  resolveAdmissibleSyntheticPrincipal,
+} from "@/lib/auth/synthetic";
 import { authMode, homeTenantId } from "@/lib/auth/mode";
 import {
   encodeSession,
@@ -112,7 +115,20 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const synthetic = findSyntheticPrincipal(body["syntheticPrincipal"]);
+  // The admissible set, not the catalogue. Over a `local_operator` gateway there
+  // is exactly one admissible principal (`D-15`), and a request for the other is
+  // refused here rather than rebound to it: the gateway serves one identity, so a
+  // second sign-in would read the first principal's durable captures while
+  // presenting itself as someone else.
+  let synthetic;
+  try {
+    synthetic = resolveAdmissibleSyntheticPrincipal(body["syntheticPrincipal"]);
+  } catch (error) {
+    if (error instanceof PrincipalNotAdmissibleError) {
+      return refuse("principal_not_admissible", error.message, 403);
+    }
+    throw error;
+  }
   if (!synthetic) {
     return refuse("unknown_principal", "unknown synthetic principal key", 400);
   }

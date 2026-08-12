@@ -77,6 +77,7 @@ CAPTURE_PURPOSE: Final[dict[Capability, Purpose]] = {
     Capability.CAPTURE_REVISE: Purpose.CAPTURE_AUTHORING,
     Capability.CAPTURE_READ: Purpose.CAPTURE_REVIEW,
     Capability.CAPTURE_LIST: Purpose.CAPTURE_REVIEW,
+    Capability.CAPTURE_SEARCH: Purpose.CAPTURE_REVIEW,
 }
 
 

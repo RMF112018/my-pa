@@ -214,6 +214,15 @@ reasserting the destination, preserves mismatches as collisions, and retries
 all three interrupted transitions. This BLOCK is historical and cannot satisfy
 the gate.
 
+A twelfth independent audit of corrective head
+`2da24e852cbad9186bdbfc6feb1509a42eff55d7` returned BLOCK after verifying
+duplicate reconciliation inside Swift enqueue. It found that production returns
+an already-pending envelope without re-entering enqueue, then acknowledges only
+the pending name, so a duplicate `.tmp` fallback could still consume the
+one-item slot. The next corrective head reconciles the fallback inside Swift
+acknowledgement and proves the production-shaped pending/admit/ack sequence
+admits a fresh handoff. This BLOCK is historical and cannot satisfy the gate.
+
 ## Independent review gate
 
 No statement in this record means `READY_FOR_PILOT_VALIDATION`, independently

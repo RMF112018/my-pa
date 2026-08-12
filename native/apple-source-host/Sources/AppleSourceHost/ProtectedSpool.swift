@@ -370,6 +370,15 @@ public final class ProtectedSpool: @unchecked Sendable {
             try validateNamespace()
             let name = envelopeID.rawValue + ".pending"
             _ = try safeBytes(in: pendingDescriptor, name: name)
+            let temporaryName = envelopeID.rawValue + ".tmp"
+            if try entryExists(in: rootDescriptor, name: temporaryName) {
+                try reconcileDuplicate(
+                    oldDirectory: rootDescriptor,
+                    oldName: temporaryName,
+                    durableDirectory: pendingDescriptor,
+                    durableName: name
+                )
+            }
             guard Darwin.unlinkat(pendingDescriptor, name, 0) == 0 else {
                 throw errno == ENOENT ? ProtectedSpoolError.itemNotFound
                     : ProtectedSpoolError.filesystemFailure(errno)

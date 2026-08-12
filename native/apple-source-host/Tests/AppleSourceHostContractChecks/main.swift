@@ -1078,34 +1078,39 @@ struct AppleSourceHostContractChecks {
         let enqueueFallback = durableEnqueueDirectory
             .appendingPathComponent("enqueue-durable.tmp", isDirectory: false)
         try FileManager.default.copyItem(at: enqueueDestination, to: enqueueFallback)
-        try require(
-            try durableEnqueueSpool.enqueue(durableEnqueue) == .alreadyPresent,
-            "Enqueue retry did not reconcile its byte-identical fallback"
-        )
+        // Production returns the pending envelope without invoking enqueue;
+        // durable application admission then acknowledges through Swift.
+        try durableEnqueueSpool.acknowledge(durableEnqueue.envelopeID)
         try require(
             !FileManager.default.fileExists(atPath: enqueueFallback.path),
-            "Enqueue retry left its byte-identical fallback"
+            "Production-shaped acknowledgement left the enqueue fallback"
+        )
+        let freshAfterAcknowledgement = try spoolItem("enqueue-fresh", payload: [2])
+        try require(
+            try durableEnqueueSpool.enqueue(freshAfterAcknowledgement) == .enqueued,
+            "Acknowledgement did not free the one-item spool for a fresh handoff"
         )
         try requireSpoolError(.injectedCrash) {
             try durableEnqueueSpool.quarantine(
-                durableEnqueue.envelopeID,
+                freshAfterAcknowledgement.envelopeID,
                 fault: .afterQuarantineDestinationSync
             )
         }
         try require(
             try durableEnqueueSpool.inventory().items.contains(where: {
-                $0.envelopeID == durableEnqueue.envelopeID && $0.state == .quarantine
+                $0.envelopeID == freshAfterAcknowledgement.envelopeID
+                    && $0.state == .quarantine
             }),
             "Destination-synced quarantine interruption did not retain evidence"
         )
         let quarantineDestination = durableEnqueueDirectory
             .appendingPathComponent("quarantine", isDirectory: true)
-            .appendingPathComponent("enqueue-durable.quarantine", isDirectory: false)
+            .appendingPathComponent("enqueue-fresh.quarantine", isDirectory: false)
         let quarantineFallback = durableEnqueueDirectory
             .appendingPathComponent("pending", isDirectory: true)
-            .appendingPathComponent("enqueue-durable.pending", isDirectory: false)
+            .appendingPathComponent("enqueue-fresh.pending", isDirectory: false)
         try FileManager.default.copyItem(at: quarantineDestination, to: quarantineFallback)
-        try durableEnqueueSpool.quarantine(durableEnqueue.envelopeID)
+        try durableEnqueueSpool.quarantine(freshAfterAcknowledgement.envelopeID)
         try require(
             !FileManager.default.fileExists(atPath: quarantineFallback.path),
             "Quarantine retry left its byte-identical fallback"

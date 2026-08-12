@@ -44,14 +44,14 @@ def _compose_mounts(block: str) -> set[tuple[str, str, bool]]:
     mounts: set[tuple[str, str, bool]] = set()
     for match in re.finditer(
         r"type:\s*bind,\s*source:\s*[\"']?([^,\"']+)[\"']?,\s*"
-        r"target:\s*([^,}\s]+)(?:,\s*read_only:\s*(true|false))?",
+        r"target:\s*([^,}\s]+)(?:,\s*read_only\s*:\s*(true|false))?",
         block,
         re.IGNORECASE,
     ):
         mounts.add((match.group(1), match.group(2), (match.group(3) or "false").lower() == "true"))
     multiline_pattern = re.compile(
         r"type:\s*bind\s*\n\s*source:\s*[\"']?([^\n\"']+)[\"']?\s*\n"
-        r"\s*target:\s*([^\s]+)(?:\s*\n\s*read_only:\s*(true|false))?",
+        r"\s*target:\s*([^\s]+)(?:\s*\n\s*read_only\s*:\s*(true|false))?",
         re.IGNORECASE,
     )
     for multiline in multiline_pattern.finditer(block):
@@ -76,8 +76,9 @@ def _compose_volume_item_count(block: str) -> int:
 
 
 def _has_noncanonical_read_only(block: str) -> bool:
-    tokens = re.findall(r"read_only:\s*([^,}\s]+)", block)
-    return len(tokens) != block.count("read_only:") or any(
+    tokens = re.findall(r"read_only\s*:\s*([^,}\s]+)", block)
+    occurrences = len(re.findall(r"read_only\s*:", block))
+    return len(tokens) != occurrences or any(
         token.lower() not in {"true", "false"} for token in tokens
     )
 
@@ -441,6 +442,14 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "      - type: bind\n"
             "        source: ./proxy-allowlist.example.caddy\n"
             "        target: /srv/my-pa/extra\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            "        read_only : true\n"
             "    networks: [data-plane]",
             "mount_ownership",
         ),

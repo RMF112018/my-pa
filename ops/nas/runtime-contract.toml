@@ -34,6 +34,7 @@ pilot_after_nas_10_and_operator_activation = "unless-stopped"
 host = "nas"
 database_credential = true
 mounts = ["postgres_data_rw"]
+networks = ["data-plane"]
 
 [services.gateway]
 host = "nas"

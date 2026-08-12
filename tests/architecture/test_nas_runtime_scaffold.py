@@ -40,6 +40,15 @@ def _service_block(compose: str, service: str) -> str:
     return match.group(1) if match else ""
 
 
+def _compose_mount_targets(block: str) -> set[str]:
+    return set(re.findall(r"target:\s*([^,}\s]+)", block))
+
+
+def _compose_networks(block: str) -> set[str]:
+    match = re.search(r"(?m)^    networks:\s*\[([^]]*)\]", block)
+    return {item.strip() for item in match.group(1).split(",")} if match else set()
+
+
 def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     """Return stable violation codes for real files or deliberately mutated copies."""
 
@@ -105,6 +114,19 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         services.get(name, {}).get("mounts") != mounts for name, mounts in expected_mounts.items()
     ):
         errors.add("mount_ownership")
+    expected_networks = {
+        "postgres": ["data-plane"],
+        "gateway": ["data-plane", "edge-plane"],
+        "worker_enrollment": ["data-plane"],
+        "worker_capture": ["data-plane"],
+        "web": ["edge-plane"],
+        "proxy": ["edge-plane"],
+    }
+    if any(
+        services.get(name, {}).get("networks") != networks
+        for name, networks in expected_networks.items()
+    ):
+        errors.add("network_planes")
     gateway = services.get("gateway", {})
     if (
         gateway.get("container_bind") != "0.0.0.0:8765"
@@ -162,6 +184,40 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("named_postgres_volume")
 
     blocks = {service: _service_block(compose, service) for service in SERVICES}
+    expected_compose_mounts = {
+        "postgres": {"/var/lib/postgresql/data"},
+        "gateway": {
+            "/srv/my-pa/config",
+            "/srv/my-pa/managed-documents",
+            "/srv/my-pa/sources",
+        },
+        "worker-enrollment": {
+            "/srv/my-pa/config",
+            "/srv/my-pa/sources",
+            "/srv/my-pa/goodnotes",
+        },
+        "worker-capture": {"/srv/my-pa/config"},
+        "web": set(),
+        "proxy": {"/etc/caddy/Caddyfile"},
+    }
+    if any(
+        _compose_mount_targets(blocks[name]) != targets
+        for name, targets in expected_compose_mounts.items()
+    ):
+        errors.add("mount_ownership")
+    expected_compose_networks = {
+        "postgres": {"data-plane"},
+        "gateway": {"data-plane", "edge-plane"},
+        "worker-enrollment": {"data-plane"},
+        "worker-capture": {"data-plane"},
+        "web": {"edge-plane"},
+        "proxy": {"edge-plane"},
+    }
+    if any(
+        _compose_networks(blocks[name]) != networks
+        for name, networks in expected_compose_networks.items()
+    ):
+        errors.add("network_planes")
     if any(not block or "    platform: linux/amd64" not in block for block in blocks.values()):
         errors.add("missing_platform")
     if any("_DIGEST:?sha256 digest required}" not in block for block in blocks.values()):
@@ -182,6 +238,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         or "networks: [edge-plane]" not in blocks["web"]
         or "networks: [data-plane]" not in blocks["postgres"]
         or "data-plane:\n    internal: true" not in compose
+        or "edge-plane:\n    internal: false" not in compose
     ):
         errors.add("network_planes")
     if "managed-documents" in compose.replace(blocks["gateway"], ""):
@@ -282,6 +339,18 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/compose.example.yml",
+            "    networks: [data-plane]\n\n  web:",
+            "    networks: [data-plane, edge-plane]\n\n  web:",
+            "network_planes",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "edge-plane:\n    internal: false",
+            "edge-plane:\n    internal: true",
+            "network_planes",
+        ),
+        (
+            "ops/nas/compose.example.yml",
             "127.0.0.1:${MY_PA_PROXY_PORT:?explicit smoke port required}:8080",
             "0.0.0.0:${MY_PA_PROXY_PORT:?explicit smoke port required}:8080",
             "public_proxy_bind",
@@ -311,6 +380,16 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             '      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/managed-documents", '
             "target: /srv/my-pa/managed-documents}\n"
             "    networks: [data-plane]\n\n  worker-capture:",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            'source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, '
+            "read_only: true}\n    networks: [data-plane]\n\n  web:",
+            'source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, read_only: true}\n'
+            '      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/sources", '
+            "target: /srv/my-pa/sources, read_only: true}\n"
+            "    networks: [data-plane]\n\n  web:",
             "mount_ownership",
         ),
         (
@@ -354,6 +433,12 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             'mounts = ["config_ro", "managed_documents_rw", "sources_ro"]',
             'mounts = ["config_ro", "sources_ro"]',
             "mount_ownership",
+        ),
+        (
+            "ops/nas/runtime-contract.toml",
+            'networks = ["data-plane"]',
+            'networks = ["data-plane", "edge-plane"]',
+            "network_planes",
         ),
         (
             "ops/nas/proxy-allowlist.example.caddy",

@@ -158,6 +158,14 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # source and no enrollment, so a request that named a scope would be
         # naming a grant this plane cannot hold.
         Capability.KNOWLEDGE_REVEAL,
+        # The three continuity reads name a Principal, not a source. Situations,
+        # Projects and the Pulse belong to no configured source and to no
+        # enrollment — a Situation *references* objects across planes and owns
+        # none of them — so a request that named a scope would be naming a grant
+        # this plane cannot hold, exactly as `knowledge.reveal` cannot.
+        Capability.CONTINUITY_PULSE,
+        Capability.CONTINUITY_SITUATIONS,
+        Capability.CONTINUITY_PROJECTS,
     }
 )
 

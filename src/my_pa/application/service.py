@@ -121,10 +121,13 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListProjects,
     ListReviewCases,
+    ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
@@ -369,6 +372,12 @@ _CAPTURE_TRUST_BASIS: Final = ("user_authored",)
 #: difference between "the person wrote this" and "these are the rows that
 #: record what was derived from what the person wrote".
 _REVEAL_TRUST_BASIS: Final = ("stored_evidence_rows", "reviewed_promotion")
+
+#: What a continuity answer rests on. `principal_partition` because every row was
+#: selected under a `principal_id` predicate, and `accepted_continuity` because
+#: the Pulse derivation additionally filters to `evidence_state = 'accepted'`. Two
+#: named bases rather than one, so a reader can tell which claim is which.
+_CONTINUITY_TRUST_BASIS: Final = ("principal_partition", "accepted_continuity")
 
 
 def _capture_content(text: str) -> CaptureContent:
@@ -1428,6 +1437,132 @@ class ApplicationService:
             ),
         )
 
+    def _continuity_pulse(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetPulse
+    ) -> _Result:
+        """The Principal's why-now list, derived at request time from accepted state.
+
+        **A read that derives, not a listing that was written earlier.** The
+        repository selects this Principal's accepted, open commitments, tasks and
+        decisions and the obligations standing on the current Frames of the
+        Principal's running Situations, and the pure derivation returns the
+        subset for which a named why-now condition holds. An accepted object with
+        no due moment, no named authority point and no unmet obligation is
+        absent, however recently it was written; that absence is the difference
+        between this and an activity feed.
+
+        Every item carries its `reason_code`, the `basis_refs` a reader can open
+        to check it, a consequence and a next step, so the answer explains itself
+        rather than asking to be trusted. Nothing here writes: the derivation
+        promotes no state and accepts no review.
+
+        The Principal is `authorization.principal.principal_id` — the one the
+        gateway established from its own authenticated context — and never
+        anything the request carried.
+        """
+        with _translated():
+            items = unit_of_work.pulse.derive_pulse(
+                authorization.principal.principal_id, self._clock()
+            )
+        return _Result(
+            payload={
+                "pulse_items": [
+                    {
+                        "pulse_id": item.pulse_id,
+                        "item_type": item.item_type.value,
+                        "item_ref": item.item_ref,
+                        "reason_code": item.reason_code.value,
+                        "reason": item.reason,
+                        "basis_refs": list(item.basis_refs),
+                        "consequence": item.consequence,
+                        "next_step": item.next_step,
+                        "priority": item.priority,
+                        "generated_at": format_rfc3339(item.generated_at),
+                    }
+                    for item in items
+                ]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONTINUITY_TRUST_BASIS,
+            ),
+        )
+
+    def _continuity_situations(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListSituations
+    ) -> _Result:
+        """One bounded page of this Principal's Situations, newest first."""
+        page_size = self._page_size(command.page_size)
+        with _translated():
+            found = unit_of_work.situations.list_situations(authorization.principal.principal_id)
+        truncated = len(found) > page_size
+        return _Result(
+            payload={
+                "situations": [
+                    {
+                        "situation_id": situation.situation_id,
+                        "title": situation.title,
+                        "state": situation.state.value,
+                        "description": situation.description,
+                        "object_refs": list(situation.object_refs),
+                        "opened_at": format_rfc3339(situation.opened_at),
+                        "closed_at": (
+                            None
+                            if situation.closed_at is None
+                            else format_rfc3339(situation.closed_at)
+                        ),
+                        "outcome": situation.outcome,
+                    }
+                    for situation in found[:page_size]
+                ]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONTINUITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                ),
+                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
+            ),
+        )
+
+    def _continuity_projects(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListProjects
+    ) -> _Result:
+        """One bounded page of this Principal's Projects, newest first."""
+        page_size = self._page_size(command.page_size)
+        with _translated():
+            found = unit_of_work.projects.list_projects(authorization.principal.principal_id)
+        truncated = len(found) > page_size
+        return _Result(
+            payload={
+                "projects": [
+                    {
+                        "project_id": project.project_id,
+                        "name": project.name,
+                        "state": project.state.value,
+                        "description": project.description,
+                        "participants": list(project.participants),
+                        "opened_at": format_rfc3339(project.opened_at),
+                        "closed_at": (
+                            None if project.closed_at is None else format_rfc3339(project.closed_at)
+                        ),
+                    }
+                    for project in found[:page_size]
+                ]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONTINUITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                ),
+                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
+            ),
+        )
+
     def _admit(
         self,
         unit_of_work: UnitOfWork,
@@ -1845,5 +1980,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CAPTURE_SEARCH: ApplicationService._capture_search,
         Capability.REVIEW_LIST: ApplicationService._review_list,
         Capability.REVIEW_DECIDE: ApplicationService._review_decide,
+        Capability.CONTINUITY_PULSE: ApplicationService._continuity_pulse,
+        Capability.CONTINUITY_SITUATIONS: ApplicationService._continuity_situations,
+        Capability.CONTINUITY_PROJECTS: ApplicationService._continuity_projects,
     }
 )

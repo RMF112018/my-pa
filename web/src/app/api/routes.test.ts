@@ -155,11 +155,12 @@ describe("a default build produces no fixture data at all", () => {
   });
 
   it("answers not_implemented, not a fixture, on every route with no backend capability", async () => {
+    // WP-11 moved Pulse, Situations and Projects out of this list and into the
+    // backend-served one below: all three now reach a real `continuity.*`
+    // capability. The relationship timeline is what is left, and it is left
+    // rather than removed — a list that emptied would stop asserting anything.
     const cookie = await signIn();
     const responses = [
-      await pulse(get(cookie, "/api/pulse")),
-      await situations(get(cookie, "/api/situations")),
-      await projects(get(cookie, "/api/projects")),
       await timeline(get(cookie, "/api/relationships/p/timeline"), {
         params: Promise.resolve({ personId: "p" }),
       }),
@@ -174,12 +175,23 @@ describe("a default build produces no fixture data at all", () => {
 
   it("serves the backend, not fixtures, on every route that has a capability", async () => {
     const cookie = await signIn();
-    stubGateway({ manifest: {}, readiness: {}, review_cases: [], captures: [] });
+    stubGateway({
+      manifest: {},
+      readiness: {},
+      review_cases: [],
+      captures: [],
+      pulse_items: [],
+      situations: [],
+      projects: [],
+    });
     const responses = [
       await system(get(cookie, "/api/system")),
       await library(get(cookie, "/api/library")),
       await reviewList(get(cookie, "/api/review")),
       await reveal(post(cookie, "/api/reveal", { subjectId: "cap_aaaaaaaa11111111" })),
+      await pulse(get(cookie, "/api/pulse")),
+      await situations(get(cookie, "/api/situations")),
+      await projects(get(cookie, "/api/projects")),
     ];
     for (const response of responses) {
       expect(response.status).toBe(200);
@@ -190,6 +202,9 @@ describe("a default build produces no fixture data at all", () => {
       "http://127.0.0.1:8000/v1/capture.list",
       "http://127.0.0.1:8000/v1/review.list",
       "http://127.0.0.1:8000/v1/knowledge.reveal",
+      "http://127.0.0.1:8000/v1/continuity.pulse",
+      "http://127.0.0.1:8000/v1/continuity.situations",
+      "http://127.0.0.1:8000/v1/continuity.projects",
     ]);
   });
 
@@ -604,6 +619,77 @@ describe("System reports what is off as off", () => {
     stubGateway({ manifest: {}, readiness: {} });
     const raw = await (await system(get(cookie, "/api/system"))).text();
     expect(raw).not.toContain("schemaHead");
+  });
+});
+
+describe("Today is a derivation, not a feed", () => {
+  /** Two derived items whose urgency order is the reverse of their recency order. */
+  const DERIVED = [
+    {
+      pulse_id: "puls_overdue0001overdue0001",
+      item_type: "commitment",
+      item_ref: "cmt_overdue0001overdue001",
+      reason_code: "commitment_overdue",
+      reason: "The agreed moment passed 10 day(s) ago and the commitment is still open.",
+      basis_refs: ["cmt_overdue0001overdue001", "cap_origin0001origin0001"],
+      consequence: "A counterparty is still entitled to expect this.",
+      next_step: "Close it with the evidence that discharged it.",
+      priority: 9,
+      generated_at: "2026-08-10T12:00:00Z",
+    },
+    {
+      pulse_id: "puls_soon00001soon00001aa",
+      item_type: "commitment",
+      item_ref: "cmt_soon00001soon00001aa",
+      reason_code: "commitment_due_soon",
+      reason: "The agreed moment is 3 hour(s) away.",
+      basis_refs: ["cmt_soon00001soon00001aa"],
+      consequence: "Leaving it later removes the option of re-agreeing the moment.",
+      next_step: "Confirm it will be met, or say now that it will not.",
+      priority: 4,
+      generated_at: "2026-08-10T12:00:00Z",
+    },
+  ];
+
+  it("carries a why-now reason code and an evidentiary basis on every item", async () => {
+    const cookie = await signIn();
+    stubGateway({ pulse_items: DERIVED });
+    const body = await (await pulse(get(cookie, "/api/pulse"))).json();
+    expect(body.shape).toBe("backend");
+    expect(body.items).toHaveLength(2);
+    for (const item of body.items) {
+      expect(item.reasonCode).toMatch(/^[a-z_]+$/);
+      expect(item.basisRefs.length).toBeGreaterThan(0);
+      expect(item.nextStep).toBeTruthy();
+      expect(item.priority).toBeGreaterThan(0);
+    }
+  });
+
+  it("preserves the gateway's ranked order and never re-sorts by time", async () => {
+    // Every item shares one `generatedAt` — it is the moment of the read — so a
+    // route that sorted by it would produce an arbitrary order. The assertion is
+    // that the order out is the order in.
+    const cookie = await signIn();
+    stubGateway({ pulse_items: DERIVED });
+    const body = await (await pulse(get(cookie, "/api/pulse"))).json();
+    expect(body.items.map((i: { pulseId: string }) => i.pulseId)).toEqual(
+      DERIVED.map((i) => i.pulse_id),
+    );
+    expect(new Set(body.items.map((i: { generatedAt: string }) => i.generatedAt)).size).toBe(1);
+  });
+
+  it("sends no principal on the wire and no payload a caller could shape", async () => {
+    const cookie = await signIn();
+    stubGateway({ pulse_items: [] });
+    await pulse(get(cookie, "/api/pulse"));
+    const call = sent.at(-1)!;
+    expect(call.url).toBe("http://127.0.0.1:8000/v1/continuity.pulse");
+    expect(call.body.payload).toEqual({});
+    // The envelope carries a session-derived correlation principal and the
+    // request body carries no other identity field at all.
+    expect(Object.keys(call.body).sort()).toEqual(
+      ["contract_version", "payload", "principal_id", "purpose", "request_id", "requested_at"],
+    );
   });
 });
 

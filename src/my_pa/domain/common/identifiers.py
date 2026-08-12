@@ -118,6 +118,18 @@ class IdKind(StrEnum):
     PROJECT_SITUATION = "psit"
     RELATIONSHIP_EVENT = "revt"
     PULSE = "puls"
+    #: The continuity objects WP-11 adds, and the one append-only record that
+    #: carries their lifecycle. `CONTINUITY_DECISION` is deliberately not
+    #: `REVIEW_DECISION`: `rdec` names a reviewer's disposition of one proposal
+    #: and `cdec` names a decision the Principal holds and has to take, and a
+    #: shared prefix would make a stored reference ambiguous about which of the
+    #: two it points at — the same argument `CAPTURE_VERSION` makes against
+    #: reusing `VERSION`. `LIFECYCLE_EVENT` is its own prefix rather than a reuse
+    #: of `RELATIONSHIP_EVENT` for the same reason.
+    COMMITMENT = "cmt"
+    CONTINUITY_DECISION = "cdec"
+    TASK = "tsk"
+    LIFECYCLE_EVENT = "lce"
 
 
 class InvalidIdentifierError(ValueError):

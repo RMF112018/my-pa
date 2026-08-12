@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with sixteen capabilities and ten
+emits what it emitted on the day it merged, with nineteen capabilities and ten
 purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -189,6 +189,10 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "native_sources.sync",
         # WP-9. `5e2c7b0a94f6` is the forward `ALTER` that admits it.
         "knowledge.reveal",
+        # WP-11. `8f2b6c4d1a37` is the forward `ALTER` that admits the trio below.
+        "continuity.projects",
+        "continuity.pulse",
+        "continuity.situations",
     }
 )
 

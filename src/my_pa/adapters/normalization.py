@@ -60,10 +60,13 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListProjects,
     ListReviewCases,
+    ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
@@ -288,6 +291,18 @@ def _list_review_cases(payload: Mapping[str, Any]) -> Command:
     return ListReviewCases(**payload)
 
 
+def _get_pulse(payload: Mapping[str, Any]) -> Command:
+    return GetPulse(**payload)
+
+
+def _list_situations(payload: Mapping[str, Any]) -> Command:
+    return ListSituations(**payload)
+
+
+def _list_projects(payload: Mapping[str, Any]) -> Command:
+    return ListProjects(**payload)
+
+
 def _decide_review_case(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     named = converted.get("disposition")
@@ -322,6 +337,9 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CAPTURE_SEARCH: _search_captures,
         Capability.REVIEW_LIST: _list_review_cases,
         Capability.REVIEW_DECIDE: _decide_review_case,
+        Capability.CONTINUITY_PULSE: _get_pulse,
+        Capability.CONTINUITY_SITUATIONS: _list_situations,
+        Capability.CONTINUITY_PROJECTS: _list_projects,
     }
 )
 
@@ -331,7 +349,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the sixteen names nothing.
+    not one of the nineteen names nothing.
     """
     try:
         return Capability(capability)

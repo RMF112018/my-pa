@@ -65,6 +65,8 @@ class SituationService:
             principal_id=cmd.principal_id,
             situation_id=cmd.situation_id,
             outcome=cmd.outcome,
+            evidence_kind=cmd.evidence_kind,
+            evidence_ref=cmd.evidence_ref,
         )
 
     def enter_frame(self, repo: FrameRepository, cmd: EnterFrameCommand) -> Frame:
@@ -108,6 +110,8 @@ class SituationService:
             principal_id=cmd.principal_id,
             project_id=cmd.project_id,
             situation_id=cmd.situation_id,
+            evidence_kind=cmd.evidence_kind,
+            evidence_ref=cmd.evidence_ref,
         )
 
     def record_relationship_event(

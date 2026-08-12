@@ -46,23 +46,45 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Apply migrations over a real connection, one transaction for the run.
+    """Apply migrations over a real connection, **one transaction per revision**.
 
-    **No `statement_timeout`, and the omission is the decision.** Every other
-    process that builds an engine passes `MY_PA_STATEMENT_TIMEOUT_MS`, because
-    its statements are sized to a request. A migration's are sized to the corpus:
-    this chain creates functional GIN indexes over `knowledge.extractions` and
-    `knowledge.capture_versions` and adds constrained columns to tables the
-    legacy corpus fills, and a `CREATE INDEX` cancelled halfway leaves the
-    database between revisions — a strictly worse failure than the unbounded
-    query the bound exists to prevent. A migration that runs too long is an
-    operator's decision to interrupt, not a timer's.
+    It was one transaction for the whole run until WP-11, and the change is a
+    repair rather than a preference. PostgreSQL takes an `ACCESS EXCLUSIVE` lock
+    on every relation a statement creates or drops and holds it to the end of
+    the transaction, and the lock table is fixed at
+    `max_locks_per_transaction * (max_connections + max_prepared_transactions)`
+    entries for the whole cluster. The chain creates 484 target tables and some
+    two and a half thousand indexes, so a single-transaction `upgrade head` or
+    `downgrade base` accumulated a lock entry for **every relation in the
+    database at once** — nearly four thousand of them against a default ceiling
+    of 64 x 100.
+
+    That was already within a dozen relations of the ceiling before this package,
+    and it was measured rather than inferred: with the chain at `7a1e5f3c9d24`,
+    `downgrade base` succeeded; adding four tables and **no indexes at all**
+    made it fail with `out of shared memory / You might need to increase
+    max_locks_per_transaction`. The next table anyone added would have broken
+    every migration round trip in the suite, and the failure would have looked
+    like a defect in whatever revision happened to add it.
+
+    Per-revision transactions bound the lock set to the relations *one revision*
+    touches, which is what the ceiling is actually sized for. **Each revision
+    stays atomic**, which is the property that matters: a revision still denotes
+    one schema, and a failure inside one still leaves that revision unapplied.
+    What is given up is whole-run atomicity — a chain that fails at revision
+    twenty leaves the database at nineteen rather than at zero. That is the
+    better direction for a chain this long: the alternative to resuming is
+    re-running four hundred and eighty-four table creations to reach the same
+    point, and Alembic records the position either way.
+
+    Tuning `max_locks_per_transaction` upward would also work and is what the
+    server's own hint suggests, but it would leave the ceiling as a property of
+    whichever machine the migration runs on rather than of the migration.
     """
-    # statement-timeout-exempt: DDL and index builds are sized to the corpus.
     engine = create_database_engine(database_url)
     try:
         with engine.connect() as connection:
-            context.configure(connection=connection)
+            context.configure(connection=connection, transaction_per_migration=True)
             with context.begin_transaction():
                 context.run_migrations()
     finally:

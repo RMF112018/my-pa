@@ -55,10 +55,13 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListProjects,
     ListReviewCases,
+    ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
@@ -172,6 +175,9 @@ def _requested_scope(
             | RevealSubject()
             | ListReviewCases()
             | DecideReviewCase()
+            | GetPulse()
+            | ListSituations()
+            | ListProjects()
         ):
             return frozenset()
         case CreateCapture():

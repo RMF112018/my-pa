@@ -14,6 +14,41 @@ public enum NativeSourceProtocolV1 {
     /// Frozen cursor ceiling, in UTF-8 bytes. Must equal the `next_cursor`
     /// `max_length` on `NativeAdmissionEnvelope`.
     public static let maximumCursorBytes = 512
+
+    // MARK: - WP-16 mail content bounds
+    //
+    // Four bounds, and they do three different things on purpose. A bound that
+    // always did the same thing would be wrong for at least one of these cases:
+    //
+    // * a body over `maximumMailBodyBytes` is **omitted whole and marked**, with
+    //   its true size recorded, because a body cut at a byte boundary is loss the
+    //   consumer cannot see, while an omission with the real size attached is
+    //   loss the consumer can measure and re-fetch;
+    // * a header block over `maximumMailHeaderBytes` **refuses the record**,
+    //   because headers are the record's identity and provenance and there is no
+    //   honest partial form of them;
+    // * attachments over `maximumMailAttachmentDescriptors` are **described up to
+    //   the ceiling and marked**, with the true count recorded;
+    // * `maximumMailAttachmentBytes` never gates bytes, because attachment bytes
+    //   are never carried at all — `MailAttachmentDescriptor` has no field to put
+    //   them in. It gates the *disposition*, so an attachment too large for a
+    //   future fetch path is labelled as such at discovery time.
+
+    /// Largest message body carried inside one record. Above this the body is
+    /// omitted and `MailContentCompleteness` records that it was.
+    public static let maximumMailBodyBytes = 262_144
+    /// Largest header block carried inside one record. Above this the record is
+    /// refused: there is no partial header block worth admitting.
+    public static let maximumMailHeaderBytes = 65_536
+    /// Largest number of attachment descriptors carried inside one record.
+    public static let maximumMailAttachmentDescriptors = 32
+    /// Attachment size above which the descriptor must be marked
+    /// `omittedOversize`. No attachment bytes are ever carried at any size.
+    public static let maximumMailAttachmentBytes = 26_214_400
+    /// UTF-8 ceiling on one component of a mail message identity. Composition is
+    /// refused, never trimmed: a truncated identity silently aliases two
+    /// different messages onto one record.
+    public static let maximumMailIdentityComponentBytes = 64
 }
 
 /// Source categories supported by protocol v1. These are product categories,
@@ -315,4 +350,14 @@ public enum NativeSourceContractError: Error, Equatable, Sendable {
     case inconsistentEnvelope
     case invalidRecurrence
     case recurrenceLimitExceeded
+    case mailGenerationUnavailable
+    case mailIdentityTooLong
+    case mailInvalidIdentityComponent
+    case mailDateBoundNotSourceSide
+    case mailDateBoundViolated
+    case mailWindowNotDayAligned
+    case mailHeaderTooLarge
+    case mailBodyTooLarge
+    case mailAttachmentLimitExceeded
+    case mailContentInconsistent
 }

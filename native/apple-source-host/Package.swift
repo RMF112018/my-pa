@@ -24,6 +24,17 @@ let package = Package(
             name: "AppleFrameworkCompatibilityProbe",
             path: "Compatibility/AppleFrameworkCompatibilityProbe"
         ),
+        // WP-16 Apple Mail automation shape probe. Same footing and same
+        // reason: it imports ScriptingBridge so that every build re-proves the
+        // mechanism is *present* — which is what makes "operator-gated" a
+        // different statement from "does not exist" — while the shipping module
+        // keeps linking nothing. Also deliberately NOT a dependency of
+        // `AppleSourceHost`, because ScriptingBridge is the one framework on
+        // this machine that can mutate Apple Mail.
+        .target(
+            name: "AppleMailAutomationShapeProbe",
+            path: "Compatibility/AppleMailAutomationShapeProbe"
+        ),
         .executableTarget(
             name: "AppleSourceHostContractChecks",
             dependencies: ["AppleSourceHost"],

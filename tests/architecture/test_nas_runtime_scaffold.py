@@ -87,7 +87,13 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     contract_text = files["ops/nas/runtime-contract.toml"]
     compose = files["ops/nas/compose.example.yml"]
     proxy = files["ops/nas/proxy-allowlist.example.caddy"]
-    proxy = "\n".join(line.split("#", 1)[0].rstrip() for line in proxy.splitlines())
+    # Caddy starts a comment only when `#` begins a token. Quoted, backtick,
+    # and attached hashes remain active configuration and must not disappear.
+    proxy_lines = []
+    for line in proxy.splitlines():
+        comment = re.search(r"(^|\s)#", line)
+        proxy_lines.append(line[: comment.start()].rstrip() if comment else line.rstrip())
+    proxy = "\n".join(proxy_lines)
     nas_readme = files["ops/nas/README.md"]
     local_readme = files["ops/compose/README.md"]
     local_compose = files["ops/compose/postgres.yml"]
@@ -1193,6 +1199,18 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "        reverse_proxy gateway:8765",
             "        # reverse_proxy gateway:8765\n        reverse_proxy other:9999",
             "remote_capture_route",
+        ),
+        (
+            "ops/nas/proxy-allowlist.example.caddy",
+            "reverse_proxy gateway:8765",
+            "reverse_proxy gateway:8765#junk",
+            "proxy_exact_structure",
+        ),
+        (
+            "ops/nas/proxy-allowlist.example.caddy",
+            "reverse_proxy gateway:8765",
+            'reverse_proxy "gateway:8765#junk"',
+            "proxy_exact_structure",
         ),
         (
             "ops/nas/proxy-allowlist.example.caddy",

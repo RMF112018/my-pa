@@ -88,7 +88,8 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
                 self = .lifecycleRefused
             case .unsafeDirectory, .pathCollision, .corruptItem:
                 self = .spoolIntegrityFailure
-            case .itemCapacityExceeded, .byteCapacityExceeded:
+            case .itemCapacityExceeded, .byteCapacityExceeded,
+                 .quarantineItemCapacityExceeded, .quarantineByteCapacityExceeded:
                 self = .spoolCapacityExceeded
             case .payloadTooLarge:
                 self = .spoolPayloadTooLarge
@@ -249,27 +250,53 @@ public struct NativeHostSpoolHealth: Codable, Hashable, Sendable {
     public let quarantineItemCount: Int
     public let crashResidueItemCount: Int
     public let totalBytes: Int64
+    public let activeBytes: Int64
+    public let quarantineBytes: Int64
     public let maximumItems: Int
     public let maximumBytes: Int64
     public let maximumPayloadBytes: Int
+    public let maximumQuarantineItems: Int
+    public let maximumQuarantineBytes: Int64
 
     public init(inventory: ProtectedSpoolInventory, limits: ProtectedSpoolLimits) {
         self.pendingItemCount = inventory.items.filter { $0.state == .pending }.count
         self.quarantineItemCount = inventory.items.filter { $0.state == .quarantine }.count
         self.crashResidueItemCount = inventory.items.filter { $0.state == .crashResidue }.count
         self.totalBytes = inventory.totalBytes
+        self.activeBytes = inventory.items
+            .filter { $0.state != .quarantine }
+            .reduce(0, { $0 + $1.byteCount })
+        self.quarantineBytes = inventory.items
+            .filter { $0.state == .quarantine }
+            .reduce(0, { $0 + $1.byteCount })
         self.maximumItems = limits.maximumItems
         self.maximumBytes = limits.maximumBytes
         self.maximumPayloadBytes = limits.maximumPayloadBytes
+        self.maximumQuarantineItems = limits.maximumQuarantineItems
+        self.maximumQuarantineBytes = limits.maximumQuarantineBytes
     }
 
     public var itemCount: Int {
         pendingItemCount + quarantineItemCount + crashResidueItemCount
     }
 
-    public var remainingItems: Int { max(0, maximumItems - itemCount) }
+    public var remainingItems: Int {
+        max(0, maximumItems - pendingItemCount - crashResidueItemCount)
+    }
 
-    public var remainingBytes: Int64 { max(0, maximumBytes - totalBytes) }
+    public var remainingBytes: Int64 { max(0, maximumBytes - activeBytes) }
+
+    public var remainingQuarantineItems: Int {
+        max(0, maximumQuarantineItems - quarantineItemCount)
+    }
+
+    public var remainingQuarantineBytes: Int64 {
+        max(0, maximumQuarantineBytes - quarantineBytes)
+    }
+
+    public var quarantineAtCapacity: Bool {
+        remainingQuarantineItems == 0 || remainingQuarantineBytes == 0
+    }
 
     /// True when the next enqueue will be *refused*. Refusal is the defined
     /// behaviour at the bound — the spool throws `itemCapacityExceeded` or

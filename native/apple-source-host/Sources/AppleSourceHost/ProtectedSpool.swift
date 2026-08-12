@@ -62,14 +62,28 @@ public struct ProtectedSpoolLimits: Hashable, Sendable {
     public let maximumItems: Int
     public let maximumBytes: Int64
     public let maximumPayloadBytes: Int
+    public let maximumQuarantineItems: Int
+    public let maximumQuarantineBytes: Int64
 
-    public init(maximumItems: Int, maximumBytes: Int64, maximumPayloadBytes: Int) throws {
-        guard maximumItems > 0, maximumBytes > 0, maximumPayloadBytes > 0 else {
+    public init(
+        maximumItems: Int,
+        maximumBytes: Int64,
+        maximumPayloadBytes: Int,
+        maximumQuarantineItems: Int? = nil,
+        maximumQuarantineBytes: Int64? = nil
+    ) throws {
+        let quarantineItems = maximumQuarantineItems ?? maximumItems
+        let quarantineBytes = maximumQuarantineBytes ?? maximumBytes
+        guard maximumItems > 0, maximumBytes > 0, maximumPayloadBytes > 0,
+              quarantineItems > 0, quarantineBytes > 0
+        else {
             throw ProtectedSpoolError.invalidLimits
         }
         self.maximumItems = maximumItems
         self.maximumBytes = maximumBytes
         self.maximumPayloadBytes = maximumPayloadBytes
+        self.maximumQuarantineItems = quarantineItems
+        self.maximumQuarantineBytes = quarantineBytes
     }
 }
 
@@ -109,6 +123,8 @@ public enum ProtectedSpoolError: Error, Equatable, Sendable {
     case pathCollision
     case itemCapacityExceeded
     case byteCapacityExceeded
+    case quarantineItemCapacityExceeded
+    case quarantineByteCapacityExceeded
     case payloadTooLarge
     case itemNotFound
     case itemAlreadyQuarantined
@@ -266,10 +282,12 @@ public final class ProtectedSpool: @unchecked Sendable {
             }
 
             let current = try inventoryUnlocked()
-            guard current.itemCount < limits.maximumItems else {
+            let active = current.items.filter { $0.state != .quarantine }
+            guard active.count < limits.maximumItems else {
                 throw ProtectedSpoolError.itemCapacityExceeded
             }
-            guard current.totalBytes <= limits.maximumBytes - Int64(bytes.count) else {
+            let activeBytes = active.reduce(0, { $0 + $1.byteCount })
+            guard activeBytes <= limits.maximumBytes - Int64(bytes.count) else {
                 throw ProtectedSpoolError.byteCapacityExceeded
             }
 
@@ -356,7 +374,17 @@ public final class ProtectedSpool: @unchecked Sendable {
                 }
                 throw ProtectedSpoolError.itemNotFound
             }
-            _ = try safeBytes(in: pendingDescriptor, name: source)
+            let sourceBytes = try safeBytes(in: pendingDescriptor, name: source)
+            let current = try inventoryUnlocked()
+            let quarantine = current.items.filter { $0.state == .quarantine }
+            guard quarantine.count < limits.maximumQuarantineItems else {
+                throw ProtectedSpoolError.quarantineItemCapacityExceeded
+            }
+            let quarantineBytes = quarantine.reduce(0, { $0 + $1.byteCount })
+            guard quarantineBytes <= limits.maximumQuarantineBytes - Int64(sourceBytes.count)
+            else {
+                throw ProtectedSpoolError.quarantineByteCapacityExceeded
+            }
             guard renameatx_np(
                 pendingDescriptor,
                 source,

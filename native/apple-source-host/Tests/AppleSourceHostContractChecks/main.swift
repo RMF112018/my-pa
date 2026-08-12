@@ -967,7 +967,8 @@ struct AppleSourceHostContractChecks {
             limits: try ProtectedSpoolLimits(
                 maximumItems: 1,
                 maximumBytes: Int64(encodedSize + 32),
-                maximumPayloadBytes: 4
+                maximumPayloadBytes: 4,
+                maximumQuarantineItems: 1
             )
         )
         try require(
@@ -977,6 +978,18 @@ struct AppleSourceHostContractChecks {
         try requireSpoolError(.itemCapacityExceeded) {
             try capacitySpool.enqueue(try spoolItem("capacity-02", payload: [2]))
         }
+        try capacitySpool.quarantine(try opaque("capacity-01"))
+        try require(
+            try capacitySpool.enqueue(try spoolItem("capacity-02", payload: [2])) == .enqueued,
+            "Quarantine did not free the bounded pending capacity"
+        )
+        try requireSpoolError(.quarantineItemCapacityExceeded) {
+            try capacitySpool.quarantine(try opaque("capacity-02"))
+        }
+        try require(
+            try capacitySpool.item(try opaque("capacity-02")).envelopeID.rawValue == "capacity-02",
+            "Refused quarantine did not retain the pending item"
+        )
 
         let byteDirectory = temporaryDirectory("bytes")
         defer { try? FileManager.default.removeItem(at: byteDirectory) }

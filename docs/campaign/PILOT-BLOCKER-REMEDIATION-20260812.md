@@ -161,6 +161,17 @@ quarantines a stale unconsumed item through Swift before a subsequent fresh
 read. Tests cover delayed expiry, quarantine, fresh retry, and exact spool
 recovery. This BLOCK is historical and cannot satisfy the gate.
 
+A seventh independent audit of corrective head
+`29465672e8debe24f5c3ce31db9114bb07819c39` returned BLOCK after verifying the
+pending-first retry and stale-item quarantine flow. It found that Swift counted
+quarantine toward the same one-item limit as pending handoff, so quarantine did
+not actually free production capacity for the promised fresh read even though
+the Python fake did. The next corrective head separates bounded active
+pending/crash-residue capacity from separately bounded quarantine retention,
+adds the capacity-one quarantine-then-enqueue contract check, and proves that a
+full quarantine refuses without displacing the pending item. This BLOCK is
+historical and cannot satisfy the gate.
+
 ## Independent review gate
 
 No statement in this record means `READY_FOR_PILOT_VALIDATION`, independently

@@ -126,7 +126,10 @@ admission does it invoke `spool --acknowledge`, which routes through
 authority and pending envelope. A delayed retry first attempts exact retained
 admission; if its unconsumed authority is stale, the item is preserved through
 `ProtectedSpool.quarantine`, freeing pending capacity for a fresh authorized
-read. No stale item is silently deleted.
+read. Pending/crash-residue capacity and quarantine retention have separate
+item and byte bounds, so retained evidence neither occupies the one-item
+handoff slot nor grows without a fail-closed ceiling. No stale item is silently
+deleted.
 
 No repository validation inspects a live account. TCC grants, live execution,
 signing,

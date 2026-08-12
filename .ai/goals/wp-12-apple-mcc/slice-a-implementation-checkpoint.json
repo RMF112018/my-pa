@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "goal_id": "WP-12-APPLE-MCC",
+  "slice": "A",
+  "disposition": "CORRECTIVE_WORK_READY_FOR_REAUDIT",
+  "repository": {
+    "repository": "RMF112018/my-pa",
+    "branch": "bf/wp-12a-truth-contracts",
+    "base_sha": "634890e0bc089294a242be176280c09766bac493"
+  },
+  "objective": "Freeze current WP-12 authority, exact acceptance ownership, and a compile-time synthetic native source protocol-v1 feasibility boundary.",
+  "acceptance": {
+    "criteria_mapped": 48,
+    "criteria_with_one_final_owner": 48,
+    "final_criteria_discharged": [],
+    "native_protocol_identifier": "my-pa.native-source.v1",
+    "provider_protocols": [
+      "MailReadAdapter",
+      "CalendarReadAdapter",
+      "ContactsReadAdapter"
+    ]
+  },
+  "authorization": {
+    "id": "AUTH-WP12-20260804-OPERATOR-001",
+    "wp12_pre_completion_implementation": true,
+    "wp10_deferred": true,
+    "wp11_deferred": true,
+    "mvp_started": false,
+    "future_mvp_handoff_condition": "independently_verified_mcv_completion"
+  },
+  "precommit_review": {
+    "review_sha256": "4ae26bda775d6b79269f789aa90f9915d1dca3238e98b450628e7a4719386d5b",
+    "initial_disposition": "BLOCKED",
+    "corrected_findings": [
+      "B1: scoped SwiftPM build-output ignore rule added and generated .build directory removed",
+      "B2: operator-specific absolute repository paths replaced with repository identity and relative path"
+    ],
+    "prospective_authored_files": 19,
+    "generated_build_directory_present": false,
+    "corrected_artifact_sha256": {
+      "evidence-index.json": "3df68e994896269bb050ab91969f064538c4a8b5db3d1606b9c9a8fbac8aca51",
+      "verified-facts.yaml": "83471829e6861dce42690fcd147c74d36d7c02585970bb325ce9f1ea342387a4",
+      "repository-truth-report.md": "77462b658cb77552cb8cf2b0de8f5b9e3dd7a974c574ab0f5cfe7e18c2fa66e6"
+    }
+  },
+  "out_of_scope": [
+    "live Apple frameworks, accounts, or personal data",
+    "TCC, permissions, entitlements, credentials, signing, or notarization",
+    "installation, service registration, XPC, LaunchAgent, or watcher activation",
+    "database, network listener, application admission, persistence, schema, domain, or frontend",
+    "source mutation, external-model disclosure, deployment, production, destruction, or risk acceptance",
+    "WP-10, WP-11, or MVP execution"
+  ],
+  "validation": {
+    "swift_contract_checks": "PASS_3_CHECKS",
+    "swift_release_build": "PASS",
+    "routing_test": "PASS_6",
+    "python_architecture_tests_prior_cycle": "PASS_1207",
+    "precommit_routing_scope_and_mapping_tests": "PASS_288",
+    "machine_readable_artifact_parse": "PASS_JSON_2_YAML_4",
+    "sensitive_value_and_personal_path_scan": "PASS",
+    "swift_build_location": "external_scratch_path_outside_repository",
+    "workspace_swift_build_directory_after_validation": "ABSENT_AND_IGNORED",
+    "ruff": "PASS",
+    "git_diff_check": "PASS",
+    "toolchain_limitation": "Swift 6.2 installation lacks Testing and XCTest; dependency-free executable contract checks are used.",
+    "failed_attempts_preserved": [
+      "swift test failed because module Testing is unavailable",
+      "swift test failed because module XCTest is unavailable",
+      "test_non_scaffold_readmes_are_routed failed because native/apple-source-host/README.md was not routed; corrected in docs/00_REPOSITORY_SOURCE_INDEX.md",
+      "precommit review blocked on unignored SwiftPM output and three operator-specific absolute paths; both findings corrected",
+      "recursive deletion of the generated .build directory was policy-blocked; swift package clean plus explicit generated-file and empty-directory removal completed the scoped cleanup"
+    ],
+    "environment_observations": [
+      "An orchestrator broad-suite invocation without MY_PA_DATABASE_URL produced expected database-fixture setup errors. This is environment and test-selection evidence only, not a product pass or failure; no database was accessed or created during correction."
+    ],
+    "database_accessed_or_created_during_correction": false
+  }
+}

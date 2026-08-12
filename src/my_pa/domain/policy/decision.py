@@ -12,7 +12,12 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from my_pa.domain.common.classification import Classification, is_cloud_eligible
-from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
+from my_pa.domain.identity.operation import (
+    AuthorizedCapability,
+    Capability,
+    is_operator_only,
+    permitted_purposes,
+)
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 
@@ -69,7 +74,7 @@ class PolicyRequest:
 
     principal: Principal
     purpose: Purpose
-    capability: Capability
+    capability: AuthorizedCapability
     classification: Classification = Classification.PRIVATE_LOCAL
     requested_source_ids: frozenset[str] = field(default_factory=frozenset)
     authorized_source_ids: frozenset[str] = field(default_factory=frozenset)

@@ -1,0 +1,507 @@
+schema_version: 2
+goal_id: WP-12-APPLE-MCC
+current_status: IN_PROGRESS
+slice_order: [A, B, D, C, E, F, G, H]
+criteria:
+  - id: NAPDCB-AC-001
+    requirement: Configure entirely from frontend.
+    current: NOT_IMPLEMENTED
+    slice: G
+    foundation_slices: [B, D, C, E, F]
+    components: [frontend/apple-sources, gateway/native-source-api, application/native_sources]
+    tests: [ui-source-setup-e2e]
+    tier: PR
+    evidence: {method: browser_e2e_with_synthetic_bridge, artifact: ui-source-setup-e2e.xml}
+    blocking_dependencies: [B-schema-contracts, D-synthetic-host, C-use-cases, E-baseline, F-watcher-simulation]
+  - id: NAPDCB-AC-002
+    requirement: Verify bridge identity, version, reachability and permissions independently.
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
+    slice: C
+    foundation_slices: [A, B, D]
+    components: [native-host/versioned-protocol, domain/native_sources/bridge, application/native_sources/preflight]
+    tests: [bridge-attestation-contract, permission-state-matrix, synthetic-host-application-integration]
+    tier: PR
+    evidence: {method: native_host_to_application_contract_test, artifact: bridge-verification-junit.xml}
+    implementation_evidence: [native/apple-source-host/Tests/AppleSourceHostFixtureExport/main.swift, tests/unit/test_wp12_slice_c_application.py]
+    blocking_dependencies: [A-protocol-freeze, B-bridge-persistence, D-synthetic-host-integrated]
+  - id: NAPDCB-AC-003
+    requirement: Enumerate reachable accounts from the Mac.
+    current: NOT_IMPLEMENTED
+    slice: D
+    foundation_slices: [A, B]
+    components: [native-host/adapters, domain/native_sources/discovery]
+    tests: [synthetic-account-discovery]
+    tier: PR
+    evidence: {method: swift_adapter_contract_test, artifact: native-discovery-test-results.json}
+    blocking_dependencies: [A-adapter-protocol, B-account-identity]
+  - id: NAPDCB-AC-004
+    requirement: Typed names activate exact discovered identity only.
+    current: IMPLEMENTED_VERIFIED_FAST
+    slice: C
+    foundation_slices: [B, D]
+    components: [domain/native_sources/identity_resolution, application/native_sources/configure]
+    tests: [identity-ambiguity-matrix]
+    tier: FAST
+    evidence: {method: exhaustive_domain_and_application_matrix, artifact: identity-ambiguity-junit.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py]
+    blocking_dependencies: [B-stable-identities, D-discovery-envelope]
+  - id: NAPDCB-AC-005
+    requirement: Bind account to opaque stable identity, not display label.
+    current: NOT_IMPLEMENTED
+    slice: B
+    foundation_slices: [A]
+    components: [domain/native_sources/account, persistence/native_source_accounts]
+    tests: [account-identity-reobservation, schema-opacity]
+    tier: PR
+    evidence: {method: isolated_database_reobservation_and_schema_test, artifact: account-identity-db.xml}
+    blocking_dependencies: [A-identity-contract]
+  - id: NAPDCB-AC-006
+    requirement: Select Mail, Calendar and supported Contact buckets.
+    current: NOT_IMPLEMENTED
+    slice: G
+    foundation_slices: [B, D, C]
+    components: [frontend/apple-sources/bucket-tree, application/native_sources/configure]
+    tests: [bucket-tree-selection-e2e]
+    tier: PR
+    evidence: {method: accessible_browser_e2e, artifact: bucket-tree-e2e.xml}
+    blocking_dependencies: [B-bucket-model, D-discovery-integration, C-configuration-command]
+  - id: NAPDCB-AC-007
+    requirement: Future buckets are not silently enrolled.
+    current: NOT_IMPLEMENTED
+    slice: B
+    foundation_slices: [A]
+    components: [domain/native_sources/selection_rule, persistence/native_configuration_buckets]
+    tests: [future-bucket-default-denial]
+    tier: FAST
+    evidence: {method: closed_state_domain_test, artifact: future-bucket-denial.xml}
+    blocking_dependencies: [A-configuration-contract]
+  - id: NAPDCB-AC-008
+    requirement: Reverify every selected bucket immediately before sync.
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
+    slice: C
+    foundation_slices: [B, D]
+    components: [native-host/preflight, application/native_sources/preflight, persistence/native_source_buckets]
+    tests: [preflight-all-buckets, preflight-drift, synthetic-preflight-integration]
+    tier: PR
+    evidence: {method: integrated_synthetic_host_preflight_with_drift_plant, artifact: preflight-integration.xml}
+    implementation_evidence: [native/apple-source-host/Tests/AppleSourceHostFixtureExport/main.swift, tests/unit/test_wp12_slice_c_application.py]
+    blocking_dependencies: [B-bucket-revisions, D-native-preflight-integrated]
+  - id: NAPDCB-AC-009
+    requirement: Start date uses configured local timezone.
+    current: NOT_IMPLEMENTED
+    slice: B
+    foundation_slices: [A]
+    components: [domain/native_sources/sync_window]
+    tests: [timezone-dst-boundaries]
+    tier: FAST
+    evidence: {method: table_driven_timezone_test, artifact: timezone-boundaries.xml}
+    blocking_dependencies: [A-date-contract]
+  - id: NAPDCB-AC-010
+    requirement: Begin Sync captures one immutable UTC cutoff.
+    current: NOT_IMPLEMENTED
+    slice: E
+    foundation_slices: [B, C]
+    components: [application/native_sources/sync_begin, persistence/native_sync_runs]
+    tests: [single-server-cutoff, cutoff-immutability]
+    tier: PR
+    evidence: {method: isolated_database_immutability_test, artifact: cutoff-immutability.xml}
+    blocking_dependencies: [B-run-schema, C-sync-command]
+  - id: NAPDCB-AC-011
+    requirement: Mail includes messages from normalized start through cutoff inclusive.
+    current: NOT_IMPLEMENTED
+    slice: E
+    foundation_slices: [B, D, C]
+    components: [domain/native_sources/mail_window, native-host/mail-adapter, worker/native-baseline]
+    tests: [mail-boundary-matrix]
+    tier: PR
+    evidence: {method: synthetic_boundary_fixture_end_to_end, artifact: mail-window-e2e.xml}
+    blocking_dependencies: [B-window-types, D-mail-synthetic-adapter, C-admission]
+  - id: NAPDCB-AC-012
+    requirement: Calendar includes overlapping events through cutoff plus 90 days.
+    current: NOT_IMPLEMENTED
+    slice: E
+    foundation_slices: [B, D, C]
+    components: [domain/native_sources/calendar_window, native-host/calendar-adapter, worker/native-baseline]
+    tests: [calendar-overlap-boundaries]
+    tier: PR
+    evidence: {method: synthetic_overlap_fixture_end_to_end, artifact: calendar-window-e2e.xml}
+    blocking_dependencies: [B-window-types, D-calendar-synthetic-adapter, C-admission]
+  - id: NAPDCB-AC-013
+    requirement: Preserve recurrence series and occurrence identity with bounded expansion.
+    current: NOT_IMPLEMENTED
+    slice: D
+    foundation_slices: [A, B]
+    components: [native-host/calendar-normalizer, domain/native_sources/occurrence]
+    tests: [recurrence-exception-timezone-matrix]
+    tier: PR
+    evidence: {method: swift_and_python_contract_fixture_comparison, artifact: recurrence-contract.json}
+    blocking_dependencies: [A-calendar-contract, B-occurrence-identity]
+  - id: NAPDCB-AC-014
+    requirement: Contacts include all current selected collection members without date cutoff.
+    current: NOT_IMPLEMENTED
+    slice: E
+    foundation_slices: [B, D, C]
+    components: [native-host/contacts-adapter, worker/native-baseline, persistence/source-memberships]
+    tests: [contact-current-inventory]
+    tier: PR
+    evidence: {method: synthetic_inventory_end_to_end, artifact: contacts-inventory-e2e.xml}
+    blocking_dependencies: [B-membership-schema, D-contacts-synthetic-adapter, C-admission]
+  - id: NAPDCB-AC-015
+    requirement: Memberships remain separate from object identity.
+    current: NOT_IMPLEMENTED
+    slice: B
+    foundation_slices: [A]
+    components: [domain/native_sources/membership, persistence/source_memberships]
+    tests: [multi-mailbox-multi-group-membership]
+    tier: PR
+    evidence: {method: isolated_database_cardinality_test, artifact: memberships-db.xml}
+    blocking_dependencies: [A-envelope-contract]
+  - id: NAPDCB-AC-016
+    requirement: Freeze configuration, range, adapter and bridge identity.
+    current: NOT_IMPLEMENTED
+    slice: E
+    foundation_slices: [B, D, C]
+    components: [domain/native_sources/frozen_run, persistence/native_sync_runs]
+    tests: [run-snapshot-immutability]
+    tier: PR
+    evidence: {method: database_trigger_and_application_snapshot_test, artifact: frozen-run.xml}
+    blocking_dependencies: [B-run-schema, D-adapter-version, C-sync-command]
+  - id: NAPDCB-AC-017
+    requirement: Pagination and batching are bounded and resumable.
+    current: NOT_IMPLEMENTED
+    slice: E
+    foundation_slices: [B, D, C]
+    components: [native-host/paging, worker/native-baseline, persistence/native_bucket_runs]
+    tests: [page-ceiling-resume]
+    tier: PR
+    evidence: {method: bounded_fixture_and_crash_resume_test, artifact: paging-resume.xml}
+    blocking_dependencies: [B-cursor-schema, D-paged-adapter, C-admission]
+  - id: NAPDCB-AC-018
+    requirement: Duplicate admission creates no duplicate immutable version.
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
+    slice: C
+    foundation_slices: [B, D]
+    components: [application/native_sources/admit, persistence/source_object_versions]
+    tests: [admission-idempotency-concurrency, synthetic-envelope-replay]
+    tier: PR
+    evidence: {method: concurrent_isolated_database_replay, artifact: admission-idempotency.xml}
+    implementation_evidence: [native/apple-source-host/Tests/AppleSourceHostFixtureExport/main.swift, tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
+    blocking_dependencies: [B-idempotency-constraints, D-versioned-envelope]
+  - id: NAPDCB-AC-019
+    requirement: Interrupted baseline resumes from durable state.
+    current: NOT_IMPLEMENTED
+    slice: E
+    foundation_slices: [B, D, C]
+    components: [worker/native-baseline, persistence/native_sync_jobs, native-host/spool]
+    tests: [crash-resume-matrix]
+    tier: FULL
+    evidence: {method: fault_injection_full_suite, artifact: crash-resume-full.xml}
+    blocking_dependencies: [B-job-schema, D-spool, C-admission]
+  - id: NAPDCB-AC-020
+    requirement: Failed admission cannot advance checkpoint past the item.
+    current: NOT_IMPLEMENTED
+    slice: E
+    foundation_slices: [B, C]
+    components: [persistence/native_checkpoints, worker/native-baseline]
+    tests: [checkpoint-before-admission-guard]
+    tier: PR
+    evidence: {method: deferred_constraint_and_rollback_snapshot, artifact: checkpoint-guard.xml}
+    blocking_dependencies: [B-checkpoint-constraints, C-admission-receipts]
+  - id: NAPDCB-AC-021
+    requirement: Progress reports counts and state without content.
+    current: IMPLEMENTED_VERIFIED_FAST
+    slice: C
+    foundation_slices: [B]
+    components: [application/native_sources/status, contracts/v1/native_sources]
+    tests: [progress-redaction-structural]
+    tier: FAST
+    evidence: {method: closed_response_shape_and_sentinel_corpus, artifact: progress-redaction.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/architecture/test_wp12_slice_c_boundaries.py]
+    blocking_dependencies: [B-run-and-count-model]
+  - id: NAPDCB-AC-022
+    requirement: Zero records, denial and unavailability are distinguishable.
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
+    slice: C
+    foundation_slices: [B, D]
+    components: [domain/native_sources/coverage, application/native_sources/status]
+    tests: [coverage-state-truth-table, synthetic-unavailable-integration]
+    tier: PR
+    evidence: {method: exhaustive_state_matrix_with_synthetic_host, artifact: coverage-state.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
+    blocking_dependencies: [B-coverage-states, D-provider-failure-vocabulary]
+  - id: NAPDCB-AC-023
+    requirement: Every bucket reconciles before watcher activation.
+    current: NOT_IMPLEMENTED
+    slice: F
+    foundation_slices: [B, D, C, E]
+    components: [worker/native-reconcile, persistence/native_watcher_simulations]
+    tests: [reconcile-before-simulation-trigger]
+    tier: PR
+    evidence: {method: deferred_constraint_and_raw_sql_negative_plant, artifact: watcher-reconcile-guard.xml}
+    blocking_dependencies: [B-control-plane, D-synthetic-host, C-admission, E-baseline]
+  - id: NAPDCB-AC-024
+    requirement: Authoritative watching requires durable checkpoint and eligible live activation receipt.
+    current: NOT_IMPLEMENTED_LIVE_GATE
+    slice: H
+    foundation_slices: [B, D, C, E, F]
+    components: [domain/native_sources/live_activation_gate, persistence/native_live_activation_gates, security/live_activation_verifier]
+    tests: [authoritative-watching-unrepresentable, watching-literal-absent, live-receipt-table-absent, synthetic-receipt-cannot-activate, synthetic-adapter-cannot-activate]
+    tier: SPECIALIZED
+    evidence: {method: structural_negative_tests_and_operator_gated_live_attestation, artifact: authoritative-watcher-gate.xml}
+    blocking_dependencies: [E-durable-checkpoint, F-simulation-segregation, H-live-attestation-gate, OPERATOR-AUTHORIZED-SIGNING-NOTARIZATION-REGISTRATION-COMPATIBILITY]
+    live_evidence: NOT_RUN_OPERATOR_GATED
+  - id: NAPDCB-AC-025
+    requirement: Failed bucket does not block healthy siblings and aggregate stays partial.
+    current: NOT_IMPLEMENTED
+    slice: F
+    foundation_slices: [B, C, E]
+    components: [domain/native_sources/account_health, worker/native-reconcile]
+    tests: [partial-account-health]
+    tier: PR
+    evidence: {method: multi_bucket_integration_matrix, artifact: partial-account-health.xml}
+    blocking_dependencies: [B-state-model, C-status-use-case, E-bucket-runs]
+  - id: NAPDCB-AC-026
+    requirement: Incremental reads use bounded overlap and idempotency.
+    current: NOT_IMPLEMENTED
+    slice: F
+    foundation_slices: [D, C, E]
+    components: [worker/native-watcher-simulation, native-host/synthetic-adapters]
+    tests: [overlap-replay-dedup]
+    tier: FULL
+    evidence: {method: clocked_overlap_replay_full_suite, artifact: overlap-replay.xml}
+    blocking_dependencies: [D-incremental-protocol, C-idempotent-admission, E-checkpoint]
+  - id: NAPDCB-AC-027
+    requirement: Calendar maintains a rolling 90-day horizon.
+    current: NOT_IMPLEMENTED
+    slice: F
+    foundation_slices: [D, E]
+    components: [worker/calendar-horizon, domain/native_sources/calendar_window]
+    tests: [rolling-horizon-clock]
+    tier: PR
+    evidence: {method: deterministic_clock_integration, artifact: rolling-horizon.xml}
+    blocking_dependencies: [D-calendar-adapter, E-calendar-baseline]
+  - id: NAPDCB-AC-028
+    requirement: Permission revocation suspends watcher and preserves checkpoint.
+    current: NOT_IMPLEMENTED
+    slice: F
+    foundation_slices: [B, D, E]
+    components: [worker/native-watcher-simulation, persistence/native_checkpoints]
+    tests: [permission-revocation-mid-page]
+    tier: FULL
+    evidence: {method: fault_injection_with_before_after_snapshot, artifact: permission-revocation.xml}
+    blocking_dependencies: [B-permission-states, D-permission-event, E-checkpoint]
+  - id: NAPDCB-AC-029
+    requirement: Missing bucket is unavailable and never silently remapped.
+    current: NOT_IMPLEMENTED
+    slice: F
+    foundation_slices: [B, D, C]
+    components: [domain/native_sources/bucket_identity, worker/native-reconcile]
+    tests: [bucket-identity-change-denial]
+    tier: PR
+    evidence: {method: identity_drift_integration_plant, artifact: bucket-drift.xml}
+    blocking_dependencies: [B-stable-bucket-identity, D-discovery-revision, C-reconfiguration-use-case]
+  - id: NAPDCB-AC-030
+    requirement: Freshness and staleness remain visible.
+    current: NOT_IMPLEMENTED
+    slice: F
+    foundation_slices: [B, C]
+    components: [domain/native_sources/freshness, application/native_sources/status]
+    tests: [freshness-state-clock]
+    tier: FAST
+    evidence: {method: deterministic_clock_state_test, artifact: freshness-state.xml}
+    blocking_dependencies: [B-freshness-vocabulary, C-status-use-case]
+  - id: NAPDCB-AC-031
+    requirement: Added account or bucket follows baseline-before-watcher.
+    current: NOT_IMPLEMENTED
+    slice: F
+    foundation_slices: [B, C, E]
+    components: [application/native_sources/configure, worker/native-reconcile]
+    tests: [scope-add-lifecycle]
+    tier: FULL
+    evidence: {method: end_to_end_scope_revision_lifecycle, artifact: scope-add-full.xml}
+    blocking_dependencies: [B-config-revisions, C-configure-command, E-baseline]
+  - id: NAPDCB-AC-032
+    requirement: Removing scope stops access without default evidence deletion.
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
+    slice: C
+    foundation_slices: [B]
+    components: [application/native_sources/disable, persistence/native_configuration_revisions]
+    tests: [scope-removal-retention]
+    tier: PR
+    evidence: {method: isolated_database_before_after_snapshot, artifact: scope-removal.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
+    blocking_dependencies: [B-config-and-evidence-schema]
+  - id: NAPDCB-AC-033
+    requirement: Earlier start performs idempotent backfill.
+    current: NOT_IMPLEMENTED
+    slice: E
+    foundation_slices: [B, D, C]
+    components: [application/native_sources/backfill, worker/native-baseline]
+    tests: [earlier-start-delta-backfill]
+    tier: FULL
+    evidence: {method: repeated_delta_backfill_full_suite, artifact: backfill-full.xml}
+    blocking_dependencies: [B-run-range-constraints, D-paged-adapters, C-backfill-command]
+  - id: NAPDCB-AC-034
+    requirement: Later start does not delete prior observations.
+    current: NOT_IMPLEMENTED
+    slice: E
+    foundation_slices: [B, C]
+    components: [application/native_sources/configure, persistence/source_observations]
+    tests: [later-start-no-delete]
+    tier: PR
+    evidence: {method: database_before_after_snapshot, artifact: later-start.xml}
+    blocking_dependencies: [B-append-only-evidence, C-configure-command]
+  - id: NAPDCB-AC-035
+    requirement: Contact-group changes reconcile membership and preserve history.
+    current: NOT_IMPLEMENTED
+    slice: F
+    foundation_slices: [B, D, E]
+    components: [worker/contact-membership-reconcile, persistence/source_memberships]
+    tests: [contact-membership-reconciliation]
+    tier: FULL
+    evidence: {method: multi_revision_membership_full_suite, artifact: contact-membership.xml}
+    blocking_dependencies: [B-membership-history, D-contact-adapter, E-contact-baseline]
+  - id: NAPDCB-AC-036
+    requirement: Resume revalidates and reconciles overlap.
+    current: NOT_IMPLEMENTED
+    slice: F
+    foundation_slices: [D, C, E]
+    components: [application/native_sources/resume, worker/native-reconcile]
+    tests: [pause-resume-overlap]
+    tier: FULL
+    evidence: {method: paused_clock_and_overlap_replay, artifact: pause-resume.xml}
+    blocking_dependencies: [D-preflight-adapter, C-resume-command, E-checkpoint]
+  - id: NAPDCB-AC-037
+    requirement: Configuration changes are revisioned and audited without content.
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
+    slice: C
+    foundation_slices: [B]
+    components: [application/native_sources/configure, application/authorization, persistence/native_configuration_revisions, persistence/audit]
+    tests: [configuration-history-redaction, configuration-audit-fail-closed]
+    tier: PR
+    evidence: {method: application_to_database_audit_integration_with_sentinel_corpus, artifact: configuration-audit.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
+    blocking_dependencies: [B-config-revision-schema, C-authorization-and-audit-integration]
+  - id: NAPDCB-AC-038
+    requirement: Native host has no PostgreSQL credentials or direct writes.
+    current: NOT_IMPLEMENTED
+    slice: D
+    foundation_slices: [A]
+    components: [native-host/package, native-host/admission-client]
+    tests: [native-import-boundary, binary-string-negative-evidence]
+    tier: PR
+    evidence: {method: dependency_graph_and_built_artifact_symbol_scan, artifact: native-db-negative-evidence.json}
+    blocking_dependencies: [A-native-boundary]
+  - id: NAPDCB-AC-039
+    requirement: Provider ports expose no mutation method.
+    current: NOT_IMPLEMENTED
+    slice: B
+    foundation_slices: [A]
+    components: [domain/source/provider, contracts/native_source_admission]
+    tests: [source-port-negative-surface]
+    tier: FAST
+    evidence: {method: ast_surface_allowlist, artifact: source-port-surface.json}
+    blocking_dependencies: [A-port-contract]
+  - id: NAPDCB-AC-040
+    requirement: Content is excluded from ordinary logs and receipts.
+    current: NOT_IMPLEMENTED
+    slice: H
+    foundation_slices: [C, D, E, F, G]
+    components: [security/redaction, contracts/v1/native_sources, native-host/logging, frontend/telemetry]
+    tests: [log-receipt-redaction-corpus]
+    tier: PR
+    evidence: {method: cross_surface_sentinel_corpus_scan, artifact: redaction-cross-surface.json}
+    blocking_dependencies: [C-application-responses, D-native-logs, E-run-receipts, F-simulation-receipts, G-frontend]
+  - id: NAPDCB-AC-041
+    requirement: Spool items are atomic, bounded and retained until acknowledgement or quarantine.
+    current: NOT_IMPLEMENTED
+    slice: D
+    foundation_slices: [A]
+    components: [native-host/protected-spool]
+    tests: [spool-crash-capacity-ack-matrix]
+    tier: FULL
+    evidence: {method: filesystem_fault_injection_with_inventory_snapshots, artifact: spool-full.xml}
+    blocking_dependencies: [A-spool-contract]
+  - id: NAPDCB-AC-042
+    requirement: Admission authenticates bridge and exact bucket scope.
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
+    slice: C
+    foundation_slices: [A, B, D]
+    components: [native-host/admission-client, application/native_sources/admit, application/authorization]
+    tests: [admission-auth-replay-scope-matrix, synthetic-host-admission-integration]
+    tier: PR
+    evidence: {method: integrated_versioned_host_application_negative_matrix, artifact: admission-auth.xml}
+    implementation_evidence: [native/apple-source-host/Tests/AppleSourceHostFixtureExport/main.swift, tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
+    blocking_dependencies: [A-authentication-contract, B-exact-scope-schema, D-integrated-synthetic-host]
+  - id: NAPDCB-AC-043
+    requirement: Provider metadata does not define canonical domain records.
+    current: NOT_IMPLEMENTED
+    slice: B
+    foundation_slices: [A]
+    components: [domain/native_sources/envelope, domain/relationship, domain/capture]
+    tests: [provider-domain-dependency-negative]
+    tier: FAST
+    evidence: {method: dependency_and_field_allowlist_test, artifact: provider-domain-boundary.json}
+    blocking_dependencies: [A-envelope-contract]
+  - id: NAPDCB-AC-044
+    requirement: Evidence persists independently of enrichment success.
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
+    slice: C
+    foundation_slices: [B, D]
+    components: [application/native_sources/admit, persistence/source_version_evidence, infrastructure/jobs]
+    tests: [persist-before-enrich-failure]
+    tier: PR
+    evidence: {method: transaction_and_worker_failure_snapshot, artifact: evidence-before-enrich.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/schema/test_wp12_slice_c_admission.py]
+    blocking_dependencies: [B-evidence-schema, D-versioned-envelope]
+  - id: NAPDCB-AC-045
+    requirement: Consequential derived records require governed Review.
+    current: IMPLEMENTED_VERIFIED_LOCAL_PR_TIER_PENDING_EXACT_HEAD_REVIEW
+    slice: C
+    foundation_slices: [B]
+    components: [application/native_sources/enrichment_route, persistence/proposals, persistence/review]
+    tests: [apple-proposal-review-policy]
+    tier: PR
+    evidence: {method: application_policy_and_database_lineage_test, artifact: apple-review-policy.xml}
+    implementation_evidence: [tests/unit/test_wp12_slice_c_application.py, tests/architecture/test_wp12_slice_c_boundaries.py, tests/schema/test_wp12_slice_c_admission.py]
+    blocking_dependencies: [B-source-evidence-binding, existing-review-plane]
+  - id: NAPDCB-AC-046
+    requirement: Automated tests use no live personal data or credentials.
+    current: NOT_IMPLEMENTED
+    slice: H
+    foundation_slices: [A, B, D, C, E, F, G]
+    components: [fixtures/native_sources, ci/repository-checks, security/containment]
+    tests: [fixture-containment-secret-scan]
+    tier: PR
+    evidence: {method: fixture_manifest_and_secret_personal_identifier_scan, artifact: fixture-containment.json}
+    blocking_dependencies: [all-implementation-slices]
+  - id: NAPDCB-AC-047
+    requirement: Host is signed, notarized, compatible and properly registered before live activation.
+    current: NOT_RUN_OPERATOR_GATED
+    slice: H
+    foundation_slices: [A, D]
+    components: [security/live_activation_verifier, domain/native_sources/live_activation_gate, persistence/native_live_activation_gates]
+    tests: [activation-attestation-denial, live-attestation-writer-absent, synthetic-attestation-type-denial, synthetic-adapter-cannot-produce-live-attestation, missing-operator-authority-denial]
+    tier: SPECIALIZED
+    evidence: {method: structural_fail_closed_gate_now_and_actual_authorized_attestation_later, artifact: live-attestation-gate.xml}
+    blocking_dependencies: [D-source-built-host, OPERATOR-SIGNING-NOTARIZATION-REGISTRATION-COMPATIBILITY-AUTHORIZATION]
+    live_evidence: NOT_RUN_OPERATOR_GATED
+  - id: NAPDCB-AC-048
+    requirement: Source mutation is unreachable through UI, capabilities, ports, adapters and tests.
+    current: NOT_IMPLEMENTED
+    slice: H
+    foundation_slices: [B, D, C, G]
+    components: [frontend/apple-sources, domain/source/provider, contracts/native_sources, native-host/adapters, application/native_sources]
+    tests: [five-surface-mutation-negative-evidence]
+    tier: PR
+    evidence: {method: ast_route_schema_swift_symbol_and_browser_action_allowlists, artifact: mutation-negative-evidence.json}
+    blocking_dependencies: [B-ports, D-native-adapters, C-capabilities, G-frontend]
+summary:
+  criteria_total: 48
+  mapped_to_slice: 48
+  mapped_to_components: 48
+  mapped_to_evidence: 48
+  mapped_to_blocking_dependencies: 48
+  mapped_to_tests: 48
+  currently_satisfied: 0
+  operator_gated_live_evidence: [NAPDCB-AC-024, NAPDCB-AC-047]

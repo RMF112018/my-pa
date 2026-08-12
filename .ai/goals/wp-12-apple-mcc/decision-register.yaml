@@ -1,0 +1,81 @@
+schema_version: 1
+goal_id: WP-12-APPLE-MCC
+decisions:
+  - id: WP12-D-001
+    decision: Execute WP-12 before deferred WP-10/WP-11.
+    basis: AUTH-WP12-20260804-OPERATOR-001
+    status: authorized
+  - id: WP12-D-002
+    decision: Implement synthetic repository behavior without live Apple, TCC, signing, activation or deployment.
+    basis: operator authorization boundary and AGENTS.md sections 5 and 8.2
+    status: accepted
+  - id: WP12-D-003
+    decision: Reuse existing provider-neutral source object/version, audit, extraction, proposal and Review planes; add a native-source control plane only for bridge/account/bucket/configuration/run/checkpoint/watcher state.
+    basis: canonical decisions MYPA-NAPDCB-D-008 and D-009; AGENTS.md section 4
+    status: proposed_for_review
+  - id: WP12-D-004
+    decision: Keep the pull SourceProvider port mutation-free; native host observations enter through a distinct authenticated admission port and then the same source persistence plane.
+    basis: NAPDCB-AC-038, AC-039, AC-042 and AC-048
+    status: proposed_for_review
+  - id: WP12-D-005
+    decision: Use one source-built Swift package target with three read-only adapter protocols and synthetic implementations; no opaque binary, raw LaunchAgent, XPC service, NAS relay or SQLite.
+    basis: canonical architecture and rejected patterns
+    status: proposed_for_review
+  - id: WP12-D-006
+    decision: The current build creates simulation-only watcher/receipt types and tables plus a closed live-activation gate whose states exclude watching. It creates no live-attestation, authoritative-watcher or activation-receipt table/writer. A separately authorized future migration must introduce those with distinct ID kinds/types/FKs; simulation evidence is never convertible.
+    basis: NAPDCB-AC-023 and AC-024
+    status: proposed_for_review
+  - id: WP12-D-007
+    decision: Add a native sync job plane rather than make enrollment jobs nullable or overload Capture jobs.
+    basis: existing non-null aggregate ownership and YAGNI
+    status: proposed_for_review
+  - id: WP12-D-008
+    decision: Add only the Apple source configuration/status frontend module using the canonical React/TypeScript/Vite recommendation; omit service worker, offline Capture and all WP-10 behavior.
+    basis: NAPDCB-AC-001 and canonical frontend architecture; WP-10 deferral
+    status: proposed_for_review
+  - id: WP12-D-009
+    decision: Exact selection is the default; dynamic future buckets require a separate explicit revision.
+    basis: MYPA-NAPDCB-D-003/D-004 and NAPDCB-AC-007
+    status: accepted_product_contract
+  - id: WP12-D-010
+    decision: Use local configured timezone start-of-day, one server-issued immutable UTC cutoff, inclusive Mail bounds, overlap Calendar bounds through cutoff plus 90 days, and current Contacts membership.
+    basis: MYPA-NAPDCB-D-005/D-006 and NAPDCB-AC-009..015
+    status: accepted_product_contract
+  - id: WP12-D-011
+    decision: Store source content in a bounded provider-neutral version-evidence record linked to existing source object versions; telemetry, audit and receipts contain identifiers/counts/digests only.
+    basis: AC-040, AC-043, AC-044 and data-authority provenance contract
+    status: proposed_for_review
+  - id: WP12-D-012
+    decision: Conservative synthetic defaults are attachments excluded, bounded text, no external model eligibility, no purge and no live configuration.
+    basis: canonical recommended defaults for NAPDCB-OP-005/006/009
+    status: reversible_default
+  - id: WP12-D-013
+    decision: Mail live feasibility is a separate activation gate; failure may disable Mail without weakening Calendar/Contacts or authorizing legacy architecture.
+    basis: MYPA-NAPDCB-D-013
+    status: accepted_product_contract
+  - id: WP12-D-014
+    decision: Preserve one PR/one exact-head independent review per slice A-H; later commits invalidate prior review.
+    basis: AGENTS.md section 8.1
+    status: accepted
+  - id: WP12-D-015
+    decision: Execute slices in dependency order A, B, D, C, E, F, G, H. A criterion is discharged only in its final slice after every blocking dependency in gap-matrix.yaml is proven; foundation tests are partial evidence.
+    basis: corrective review B1
+    status: corrective_proposal_for_review
+  - id: WP12-D-016
+    decision: AC-024 authoritative watching and AC-047 live attestation remain NOT_RUN_OPERATOR_GATED. Repository work proves only that missing or synthetic signing, notarization, registration, compatibility, environment, scope, checkpoint or operator-authority evidence cannot cross the live gate.
+    basis: corrective review B2 and authorization boundary
+    status: corrective_proposal_for_review
+operator_decisions_remaining:
+  count: 10
+  ids:
+    - NAPDCB-OP-001
+    - NAPDCB-OP-002
+    - NAPDCB-OP-003
+    - NAPDCB-OP-004
+    - NAPDCB-OP-005
+    - NAPDCB-OP-006
+    - NAPDCB-OP-007
+    - NAPDCB-OP-008
+    - NAPDCB-OP-009
+    - NAPDCB-OP-010
+  effect: They block live scope, live Mail mechanism, final live limits/retention, signing/TCC, disclosure and production; they do not block synthetic repository implementation.

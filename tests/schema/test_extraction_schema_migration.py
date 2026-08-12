@@ -71,8 +71,8 @@ EXPECTED_SCHEMA = "knowledge"
 
 #: Restated, not imported. The knowledge revision's five, this revision's three,
 #: the audit revision's one, the enrollment-objects revision's one, the capture
-#: revision's five, and the proposal revision's seven, each against the revision
-#: that must create them and no other.
+#: revision's five, the proposal revision's seven, WP-12C's three, and WP-06's
+#: seven, each against the revision that must create them and no other.
 KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "7e5a1fb93d62": frozenset(
         {
@@ -142,6 +142,45 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "relationship_evidence_observations",
             "relationship_conversation_participants",
             "relationship_conversation_observations",
+        }
+    ),
+    "8c4d1e7a2b90": frozenset(
+        {
+            "source_version_evidence",
+            "native_bridges",
+            "native_bridge_observations",
+            "native_source_accounts",
+            "native_source_buckets",
+            "native_discovery_snapshots",
+            "native_configuration_revisions",
+            "native_configuration_buckets",
+            "native_sync_runs",
+            "native_bucket_runs",
+            "native_sync_jobs",
+            "native_checkpoints",
+            "source_observations",
+            "source_memberships",
+            "native_watcher_simulations",
+            "native_simulation_receipts",
+            "native_live_activation_gates",
+        }
+    ),
+    "9d5e2f7b4c61": frozenset(
+        {
+            "native_admission_authorities",
+            "native_preflight_observations",
+            "native_source_review_routes",
+        }
+    ),
+    "d2e3f4a5b6c7": frozenset(
+        {
+            "situations",
+            "frames",
+            "traces",
+            "projects",
+            "project_situations",
+            "relationship_events",
+            "pulse_items",
         }
     ),
 }

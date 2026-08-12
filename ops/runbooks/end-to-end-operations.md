@@ -284,11 +284,20 @@ Both processes were observed stopped, and no third signal was needed.
 
 ## One process, one principal — the limitation this sequence walked into
 
-`bootstrap.gateway.local_principal()` issues a **fresh** principal identifier per
-composition, and `apps/cli/invoke.py` composes a runtime per invocation. So each
-`invoke.py` run acts as a principal that has never existed before and holds no
-enrollment, and `authorize` reads the authorized scope from the enrollments that
-principal holds (`application/authorization.py`).
+*Superseded 2026-08-05 (WP-03, `PKL-MYPA-D-WP03-001`):
+`bootstrap.gateway.local_principal()` now derives its identifier from the fixed
+`LOCAL_OPERATOR_UUID` in `domain/identity/binding.py`, so every composition —
+including one CLI invocation after another — acts as **one** durable local
+operator, and the denials measured below would not recur. The paragraph is left
+standing because it records what this sequence observed at the head it ran
+against; `../../docs/operations/mcv-limitations.md` section 2 carries the
+current statement.*
+
+At that head, `bootstrap.gateway.local_principal()` issued a **fresh** principal
+identifier per composition, and `apps/cli/invoke.py` composes a runtime per
+invocation. So each `invoke.py` run acted as a principal that had never existed
+before and held no enrollment, and `authorize` reads the authorized scope from
+the enrollments that principal holds (`application/authorization.py`).
 
 Measured on the `08e7c81` run's `my_pa_end_to_end_runbook`, at head
 `af3d35efb9c0` — one of the **two** disposable databases this document spans, per

@@ -196,6 +196,63 @@ _FROZEN: Final[dict[str, dict[str, str]]] = {
     },
 }
 
+#: What WP-05's forward revision `b9a4ecdfac0b` adds to four of this revision's
+#: tables, listed here so the freeze can subtract them. This revision merged at
+#: WP-08, before the identity foundation existed, when `P00-OD-010` described a
+#: single local principal (`D-72`); it must keep emitting the pre-`principal_id`
+#: shape it merged with (`D-48`) even though the live declarations these tables
+#: are copied from now carry `principal_id`. The freeze is **purely
+#: subtractive**: for each table below it drops the `principal_id` column, its
+#: `principal_id_is_an_opaque_identifier` CHECK, and the named principal indexes
+#: `b9a4ecdfac0b` creates — and touches nothing this revision itself emitted. In
+#: particular `capture_assertions_by_version` (still `(version_id, state)` here)
+#: and `capture_review_decisions.principal_id` (which this revision *did* emit,
+#: because a decision records the deciding Principal) are left exactly as they
+#: were. `b9a4ecdfac0b` is what re-adds the four columns as an explicit forward
+#: `ALTER`.
+_WP05_PRINCIPAL_INDEXES: Final[dict[str, tuple[str, ...]]] = {
+    "capture_review_cases": ("capture_review_cases_by_principal",),
+    "capture_assertions": (
+        "capture_assertions_by_principal",
+        "capture_assertions_by_principal_version",
+    ),
+    "capture_assertion_spans": ("capture_assertion_spans_by_principal",),
+    "capture_promotion_receipts": ("capture_promotion_receipts_by_principal",),
+}
+_WP05_PRINCIPAL_CHECK: Final = "principal_id_is_an_opaque_identifier"
+
+
+def _freeze_out_wp05_principal(copy: Table) -> None:
+    """Remove WP-05's `principal_id` additions from one copied table in place.
+
+    Called on every copy `_historical_wp8_tables` builds. For the four tables in
+    `_WP05_PRINCIPAL_INDEXES` it discards the principal indexes `b9a4ecdfac0b`
+    creates, discards the `principal_id_is_an_opaque_identifier` CHECK, and
+    removes the `principal_id` column itself, so `create_all` emits the shape
+    this revision merged with rather than the shape the live declaration now
+    carries. For every other copy — including `capture_review_decisions`, whose
+    `principal_id` this revision *did* emit — it is a no-op.
+
+    Operating on the throwaway copy (never the shared declaration) is the same
+    discipline the `_FROZEN` closed-set replacement above keeps: the freeze is a
+    local subtraction, and the live tables the application reads and writes still
+    carry `principal_id`.
+    """
+    index_names = _WP05_PRINCIPAL_INDEXES.get(copy.name)
+    if index_names is None:
+        return
+    for index in [candidate for candidate in copy.indexes if candidate.name in index_names]:
+        copy.indexes.discard(index)
+    for constraint in [
+        candidate for candidate in copy.constraints if candidate.name == _WP05_PRINCIPAL_CHECK
+    ]:
+        copy.constraints.discard(constraint)
+    # `Table` exposes no public column removal; `_columns.remove` is how a copied
+    # column is dropped from a throwaway metadata, validated to leave the table
+    # otherwise intact (no FK or PK on any of the four names `principal_id`).
+    copy._columns.remove(copy.c.principal_id)
+
+
 #: The function both assertion-span triggers run, and the triggers themselves.
 #: Two triggers rather than one, on `D-98`'s measured grounds: an `AFTER INSERT`
 #: alone is satisfied by writing the rows and then removing the link.
@@ -298,6 +355,7 @@ def _historical_wp8_tables() -> list[Table]:
             copy.constraints.discard(constraint)
         for name, expression in replacements.items():
             copy.append_constraint(CheckConstraint(expression, name=name))
+        _freeze_out_wp05_principal(copy)
     return copies
 
 

@@ -100,7 +100,7 @@ from my_pa.domain.capture.submission import (
 from my_pa.domain.capture.version import ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.conversation.event import ConversationChannel, ConversationState
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -165,6 +165,28 @@ CAPABILITIES_AT_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset(
         "sources.list",
         "sources.metadata",
         "sources.status",
+    }
+)
+
+#: Exact delta between the frozen capture revision and the current head. This is
+#: historical migration evidence, so it is intentionally literal rather than
+#: derived from either live domain enum.
+CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset(
+    {
+        "capture.search",
+        "review.decide",
+        "review.list",
+        "native_sources.backfill",
+        "native_sources.configure",
+        "native_sources.disable",
+        "native_sources.discover",
+        "native_sources.pause",
+        "native_sources.preflight",
+        "native_sources.reconcile",
+        "native_sources.resume",
+        "native_sources.retry",
+        "native_sources.status",
+        "native_sources.sync",
     }
 )
 
@@ -242,6 +264,12 @@ CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
 
 PURPOSES_ADMITTED_AHEAD_OF_THE_DOMAIN: Final[frozenset[str]] = frozenset()
 
+HEAD_CAPABILITIES_DECLARED_BY_DOMAIN: Final[frozenset[str]] = frozenset(
+    capability.value
+    for capability_type in (Capability, NativeSourceCapability)
+    for capability in capability_type
+)
+
 #: The thirteen triggers `3c8f1e2a5b74` installs. Four sit on tables it does not
 #: create, which is what forward DDL is for: a trigger is not a `Table`
 #: attribute, so it changes nothing an already-merged revision emits.
@@ -296,6 +324,38 @@ RELATIONSHIP_TRIGGERS: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: The exact native-source trigger inventory added above this revision. Restated
+#: here so the global equality remains sensitive to both missing and unexpected
+#: triggers while this test continues to prove its original span-trigger claim.
+NATIVE_SOURCE_TRIGGERS: Final[frozenset[str]] = frozenset(
+    {
+        "source_version_evidence_is_append_only",
+        "native_bridge_observations_is_append_only",
+        "native_discovery_snapshots_is_append_only",
+        "native_configuration_revisions_is_append_only",
+        "native_configuration_buckets_is_append_only",
+        "native_sync_runs_is_append_only",
+        "native_bucket_runs_is_append_only",
+        "native_checkpoints_is_append_only",
+        "source_observations_is_append_only",
+        "source_memberships_is_append_only",
+        "native_watcher_simulations_is_append_only",
+        "native_simulation_receipts_is_append_only",
+        "native_live_activation_gates_is_append_only",
+        "native_checkpoint_requires_current_predecessor",
+        "native_simulation_requires_closed_transition",
+        "native_configuration_requires_bucket",
+        "native_configuration_bucket_matches_seal",
+        "source_observation_requires_matching_version",
+        "source_membership_requires_matching_contact_version",
+        "source_evidence_requires_matching_object_kind",
+        "native_account_requires_matching_provider",
+        "native_bucket_requires_account_and_parent_scope",
+        "native_bucket_run_requires_selected_bucket",
+        "native_simulation_receipt_requires_exact_evidence",
+    }
+)
+
 _CONSTRAINT = text(
     "SELECT pg_get_constraintdef(con.oid) FROM pg_constraint con "
     "JOIN pg_class rel ON rel.oid = con.conrelid "
@@ -320,7 +380,7 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
     (
         "audit_events",
         "capability_is_known",
-        frozenset(c.value for c in Capability) | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN,
+        HEAD_CAPABILITIES_DECLARED_BY_DOMAIN | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN,
     ),
     (
         "audit_events",
@@ -682,7 +742,7 @@ def test_downgrading_this_revision_restores_the_previous_vocabulary(
     try:
         command.upgrade(_config(), "head")
         assert _admitted(engine, "capability_is_known") == (
-            {c.value for c in Capability} | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+            HEAD_CAPABILITIES_DECLARED_BY_DOMAIN | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
         )
 
         command.downgrade(_config(), ENROLLMENT_OBJECTS_REVISION)
@@ -727,18 +787,19 @@ def test_stopping_at_the_capture_revision_emits_the_twelve_it_merged_with(
         assert not PROPOSAL_TABLES & _tables(engine)
 
         command.upgrade(_config(), "head")
-        admitted_at_head = {c.value for c in Capability} | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+        admitted_at_head = (
+            HEAD_CAPABILITIES_DECLARED_BY_DOMAIN | CAPABILITIES_ADMITTED_AHEAD_OF_THE_DOMAIN
+        )
         assert _admitted(engine, "capability_is_known") == admitted_at_head
         assert _tables(engine) >= PROPOSAL_TABLES
         # The two vocabularies differ by exactly the capability WP-7 added and
         # the two WP-8 capabilities widened by `3c8f1e2a5b74`, so the equality
         # above is a measurement rather than a tautology. The schema-ahead gap
         # is empty now that WP-8 has declared both names in the domain.
-        assert admitted_at_head - CAPABILITIES_AT_THE_CAPTURE_REVISION == {
-            "capture.search",
-            "review.decide",
-            "review.list",
-        }
+        assert (
+            admitted_at_head - CAPABILITIES_AT_THE_CAPTURE_REVISION
+            == CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION
+        )
 
         command.downgrade(_config(), "base")
     finally:
@@ -825,6 +886,7 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "a_span_link_leaves_its_proposal_cited",
             *REVIEW_TRIGGERS,
             *RELATIONSHIP_TRIGGERS,
+            *NATIVE_SOURCE_TRIGGERS,
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

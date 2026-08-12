@@ -39,7 +39,7 @@ Drive mirrors are review surfaces rather than a competing ledger.
 | Database container | `my-pa-postgres`, `postgres:17.10`, healthy | `docker ps` |
 | Database binding | `127.0.0.1:5433 -> 5432`, loopback only | `docker ps` port map |
 | Logical database | `my_pa` | `select current_database()` |
-| Alembic head | `7f2a9d6c4e18` in the repository, fourteen revisions; the canonical database remains at `6c4d3ea82f10` because every revision above it builds the `knowledge` schema, which runs only against disposable databases | `migrations/versions/*.py`, `select * from alembic_version` |
+| Alembic head | `d2e3f4a5b6c7` in the repository, twenty-one revisions; the canonical database remains at `6c4d3ea82f10` because every revision above it builds the `knowledge` schema, which runs only against disposable databases | `migrations/versions/*.py`, `select * from alembic_version` |
 | Extensions | `pg_trgm`, `unaccent`, `plpgsql` | `select extname from pg_extension` |
 
 ## 2. Verified corpus claim
@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-One hundred and nineteen Python modules under `src/my_pa` and one hundred and eight test modules —
+One hundred and thirty-five Python modules under `src/my_pa` and one hundred and twenty-two test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -89,7 +89,7 @@ section disagrees with the tree.
 | `domain/source`, `domain/extraction`, `domain/search` — registry, bounded enrollment, provider port, extraction outcomes, quarantine, coverage, search query | Implemented and tested |
 | `infrastructure/persistence` — registry, enrollment, jobs, extraction, quarantine, coverage, lexical search | Implemented; covered by the database tier |
 | `infrastructure/providers/fixture.py` — read-only fixture source provider | Implemented and tested |
-| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, the enrolled object set, relationship identity and profiles | Implemented, fourteen revisions, head `7f2a9d6c4e18` |
+| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, the enrolled object set, relationship identity and profiles, native-source control plane, identity user accounts and scope grants, per-Principal capture partitioning, per-Principal review/promotion partitioning | Implemented, twenty-one revisions, head `d2e3f4a5b6c7` |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
 All fifteen capability names, their operator-only flags, and their permitted
@@ -270,15 +270,19 @@ agent that did not author it.
     completion, so WP-11 remains dependency-blocked and its own pre-completion or
     post-completion placement is unresolved. `D-104` does not answer its active
     gates `NAR-OP-001` through `NAR-OP-009` or authorize any part of it.
-14. **WP-12 — Apple Mail, Calendar & Contacts.** Provisional only, sequenced
-    after WP-10 and WP-11 by the operator's 2026-08-04 clarification. Separate
-    operator authorization is required before implementation planning. It has
-    no pre-MCV or post-MCV disposition, and nothing in it is planned or built.
+14. **WP-12 — Apple Mail, Calendar & Contacts.** **Promoted ahead of deferred
+    WP-10 and WP-11 for bounded pre-completion implementation by direct operator
+    authorization `AUTH-WP12-20260804-OPERATOR-001` (`D-106`).** Its internal
+    dependency order is A, B, D, C, E, F, G, H. Slice A freezes repository truth,
+    the exact acceptance map, and source-built protocol-v1 feasibility contracts;
+    live Apple access, TCC, signing, activation, deployment, source mutation, and
+    risk acceptance remain prohibited.
 
 Items 4 through 14 restate section 12's sequence table, which is the authoritative
 one; `D-28` split WP-4, the Remote Quick Capture revision added WP-0R and
-WP-10, the Native Apple Reminders revision added WP-11, and `D-105` records the
-provisional WP-12. Section 7 originally stopped at WP-5, and listing only half
+WP-10, the Native Apple Reminders revision added WP-11, `D-105` records the
+historical provisional WP-12 state, and `D-106` records its later promotion.
+Section 7 originally stopped at WP-5, and listing only half
 the merge order was how a reader ended up consulting two tables that disagreed.
 
 ## 8. Boundaries held throughout
@@ -315,7 +319,7 @@ claim left visible.
 | D-05 | Corpus claim accepted | Recomputed from the live database, not restated. Exact match. | Verified |
 | D-06 | PDF remains `unsupported` | `P00-OD-003` is `OPEN_OPERATOR`. Reporting `unsupported` is the specified behavior; silently skipping is forbidden. | Accepted |
 | D-07 | Corrected in place: this document first said "five revisions" | The count came from a truncated directory listing. Recounted from `migrations/versions/*.py`: six, chained `5d75f23847c9 → 1e6c0a94f3b7 → 4b9f0d27ac31 → 2f7d1ba05c48 → 3a8e2cb16d59 → 6c4d3ea82f10`, the last creating target views, and the head matching `alembic_version` in the live database. The mechanism, not just the number, is fixed: the count is now stated with the head revision beside it, so a future drift between the files and the database is visible rather than latent. | Corrected |
-| D-08 | Terminal disposition cannot be reached in this scope | Plan §11 requires GoodNotes, frontend, and relationship acceptance criteria that D-03 and D-04 defer. The eventual terminal disposition must name the deferred set and must not assert `MYPA_CURRENT_PRODUCT_SCOPE_COMPLETE`. **Updated 2026-08-04:** the operator explicitly confirmed the MCV is not complete. `D-104` defers WP-10 until completion, while `D-105` provisionally sequences WP-12 after WP-10 and WP-11 without deciding whether those packages are pre-MCV or post-MCV. That boundary conflict remains open and prevents a completion-readiness claim. | MCV not complete; sequence boundary unresolved |
+| D-08 | Terminal disposition cannot be reached in this scope | Plan §11 requires GoodNotes, frontend, and relationship acceptance criteria that D-03 and D-04 defer. The eventual terminal disposition must name the deferred set and must not assert `MYPA_CURRENT_PRODUCT_SCOPE_COMPLETE`. **Updated 2026-08-04:** the operator explicitly confirmed the MCV is not complete. `D-104` defers WP-10 until completion. `D-105`'s provisional WP-12 sequence is historical and superseded by `D-106`, which promotes WP-12 ahead of WP-10/WP-11 without declaring MCV complete. `D-107` defines the future full-MVP handoff only after independent completion verification. | MCV not complete; WP-12 active; terminal declaration still reserved |
 
 ## 10. Carried forward
 
@@ -602,7 +606,7 @@ original rows above are what section 15's divergence 2 corrected.
 | WP-9 | Relationship identity and read-only profiles | WP-4B, WP-8 | No |
 | WP-10 | PWA capture surface and offline recovery — **deferred until after MCV completion by `D-104`; active gates `D-09`, `O-04`, and `O-20` remain** | WP-8 | **Yes** |
 | WP-11 | Native Apple Reminders execution projection, internal sequence `NAR-00` policy amendment, `NAR-01` EventKit feasibility proof, `NAR-02` domain and contracts, `NAR-03` application services, `NAR-04` signed native bridge, `NAR-05` creation and updates, `NAR-06` completion roundtrip, `NAR-07` conflicts and recovery, `NAR-08` security and operational proof — **dependency-blocked by deferred WP-10; its completion-boundary placement is unresolved; active gates `NAR-OP-001`–`NAR-OP-009` remain** | WP-10 | No |
-| WP-12 | Apple Mail, Calendar & Contacts — **provisional only; implementation planning requires separate operator authorization; no pre-MCV or post-MCV disposition** | WP-10, WP-11 | To be decided |
+| WP-12 | Apple Mail, Calendar & Contacts — **authorized before MCV completion under `AUTH-WP12-20260804-OPERATOR-001`; internal order A, B, D, C, E, F, G, H; live and extreme-risk actions remain excluded** | WP-9; WP-10/WP-11 remain deferred, not prerequisites | Slice G only |
 
 Two things about that table are worth stating rather than leaving to be inferred.
 
@@ -632,13 +636,19 @@ surface, so `D-09` does not reach it — but its declared WP-10 dependency makes
 its placement conflict with that deferral rather than proving a post-completion
 disposition. It also remains held by nine open operator decisions
 `NAR-OP-001` through `NAR-OP-009`, one of which is the EventKit permission grant
-and another the code-signing identity. WP-12 is provisional after WP-10 and
-WP-11, but planning it requires separate operator authorization and its MCV
-boundary is likewise unresolved. See `D-39`, `D-104`, and `D-105`; no package in
-that chain is silently reordered. The remaining
+and another the code-signing identity. `AUTH-WP12-20260804-OPERATOR-001` and
+`D-106` expressly promote WP-12 ahead of WP-10/WP-11 for bounded synthetic-only
+repository implementation; this reorders only WP-12 and does not reactivate the
+two deferred packages. The remaining
 frontend stages — Quick Capture `QC-05` through `QC-08`, and every responsive
 surface in the Relationship Intelligence specification — are not planned here
 and remain held.
+
+`D-107` records the next-campaign handoff without starting it: only after MCV
+completion is independently verified, a fresh orchestrator defines a
+comprehensive MVP `CAMPAIGN-BRIEF` and executes the full MVP, including WP-10
+and WP-11. That future instruction supplies no present authority to implement
+either package, declare MCV complete, deploy, or cross an operator-only gate.
 
 ### WP-4 — application services and transports
 
@@ -1341,7 +1351,9 @@ managed-document write and grants the source-provider port nothing.
 | D-103 | **The campaign briefing file named by the WP-8 execution directive is absent from repository history; execution uses the pasted operator directive plus repository authority** | A bounded repository/ref search found no `CAMPAIGN-BRIEF.md`. Its absence is a plan/reality discrepancy, not permission to invent its contents. The pasted directive supplies the campaign objective, operator delegation, single-worker constraint, exact-head review/merge gates, and prohibition on deployment. `AGENTS.md`, this plan's WP-8 section, ADR-003, and the mirrored Quick Capture specifications supply the implementation and acceptance criteria. The missing file therefore weakens provenance convenience but does not prevent safe acceptance mapping; exact implementation and review evidence remain bound to Git/CI and the governed external audit artifact | Recorded by WP-8. Invalidated if an authenticated byte-exact campaign brief is later recovered, at which point it must be reconciled rather than silently substituted |
 | D-104 | **WP-10 is deferred until MCV completion; WP-11 remains dependency-blocked on it** | Direct operator instruction on 2026-08-04: “defer wp-10 until mcv is complete.” This explicitly overturns `D-32`'s assumed placement of WP-10 inside the pre-completion sequence without lifting active WP-10 gates `D-09` and `O-04` or deciding `O-20`. WP-11's published sequence and this plan both make WP-10 its prerequisite, so WP-11 cannot run while WP-10 is deferred. The operator's later `D-105` clarification explicitly says the MCV is not complete and does not assign WP-11 to either side of the completion boundary. Its active gates `NAR-OP-001`–`NAR-OP-009` remain open. WP-0R through WP-9 are merged, but that fact is not a completion-readiness claim and does not resolve the sequence conflict, declare the MCV complete, assert `MYPA_CURRENT_PRODUCT_SCOPE_COMPLETE`, or authorize deployment. | Operator-directed; WP-10 deferred; WP-11 dependency-blocked; boundary unresolved |
 
-| D-105 | **Canonical version 2.3 is re-mirrored; Apple Mail, Calendar & Contacts yields provisional WP-12 with planning reserved to the operator** | `REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z` revised 17 of the canonical package's 21 numbered artifacts in place, preserved all 21 Drive identities and parent bindings, and took the package from 2.2 to 2.3. The publisher labels the Native Apple Personal Data Capture Bridge as conditional MCV scope and calls its sequence WP-12. Authority evidence is layered rather than identical: the numbered canonical artifacts carry their own implementation-not-granted blocks; the disposition denies implementation, live access, source mutation, deployment, production, and risk acceptance; the readback asserts only that implementation authority was not granted; and the publication and roundtrip receipts carry the fuller denial list covering live personal data, TCC/credential mutation, source mutation, deployment/watchers, production activation, external-model disclosure, destructive retention, and risk acceptance. The operator then clarified that the MCV is explicitly not complete and that WP-12 is provisional after WP-10 and WP-11; separate operator authorization is required before WP-12 implementation planning. The operator assigned WP-12 no pre-MCV or post-MCV disposition. Because `D-104` still defers WP-10 until completion and WP-11 depends on WP-10, the resulting completion-boundary conflict is recorded rather than resolved by inference. Nothing in WP-12 is planned, implemented, or authorized. | Re-mirrored; WP-12 provisional / `OPERATOR_AUTHORIZATION_REQUIRED`; boundary unresolved; no implementation authority |
+| D-105 | **Canonical version 2.3 is re-mirrored; Apple Mail, Calendar & Contacts yields provisional WP-12 with planning reserved to the operator** | `REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z` revised 17 of the canonical package's 21 numbered artifacts in place, preserved all 21 Drive identities and parent bindings, and took the package from 2.2 to 2.3. The publisher labels the Native Apple Personal Data Capture Bridge as conditional MCV scope and calls its sequence WP-12. Authority evidence is layered rather than identical: the numbered canonical artifacts carry their own implementation-not-granted blocks; the disposition denies implementation, live access, source mutation, deployment, production, and risk acceptance; the readback asserts only that implementation authority was not granted; and the publication and roundtrip receipts carry the fuller denial list covering live personal data, TCC/credential mutation, source mutation, deployment/watchers, production activation, external-model disclosure, destructive retention, and risk acceptance. The operator then clarified that the MCV is explicitly not complete and that WP-12 is provisional after WP-10 and WP-11; separate operator authorization is required before WP-12 implementation planning. The operator assigned WP-12 no pre-MCV or post-MCV disposition. Because `D-104` still defers WP-10 until completion and WP-11 depends on WP-10, the resulting completion-boundary conflict is recorded rather than resolved by inference. Nothing in WP-12 is planned, implemented, or authorized. | Historical state, superseded by the later direct authorization in `D-106`; retained as provenance |
+| D-106 | **WP-12 is promoted ahead of WP-10/WP-11 for bounded implementation before MCV completion** | Direct operator authorization `AUTH-WP12-20260804-OPERATOR-001` supersedes only WP-12's provisional sequencing and implementation hold. WP-10 remains deferred by `D-104`; WP-11 remains dependency-blocked on WP-10. WP-12 executes in reviewed slice order A, B, D, C, E, F, G, H against the exact 48-row `NAPDCB-AC-*` map. The authority permits repository planning and synthetic implementation but not live Apple or personal-data access, TCC/credential/entitlement changes, signing/notarization, installation or watcher activation, external-model disclosure, source mutation, destructive retention, deployment/production, or risk acceptance. Slice A freezes the map and protocol-v1 source boundary but discharges no final acceptance criterion. | Operator-directed; WP-12 active before MCV completion; WP-10/WP-11 remain deferred |
+| D-107 | **After independently verified MCV completion, a fresh orchestrator owns a comprehensive full-MVP campaign** | Direct operator instruction establishes a future handoff, not present implementation scope. After MCV completion has been independently verified, a fresh orchestration context must define a comprehensive MVP `CAMPAIGN-BRIEF` and execute the full MVP, explicitly including WP-10 and WP-11. Until that condition is met, this row does not start MVP, reactivate either package, declare MCV complete, authorize deployment, resolve their open product/operator gates, or relax `AGENTS.md` section 8.2. | Durable future handoff; condition not yet met; no current MVP execution authority |
 
 **Identifier reservation: `D-106` and `D-107` are not available, and the two
 corrections dated 2026-08-08 therefore mint no new row.** Parsed structurally at
@@ -1571,12 +1583,13 @@ in a package.
    date passed and that the MCV runs until the operator declares it complete,
    which is honest but is not a date. On 2026-08-04 the operator directed that
    WP-10 be deferred until after MCV completion. The operator then explicitly
-   confirmed the MCV is not complete and provisionally placed WP-12 after WP-10
-   and WP-11 without assigning that chain to either side of the MCV boundary.
-   WP-11 still depends on deferred WP-10. The resulting sequence conflict is
-   open: WP-0R through WP-9 being merged is not evidence that the repository is
-   ready for a completion decision. No date, terminal disposition, or boundary
-   resolution is inferred or drafted on the operator's behalf.
+   confirmed the MCV is not complete and later authorized WP-12 ahead of
+   deferred WP-10/WP-11 (`D-106`). WP-11 still depends on deferred WP-10.
+   WP-0R through WP-9 being merged is not evidence that the repository is ready
+   for a completion decision, and WP-12 authorization is not a completion
+   declaration. No date or terminal disposition is inferred. `D-107` governs
+   only the later handoff: after independent verification of MCV completion, a
+   fresh orchestrator defines and executes the comprehensive full-MVP campaign.
 
 2. **Whether promoted scope is still MCV.** `AGENTS.md` section 1 describes the
    objective as "one complete, read-only vertical slice." Quick Capture is not
@@ -2248,17 +2261,49 @@ deployment, production, and risk acceptance. The readback asserts only
 receipts carry the fuller denial list for implementation, live personal data,
 TCC/credential mutation, source mutation, deployment/watchers, production
 activation, external-model disclosure, destructive retention, and risk
-acceptance. The operator has nevertheless identified the feature as provisional
-WP-12 after WP-10 and WP-11, while reserving implementation planning to a
-separate authorization. This does not activate WP-12 or decide whether it is
-pre-MCV or post-MCV. `D-104` still defers WP-10 until MCV completion, and WP-11
-still depends on WP-10, so the chain now exposes an unresolved completion-boundary
-conflict. `D-105` records that conflict without reordering the packages or
-inferring authority. Nothing in WP-12 is planned or built.
+acceptance. The operator first identified the feature as provisional WP-12
+after WP-10 and WP-11, which `D-105` preserves as historical provenance. The
+later direct authorization `AUTH-WP12-20260804-OPERATOR-001` resolves that
+sequencing hold for WP-12 only: `D-106` promotes bounded synthetic repository
+implementation ahead of WP-10/WP-11. `D-104` still defers WP-10 until MCV
+completion, and WP-11 still depends on WP-10. Live Apple access,
+TCC/credentials, signing, installation/watcher activation, external disclosure,
+source mutation, destruction, deployment/production, and risk acceptance remain
+unauthorized. `D-107` separately records the future full-MVP handoff after
+independently verified MCV completion; it does not start that campaign now.
 
 The ten `NAPDCB-OP-001` through `NAPDCB-OP-010` decisions remain in the
 canonical package's own ledger. Like `NAR-OP-*`, they are excluded from section
 14's three-ledger counts and none is answered here.
+
+### WP-12C implementation checkpoint — 2026-08-05
+
+Slice C now has a bounded synthetic-only application admission and control
+implementation for its eleven final criteria. Its local PR-tier evidence is
+complete: 467 database/recovery/e2e tests passed against a separate disposable
+PostgreSQL 17 database, and 2,950 FAST tests passed. Slice C still requires a
+green PR rerun and independent review of the corrected exact head, so this
+checkpoint does not declare Slice C complete. The first independent review
+returned `BLOCK` with six findings; a corrective rereview found one call-order
+defect; the next precommit rereview passed pending database CI; and the PR source
+review then found request-ID and composite-locator binding defects. All reports
+remain preserved. A subsequent corrected-manifest review found that admission
+status could commit before response acceptance and final current-scope
+validation. The bounded correction now rejects response-identity mismatch
+before any write, commits reachable status atomically with final locked
+authority validation, consumption, and evidence, and records an operational
+preflight denial only after the same current-scope validation without consuming
+the authority. Focused unit and architecture regressions pass, the full Slice C
+admission schema file passes ten tests, and the exact database/recovery/e2e tier
+passes 467 tests against disposable PostgreSQL 17. A green PR-CI rerun remains
+mandatory. The correction also binds preflight to the exact request and `(kind,
+account, bucket)` locator, retains serialized scope/admission and durable exact
+authority, and repairs historical migration and disposable-test isolation
+without weakening the authority-to-audit foreign key. Native-host
+operation, baseline execution, watchers, frontend routes, live Apple access,
+and every other Slice E/F/G/H behavior remain absent or deferred. The
+machine-readable disposition is
+`.ai/goals/wp-12-apple-mcc/slice-c-implementation-checkpoint.json`.
 
 ### Invalidation
 

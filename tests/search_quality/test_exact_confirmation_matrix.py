@@ -64,11 +64,12 @@ from dataclasses import dataclass
 import pytest
 from sqlalchemy import Engine, and_, select, text, true
 from sqlalchemy.engine import Connection
-from tests.pipeline.conftest import save
+from tests.pipeline.conftest import PRINCIPAL_ID, save
 
 from my_pa.contracts.ports import CaptureSearchRequest
 from my_pa.domain.search.query import SearchQuery, SearchQueryError
 from my_pa.infrastructure.persistence import capture_search
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.tables import capture_versions
 
 pytestmark = pytest.mark.database
@@ -213,7 +214,7 @@ def _probe(connection: Connection, query: str) -> tuple[str | None, tuple[tuple[
             confirmation.label("confirmed"),
             capture_search._confirmation_needle(request).label("needle"),
         ).where(
-            *capture_search.capture_text_in_scope(),
+            *capture_search.capture_text_in_scope(capture_context(PRINCIPAL_ID)),
             capture_search.document_vector().bool_op("@@")(capture_search._tsquery(request)),
         )
     ).all()
@@ -336,7 +337,9 @@ def test_the_matrix_measures_the_statement_the_product_runs(engine: Engine) -> N
             request = CaptureSearchRequest(query=SearchQuery(query), limit=100)
             through_product = {
                 row.version_id
-                for row in connection.execute(capture_search.match_statement(request)).all()
+                for row in connection.execute(
+                    capture_search.match_statement(request, context=capture_context(PRINCIPAL_ID))
+                ).all()
             }
             _, rows = _probe(connection, query)
             confirmed = sum(1 for _, verdict in rows if verdict)
@@ -380,7 +383,7 @@ def test_a_document_that_matches_only_at_lexeme_granularity_is_still_removed(
             str(version)
             for version in connection.execute(
                 select(capture_versions.c.version_id).where(
-                    *capture_search.capture_text_in_scope(),
+                    *capture_search.capture_text_in_scope(capture_context(PRINCIPAL_ID)),
                     capture_search.document_vector().bool_op("@@")(
                         capture_search._tsquery(request)
                     ),
@@ -389,7 +392,9 @@ def test_a_document_that_matches_only_at_lexeme_granularity_is_still_removed(
         }
         confirmed = {
             str(row.version_id)
-            for row in connection.execute(capture_search.match_statement(request)).all()
+            for row in connection.execute(
+                capture_search.match_statement(request, context=capture_context(PRINCIPAL_ID))
+            ).all()
         }
 
     assert indexed == {exact.version_id, split.version_id}, (

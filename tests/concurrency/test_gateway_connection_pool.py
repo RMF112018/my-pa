@@ -261,7 +261,9 @@ def engines(disposable_database: str) -> Iterator[tuple[Engine, Engine]]:
     runtime = build_gateway_runtime(Settings(database_url=disposable_database))
     try:
         with runtime.work_engine.begin() as connection:
-            connection.execute(text("TRUNCATE knowledge.audit_events"))
+            connection.execute(
+                text("TRUNCATE knowledge.native_admission_authorities, knowledge.audit_events")
+            )
         yield runtime.work_engine, runtime.audit_engine
     finally:
         runtime.close()
@@ -279,7 +281,9 @@ def shared_engine(disposable_database: str) -> Iterator[Engine]:
     )
     try:
         with engine.begin() as connection:
-            connection.execute(text("TRUNCATE knowledge.audit_events"))
+            connection.execute(
+                text("TRUNCATE knowledge.native_admission_authorities, knowledge.audit_events")
+            )
         yield engine
     finally:
         engine.dispose()

@@ -59,12 +59,15 @@ _LABEL_PATTERN: Final = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9 _-]{0,63}\Z")
 class SourceProviderKind(StrEnum):
     """Which provider implementation serves a configured source.
 
-    One member, because one provider exists. A second arrives with the adapter
-    that implements it, not before it: an enum value with no implementation
-    behind it is a promise the registry cannot keep.
+    The Apple members are schema vocabulary for the bounded native-source
+    control plane. They do not imply a live adapter or permission grant; slice B
+    can persist synthetic source evidence while live composition remains absent.
     """
 
     FIXTURE = "fixture"
+    APPLE_MAIL = "apple_mail"
+    APPLE_CALENDAR = "apple_calendar"
+    APPLE_CONTACTS = "apple_contacts"
 
 
 class InvalidSourceLabelError(ValueError):

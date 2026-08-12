@@ -113,6 +113,7 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.jobs.worker import JobExecutionError, LeaseLostError
 from my_pa.infrastructure.persistence.capture_search import CAPTURE_VERSIONS, match_statement
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, LeasedJob, hold_lease
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.proposals import (
     OffsetMapping,
     StageOutcome,
@@ -784,12 +785,19 @@ def _index_digest(content_sha256: str, *, searchable: bool) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _Version:
-    """The version row this job is about, as the pipeline reads it."""
+    """The version row this job is about, as the pipeline reads it.
+
+    Carries the owner because the searchability confirmation below asks the
+    search plane a question, and under WP-03 the search plane answers only
+    within a Principal's partition — the pipeline asks as the version's owner,
+    which is the only Principal `QC-AC-050` promises findability to.
+    """
 
     version_id: str
     content: str
     content_sha256: str
     processing_policy: ProcessingPolicy
+    owner_principal_id: str
 
 
 def _read_version(connection: Connection, version_id: str) -> _Version | None:
@@ -798,6 +806,7 @@ def _read_version(connection: Connection, version_id: str) -> _Version | None:
             capture_versions.c.content,
             capture_versions.c.content_sha256,
             capture_versions.c.processing_policy,
+            capture_versions.c.owner_principal_id,
         ).where(capture_versions.c.version_id == version_id)
     ).one_or_none()
     if row is None:
@@ -807,6 +816,7 @@ def _read_version(connection: Connection, version_id: str) -> _Version | None:
         content=str(row.content),
         content_sha256=str(row.content_sha256),
         processing_policy=ProcessingPolicy(row.processing_policy),
+        owner_principal_id=str(row.owner_principal_id),
     )
 
 
@@ -847,7 +857,11 @@ def _is_searchable(connection: Connection, version: _Version) -> bool:
     "does some query match something". A version whose text yields no queryable
     term at all answers `False` rather than raising, and the stage records
     `PARTIAL` for it — which is the disclosed residue rather than a silent empty.
+
+    Asked as the version's owner: the search plane is Principal-partitioned
+    (WP-03), and findable-by-someone-else is not the property `P-16` confirms.
     """
+    context = capture_context(version.owner_principal_id)
     for word in version.content.split():
         candidate = word.strip(".,;:!?\"'()[]<>")
         if not candidate:
@@ -856,7 +870,7 @@ def _is_searchable(connection: Connection, version: _Version) -> bool:
             request = CaptureSearchRequest(query=SearchQuery(candidate), limit=1)
         except ValueError:
             continue
-        rows = connection.execute(match_statement(request)).all()
+        rows = connection.execute(match_statement(request, context=context)).all()
         if any(str(row.version_id) == version.version_id for row in rows):
             return True
     return False

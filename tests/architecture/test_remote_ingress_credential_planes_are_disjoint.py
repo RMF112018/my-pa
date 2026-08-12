@@ -1,13 +1,12 @@
 """The two credential planes stay disjoint, and the `D-15` pin stays pinned.
 
 **This module exists because of a discharge condition, not because of a rule.**
-WP-08's NOTE 1 records that `replayQueuedCaptures` compares an entry's stored
-`principalId` against a **rendered** identity (`currentPrincipalId`, a prop from
-a server render) while `httpCaptureTransport` posts with
-`credentials: "same-origin"` — so replay is checked against a costume and
-authenticated by whatever cookie the browser holds. Its recorded discharge
-condition is verbatim: *"this becomes release-blocking the moment two identities
-can hold sessions while the backend serves."*
+WP-08's NOTE 1 recorded that `replayQueuedCaptures` compared an entry's stored
+`principalId` against a rendered identity while the transport authenticated with
+the current cookie. The offline replay principal-isolation correction closes
+that gap with replay-time session introspection, an opaque check/send binding,
+and Principal-bound receipt verification. The `D-15` single-Principal pin still
+holds independently and is not weakened by that defense in depth.
 
 WP-10 mints credentials, which is the cheapest imaginable way to create that
 condition. The decision was to **avoid creating it**, and a decision that lives
@@ -24,7 +23,7 @@ avoidance is expressed here as four executable claims:
    cookie cannot become one.
 3. **The two schemes are mutually exclusive.** The bearer parser and the client
    parser each reject the other's scheme, read off the composition root itself.
-4. **`D-15`'s pin and WP-08's queue semantics are byte-unchanged.** Four web
+4. **`D-15`'s pin and the corrected queue semantics are change-detected.** Four web
    files carry the property that exactly one Principal is admissible under
    `local_operator` and that the offline queue behaves as WP-08 left it. Their
    SHA-256 digests are pinned here, so an edit to any of them fails the build and
@@ -86,8 +85,8 @@ INGRESS_MARKERS: Final = (
     "cclt_",
 )
 
-#: The four web files whose current behaviour this package depends on and does
-#: not touch. The digests are of the bytes at WP-10's base, `77c44c1`.
+#: The four web files whose current behaviour this package depends on. Queue
+#: hashes were deliberately re-derived for the replay Principal-isolation fix.
 #:
 #: * `synthetic.ts` holds `admissibleSyntheticPrincipals()`, the `D-15` narrowing
 #:   to exactly one Principal under `local_operator`;
@@ -102,8 +101,8 @@ INGRESS_MARKERS: Final = (
 PINNED: Final = {
     "lib/auth/synthetic.ts": "3d5c196ac3475433aa3a391507ded753b942d51f6b383180ae93db3c43d87f60",
     "lib/auth/mode.ts": "31a0c3322f0dd4751fd06841f54634825ead770ce5b3c654bdaef0d1ad0e04fc",
-    "lib/offline/replay.ts": "de89236c08200a143d5ee7ce9ba6f160176fe4173871ebc3a685e3172eb04af2",
-    "lib/offline/queue.ts": "f3153b70a39e1633ce6c4708c932beb35ed788030285d32e7ecf8f7608d9bc33",
+    "lib/offline/replay.ts": "d50531075de6019a5be503fb36fbfa0fb97faf42136fdd5fec6b85b167c51e5d",
+    "lib/offline/queue.ts": "c4bf1cd90ff88696583aa9e377eedcf1f3e16169868dee4e08ff711ae3792ead",
 }
 
 

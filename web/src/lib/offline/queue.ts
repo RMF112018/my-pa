@@ -14,14 +14,12 @@
  * statement cannot commit it.
  *
  * **The principal binding is immutable and is checked at replay, not at
- * enqueue.** `replay.ts` compares the Principal the surface was rendered for
- * against the entry's own and refuses when they differ. That is a rendered
- * identity, not the session that authenticates the replay — see the note on
- * `replayQueuedCaptures`, which states the limit rather than implying a stronger
- * check than the code performs. It quarantines; it does not
- * rebind, does not delete, and does not send. `quarantineForeignEntries` is the
- * same rule applied eagerly at a sign-in boundary so the state a person sees is
- * right before anything tries to replay.
+ * enqueue.** `replay.ts` resolves the current authenticated session immediately
+ * before replay and compares it with the entry owner before decryption. The
+ * rendered identity still selects the local key, but is not treated as session
+ * authority. A mismatch retains the ciphertext in `needs_reauth`; an entry
+ * foreign to the rendered surface is quarantined. Neither path rebinds, deletes,
+ * or sends the payload.
  *
  * **Deletion has two explicit authorities.** `deleteReplayed` requires a
  * verified server receipt. `deleteHeldByUser` requires the owning Principal and

@@ -62,6 +62,16 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
     /// A calendar read refused at one of the WP-17 bounds — the horizon, or an
     /// identity composition that would not fit.
     case calendarBoundRefused = "calendar_bound_refused"
+    /// A contacts mechanism that cannot satisfy WP-18's preconditions: it cannot
+    /// name the epoch its contact keys belong to, it cannot report group
+    /// membership, or it walked every container to answer a container-scoped
+    /// read. Nothing about the request can be fixed, which is why it is not
+    /// `malformedEnvelope`.
+    case contactsMechanismUnsupported = "contacts_mechanism_unsupported"
+    /// A contacts read refused at one of the WP-18 bounds — an identity
+    /// composition that would not fit, a membership list over the ceiling, or a
+    /// key set that is not the frozen minimum.
+    case contactsBoundRefused = "contacts_bound_refused"
     case unclassified = "unclassified"
 
     /// Classify without quoting. `filesystemFailure` carries an `errno`, and even
@@ -102,6 +112,11 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
                 self = .calendarMechanismUnsupported
             case .calendarHorizonExceeded, .calendarIdentityTooLong:
                 self = .calendarBoundRefused
+            case .contactsIdentityEpochUnavailable, .contactsMembershipUnavailable,
+                 .contactsUnboundedEnumeration:
+                self = .contactsMechanismUnsupported
+            case .contactsIdentityTooLong, .contactsGroupLimitExceeded, .contactsKeySetWidened:
+                self = .contactsBoundRefused
             case .inconsistentDiscovery, .inconsistentEnvelope, .invalidTimeRange,
                  .mismatchedSourceKind, .unknownBucket, .missingSyntheticPage,
                  .duplicateSyntheticPage, .invalidRecurrence, .recurrenceLimitExceeded,
@@ -109,7 +124,10 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
                  .mailDateBoundViolated, .mailContentInconsistent,
                  .calendarInvalidIdentityComponent, .calendarScheduleInconsistent,
                  .calendarUnknownTimezone, .calendarTruncationUndeclared,
-                 .calendarLifecycleInconsistent, .calendarHorizonViolated:
+                 .calendarLifecycleInconsistent, .calendarHorizonViolated,
+                 .contactsInvalidIdentityComponent, .contactsIdentityEpochMismatch,
+                 .contactsMembershipInconsistent, .contactsUnknownGroup,
+                 .contactsTruncationUndeclared:
                 self = .malformedEnvelope
             }
         case let provider as NativeProviderFailure:

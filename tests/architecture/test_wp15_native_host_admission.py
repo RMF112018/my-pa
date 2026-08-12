@@ -50,6 +50,19 @@ PROBE: Final = HOST / "Compatibility" / "AppleFrameworkCompatibilityProbe"
 #: **not** change is control 1's assertion: every Swift file under `native/`
 #: outside the compile-only probes still may name none of `MUTATING_APPLE_SURFACE`.
 CALENDAR_PROBE: Final = HOST / "Compatibility" / "AppleCalendarEventKitProbe"
+#: WP-18's Contacts shape probe. Held out of control 1's scan on exactly the
+#: terms `CALENDAR_PROBE` is: compile-only, a dependency of nothing, and **not
+#: excused** — `test_wp18_contacts_adapter.py` holds it to metatypes, key paths
+#: and unapplied method references, a closed set of store members, a closed
+#: import set, no instantiation, no authorization request, no mutating symbol and
+#: no content-bearing key, and re-derives this exemption set so that widening it
+#: again is itself measured.
+#:
+#: Adding it here is a widening of an exemption and is recorded as one, in
+#: `docs/campaign/WP-18-CONTACTS-ADAPTER-RECORD.md` §H. What did **not** change is
+#: control 1's assertion: every Swift file under `native/` outside the
+#: compile-only probes still may name none of `MUTATING_APPLE_SURFACE`.
+CONTACTS_PROBE: Final = HOST / "Compatibility" / "AppleContactsShapeProbe"
 MANIFEST: Final = HOST / "Package.swift"
 
 #: Every tree that runs in production. A wiring of the quarantined native plane
@@ -63,15 +76,32 @@ PRODUCTION_ROOTS: Final = ("src", "apps", "scripts", "migrations", "ops")
 PROBED_FRAMEWORKS: Final = ("EventKit", "Contacts", "MailKit", "ServiceManagement")
 
 
-def _without_comments(source: str) -> str:
-    """Drop whole-line comments, keeping string literals intact.
+#: A closed `/* … */` span, non-greedy so nested openers do not swallow code.
+BLOCK_COMMENT: Final = re.compile(r"/\*[\s\S]*?\*/")
 
-    Only whole-line comments are removed, so a DSN inside a string literal is
-    still visible to the credential scan below — which is the one place a literal
-    genuinely matters.
+
+def _without_comments(source: str) -> str:
+    """Drop comment text, keeping string literals — and code — intact.
+
+    Only whole-line `//` comments are removed, so a DSN inside a string literal
+    is still visible to the credential scan below — which is the one place a
+    literal genuinely matters.
+
+    Closed `/* … */` **spans** are blanked before that line filter rather than
+    their lines being dropped whole. Dropping the line was fail-open: a comment
+    that ends mid-line leaves code after it, so `/* shape */ <forbidden code>`
+    compiled and was invisible to every text guard here. WP-18's reviewer proved
+    it against this helper's copy in `test_wp18_contacts_adapter.py`, and the
+    helper is shared by WP-15 through WP-18, so all four are corrected together.
+    Blanking preserves newlines, and an opener with no closer still starts its
+    line with `/*` and is dropped as before.
     """
+    blanked = BLOCK_COMMENT.sub(
+        lambda match: "".join("\n" if character == "\n" else " " for character in match.group(0)),
+        source,
+    )
     return "\n".join(
-        line for line in source.splitlines() if not line.lstrip().startswith(("//", "*", "/*"))
+        line for line in blanked.splitlines() if not line.lstrip().startswith(("//", "*", "/*"))
     )
 
 
@@ -100,12 +130,15 @@ def _swift_outside_the_probe() -> tuple[Path, ...]:
     excused: `test_the_compatibility_probe_is_compile_only_and_never_linked_into_the_host`
     holds `PROBE` to metatype references, no instantiation and no TCC call, and
     `test_wp17_calendar_adapter.py::test_the_event_kit_probe_resolves_symbols_and_reaches_no_store`
-    holds `CALENDAR_PROBE` to the same standard.
+    holds `CALENDAR_PROBE` to the same standard, as
+    `test_wp18_contacts_adapter.py::test_the_contacts_probe_reaches_no_store_in_any_spelling`
+    does `CONTACTS_PROBE`.
     """
+    exempt = (PROBE, CALENDAR_PROBE, CONTACTS_PROBE)
     return tuple(
         path
         for path in _swift_files(HOST)
-        if PROBE not in path.parents and CALENDAR_PROBE not in path.parents
+        if not any(directory in path.parents for directory in exempt)
     )
 
 
@@ -145,8 +178,13 @@ def test_the_scan_is_reading_the_host_at_all() -> None:
     # Control 1's basis is strictly wider than the shipping directory, and the
     # compile-only probes — the only places the personal-data frameworks are
     # allowed — are the only things held out of it.
-    exempt = set(_swift_files(PROBE)) | set(_swift_files(CALENDAR_PROBE))
+    exempt = (
+        set(_swift_files(PROBE))
+        | set(_swift_files(CALENDAR_PROBE))
+        | set(_swift_files(CONTACTS_PROBE))
+    )
     assert len(_swift_files(CALENDAR_PROBE)) == 1
+    assert len(_swift_files(CONTACTS_PROBE)) == 1
     scanned = set(_swift_outside_the_probe())
     assert set(shipping) < scanned, "control 1's scan is no wider than Sources/AppleSourceHost"
     assert scanned.isdisjoint(exempt)

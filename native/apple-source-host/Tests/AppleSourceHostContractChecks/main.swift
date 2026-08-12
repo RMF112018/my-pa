@@ -67,7 +67,13 @@ struct AppleSourceHostContractChecks {
         try checkCalendarHorizonBoundsAndHonestTruncation()
         try checkCalendarCancellationSurvivesTheAdapterAndIsNotFilterable()
         try checkCalendarValueBoundsHoldOffTheWire()
-        print("AppleSourceHostContractChecks: PASS (30 checks)")
+        try checkContactsMinimumKeySetIsFrozenAndContentFree()
+        try checkContactsIdentityCarriesItsEpochAndIsBranchInjective()
+        try checkContactsContainerAndGroupMembershipSurvivesTheRead()
+        try checkContactsAuthorizationFailsClosedAndRevocationIsNotAStalePage()
+        try checkContactsPageBoundsAndHonestTruncation()
+        try checkContactsValueBoundsHoldOffTheWire()
+        print("AppleSourceHostContractChecks: PASS (36 checks)")
     }
 
     private static func require(_ condition: Bool, _ message: String) throws {
@@ -3348,6 +3354,731 @@ struct AppleSourceHostContractChecks {
         try requireDecodeFailure(
             NativeCalendarOccurrence.self,
             data: try mutatedJSON(legacy) { $0["lifecycle"] = nil }
+        )
+    }
+
+    // MARK: - WP-18 contacts
+    //
+    // Every value below is obviously synthetic and no contact belonging to
+    // anyone was read to write any of it. `Person Alpha` is not a person, and
+    // there is no field in any contacts type for a name, an address, a number or
+    // a photograph, so there is nothing here for a real one to be mistaken for.
+
+    private static let contactsEpoch = "epoch-one"
+
+    private static func contactsComponent(_ value: String) throws -> ContactsIdentityComponent {
+        try requireValue(
+            ContactsIdentityComponent(rawValue: value),
+            "The probe contacts identity component \(value) is not admissible"
+        )
+    }
+
+    private static func contactsContainer(_ account: String, _ container: String) throws
+        -> ContactsContainerIdentity {
+        ContactsContainerIdentity(
+            accountKey: try contactsComponent(account),
+            containerKey: try contactsComponent(container)
+        )
+    }
+
+    private static func contactsGroup(
+        _ account: String,
+        _ container: String,
+        _ group: String
+    ) throws -> ContactsGroupIdentity {
+        ContactsGroupIdentity(
+            container: try contactsContainer(account, container),
+            groupKey: try contactsComponent(group)
+        )
+    }
+
+    private static func contactsIdentity(
+        _ account: String,
+        _ container: String,
+        _ contact: String,
+        epoch: String = contactsEpoch
+    ) throws -> ContactIdentity {
+        ContactIdentity(
+            container: try contactsContainer(account, container),
+            identityEpoch: try contactsComponent(epoch),
+            contactKey: try contactsComponent(contact)
+        )
+    }
+
+    private static func contactsObservation(
+        container: String = "container-alpha",
+        contact: String,
+        epoch: String = contactsEpoch,
+        structuralType: ContactStructuralType = .person,
+        assurance: ContactIdentityAssurance = .stableWithinEpoch,
+        groups: [String] = []
+    ) throws -> ContactObservation {
+        try ContactObservation(
+            identity: try contactsIdentity("account-alpha", container, contact, epoch: epoch),
+            structuralType: structuralType,
+            identityAssurance: assurance,
+            groupKeys: try groups.map { try contactsComponent($0) },
+            observedKeys: ContactsMinimumKeySet.keys
+        )
+    }
+
+    /// Four observations in `Container Alpha` and one in `Container Beta`, the
+    /// last so that a mechanism which answers with another container's people
+    /// has something to leak that the adapter can catch.
+    ///
+    /// The three assurance answers are all present on purpose: a page in which
+    /// every record claims the strongest one would exercise nothing, and
+    /// `unknown` is the one a consumer must not be able to mistake for
+    /// `stableWithinEpoch`.
+    private static func contactsObservations(epoch: String = contactsEpoch) throws
+        -> [ContactObservation] {
+        [
+            try contactsObservation(
+                contact: "org-delta",
+                epoch: epoch,
+                structuralType: .organization,
+                groups: ["group-beta"]
+            ),
+            try contactsObservation(contact: "person-alpha", epoch: epoch, groups: ["group-alpha"]),
+            try contactsObservation(
+                contact: "person-beta",
+                epoch: epoch,
+                assurance: .unknown,
+                groups: ["group-alpha", "group-beta"]
+            ),
+            try contactsObservation(
+                contact: "person-gamma",
+                epoch: epoch,
+                assurance: .reMintedInThisEpoch
+            ),
+            try contactsObservation(
+                container: "container-beta",
+                contact: "person-epsilon",
+                epoch: epoch
+            ),
+        ]
+    }
+
+    private static func contactsDescriptor(
+        publishesIdentityEpoch: Bool = true,
+        publishesGroupMembership: Bool = true
+    ) -> ContactsMechanismDescriptor {
+        ContactsMechanismDescriptor(
+            mechanism: .fixtureSeeded,
+            publishesIdentityEpoch: publishesIdentityEpoch,
+            publishesGroupMembership: publishesGroupMembership,
+            requiresOperatorConsent: true
+        )
+    }
+
+    private static func contactsMechanism(
+        observations: [ContactObservation]? = nil,
+        epoch: String = contactsEpoch,
+        publishesIdentityEpoch: Bool = true,
+        publishesGroupMembership: Bool = true,
+        groups: [ContactsGroupDescriptor]? = nil
+    ) throws -> FixtureContactsMechanism {
+        try FixtureContactsMechanism(
+            descriptor: contactsDescriptor(
+                publishesIdentityEpoch: publishesIdentityEpoch,
+                publishesGroupMembership: publishesGroupMembership
+            ),
+            accounts: [
+                ContactsAccountDescriptor(
+                    accountKey: try contactsComponent("account-alpha"),
+                    displayLabel: "Account Alpha"
+                )
+            ],
+            containers: [
+                ContactsContainerDescriptor(
+                    identity: try contactsContainer("account-alpha", "container-alpha"),
+                    kind: .local,
+                    displayLabel: "Container Alpha",
+                    isSelectable: true
+                ),
+                ContactsContainerDescriptor(
+                    identity: try contactsContainer("account-alpha", "container-beta"),
+                    kind: .cardDAV,
+                    displayLabel: "Container Beta",
+                    isSelectable: true
+                ),
+            ],
+            groups: try groups ?? [
+                ContactsGroupDescriptor(
+                    identity: try contactsGroup("account-alpha", "container-alpha", "group-alpha"),
+                    displayLabel: "Group Alpha"
+                ),
+                ContactsGroupDescriptor(
+                    identity: try contactsGroup("account-alpha", "container-alpha", "group-beta"),
+                    displayLabel: "Group Beta"
+                ),
+                ContactsGroupDescriptor(
+                    identity: try contactsGroup("account-alpha", "container-beta", "group-gamma"),
+                    displayLabel: "Group Gamma"
+                ),
+            ],
+            observations: try observations ?? contactsObservations(epoch: epoch),
+            identityEpoch: try contactsComponent(epoch)
+        )
+    }
+
+    private static func contactsRequest(
+        container: String = "container-alpha",
+        limit: Int = 100,
+        cursor: NativeReadCursor? = nil
+    ) throws -> NativeReadRequest {
+        try NativeReadRequest(
+            bucketID: try contactsContainer("account-alpha", container).recordIdentifier(),
+            cursor: cursor,
+            limit: limit
+        )
+    }
+
+    private static func decodedObservation(_ record: NativeSourceRecord) throws
+        -> ContactObservation {
+        try JSONDecoder().decode(ContactObservation.self, from: Data(record.payload))
+    }
+
+    /// Control 1. The minimum key set, frozen, content-free, and **closed by the
+    /// type rather than by a refusal**.
+    ///
+    /// The strongest statement available here is not "a wider key set is
+    /// rejected" — it is that a wider key set has no spelling. The fetch-key
+    /// vocabulary is two cases and the minimum is all of them, so widening the
+    /// request and widening the vocabulary are one edit. The rest of this check
+    /// is what happens when somebody makes that edit off the wire instead.
+    private static func checkContactsMinimumKeySetIsFrozenAndContentFree() throws {
+        try require(
+            ContactsFetchKey.allCases.count == 2,
+            "The contacts fetch-key vocabulary is no longer two cases"
+        )
+        try require(
+            ContactsMinimumKeySet.keys == ContactsFetchKey.allCases,
+            "The minimum key set is no longer the whole fetch-key vocabulary, so there is now "
+                + "a key this package can ask for and does not"
+        )
+        try require(
+            ContactsFetchKey.allCases.map(\.rawValue)
+                == ["contact_identifier", "contact_structural_type"],
+            "The contacts fetch-key vocabulary drifted from the two frozen keys"
+        )
+        try require(
+            ContactsMinimumKeySet.isTheMinimum(ContactsMinimumKeySet.keys),
+            "The frozen minimum no longer recognises itself"
+        )
+        // Narrower and reordered are both refused. Narrower matters as much as
+        // wider: a record built from fewer keys than the contract names carries
+        // a field the consumer reads as absent when it was merely unfetched.
+        for wrong in [[ContactsFetchKey.identifier], [.structuralType, .identifier], []] {
+            try require(
+                !ContactsMinimumKeySet.isTheMinimum(wrong),
+                "The key set \(wrong.map(\.rawValue)) was accepted as the frozen minimum"
+            )
+            try requireError(.contactsKeySetWidened) {
+                try ContactsTraversalQuery(
+                    container: try contactsContainer("account-alpha", "container-alpha"),
+                    requestedKeys: wrong,
+                    afterCursorKey: nil,
+                    limit: 10
+                )
+            }
+            try requireError(.contactsKeySetWidened) {
+                try ContactObservation(
+                    identity: try contactsIdentity(
+                        "account-alpha", "container-alpha", "person-alpha"
+                    ),
+                    structuralType: .person,
+                    identityAssurance: .stableWithinEpoch,
+                    groupKeys: [],
+                    observedKeys: wrong
+                )
+            }
+        }
+
+        // The record the adapter actually produces. Its payload is asserted
+        // field by field rather than spot-checked, because "no content field"
+        // is a claim about the *whole* value and a spot check cannot make it.
+        let adapter = BoundedContactsReadAdapter(mechanism: try contactsMechanism())
+        let page = try adapter.readContacts(try contactsRequest())
+        try require(!page.records.isEmpty, "The contacts fixture read produced no record")
+        for record in page.records {
+            try require(
+                try decodedObservation(record).observedKeys == ContactsMinimumKeySet.keys,
+                "A contact observation declared a key set that is not the frozen minimum"
+            )
+            let payload = try jsonDictionary(
+                try JSONSerialization.jsonObject(with: Data(record.payload))
+            )
+            try require(
+                payload.keys.sorted() == [
+                    "groupKeys", "identity", "identityAssurance", "observedKeys", "structuralType",
+                ],
+                "A contact record's payload carries the fields \(payload.keys.sorted())"
+            )
+        }
+
+        // Off the wire, a content key is not a key this vocabulary can decode.
+        // The record would have to name it, and there is no case to name.
+        try requireDecodeFailure(
+            ContactsFetchKey.self,
+            data: Data(#""contact_email_address""#.utf8)
+        )
+        try requireDecodeFailure(
+            ContactObservation.self,
+            data: try mutatedJSON(try contactsObservation(contact: "person-alpha")) { object in
+                object["observedKeys"] = ["contact_identifier", "contact_email_address"]
+            }
+        )
+    }
+
+    /// Control 2. Identity is five levels, injective across the branch, and
+    /// carries the epoch it is only stable within — so an identifier that
+    /// changes produces a **visibly disjoint key space** rather than a second
+    /// record for the same person under a stable-looking key.
+    private static func checkContactsIdentityCarriesItsEpochAndIsBranchInjective() throws {
+        let account = ContactsAccountIdentity(accountKey: try contactsComponent("account-alpha"))
+        let container = try contactsContainer("account-alpha", "container-alpha")
+        // The same trailing key on both branches at the same depth. This is the
+        // collision the discriminator exists to prevent, and it is asserted
+        // rather than assumed.
+        let group = try contactsGroup("account-alpha", "container-alpha", "shared-key")
+        let contact = try contactsIdentity("account-alpha", "container-alpha", "shared-key")
+
+        let identifiers = [
+            try account.recordIdentifier().rawValue,
+            try container.recordIdentifier().rawValue,
+            try group.recordIdentifier().rawValue,
+            try contact.recordIdentifier().rawValue,
+        ]
+        try require(
+            Set(identifiers).count == 4,
+            "Two contacts identity levels compose to the same identifier"
+        )
+        try require(
+            identifiers.map { $0.filter { $0 == ":" }.count } == [0, 1, 3, 4],
+            "The contacts identity levels are no longer distinguished by their shape"
+        )
+        try require(
+            identifiers[1].hasPrefix(identifiers[0] + ":")
+                && identifiers[2].hasPrefix(identifiers[1] + ":")
+                && identifiers[3].hasPrefix(identifiers[1] + ":"),
+            "A contacts identity level is no longer a prefix of the level below it"
+        )
+        try require(
+            !identifiers[3].hasPrefix(identifiers[2]),
+            "A contact identifier is a prefix-extension of a group identifier, so a group and a "
+                + "contact at the same depth can be confused"
+        )
+        try require(
+            ContactsIdentityBranch.allCases.map(\.rawValue).sorted() == ["contact", "group"],
+            "The identity branch discriminator is no longer a closed two-member set"
+        )
+        try require(
+            ContactsIdentityComponent(rawValue: "container:alpha") == nil,
+            "A colon in a contacts identity component would make composition ambiguous"
+        )
+        // Refused, never trimmed: five maximum-length components genuinely
+        // exceed the opaque identifier's ceiling.
+        let longest = String(
+            repeating: "k",
+            count: NativeSourceProtocolV1.maximumContactsIdentityComponentBytes
+        )
+        try requireError(.contactsIdentityTooLong) {
+            try ContactIdentity(
+                container: ContactsContainerIdentity(
+                    accountKey: try contactsComponent(longest),
+                    containerKey: try contactsComponent(longest)
+                ),
+                identityEpoch: try contactsComponent(longest),
+                contactKey: try contactsComponent(longest)
+            ).recordIdentifier()
+        }
+
+        // Stability across reads, and visible change across an epoch. The second
+        // half is the one that matters: the key spaces must be **disjoint**, not
+        // overlapping, because a partial overlap is exactly the state in which a
+        // reconciler silently produces a duplicate person.
+        let adapter = BoundedContactsReadAdapter(mechanism: try contactsMechanism())
+        let first = try adapter.readContacts(try contactsRequest()).records.map(\.id.rawValue)
+        let again = try adapter.readContacts(try contactsRequest()).records.map(\.id.rawValue)
+        try require(first == again, "A contacts read produced different identifiers second time")
+
+        let reMinted = BoundedContactsReadAdapter(
+            mechanism: try contactsMechanism(epoch: "epoch-two")
+        )
+        let afterReMint = try reMinted.readContacts(try contactsRequest())
+        try require(
+            Set(afterReMint.records.map(\.id.rawValue)).isDisjoint(with: Set(first)),
+            "A re-minted epoch produced identifiers that overlap the previous epoch's, so a "
+                + "changed identifier is not detectable"
+        )
+        try require(
+            afterReMint.records.count == first.count,
+            "The re-minted read lost or gained a record"
+        )
+        try require(
+            afterReMint.records.allSatisfy { $0.sourceRevision == "epoch-two" },
+            "A contact record's revision is not the epoch its identity is keyed with"
+        )
+        try require(
+            afterReMint.records.allSatisfy { $0.sourceModifiedUnixMilliseconds == nil },
+            "A contact record carries a modification time the source does not publish"
+        )
+
+        // Assurance is carried per record, all three answers survive, and
+        // `unknown` is never rounded up to a claim the mechanism did not make.
+        try require(
+            ContactIdentityAssurance.allCases.count == 3,
+            "The identity assurance vocabulary is no longer three answers"
+        )
+        let assurances = try afterReMint.records.map { try decodedObservation($0).identityAssurance }
+        try require(
+            Set(assurances) == [.stableWithinEpoch, .unknown, .reMintedInThisEpoch],
+            "The read did not carry all three assurance answers through to the records"
+        )
+
+        // A mechanism that cannot name its epoch is refused rather than read
+        // from with a best guess, and one whose declared epoch disagrees with
+        // the keys it minted is caught.
+        try requireError(.contactsIdentityEpochUnavailable) {
+            try BoundedContactsReadAdapter(
+                mechanism: try contactsMechanism(publishesIdentityEpoch: false)
+            ).readContacts(try contactsRequest())
+        }
+        let drifting = try contactsMechanism()
+        drifting.setFault(.driftTheIdentityEpoch)
+        try requireError(.contactsIdentityEpochMismatch) {
+            try BoundedContactsReadAdapter(mechanism: drifting)
+                .readContacts(try contactsRequest())
+        }
+    }
+
+    /// Control 3. `account → container → group → contact` survives the read, in
+    /// the vocabulary the protocol already has, and membership is re-checked
+    /// against what discovery published rather than believed.
+    private static func checkContactsContainerAndGroupMembershipSurvivesTheRead() throws {
+        let mechanism = try contactsMechanism()
+        let adapter = BoundedContactsReadAdapter(mechanism: mechanism)
+
+        let snapshot = try adapter.discoverContactCollections()
+        try require(snapshot.kind == .contacts, "Contacts discovery returned the wrong kind")
+        try require(snapshot.accounts.count == 1, "Contacts discovery lost the account")
+        try require(snapshot.buckets.count == 5, "Contacts discovery lost a container or a group")
+        let containers = snapshot.buckets.compactMap { $0.parentID == nil ? $0 : nil }
+        let groups = snapshot.buckets.compactMap { $0.parentID == nil ? nil : $0 }
+        try require(containers.count == 2, "Contacts discovery lost a container")
+        try require(groups.count == 3, "Contacts discovery lost a group")
+        try require(
+            groups.allSatisfy { group in containers.contains { $0.id == group.parentID } },
+            "A discovered group names a container discovery did not report"
+        )
+        try require(
+            snapshot.buckets.allSatisfy { bucket in
+                snapshot.accounts.contains { $0.id == bucket.accountID }
+            },
+            "A discovered bucket names an account discovery did not report"
+        )
+        try require(
+            groups.allSatisfy { !$0.isSelectable } && containers.allSatisfy(\.isSelectable),
+            "A group became selectable, or a container stopped being; a bounded contacts read is "
+                + "scoped to a container and a group is a membership view of one"
+        )
+
+        // A group whose container was never published has no place in the tree,
+        // and is refused rather than attached to whichever container looks
+        // plausible.
+        try requireError(.contactsMembershipInconsistent) {
+            try BoundedContactsReadAdapter(
+                mechanism: try contactsMechanism(groups: [
+                    ContactsGroupDescriptor(
+                        identity: try contactsGroup(
+                            "account-alpha", "container-omega", "group-alpha"
+                        ),
+                        displayLabel: "Group Alpha"
+                    )
+                ])
+            ).discoverContactCollections()
+        }
+
+        // Membership survives to the record, including the two facts that are
+        // easiest to lose: a contact in more than one group, and a contact in
+        // none.
+        let page = try adapter.readContacts(try contactsRequest())
+        var memberships: [String: [String]] = [:]
+        for record in page.records {
+            let observation = try decodedObservation(record)
+            memberships[observation.identity.contactKey.rawValue] =
+                observation.groupKeys.map(\.rawValue)
+        }
+        try require(
+            memberships["person-beta"] == ["group-alpha", "group-beta"],
+            "A contact in two groups did not keep both memberships"
+        )
+        try require(
+            memberships["person-gamma"] == [],
+            "A contact in no group did not survive the read as a contact in no group"
+        )
+        try require(
+            memberships["org-delta"] == ["group-beta"],
+            "An organization row lost its membership"
+        )
+
+        // A membership naming a group nothing published is a dangling edge, and
+        // is refused.
+        mechanism.setFault(.claimAnUndeclaredGroup)
+        try requireError(.contactsUnknownGroup) {
+            try adapter.readContacts(try contactsRequest())
+        }
+        mechanism.setFault(.none)
+
+        // **Measured, not asserted.** A mechanism that discards membership is
+        // undetectable from the adapter — nothing downstream of a source can
+        // tell "in no group" from "I did not look" — so the two reads are
+        // compared directly. The suppressed page is well-formed, passes every
+        // check, and is missing a fact. That is the whole argument for the seam
+        // refusing a mechanism that cannot report membership at all.
+        mechanism.setFault(.forgetGroupMembership)
+        let suppressed = try adapter.readContacts(try contactsRequest())
+        mechanism.setFault(.none)
+        try require(
+            suppressed.records.map(\.id.rawValue) == page.records.map(\.id.rawValue),
+            "Suppressing membership changed which records were returned, so the comparison below "
+                + "is measuring something other than the membership"
+        )
+        try require(
+            try suppressed.records.allSatisfy { try decodedObservation($0).groupKeys.isEmpty },
+            "The suppressed page kept a membership"
+        )
+        try requireError(.contactsMembershipUnavailable) {
+            try BoundedContactsReadAdapter(
+                mechanism: try contactsMechanism(publishesGroupMembership: false)
+            ).readContacts(try contactsRequest())
+        }
+
+        // The membership ceiling refuses rather than shortening, and a
+        // membership list with no canonical order is refused too: two equal
+        // memberships must not encode two ways.
+        let overFull = try (0...NativeSourceProtocolV1.maximumContactGroupMemberships)
+            .map { try contactsComponent("group-\(String(format: "%03d", $0))") }
+        try requireError(.contactsGroupLimitExceeded) {
+            try ContactObservation(
+                identity: try contactsIdentity(
+                    "account-alpha", "container-alpha", "person-alpha"
+                ),
+                structuralType: .person,
+                identityAssurance: .stableWithinEpoch,
+                groupKeys: overFull,
+                observedKeys: ContactsMinimumKeySet.keys
+            )
+        }
+        for disordered in [["group-beta", "group-alpha"], ["group-alpha", "group-alpha"]] {
+            try requireError(.contactsMembershipInconsistent) {
+                try contactsObservation(contact: "person-alpha", groups: disordered)
+            }
+        }
+    }
+
+    /// Control 4. Authorization fails closed before any read, a refusal is a
+    /// **different value** from an empty container, and a grant withdrawn
+    /// mid-session refuses the next call rather than serving the last one again.
+    ///
+    /// The revocation half is the one WP-17 did not have to answer. A contacts
+    /// grant can be taken away in System Settings while this process is running,
+    /// and an adapter that consulted authorization once at construction would
+    /// keep reading afterwards. This one re-checks on every operation and holds
+    /// no state a revoked grant could leave behind.
+    private static func checkContactsAuthorizationFailsClosedAndRevocationIsNotAStalePage() throws {
+        let mechanism = try contactsMechanism()
+        let adapter = BoundedContactsReadAdapter(mechanism: mechanism)
+
+        try require(
+            ContactsAuthorizationState.allCases.count == 4,
+            "The contacts authorization vocabulary is no longer the four states macOS distinguishes"
+        )
+
+        for state in ContactsAuthorizationState.allCases where state != .authorized {
+            mechanism.setAuthorization(state)
+            mechanism.resetCallCounters()
+            try requireProviderFailure(.permissionDenied) {
+                try adapter.discoverContactCollections()
+            }
+            try requireProviderFailure(.permissionDenied) {
+                try adapter.readContacts(try contactsRequest())
+            }
+            try require(
+                mechanism.readCalls == 0,
+                "The adapter made \(mechanism.readCalls) reads with authorization \(state.rawValue)"
+            )
+            try require(
+                mechanism.authorizationCalls == 2,
+                "Authorization was not consulted once per operation"
+            )
+        }
+
+        // The other half, and the half that makes the first one mean something:
+        // an authorized read of a container that genuinely holds nobody produces
+        // a *page*. A refusal produces no page at all, because it throws.
+        mechanism.setAuthorization(.authorized)
+        let empty = try contactsMechanism(observations: [])
+        let emptyPage = try BoundedContactsReadAdapter(mechanism: empty)
+            .readContacts(try contactsRequest())
+        try require(
+            emptyPage.records.isEmpty && emptyPage.nextCursor == nil,
+            "An empty contacts container did not read as an empty page"
+        )
+
+        // **Revocation mid-session.** The first read is honest; the grant is
+        // withdrawn between the two calls; the second must throw. The fixture's
+        // own counter is what proves the mechanism was never asked a second
+        // time, so "no stale page was served" is a measurement rather than an
+        // argument about the adapter's source.
+        let revoking = try contactsMechanism()
+        let revokingAdapter = BoundedContactsReadAdapter(mechanism: revoking)
+        revoking.setFault(.revokeAuthorizationAfterTheFirstCheck)
+        revoking.resetCallCounters()
+        let served = try revokingAdapter.readContacts(try contactsRequest())
+        try require(!served.records.isEmpty, "The pre-revocation read returned nothing to go stale")
+        try require(revoking.contactCalls == 1, "The pre-revocation read did not reach the source")
+        let servedCalls = revoking.readCalls
+        for attempt in 1...2 {
+            try requireProviderFailure(.permissionDenied) {
+                try revokingAdapter.readContacts(try contactsRequest())
+            }
+            try require(
+                revoking.contactCalls == 1,
+                "Read attempt \(attempt) after revocation reached the source"
+            )
+        }
+        try requireProviderFailure(.permissionDenied) {
+            try revokingAdapter.discoverContactCollections()
+        }
+        try require(
+            revoking.readCalls == servedCalls,
+            "Discovery after revocation reached the source"
+        )
+    }
+
+    /// The page bounds, the honest truncation signal, and the mechanism faults
+    /// that exercise the adapter's re-checks rather than leaving them written.
+    private static func checkContactsPageBoundsAndHonestTruncation() throws {
+        let mechanism = try contactsMechanism()
+        let adapter = BoundedContactsReadAdapter(mechanism: mechanism)
+
+        var collected: [String] = []
+        var cursor: NativeReadCursor?
+        var pages = 0
+        repeat {
+            let page = try adapter.readContacts(try contactsRequest(limit: 2, cursor: cursor))
+            pages += 1
+            collected.append(contentsOf: page.records.map(\.id.rawValue))
+            cursor = page.nextCursor
+            try require(pages <= 8, "Paging the contacts fixture did not terminate")
+        } while cursor != nil
+        let whole = try adapter.readContacts(try contactsRequest())
+        try require(
+            collected == whole.records.map(\.id.rawValue),
+            "Paging in twos did not reproduce the single-page contacts read exactly"
+        )
+        try require(Set(collected).count == collected.count, "Paging returned a contact twice")
+        try require(whole.nextCursor == nil, "A complete contacts page still declared more available")
+        try require(
+            whole.records.allSatisfy { $0.kind == .contacts },
+            "A contact record was admitted under another source kind"
+        )
+        try require(
+            whole.records.count == 4,
+            "The container-scoped read returned \(whole.records.count) records; the other "
+                + "container's contact must not be in it"
+        )
+
+        for (fault, expected) in [
+            (FixtureContactsFault.declareEveryContainerSweep, NativeSourceContractError
+                .contactsUnboundedEnumeration),
+            (.returnKeysOutOfOrder, .nonCanonicalOrder),
+            (.claimMoreAvailableWithoutFillingThePage, .contactsTruncationUndeclared),
+            (.leakAnotherContainersContact, .unknownBucket),
+        ] {
+            mechanism.setFault(fault)
+            try requireError(expected) { try adapter.readContacts(try contactsRequest()) }
+        }
+        mechanism.setFault(.none)
+
+        // A container identifier the adapter cannot decompose is refused rather
+        // than guessed at.
+        try requireError(.contactsInvalidIdentityComponent) {
+            try adapter.readContacts(
+                try NativeReadRequest(bucketID: try opaque("account-alpha"), limit: 10)
+            )
+        }
+
+        // The page and cursor ceilings are the protocol's, not this adapter's,
+        // and they still refuse rather than clamp.
+        try requireError(.invalidPageLimit) {
+            try contactsRequest(limit: NativeSourceProtocolV1.maximumPageSize + 1)
+        }
+        try require(
+            NativeReadCursor(
+                rawValue: String(
+                    repeating: "c",
+                    count: NativeSourceProtocolV1.maximumCursorBytes + 1
+                )
+            ) == nil,
+            "The frozen cursor ceiling no longer refuses an over-long cursor"
+        )
+    }
+
+    /// Every contacts invariant, re-checked on the decode path.
+    ///
+    /// WP-15's lesson through WP-17's: a bound that exists only on an
+    /// initialiser holds for values built in Swift and not for the same values
+    /// arriving as JSON, which is the shape a host is actually handed.
+    private static func checkContactsValueBoundsHoldOffTheWire() throws {
+        let observation = try contactsObservation(
+            contact: "person-alpha",
+            groups: ["group-alpha", "group-beta"]
+        )
+
+        // A key set widened, narrowed, or merely reordered.
+        for keys in [
+            ["contact_identifier"],
+            ["contact_structural_type", "contact_identifier"],
+            [String](),
+        ] {
+            try requireDecodeFailure(
+                ContactObservation.self,
+                data: try mutatedJSON(observation) { $0["observedKeys"] = keys }
+            )
+        }
+        // A membership list that is unordered, repeated, or over the ceiling.
+        for groups in [
+            ["group-beta", "group-alpha"],
+            ["group-alpha", "group-alpha"],
+            (0...NativeSourceProtocolV1.maximumContactGroupMemberships)
+                .map { "group-\(String(format: "%03d", $0))" },
+        ] {
+            try requireDecodeFailure(
+                ContactObservation.self,
+                data: try mutatedJSON(observation) { $0["groupKeys"] = groups }
+            )
+        }
+        // An observation with no assurance at all. A consumer handed one would
+        // assume the strongest answer.
+        try requireDecodeFailure(
+            ContactObservation.self,
+            data: try mutatedJSON(observation) { $0["identityAssurance"] = nil }
+        )
+        // A component carrying the composition separator, off the wire.
+        try requireDecodeFailure(
+            ContactsIdentityComponent.self,
+            data: Data(#""container:alpha""#.utf8)
+        )
+        // A component over the frozen byte ceiling.
+        try requireDecodeFailure(
+            ContactsIdentityComponent.self,
+            data: Data(
+                "\"\(String(repeating: "k", count: NativeSourceProtocolV1.maximumContactsIdentityComponentBytes + 1))\""
+                    .utf8
+            )
         )
     }
 

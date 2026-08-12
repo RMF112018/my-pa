@@ -47,6 +47,18 @@ let package = Package(
             name: "AppleCalendarEventKitProbe",
             path: "Compatibility/AppleCalendarEventKitProbe"
         ),
+        // WP-18 Contacts shape probe. Same footing and the same reason: it
+        // imports Contacts so that every build re-proves the contacts read
+        // mechanism is *present* — which is what makes "operator-gated" a
+        // different statement from "does not exist" — while the shipping module
+        // keeps linking nothing. Also deliberately NOT a dependency of
+        // `AppleSourceHost`, because one contact store answers both the read
+        // methods and the request that saves, and the shipping module linking no
+        // Apple framework is WP-15's control 1, proved at link time.
+        .target(
+            name: "AppleContactsShapeProbe",
+            path: "Compatibility/AppleContactsShapeProbe"
+        ),
         .executableTarget(
             name: "AppleSourceHostContractChecks",
             dependencies: ["AppleSourceHost"],

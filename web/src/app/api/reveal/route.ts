@@ -1,31 +1,65 @@
 /**
- * Reveal — **not backend-backed at this head, and it says so.**
+ * Reveal — **backend-backed, and the three answers stay three answers.**
  *
- * Reveal answers "why am I seeing this?" with the evidence spans and derivation
- * trace behind a subject. `application/disclosure.py` is not that: it assembles
- * the mandatory disclosure envelope that accompanies every result, which is a
- * different artefact from a per-subject evidence traversal. No capability in the
- * v1 set takes a subject identifier and returns its derivation.
+ * This route answered `501 not_implemented` until WP-09, and the reason it gave
+ * was accurate at the time: no member of the v1 capability set took a subject
+ * identifier and returned its derivation. `knowledge.reveal` is that member now.
+ * It returns the evidence spans behind a subject, the versions their offsets are
+ * counted in, and the derivation trace from proposal through review case and
+ * decision to assertion and promotion receipt.
  *
- * The nearest real thing is `knowledge.read`, which returns one stored record
- * and its provenance inside a stated enrollment — and `/api/library` exposes it.
- * It is not Reveal: it needs a `kn_…` and an `enr_…` rather than an arbitrary
- * subject, and it answers about a record rather than about why a derived item was
- * surfaced. Routing Reveal at it would make this route claim to explain things it
- * had not explained, so it does not.
+ * **What this route must not flatten.** The backend distinguishes three
+ * outcomes, and a BFF that mapped them onto "some data or an error" would undo
+ * the whole point of the capability:
+ *
+ * * `evidence` — spans were found;
+ * * `no_evidence` — the scope was searched to completion and holds none;
+ * * `unavailable` — the scope **could not be searched**, because the subject
+ *   kind is outside this build's evidence model or a version's derivation has
+ *   not completed. It carries no rows, exactly like `no_evidence`, and is a
+ *   different answer.
+ *
+ * So `state` is passed through unchanged and the disclosure is built from the
+ * backend's own envelope, where an unavailable reveal already carries
+ * `coverage: "unavailable"` and `partial_result`. Nothing here derives a state
+ * by counting the arrays — that is the mistake the backend's typed outcome
+ * exists to make impossible, and repeating it here would reintroduce it one tier
+ * up.
+ *
+ * **A subject nobody owns is `404`, and so is a subject somebody else owns.**
+ * The gateway answers `not_found` for both, deliberately, so this route sees one
+ * status and cannot tell them apart either.
  *
  * The synthetic path still says plainly that the subject is a fixture. In a
  * default build there is no synthetic path and no explanation is manufactured.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
-import { notImplemented, resolveServing } from "@/lib/api/serving";
+import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
 
-const NO_CAPABILITY =
-  "Reveal has no backend capability. No member of the v1 capability set takes a subject " +
-  "identifier and returns its evidence spans and derivation trace; knowledge.read answers " +
-  "a different question and is exposed at /api/library instead.";
+const SCOPE = "reveal";
+
+/** The opaque-identifier shape the Python domain enforces, restated for early refusal. */
+const IDENTIFIER = /^[a-z]+_[A-Za-z0-9]{8,64}$/;
+
+/**
+ * The reveal document, in the shape the Python `RevealView` publishes.
+ *
+ * `proposed` and `accepted` are two arrays rather than one with a state field,
+ * because that is how the backend publishes them and because a renderer that had
+ * to consult a field to tell a candidate from a promoted fact is a renderer that
+ * can fail to.
+ */
+interface RevealResult {
+  readonly state: "evidence" | "no_evidence" | "unavailable";
+  readonly gap: string | null;
+  readonly subject_kind: string | null;
+  readonly spans: readonly unknown[];
+  readonly proposed: readonly unknown[];
+  readonly accepted: readonly unknown[];
+}
 
 export async function POST(request: NextRequest) {
   const guard = await requirePrincipal(request);
@@ -44,13 +78,44 @@ export async function POST(request: NextRequest) {
 
   const serving = resolveServing();
   if (serving.kind === "refused") return serving.response;
-  if (serving.kind === "backend") return notImplemented(`reveal:${subjectId}`, NO_CAPABILITY);
+  if (serving.kind === "synthetic") {
+    return NextResponse.json({
+      shape: "synthetic",
+      state: "unavailable",
+      reason:
+        "This item is a synthetic fixture created to exercise the shell. Its evidence was not " +
+        "searched, because there is none to search.",
+      disclosure: syntheticDisclosure(`${SCOPE}:${subjectId}`),
+    });
+  }
+
+  if (!IDENTIFIER.test(subjectId)) {
+    return NextResponse.json(
+      {
+        error: {
+          errorClass: "validation",
+          code: "invalid_identifier",
+          message: "subjectId must be an opaque identifier of the form prefix_suffix",
+        },
+      },
+      { status: 400 },
+    );
+  }
+
+  const outcome = await callGateway<RevealResult>(guard.principal, "knowledge.reveal", {
+    subject_id: subjectId,
+  });
+  if (!outcome.ok) return gatewayRefusal(`${SCOPE}:knowledge.reveal`, outcome.status, outcome.error);
 
   return NextResponse.json({
-    shape: "synthetic",
-    reason:
-      "This item is a synthetic fixture created to exercise the shell. When live sources are " +
-      "connected, Reveal will show the exact evidence spans and derivation trace behind it.",
-    disclosure: syntheticDisclosure(`reveal:${subjectId}`),
+    shape: "backend",
+    // Passed through, never recomputed. See the module docstring.
+    state: outcome.result.state,
+    result: outcome.result,
+    disclosure: backendDisclosure(
+      `${SCOPE}:knowledge.reveal`,
+      outcome.disclosure,
+      transportLimitations(),
+    ),
   });
 }

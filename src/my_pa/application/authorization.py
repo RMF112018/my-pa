@@ -62,6 +62,7 @@ from my_pa.application.commands import (
     ListSources,
     ReadCapture,
     ReadKnowledge,
+    RevealSubject,
     ReviseCapture,
     SearchCaptures,
     SearchKnowledge,
@@ -155,6 +156,7 @@ def _requested_scope(
             | ReadCapture()
             | ListCaptures()
             | SearchCaptures()
+            | RevealSubject()
             | ListReviewCases()
             | DecideReviewCase()
         ):

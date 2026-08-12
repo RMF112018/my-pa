@@ -38,6 +38,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
+from typing import Final
 
 import pytest
 
@@ -79,7 +80,18 @@ from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.capture.errors import CaptureConflictError
+from my_pa.domain.capture.pipeline import ProcessingState
 from my_pa.domain.capture.proposal import ProposalState, ProposalType, RiskClass
+from my_pa.domain.capture.reveal import (
+    EvidenceGap,
+    EvidenceState,
+    Reveal,
+    RevealedAssertion,
+    RevealedProposal,
+    RevealedSpan,
+    RevealedVersion,
+    RevealSubjectKind,
+)
 from my_pa.domain.capture.review import (
     Disposition,
     ReviewCase,
@@ -92,7 +104,7 @@ from my_pa.domain.capture.submission import CaptureReceipt
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
-from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
@@ -130,6 +142,42 @@ DEFAULT_LIMITS = EffectiveLimits(
 )
 
 
+#: The two subject prefixes the evidence model can be walked back from, written
+#: out here rather than imported from `infrastructure.persistence.reveal`: a fake
+#: that read the implementation's own map would agree with it however that map
+#: changed, which is the one thing a fake must not do.
+_REVEALABLE: Final[dict[IdKind, RevealSubjectKind]] = {
+    IdKind.CAPTURE: RevealSubjectKind.CAPTURE,
+    IdKind.ASSERTION: RevealSubjectKind.ASSERTION,
+}
+
+
+def _revealable_kind(subject_id: str) -> RevealSubjectKind | None:
+    """The subject kind this identifier names, or `None` for one not covered."""
+    kind, _ = parse_identifier(subject_id)
+    return _REVEALABLE.get(kind)
+
+
+def _evidence_state(
+    versions: tuple[RevealedVersion, ...],
+    spans: tuple[RevealedSpan, ...],
+    proposed: tuple[RevealedProposal, ...],
+    accepted: tuple[RevealedAssertion, ...],
+) -> tuple[EvidenceState, EvidenceGap | None]:
+    """Which of the three answers the rows in hand support, in the same order.
+
+    Evidence first, then the derivation gap, then `no_evidence` — restated here
+    rather than imported for the reason `_REVEALABLE` is restated: a fake that
+    called the implementation's own decision would agree with it by
+    construction, and the ordering is exactly what the tests are about.
+    """
+    if spans or proposed or accepted:
+        return EvidenceState.EVIDENCE, None
+    if not all(version.derivation_is_complete for version in versions):
+        return EvidenceState.UNAVAILABLE, EvidenceGap.DERIVATION_HAS_NOT_COMPLETED
+    return EvidenceState.NO_EVIDENCE, None
+
+
 @dataclass
 class World:
     """Everything the fake repositories know, in one mutable place."""
@@ -164,6 +212,18 @@ class World:
     capture_versions: list[CaptureVersion] = field(default_factory=list)
     capture_receipts: dict[str, CaptureReceipt] = field(default_factory=dict)
     capture_keys: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
+    #: The evidence plane, as the three collections a reveal traverses. Keyed by
+    #: `version_id` because that is what the rows are keyed by: a span is
+    #: measured against a version, a proposal is derived from one, and an
+    #: assertion is promoted from a proposal on one. `derivation_states` is the
+    #: `capture_stage_results` row for the proposal-persisting stage, absent when
+    #: that stage has not run — which is the distinction the fake exists to make
+    #: reachable, since "no evidence" and "the derivation has not finished" are
+    #: the same empty collections and different answers.
+    capture_spans: dict[str, tuple[RevealedSpan, ...]] = field(default_factory=dict)
+    capture_proposals: dict[str, tuple[RevealedProposal, ...]] = field(default_factory=dict)
+    capture_assertions: dict[str, tuple[RevealedAssertion, ...]] = field(default_factory=dict)
+    derivation_states: dict[str, ProcessingState] = field(default_factory=dict)
     review_cases: list[ReviewCase] = field(default_factory=list)
     review_decisions: list[ReviewDecision] = field(default_factory=list)
     audit: list[AuditEvent] = field(default_factory=list)
@@ -588,6 +648,130 @@ class _Captures(CaptureRepository):
             searchable_versions=len(in_scope),
             stored_versions=len(mine),
             truncated=len(found) > request.limit,
+        )
+
+    def reveal(self, subject_id: str, *, principal_id: str) -> Reveal | None:
+        """The evidence behind one subject, reproducing the rule and not the SQL.
+
+        Three rules, each reproduced rather than approximated, because each is
+        one this tier is meant to prove:
+
+        * a subject kind outside the covered two is an `unavailable` reveal and
+          never `None`, so "we do not cover that plane" cannot arrive as "no such
+          thing";
+        * a capture this principal does not own is `None`, the same value an
+          absent one yields, so a foreign identifier maps nothing;
+        * the state is decided from the rows in hand by the same three-way test
+          the store's traversal applies — evidence first, then the derivation
+          gap, and `no_evidence` only for a scope whose every version finished.
+
+        What this fake **cannot** prove is that the real statements are scoped at
+        the query rather than filtered afterwards. That claim is a property of
+        the SQL and belongs to `tests/database/test_reveal_isolation.py`, against
+        a server.
+        """
+        self._world.fail("reveal")
+        kind = _revealable_kind(subject_id)
+        if kind is None:
+            return Reveal(
+                subject_id=subject_id,
+                subject_kind=None,
+                state=EvidenceState.UNAVAILABLE,
+                gap=EvidenceGap.SUBJECT_KIND_NOT_COVERED,
+            )
+        if kind is RevealSubjectKind.ASSERTION:
+            return self._reveal_assertion(subject_id, principal_id=principal_id)
+        owner = self._world.captures.get(subject_id, (None, None))[0]
+        if owner != principal_id:
+            return None
+        versions = self._revealed_versions(subject_id, principal_id=principal_id)
+        version_ids = [version.version_id for version in versions]
+        spans = tuple(
+            span
+            for version_id in version_ids
+            for span in self._world.capture_spans.get(version_id, ())
+        )
+        proposed = tuple(
+            proposal
+            for version_id in version_ids
+            for proposal in self._world.capture_proposals.get(version_id, ())
+        )
+        accepted = tuple(
+            assertion
+            for version_id in version_ids
+            for assertion in self._world.capture_assertions.get(version_id, ())
+        )
+        state, gap = _evidence_state(versions, spans, proposed, accepted)
+        return Reveal(
+            subject_id=subject_id,
+            subject_kind=kind,
+            state=state,
+            gap=gap,
+            capture_id=subject_id,
+            versions=versions,
+            spans=spans,
+            proposed=proposed,
+            accepted=accepted,
+        )
+
+    def _reveal_assertion(self, assertion_id: str, *, principal_id: str) -> Reveal | None:
+        """One accepted record and what it rests on, inside the caller's partition."""
+        for version in self._world.capture_versions:
+            if version.owner_principal_id != principal_id:
+                continue
+            for assertion in self._world.capture_assertions.get(version.version_id, ()):
+                if assertion.assertion_id != assertion_id:
+                    continue
+                cited = set(assertion.span_ids)
+                versions = self._revealed_versions(version.capture_id, principal_id=principal_id)
+                return Reveal(
+                    subject_id=assertion_id,
+                    subject_kind=RevealSubjectKind.ASSERTION,
+                    state=EvidenceState.EVIDENCE,
+                    capture_id=version.capture_id,
+                    versions=tuple(
+                        candidate
+                        for candidate in versions
+                        if candidate.version_id == version.version_id
+                    ),
+                    spans=tuple(
+                        span
+                        for span in self._world.capture_spans.get(version.version_id, ())
+                        if span.span_id in cited
+                    ),
+                    proposed=tuple(
+                        proposal
+                        for proposal in self._world.capture_proposals.get(version.version_id, ())
+                        if proposal.proposal_id == assertion.proposal_id
+                    ),
+                    accepted=(assertion,),
+                )
+        return None
+
+    def _revealed_versions(
+        self, capture_id: str, *, principal_id: str
+    ) -> tuple[RevealedVersion, ...]:
+        """The caller's own versions of one capture, with their derivation state."""
+        mine = sorted(
+            (
+                version
+                for version in self._world.capture_versions
+                if version.capture_id == capture_id and version.owner_principal_id == principal_id
+            ),
+            key=lambda version: version.version_number,
+        )
+        latest = mine[-1].version_number if mine else None
+        return tuple(
+            RevealedVersion(
+                version_id=version.version_id,
+                capture_id=capture_id,
+                version_number=version.version_number,
+                is_current=version.version_number == latest,
+                content_sha256=version.content.digest,
+                recorded_at=version.recorded_at,
+                derivation_state=self._world.derivation_states.get(version.version_id),
+            )
+            for version in mine
         )
 
     def _head(self, capture_id: str, *, principal_id: str) -> CaptureVersion | None:

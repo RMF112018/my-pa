@@ -76,7 +76,21 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the fifteen capabilities.
+the sixteen capabilities.
+
+`entra` composes `entra_authenticator` instead and issues **no** process
+principal. Every request presents a bearer token, the token's validated
+`(tid, oid)` resolves through `PrincipalIdentityService` to that person's durable
+`principal_id`, and the `Principal` handed to the application is `OPERATOR` and
+authenticated — the same kind, for the same reason, so authorization semantics
+are identical to the loopback mode and only the identifier differs. Widening or
+narrowing authority was not part of turning authentication on, and a different
+kind would have done one or the other silently.
+
+`P00-OD-010` — which mechanism authenticates — is answered for the mechanism and
+still open for the activation: no tenant, application registration, or credential
+is configured here, and an unconfigured `entra` refuses to start rather than
+falling back (see `bootstrap.settings`).
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated

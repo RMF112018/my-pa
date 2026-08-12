@@ -59,6 +59,7 @@ from my_pa.domain.source.enrollment import Enrollment
 __all__ = [
     "Limitation",
     "disclosure_for",
+    "unavailable_disclosure",
     "unenrolled_disclosure",
 ]
 
@@ -99,6 +100,19 @@ class Limitation(StrEnum):
     #: "independently retrievable"; it is not *found*. Emitted from the two
     #: counts the search itself measured, never from a constant.
     CAPTURE_SEARCH_EXCLUDES_SUPERSEDED = "capture_search_covers_current_versions_only"
+    #: A reveal returns the *locator* of each citation and never the text it
+    #: covers. Unconditional on that capability because the property is: there
+    #: is no field a quote could go in. A caller acts on it by reading the
+    #: version through `capture.read`, under that capability's own audit event.
+    EVIDENCE_SPANS_CARRY_NO_QUOTED_TEXT = "evidence_spans_carry_offsets_and_digests_only"
+    #: **The token that makes "unavailable" different from "empty".** The scope
+    #: was not searched — a subject kind this evidence model does not cover, or
+    #: a version whose derivation has not completed — so the absence of results
+    #: is an absence of *searching*, and `INV-PKL-007` forbids reporting it as an
+    #: absence of evidence. Emitted only beside `CoverageState.UNAVAILABLE`, and
+    #: `Disclosure` refuses that state without `partial_result`, so a caller
+    #: that reads neither field still cannot receive a complete-looking answer.
+    EVIDENCE_SCOPE_WAS_NOT_SEARCHED = "evidence_scope_was_not_searched"
 
     # A truncated capture-search page emits `LISTING_HAS_NO_CONTINUATION` rather
     # than a token of its own. The fact is identical — this build issues no
@@ -248,6 +262,57 @@ def unenrolled_disclosure(
         truncation=truncation,
         limitations=tuple(sorted(token.value for token in dict.fromkeys(extra_limitations))),
         partial_result=truncation.is_truncated,
+        classification=Classification.PRIVATE_LOCAL,
+        cloud_eligible=False,
+    )
+
+
+def unavailable_disclosure(
+    observed_at: datetime,
+    *,
+    unavailable_evidence: tuple[str, ...],
+    trust_basis: tuple[str, ...],
+    extra_limitations: tuple[Limitation, ...] = (),
+) -> Disclosure:
+    """The envelope for an answer whose scope could not be searched.
+
+    **This is the envelope's half of "no empty-success for unavailable scope".**
+    A capability that could not search returns rows it does not have, so the
+    only thing distinguishing it from a genuine nothing is what the envelope
+    says — and three fields say it here rather than one, because a caller that
+    reads only one of them still cannot be misled:
+
+    * `coverage.state` is `UNAVAILABLE`, which `domain.common.coverage` puts in
+      the partition `INV-PKL-007` forbids collapsing into empty or complete;
+    * `partial_result` is `True`, which `Disclosure` *requires* for that state —
+      so an unavailable envelope claiming completeness is unconstructible rather
+      than merely discouraged;
+    * `unavailable_evidence` names what was not reached, from the caller's own
+      closed vocabulary. The field is `tuple[str, ...]` and so is exactly the
+      free-text shape `Limitation` exists to close, which is why every value
+      that reaches it comes from a closed enum in the layer above and never from
+      a message.
+
+    `EVIDENCE_SCOPE_WAS_NOT_SEARCHED` is added unconditionally, so the same fact
+    is also in the limitations a caller may already be rendering.
+    """
+    return Disclosure(
+        scope=Scope(),
+        coverage=Coverage(state=CoverageState.UNAVAILABLE),
+        freshness=Freshness(
+            observed_at=observed_at, state=FreshnessState.CURRENT_FOR_OBSERVED_VERSION
+        ),
+        trust=Trust(level=TrustLevel.SOURCE_ORIGINAL, basis=trust_basis),
+        limitations=tuple(
+            sorted(
+                token.value
+                for token in dict.fromkeys(
+                    (*extra_limitations, Limitation.EVIDENCE_SCOPE_WAS_NOT_SEARCHED)
+                )
+            )
+        ),
+        unavailable_evidence=tuple(sorted(dict.fromkeys(unavailable_evidence))),
+        partial_result=True,
         classification=Classification.PRIVATE_LOCAL,
         cloud_eligible=False,
     )

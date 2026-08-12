@@ -68,6 +68,7 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadKnowledge,
     Representation,
+    RevealSubject,
     ReviseCapture,
     SearchCaptures,
     SearchKnowledge,
@@ -279,6 +280,10 @@ def _search_captures(payload: Mapping[str, Any]) -> Command:
     return SearchCaptures(**payload)
 
 
+def _reveal_subject(payload: Mapping[str, Any]) -> Command:
+    return RevealSubject(**payload)
+
+
 def _list_review_cases(payload: Mapping[str, Any]) -> Command:
     return ListReviewCases(**payload)
 
@@ -309,6 +314,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.SOURCES_ENROLL: _enroll_source,
         Capability.KNOWLEDGE_SEARCH: _search_knowledge,
         Capability.KNOWLEDGE_READ: _read_knowledge,
+        Capability.KNOWLEDGE_REVEAL: _reveal_subject,
         Capability.CAPTURE_CREATE: _create_capture,
         Capability.CAPTURE_REVISE: _revise_capture,
         Capability.CAPTURE_READ: _read_capture,
@@ -325,7 +331,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the fifteen names nothing.
+    not one of the sixteen names nothing.
     """
     try:
         return Capability(capability)

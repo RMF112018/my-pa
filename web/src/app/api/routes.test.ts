@@ -7,9 +7,10 @@
  *
  * 1. **No core route serves fixture data with the synthetic switch unset.** Not
  *    "returns a labelled fixture" — returns none at all. The four routes that
- *    have no backend capability answer `not_implemented`, the four that have one
+ *    have no backend capability answer `not_implemented`, the five that have one
  *    answer from the gateway, and the fixture functions themselves refuse to
- *    produce a value.
+ *    produce a value. Reveal moved from the first group to the second at WP-09,
+ *    when `knowledge.reveal` gave it a capability to reach.
  * 2. **Disclosure accuracy, in both directions.** A backend-served route never
  *    carries `coverage: "synthetic"` or `authority: "synthetic_fixture"`, and a
  *    synthetic-served route always carries both. Asserting only the first
@@ -159,7 +160,6 @@ describe("a default build produces no fixture data at all", () => {
       await pulse(get(cookie, "/api/pulse")),
       await situations(get(cookie, "/api/situations")),
       await projects(get(cookie, "/api/projects")),
-      await reveal(post(cookie, "/api/reveal", { subjectId: "anything" })),
       await timeline(get(cookie, "/api/relationships/p/timeline"), {
         params: Promise.resolve({ personId: "p" }),
       }),
@@ -179,6 +179,7 @@ describe("a default build produces no fixture data at all", () => {
       await system(get(cookie, "/api/system")),
       await library(get(cookie, "/api/library")),
       await reviewList(get(cookie, "/api/review")),
+      await reveal(post(cookie, "/api/reveal", { subjectId: "cap_aaaaaaaa11111111" })),
     ];
     for (const response of responses) {
       expect(response.status).toBe(200);
@@ -188,6 +189,7 @@ describe("a default build produces no fixture data at all", () => {
       "http://127.0.0.1:8000/v1/capabilities.get",
       "http://127.0.0.1:8000/v1/capture.list",
       "http://127.0.0.1:8000/v1/review.list",
+      "http://127.0.0.1:8000/v1/knowledge.reveal",
     ]);
   });
 
@@ -226,6 +228,108 @@ describe("disclosure accuracy, in both directions", () => {
     const pulseBody = await (await pulse(get(cookie, "/api/pulse"))).json();
     expect(pulseBody.disclosure.coverage).toBe("synthetic");
     expect(pulseBody.disclosure.authority).toBe("synthetic_fixture");
+  });
+});
+
+describe("Library distinguishes an unavailable scope from an empty one", () => {
+  /** The gateway envelope for a scope that could not be searched. */
+  const UNAVAILABLE_DISCLOSURE = {
+    ...DISCLOSURE,
+    coverage: { state: "unavailable" },
+    partial_result: true,
+    limitations: ["evidence_scope_was_not_searched"],
+  };
+
+  function stubGatewayWith(result: unknown, disclosure: unknown) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        sent.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
+        return new Response(JSON.stringify({ result, disclosure }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+  }
+
+  it("says `unavailable` for a scope the backend could not search", async () => {
+    const cookie = await signIn();
+    stubGatewayWith({ captures: [] }, UNAVAILABLE_DISCLOSURE);
+    const body = await (await library(get(cookie, "/api/library"))).json();
+    expect(body.state).toBe("unavailable");
+    expect(body.disclosure.coverage).toBe("unavailable");
+  });
+
+  it("says `results` for the identical empty page over a scope that was searched", async () => {
+    const cookie = await signIn();
+    stubGatewayWith({ captures: [] }, DISCLOSURE);
+    const body = await (await library(get(cookie, "/api/library"))).json();
+    // The same empty `captures` as the test above, and a different answer.
+    expect(body.result.captures).toEqual([]);
+    expect(body.state).toBe("results");
+    expect(body.disclosure.coverage).not.toBe("unavailable");
+  });
+});
+
+describe("Reveal carries the backend's own outcome, and does not recompute one", () => {
+  /** An unavailable reveal: no rows, and a state that is not "found nothing". */
+  const UNAVAILABLE = {
+    state: "unavailable",
+    gap: "derivation_has_not_completed_for_every_version",
+    subject_kind: "capture",
+    capture_id: "cap_aaaaaaaa11111111",
+    versions: [],
+    spans: [],
+    proposed: [],
+    accepted: [],
+    versions_with_completed_derivation: 0,
+  };
+
+  it("passes an unavailable state through rather than deriving one from empty arrays", async () => {
+    const cookie = await signIn();
+    stubGateway(UNAVAILABLE);
+    const response = await reveal(
+      post(cookie, "/api/reveal", { subjectId: "cap_aaaaaaaa11111111" }),
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    // The route did not turn "we could not search" into "here is nothing".
+    expect(body.state).toBe("unavailable");
+    expect(body.result.gap).toBe("derivation_has_not_completed_for_every_version");
+    expect(body.shape).toBe("backend");
+  });
+
+  it("keeps `no_evidence` distinct from `unavailable` over identical empty rows", async () => {
+    const cookie = await signIn();
+    stubGateway({ ...UNAVAILABLE, state: "no_evidence", gap: null });
+    const body = await (
+      await reveal(post(cookie, "/api/reveal", { subjectId: "cap_aaaaaaaa11111111" }))
+    ).json();
+    // Same arrays as the test above, different answer.
+    expect(body.result.spans).toEqual([]);
+    expect(body.state).toBe("no_evidence");
+    expect(body.result.gap).toBeNull();
+  });
+
+  it("refuses a subject identifier that is not opaque, before any request is sent", async () => {
+    const cookie = await signIn();
+    stubGateway(UNAVAILABLE);
+    const response = await reveal(post(cookie, "/api/reveal", { subjectId: "../../etc/passwd" }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("invalid_identifier");
+    expect(sent).toEqual([]);
+  });
+
+  it("sends the session-derived principal and never one the body names", async () => {
+    const cookie = await signIn();
+    stubGateway(UNAVAILABLE);
+    const response = await reveal(
+      post(cookie, "/api/reveal", { subjectId: "cap_aaaaaaaa11111111", principal_id: FOREIGN }),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("caller_supplied_principal");
+    expect(sent).toEqual([]);
   });
 });
 

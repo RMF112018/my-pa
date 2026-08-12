@@ -120,8 +120,8 @@ jobs:
             docs/00_REPOSITORY_SOURCE_INDEX.md
             docs/governance/GOVERNANCE-AUDIT-MYPA-MCV-20260730.md
           if-no-files-found: error
-      retention-days: 7
-      include-hidden-files: true
+          retention-days: 7
+          include-hidden-files: true
 
   web-security:
     runs-on: ubuntu-latest

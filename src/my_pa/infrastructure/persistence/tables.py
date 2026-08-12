@@ -87,6 +87,7 @@ from my_pa.domain.capture.classification import (
     EntityType,
     ResolutionState,
 )
+from my_pa.domain.capture.client import ClientState
 from my_pa.domain.capture.context import (
     ContextLinkAuthority,
     ContextLinkRole,
@@ -1131,6 +1132,46 @@ capture_jobs = Table(
     ),
     Index("capture_jobs_by_state", "state", "created_at"),
     Index("capture_jobs_by_principal_claim_order", "principal_id", "state", "created_at"),
+)
+
+#: One row per registered remote capture client (WP-10).
+#:
+#: **The table is the binding.** A client row names exactly one `principal_id`
+#: and there is no column that could name a second, so "a client credential
+#: cannot capture on behalf of another Principal" is a property of the schema
+#: rather than of a predicate somebody remembered to write. It is partitioned on
+#: that same column, so every operator-facing read of the plane goes through
+#: `principal_scope` like the rest of the capture plane.
+#:
+#: **`secret_sha256` and nothing else.** There is no plaintext column, no
+#: reversible encoding, and no `last_used_at` — the first because a stored secret
+#: is a stolen secret, the last because it would be a per-request write on the
+#: ingress path recording when a device was used, which is behavioural metadata
+#: this build has no use for and `SECURITY.md` would rather not hold.
+#:
+#: **Revocation is a state, not a delete.** `state` closes to `ClientState` and
+#: `revoked_at` is `NOT NULL` exactly when the state is `revoked`, so a revoked
+#: row cannot lose the fact of when it happened and an active row cannot claim
+#: one. A deleted row would make "revoked" and "never registered" the same
+#: observation for an operator reading the table.
+capture_clients = Table(
+    "capture_clients",
+    METADATA,
+    Column("client_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("secret_sha256", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("revoked_at", DateTime(timezone=True)),
+    _is_identifier("client_id", IdKind.CAPTURE_CLIENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("state", ClientState, name="capture_client_state_is_known"),
+    _matches("secret_sha256", DIGEST_PATTERN.pattern, name="client_secret_is_a_sha256_digest"),
+    CheckConstraint(
+        f"(state = '{ClientState.REVOKED.value}') = (revoked_at IS NOT NULL)",
+        name="a_client_is_revoked_exactly_when_it_records_a_revocation",
+    ),
+    Index("capture_clients_by_principal", "principal_id", "created_at", "client_id"),
 )
 
 #: `P-02`'s output: the conservative processing text and the mapping that takes

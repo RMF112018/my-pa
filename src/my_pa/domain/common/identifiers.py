@@ -44,6 +44,12 @@ class IdKind(StrEnum):
     CAPTURE_VERSION = "capver"
     RECEIPT = "rcpt"
     SUBMISSION = "sub"
+    #: A registered remote capture client (WP-10). Its own prefix rather than a
+    #: reuse of `PRINCIPAL`, because a client is a credential bearer bound to a
+    #: Principal and not a Principal: one prefix for both would make a stored
+    #: reference ambiguous about which of the two it names, and the binding is
+    #: exactly the distinction that must stay legible.
+    CAPTURE_CLIENT = "cclt"
     #: The capture *processing* plane: what the pipeline derived from a stored
     #: version. Each is its own prefix rather than a shared `derived_` one,
     #: because an audit row or a stored reference has to say which record it

@@ -68,8 +68,7 @@ from my_pa.domain.capture.submission import (
     CaptureKind,
     CaptureMethod,
     CaptureReceipt,
-    CaptureTransport,
-    TrustState,
+    trust_state_for,
 )
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
@@ -243,9 +242,16 @@ def admit_capture(
             request_id=request.request_id,
             correlation_id=request.correlation_id,
             principal_id=request.principal_id,
-            transport=CaptureTransport.LOCAL.value,
+            # Provenance, taken from the request rather than asserted here. The
+            # transport is established by the composition root; the trust state
+            # is *derived* from it by `trust_state_for` rather than passed
+            # beside it, so no writer can store `remote_client` alongside
+            # `local_principal`. Everything else about this INSERT — and every
+            # other statement in this function — is identical for a remote and a
+            # local submission, which is the whole of "one durable transaction".
+            transport=request.transport.value,
             capture_method=CaptureMethod.TYPED_TEXT.value,
-            trust_state=TrustState.LOCAL_PRINCIPAL.value,
+            trust_state=trust_state_for(request.transport).value,
             payload_sha256=payload_digest,
             client_created_at=request.client_created_at,
             server_received_at=request.server_received_at,

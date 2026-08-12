@@ -91,6 +91,12 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
     {
         "infrastructure/jobs/capture_pipeline.py",
         "infrastructure/persistence/capture.py",
+        # WP-10's client plane. Three of its four statements reach the partition
+        # — the insert through `principal_bound_values`, the revoke through
+        # `partition_criterion`, the listing through `principal_scoped`. The
+        # fourth is `authenticate_client`, which is registered below for the
+        # reason `jobs.job_principal` is: it *derives* the Principal.
+        "infrastructure/persistence/capture_clients.py",
         "infrastructure/persistence/capture_search.py",
         # Both job queues gained `principal_id` at revision `4f1a8b6d92e3`; the
         # dequeue and the reap carry the partition and the enqueue stamps it
@@ -204,6 +210,14 @@ PER_MODULE_ONLY: Final = {
         "the max-version-number subquery — carry the partition through an "
         "idempotency key or a version identifier instead of `principal_scoped`. "
         "Converting them is capture-plane work, not WP-04's."
+    ),
+    "infrastructure/persistence/capture_clients.py": (
+        "one statement of four — `authenticate_client`'s lookup by `client_id` — "
+        "carries no partition predicate, because it is the read that *derives* "
+        "the Principal a remote submission runs as and a predicate there would "
+        "need the answer to ask the question. The same shape as "
+        "`jobs.job_principal`, and it fails closed: an unknown client, a wrong "
+        "secret and a revoked client are one `None`."
     ),
     "infrastructure/persistence/capture_search.py": (
         "two statements of three build fragments over `capture_versions` that the "

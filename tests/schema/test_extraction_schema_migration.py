@@ -183,6 +183,11 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "pulse_items",
         }
     ),
+    # WP-10's registered remote capture client. One table, created in raw SQL by
+    # a revision that imports no declaration — `d2e3f4a5b6c7`'s shape — and
+    # declared here so the structural guard covers it exactly as it covers a
+    # revision that copies the declaration.
+    "7a1e5f3c9d24": frozenset({"capture_clients"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

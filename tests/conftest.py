@@ -212,6 +212,13 @@ class World:
     capture_versions: list[CaptureVersion] = field(default_factory=list)
     capture_receipts: dict[str, CaptureReceipt] = field(default_factory=dict)
     capture_keys: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
+    #: Every admission request the store was *asked* to perform, in order, whether
+    #: it was created, replayed, or refused. Recorded rather than derived from the
+    #: rows above because two claims need the request itself: which transport the
+    #: composition root vouched for (WP-10 records it on the submission), and
+    #: whether a refused transport request reached the store at all — a question
+    #: "no version was written" cannot answer, since a replay writes none either.
+    capture_admissions: list[CaptureAdmissionRequest] = field(default_factory=list)
     #: The evidence plane, as the three collections a reveal traverses. Keyed by
     #: `version_id` because that is what the rows are keyed by: a span is
     #: measured against a version, a proposal is derived from one, and an
@@ -482,6 +489,7 @@ class _Captures(CaptureRepository):
 
     def admit(self, request: CaptureAdmissionRequest, *, principal_id: str) -> CaptureAdmission:
         self._world.fail("admit")
+        self._world.capture_admissions.append(request)
         if request.principal_id != principal_id:
             # The same refusal the store makes: admission is bound to the
             # authenticated principal, never to one the payload carries

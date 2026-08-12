@@ -32,12 +32,15 @@ Delivered:
   check, UUID `oid`, and outright rejection of caller-supplied identity fields
   (`src/lib/auth/claims.ts`).
 - A **synthetic identity provider** (`src/lib/auth/synthetic.ts`) with two fixed
-  development principals in a synthetic tenant. No live Entra registration, tenant id,
+  development principals in a synthetic tenant — narrowed to **one** whenever the
+  gateway runs `local_operator` and therefore has one identity (`D-15`; see
+  "`MYPA_GATEWAY_AUTH_MODE`" below). No live Entra registration, tenant id,
   or personal data anywhere. The real MSAL wiring has a configuration seam
   (`src/lib/auth/msal.config.ts`) and is inert until one exists.
 - **Canonical TypeScript contracts** (`src/contracts/`) — parity mirror of the Python
   contract and domain vocabulary; see `src/contracts/README.md`.
-- **Capture** and **Reveal** affordances posting to stub API routes that acknowledge
+- **Capture**, wired to the durable `capture.create` path, with the four outcomes
+  below kept apart, and a **Reveal** affordance posting to a stub API route that acknowledges
   with `coverage: "synthetic"` disclosures; a principal-scoped synthetic **Pulse** on
   Today; honest "not yet connected" states on Situations and Library; full
   disclosure on System.
@@ -104,6 +107,36 @@ finished.
 | Reveal | `/api/reveal` | **not wired** — `not_implemented` | none exists |
 | Projects | `/api/projects` | **not wired** — `not_implemented` | none exists |
 | Relationship timeline | `/api/relationships/:id/timeline` | **not wired** — `not_implemented` | none exists |
+
+### What the capture surface says, and what it refuses to say
+
+The screen's job is to tell a person which of four things happened, because that
+is what they act on, and the dangerous direction is asymmetric: saying "saved"
+for something that was not stored tells someone to stop worrying about a note
+that is gone, while saying "refused" about a note that was stored merely annoys
+them. So the four are kept apart and the recognition is positive —
+`status: "persisted"` is the **only** condition that renders as a save, and an
+answer whose shape the screen does not recognise understates rather than
+overstates.
+
+| Outcome | What is true | What the screen does |
+|---|---|---|
+| durable | the Python transaction committed and issued the receipt | says **saved**, clears the field |
+| acknowledged, not persisted | the explicitly-enabled synthetic provider minted an in-process receipt | says **not stored**, keeps the note in the field |
+| refused | validation, conflict, authorization, policy — nothing stored | names the reason, keeps the note |
+| unavailable | the backend could not be reached — nothing stored | says retrying is worth it, keeps the note and the same attempt key |
+
+**No enrichment state, and the absence is deliberate.** A save is durable before
+any processing runs, and no capability this tier can call reports how that
+processing went — `POST /v1/{capability}` dispatches fifteen and none of them
+answers "what happened to the job". So the screen says the note is safe and that
+proposals appear in Review when they exist. Inventing an "enrichment degraded"
+badge here would be a claim with nothing behind it.
+
+**One non-empty field is the whole precondition.** No title, no tags. The kind
+defaults to `quick_note` and `conversation_log` is a selection rather than a
+step; `POST /api/capture` refuses any other value instead of defaulting it, so a
+caller that misspelled the kind is told rather than quietly given something else.
 
 ### Why the last five are not wired, precisely
 
@@ -181,7 +214,8 @@ it.
   fixed process principal. **Every disclosure returned in this mode states that
   results belong to the deployment's single local-operator principal and are not
   partitioned by browser session**, because that is true and claiming otherwise
-  would be the inaccuracy this seam exists to remove.
+  would be the inaccuracy this seam exists to remove. **And in this mode the web
+  tier admits exactly one Principal** (`D-15`): see below.
 - `entra` — the gateway requires a bearer token, and **this tier holds none**. The
   session envelope carries `principalId`, `tid`, `oid`, `upn` and `displayName`
   and deliberately no credential, and `POST /api/session` implements no real
@@ -189,6 +223,41 @@ it.
   refuses with `no_forwardable_credential` rather than sending an unauthenticated
   request or fabricating a token. Forwarding a real credential needs an Entra app
   registration and an MSAL sign-in path, both operator-gated and neither present.
+
+#### `local_operator` narrows the admissible Principal set to one (`D-15`)
+
+Disclosure was not enough. WP-06's reviewer signed in as `synthetic-a`, captured a
+note, signed in as `synthetic-b`, and **read A's capture back** through
+`/api/library`, including a full-text match on A's exact text. The limitation
+above was on every one of those responses; nothing prevented the read. WP-07 makes
+that read carry durable user-authored text, which under the operating brief's
+Principal-isolation invariant is release-blocking.
+
+A web tier offering two sign-ins over a one-identity backend is offering two
+costumes for one person, so the **set of admissible principals itself narrows** to
+one — the first, `synthetic-a` — whenever `MYPA_GATEWAY_AUTH_MODE=local_operator`.
+It is deterministic and configuration-free: no new environment variable, because an
+operator choice between two development principals buys nothing.
+
+- `src/lib/auth/synthetic.ts` holds the narrowing. The full catalogue is
+  module-private; `admissibleSyntheticPrincipals()` is the only listing anyone can
+  import, so `POST /api/session`, the sign-in screen, and anything added later get
+  the narrowed set without having to remember to ask. WP-06 learned that lesson with
+  `fixtures/gate.ts`, where a gate in ten route handlers left four server components
+  unguarded with every route test green.
+- `POST /api/session` **refuses** the non-pinned key with
+  `principal_not_admissible` (`403`) rather than silently signing the caller in as
+  the pinned principal, because rebinding one identity to another is its own defect.
+- `/sign-in` became a server component so it can read the same set; it offers one
+  button, so nobody is shown a control guaranteed to fail.
+- `entra` is unaffected — two real Principals there are two real datasets — and an
+  unconfigured gateway mode is unaffected too, because in that state no backend
+  request is made at all.
+- The disclosure stays. Prevention plus disclosure is better than either.
+
+`src/lib/auth/admissible-principals.test.ts` is the evidence: `synthetic-b` cannot
+sign in at all under `local_operator`, both principals remain admissible under
+`entra`.
 
 ### `MYPA_DATA_PROVIDER` gates the synthetic provider, and unset means off
 

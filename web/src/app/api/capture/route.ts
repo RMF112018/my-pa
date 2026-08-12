@@ -25,6 +25,21 @@
  *
  * **Capture text never appears in the response.** The receipt carries a content
  * digest, which is what makes a replay checkable without echoing the content.
+ *
+ * **The kind is a default, not a precondition.** `captureKind` is optional and
+ * resolves to `quick_note`; `conversation_log` is the other value the Python
+ * `CaptureKind` admits, and an explicit conversation log is what seeds a skeletal
+ * Conversation in the save transaction. Anything else is refused rather than
+ * silently defaulted, because a caller that misspelled the kind asked for
+ * something and would otherwise be given something else without being told.
+ *
+ * **What this route cannot report, and does not pretend to.** The receipt says
+ * the note is durable. It says nothing about whether the asynchronous pipeline
+ * later enriched it, because no capability this tier can call exposes the job's
+ * state — `POST /v1/{capability}` dispatches fifteen and none of them answers
+ * "how did processing go". So the answer distinguishes *durable* from *refused*
+ * and stops there; a third state invented here would be a claim with nothing
+ * behind it.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
@@ -34,6 +49,11 @@ import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
 
 const SCOPE = "capture";
+
+/** The two kinds the Python `CaptureKind` admits, and the one a caller gets by default. */
+const CAPTURE_KINDS = ["quick_note", "conversation_log"] as const;
+type CaptureKind = (typeof CAPTURE_KINDS)[number];
+const DEFAULT_CAPTURE_KIND: CaptureKind = "quick_note";
 
 interface PythonReceipt {
   readonly receipt_id: string;
@@ -75,6 +95,43 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  const requestedKind = parsed.body["captureKind"];
+  const captureKind: CaptureKind =
+    requestedKind === undefined || requestedKind === null
+      ? DEFAULT_CAPTURE_KIND
+      : (requestedKind as CaptureKind);
+  if (!CAPTURE_KINDS.includes(captureKind)) {
+    return NextResponse.json(
+      {
+        error: {
+          errorClass: "validation",
+          code: "unknown_capture_kind",
+          message: `captureKind must be one of ${CAPTURE_KINDS.join(", ")}`,
+        },
+      },
+      { status: 400 },
+    );
+    if (!outcome.ok) {
+      return NextResponse.json(
+        {
+          error: {
+            errorClass: "conflict",
+            code: "capture_conflict",
+            message: "this idempotency key was already used with different content",
+          },
+        },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json({
+      shape: "synthetic",
+      receiptId: outcome.receipt.receiptId,
+      created: outcome.receipt.created,
+      status: "acknowledged_not_persisted",
+      disclosure: syntheticDisclosure(SCOPE),
+    });
+  }
+
   const serving = resolveServing();
   if (serving.kind === "refused") return serving.response;
 
@@ -100,6 +157,7 @@ export async function POST(request: NextRequest) {
       shape: "synthetic",
       receiptId: outcome.receipt.receiptId,
       created: outcome.receipt.created,
+      captureKind,
       status: "acknowledged_not_persisted",
       disclosure: syntheticDisclosure(SCOPE),
     });
@@ -108,12 +166,14 @@ export async function POST(request: NextRequest) {
   const outcome = await callGateway<PythonReceipt>(guard.principal, "capture.create", {
     text: text.trim(),
     idempotency_key: idempotencyKey.trim(),
+    capture_kind: captureKind,
   });
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
 
   return NextResponse.json({
     shape: "backend",
     status: "persisted",
+    captureKind,
     receipt: {
       receiptId: outcome.result.receipt_id,
       captureId: outcome.result.capture_id,

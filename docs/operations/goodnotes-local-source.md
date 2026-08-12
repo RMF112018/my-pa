@@ -47,12 +47,11 @@ an idempotent insert is accepted only when the already-stored page, version,
 region, and receipt are field-equivalent; a deterministic-ID collision with
 different OCR content or provenance is an error.
 
-GoodNotes invokes no model in the current composition. The optional local-only
-model gate is composed into application readiness as disabled and cannot be
-enabled without both a provider and durable router into the existing canonical
-Review plane; provider and router processes share one killable deadline.
-GoodNotes model enrichment remains deferred rather than returning or dropping
-free-floating model output.
+GoodNotes invokes no model in the current composition. The production model
+gate is composed into application readiness as disabled, accepts no content or
+provider, and has no executable router. GoodNotes model enrichment remains
+explicitly deferred; a future implementation must route proposals durably into
+the existing canonical Review plane.
 
 Live GoodNotes root admission, OCR engine selection/licensing, background
 watcher activation, personal-data eligibility, and production database use

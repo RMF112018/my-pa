@@ -16,6 +16,86 @@ private enum HostError: Error {
     case inputNotBounded
 }
 
+private func composition(
+    _ configuration: PlatformAppleSourceConfiguration
+) throws -> PlatformAppleSourceComposition {
+    try PlatformAppleSourceComposition(
+        eventStore: EKEventStore(),
+        contactStore: CNContactStore(),
+        contactsIdentityEpoch: configuration.contactsIdentityEpoch,
+        mailGeneration: configuration.mailGeneration
+    )
+}
+
+private func runProbe(_ arguments: [String]) throws -> Bool {
+    guard arguments.count >= 8, arguments[1] == "probe",
+          arguments[2] == "--preflight" || arguments[2] == "--discover"
+    else { return false }
+    let preflight = arguments[2] == "--preflight"
+    var configurationPath: String?
+    var bridgeID: NativeSourceOpaqueID?
+    var requestID: NativeSourceOpaqueID?
+    var kind: NativeSourceKind?
+    var offset = 3
+    while offset < arguments.count {
+        guard offset + 1 < arguments.count else { throw HostError.usage }
+        switch arguments[offset] {
+        case "--configuration" where configurationPath == nil:
+            configurationPath = arguments[offset + 1]
+        case "--bridge-id" where bridgeID == nil:
+            bridgeID = NativeSourceOpaqueID(rawValue: arguments[offset + 1])
+        case "--request-id" where requestID == nil:
+            requestID = NativeSourceOpaqueID(rawValue: arguments[offset + 1])
+        case "--kind" where kind == nil:
+            kind = NativeSourceKind(rawValue: arguments[offset + 1])
+        default: throw HostError.usage
+        }
+        offset += 2
+    }
+    guard let configurationPath, let bridgeID, let requestID,
+          preflight == (kind == nil)
+    else { throw HostError.usage }
+    var remainingAggregateBytes = maximumAggregateInputBytes
+    let configuration = try readBounded(
+        configurationPath,
+        as: PlatformAppleSourceConfiguration.self,
+        remainingAggregateBytes: &remainingAggregateBytes
+    )
+    _ = try PlatformHostAdmission.validate(configuration: configuration, checkpoints: [])
+    let platform = try composition(configuration)
+    let now = Int64(Date().timeIntervalSince1970 * 1_000)
+    let metadata = try NativeEnvelopeMetadata(
+        envelopeID: requestID,
+        hostInstanceID: bridgeID,
+        emittedAtUnixMilliseconds: now
+    )
+    let output: Data
+    if preflight {
+        let selections = configuration.selections.sorted {
+            ($0.kind.rawValue, $0.accountID.rawValue, $0.bucketID.rawValue) <
+                ($1.kind.rawValue, $1.accountID.rawValue, $1.bucketID.rawValue)
+        }.map {
+            NativeBucketSelection(kind: $0.kind, accountID: $0.accountID, bucketID: $0.bucketID)
+        }
+        let request = try NativePreflightRequest(requestID: requestID, selections: selections)
+        output = try JSONEncoder().encode(
+            NativePreflightEnvelope(
+                metadata: metadata,
+                request: request,
+                results: try platform.preflight(selections)
+            )
+        )
+    } else {
+        output = try JSONEncoder().encode(
+            NativeDiscoveryEnvelope(metadata: metadata, snapshot: try platform.discover(kind!))
+        )
+    }
+    guard output.count <= maximumInputFileBytes else { throw HostError.inputNotBounded }
+    FileHandle.standardOutput.write(output)
+    FileHandle.standardOutput.write(Data([0x0a]))
+    return true
+}
+
 private func readBounded<T: Decodable>(
     _ path: String,
     as type: T.Type,
@@ -84,17 +164,18 @@ private func readBounded<T: Decodable>(
 }
 
 private func run(_ arguments: [String]) throws {
+    if try runProbe(arguments) { return }
     guard arguments.count >= 13,
           arguments[1] == "handoff",
           arguments[2] == "--dry-run" || arguments[2] == "--authorized-single-pass"
     else { throw HostError.usage }
-    let authorizedSinglePass = arguments[2] == "--authorized-single-pass"
+    let authorizedRead = arguments[2] == "--authorized-single-pass"
     var configurationPath: String?
-    var authorizationGrantPath: String?
     var spoolPath: String?
     var maximumSpoolItems: Int?
     var maximumSpoolBytes: Int64?
     var maximumPayloadBytes: Int?
+    var authorizationGrantPath: String?
     var checkpointPaths: [String] = []
     var offset = 3
     while offset < arguments.count {
@@ -112,13 +193,13 @@ private func run(_ arguments: [String]) throws {
             maximumSpoolBytes = Int64(value)
         case "--maximum-payload-bytes" where maximumPayloadBytes == nil:
             maximumPayloadBytes = Int(value)
+        case "--authorization-grant" where authorizationGrantPath == nil:
+            authorizationGrantPath = value
         case "--checkpoint":
             guard checkpointPaths.count < PlatformHostAdmission.maximumCheckpoints else {
                 throw HostError.inputNotBounded
             }
             checkpointPaths.append(value)
-        case "--authorization-grant" where authorizationGrantPath == nil:
-            authorizationGrantPath = value
         default:
             throw HostError.usage
         }
@@ -132,7 +213,8 @@ private func run(_ arguments: [String]) throws {
           let maximumSpoolBytes,
           1...maximumConfiguredSpoolBytes ~= maximumSpoolBytes,
           let maximumPayloadBytes,
-          1...maximumConfiguredPayloadBytes ~= maximumPayloadBytes
+          1...maximumConfiguredPayloadBytes ~= maximumPayloadBytes,
+          authorizedRead == (authorizationGrantPath != nil)
     else { throw HostError.inputNotBounded }
     var remainingAggregateBytes = maximumAggregateInputBytes
     let configuration = try readBounded(
@@ -150,24 +232,7 @@ private func run(_ arguments: [String]) throws {
             )
         )
     }
-    let grant: PlatformAuthorizedReadGrant?
-    if authorizedSinglePass {
-        guard let authorizationGrantPath else { throw HostError.usage }
-        grant = try readBounded(
-            authorizationGrantPath,
-            as: PlatformAuthorizedReadGrant.self,
-            remainingAggregateBytes: &remainingAggregateBytes
-        )
-    } else {
-        guard authorizationGrantPath == nil else { throw HostError.usage }
-        grant = nil
-    }
-    let composition = try PlatformAppleSourceComposition(
-        eventStore: EKEventStore(),
-        contactStore: CNContactStore(),
-        contactsIdentityEpoch: configuration.contactsIdentityEpoch,
-        mailGeneration: configuration.mailGeneration
-    )
+    let composition = try composition(configuration)
     let spool = try ProtectedSpool(
         directory: URL(fileURLWithPath: spoolPath, isDirectory: true),
         limits: try ProtectedSpoolLimits(
@@ -177,7 +242,12 @@ private func run(_ arguments: [String]) throws {
         )
     )
     let summary: PlatformHostAdmissionSummary
-    if let grant {
+    if let authorizationGrantPath {
+        let grant = try readBounded(
+            authorizationGrantPath,
+            as: PlatformAuthorizedReadGrant.self,
+            remainingAggregateBytes: &remainingAggregateBytes
+        )
         summary = try PlatformHostAdmission.authorizedSinglePassHandoff(
             configuration: configuration,
             checkpoints: checkpoints,

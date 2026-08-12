@@ -1,7 +1,16 @@
-# Campaign Brief — my-pa Completion Campaign
+# Historical Campaign Brief — my-pa Completion Campaign
+
+> **SUPERSEDED — NOT CURRENT CAMPAIGN AUTHORITY.** This document is a preserved
+> continuity snapshot of the 2026-08-09 recovery-lineage campaign through
+> WP-03. It must not be used to select present work, repository lineage, or
+> acceptance state. The current remediation record is
+> [`PILOT-BLOCKER-REMEDIATION-20260812.md`](PILOT-BLOCKER-REMEDIATION-20260812.md),
+> with live repository/PR evidence controlling when that record and Git differ.
 
 ```yaml
 campaign_id: MYPA-CANONICAL-APPLICATION-COMPLETION-PLAN-20260809-001
+status: SUPERSEDED_HISTORICAL_SNAPSHOT
+superseded_by: PILOT-BLOCKER-REMEDIATION-20260812
 completion_plan_package: MYPA-CANONICAL-APPLICATION-COMPLETION-PLAN-20260809-001
 canonical_product_package: MYPA-CANONICAL-PRODUCT-DEFINITION-20260809-009
 validated_audit_package: MYPA-CURRENT-STATE-PACKAGE-20260809-001
@@ -18,7 +27,9 @@ completed_work_packages: [WP-01, WP-02, WP-S01]
 milestone_ms0: WP-01 -> WP-02 -> WP-S01 -> WP-03
 ```
 
-This brief is the campaign's continuity aid, not a governance ledger. `AGENTS.md` remains the normative policy; this file states where the campaign currently stands against it.
+This brief was the campaign's continuity aid, not a governance ledger. It now
+records historical state only. `AGENTS.md` remains normative, and the current
+remediation record named above routes present candidate authority.
 
 ## Supersession: WP-N01 -> WP-01
 

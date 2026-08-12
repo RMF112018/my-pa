@@ -76,6 +76,11 @@ MANAGED_STORE: Final = "src/my_pa/infrastructure/managed_document_stores/filesys
 #: and no source root can reach it. A module added here is a decision someone has
 #: to write down.
 REGISTERED_WRITERS: Final[dict[str, str]] = {
+    "src/my_pa/infrastructure/apple_source_host.py": (
+        "writes bounded configuration, grant, and checkpoint JSON only inside a "
+        "fresh process-private temporary directory for one Apple host invocation; "
+        "the directory is not caller-selected and cannot be a managed or source root."
+    ),
     "src/my_pa/infrastructure/migration/sql_files.py": (
         "writes the rendered target-schema DDL to a path the caller supplies. A "
         "review artifact for `scripts/migration/generate_target_schema.py`; it "

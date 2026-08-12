@@ -17,14 +17,20 @@ public struct PlatformSourceSelection: Codable, Hashable, Sendable {
     }
 }
 
-/// Separate operator artifact required before the executable can enter its one-
-/// pass live read lifecycle. Merely setting `activationRequested` is insufficient.
+/// Separate, expiring authority artifact issued by the authenticated Python
+/// application for exactly one bridge/request/envelope and one source bucket.
 public struct PlatformAuthorizedReadGrant: Codable, Hashable, Sendable {
     public static let schema = "my-pa.apple-source-read-grant.v1"
     public static let authorization = "AUTHORIZED_LIVE_PERSONAL_DATA_READ"
 
     public let schema: String
     public let configurationID: NativeSourceOpaqueID
+    public let bridgeID: NativeSourceOpaqueID
+    public let requestID: NativeSourceOpaqueID
+    public let envelopeID: NativeSourceOpaqueID
+    public let kind: NativeSourceKind
+    public let accountID: NativeSourceOpaqueID
+    public let bucketID: NativeSourceOpaqueID
     public let authorization: String
     public let expiresAtUnixMilliseconds: Int64
     public let pageLimit: Int
@@ -33,6 +39,12 @@ public struct PlatformAuthorizedReadGrant: Codable, Hashable, Sendable {
     public init(
         schema: String = Self.schema,
         configurationID: NativeSourceOpaqueID,
+        bridgeID: NativeSourceOpaqueID,
+        requestID: NativeSourceOpaqueID,
+        envelopeID: NativeSourceOpaqueID,
+        kind: NativeSourceKind,
+        accountID: NativeSourceOpaqueID,
+        bucketID: NativeSourceOpaqueID,
         authorization: String,
         expiresAtUnixMilliseconds: Int64,
         pageLimit: Int,
@@ -40,6 +52,12 @@ public struct PlatformAuthorizedReadGrant: Codable, Hashable, Sendable {
     ) {
         self.schema = schema
         self.configurationID = configurationID
+        self.bridgeID = bridgeID
+        self.requestID = requestID
+        self.envelopeID = envelopeID
+        self.kind = kind
+        self.accountID = accountID
+        self.bucketID = bucketID
         self.authorization = authorization
         self.expiresAtUnixMilliseconds = expiresAtUnixMilliseconds
         self.pageLimit = pageLimit
@@ -227,7 +245,12 @@ public enum PlatformHostAdmission {
               grant.schema == PlatformAuthorizedReadGrant.schema,
               grant.configurationID == configuration.configurationID,
               grant.authorization == PlatformAuthorizedReadGrant.authorization,
-              1...NativeSourceProtocolV1.maximumPageSize ~= grant.pageLimit
+              1...NativeSourceProtocolV1.maximumPageSize ~= grant.pageLimit,
+              configuration.selections.count == 1,
+              let selection = configuration.selections.first,
+              selection.kind == grant.kind,
+              selection.accountID == grant.accountID,
+              selection.bucketID == grant.bucketID
         else { throw PlatformHostAdmissionError.liveReadGrantInvalid }
         guard grant.expiresAtUnixMilliseconds >= nowUnixMilliseconds else {
             throw PlatformHostAdmissionError.liveReadGrantExpired
@@ -251,7 +274,6 @@ public enum PlatformHostAdmission {
             protectedArtifacts: 0
         )
     }
-
 
     /// Execute the production composition boundary without invoking a source.
     /// Construction wires the real adapters; this handoff only proves that each
@@ -343,10 +365,8 @@ public enum PlatformHostAdmission {
         )
     }
 
-    /// Perform one explicitly authorized, checkpointed page read per selected
-    /// bucket and enqueue immutable admission envelopes for application pickup.
-    /// The executable requires a separate, expiring operator grant before it can
-    /// call this method; this method never requests TCC or mutates a source.
+    /// Read exactly one previously authorized page and enqueue its immutable
+    /// envelope. Application-issued authority identities are carried unchanged.
     public static func authorizedSinglePassHandoff(
         configuration: PlatformAppleSourceConfiguration,
         checkpoints: [PlatformSourceCheckpoint],
@@ -361,67 +381,36 @@ public enum PlatformHostAdmission {
             grant: grant,
             nowUnixMilliseconds: nowUnixMilliseconds
         )
-        let checkpointBySelection = Dictionary(
-            uniqueKeysWithValues: checkpoints.map {
-                (PlatformCheckpointKey(kind: $0.kind, bucketID: $0.bucketID), $0)
-            }
-        )
-        let hostInstanceID = try PlatformIdentity.opaque(
-            "apple-source-host-instance", configuration.configurationID.rawValue
-        )
-        var lifecycle = try NativeHostLifecycle(hostInstanceID: hostInstanceID)
+        let selection = configuration.selections[0]
+        var lifecycle = try NativeHostLifecycle(hostInstanceID: grant.bridgeID)
         do {
             _ = try lifecycle.negotiate(
                 NativeProtocolOffer(supportedVersions: [configuration.protocolVersion])
             )
             try lifecycle.openedSpool()
             try lifecycle.readyForHandoff()
-            let selections = configuration.selections.sorted {
-                ($0.kind.rawValue, $0.bucketID.rawValue) <
-                    ($1.kind.rawValue, $1.bucketID.rawValue)
-            }
-            for selection in selections {
-                let checkpoint = checkpointBySelection[
-                    PlatformCheckpointKey(kind: selection.kind, bucketID: selection.bucketID)
-                ]
-                let request = try NativeReadRequest(
-                    bucketID: selection.bucketID,
-                    timeRange: grant.timeRange,
-                    cursor: checkpoint?.cursor,
-                    limit: grant.pageLimit
-                )
-                let identityMaterial = [
-                    configuration.configurationID.rawValue,
-                    selection.kind.rawValue,
-                    selection.accountID.rawValue,
-                    selection.bucketID.rawValue,
-                    checkpoint?.cursor?.rawValue ?? "initial",
-                ].joined(separator: "\u{1f}")
-                let requestID = try PlatformIdentity.opaque(
-                    "apple-source-read-request", identityMaterial
-                )
-                let envelopeRequest = try NativeReadEnvelopeRequest(
-                    requestID: requestID,
-                    kind: selection.kind,
-                    accountID: selection.accountID,
-                    request: request
-                )
-                let page = try composition.read(selection.kind, request: request)
-                let envelopeID = try PlatformIdentity.opaque(
-                    "apple-source-admission-envelope", identityMaterial
-                )
-                let metadata = try NativeEnvelopeMetadata(
-                    envelopeID: envelopeID,
-                    hostInstanceID: hostInstanceID,
+            let request = try NativeReadRequest(
+                bucketID: selection.bucketID,
+                timeRange: grant.timeRange,
+                cursor: checkpoints.first?.cursor,
+                limit: grant.pageLimit
+            )
+            let envelopeRequest = try NativeReadEnvelopeRequest(
+                requestID: grant.requestID,
+                kind: selection.kind,
+                accountID: selection.accountID,
+                request: request
+            )
+            let envelope = try NativeAdmissionEnvelope(
+                metadata: try NativeEnvelopeMetadata(
+                    envelopeID: grant.envelopeID,
+                    hostInstanceID: grant.bridgeID,
                     emittedAtUnixMilliseconds: nowUnixMilliseconds
-                )
-                let envelope = try NativeAdmissionEnvelope(
-                    metadata: metadata,
-                    request: envelopeRequest,
-                    page: page
-                )
-                _ = try spool.enqueue(try NativeSpoolItem(admissionEnvelope: envelope))
-            }
+                ),
+                request: envelopeRequest,
+                page: try composition.read(selection.kind, request: request)
+            )
+            _ = try spool.enqueue(try NativeSpoolItem(admissionEnvelope: envelope))
             return PlatformHostAdmissionSummary(
                 configurationID: admitted.configurationID,
                 admittedSelections: admitted.admittedSelections,
@@ -429,11 +418,12 @@ public enum PlatformHostAdmission {
                 activationState: "authorized_single_pass_complete",
                 mailState: admitted.mailState,
                 handoffState: lifecycle.state.rawValue,
-                protectedArtifacts: selections.count
+                protectedArtifacts: 1
             )
         } catch {
             lifecycle.refuse(error)
             throw error
         }
     }
+
 }

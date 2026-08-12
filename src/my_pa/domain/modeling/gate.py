@@ -17,7 +17,6 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 
 class ModelRoutePolicy(StrEnum):
     DISABLED = "disabled"
-    LOCAL_PROPOSALS_ONLY = "local_proposals_only"
 
 
 @dataclass(frozen=True, slots=True)

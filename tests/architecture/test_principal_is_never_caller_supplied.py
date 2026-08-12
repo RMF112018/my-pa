@@ -189,12 +189,6 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("plan", "principal_id"),
         ("prior", "principal_id"),
     ),
-    # The manifest Principal is the authenticated context used to mint the
-    # Review-bound identity and is copied into the immutable routed proposal.
-    "application/model_gate.py": (
-        ("manifest", "principal_id"),
-        ("manifest", "principal_id"),
-    ),
     # The runtime receives the authenticated local operator Principal from the
     # CLI and compares a stored retry receipt to that same admitted plan.
     "bootstrap/goodnotes.py": (("prior", "principal_id"),),

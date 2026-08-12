@@ -50,8 +50,8 @@ capability, not merged wholesale:
 | 001 — durable Quick Capture | web Capture calls the authenticated BFF, which invokes `capture.create`; PostgreSQL commits source/version/submission/receipt/job before success; replay/conflict/restart and two-Principal behavior remain structural | capture transaction, remote transaction, recovery, cross-Principal, web gateway and route tests |
 | 002 — incoherent lineage | one selective candidate, one 34-revision history, DDL-free branch merge, head `b4e8d2c7a613`; retained lines classified above | Alembic heads, empty/head/round-trip/denotation tests, this record and PR ancestry |
 | 003 — synthetic/stub normal UI | normal Capture, Library, Review, Reveal, Pulse, Projects, Situations, Frames, Trace, commitments, decisions, tasks and relationship timeline call backend capabilities; synthetic data remains opt-in test/dev | web route/gateway/session tests, TypeScript/lint, optimized Next.js build |
-| 004 — Apple plane incomplete | source-built Swift core plus fail-closed protected dry-run and a separate expiring-grant single-pass checkpoint/read/admission-envelope handoff; EventKit Calendar and Tasks, bounded Contacts, and a read-only Apple Mail ScriptingBridge mechanism; frozen baseline, reconciliation, cursor watcher, overlap, rolling calendar horizon, pause and bounded failure semantics | Swift build/contract checks, a synthetic four-family dry-run producing four content-free protected receipts, and platform architecture guards for the active lifecycle; no live store invocation, personal-data read, TCC request, signing, install, or activation claim |
-| 005 — knowledge/tool set | PKL lexical/evidence retrieval; the local-only model proposal gate is composed into the production application readiness path as off and cannot be enabled without both provider and canonical Review composition; provider/router processes are reaped under one deadline; GoodNotes invokes no model and its exact-registry/enrollment-bound reconciliation shares one 300-second external-work deadline across plan/OCR plus before/after persistence checks under the separately bounded database statement timeout; canonical Review/accepted knowledge search; managed-document lifecycle; stdio Frontier MCP | aggregate-limit/model cancellation and locality tests, same-source/two-Principal canonical Review and ordinary knowledge-search PostgreSQL proof, hostile deterministic-ID collision refusal, managed-document, MCP, Principal-isolation, security and conformance tests |
+| 004 — Apple plane incomplete | source-built Swift core plus fail-closed protected dry-run and a separate expiring-grant single-pass checkpoint/read/admission-envelope handoff; the authenticated Python process adapter issues and preserves exact bridge/request/envelope/scope identity and consumes the exact owner-only spool item before durable application admission; EventKit Calendar and Tasks, bounded Contacts, and a read-only Apple Mail ScriptingBridge mechanism; frozen baseline, reconciliation, cursor watcher, overlap, rolling calendar horizon, pause and bounded failure semantics | Swift build/contract checks, synthetic process-adapter authority-chain tests, a synthetic four-family dry-run producing four content-free protected receipts, and platform architecture guards for the active lifecycle; no live store invocation, personal-data read, TCC request, signing, install, or activation claim |
+| 005 — knowledge/tool set | PKL lexical/evidence retrieval; speculative model provider/router execution removed and the production readiness gate made explicitly non-executable and deferred; GoodNotes invokes no model and its exact-registry/enrollment-bound reconciliation shares one 300-second external-work deadline across plan/OCR plus before/after persistence checks under the separately bounded database statement timeout; canonical Review/accepted knowledge search; managed-document lifecycle; stdio Frontier MCP | disabled-gate and untrusted-context contract tests, same-source/two-Principal canonical Review and ordinary knowledge-search PostgreSQL proof, hostile deterministic-ID collision refusal, managed-document, MCP, Principal-isolation, security and conformance tests |
 | 006 — offline/remote/operations | Principal-bound encrypted offline queue and replay controls, dedicated remote Capture credential plane and iOS Shortcut fixture, retry/dead-letter, worker heartbeat health, statement timeouts, backup/restore rehearsal and runbooks | web offline tests, remote socket/database tests, worker/recovery/health tests, restored database at exact Alembic head |
 
 ## Safety and external prerequisites
@@ -76,9 +76,9 @@ final exact totals, commit/tree, PR identity, and independent-review result are
 recorded in the PR and final implementation report. At implementation closeout
 before the final exact-head commit:
 
-- Ruff lint and formatting pass across 656 files; mypy passes the configured
-  `src` and `apps` targets; 2,495 architecture guards pass;
-- the exact FAST selection passes 4,825 tests with 709 deselected in 98.19
+- Ruff lint and formatting pass across 658 files; mypy passes the configured
+  repository targets; 2,505 architecture guards pass;
+- the exact FAST selection passes 4,832 tests with 709 deselected in 95.27
   seconds. This exceeds the 60-second MCV target and is recorded as a measured
   budget variance rather than treated as a functional failure;
 - the database/recovery/e2e selection passes 706 tests with 4,828 deselected
@@ -115,6 +115,18 @@ Mail checked headers after materialization, the model timeout left work running,
 GoodNotes reset its clock, and current-state docs/CLI counts remained stale. The
 next corrective head implements those findings; this BLOCK remains historical
 evidence and cannot satisfy the final review gate.
+
+A third independent audit of corrective head
+`b3ed19b5075d061988b0becb4ddd68b4b776a1c8` returned BLOCK after verifying the
+Mail and GoodNotes corrections. It found that the Swift host derived new
+authority identities instead of carrying the authenticated application's exact
+bridge/request/envelope grant into admission, that no production process
+adapter consumed the protected spool, that the model gate still exposed dead
+provider/router execution, and that module-boundary documentation remained
+stale. The next corrective head preserves application-issued identities through
+the grant and spool, adds the bounded process adapter and synthetic authority-
+chain proof, removes executable model routing, and reconciles current-state
+documentation. This BLOCK is historical and cannot satisfy the final gate.
 
 ## Independent review gate
 

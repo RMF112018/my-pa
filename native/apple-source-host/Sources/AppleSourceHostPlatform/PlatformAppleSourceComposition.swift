@@ -75,6 +75,53 @@ public struct PlatformAppleSourceComposition: @unchecked Sendable {
         }
     }
 
+    public func discover(_ kind: NativeSourceKind) throws -> NativeDiscoverySnapshot {
+        switch kind {
+        case .calendar: try calendar.discoverCalendars()
+        case .contacts: try contacts.discoverContactCollections()
+        case .tasks: try tasks.discoverTaskLists()
+        case .mail: try mail.discoverMail()
+        }
+    }
+
+    public func preflight(
+        _ selections: [NativeBucketSelection]
+    ) throws -> [NativePreflightResult] {
+        var snapshots: [NativeSourceKind: NativeDiscoverySnapshot] = [:]
+        return try selections.map { selection in
+            do {
+                let snapshot: NativeDiscoverySnapshot
+                if let existing = snapshots[selection.kind] {
+                    snapshot = existing
+                } else {
+                    snapshot = try discover(selection.kind)
+                    snapshots[selection.kind] = snapshot
+                }
+                let reachable = snapshot.buckets.contains {
+                    $0.id == selection.bucketID && $0.accountID == selection.accountID &&
+                        $0.kind == selection.kind && $0.isSelectable
+                }
+                return try NativePreflightResult(
+                    selection: selection,
+                    state: reachable ? .reachable : .identityDrift,
+                    failure: reachable ? nil : .bucketUnavailable
+                )
+            } catch NativeProviderFailure.permissionDenied {
+                return try NativePreflightResult(
+                    selection: selection,
+                    state: .permissionDenied,
+                    failure: .permissionDenied
+                )
+            } catch {
+                return try NativePreflightResult(
+                    selection: selection,
+                    state: .unavailable,
+                    failure: .transientUnavailable
+                )
+            }
+        }
+    }
+
     /// Execute one already-admitted bounded page read. The caller owns operator
     /// authorization, lifecycle state, checkpoint selection, and protected
     /// handoff; this switch only routes to the four read-only adapters.

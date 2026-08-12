@@ -297,7 +297,7 @@ def _kind_for_provider(kind: NativeSourceKind) -> str:
 
 
 class NativeSourceController:
-    """One bounded synthetic-only controller for the eleven C capabilities."""
+    """Authenticated controller for the bounded native-source capabilities."""
 
     def __init__(
         self,

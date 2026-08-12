@@ -8,7 +8,8 @@ synthetic adapters.
 
 WP-12D supplied the application-facing envelope/spool foundations. The current
 candidate also supplies a separately bounded production composition with a
-non-live proof path and an independently authorized single-pass read path:
+non-live proof path and an authenticated application-issued single-pass read
+path. Neither path can request permission:
 
 - deterministic, versioned discovery, preflight, read, and handoff envelopes;
 - explicit fail-closed decoding for every invariant-bearing wire/storage value;
@@ -106,17 +107,19 @@ discovers an account, enumerates a source, reads personal data, or activates a
 watcher. The spool artifact is proof of protected handoff reachability, not data
 admission authority.
 
-The separate `handoff --authorized-single-pass` path additionally requires an
-absolute, bounded, expiring `my-pa.apple-source-read-grant.v1` artifact whose
-configuration identity matches and whose authorization literal is exact. Only
-then does it negotiate the lifecycle, open the protected spool, read one
-checkpointed bounded page from each selected Calendar, Contacts, Tasks, or Mail
-bucket, wrap the page in a versioned immutable admission envelope, and enqueue
-it for application pickup. Merely setting `activationRequested` is refused.
-This repository implements that operator-gated lifecycle but did not invoke it:
-no TCC grant or live personal-data access was authorized for validation.
+The separate `handoff --authorized-single-pass` path accepts exactly one
+selection and requires an absolute, bounded, expiring
+`my-pa.apple-source-read-grant.v1` artifact. The Python application process
+adapter writes that artifact after authenticated policy and scope admission and
+carries its exact bridge, request, envelope, source-kind, account, and bucket
+identities through the Swift envelope. The adapter then consumes exactly the
+matching protected-spool item with `O_NOFOLLOW` and returns it to
+`NativeSourceController` for durable authority revalidation and admission.
+Merely setting `activationRequested` is refused, and the host derives no
+replacement authority identity.
 
-No repository validation inspects a live account. TCC grants, signing,
+No repository validation inspects a live account. TCC grants, live execution,
+signing,
 installation, service/watcher activation, application admission, persistence,
 and live data remain operator-gated. Neither platform mechanism names a save,
 remove, commit, save request, consent request, database, network client, or

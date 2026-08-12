@@ -43,11 +43,11 @@ This document refines the accepted foundation in ADR-001 and ADR-002. It does no
 | `CTX-PKL-006` | PostgreSQL | Canonical structured authority and FTS | Implemented and validated on disposable synthetic databases | No unknown/existing physical target is authorized |
 | `CTX-PKL-007` | Fixture source provider | Approved bounded read-only source | Active | Original bytes authoritative; adapter cannot mutate |
 | `CTX-PKL-008` | NAS/source providers | Future real read-only sources | Later phase | Must receive configured allowed roots; no discovery outside them |
-| `CTX-PKL-009` | Local model gateway | Optional context consumer/generator | Disabled unless a durable canonical Review router is supplied | Bounded output is proposed/inferred, never source authority |
+| `CTX-PKL-009` | Local model gateway | Deferred context consumer/generator | Disabled; no production provider or router invocation exists | Future output would be proposed/inferred, never source authority |
 | `CTX-PKL-010` | Cloud model provider | External processing boundary | Excluded by default | Raw/private data disclosure prohibited absent separate approval |
 | `CTX-PKL-011` | Managed-document store | Separate product-owned write-authority capability | Implemented for this remediation objective | Designated storage only; no source-system write or deployment authority |
 | `CTX-PKL-012` | Obsidian projection | Rebuildable human-facing view | Later phase | Derived projection, never canonical authority |
-| `CTX-PKL-013` | Apple Mail/Calendar/Contacts/Tasks providers | Personal-data observations | Bounded mechanisms and operator-gated single-pass read/handoff implemented; no live read executed | TCC, live data, activation, signing, and deployment require separate authority |
+| `CTX-PKL-013` | Apple Mail/Calendar/Contacts/Tasks providers | Personal-data observations | Bounded mechanisms plus inert dry-run and authenticated application-to-host single-page handoff; no permission-request path and no live read executed | TCC, live data, activation, signing, and deployment require separate authority |
 | `CTX-PKL-015` | Local operator as author | Creates user-authored records through the capture contract | Active under ADR-003 | Authors evidence the product owns; authoring is neither source mutation nor a managed write |
 | `CTX-PKL-014` | Public research providers | External evidence collection | Excluded | No public research or automated profiling in MCV |
 | `CTX-PKL-016` | MossAIc web frontend | Next.js App Router PWA/BFF | Implemented for this remediation objective | Uses public capability contracts; no provider or database bypass |
@@ -111,8 +111,8 @@ GoodNotes invokes none.
 
 Later phases may add a verified NAS provider, live personal-source activation,
 GoodNotes watcher/live-root operation, canonical-Review-routed model assistance,
-and projections. They remain future context and are not implied by the inert or
-synthetic implementation present here.
+and projections. They remain future context and are not implied by the bounded
+implementation present here.
 
 
 ## 4. Context diagram
@@ -256,11 +256,12 @@ Client → gateway → authorization/purpose/scope → PostgreSQL FTS or record 
 ### `DF-PKL-006` — Model context, deferred without canonical Review routing
 
 
-Authorized retrieval result → policy/classification/purpose filter → field-level
-disclosure packet → bounded local model → durable canonical Review router. The
-gate refuses before provider invocation when that router is absent. Cloud
-transmission remains denied until a separate operator-approved data eligibility
-policy and auditable receipt exist.
+The current production gate accepts no content, provider, or persistence port
+and returns `model_route_deferred`. A future route would require authorized
+retrieval → policy/classification/purpose filtering → field-level disclosure →
+bounded model → durable canonical Review. Cloud transmission remains denied
+until a separate operator-approved data eligibility policy and auditable receipt
+exist.
 
 
 ## 7. Authority boundaries
@@ -276,7 +277,7 @@ policy and auditable receipt exist.
 | User-authored records | Owning principal within policy | Owning principal, append-only, through an application command | Immutable versions; no update or delete path; not a managed write |
 | Managed documents | Owning Principal through admitted capability | Versioned application transaction into designated managed storage | Product-owned write only; never source-system mutation |
 | Projection | Later read | Rebuild only | Never canonical |
-| Model output | Disabled unless canonical Review routing exists | Existing canonical Review plane only | Timeout/count/byte bounded; cannot mutate source/facts/policy |
+| Model output | Disabled; no production invocation exists | None | Future proposals cannot mutate source/facts/policy |
 
 
 ## 8. Deployment-neutral interfaces
@@ -330,11 +331,10 @@ read/write provider that allows accidental source mutation.
 - No model is required for MCV correctness.
 - Retrieved source content is untrusted data and may contain prompt or indirect tool injection.
 - Model requests must be assembled from explicitly allowed fields after classification, purpose, and policy evaluation.
-- The bounded model gate has timeout, proposal-count, aggregate-byte, and field
-  ceilings. An enabled instance cannot be composed without both a local provider
-  and canonical Review router; provider and router work run under one killable
-  process deadline. The production readiness path reports the route disabled,
-  and GoodNotes supplies no model route.
+- The production model gate accepts no content, provider, router, or persistence
+  port and has no enabled route. The readiness path reports it explicitly
+  deferred, and GoodNotes supplies no model route. Any future executable model
+  path requires separate implementation and bounded-process design.
 - The default is `cloud_eligible=false` for raw/private content.
 - Cloud processing requires a future operator decision specifying provider, account/container, purpose, field allowlist, retention/training terms, redaction, audit receipt, and revocation.
 - Model output is labeled `proposal` or `inference`, source-referenced where possible, and cannot silently become canonical fact or authorize an action.

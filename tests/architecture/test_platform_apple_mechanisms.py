@@ -139,7 +139,7 @@ def test_current_swift_check_count_and_contacts_implementation_are_documented() 
     assert "ContactsStoreMechanism" in record
 
 
-def test_platform_executable_separates_dry_run_from_explicit_authorized_read() -> None:
+def test_platform_executable_preserves_application_issued_authority_identity() -> None:
     main = (HOST / "Sources" / "AppleSourceHostPlatformHost" / "main.swift").read_text(
         encoding="utf-8"
     )
@@ -151,9 +151,10 @@ def test_platform_executable_separates_dry_run_from_explicit_authorized_read() -
         "PlatformAppleSourceComposition(",
         "ProtectedSpool(",
         "protectedNonLiveHandoff(",
-        '"--authorized-single-pass"',
-        '"--authorization-grant"',
         "authorizedSinglePassHandoff(",
+        'arguments[2] == "--dry-run"',
+        'arguments[2] == "--authorized-single-pass"',
+        'case "--authorization-grant"',
     ):
         assert required in main
     assert "spool.enqueue" in admission
@@ -161,20 +162,35 @@ def test_platform_executable_separates_dry_run_from_explicit_authorized_read() -
     for required in (
         "PlatformAuthorizedReadGrant",
         "validateAuthorizedRead(",
-        "NativeHostLifecycle(",
-        "NativeReadRequest(",
+        "grant.bridgeID",
+        "grant.requestID",
+        "grant.envelopeID",
+        "selection.accountID == grant.accountID",
+        "selection.bucketID == grant.bucketID",
         "composition.read(",
-        "NativeAdmissionEnvelope(",
-        "NativeSpoolItem(admissionEnvelope:",
-        'activationState: "authorized_single_pass_complete"',
     ):
         assert required in admission
-    for forbidden in ("authorizationState()", "consentState()", "discoverMail()"):
-        assert forbidden not in main
+    for forbidden in (
+        "authorizationState()",
+        "consentState()",
+        "discoverMail()",
+    ):
+        assert forbidden not in admission
 
-    dry_run_branch = main.split("if let grant", 1)[1].split("} else {", 1)[1]
-    assert "protectedNonLiveHandoff(" in dry_run_branch
-    assert "authorizedSinglePassHandoff(" not in dry_run_branch
+    process_adapter = (
+        ROOT / "src" / "my_pa" / "infrastructure" / "apple_source_host.py"
+    ).read_text(encoding="utf-8")
+    controller = (ROOT / "src" / "my_pa" / "application" / "native_sources.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"bridgeID": bridge_id' in process_adapter
+    assert '"requestID": request_id' in process_adapter
+    assert '"envelopeID": envelope_id' in process_adapter
+    assert 'f"{envelope_id}.pending"' in process_adapter
+    assert "os.O_NOFOLLOW" in process_adapter
+    assert "bridge_id=authority.bridge_id" in controller
+    assert "envelope_id=authority.envelope_id" in controller
+    assert "request_id=control_context.request_id" in controller
 
 
 def test_current_docs_name_the_inert_handoff_and_deferred_goodnotes_model_route() -> None:
@@ -186,14 +202,31 @@ def test_current_docs_name_the_inert_handoff_and_deferred_goodnotes_model_route(
     )
     assert "content-free protected receipt" in readme
     assert "closed ScriptingBridge Mail reads" in source_index
-    assert "operator-gated single-pass read/handoff implemented" in context
+    assert "authenticated application-to-host single-page handoff" in context
     assert "GoodNotes invokes no model" in goodnotes
-    assert "durable router into the existing canonical\nReview plane" in goodnotes
-    assert "provider and router processes share one killable deadline" in goodnotes
+    assert "accepts no content or\nprovider" in goodnotes
+    assert "has no executable router" in goodnotes
     assert "status: CURRENT_REPOSITORY_ARCHITECTURE" in context
     assert "authenticated_head_sha:" not in context
     assert "NEW_CANDIDATE_NOT_IN_REPOSITORY" not in context
     assert "current tree SHA, local worktree status" not in context
+
+    campaign = (ROOT / "docs" / "campaign" / "CAMPAIGN-BRIEF.md").read_text(encoding="utf-8")
+    assert "SUPERSEDED — NOT CURRENT CAMPAIGN AUTHORITY" in campaign
+    assert "status: SUPERSEDED_HISTORICAL_SNAPSHOT" in campaign
+    assert "PILOT-BLOCKER-REMEDIATION-20260812.md" in campaign
+    assert "current candidate authority record" in source_index
+    assert "not authority for present campaign state" in source_index
+
+    runbook = (ROOT / "ops" / "runbooks" / "goodnotes-and-model-operations.md").read_text(
+        encoding="utf-8"
+    )
+    assert "production-shaped, local GoodNotes" in runbook
+    assert "ManifestGoodNotesSource" in runbook
+    assert "BoundedLocalOCRTranscriber" in runbook
+    assert "temporary synthetic files" in runbook
+    assert "remains unconfigured and\ndisabled" in runbook
+    assert "implements a synthetic-only GoodNotes" not in runbook
 
     cli_source = (ROOT / "apps" / "cli" / "sources.py").read_text(encoding="utf-8")
     module_boundaries = (ROOT / "docs" / "architecture" / "module-boundaries.md").read_text(

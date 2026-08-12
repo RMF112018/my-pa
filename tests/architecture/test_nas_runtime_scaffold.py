@@ -214,6 +214,67 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     }
     if services != expected_contract_services:
         errors.add("service_authority")
+    expected_contract_sections = {
+        "target_platform": {
+            "planning_value": "linux/amd64",
+            "deployable_only_after_live_confirmation": True,
+        },
+        "images": {"build_during_start": False, "require_exact_digest": True},
+        "network": {
+            "data_network": "data-plane",
+            "data_network_internal": True,
+            "edge_network": "edge-plane",
+            "edge_network_egress": "firewall_allowlisted_entra_only",
+            "egress_services": ["gateway", "web"],
+            "only_host_published_service": "proxy",
+            "postgres_published": False,
+            "smoke_publish_interface": "loopback",
+            "pilot_https": "tailscale_serve",
+            "public_exposure": "forbidden",
+        },
+        "auth": {"pilot_web": "entra", "scratch_only": "local_operator"},
+        "restart": {"smoke": "no", "pilot_after_nas_10_and_operator_activation": "unless-stopped"},
+        "mounts": {
+            "config_ro": {"class": "config", "mode": "read_only"},
+            "postgres_data_rw": {
+                "class": "postgres_data",
+                "mode": "read_write",
+                "owner": "postgres",
+                "storage": "nas_local",
+            },
+            "managed_documents_rw": {
+                "class": "managed_documents",
+                "mode": "read_write",
+                "owner": "gateway",
+            },
+            "sources_ro": {"class": "sources", "mode": "read_only"},
+            "goodnotes_ro": {"class": "goodnotes", "mode": "read_only"},
+            "proxy_config_ro": {"class": "proxy_config", "mode": "read_only"},
+        },
+        "ingress": {
+            "remote_capture": {
+                "method": "POST",
+                "path": "/remote/v1/capture.create",
+                "upstream": "gateway",
+                "auth": "ClientCredential",
+                "capability": "capture.create",
+                "principal_source": "credential",
+                "caller_principal_forbidden": True,
+            },
+            "generic_capabilities": {
+                "path_family": "/v1/{capability}",
+                "exposure": "internal_only",
+            },
+            "apple_machine": {
+                "exposure": "exact_dedicated_paths_only",
+                "paths_frozen_by": "NAS-07",
+            },
+            "browser": {"upstream": "web", "auth": "entra"},
+        },
+        "mcp": {"transport": "stdio_only"},
+    }
+    if any(contract.get(name) != value for name, value in expected_contract_sections.items()):
+        errors.add("contract_values")
     expected_mounts = {
         "postgres": ["postgres_data_rw"],
         "gateway": ["config_ro", "managed_documents_rw", "sources_ro"],
@@ -1006,6 +1067,30 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             '\n[mounts.extra_rw]\nclass = "extra"\nmode = "read_write"\n'
             'owner = "gateway"\n\n[ingress.remote_capture]',
             "contract_schema",
+        ),
+        (
+            "ops/nas/runtime-contract.toml",
+            '[mounts.config_ro]\nclass = "config"',
+            '[mounts.config_ro]\nclass = "config"\nowner = "proxy"',
+            "contract_values",
+        ),
+        (
+            "ops/nas/runtime-contract.toml",
+            'class = "managed_documents"',
+            'class = "secrets"',
+            "contract_values",
+        ),
+        (
+            "ops/nas/runtime-contract.toml",
+            '[ingress.browser]\nupstream = "web"\nauth = "entra"',
+            '[ingress.browser]\nupstream = "web"\nauth = "disabled"',
+            "contract_values",
+        ),
+        (
+            "ops/nas/runtime-contract.toml",
+            'public_exposure = "forbidden"',
+            'public_exposure = "forbidden"\nunrestricted = true',
+            "contract_values",
         ),
         (
             "ops/nas/runtime-contract.toml",

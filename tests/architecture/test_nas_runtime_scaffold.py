@@ -165,6 +165,55 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "apple_source_host",
     }:
         errors.add("contract_schema")
+    expected_contract_services = {
+        "postgres": {
+            "host": "nas",
+            "database_credential": True,
+            "mounts": ["postgres_data_rw"],
+            "networks": ["data-plane"],
+        },
+        "gateway": {
+            "host": "nas",
+            "database_credential": True,
+            "mounts": ["config_ro", "managed_documents_rw", "sources_ro"],
+            "networks": ["data-plane", "edge-plane"],
+            "container_bind": "0.0.0.0:8765",
+            "bind_implementation_owned_by": "NAS-04",
+        },
+        "worker_enrollment": {
+            "host": "nas",
+            "database_credential": True,
+            "mounts": ["config_ro", "sources_ro", "goodnotes_ro"],
+            "networks": ["data-plane"],
+        },
+        "worker_capture": {
+            "host": "nas",
+            "database_credential": True,
+            "mounts": ["config_ro"],
+            "networks": ["data-plane"],
+        },
+        "web": {
+            "host": "nas",
+            "database_credential": False,
+            "mounts": [],
+            "networks": ["edge-plane"],
+        },
+        "proxy": {
+            "host": "nas",
+            "database_credential": False,
+            "mounts": ["proxy_config_ro"],
+            "networks": ["edge-plane"],
+        },
+        "apple_source_host": {
+            "host": "mac",
+            "database_credential": False,
+            "general_nas_filesystem_credential": False,
+            "grant_issuer": "nas_application",
+            "transport": "outbound_poll",
+        },
+    }
+    if services != expected_contract_services:
+        errors.add("service_authority")
     expected_mounts = {
         "postgres": ["postgres_data_rw"],
         "gateway": ["config_ro", "managed_documents_rw", "sources_ro"],
@@ -932,6 +981,24 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             '\n[services.sidecar]\nhost = "nas"\ndatabase_credential = true\n'
             'mounts = []\nnetworks = ["data-plane"]\n\n[mounts.config_ro]',
             "contract_schema",
+        ),
+        (
+            "ops/nas/runtime-contract.toml",
+            '[services.gateway]\nhost = "nas"',
+            '[services.gateway]\nhost = "mac"',
+            "service_authority",
+        ),
+        (
+            "ops/nas/runtime-contract.toml",
+            '[services.proxy]\nhost = "nas"\ndatabase_credential = false',
+            '[services.proxy]\nhost = "nas"\ndatabase_credential = true',
+            "service_authority",
+        ),
+        (
+            "ops/nas/runtime-contract.toml",
+            '[services.web]\nhost = "nas"',
+            '[services.web]\nhost = "nas"\ngeneral_nas_filesystem_credential = true',
+            "service_authority",
         ),
         (
             "ops/nas/runtime-contract.toml",

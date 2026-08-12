@@ -1,5 +1,6 @@
-# Canonical `my_pa` PostgreSQL instance for local development and the
-# legacy-SQLite -> PostgreSQL migration.
+# Single-Mac local-development PostgreSQL instance and legacy-SQLite migration
+# aid. This file is explicitly not the NAS pilot/production runtime; see
+# ops/nas/ for that separately staged contract.
 #
 # Start:  docker compose -f ops/compose/postgres.yml up -d
 # Stop:   docker compose -f ops/compose/postgres.yml down

@@ -1,0 +1,99 @@
+# NAS-01 contract example only. The profile is deliberately disabled by default.
+# NAS-02 through NAS-09 must replace required values and add verified lifecycle
+# behavior before this can become an executable smoke stack.
+name: my-pa-nas-contract
+
+services:
+  postgres:
+    profiles: [nas-01-contract-only]
+    image: "${MY_PA_POSTGRES_IMAGE:?repository required}@${MY_PA_POSTGRES_IMAGE_DIGEST:?sha256 digest required}"
+    platform: linux/amd64
+    restart: "no"
+    environment:
+      POSTGRES_DB: my_pa
+      POSTGRES_USER: my_pa
+      POSTGRES_PASSWORD: "${MY_PA_DB_PASSWORD:?database password required}"
+    volumes:
+      - type: bind
+        source: "${MY_PA_NAS_ROOT:?explicit NAS root required}/postgres/data"
+        target: /var/lib/postgresql/data
+    networks: [data-plane]
+
+  gateway:
+    profiles: [nas-01-contract-only]
+    image: "${MY_PA_APP_IMAGE:?repository required}@${MY_PA_APP_IMAGE_DIGEST:?sha256 digest required}"
+    platform: linux/amd64
+    user: "${MY_PA_UID:?dedicated service uid required}:${MY_PA_GID:?dedicated service gid required}"
+    restart: "no"
+    command: [python, apps/gateway.py, run]
+    # NAS-04 must implement and verify this container-namespace bind setting.
+    # It does not publish the gateway on the NAS host.
+    environment:
+      MY_PA_GATEWAY_BIND_HOST: 0.0.0.0
+    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]
+    expose: ["8765"]
+    volumes:
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, read_only: true}
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/managed-documents", target: /srv/my-pa/managed-documents}
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/sources", target: /srv/my-pa/sources, read_only: true}
+    networks: [data-plane, edge-plane]
+
+  worker-enrollment:
+    profiles: [nas-01-contract-only]
+    image: "${MY_PA_APP_IMAGE:?repository required}@${MY_PA_APP_IMAGE_DIGEST:?sha256 digest required}"
+    platform: linux/amd64
+    user: "${MY_PA_UID:?}:${MY_PA_GID:?}"
+    restart: "no"
+    command: [python, apps/worker.py, run, --plane, enrollment]
+    env_file: ["${MY_PA_NAS_ENV_FILE:?}"]
+    volumes:
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, read_only: true}
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/sources", target: /srv/my-pa/sources, read_only: true}
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/goodnotes", target: /srv/my-pa/goodnotes, read_only: true}
+    networks: [data-plane]
+
+  worker-capture:
+    profiles: [nas-01-contract-only]
+    image: "${MY_PA_APP_IMAGE:?repository required}@${MY_PA_APP_IMAGE_DIGEST:?sha256 digest required}"
+    platform: linux/amd64
+    user: "${MY_PA_UID:?}:${MY_PA_GID:?}"
+    restart: "no"
+    command: [python, apps/worker.py, run, --plane, capture]
+    env_file: ["${MY_PA_NAS_ENV_FILE:?}"]
+    volumes:
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, read_only: true}
+    networks: [data-plane]
+
+  web:
+    profiles: [nas-01-contract-only]
+    image: "${MY_PA_WEB_IMAGE:?repository required}@${MY_PA_WEB_IMAGE_DIGEST:?sha256 digest required}"
+    platform: linux/amd64
+    user: "${MY_PA_UID:?}:${MY_PA_GID:?}"
+    restart: "no"
+    command: [npm, run, start]
+    environment:
+      NODE_ENV: production
+      MYPA_GATEWAY_URL: http://gateway:8765
+      MYPA_GATEWAY_AUTH_MODE: entra
+      MYPA_SESSION_SECRET: "${MYPA_SESSION_SECRET:?session secret required}"
+    expose: ["3000"]
+    networks: [edge-plane]
+
+  proxy:
+    profiles: [nas-01-contract-only]
+    image: "${MY_PA_PROXY_IMAGE:?repository required}@${MY_PA_PROXY_IMAGE_DIGEST:?sha256 digest required}"
+    platform: linux/amd64
+    restart: "no"
+    ports:
+      - "127.0.0.1:${MY_PA_PROXY_PORT:?explicit smoke port required}:8080"
+    volumes:
+      - {type: bind, source: "./proxy-allowlist.example.caddy", target: /etc/caddy/Caddyfile, read_only: true}
+    networks: [edge-plane]
+
+networks:
+  data-plane:
+    internal: true
+  # Gateway and web require outbound Entra/OIDC access. NAS-06 must install
+  # and verify the host/DNS egress allowlist before pilot activation.
+  edge-plane:
+    internal: false

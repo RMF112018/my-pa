@@ -1,12 +1,12 @@
 ---
 artifact_id: ARCH-PKL-SC-001
 artifact_type: System-context architecture
-version: 0.1.0
+version: 0.2.0
 status: CURRENT_REPOSITORY_ARCHITECTURE
 feature_id: FEATURE-PKL-001
 phase_id: PHASE-00
 repository: RMF112018/my-pa
-authenticated_base_sha: 9b35476b70fe4fbc03bb8f9835d93c1b71089bbe
+authenticated_base_sha: c10ecf397e1556ac5da64ff49a608aa8e963cdb3
 classification: INTERNAL_ARCHITECTURE
 supersession_state: CURRENT
 ---
@@ -27,7 +27,14 @@ policy; the stale policy inconsistency remains recorded for later, separately
 authorized operator correction.
 
 
-This document refines the accepted foundation in ADR-001 and ADR-002. It does not itself authorize NAS/database access, deployment, production activation, or risk acceptance. Its remediation lineage starts at authenticated base `main@9b35476b70fe4fbc03bb8f9835d93c1b71089bbe`; the candidate's exact head/tree and clean-worktree evidence are maintained in the pull request and final-state record, where they can be updated without a self-referential commit hash.
+This document refines the accepted foundation in ADR-001, ADR-002, and ADR-008.
+It records the accepted NAS target without claiming that the target is deployed.
+It does not itself authorize live NAS/database access, deployment, production
+activation, or risk acceptance. Its NAS-target lineage starts at authenticated
+base `main@c10ecf397e1556ac5da64ff49a608aa8e963cdb3`; the candidate's exact
+head/tree and clean-worktree evidence are maintained in the pull request and
+final-state record, where they can be updated without a self-referential commit
+hash.
 
 
 ## 2. Actors and external systems
@@ -52,6 +59,9 @@ This document refines the accepted foundation in ADR-001 and ADR-002. It does no
 | `CTX-PKL-014` | Public research providers | External evidence collection | Excluded | No public research or automated profiling in MCV |
 | `CTX-PKL-016` | MossAIc web frontend | Next.js App Router PWA/BFF | Implemented for this remediation objective | Uses public capability contracts; no provider or database bypass |
 | `CTX-PKL-017` | GoodNotes manifest source | Read-only page representations into OCR/Review | Implemented with exact registry/enrollment binding | No traversal, cloud OCR/model, watcher, or live-root admission |
+| `CTX-PKL-018` | NAS runtime host | Accepted canonical deployment target; not deployed | Staged through NAS-01–NAS-10 | Owns PostgreSQL and application filesystem authority only after gated activation |
+| `CTX-PKL-019` | Private reverse proxy and Tailscale Serve | Accepted pilot ingress; inactive | Exact allowlist with one published container | Tailnet-only; generic capabilities and unmatched machine routes fail closed |
+| `CTX-PKL-020` | Mac Apple transport host | Accepted target split; not deployed | Apple TCC read, protected spool, outbound polling only | No database credential, general NAS filesystem credential, or grant-minting authority |
 
 
 ## 3. Current versus target context
@@ -106,13 +116,22 @@ no live personal source is activated. No model is required for correctness, and
 GoodNotes invokes none.
 
 
-### 3.3 Later target context
+### 3.3 Accepted NAS deployment target
 
 
-Later phases may add a verified NAS provider, live personal-source activation,
-GoodNotes watcher/live-root operation, canonical-Review-routed model assistance,
-and projections. They remain future context and are not implied by the bounded
-implementation present here.
+ADR-008 accepts the NAS as the canonical deployment host for PostgreSQL,
+gateway, worker planes, web/BFF, and the sole published reverse proxy. The Mac
+retains only Apple TCC access, its protected spool, and an outbound transport
+agent. Browser routes go to web; only exact approved machine paths can reach
+the gateway. PostgreSQL and generic `/v1/*` capabilities are not published.
+
+This is a target-state contract, not a deployment claim. NAS-02 through NAS-10
+must measure the live platform, build and verify exact images, establish
+storage and credentials, prove smoke/backup/restore/security behavior, activate
+private ingress, and complete the pilot before the target becomes operational.
+Live personal-source activation, GoodNotes watcher/live-root operation,
+canonical-Review-routed model assistance, and projections remain separately
+gated future context.
 
 
 ## 4. Context diagram
@@ -128,7 +147,9 @@ flowchart LR
     WK[Worker Process\nmy-pa-worker]
     DB[(PostgreSQL\nstructured authority + FTS)]
     FP[Approved Fixture Provider\nread-only]
-    NAS[Future NAS / Source Providers\nread-only]
+    NAS[NAS Runtime Target\nPostgreSQL + app authority; inactive]
+    PROXY[Private Proxy + Tailscale Serve\nexact allowlist; inactive]
+    MAC[Mac Apple Host\nTCC + spool + outbound transport]
     LM[Future Local Model Gateway]
     CM[Cloud Model Provider\nprohibited by default]
     MD[Managed Document Store\nseparate product-owned write boundary]
@@ -147,7 +168,11 @@ flowchart LR
     WK --> DB
     WK --> FP
     GW --> FP
-    WK -. later .-> NAS
+    PROXY -. accepted target .-> GW
+    PROXY -. browser routes .-> WEB
+    GW -. accepted target .-> NAS
+    WK -. accepted target .-> NAS
+    MAC -. exact machine transport .-> PROXY
     GW -. approved context only .-> LM
     GW -. separately approved disclosure only .-> CM
     GW --> MD
@@ -157,12 +182,13 @@ flowchart LR
 
 
     classDef excluded stroke-dasharray: 5 5;
-    class CM,OB,NAS,LM excluded;
+    class CM,OB,NAS,PROXY,MAC,LM excluded;
 ```
 
 
 Solid edges are implemented conceptual flows under the current objective.
-Dashed edges remain later-phase or excluded until separately authorized.
+Dashed edges remain inactive target-state or excluded until their named gates
+are completed and the operator activates them.
 
 
 ## 5. Trust boundaries

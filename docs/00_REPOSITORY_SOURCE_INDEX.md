@@ -21,6 +21,7 @@ The current remediation candidate is `bf/pilot-blocker-remediation`, forked from
 - [`docs/decisions/ADR-002-database-identity-and-compatibility-alias.md`](decisions/ADR-002-database-identity-and-compatibility-alias.md) — logical database identity and deferred physical alias.
 - [`docs/decisions/ADR-003-product-owned-user-authored-source-records.md`](decisions/ADR-003-product-owned-user-authored-source-records.md) — the third authority class: records the user creates inside `my-pa`, append-only, and not a managed-document write.
 - [`docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md`](decisions/ADR-004-mossaic-frontend-nextjs-app-router.md) — Next.js App Router PWA as the MossAIc frontend, with a synthetic identity provider until a real Entra registration exists.
+- [`docs/decisions/ADR-008-nas-runtime-topology.md`](decisions/ADR-008-nas-runtime-topology.md) — accepted NAS runtime placement, filesystem authority, ingress, auth, image-platform, restart, and Mac Apple-TCC split.
 - [`docs/architecture/system-context.md`](architecture/system-context.md) — actors, external systems, trust and authority boundaries.
 - [`docs/architecture/module-boundaries.md`](architecture/module-boundaries.md) — module ownership, dependency direction, and split triggers.
 - [`docs/architecture/data-authority.md`](architecture/data-authority.md) — data ownership, authority, lifecycle, and disclosure.
@@ -72,6 +73,7 @@ Running the local candidate on one machine. A procedure under `ops/runbooks/` is
 - [`apps/cli/README.md`](../apps/cli/README.md) — the four operator programs: the capability transport, the source configuration plane, the runtime probe, and the migration control plane.
 - [`ops/postgres/README.md`](../ops/postgres/README.md) — the PostgreSQL instance itself: image, tuning, locale, collation contract, cluster-creation settings, and reset procedure.
 - [`ops/compose/README.md`](../ops/compose/README.md) — the container definition the instance is started from.
+- [`ops/nas/README.md`](../ops/nas/README.md) — non-deploying NAS runtime contract and the NAS-01 through NAS-10 implementation boundary.
 
 ## Schema, fixtures, and evidence
 

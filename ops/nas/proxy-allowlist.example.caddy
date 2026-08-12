@@ -1,0 +1,43 @@
+# NAS-01 contract example. Smoke only: Compose publishes this proxy on loopback.
+# Tailscale Serve activation and the final private origin belong to NAS-06.
+:8080 {
+    # Remote Capture keeps the WP-10 gateway transport exactly.
+    @remote_capture {
+        method POST
+        path /remote/v1/capture.create
+    }
+    handle @remote_capture {
+        reverse_proxy gateway:8765
+    }
+
+    # The path exists for one method only; it never falls through to Next.js.
+    @remote_capture_wrong_method path /remote/v1/capture.create
+    handle @remote_capture_wrong_method {
+        respond "method not allowed" 405
+    }
+
+    # Capability endpoints are container-network internal, even if a web route
+    # happens to share the prefix. Do not forward Tailscale identity headers as
+    # application authentication.
+    @internal_capabilities path /v1/*
+    handle @internal_capabilities {
+        respond "not found" 404
+    }
+
+    # Unmatched machine routes fail closed instead of falling through to web.
+    @unmatched_remote path /remote/*
+    handle @unmatched_remote {
+        respond "not found" 404
+    }
+
+    # NAS-07 will insert exact Apple poll/admit matchers before this deny.
+    @reserved_apple path /apple/*
+    handle @reserved_apple {
+        respond "not found" 404
+    }
+
+    # Browser routes are the only remaining ingress class.
+    handle {
+        reverse_proxy web:3000
+    }
+}

@@ -1,7 +1,7 @@
 # ADR-008: NAS runtime topology and authority boundaries
 
-**Status:** Accepted; implementation staged as NAS-01 through NAS-10  
-**Decision date:** 2026-08-12  
+**Status:** Accepted; implementation staged as NAS-01 through NAS-10
+**Decision date:** 2026-08-12
 **Repository basis:** `main@c10ecf397e1556ac5da64ff49a608aa8e963cdb3`, tree `838169552d9b8db92c5ba38be93fd6dfc9fbac04`
 
 ## Context

@@ -40,8 +40,22 @@ def _service_block(compose: str, service: str) -> str:
     return match.group(1) if match else ""
 
 
-def _compose_mount_targets(block: str) -> set[str]:
-    return set(re.findall(r"target:\s*([^,}\s]+)", block))
+def _compose_mounts(block: str) -> set[tuple[str, str, bool]]:
+    mounts: set[tuple[str, str, bool]] = set()
+    for match in re.finditer(
+        r"type:\s*bind,\s*source:\s*[\"']?([^,\"']+)[\"']?,\s*"
+        r"target:\s*([^,}\s]+)(?:,\s*read_only:\s*(true|false))?",
+        block,
+    ):
+        mounts.add((match.group(1), match.group(2), match.group(3) == "true"))
+    multiline = re.search(
+        r"type:\s*bind\s*\n\s*source:\s*[\"']?([^\n\"']+)[\"']?\s*\n"
+        r"\s*target:\s*([^\s]+)",
+        block,
+    )
+    if multiline:
+        mounts.add((multiline.group(1), multiline.group(2), False))
+    return mounts
 
 
 def _compose_networks(block: str) -> set[str]:
@@ -185,24 +199,33 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
 
     blocks = {service: _service_block(compose, service) for service in SERVICES}
     expected_compose_mounts = {
-        "postgres": {"/var/lib/postgresql/data"},
+        "postgres": {
+            (
+                "${MY_PA_NAS_ROOT:?explicit NAS root required}/postgres/data",
+                "/var/lib/postgresql/data",
+                False,
+            )
+        },
         "gateway": {
-            "/srv/my-pa/config",
-            "/srv/my-pa/managed-documents",
-            "/srv/my-pa/sources",
+            ("${MY_PA_NAS_ROOT:?}/config", "/srv/my-pa/config", True),
+            (
+                "${MY_PA_NAS_ROOT:?}/managed-documents",
+                "/srv/my-pa/managed-documents",
+                False,
+            ),
+            ("${MY_PA_NAS_ROOT:?}/sources", "/srv/my-pa/sources", True),
         },
         "worker-enrollment": {
-            "/srv/my-pa/config",
-            "/srv/my-pa/sources",
-            "/srv/my-pa/goodnotes",
+            ("${MY_PA_NAS_ROOT:?}/config", "/srv/my-pa/config", True),
+            ("${MY_PA_NAS_ROOT:?}/sources", "/srv/my-pa/sources", True),
+            ("${MY_PA_NAS_ROOT:?}/goodnotes", "/srv/my-pa/goodnotes", True),
         },
-        "worker-capture": {"/srv/my-pa/config"},
+        "worker-capture": {("${MY_PA_NAS_ROOT:?}/config", "/srv/my-pa/config", True)},
         "web": set(),
-        "proxy": {"/etc/caddy/Caddyfile"},
+        "proxy": {("./proxy-allowlist.example.caddy", "/etc/caddy/Caddyfile", True)},
     }
     if any(
-        _compose_mount_targets(blocks[name]) != targets
-        for name, targets in expected_compose_mounts.items()
+        _compose_mounts(blocks[name]) != mounts for name, mounts in expected_compose_mounts.items()
     ):
         errors.add("mount_ownership")
     expected_compose_networks = {
@@ -372,6 +395,24 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             'source: "${MY_PA_NAS_ROOT:?}/sources", target: /srv/my-pa/sources, read_only: true',
             'source: "${MY_PA_NAS_ROOT:?}/sources", target: /srv/my-pa/sources',
             "writable_control_mount",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            'source: "${MY_PA_NAS_ROOT:?}/managed-documents", target: /srv/my-pa/managed-documents',
+            'source: "${MY_PA_NAS_ROOT:?}/backups", target: /srv/my-pa/managed-documents',
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            'source: "${MY_PA_NAS_ROOT:?explicit NAS root required}/postgres/data"',
+            'source: "${MY_PA_NAS_ROOT:?explicit NAS root required}/backups"',
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            'source: "./proxy-allowlist.example.caddy", target: /etc/caddy/Caddyfile',
+            'source: "${MY_PA_NAS_ROOT:?}/sources", target: /etc/caddy/Caddyfile',
+            "mount_ownership",
         ),
         (
             "ops/nas/compose.example.yml",

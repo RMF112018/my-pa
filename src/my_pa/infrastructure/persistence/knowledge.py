@@ -81,7 +81,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, Connection, Row, Select, func, literal, select
+from sqlalchemy import ColumnElement, Connection, Row, Select, func, literal, or_, select
 
 from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -380,9 +380,7 @@ def scope_beyond_enrollment(
         )
         .exists()
     )
-    found = connection.execute(
-        select(another.self_group() | _unenrolled_object(context).self_group())
-    ).scalar_one()
+    found = connection.execute(select(or_(another, _unenrolled_object(context)))).scalar_one()
     return bool(found)
 
 

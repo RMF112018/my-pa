@@ -676,6 +676,39 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("machine_route_fallthrough")
     if web_fallback < 0 or proxy.count("reverse_proxy web:3000") != 1:
         errors.add("browser_route")
+    allowed_proxy = """
+:8080 {
+    @remote_capture {
+        method POST
+        path /remote/v1/capture.create
+    }
+    handle @remote_capture {
+        reverse_proxy gateway:8765
+    }
+    @remote_capture_wrong_method path /remote/v1/capture.create
+    handle @remote_capture_wrong_method {
+        respond "method not allowed" 405
+    }
+    @internal_capabilities path /v1/*
+    handle @internal_capabilities {
+        respond "not found" 404
+    }
+    @unmatched_remote path /remote/*
+    handle @unmatched_remote {
+        respond "not found" 404
+    }
+    @reserved_apple path /apple/*
+    handle @reserved_apple {
+        respond "not found" 404
+    }
+    handle {
+        reverse_proxy web:3000
+    }
+}
+""".strip()
+    normalized_proxy = "\n".join(line.rstrip() for line in proxy.splitlines() if line.strip())
+    if normalized_proxy.strip() != allowed_proxy:
+        errors.add("proxy_exact_structure")
 
     if "Local development only" not in local_readme or "NAS pilot" not in local_readme:
         errors.add("local_non_pilot_label")
@@ -1179,6 +1212,15 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "@unmatched_remote path /remote/*",
             "@unmatched_remote path /unused/*",
             "machine_route_fallthrough",
+        ),
+        (
+            "ops/nas/proxy-allowlist.example.caddy",
+            "    # Browser routes are the only remaining ingress class.",
+            "    handle @remote_capture {\n"
+            "        reverse_proxy other:9999\n"
+            "    }\n\n"
+            "    # Browser routes are the only remaining ingress class.",
+            "proxy_exact_structure",
         ),
         (
             "ops/nas/README.md",

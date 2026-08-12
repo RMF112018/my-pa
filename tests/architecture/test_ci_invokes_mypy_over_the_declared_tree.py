@@ -126,7 +126,7 @@ _INTERPRETER: Final = re.compile(r"^python(3(\.\d+)?)?$")
 #: argue that any of the three *should* be unchecked. Its job is that a **new**
 #: Python root cannot appear without someone deciding which side it is on, which
 #: is the half of `D-64` that a bare-invocation rule alone does not cover.
-UNCHECKED_ROOTS: Final = frozenset({"tests", "docs", "scripts", "web"})
+UNCHECKED_ROOTS: Final = frozenset({"tests", "docs", "scripts"})
 
 
 def _indent(line: str) -> int:
@@ -735,6 +735,7 @@ def test_every_python_root_is_type_checked_or_named() -> None:
         root
         for path in ROOT.glob("*/**/*.py")
         if "__pycache__" not in path.parts
+        and "node_modules" not in path.parts
         and (root := path.relative_to(ROOT).parts[0]) not in ignored
         and not root.startswith(".")
     }

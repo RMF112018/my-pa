@@ -205,6 +205,15 @@ source-pre-sync, destination-first post-rename ordering to all three
 cross-directory spool transitions and exercises destination-synced
 interruptions for each transition.
 
+An eleventh independent audit of corrective head
+`dd4c585b889fb621bef6b26dc984a42f8aa6d817` returned BLOCK after verifying the
+loss-preventing sync order. It found that the permitted crash state can retain
+both old and new names, but retries did not reconcile those duplicates. The
+next corrective head durably removes byte-identical fallback names only after
+reasserting the destination, preserves mismatches as collisions, and retries
+all three interrupted transitions. This BLOCK is historical and cannot satisfy
+the gate.
+
 ## Independent review gate
 
 No statement in this record means `READY_FOR_PILOT_VALIDATION`, independently

@@ -274,12 +274,21 @@ public final class ProtectedSpool: @unchecked Sendable {
             let bytes = try encoder.encode(item)
             let pendingName = item.envelopeID.rawValue + ".pending"
             let quarantineName = item.envelopeID.rawValue + ".quarantine"
+            let temporaryName = item.envelopeID.rawValue + ".tmp"
             for (descriptor, name) in [
                 (pendingDescriptor, pendingName),
                 (quarantineDescriptor, quarantineName),
             ] where try entryExists(in: descriptor, name: name) {
                 guard try safeBytes(in: descriptor, name: name) == bytes else {
                     throw ProtectedSpoolError.pathCollision
+                }
+                if try entryExists(in: rootDescriptor, name: temporaryName) {
+                    try reconcileDuplicate(
+                        oldDirectory: rootDescriptor,
+                        oldName: temporaryName,
+                        durableDirectory: descriptor,
+                        durableName: name
+                    )
                 }
                 return .alreadyPresent
             }
@@ -294,7 +303,6 @@ public final class ProtectedSpool: @unchecked Sendable {
                 throw ProtectedSpoolError.byteCapacityExceeded
             }
 
-            let temporaryName = item.envelopeID.rawValue + ".tmp"
             let descriptor = Darwin.openat(
                 rootDescriptor,
                 temporaryName,
@@ -378,6 +386,17 @@ public final class ProtectedSpool: @unchecked Sendable {
             try validateNamespace()
             let source = envelopeID.rawValue + ".pending"
             let destination = envelopeID.rawValue + ".quarantine"
+            if try entryExists(in: pendingDescriptor, name: source),
+               try entryExists(in: quarantineDescriptor, name: destination)
+            {
+                try reconcileDuplicate(
+                    oldDirectory: pendingDescriptor,
+                    oldName: source,
+                    durableDirectory: quarantineDescriptor,
+                    durableName: destination
+                )
+                return
+            }
             guard try entryExists(in: pendingDescriptor, name: source) else {
                 if try entryExists(in: quarantineDescriptor, name: destination) {
                     throw ProtectedSpoolError.itemAlreadyQuarantined
@@ -427,15 +446,21 @@ public final class ProtectedSpool: @unchecked Sendable {
             let quarantine = current.items.filter { $0.state == .quarantine }
             var projectedQuarantineCount = quarantine.count
             var projectedQuarantineBytes = quarantine.reduce(0, { $0 + $1.byteCount })
-            var recovery: [(source: String, destination: String)] = []
+            var recovery: [(source: String, destination: String, duplicate: Bool)] = []
             for source in names {
                 let stem = String(source.dropLast(".tmp".count))
                 guard let envelopeID = NativeSourceOpaqueID(rawValue: stem) else {
                     throw ProtectedSpoolError.corruptItem
                 }
                 let destination = envelopeID.rawValue + ".quarantine"
-                guard try !entryExists(in: quarantineDescriptor, name: destination) else {
-                    throw ProtectedSpoolError.pathCollision
+                if try entryExists(in: quarantineDescriptor, name: destination) {
+                    guard try safeBytes(in: rootDescriptor, name: source)
+                        == safeBytes(in: quarantineDescriptor, name: destination)
+                    else {
+                        throw ProtectedSpoolError.pathCollision
+                    }
+                    recovery.append((source: source, destination: destination, duplicate: true))
+                    continue
                 }
                 let sourceBytes = try safeBytes(in: rootDescriptor, name: source)
                 projectedQuarantineCount += 1
@@ -446,9 +471,18 @@ public final class ProtectedSpool: @unchecked Sendable {
                 guard projectedQuarantineBytes <= limits.maximumQuarantineBytes else {
                     throw ProtectedSpoolError.quarantineByteCapacityExceeded
                 }
-                recovery.append((source: source, destination: destination))
+                recovery.append((source: source, destination: destination, duplicate: false))
             }
             for candidate in recovery {
+                if candidate.duplicate {
+                    try reconcileDuplicate(
+                        oldDirectory: rootDescriptor,
+                        oldName: candidate.source,
+                        durableDirectory: quarantineDescriptor,
+                        durableName: candidate.destination
+                    )
+                    continue
+                }
                 // The injected-crash path fsyncs file bytes but deliberately
                 // does not sync this directory entry. Establish the recoverable
                 // source name before replacing it across directories.
@@ -474,6 +508,25 @@ public final class ProtectedSpool: @unchecked Sendable {
             }
             return try inventoryUnlocked()
         }
+    }
+
+    private func reconcileDuplicate(
+        oldDirectory: Int32,
+        oldName: String,
+        durableDirectory: Int32,
+        durableName: String
+    ) throws {
+        guard try safeBytes(in: oldDirectory, name: oldName)
+            == safeBytes(in: durableDirectory, name: durableName)
+        else {
+            throw ProtectedSpoolError.pathCollision
+        }
+        // Reassert the destination before removing the duplicate fallback.
+        try syncDirectory(durableDirectory)
+        guard Darwin.unlinkat(oldDirectory, oldName, 0) == 0 else {
+            throw ProtectedSpoolError.filesystemFailure(errno)
+        }
+        try syncDirectory(oldDirectory)
     }
 
     private func inventoryUnlocked() throws -> ProtectedSpoolInventory {

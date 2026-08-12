@@ -1039,6 +1039,17 @@ struct AppleSourceHostContractChecks {
             }),
             "Destination-synced interruption did not retain recovered evidence"
         )
+        let recoveredDestination = durableMoveDirectory
+            .appendingPathComponent("quarantine", isDirectory: true)
+            .appendingPathComponent("crash-durable.quarantine", isDirectory: false)
+        let recoveredFallback = durableMoveDirectory
+            .appendingPathComponent("crash-durable.tmp", isDirectory: false)
+        try FileManager.default.copyItem(at: recoveredDestination, to: recoveredFallback)
+        _ = try durableMoveSpool.recoverResidues()
+        try require(
+            !FileManager.default.fileExists(atPath: recoveredFallback.path),
+            "Recovery retry did not remove its byte-identical fallback"
+        )
 
         let durableEnqueueDirectory = temporaryDirectory("enqueue-durable-move")
         defer { try? FileManager.default.removeItem(at: durableEnqueueDirectory) }
@@ -1061,6 +1072,20 @@ struct AppleSourceHostContractChecks {
             try durableEnqueueSpool.item(durableEnqueue.envelopeID) == durableEnqueue,
             "Destination-synced enqueue interruption did not retain pending evidence"
         )
+        let enqueueDestination = durableEnqueueDirectory
+            .appendingPathComponent("pending", isDirectory: true)
+            .appendingPathComponent("enqueue-durable.pending", isDirectory: false)
+        let enqueueFallback = durableEnqueueDirectory
+            .appendingPathComponent("enqueue-durable.tmp", isDirectory: false)
+        try FileManager.default.copyItem(at: enqueueDestination, to: enqueueFallback)
+        try require(
+            try durableEnqueueSpool.enqueue(durableEnqueue) == .alreadyPresent,
+            "Enqueue retry did not reconcile its byte-identical fallback"
+        )
+        try require(
+            !FileManager.default.fileExists(atPath: enqueueFallback.path),
+            "Enqueue retry left its byte-identical fallback"
+        )
         try requireSpoolError(.injectedCrash) {
             try durableEnqueueSpool.quarantine(
                 durableEnqueue.envelopeID,
@@ -1072,6 +1097,18 @@ struct AppleSourceHostContractChecks {
                 $0.envelopeID == durableEnqueue.envelopeID && $0.state == .quarantine
             }),
             "Destination-synced quarantine interruption did not retain evidence"
+        )
+        let quarantineDestination = durableEnqueueDirectory
+            .appendingPathComponent("quarantine", isDirectory: true)
+            .appendingPathComponent("enqueue-durable.quarantine", isDirectory: false)
+        let quarantineFallback = durableEnqueueDirectory
+            .appendingPathComponent("pending", isDirectory: true)
+            .appendingPathComponent("enqueue-durable.pending", isDirectory: false)
+        try FileManager.default.copyItem(at: quarantineDestination, to: quarantineFallback)
+        try durableEnqueueSpool.quarantine(durableEnqueue.envelopeID)
+        try require(
+            !FileManager.default.fileExists(atPath: quarantineFallback.path),
+            "Quarantine retry left its byte-identical fallback"
         )
 
         let fullQuarantineBytesDirectory = temporaryDirectory("crash-quarantine-bytes")

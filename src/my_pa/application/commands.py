@@ -43,15 +43,18 @@ from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
+from my_pa.domain.documents.managed import validate_managed_media_type, validate_managed_title
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.situation.continuity import ClosureEvidenceKind
 
 __all__ = [
     "AddProjectCommand",
+    "ArchiveManagedDocumentCommand",
     "CloseSituationCommand",
     "Command",
     "CreateCapture",
+    "CreateManagedDocumentCommand",
     "DecideReviewCase",
     "EnrollSource",
     "EnterFrameCommand",
@@ -63,6 +66,7 @@ __all__ = [
     "GetSourceStatus",
     "LinkSituationToProjectCommand",
     "ListCaptures",
+    "ListManagedDocumentsCommand",
     "ListProjects",
     "ListReviewCases",
     "ListSituations",
@@ -70,10 +74,13 @@ __all__ = [
     "OpenSituationCommand",
     "ReadCapture",
     "ReadKnowledge",
+    "ReadManagedDocumentCommand",
     "RecordRelationshipEventCommand",
     "Representation",
+    "RestoreManagedDocumentCommand",
     "RevealSubject",
     "ReviseCapture",
+    "ReviseManagedDocumentCommand",
     "SearchCaptures",
     "SearchKnowledge",
     "TraceObjectCommand",
@@ -883,3 +890,147 @@ class TraceObjectCommand:
             and self.time_range_end < self.time_range_start
         ):
             raise ValueError("a trace range ends no earlier than it starts")
+
+
+# --- WP-27 managed-document commands ----------------------------------------
+#
+# A third command family, and it sits beside the WP-06 continuity family for the
+# same reason and with the same shape: these are consumed by the standalone
+# `application.managed_documents.ManagedDocumentService`, a caller resolves the
+# authenticated Principal and passes it in explicitly, and the repository stamps
+# and filters every row by it. They are not part of `Command`, hold no
+# `Capability`, and never reach `invoke`.
+#
+# **That is a scope boundary rather than an oversight, and it is written down
+# here so nobody has to infer it.** WP-27 builds the canonical managed-document
+# application service; exposing managed writes over a transport is WP-28's, which
+# the completion plan states as "managed writes use WP-27 only". A capability seat
+# added here with no transport behind it would publish a name `capabilities.get`
+# reports as available and nothing can reach.
+#
+# **`content` is `bytes` and is `repr=False`**, for the reason `CreateCapture.text`
+# carries it and more so: this is a document body, and a dataclass `repr` reaches
+# a traceback, a log record and a pytest assertion message without anyone deciding
+# it should.
+#
+# **No command carries a path, a filename, or a location.** `title` is metadata,
+# bounded and stored in the database, and the byte store accepts no path
+# parameter at all — so there is nothing on this surface for a traversal to
+# travel in.
+
+
+@dataclass(frozen=True, slots=True)
+class CreateManagedDocumentCommand:
+    """Write the first immutable version of a new managed document.
+
+    Names no document, because creating names nothing that exists. That is the
+    whole difference from `ReviseManagedDocumentCommand`, and it is a difference
+    in the type rather than in a nullable field, so no request can be ambiguous
+    about which it is.
+    """
+
+    principal_id: str
+    title: str
+    media_type: str
+    content: bytes = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_managed_title(self.title)
+        validate_managed_media_type(self.media_type)
+        if not isinstance(self.content, bytes | bytearray):
+            raise ValueError("a managed document version carries bytes")
+        if not self.idempotency_key:
+            raise ValueError("a managed write carries an idempotency key")
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseManagedDocumentCommand:
+    """Append a successor version to a managed document the Principal owns.
+
+    `expected_version_number` is required and has no default. A revision that did
+    not state what it was revising would be a blind write, and the whole of
+    WP-27's expected-version control is that a writer says which version it read
+    before it says what should follow.
+    """
+
+    principal_id: str
+    document_id: str
+    expected_version_number: int
+    title: str
+    media_type: str
+    content: bytes = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.document_id, IdKind.MANAGED_DOCUMENT)
+        if type(self.expected_version_number) is not int or self.expected_version_number < 1:
+            raise ValueError("an expected managed version number starts at one")
+        validate_managed_title(self.title)
+        validate_managed_media_type(self.media_type)
+        if not isinstance(self.content, bytes | bytearray):
+            raise ValueError("a managed document version carries bytes")
+        if not self.idempotency_key:
+            raise ValueError("a managed write carries an idempotency key")
+
+
+@dataclass(frozen=True, slots=True)
+class ReadManagedDocumentCommand:
+    """Read one stored version of a managed document the Principal owns.
+
+    `version_id` omitted means the current version. Named, it means that version —
+    including a superseded one, which is what makes an immutable chain worth
+    keeping. `include_bytes` is false by default so that reading metadata is not
+    silently a read of a document body.
+    """
+
+    principal_id: str
+    document_id: str
+    version_id: str | None = None
+    include_bytes: bool = False
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.document_id, IdKind.MANAGED_DOCUMENT)
+        if self.version_id is not None:
+            validate_identifier(self.version_id, IdKind.MANAGED_DOCUMENT_VERSION)
+
+
+@dataclass(frozen=True, slots=True)
+class ListManagedDocumentsCommand:
+    """One bounded page of the Principal's managed documents, newest first."""
+
+    principal_id: str
+    limit: int = 50
+    include_archived: bool = False
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if type(self.limit) is not int or self.limit < 1:
+            raise ValueError("a page holds at least one managed document")
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveManagedDocumentCommand:
+    """Withdraw one managed document from the active set. Destroys nothing."""
+
+    principal_id: str
+    document_id: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.document_id, IdKind.MANAGED_DOCUMENT)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreManagedDocumentCommand:
+    """Return one archived managed document to the active set."""
+
+    principal_id: str
+    document_id: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.document_id, IdKind.MANAGED_DOCUMENT)

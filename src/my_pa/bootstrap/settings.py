@@ -233,6 +233,34 @@ class Settings(StrictModel):
     #: nothing else. Publishing it — a TLS-terminating reverse proxy, a tunnel,
     #: a port forward — is an operator act outside this repository and is
     #: reserved to them under `AGENTS.md` section 8.2.
+    #: Where the managed-document write plane stores bytes (WP-27).
+    #:
+    #: **Empty by default, and empty means there is no managed plane.** A process
+    #: that has not been told where managed bytes go composes no byte store, so
+    #: an unconfigured or mistyped deployment cannot write a managed document at
+    #: all — the fail-closed direction, and the same one `remote_ingress_enabled`
+    #: takes. There is no default location and no inference: choosing where a
+    #: user's documents live is an operator decision, and a default would put one
+    #: in the working directory of whichever process started first.
+    #:
+    #: **Separate from every source root, and separate by construction rather
+    #: than by comparison.** A source root is a `knowledge.sources.native_root`
+    #: row an operator registered through `apps/cli/sources.py`; this is process
+    #: configuration. Two different channels, so there is no single value that
+    #: could be read as both. The overlap check is still made, after full path
+    #: resolution, when the store is constructed —
+    #: `infrastructure.managed_document_stores.filesystem.store` refuses a
+    #: managed root that is, contains, or lies inside a configured source root,
+    #: including through a symbolic link.
+    #:
+    #: **It holds no credential, and that is stated rather than left as an
+    #: absence.** The managed store in this build is a local filesystem reached
+    #: with the process's own identity, so there is nothing to hold; a remote
+    #: managed store is an EXT-10 operator-gated seam and would carry its own
+    #: `MY_PA_MANAGED_DOCUMENT_*` credential setting rather than reuse any source
+    #: one. Adding an unused credential field today would be the speculative
+    #: configuration `AGENTS.md` section 2 rules out.
+    managed_document_root: str = ""
     remote_ingress_enabled: bool = False
     redaction_enabled: bool = True
     contract_strict_mode: bool = True

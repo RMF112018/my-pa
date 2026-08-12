@@ -135,6 +135,29 @@ CONTINUITY_COMMANDS: Final = frozenset(
     }
 )
 
+#: WP-27's six managed-document commands. The same shape and the same posture as
+#: the seven above — `principal_id` first, no `Capability`, no transport — and
+#: they are held to the same rule for a sharper reason: this family is the one
+#: whose commands cause bytes to be written to a filesystem, so a construction
+#: taking its Principal from a caller's payload would write a document into
+#: someone else's partition.
+MANAGED_DOCUMENT_COMMANDS: Final = frozenset(
+    {
+        "CreateManagedDocumentCommand",
+        "ReviseManagedDocumentCommand",
+        "ReadManagedDocumentCommand",
+        "ListManagedDocumentsCommand",
+        "ArchiveManagedDocumentCommand",
+        "RestoreManagedDocumentCommand",
+    }
+)
+
+#: Every command that carries a resolved Principal as a field rather than taking
+#: it from an `Authorization`. Claim 3 is quantified over this union, so a
+#: managed-document command wired from a caller's stated identity reddens exactly
+#: as a continuity one does.
+PRINCIPAL_BEARING_COMMANDS: Final = CONTINUITY_COMMANDS | MANAGED_DOCUMENT_COMMANDS
+
 #: An expression is a derived principal when it ends in one of these chains.
 #: `.principal.principal_id` is an `Authorization`'s or a policy request's;
 #: `account.principal_id` is the identity plane's registered account.
@@ -164,6 +187,25 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("cmd", "principal_id"),
         ("cmd", "principal_id"),
     ),
+    # WP-27's managed-document service reads each command's stated Principal and
+    # hands it to a repository that derives its own `PrincipalContext` from it and
+    # stamps every row with that. The persistence module then *verifies* the
+    # request's copy against the resolved context and refuses a mismatch as
+    # `CallerSuppliedPrincipalError`, exactly as `capture.py` does. The
+    # `document` read is the backup manifest's own `principal_id`, compared
+    # against the Principal being restored and refused when they differ — so a
+    # backup cannot move a document between partitions by being restored.
+    "application/managed_documents.py": (
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("document", "principal_id"),
+    ),
     "infrastructure/persistence/capture.py": (
         ("request", "principal_id"),
         ("request", "principal_id"),
@@ -171,6 +213,10 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
     ),
     "infrastructure/persistence/enrollment.py": (
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+    ),
+    "infrastructure/persistence/managed_documents.py": (
         ("request", "principal_id"),
         ("request", "principal_id"),
     ),
@@ -703,7 +749,7 @@ def continuity_constructions(tree: ast.AST) -> tuple[tuple[int, str, str], ...]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
             continue
-        if node.func.id not in CONTINUITY_COMMANDS:
+        if node.func.id not in PRINCIPAL_BEARING_COMMANDS:
             continue
         named = next(
             (kw.value for kw in node.keywords if kw.arg == "principal_id"),
@@ -1017,7 +1063,7 @@ def test_the_continuity_detector_accepts_a_derived_principal_and_refuses_a_state
     )
     assert not _is_derived("<positional or absent>")
 
-    # The seven names are the whole family, so a command added to
+    # The thirteen names are the whole family, so a command added to
     # `application/commands.py` without being added here is not silently exempt.
     from my_pa.application import commands
 
@@ -1028,8 +1074,8 @@ def test_the_continuity_detector_accepts_a_derived_principal_and_refuses_a_state
         for name in vars(commands)
         if name.endswith("Command") and not name.startswith("_") and name != "Command"
     }
-    assert declared == CONTINUITY_COMMANDS, (
-        f"the continuity command family is now {sorted(declared)}; this guard "
-        "covers "
-        f"{sorted(CONTINUITY_COMMANDS)}"
+    assert declared == PRINCIPAL_BEARING_COMMANDS, (
+        f"the principal-bearing command family is now {sorted(declared)}; this "
+        "guard covers "
+        f"{sorted(PRINCIPAL_BEARING_COMMANDS)}"
     )

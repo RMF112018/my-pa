@@ -188,6 +188,7 @@ _EMISSION_CALLABLES: Final = (
     "_historical_capture_tables",
     "_historical_wp7_tables",
     "_historical_wp8_tables",
+    "_historical_wp27_tables",
 )
 _EMISSION_LIST: Final = "_TABLES"
 
@@ -470,6 +471,20 @@ FROZEN: Final[dict[str, dict[str, tuple[str, ...]]]] = {
         ),
         "conversation_channel_is_known": ("unknown",),
     },
+    # WP-27's managed-document plane. Two closed sets, both frozen in the
+    # revision: the media types a managed document may declare, and the two
+    # lifecycle transitions. A member added to `MANAGED_MEDIA_TYPES` or to
+    # `domain.documents.managed.LifecycleTransition` must leave both texts here.
+    "4c7b2e91d8a5": {
+        "a_managed_media_type_is_known": (
+            "application/json",
+            "application/octet-stream",
+            "application/pdf",
+            "text/markdown",
+            "text/plain",
+        ),
+        "a_managed_document_transition_is_known": ("archived", "restored"),
+    },
 }
 
 
@@ -605,8 +620,8 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 27
-    assert len({revision for revision, _ in revisions}) == 27
+    assert len(revisions) == 28
+    assert len({revision for revision, _ in revisions}) == 28
     assert {"9c6b4a18ed72", "1a4c9e77b2d5", "2b7e9f4c1a83", "7e5a1fb93d62", "8b3f5c17d904"} <= {
         revision for revision, _ in revisions
     }

@@ -8,6 +8,7 @@ Operational procedures for running `my-pa` locally.
 | [`postgres-operations.md`](postgres-operations.md) | The canonical `my_pa` PostgreSQL database: start, stop, health check, connect, back up, restore. |
 | [`worker-operations.md`](worker-operations.md) | The worker process: running it bounded or until signalled, stopping it cleanly, and how a crashed worker's job is recovered. |
 | [`gateway-operations.md`](gateway-operations.md) | The HTTP gateway process: running it on loopback, calling the twenty capabilities, the status each error code takes, its two connection pools, and stopping it. |
+| [`managed-document-operations.md`](managed-document-operations.md) | The managed-document write plane: configuring its root, checking that its rows and its bytes agree, the metadata/bytes failure window and what it can leave behind, and backing the plane up and restoring it. |
 | [`mcp-and-cli-operations.md`](mcp-and-cli-operations.md) | The other two transports: the MCP server on stdio and the operator CLI. What is identical to HTTP and why, the handshake and derived tool list, the CLI's options and exit status, and what a bad command line does. |
 
 Related, outside this directory:

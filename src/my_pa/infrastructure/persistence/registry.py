@@ -47,6 +47,7 @@ from my_pa.infrastructure.persistence.tables import (
 __all__ = [
     "UnknownSourceError",
     "all_sources",
+    "configured_source_roots",
     "get_source",
     "observe_object",
     "register_source",
@@ -169,6 +170,30 @@ def all_sources(connection: Connection) -> tuple[ConfiguredSource, ...]:
         select(*_SOURCE_COLUMNS).order_by(sources.c.configured_at, sources.c.source_id)
     ).all()
     return tuple(_to_source(row) for row in rows)
+
+
+def configured_source_roots(connection: Connection) -> tuple[str, ...]:
+    """Every configured source's native root, for the managed plane's refusal.
+
+    **The third place a physical locator leaves persistence**, after
+    `resolve_native_locator` and `RegisteredSourceProviders.for_source`, and it
+    exists for one caller: the managed byte store refuses to be constructed over
+    a root that is, contains, or lies inside a read-only source root, and it
+    cannot make that comparison against roots it has not been given.
+
+    The values go straight into that constructor. They are never returned to a
+    request, never logged, and never put in a message — the store's refusal names
+    the rule and no path, exactly as `FixtureSourceProvider` does.
+
+    An empty tuple means no source is configured, which is a truthful answer: the
+    managed root then overlaps nothing because there is nothing to overlap.
+    """
+    return tuple(
+        str(row[0])
+        for row in connection.execute(
+            select(sources.c.native_root).order_by(sources.c.source_id)
+        ).all()
+    )
 
 
 def source_of_object(connection: Connection, source_object_id: str) -> str | None:

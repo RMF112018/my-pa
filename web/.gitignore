@@ -30,8 +30,11 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files. Only .env.example is committed, and it holds no secret — the same
+# exception the repository root makes, restated here because a nested .gitignore
+# does not inherit it.
 .env*
+!.env.example
 
 # vercel
 .vercel

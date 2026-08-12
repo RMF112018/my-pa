@@ -1,7 +1,9 @@
 # `web/` — MossAIc frontend shell
 
-**Status:** built across WP-00 through WP-06 of the **superseded** Moss v4.0
-campaign; runs against synthetic fixtures only and is not deployable.
+**Status:** four of the seven acceptance surfaces are wired to the Python
+gateway; three are not, and this file says which and why. The synthetic fixture
+provider is off unless explicitly configured, and in a default build no route and
+no page can produce fixture data at all.
 
 The Next.js (App Router) progressive web app for `my-pa`, decided by
 [`docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md`](../docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md).
@@ -48,8 +50,9 @@ canonical record only on an explicit accept / correct-and-accept, returning the 
 receipt the promotion issues. Correct-and-accept preserves the original proposal. The
 listing and every disposition are scoped to the signed-in principal — a foreign case is
 `not_found`, never disclosed — the web-tier shadow of the Python `review_cases` /
-`decide_review` partition (MU-AC-04). Cases are principal-scoped synthetic fixtures until
-the Python read models are wired.
+`decide_review` partition (MU-AC-04). **Both are now backed by the Python `review.list` and
+`review.decide` capabilities**; the fixture path survives only behind the explicit synthetic
+switch. See "What is wired, and what is not" below.
 
 WP-06 (R5) adds the **relationship / project continuity** surfaces. The **Situation board**
 (`/situations`, `/api/situations`, `/api/projects`) gathers the principal's Situations and
@@ -61,8 +64,10 @@ records**: a proposed (not-accepted) relationship event never surfaces on a time
 web-tier shadow of the Python `list_accepted_events` filter, and this is the WP-06 gate that
 Today/Pulse and timelines read only accepted records. Every listing is scoped to the signed-in
 principal, and a person that does not resolve in the caller's own partition is `not_found` —
-a foreign person and an unknown person are indistinguishable (MU-AC-05). Records are
-principal-scoped synthetic fixtures until the Python continuity read models are wired.
+a foreign person and an unknown person are indistinguishable (MU-AC-05). **These surfaces are
+not backed by the Python read models**, which do exist and are unreachable over the transport;
+in a default build they answer `not_implemented` rather than serving fixtures. See "What is
+wired, and what is not" below.
 
 Not delivered here: capture persistence and the processing pipeline, offline support,
 AI processing, and the To-Do projection. These were sequenced as WP-03, WP-04, WP-08
@@ -80,6 +85,128 @@ from Graph connector activation. This file previously listed "the Microsoft Grap
 connector (WP-07)" among the things pending delivery here, which presented the
 superseded Graph-primary sequencing as a live commitment; it is not one.
 
+## What is wired, and what is not
+
+The table is the honest state of the seam at this head. "Real-backed" means the
+route builds the canonical envelope, posts it to `POST /v1/{capability}` on the
+Python gateway, and returns what came back; it does not mean the surface is
+finished.
+
+| Surface | Route | State | Python capability |
+|---|---|---|---|
+| System | `/api/system` | real-backed | `capabilities.get` |
+| Library | `/api/library` | real-backed | `capture.list`, `capture.search`, `knowledge.search`, `knowledge.read` |
+| Review | `/api/review` | real-backed | `review.list` |
+| Review — decide | `/api/review/:id/decide` | real-backed | `review.decide` |
+| Capture | `/api/capture` | real-backed | `capture.create` |
+| Today / Pulse | `/api/pulse` | **not wired** — `not_implemented` | none exists |
+| Situations | `/api/situations` | **not wired** — `not_implemented` | none exists |
+| Reveal | `/api/reveal` | **not wired** — `not_implemented` | none exists |
+| Projects | `/api/projects` | **not wired** — `not_implemented` | none exists |
+| Relationship timeline | `/api/relationships/:id/timeline` | **not wired** — `not_implemented` | none exists |
+
+### Why the last five are not wired, precisely
+
+Not because the data does not exist. `SqlPulseRepository`, `SqlSituationRepository`,
+`SqlProjectRepository` and `SqlRelationshipEventRepository` are real, stamp
+`principal_id` on every write and filter by it on every read, and sit on tables
+WP-03's migration chain created. `SituationService` routes to them.
+
+They are unreachable over the transport. `POST /v1/{capability}` dispatches the
+fifteen members of `Capability` and nothing else, and `SituationService` is
+deliberately outside `ApplicationService.invoke`. Exposing any of them needs a
+sixteenth `Capability` member — and `audit_events.capability` carries a **frozen**
+`IN (...)` CHECK constraint listing exactly those fifteen names, widened by an
+explicit forward `ALTER` each time the vocabulary grows. A member added without
+one leaves every test green, because every test builds its database from scratch,
+and is refused by the stored constraint on the first audited operation in the
+field. So a sixteenth capability requires a migration, and the work package that
+wired this seam was authorised to write none.
+
+Reveal is a different absence: no capability takes a subject identifier and
+returns its evidence spans and derivation trace at all. `knowledge.read` answers a
+different question and is exposed at `/api/library` instead.
+
+There is one further reason the relationship timeline must not be wired casually:
+`relationship_identity_observations` carries a **table-wide** unique constraint, so
+two Principals recording the same source version collide with an `IntegrityError`
+where an absent row would have succeeded — an existence disclosure across the
+partition. It is unreachable today. Whoever wires that plane owns the constraint
+first.
+
+### What the pages do, which is not what the routes do
+
+`app/(app)/today`, `/review`, `/situations` and `/relationships/[personId]` are
+server components that read the fixture modules **directly** and never call an API
+route. They were not rewired here. In a default build they now fail closed rather
+than rendering fixtures, because the refusal lives in the fixture modules
+themselves rather than in the route handlers. Rewiring those four pages onto the
+routes is follow-on work and is not done.
+
+## The BFF transport
+
+`src/lib/api/gateway.ts` is the server-side client to the Python gateway, and
+until it existed there was none: every route assembled fixtures and
+`src/lib/api/client.ts` was a browser-side wrapper around those routes.
+
+- **Server-only, Node runtime.** It refuses outright if a browser global is
+  present, and a test scans the tree for any client component or middleware that
+  imports it.
+- **Identity comes from the verified session and nowhere else.** The envelope's
+  `principal_id` is derived by SHA-256 from the session's `tid`/`oid` — never read
+  from a body, query string, or header — and `rejectCallerSuppliedPrincipal` runs
+  on every payload before it is sent. On the Python side that field is
+  *correlation* input which no production module reads; an architecture guard
+  keeps that a measurement, and this tier does not change it.
+- **The request shape has one definition.** `src/contracts/gateway.json` is read
+  by this module and by `tests/contract/test_bff_gateway_contract_parity.py`, which
+  checks every entry against `Capability`, the permitted purposes, `RequestMetadata`
+  and each command's own dataclass fields, then feeds each probe through
+  `normalize()`. There is no second copy to drift.
+- **Failure is a typed state, never an empty success.** `unavailable`,
+  `not_found`, `conflict`, `policy_denied` and `validation` stay distinguishable.
+
+### `MYPA_GATEWAY_URL` and `MYPA_GATEWAY_AUTH_MODE` are required, with no defaults
+
+`MYPA_GATEWAY_URL` has no default at all, not even loopback: a default would mean
+a deployment that configured nothing still sent a principal's request somewhere
+nobody chose. Unset is a refusal (`gateway_not_configured`), and it is **never** a
+fallback to fixtures — the two are separate switches so that losing the backend
+cannot quietly become serving synthetic data.
+
+`MYPA_GATEWAY_AUTH_MODE` mirrors the Python `MY_PA_AUTH_MODE` and must agree with
+it.
+
+- `local_operator` — no `Authorization` header is sent, and the gateway serves its
+  fixed process principal. **Every disclosure returned in this mode states that
+  results belong to the deployment's single local-operator principal and are not
+  partitioned by browser session**, because that is true and claiming otherwise
+  would be the inaccuracy this seam exists to remove.
+- `entra` — the gateway requires a bearer token, and **this tier holds none**. The
+  session envelope carries `principalId`, `tid`, `oid`, `upn` and `displayName`
+  and deliberately no credential, and `POST /api/session` implements no real
+  sign-in — it refuses outright when `MYPA_AUTH_MODE` is `entra`. So the BFF
+  refuses with `no_forwardable_credential` rather than sending an unauthenticated
+  request or fabricating a token. Forwarding a real credential needs an Entra app
+  registration and an MSAL sign-in path, both operator-gated and neither present.
+
+### `MYPA_DATA_PROVIDER` gates the synthetic provider, and unset means off
+
+One switch, no `||` fallback, refused in a production build the way
+`MYPA_AUTH_MODE=synthetic` already is. Any value other than `synthetic` is refused
+rather than treated as unset, so a typo is visible instead of silently safe.
+
+The refusal lives in `src/lib/fixtures/gate.ts` and every fixture entry point
+calls it — including `syntheticDisclosure`, because the label is the half that can
+lie on its own. That placement is the guarantee: a gate written into the ten route
+handlers would have left the four server components above serving fixtures in a
+default build while every route-level test stayed green.
+
+`src/app/api/routes.test.ts` asserts the default build both ways: with the switch
+unset the fixture functions throw and no route returns fixture data, and with it
+set the synthetic surfaces carry `coverage: "synthetic"` /
+`authority: "synthetic_fixture"` while backend-served ones never do.
+
 ## Commands
 
 ```bash
@@ -87,6 +214,9 @@ cd web
 npm install
 export MYPA_SESSION_SECRET="$(openssl rand -hex 32)"   # required to serve; see below
 export MYPA_AUTH_MODE=synthetic                        # required to serve; see below
+export MYPA_GATEWAY_URL=http://127.0.0.1:8000          # required; no default; see below
+export MYPA_GATEWAY_AUTH_MODE=local_operator           # required; no default; see below
+# export MYPA_DATA_PROVIDER=synthetic                  # optional; OFF unless set
 npm run dev        # development server
 npm run lint       # eslint
 npm run typecheck  # tsc --noEmit
@@ -164,8 +294,13 @@ sign-in path imports or starts a Graph connector, delta worker, or webhook.
 
 1. Identity derives only from the verified session; request payloads carrying
    `principal_id`/`principalId`/`tid`/`oid` are rejected at the client wrapper
-   (`src/lib/api/client.ts`) and again at every route (`src/lib/api/guard.ts`).
-2. Every API response carries a `DisclosureEnvelope`; synthetic data is always
-   labeled synthetic, in the payload and in the UI.
+   (`src/lib/api/client.ts`), again at every route (`src/lib/api/guard.ts`), and a
+   third time before anything leaves for the backend (`src/lib/api/gateway.ts`).
+   No Principal is ever supplied by a browser: the identifier on the wire is
+   derived from the session, and a foreign one in a body, query string, or header
+   reaches nothing.
+2. Every API response carries a `DisclosureEnvelope`, and it is accurate in both
+   directions: synthetic data is always labeled synthetic, and backend data never
+   is. Neither label is reachable from the other's code path.
 3. Nothing is asserted on the user's behalf; the shell language keeps proposals
    and dispositions distinct even while the pipeline is a stub.

@@ -66,7 +66,17 @@ async function signIn(key = "synthetic-a"): Promise<string> {
   return issuedCookie(response);
 }
 
+/**
+ * This file's subject is the session lifecycle, not which data provider is
+ * configured. It probes `/api/pulse` purely as "a route that requires a
+ * principal", and WP-06 made that route answer `not_implemented` in a default
+ * build because Today has no backend capability. The synthetic provider is
+ * therefore turned on explicitly here, so the probe still has something to
+ * return and every assertion below stays exactly the assertion it was. The
+ * default-build behaviour is asserted in `src/app/api/routes.test.ts`.
+ */
 beforeEach(() => {
+  vi.stubEnv("MYPA_DATA_PROVIDER", "synthetic");
   resetSessionRegistry();
 });
 

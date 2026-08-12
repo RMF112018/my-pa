@@ -18,6 +18,7 @@
 import type { PrincipalSession } from "@/contracts/identity";
 import type { ReviewCase, ReviewDisposition } from "@/contracts/views";
 import type { Receipt } from "@/contracts/envelope";
+import { requireSyntheticProvider } from "@/lib/fixtures/gate";
 
 /**
  * Deterministic principal-scoped review cases. The `principalId` on every
@@ -26,6 +27,7 @@ import type { Receipt } from "@/contracts/envelope";
  * (MU-AC-04).
  */
 export function syntheticReviewCases(principal: PrincipalSession): readonly ReviewCase[] {
+  requireSyntheticProvider();
   const pid = principal.principalId;
   return [
     {
@@ -98,6 +100,7 @@ export function syntheticDecisionReceipt(
   reviewCaseId: string,
   disposition: ReviewDisposition,
 ): Receipt {
+  requireSyntheticProvider();
   return {
     receiptId: `rcpt-${principal.principalId}-${reviewCaseId}-${disposition}`,
     principalId: principal.principalId,

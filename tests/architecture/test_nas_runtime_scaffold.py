@@ -205,6 +205,42 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         return {"compose_parse"}
     if set(compose_services) != set(SERVICES):
         errors.add("service_set")
+    app_image = (
+        "${MY_PA_APP_IMAGE:?repository required}@${MY_PA_APP_IMAGE_DIGEST:?sha256 digest required}"
+    )
+    expected_images = {
+        "postgres": "${MY_PA_POSTGRES_IMAGE:?repository required}@"
+        "${MY_PA_POSTGRES_IMAGE_DIGEST:?sha256 digest required}",
+        "gateway": app_image,
+        "worker-enrollment": app_image,
+        "worker-capture": app_image,
+        "web": "${MY_PA_WEB_IMAGE:?repository required}@"
+        "${MY_PA_WEB_IMAGE_DIGEST:?sha256 digest required}",
+        "proxy": "${MY_PA_PROXY_IMAGE:?repository required}@"
+        "${MY_PA_PROXY_IMAGE_DIGEST:?sha256 digest required}",
+    }
+    for name in SERVICES:
+        service = compose_services.get(name, {})
+        if not isinstance(service, dict):
+            errors.add("service_contract")
+            continue
+        if service.get("platform") != "linux/amd64":
+            errors.add("missing_platform")
+        if service.get("restart") != "no":
+            errors.add("restart_policy")
+        if service.get("image") != expected_images[name]:
+            errors.add("exact_image_digest")
+        if service.get("profiles") != ["nas-01-contract-only"]:
+            errors.add("contract_profile")
+        if "build" in service:
+            errors.add("implicit_build")
+        expected_ports = (
+            ["127.0.0.1:${MY_PA_PROXY_PORT:?explicit smoke port required}:8080"]
+            if name == "proxy"
+            else None
+        )
+        if service.get("ports") != expected_ports:
+            errors.add("host_publication")
     expected_compose_mounts = {
         "postgres": {
             (
@@ -430,6 +466,12 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "    networks: [edge-plane]\n"
             "\nnetworks:\n",
             "service_set",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            '    expose: ["8765"]\n',
+            '    expose: ["8765"]\n    ports : ["0.0.0.0:8765:8765"]\n',
+            "host_publication",
         ),
         (
             "ops/nas/compose.example.yml",

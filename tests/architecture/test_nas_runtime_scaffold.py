@@ -105,6 +105,21 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
 
     if contract.get("status") != "contract_only_not_deployable":
         errors.add("contract_status")
+    if set(contract) != {
+        "schema",
+        "status",
+        "canonical_host",
+        "target_platform",
+        "images",
+        "network",
+        "auth",
+        "restart",
+        "services",
+        "mounts",
+        "ingress",
+        "mcp",
+    }:
+        errors.add("contract_schema")
     if contract.get("canonical_host") != "nas":
         errors.add("canonical_host")
     if contract.get("target_platform", {}).get("planning_value") != "linux/amd64":
@@ -140,6 +155,16 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     ):
         errors.add("pilot_restart")
     services = contract.get("services", {})
+    if set(services) != {
+        "postgres",
+        "gateway",
+        "worker_enrollment",
+        "worker_capture",
+        "web",
+        "proxy",
+        "apple_source_host",
+    }:
+        errors.add("contract_schema")
     expected_mounts = {
         "postgres": ["postgres_data_rw"],
         "gateway": ["config_ro", "managed_documents_rw", "sources_ro"],
@@ -202,6 +227,22 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     if contract.get("mcp", {}).get("transport") != "stdio_only":
         errors.add("mcp_transport")
     mounts = contract.get("mounts", {})
+    if set(mounts) != {
+        "config_ro",
+        "postgres_data_rw",
+        "managed_documents_rw",
+        "sources_ro",
+        "goodnotes_ro",
+        "proxy_config_ro",
+    }:
+        errors.add("contract_schema")
+    if set(contract.get("ingress", {})) != {
+        "remote_capture",
+        "generic_capabilities",
+        "apple_machine",
+        "browser",
+    }:
+        errors.add("contract_schema")
     if mounts.get("postgres_data_rw", {}).get("storage") != "nas_local":
         errors.add("postgres_storage")
     if any(
@@ -884,6 +925,20 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             'pilot_web = "entra"',
             'pilot_web = "synthetic"',
             "pilot_auth",
+        ),
+        (
+            "ops/nas/runtime-contract.toml",
+            "\n[mounts.config_ro]",
+            '\n[services.sidecar]\nhost = "nas"\ndatabase_credential = true\n'
+            'mounts = []\nnetworks = ["data-plane"]\n\n[mounts.config_ro]',
+            "contract_schema",
+        ),
+        (
+            "ops/nas/runtime-contract.toml",
+            "\n[ingress.remote_capture]",
+            '\n[mounts.extra_rw]\nclass = "extra"\nmode = "read_write"\n'
+            'owner = "gateway"\n\n[ingress.remote_capture]',
+            "contract_schema",
         ),
         (
             "ops/nas/runtime-contract.toml",

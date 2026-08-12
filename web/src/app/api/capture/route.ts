@@ -111,6 +111,25 @@ export async function POST(request: NextRequest) {
       },
       { status: 400 },
     );
+    if (!outcome.ok) {
+      return NextResponse.json(
+        {
+          error: {
+            errorClass: "conflict",
+            code: "capture_conflict",
+            message: "this idempotency key was already used with different content",
+          },
+        },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json({
+      shape: "synthetic",
+      receiptId: outcome.receipt.receiptId,
+      created: outcome.receipt.created,
+      status: "acknowledged_not_persisted",
+      disclosure: syntheticDisclosure(SCOPE),
+    });
   }
 
   const serving = resolveServing();

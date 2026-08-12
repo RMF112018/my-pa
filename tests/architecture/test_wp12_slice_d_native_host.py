@@ -105,7 +105,13 @@ def test_every_invariant_bearing_wire_value_has_explicit_validating_decode() -> 
     # only direction it may ever move without deleting a decoder.
     assert protocol.count("public init(from decoder: Decoder)") == 6
     assert envelopes.count("public init(from decoder: Decoder)") == 8
-    assert recurrence.count("public init(from decoder: Decoder)") == 2
+    # Three, not two, since WP-17. `NativeCalendarOccurrence` was the one type in
+    # this file with a *synthesized* `Codable`, so its invariants held for values
+    # built in Swift and not for the same values arriving as JSON — which is the
+    # exact defect this test exists to catch, in the one shape it was not
+    # counting. It now has a validating decoder like its two siblings, and the
+    # number moves in the direction the comment above permits.
+    assert recurrence.count("public init(from decoder: Decoder)") == 3
     assert spool.count("public init(from decoder: Decoder)") == 1
 
 

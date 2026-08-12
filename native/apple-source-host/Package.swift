@@ -35,6 +35,18 @@ let package = Package(
             name: "AppleMailAutomationShapeProbe",
             path: "Compatibility/AppleMailAutomationShapeProbe"
         ),
+        // WP-17 EventKit shape probe. Same footing and the same reason: it
+        // imports EventKit so that every build re-proves the calendar read
+        // mechanism is *present* — which is what makes "operator-gated" a
+        // different statement from "does not exist" — while the shipping module
+        // keeps linking nothing. Also deliberately NOT a dependency of
+        // `AppleSourceHost`, because EventKit is the framework that can mutate a
+        // calendar and the shipping module linking no Apple framework is
+        // WP-15's control 1, proved at link time.
+        .target(
+            name: "AppleCalendarEventKitProbe",
+            path: "Compatibility/AppleCalendarEventKitProbe"
+        ),
         .executableTarget(
             name: "AppleSourceHostContractChecks",
             dependencies: ["AppleSourceHost"],

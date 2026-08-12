@@ -9,15 +9,26 @@ services:
     image: "${MY_PA_POSTGRES_IMAGE_ID:?sha256 loaded image id required}"
     platform: linux/amd64
     restart: "no"
+    stop_grace_period: 60s
     environment:
       POSTGRES_DB: my_pa
       POSTGRES_USER: my_pa
       POSTGRES_PASSWORD: "${MY_PA_DB_PASSWORD:?database password required}"
+      POSTGRES_INITDB_ARGS: "--data-checksums --locale=C.UTF-8 --encoding=UTF8"
     volumes:
       - type: bind
         source: "${MY_PA_NAS_ROOT:?explicit NAS root required}/postgres/data"
         target: /var/lib/postgresql/data
     networks: [data-plane]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U my_pa -d my_pa"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    # Numeric tuning and shm_size are intentionally absent. NAS-03 may add
+    # them only after postgres-resources.example.toml is replaced by verified
+    # measurements from the exact live NAS Docker engine.
 
   gateway:
     profiles: [nas-01-contract-only]

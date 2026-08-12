@@ -40,6 +40,19 @@ The existing [`../compose/postgres.yml`](../compose/postgres.yml) remains a
 single-Mac local-development service. It is not a NAS, pilot, or production
 compose file.
 
+NAS-03 adds an unpublished PostgreSQL bind-mount contract plus explicit
+[`validate-storage.sh`](validate-storage.sh), [`migrate.sh`](migrate.sh),
+[`backup.sh`](backup.sh), and
+[`restore-to-scratch.sh`](restore-to-scratch.sh) operations. They all require a
+live-verified [`postgres-resources.example.toml`](postgres-resources.example.toml)
+replacement bound to the exact Docker engine and canonical local filesystem.
+The checked-in example refuses, and numeric PostgreSQL tuning remains absent
+until CPU, memory, free storage, and filesystem type are measured on that NAS.
+Migration is never an application startup side effect; canonical migration also
+requires a recent backup receipt. Backups are custom-format, integrity-listed,
+owner-only artifacts outside the repository. Restore accepts only a new
+`my_pa_scratch_*` database and retains a failed scratch target for diagnosis.
+
 Later packages own executable behavior:
 
 - NAS-02 images supply app/web Dockerfiles and the

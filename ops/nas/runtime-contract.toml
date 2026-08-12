@@ -30,6 +30,16 @@ scratch_only = "local_operator"
 smoke = "no"
 pilot_after_nas_10_and_operator_activation = "unless-stopped"
 
+[postgres]
+storage = "nas_local_bind"
+host_publish = "forbidden"
+password_fallback = "forbidden"
+migration = "explicit_only"
+backup_format = "pg_dump_custom"
+restore_target = "scratch_database_only"
+tuning_source = "measured_live_nas_resources"
+tuning_status = "awaiting_live_measurement"
+
 [services.postgres]
 host = "nas"
 database_credential = true

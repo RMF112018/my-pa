@@ -24,6 +24,32 @@
  * revocation and does not claim to; it is a cheap pre-filter, and the authority
  * is `principal.ts`, which every `/api/*` route handler and every server-side
  * principal lookup goes through.
+ *
+ * **The two maps live on `globalThis`, and that is not a style choice — it is
+ * the fix for a defect that made this application unusable in a browser.**
+ *
+ * Next compiles route handlers and server components into *separate module
+ * graphs*. A module-level `const live = new Map()` is therefore instantiated
+ * **once per graph**: `POST /api/session` registered a `sid` in the route
+ * handler's copy, and the server component rendering `/today` then asked the
+ * RSC copy — which had never seen it — and was told the session was not live.
+ * Every signed-in page redirected straight back to `/sign-in`. Sign in, land on
+ * the sign-in screen, forever.
+ *
+ * Nothing in the repository could see it. Every web test invokes route handlers
+ * in one process where the module is imported once, so the two copies are one
+ * copy and the bug is invisible; and until WP-13 no test had ever driven a real
+ * browser against a real Next server, which is the only place the two graphs
+ * exist at the same time. It was found by the first browser run — `POST
+ * /api/session` answering `200` and setting a cookie that `GET /api/system`
+ * accepted and `GET /today` refused, in the same second, with the same cookie.
+ *
+ * Keying the state on a process-global symbol makes the two graphs share one
+ * registry, which is what "process-local" was always supposed to mean. It
+ * weakens nothing: rotation, revocation, the principal-equality check and the
+ * idle window are unchanged, and a restart still drops every session, which is
+ * still the safe direction. The swap point for a durable store is still the four
+ * functions below.
  */
 
 /** How long a session may sit unused before it is refused. */
@@ -34,11 +60,33 @@ interface LiveSession {
   lastSeenAt: number;
 }
 
-/** `sid` -> the live session it names. */
-const live = new Map<string, LiveSession>();
+interface Registry {
+  /** `sid` -> the live session it names. */
+  readonly live: Map<string, LiveSession>;
+  /** `principalId` -> the one `sid` that principal currently holds. */
+  readonly current: Map<string, string>;
+}
 
-/** `principalId` -> the one `sid` that principal currently holds. */
-const current = new Map<string, string>();
+/**
+ * The process-global slot the two maps live in.
+ *
+ * `Symbol.for` rather than a string key so nothing can collide with it by
+ * accident, and so the same symbol resolves from every module graph in the
+ * process — which is the entire point.
+ */
+const REGISTRY_KEY = Symbol.for("my-pa.web.auth.session-registry.v1");
+
+type RegistryHolder = typeof globalThis & { [REGISTRY_KEY]?: Registry };
+
+/** The one registry this process has, created on first use. */
+function registry(): Registry {
+  const holder = globalThis as RegistryHolder;
+  const existing = holder[REGISTRY_KEY];
+  if (existing !== undefined) return existing;
+  const created: Registry = { live: new Map(), current: new Map() };
+  holder[REGISTRY_KEY] = created;
+  return created;
+}
 
 function seconds(now: number | undefined): number {
   return now ?? Math.floor(Date.now() / 1000);
@@ -52,6 +100,7 @@ function seconds(now: number | undefined): number {
  * observed earlier cannot be carried across the boundary.
  */
 export function registerSession(principalId: string, sid: string, now?: number): void {
+  const { live, current } = registry();
   const previous = current.get(principalId);
   if (previous !== undefined && previous !== sid) live.delete(previous);
   live.set(sid, { principalId, lastSeenAt: seconds(now) });
@@ -78,7 +127,7 @@ export function registerSession(principalId: string, sid: string, now?: number):
  */
 export function touchSession(sid: string, principalId: string, now?: number): boolean {
   const at = seconds(now);
-  const session = live.get(sid);
+  const session = registry().live.get(sid);
   if (session === undefined) return false;
   if (session.principalId !== principalId) return false;
   if (at - session.lastSeenAt > IDLE_TIMEOUT_SECONDS) {
@@ -91,6 +140,7 @@ export function touchSession(sid: string, principalId: string, now?: number): bo
 
 /** Revoke `sid`. Idempotent, and safe for a `sid` that was never registered. */
 export function revokeSession(sid: string): void {
+  const { live, current } = registry();
   const session = live.get(sid);
   live.delete(sid);
   if (session !== undefined && current.get(session.principalId) === sid) {
@@ -100,6 +150,7 @@ export function revokeSession(sid: string): void {
 
 /** Drop every session. For tests, and for nothing else. */
 export function resetSessionRegistry(): void {
+  const { live, current } = registry();
   live.clear();
   current.clear();
 }

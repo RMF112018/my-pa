@@ -248,7 +248,7 @@ export function CaptureDialog({
           </p>
         ) : null}
         {outcome.kind === "acknowledged" ? (
-          <p role="status" data-testid="capture-acknowledged" className="text-sm text-moss-coral">
+          <p role="status" data-testid="capture-acknowledged" className="text-sm text-moss-coral-strong">
             Acknowledged, but <strong>not stored</strong>. This build is serving the synthetic
             provider, which keeps nothing across a restart. Keep this note somewhere else.
             {outcome.receiptId ? (
@@ -257,12 +257,12 @@ export function CaptureDialog({
           </p>
         ) : null}
         {outcome.kind === "refused" ? (
-          <p role="alert" data-testid="capture-refused" className="text-sm text-moss-coral">
+          <p role="alert" data-testid="capture-refused" className="text-sm text-moss-coral-strong">
             Refused, and nothing was stored: {outcome.reason} Your note is still in the field.
           </p>
         ) : null}
         {outcome.kind === "queued" ? (
-          <p role="status" data-testid="capture-queued" className="text-sm text-moss-coral">
+          <p role="status" data-testid="capture-queued" className="text-sm text-moss-coral-strong">
             <strong>Held on this device only</strong> — not saved on the server. The connection
             could not be reached, so the note is encrypted and kept here, and it will be sent when
             you are back online. Until then this device holds the only copy.
@@ -270,13 +270,13 @@ export function CaptureDialog({
           </p>
         ) : null}
         {outcome.kind === "not_held" ? (
-          <p role="alert" data-testid="capture-not-held" className="text-sm text-moss-coral">
+          <p role="alert" data-testid="capture-not-held" className="text-sm text-moss-coral-strong">
             <strong>Not saved and not held.</strong> {outcome.reason} Your note is still in the
             field — copy it somewhere else before closing this dialog.
           </p>
         ) : null}
         {outcome.kind === "unavailable" ? (
-          <p role="alert" data-testid="capture-unavailable" className="text-sm text-moss-coral">
+          <p role="alert" data-testid="capture-unavailable" className="text-sm text-moss-coral-strong">
             Not saved — the service could not be reached: {outcome.reason} Your note is still in
             the field, and retrying resubmits the same attempt rather than capturing it twice.
           </p>

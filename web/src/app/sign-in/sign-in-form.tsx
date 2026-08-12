@@ -62,7 +62,7 @@ export function SignInForm({ principals }: { principals: readonly OfferedPrincip
         ))}
       </div>
       {error ? (
-        <p role="alert" className="mt-3 text-sm text-moss-coral">
+        <p role="alert" className="mt-3 text-sm text-moss-coral-strong">
           {error}
         </p>
       ) : null}

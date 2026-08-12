@@ -163,7 +163,7 @@ export function RevealDialog({
 
         {state === "unavailable" ? (
           <div data-testid="reveal-unavailable" className="flex flex-col gap-1">
-            <p className="font-semibold text-moss-coral">This was not searched.</p>
+            <p className="font-semibold text-moss-coral-strong">This was not searched.</p>
             <p>
               {(result?.gap ? GAP_TEXT[result.gap] : undefined) ??
                 response?.reason ??
@@ -236,7 +236,7 @@ export function RevealDialog({
         ) : null}
 
         {status === "error" ? (
-          <p role="alert" className="text-moss-coral">
+          <p role="alert" className="text-moss-coral-strong">
             Reveal failed.
           </p>
         ) : null}

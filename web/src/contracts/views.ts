@@ -216,3 +216,43 @@ export interface BackendProject {
   readonly openedAt: IsoTimestamp;
   readonly closedAt: IsoTimestamp | null;
 }
+
+/**
+ * One stored capture as `capture.list` returns it.
+ *
+ * **There is no text field, and its absence is structural rather than an
+ * omission.** The Python `CaptureListEntry` has no field content could go in
+ * (`QC-AC-041`), so a listing cannot become a second read of what was captured.
+ * This shape mirrors that exactly: identifiers, an owner, counts, and two
+ * moments. A renderer that wanted to show a preview would have to fetch it, and
+ * fetching it is a different capability under a different audit.
+ *
+ * `ownerPrincipalId` is the backend's own answer about the row, not the caller's
+ * session identity re-stated — it is rendered so a reader can see that every row
+ * they were shown belongs to them.
+ */
+export interface BackendCaptureEntry {
+  readonly captureId: OpaqueId;
+  readonly ownerPrincipalId: OpaqueId;
+  readonly createdAt: IsoTimestamp;
+  readonly versionCount: number;
+  readonly latestVersionId: OpaqueId;
+  readonly latestVersionNumber: number;
+  readonly latestRecordedAt: IsoTimestamp;
+}
+
+/**
+ * One hit from `capture.search`.
+ *
+ * Carries no snippet and no text for the same reason the listing carries none,
+ * so a reader can see *that* a capture matched and not *why*. The backend states
+ * that limitation on the answer; the Library surface renders it rather than
+ * quietly presenting a hit list as if it were self-explanatory.
+ */
+export interface BackendCaptureMatch {
+  readonly captureId: OpaqueId;
+  readonly versionId: OpaqueId;
+  readonly versionNumber: number;
+  readonly characterCount: number;
+  readonly recordedAt: IsoTimestamp;
+}

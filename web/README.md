@@ -104,11 +104,20 @@ finished.
 | Review | `/api/review` | real-backed | `review.list` |
 | Review — decide | `/api/review/:id/decide` | real-backed | `review.decide` |
 | Capture | `/api/capture` | real-backed | `capture.create` |
-| Today / Pulse | `/api/pulse` | **not wired** — `not_implemented` | none exists |
-| Situations | `/api/situations` | **not wired** — `not_implemented` | none exists |
-| Reveal | `/api/reveal` | **not wired** — `not_implemented` | none exists |
-| Projects | `/api/projects` | **not wired** — `not_implemented` | none exists |
+| Today / Pulse | `/api/pulse` | real-backed | `continuity.pulse` |
+| Situations | `/api/situations` | real-backed | `continuity.situations` |
+| Projects | `/api/projects` | real-backed | `continuity.projects` |
+| Reveal | `/api/reveal` | real-backed | `knowledge.reveal` |
 | Relationship timeline | `/api/relationships/:id/timeline` | **not wired** — `not_implemented` | none exists |
+
+Every **page** in `app/(app)` now reaches a capability directly too, which was
+not true before WP-13: `library`, `review`, `today`, `situations` and `system`
+are server components that call `lib/api/gateway` themselves. `library` and
+`review` were the two that did not — `library` rendered a fixed "no sources are
+connected yet" card in front of an already-wired capability, and `review` called
+a fixture module that throws in a default build. The relationship timeline page
+is the one destination that still has no capability to reach, and it now says so
+instead of raising.
 
 ### What the capture surface says, and what it refuses to say
 
@@ -177,12 +186,27 @@ first.
 
 ### What the pages do, which is not what the routes do
 
-`app/(app)/today`, `/review`, `/situations` and `/relationships/[personId]` are
-server components that read the fixture modules **directly** and never call an API
-route. They were not rewired here. In a default build they now fail closed rather
-than rendering fixtures, because the refusal lives in the fixture modules
-themselves rather than in the route handlers. Rewiring those four pages onto the
-routes is follow-on work and is not done.
+Every signed-in page is a server component that reaches `lib/api/gateway`
+**directly** rather than calling its own API route. That is deliberate and is the
+pattern `app/(app)/today` established: a server component that fetched its own
+route would be a second copy of the same decision, and the two copies would
+drift. The route handlers exist for the client-side surfaces — the capture
+dialog, the reveal dialog, the review workbench — which are browser code and have
+no other way in.
+
+Each page classifies the gateway's answer through `lib/api/surface-answer.ts`,
+which is one function rather than five copies of an `if`, and renders one of four
+states from `components/ui/surface-state.tsx`. The four are **empty**,
+**unavailable**, **degraded** and **not_implemented**, and the ordering inside
+`surfaceAnswer` is the whole of the guarantee: a failed call and a `coverage:
+"unavailable"` answer are classified *before* any row is counted, so an
+unreachable backend can never reach the branch that says "you hold nothing".
+
+`/relationships/[personId]` is the one page with no capability behind it. It
+renders `not_implemented` naming the two reasons — no v1 capability exposes the
+relationship read model, and `relationship_identity_observations` carries a
+table-wide unique constraint that has to be partitioned before the plane can be
+read across Principals — rather than raising, which is what it did before.
 
 ## Offline capture
 
@@ -426,9 +450,38 @@ export MYPA_GATEWAY_AUTH_MODE=local_operator           # required; no default; s
 npm run dev        # development server
 npm run lint       # eslint
 npm run typecheck  # tsc --noEmit
-npm test           # vitest (unit + component)
+npm test           # vitest (unit + component) — never the browser suite
 npm run build      # production build
+npm run e2e        # the browser suite; see below
 ```
+
+### `npm run e2e` — a real browser against the real stack
+
+`e2e/stack.sh` creates a **disposable** PostgreSQL database at head, starts
+`apps/gateway.py` on loopback, and hands over to Playwright, which starts two
+Next servers of its own and drives Chromium against them. The database is
+dropped afterwards, and dropped first as well, so an interrupted run is cleaned
+up by the next one. It needs the repository venv (`../.venv`) and the same
+PostgreSQL the Python suites use; it needs no credential.
+
+Three things about it are worth knowing before reading its results:
+
+* **It runs `next dev`, and that is forced rather than convenient.** The only
+  sign-in this build implements is the synthetic provider, and `lib/auth/mode.ts`
+  refuses it outright when `NODE_ENV === "production"`. `next start` sets that.
+  So a browser run that signs in has to be a dev run. The production build is
+  checked by `npm run build`, which is a separate and honest claim.
+* **The second Next server exists to fail.** Its `MYPA_GATEWAY_URL` names a port
+  nothing listens on, so `e2e/failure-states.spec.ts` reaches the genuine
+  connect-refused path through the real transport rather than a stub. A browser
+  cannot intercept the gateway call — it happens on the server — so this is the
+  only way that path can be exercised for real.
+* **It is not in the unit baseline.** `vitest.config.ts` includes `src/**` only
+  and these live in `e2e/`, so `npm test` neither collects nor reports them.
+
+A run reports 72 tests across two viewports — a 1280x800 desktop and a Pixel 7
+profile — of which one, the 44px touch-target rule, is skipped on desktop by
+design.
 
 ### Dependencies added here
 

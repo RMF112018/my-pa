@@ -22,9 +22,10 @@ import {
 } from "@/lib/fixtures/situation";
 import { callGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
+import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SituationBoard } from "@/components/situation/situation-board";
 import { BackendSituationBoard } from "@/components/situation/backend-situation-board";
-import { NotConnected } from "@/components/ui/not-connected";
+import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import type {
   BackendProject,
   BackendSituation,
@@ -125,27 +126,100 @@ export default async function SituationsPage() {
     callGateway<{ projects?: readonly PythonProject[] }>(principal, "continuity.projects"),
   ]);
 
-  if (!situationsOutcome.ok || !projectsOutcome.ok) {
-    const failure = situationsOutcome.ok ? projectsOutcome : situationsOutcome;
+  const situationsAnswer = surfaceAnswer(
+    "situations:continuity.situations",
+    situationsOutcome,
+    (result) => (result.situations ?? []).length,
+  );
+  const projectsAnswer = surfaceAnswer(
+    "situations:continuity.projects",
+    projectsOutcome,
+    (result) => (result.projects ?? []).length,
+  );
+
+  // **Either read failing makes the whole board unavailable, and it is not
+  // partially rendered.** The board is one claim about a Principal's live work;
+  // showing the half that answered beside a silently missing half would present
+  // an incomplete picture as a whole one, and the reader has no way to see the
+  // difference. A partial *answer* is different — the backend says so, and that
+  // is the `degraded` branch below.
+  if (situationsAnswer.kind === "unavailable" || projectsAnswer.kind === "unavailable") {
+    const failure =
+      situationsAnswer.kind === "unavailable" ? situationsAnswer : projectsAnswer;
     return (
       <section aria-labelledby="situations-heading" className="mx-auto max-w-2xl">
         {heading}
-        <NotConnected
+        <SurfaceState
+          kind="unavailable"
           title="Situations could not be read"
-          description={failure.ok ? "" : failure.error.message}
-          arrivesWith="This is a stated failure, not an empty board. Nothing was read and nothing is claimed."
+          detail={failure.kind === "unavailable" ? failure.error.message : ""}
+          limitations={failure.disclosure.limitations}
+          testId="situations-unavailable"
         />
       </section>
     );
   }
 
+  const situations =
+    situationsAnswer.kind === "empty"
+      ? []
+      : (situationsAnswer.result.situations ?? []).map(toSituation);
+  const projects =
+    projectsAnswer.kind === "empty" ? [] : (projectsAnswer.result.projects ?? []).map(toProject);
+  const degraded = situationsAnswer.kind === "degraded" || projectsAnswer.kind === "degraded";
+
   return (
     <section aria-labelledby="situations-heading" className="mx-auto max-w-2xl">
       {heading}
-      <BackendSituationBoard
-        situations={(situationsOutcome.result.situations ?? []).map(toSituation)}
-        projects={(projectsOutcome.result.projects ?? []).map(toProject)}
-      />
+      {degraded ? (
+        <DegradedBanner
+          scope="this board"
+          limitations={[
+            ...situationsAnswer.disclosure.limitations,
+            ...projectsAnswer.disclosure.limitations,
+          ]}
+          truncated={
+            situationsAnswer.disclosure.truncated || projectsAnswer.disclosure.truncated
+          }
+        />
+      ) : null}
+      {situations.length === 0 && projects.length === 0 ? (
+        // A partial answer that carried nothing is not an empty board, and the
+        // distinction is made here for the same reason Today, Library and Review
+        // make it: the rows may exist and simply not have been returned, so the
+        // only truthful thing to say is that the read was incomplete.
+        degraded ? (
+          <SurfaceState
+            kind="degraded"
+            title="The board was read incompletely and returned nothing"
+            detail={
+              "An empty board is not established by a partial read. Situations or projects may " +
+              "exist that this answer did not cover."
+            }
+            testId="situations-degraded-empty"
+          />
+        ) : (
+          <SurfaceState
+            kind="empty"
+            title="You hold no situations or projects"
+            detail={
+              "Both were read successfully and both are empty. Nothing failed; there is simply " +
+              "nothing recorded yet."
+            }
+            testId="situations-empty"
+          />
+        )
+      ) : (
+        // One half may be empty while the other carried rows. Whether *that*
+        // half's emptiness was established is per-answer, not per-board, so each
+        // answer's own partiality is carried down rather than the board-wide OR.
+        <BackendSituationBoard
+          situations={situations}
+          projects={projects}
+          situationsPartial={situationsAnswer.kind === "degraded"}
+          projectsPartial={projectsAnswer.kind === "degraded"}
+        />
+      )}
     </section>
   );
 }

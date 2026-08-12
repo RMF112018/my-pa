@@ -32,6 +32,7 @@ interface FakeRequest {
   readonly method: string;
   readonly url: string;
   readonly destination: string;
+  readonly mode?: string;
 }
 
 function requestFor(pathname: string, overrides: Partial<FakeRequest> = {}): FakeRequest {
@@ -44,7 +45,7 @@ function requestFor(pathname: string, overrides: Partial<FakeRequest> = {}): Fak
 }
 
 /** Evaluate `public/sw.js` against a recording scope and hand back its listeners. */
-function loadServiceWorker() {
+function loadServiceWorker(responseOverrides: Record<string, unknown> = {}) {
   const calls: CacheCall[] = [];
   const fetched: string[] = [];
   const listeners = new Map<string, (event: unknown) => void>();
@@ -75,7 +76,7 @@ function loadServiceWorker() {
   };
   const fetchImpl = async (request: FakeRequest) => {
     fetched.push(request.url);
-    return { ok: true, type: "basic", clone: () => ({}) };
+    return { ok: true, type: "basic", clone: () => ({}), ...responseOverrides };
   };
   const scope = {
     location: { origin: ORIGIN },
@@ -153,6 +154,69 @@ describe("no /api response is ever cached, stored, or served from a cache", () =
     );
     expect(responses).toHaveLength(0);
     expect(calls).toEqual([]);
+  });
+
+  /**
+   * **The shape this worker actually got wrong, kept as a test so it stays
+   * wrong-proof.**
+   *
+   * An App Router client-side navigation is not a document request. It is a
+   * `GET` to the page's own path with a `?_rsc=…` parameter and
+   * `destination: "empty"`, and the body is the server-rendered payload of that
+   * page for whoever was signed in. Under the previous deny-list rule — not
+   * `/api`, not a document — every one of those matched and was written to a
+   * cache shared by every session on the browser profile. A real browser run
+   * surfaced it as a signed-in tab bouncing to the sign-in screen, because the
+   * cached payload was a stale redirect.
+   *
+   * Each variant below is a separate way in, and each must be refused on its own.
+   */
+  const rscRequests = [
+    ["/today?_rsc=1a2b3", "empty"],
+    ["/library?_rsc=1a2b3", "empty"],
+    ["/system?_rsc=deadbeef", ""],
+  ] as const;
+
+  it.each(rscRequests)(
+    "does not cache the RSC payload of %s, which is a rendered page",
+    async (pathname, destination) => {
+      const { calls, responses } = await dispatchFetch(requestFor(pathname, { destination }));
+      expect(responses).toHaveLength(0);
+      expect(calls).toEqual([]);
+    },
+  );
+
+  it("does not cache a navigation, by either signal the platform gives", async () => {
+    for (const request of [
+      requestFor("/today", { destination: "document" }),
+      requestFor("/today", { mode: "navigate" }),
+    ]) {
+      const { calls, responses } = await dispatchFetch(request);
+      expect(responses).toHaveLength(0);
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it("caches nothing outside the static allow-list, however innocent it looks", async () => {
+    for (const pathname of ["/", "/today", "/sign-in", "/favicon.ico", "/some/new/route"]) {
+      const { calls, responses } = await dispatchFetch(requestFor(pathname));
+      expect(responses, `${pathname} must reach the network untouched`).toHaveLength(0);
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it("does not store a response that was answered somewhere else", async () => {
+    // A redirect to `/sign-in` stored under the original URL replays a dead
+    // session's bounce to every later visitor of this profile.
+    const worker = loadServiceWorker({ redirected: true });
+    const handler = worker.listeners.get("fetch");
+    const responses: unknown[] = [];
+    handler!({
+      request: requestFor("/_next/static/chunks/synthetic.js", { destination: "script" }),
+      respondWith: (value: unknown) => responses.push(value),
+    });
+    await Promise.all(responses.map((value) => Promise.resolve(value).catch(() => undefined)));
+    expect(worker.calls.some((call) => call.op === "put")).toBe(false);
   });
 
   it("does not cache a cross-origin request", async () => {

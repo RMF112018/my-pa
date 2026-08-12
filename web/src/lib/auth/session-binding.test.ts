@@ -94,3 +94,43 @@ describe("resolveSessionPrincipal carries the binding through", () => {
     await expect(resolveSessionPrincipal(token)).resolves.toBeNull();
   });
 });
+
+/**
+ * **The state is process-global, and this is the structural half of a defect a
+ * browser found and no unit test could.**
+ *
+ * Next compiles route handlers and server components into separate module
+ * graphs, so a module-level `const live = new Map()` is instantiated once per
+ * graph. `POST /api/session` registered a `sid` in the route handler's copy and
+ * the server component rendering `/today` asked the RSC copy, which had never
+ * seen it — so every signed-in page redirected back to `/sign-in`. Reproduced
+ * with two `curl`s against a real Next server: the same cookie was accepted by
+ * `GET /api/system` (200) and refused by `GET /today` (307 to `/sign-in`) in the
+ * same second.
+ *
+ * A vitest process has one module graph, so no test here can reproduce the split
+ * — and this one does not pretend to. What it asserts is the mechanism that
+ * makes the two graphs agree: the maps hang off a process-global symbol slot, so
+ * a second evaluation of this module in the same process finds the same object
+ * rather than making a new one. The end-to-end proof is `e2e/journeys.spec.ts`,
+ * in a real browser against a real server, and it is the only proof that can be.
+ */
+describe("the registry is one object per process, not one per module graph", () => {
+  it("keeps its maps in a process-global slot a second graph would also find", () => {
+    resetSessionRegistry();
+    registerSession(A.principalId, "sid-global-check");
+
+    const slot = (globalThis as Record<symbol, unknown>)[
+      Symbol.for("my-pa.web.auth.session-registry.v1")
+    ] as { live: Map<string, unknown>; current: Map<string, string> } | undefined;
+
+    expect(slot, "the registry must be reachable from the process global").toBeDefined();
+    expect(slot?.live.has("sid-global-check")).toBe(true);
+    expect(slot?.current.get(A.principalId)).toBe("sid-global-check");
+
+    // And the exported functions read that same object rather than a private one.
+    expect(touchSession("sid-global-check", A.principalId)).toBe(true);
+    slot?.live.delete("sid-global-check");
+    expect(touchSession("sid-global-check", A.principalId)).toBe(false);
+  });
+});

@@ -184,6 +184,34 @@ describe("control 2 — a queued entry never rebinds Principal", () => {
     expect(await payloadPresent(db, entry.entryId)).toBe(false);
     expect(await payloadPresent(db, theirs.entryId)).toBe(true);
   });
+
+  it("resolves authenticated authority again before every queued entry", async () => {
+    const { db, key, entry } = await queueOne(PRINCIPAL_A, NOTE, "cap-synthetic-first");
+    const second = await enqueueCapture(db, key, {
+      principalId: PRINCIPAL_A,
+      text: "synthetic note beta",
+      captureKind: "quick_note",
+      idempotencyKey: "cap-synthetic-second",
+    });
+    const resolveSession = vi
+      .fn()
+      .mockResolvedValueOnce({ principalId: PRINCIPAL_A, replayBinding: "binding-a" })
+      .mockResolvedValueOnce({ principalId: PRINCIPAL_B, replayBinding: "binding-b" });
+    const transport = vi.fn<ReplayTransport>(async (request) =>
+      goodReceipt(request.text, request.idempotencyKey),
+    );
+
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, resolveSession);
+
+    expect(resolveSession).toHaveBeenCalledTimes(2);
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(summary).toMatchObject({ replayed: 1, needsReauth: 1, stoppedForReauth: true });
+    expect(await payloadPresent(db, entry.entryId)).toBe(false);
+    expect(await payloadPresent(db, second.entryId)).toBe(true);
+    expect((await queueSnapshot(db)).find((item) => item.entryId === second.entryId)?.state).toBe(
+      "needs_reauth",
+    );
+  });
 });
 
 describe("control 4 — a stale session fails closed", () => {
@@ -212,6 +240,61 @@ describe("control 4 — a stale session fails closed", () => {
     // Nothing was dropped.
     expect(await payloadPresent(db, entry.entryId)).toBe(true);
     expect(await payloadPresent(db, second.entryId)).toBe(true);
+  });
+
+  it("stops after the BFF detects a check/send session transition", async () => {
+    const { db, key, entry } = await queueOne(PRINCIPAL_A, NOTE, "cap-synthetic-first");
+    const second = await enqueueCapture(db, key, {
+      principalId: PRINCIPAL_A,
+      text: "synthetic note beta",
+      captureKind: "quick_note",
+      idempotencyKey: "cap-synthetic-second",
+    });
+    const transport = vi.fn<ReplayTransport>(async () => ({
+      status: 409,
+      body: {
+        error: {
+          errorClass: "authentication",
+          code: "replay_session_changed",
+          message: "the authenticated session changed before replay admission",
+        },
+      },
+    }));
+
+    const summary = await replayQueuedCaptures(
+      db,
+      PRINCIPAL_A,
+      key,
+      transport,
+      sessionFor(PRINCIPAL_A),
+    );
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(summary).toMatchObject({ needsReauth: 1, failed: 0, stoppedForReauth: true });
+    const entries = await queueSnapshot(db);
+    expect(entries.find((item) => item.entryId === entry.entryId)?.state).toBe("needs_reauth");
+    expect(entries.find((item) => item.entryId === second.entryId)?.state).toBe("pending");
+    expect(await payloadPresent(db, entry.entryId)).toBe(true);
+    expect(await payloadPresent(db, second.entryId)).toBe(true);
+  });
+
+  it("does not treat an unrelated 409 as an authentication transition", async () => {
+    const { db, key } = await queueOne(PRINCIPAL_A);
+    const transport = vi.fn<ReplayTransport>(async () => ({
+      status: 409,
+      body: { error: { errorClass: "conflict", code: "some_other_conflict" } },
+    }));
+
+    const summary = await replayQueuedCaptures(
+      db,
+      PRINCIPAL_A,
+      key,
+      transport,
+      sessionFor(PRINCIPAL_A),
+    );
+
+    expect(summary).toMatchObject({ needsReauth: 0, failed: 1, stoppedForReauth: false });
+    expect((await queueSnapshot(db))[0].state).toBe("pending");
   });
 
   it("never replays without a session — the transport is the only way out and it is authenticated", async () => {

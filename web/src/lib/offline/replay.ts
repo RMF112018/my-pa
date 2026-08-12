@@ -162,7 +162,12 @@ export interface ReplaySummary {
 
 /** Statuses that mean "this session is not usable", and end the pass. */
 function isStaleSession(response: ReplayResponse): boolean {
-  return response.status === 401 || response.status === 403;
+  if (response.status === 401 || response.status === 403) return true;
+  if (response.status !== 409 || typeof response.body !== "object" || response.body === null) {
+    return false;
+  }
+  const body = response.body as { error?: { code?: unknown } };
+  return body.error?.code === "replay_session_changed";
 }
 
 /**
@@ -175,8 +180,9 @@ function isStaleSession(response: ReplayResponse): boolean {
  *
  * `currentPrincipalId` remains the rendered identity used to select the local
  * key. It is not authentication authority. `resolveSession` obtains that
- * authority immediately before the pass, and its opaque binding is carried to
- * the write so the BFF can reject a cookie change between check and admission.
+ * authority immediately before every entry, and its opaque binding is carried
+ * to the write so the BFF can reject a cookie change between check and
+ * admission.
  */
 export async function replayQueuedCaptures(
   db: IDBDatabase,
@@ -185,12 +191,6 @@ export async function replayQueuedCaptures(
   transport: ReplayTransport,
   resolveSession: ReplaySessionResolver,
 ): Promise<ReplaySummary> {
-  let authenticated: AuthenticatedReplaySession | null = null;
-  try {
-    authenticated = await resolveSession();
-  } catch {
-    authenticated = null;
-  }
   const entries = await queueSnapshot(db);
   let attempted = 0;
   let replayed = 0;
@@ -219,8 +219,17 @@ export async function replayQueuedCaptures(
     if (!replayable(entry)) continue;
     if (stoppedForReauth) break;
 
-    // This is the authoritative replay-time identity check. It occurs before
-    // `replayOne`, which is the only function that reads/decrypts payload bytes.
+    let authenticated: AuthenticatedReplaySession | null = null;
+    try {
+      authenticated = await resolveSession();
+    } catch {
+      authenticated = null;
+    }
+
+    // This is the authoritative per-entry replay-time identity check. It occurs
+    // before `replayOne`, which is the only function that reads/decrypts payload
+    // bytes. Resolving inside the loop prevents a session snapshot from becoming
+    // authority for later entries in the same drain.
     if (authenticated === null || entry.principalId !== authenticated.principalId) {
       await markNeedsReauth(db, entry.entryId, "current authenticated principal does not own entry");
       needsReauth += 1;

@@ -455,11 +455,10 @@ describe("the capture receipt is the backend's own", () => {
     });
   });
 
-  it("refuses a durable receipt without a valid gateway Principal binding", async () => {
+  it("binds the browser receipt to the authenticated BFF Principal", async () => {
     const cookie = await signIn();
     stubGateway({
       receipt_id: "rcpt_aaaaaaaa11111111",
-      principal_id: "",
       capture_id: "cap_aaaaaaaa11111111",
       version_id: "capver_aaaaaaaa11111111",
       version_number: 1,
@@ -471,8 +470,8 @@ describe("the capture receipt is the backend's own", () => {
 
     const response = await capture(post(cookie, "/api/capture", { text: "a note", idempotencyKey: "k1" }));
 
-    expect(response.status).toBe(502);
-    expect((await response.json()).error.code).toBe("receipt_principal_missing");
+    expect(response.status).toBe(200);
+    expect((await response.json()).receipt.principalId).toBe("syn-aaaa0001");
   });
 
   it("refuses a replay when the authenticating cookie changes after session introspection", async () => {

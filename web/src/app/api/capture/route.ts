@@ -58,7 +58,6 @@ const DEFAULT_CAPTURE_KIND: CaptureKind = "quick_note";
 
 interface PythonReceipt {
   readonly receipt_id: string;
-  readonly principal_id: string;
   readonly capture_id: string;
   readonly version_id: string;
   readonly version_number: number;
@@ -177,22 +176,6 @@ export async function POST(request: NextRequest) {
     capture_kind: captureKind,
   });
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
-  if (
-    typeof outcome.result.principal_id !== "string" ||
-    !/^prn_[A-Za-z0-9]{8,64}$/.test(outcome.result.principal_id)
-  ) {
-    return NextResponse.json(
-      {
-        error: {
-          errorClass: "authentication",
-          code: "receipt_principal_missing",
-          message: "the durable receipt has no valid gateway Principal binding",
-        },
-      },
-      { status: 502 },
-    );
-  }
-
   return NextResponse.json({
     shape: "backend",
     status: "persisted",
@@ -204,11 +187,8 @@ export async function POST(request: NextRequest) {
       versionNumber: outcome.result.version_number,
       idempotencyKey: outcome.result.idempotency_key,
       contentSha256: outcome.result.content_sha256,
-      // The Python and web tiers use distinct opaque Principal namespaces. The
-      // gateway receipt proves which authenticated gateway Principal admitted
-      // the write; this BFF attests that result to the browser Principal already
-      // verified for this same request. Never compare or expose the unrelated
-      // opaque identifiers as though equality between namespaces were meaningful.
+      // This value is derived from the same authenticated guard that authorized
+      // the gateway call. It is never echoed from queue metadata or request JSON.
       principalId: guard.principal.principalId,
       issuedAt: outcome.result.issued_at,
     },

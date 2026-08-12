@@ -40,11 +40,6 @@ Not mirrored, routed by identity only: the **Frontier NAS MCP Connector** featur
 
 Also indexed by identity only: the **Native Apple Personal Data Capture Bridge**, user-facing **Apple Mail, Calendar & Contacts** (`MYPA-NATIVE-APPLE-PERSONAL-DATA-CAPTURE-BRIDGE-FEATURE-PACKAGE-20260804-087`, Drive folder `13jS8vmsWHvwQQqPksNlwW5r2whH8V8Z5`). It is active only for bounded synthetic repository implementation under `AUTH-WP12-20260804-OPERATOR-001`; live personal data, TCC, credentials, signing, activation, source mutation, deployment, production, destruction, and risk acceptance remain unauthorized. See `docs/plans/mcv-completion-plan.md` `D-105` through `D-107`.
 
-## Frontend
-
-- [`web/README.md`](../web/README.md) — the MossAIc Next.js progressive web app: five-destination shell, synthetic Entra-shaped identity boundary, Capture/Reveal affordances against stub routes, and PWA install surface. WP-02 (R1); no live sources, credentials, or personal data.
-- [`web/src/contracts/README.md`](../web/src/contracts/README.md) — canonical TypeScript contract mirror and its parity rules against the Python contracts and domain vocabulary.
-
 ## Plans
 
 - [`docs/plans/mcv-completion-plan.md`](plans/mcv-completion-plan.md) — current gap audit and integrated work-package plan: what the repository contains, what the accepted specification requires, and which dispatched workstreams are deferred and why.

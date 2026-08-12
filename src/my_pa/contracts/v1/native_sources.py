@@ -18,6 +18,7 @@ from pydantic import Field, model_validator
 from my_pa.contracts.v1.base import StrictModel
 
 __all__ = [
+    "NATIVE_SOURCE_MAX_PAGE_SIZE",
     "NATIVE_SOURCE_PROTOCOL_V1",
     "NativeAccountView",
     "NativeAdmissionEnvelope",
@@ -37,6 +38,7 @@ __all__ = [
 ]
 
 NATIVE_SOURCE_PROTOCOL_V1: Final = "my-pa.native-source.v1"
+NATIVE_SOURCE_MAX_PAGE_SIZE: Final = 100
 _OPAQUE_ID: Final = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,198}[A-Za-z0-9])?$")
 _REVISION: Final = re.compile(r"\A[^\s]{1,256}\Z")
 
@@ -217,8 +219,8 @@ class NativeAdmissionEnvelope(StrictModel):
     kind: NativeSourceKind
     account_id: OpaqueNativeID = Field(alias="accountID")
     bucket_id: OpaqueNativeID = Field(alias="bucketID")
-    records: tuple[NativeSourceRecord, ...]
-    next_cursor: str | None = Field(default=None, alias="nextCursor")
+    records: tuple[NativeSourceRecord, ...] = Field(max_length=NATIVE_SOURCE_MAX_PAGE_SIZE)
+    next_cursor: str | None = Field(default=None, alias="nextCursor", max_length=512)
 
     @model_validator(mode="after")
     def _exact_scope(self) -> NativeAdmissionEnvelope:

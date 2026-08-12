@@ -18,6 +18,7 @@ from typing import Any, Protocol, assert_never
 from my_pa.contracts.ports import AuditSink
 from my_pa.contracts.v1.base import canonical_json
 from my_pa.contracts.v1.native_sources import (
+    NATIVE_SOURCE_MAX_PAGE_SIZE,
     NATIVE_SOURCE_PROTOCOL_V1,
     NativeAdmissionEnvelope,
     NativeBucketProgress,
@@ -51,6 +52,7 @@ __all__ = [
     "NativeBucketBinding",
     "NativeConfigurationSnapshot",
     "NativeControlReceipt",
+    "NativeReadPageReceipt",
     "NativeRequestContext",
     "NativeSourceController",
     "NativeSourceHost",
@@ -157,6 +159,15 @@ class NativeAdmissionReceipt:
     enrichment_failed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class NativeReadPageReceipt:
+    """One admitted bounded page and its private continuation cursor."""
+
+    admission: NativeAdmissionReceipt
+    authority_id: str
+    next_cursor: str | None
+
+
 class NativeSourceHost(Protocol):
     """The integrated protocol-v1 host boundary; implementations hold no DB access."""
 
@@ -171,6 +182,21 @@ class NativeSourceHost(Protocol):
         selections: tuple[NativeBucketSelection, ...],
         *,
         bridge_id: str,
+        request_id: str,
+        at: datetime,
+    ) -> Mapping[str, Any]: ...
+
+    def adapter_identity(self, kind: NativeSourceKind) -> str: ...
+
+    def read(
+        self,
+        selection: NativeBucketSelection,
+        *,
+        time_range: tuple[datetime, datetime] | None,
+        cursor: str | None,
+        limit: int,
+        bridge_id: str,
+        envelope_id: str,
         request_id: str,
         at: datetime,
     ) -> Mapping[str, Any]: ...
@@ -241,6 +267,8 @@ class NativeSourceStore(Protocol):
         preflight: tuple[NativeBucketProgress, ...],
         *,
         at: datetime,
+        checkpoint_job_id: str | None = None,
+        checkpoint_run_id: str | None = None,
     ) -> tuple[tuple[str, bool], ...]:
         """Atomically validate, record preflight, consume authority, and commit evidence."""
 
@@ -634,6 +662,8 @@ class NativeSourceController:
         *,
         authority: NativeSyncAuthority,
         wire_envelope: Mapping[str, Any],
+        checkpoint_job_id: str | None = None,
+        checkpoint_run_id: str | None = None,
     ) -> NativeAdmissionReceipt:
         if (
             not context.principal.authenticated
@@ -690,6 +720,8 @@ class NativeSourceController:
                 authority,
                 verification.bucket_results,
                 at=context.at,
+                checkpoint_job_id=checkpoint_job_id,
+                checkpoint_run_id=checkpoint_run_id,
             )
         except NativeAdmissionAuthorityError as exc:
             raise AdmissionDeniedError("native sync authority is stale or unauthenticated") from exc
@@ -723,4 +755,71 @@ class NativeSourceController:
             evidence_digest=digest,
             enrichment_proposal_count=len(proposals),
             enrichment_failed=enrichment_failed,
+        )
+
+    def adapter_identity(self, kind: NativeSourceKind) -> str:
+        """Return the bounded identity frozen into a baseline run."""
+        identity = self._host.adapter_identity(kind)
+        if (
+            not identity
+            or len(identity) > 64
+            or not all(character.isalnum() or character in "._-" for character in identity)
+        ):
+            raise AdmissionDeniedError("native-source adapter identity is invalid")
+        return identity
+
+    def read_and_admit_page(
+        self,
+        control_context: NativeRequestContext,
+        admission_context: NativeRequestContext,
+        *,
+        configuration_id: str,
+        bucket_id: str,
+        time_range: tuple[datetime, datetime] | None,
+        cursor: str | None,
+        limit: int = NATIVE_SOURCE_MAX_PAGE_SIZE,
+        checkpoint_job_id: str | None = None,
+        checkpoint_run_id: str | None = None,
+    ) -> NativeReadPageReceipt:
+        """Read and durably admit one exact page under a fresh sync grant."""
+        if control_context.request_id != admission_context.request_id:
+            raise AdmissionDeniedError("native page contexts do not name one request")
+        if not 1 <= limit <= NATIVE_SOURCE_MAX_PAGE_SIZE:
+            raise ValueError("native-source page limit is outside the frozen bound")
+        if time_range is not None:
+            start, end = (ensure_utc(value) for value in time_range)
+            if start > end:
+                raise ValueError("native-source page range is not ordered")
+            time_range = (start, end)
+        authority = self.lifecycle(
+            control_context,
+            capability=NativeSourceCapability.SYNC,
+            configuration_id=configuration_id,
+            bucket_id=bucket_id,
+        )
+        if not isinstance(authority, NativeSyncAuthority):
+            raise RuntimeError("native sync did not issue page authority")
+        binding = self._bindings((bucket_id,), authority.bridge_id)[0]
+        wire = self._host.read(
+            self._host_selections((binding,))[0],
+            time_range=time_range,
+            cursor=cursor,
+            limit=limit,
+            bridge_id=authority.bridge_id,
+            envelope_id=authority.envelope_id,
+            request_id=control_context.request_id,
+            at=control_context.at,
+        )
+        envelope = NativeAdmissionEnvelope.model_validate(wire)
+        admission = self.admit(
+            admission_context,
+            authority=authority,
+            wire_envelope=wire,
+            checkpoint_job_id=checkpoint_job_id,
+            checkpoint_run_id=checkpoint_run_id,
+        )
+        return NativeReadPageReceipt(
+            admission=admission,
+            authority_id=authority.authority_id,
+            next_cursor=envelope.next_cursor,
         )

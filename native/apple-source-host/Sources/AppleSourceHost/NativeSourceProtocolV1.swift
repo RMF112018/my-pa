@@ -4,6 +4,8 @@ import Foundation
 public enum NativeSourceProtocolV1 {
     public static let identifier = "my-pa.native-source.v1"
     public static let supportedIdentifiers = [identifier]
+    public static let maximumPageSize = 100
+    public static let maximumCursorBytes = 512
 }
 
 /// Source categories supported by protocol v1. These are product categories,
@@ -158,7 +160,9 @@ public struct NativeReadCursor: RawRepresentable, Codable, Hashable, Sendable {
     public let rawValue: String
 
     public init?(rawValue: String) {
-        guard !rawValue.isEmpty, !rawValue.contains(where: { $0.isWhitespace }) else {
+        guard !rawValue.isEmpty,
+              rawValue.utf8.count <= NativeSourceProtocolV1.maximumCursorBytes,
+              !rawValue.contains(where: { $0.isWhitespace }) else {
             return nil
         }
         self.rawValue = rawValue
@@ -208,7 +212,7 @@ public struct NativeReadRequest: Codable, Hashable, Sendable {
         cursor: NativeReadCursor? = nil,
         limit: Int
     ) throws {
-        guard limit > 0 else {
+        guard limit > 0, limit <= NativeSourceProtocolV1.maximumPageSize else {
             throw NativeSourceContractError.invalidPageLimit
         }
         self.bucketID = bucketID
@@ -264,6 +268,7 @@ public struct NativeReadPage: Codable, Hashable, Sendable {
     public let nextCursor: NativeReadCursor?
 
     public init(records: [NativeSourceRecord], nextCursor: NativeReadCursor?) {
+        precondition(records.count <= NativeSourceProtocolV1.maximumPageSize)
         self.records = records
         self.nextCursor = nextCursor
     }

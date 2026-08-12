@@ -42,6 +42,7 @@ __all__ = [
 
 _DIGEST: Final = re.compile(r"\A[0-9a-f]{64}\Z")
 _PROTOCOL_VERSION: Final = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,31}\Z")
+_ADAPTER_IDENTITY: Final = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 CALENDAR_HORIZON_DAYS: Final = 90
 
 
@@ -58,6 +59,7 @@ class NativeRunKind(StrEnum):
 
 
 class NativeRunState(StrEnum):
+    RUNNING = "running"
     SUCCEEDED = "succeeded"
     PARTIAL = "partial"
     FAILED = "failed"
@@ -210,6 +212,8 @@ class NativeRun:
     run_id: str
     configuration_id: str
     configuration_revision: int
+    bridge_id: str
+    adapter_identity: str
     kind: NativeRunKind
     state: NativeRunState
     start_at: datetime
@@ -220,8 +224,11 @@ class NativeRun:
     def __post_init__(self) -> None:
         validate_identifier(self.run_id, IdKind.NATIVE_RUN)
         validate_identifier(self.configuration_id, IdKind.NATIVE_CONFIGURATION)
+        validate_identifier(self.bridge_id, IdKind.NATIVE_BRIDGE)
         if self.configuration_revision < 1:
             raise ValueError("a native run requires a configuration revision")
+        if not _ADAPTER_IDENTITY.fullmatch(self.adapter_identity):
+            raise ValueError("a native run adapter identity has an invalid shape")
         start = ensure_utc(self.start_at)
         cutoff = ensure_utc(self.cutoff_at)
         horizon = ensure_utc(self.calendar_horizon_at)
@@ -242,10 +249,20 @@ class NativeCheckpoint:
     previous_checkpoint_id: str | None
     cursor_digest: str
     recorded_at: datetime
+    job_id: str | None = None
+    admission_authority_id: str | None = None
+    terminal: bool = False
+    item_count: int = 0
 
     def __post_init__(self) -> None:
         validate_identifier(self.checkpoint_id, IdKind.NATIVE_CHECKPOINT)
         validate_identifier(self.bucket_id, IdKind.NATIVE_BUCKET)
+        if self.job_id is not None:
+            validate_identifier(self.job_id, IdKind.NATIVE_JOB)
+        if self.admission_authority_id is not None:
+            validate_identifier(self.admission_authority_id, IdKind.NATIVE_AUTHORITY)
+        if (self.job_id is None) != (self.admission_authority_id is None):
+            raise ValueError("a baseline checkpoint binds both job and admission authority")
         if self.sequence < 1:
             raise ValueError("a native checkpoint sequence starts at one")
         if self.previous_checkpoint_id is not None:
@@ -254,6 +271,8 @@ class NativeCheckpoint:
             raise ValueError("a native checkpoint predecessor must match its sequence")
         if not _DIGEST.fullmatch(self.cursor_digest):
             raise ValueError("a native checkpoint cursor digest must be lowercase SHA-256")
+        if self.item_count < 0:
+            raise ValueError("a native checkpoint item count cannot be negative")
         object.__setattr__(self, "recorded_at", ensure_utc(self.recorded_at))
 
 

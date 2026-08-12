@@ -178,7 +178,11 @@ def runtime(disposable_database: str) -> Iterator[GatewayRuntime]:
         with built.work_engine.begin() as connection:
             connection.execute(text("TRUNCATE knowledge.sources CASCADE"))
             connection.execute(
-                text("TRUNCATE knowledge.native_admission_authorities, knowledge.audit_events")
+                text(
+                    "TRUNCATE knowledge.native_simulation_receipts, "
+                    "knowledge.native_checkpoints, "
+                    "knowledge.native_admission_authorities, knowledge.audit_events"
+                )
             )
         yield built
     finally:

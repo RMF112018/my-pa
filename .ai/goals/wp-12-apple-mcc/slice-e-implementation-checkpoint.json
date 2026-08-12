@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "goal_id": "WP-12-APPLE-MCC",
+  "slice": "E",
+  "disposition": "LOCAL_IMPLEMENTATION_AND_APPLICABLE_TIERS_PASS_PENDING_EXACT_HEAD_REVIEW_AND_PR_CI",
+  "repository": {
+    "repository": "RMF112018/my-pa",
+    "branch": "bf/wp-12e-frozen-baseline",
+    "base_sha": "88e8d8193095afa8d903db08324a588a5786908b",
+    "base_tree_sha": "418c466b020db1819b575f3206dbbdaf71db7f0a"
+  },
+  "objective": "Implement one synthetic-only frozen Apple baseline execution plane with a server-issued immutable cutoff, exact Mail/Calendar/Contacts windows, bounded paging, durable resume, admission-before-checkpoint ordering, and append-only start-date changes.",
+  "acceptance": {
+    "final_criteria_owned": [
+      "NAPDCB-AC-010",
+      "NAPDCB-AC-011",
+      "NAPDCB-AC-012",
+      "NAPDCB-AC-014",
+      "NAPDCB-AC-016",
+      "NAPDCB-AC-017",
+      "NAPDCB-AC-019",
+      "NAPDCB-AC-020",
+      "NAPDCB-AC-033",
+      "NAPDCB-AC-034"
+    ],
+    "implemented_verified_local_pending_exact_head_review": 10,
+    "final_criteria_discharged": []
+  },
+  "implementation": {
+    "cutoff": "ONE_SERVER_ISSUED_UTC_VALUE_PERSISTED_AND_REUSED_BY_IDEMPOTENCY_KEY",
+    "windows": "MAIL_INCLUSIVE_CALENDAR_OVERLAP_TO_PLUS_90_DAYS_CONTACTS_CURRENT_INVENTORY",
+    "frozen_inputs": "CONFIGURATION_REVISION_START_CUTOFF_HORIZON_BRIDGE_AND_ADAPTER_SET_DIGEST",
+    "paging": "MAXIMUM_100_RECORDS_PER_PAGE_CURSOR_MAXIMUM_512_BYTES_10000_PAGES_AND_1000000_RECORDS_PER_JOB",
+    "resume": "JOB_BOUND_PRIVATE_CURSOR_AND_TERMINAL_CHECKPOINT_WITH_ALL_PRIOR_DURABLE_CURSOR_REJECTION",
+    "checkpoint_guard": "IMMUTABLE_ADMISSION_BINDING_TO_EXACT_JOB_RUN_CONFIGURATION_REVISION_CURSOR_DIGEST_TERMINAL_AND_COUNT_ENFORCED_BY_DATABASE_TRIGGER",
+    "backfill": "EARLIER_START_TO_ONE_MILLISECOND_BEFORE_PRIOR_START_WITH_IDEMPOTENT_ADMISSION",
+    "later_start": "NO_DELETE_PATH_AND_APPEND_ONLY_SOURCE_EVIDENCE_AND_OBSERVATIONS",
+    "contacts": "CURRENT_INVENTORY_WITH_SEPARATE_IDEMPOTENT_MEMBERSHIP_EDGE"
+  },
+  "out_of_scope": [
+    "Slice F watchers, reconciliation lifecycle, rolling horizon and permission recovery",
+    "Slice G frontend and any WP-10 or WP-11 behavior",
+    "Slice H live gates, live Apple data, TCC, credentials, signing, notarization or activation",
+    "external-model disclosure, deployment, source mutation, destructive purge or risk acceptance"
+  ],
+  "validation": {
+    "focused_unit_application": "PASS_31",
+    "swift_contract_checks": "PASS_10_CHECKS",
+    "swift_release_build": "PASS",
+    "slice_b_schema_persistence": "PASS_12_DISPOSABLE_POSTGRESQL",
+    "combined_native_capture_audit_admission_migrations": "PASS_48_DISPOSABLE_POSTGRESQL",
+    "slice_e_database_fault_plants": "PASS_FOCUSED_TESTS_COVERING_12_RANGE_REJECTIONS_WRONG_RUN_KIND_6_CHECKPOINT_FORGERIES_IMMUTABLE_BINDING_2_CURSOR_CYCLES_AND_PAGE_RECORD_BUDGETS",
+    "populated_prior_head_roundtrip": "PASS_1_DISPOSABLE_POSTGRESQL",
+    "sql_executor_crash_resume_e2e": "PASS_1_DISPOSABLE_POSTGRESQL",
+    "architecture": "PASS_1274",
+    "mypy": "PASS_150_SOURCE_FILES",
+    "ruff": "PASS_FULL_REPOSITORY",
+    "format": "PASS_497_FILES",
+    "declared_floor_mypy": "PASS_150_SOURCE_FILES",
+    "declared_floor_fast": "PASS_2972_WITH_477_DESELECTED",
+    "broad_non_database": "PASS_2972_WITH_477_DESELECTED",
+    "broad_database_recovery_e2e": "PASS_476_WITH_2973_DESELECTED_DISPOSABLE_POSTGRESQL",
+    "independent_exact_head_review": "PENDING",
+    "pr_ci": "PENDING"
+  },
+  "failed_attempts": [
+    "The first migration used the central metadata constraint name instead of the frozen prior-revision PostgreSQL name; corrected and rerun.",
+    "The first applied-head parity check exposed ALTER-appended column order differing from central metadata; declarations were reordered and parity passed.",
+    "The first populated-prior-head upgrade correctly hit the append-only run trigger while backfilling new frozen columns; the migration now transactionally disables only that trigger for the bounded backfill and immediately re-enables it, and roundtrip passes.",
+    "The first E unit run had an undersized deterministic clock and one incorrect expected post-terminal read count; both tests were corrected to the actual executor lifecycle and rerun clean.",
+    "Final self-review found that nullable migration columns preserved legacy rows but also permitted new unbound job and checkpoint inserts; INSERT triggers now reject both bypasses, with direct SQL negative plants.",
+    "The first corrected combined database rerun had one historical-revision test call a current-head RETURNING shape; the historical constraint test now uses its own revision's SQL and all 28 combined tests pass.",
+    "The first full database tier found 25 cleanup setup errors from the new checkpoint foreign key and one stale trigger inventory; exact disposable-fixture dependency lists and the trigger expectation were updated, and the complete 26-test failed set passes.",
+    "Independent exact-head review blocked the first candidate because job ranges were not database-bound, checkpoints did not prove their exact admitted page, and only immediate cursor repetition was rejected. The corrective migration now closes all three raw/restart paths with non-vacuous plants.",
+    "The first corrective focused database run exposed two test-only defects: an obsolete exception regex and a None restart sentinel interpreted as an injected failure. Both were corrected; all four focused tests and all broader tiers pass.",
+    "The first corrective combined migration run found the newly added authority immutability trigger absent from the exact global inventory. The inventory was updated and the combined 48-test rerun passes.",
+    "Corrective self-review found that a first trigger form made migrated legacy jobs unable to perform state-only lease transitions. It now preserves those transitions while freezing every legacy scope field, and a populated prior-head upgrade/continuation/downgrade plant passes.",
+    "The blocked-head dependency-floor job failed because SQLAlchemy 2.0.20 exposes aggregate filter as untyped. The completion query now uses two typed count statements; a clean declared-floor environment passes mypy and the complete FAST tier.",
+    "The first local floor installation hit the macOS psycopg 3.2 extra metadata reference to unavailable psycopg-binary 3.2.0.dev1. Installing the same exact release pair separately reproduced the CI floor without weakening a declared dependency; pip check, mypy, and FAST pass.",
+    "Final raw-bypass self-review found that an earlier-start revision could be mislabeled as a baseline run and thereby request the full window. The run trigger now derives baseline versus backfill from immutable start history, bound jobs accept only those two run kinds, and a direct SQL wrong-kind plant passes.",
+    "The first full rerun after the run-kind correction exposed an existing idempotent mismatch test reaching the new trigger before ON CONFLICT. A first broad short-circuit overcorrected by skipping exact configuration validation. The final ordering preserves exact bridge/start validation, defers only history-kind comparison for an existing idempotency row, and retains the application immutable-work conflict; focused and full reruns pass."
+  ],
+  "limitations": [
+    "This slice is synthetic-only and establishes no live Apple feasibility or activation evidence.",
+    "A crash after durable admission but before checkpoint intentionally replays that page; Slice C idempotency prevents duplicate immutable versions.",
+    "Exact-head independent review and green PR CI are required before criteria are discharged."
+  ]
+}

@@ -353,6 +353,10 @@ NATIVE_SOURCE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "native_bucket_requires_account_and_parent_scope",
         "native_bucket_run_requires_selected_bucket",
         "native_simulation_receipt_requires_exact_evidence",
+        "native_run_requires_exact_frozen_inputs",
+        "native_authority_allows_one_exact_consumption",
+        "native_job_requires_exact_frozen_run",
+        "native_checkpoint_requires_admitted_page",
     }
 )
 

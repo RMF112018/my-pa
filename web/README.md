@@ -86,6 +86,7 @@ superseded Graph-primary sequencing as a live commitment; it is not one.
 cd web
 npm install
 export MYPA_SESSION_SECRET="$(openssl rand -hex 32)"   # required to serve; see below
+export MYPA_AUTH_MODE=synthetic                        # required to serve; see below
 npm run dev        # development server
 npm run lint       # eslint
 npm run typecheck  # tsc --noEmit
@@ -111,6 +112,53 @@ request fails rather than resolving to a principal.
 but `npm run dev` and `npm start` do, from the first request onward. The tests
 supply their own key explicitly in `vitest.setup.ts`; do not reintroduce an
 implicit default to make anything green.
+
+### `MYPA_AUTH_MODE` is required too, and unset is a refusal
+
+Two values, `synthetic` and `entra`, and no default. Until WP-05,
+`POST /api/session` would mint a session for either hardcoded synthetic
+principal with **no gate at all** — no mode, no environment check, nothing. A
+deployment did not have to be a development one for the passwordless sign-in
+buttons to work, and nothing said so.
+
+- `synthetic` — the two fixed development principals. **Refused outright when
+  `NODE_ENV === "production"`**, rather than warned about.
+- `entra` — real sign-in. A synthetic key is refused (`403`), and
+  `MYPA_ENTRA_HOME_TENANT_ID` must name the tenant whose tokens are accepted;
+  without it the deployment cannot reject a foreign tenant and so refuses to
+  answer. A live Entra registration is operator-gated and is not configured
+  anywhere in this repository.
+
+### Sessions are revocable, and revocation is enforced on the Node side
+
+The session envelope carries a random `sid`. Signing in registers it and revokes
+whatever that principal held before, so a session identifier cannot be carried
+across a sign-in. Signing out **revokes the `sid` server-side** and then clears
+the cookie — in that order, because clearing a cookie is a request the holder may
+decline, and the property that matters is that replaying the exact same cookie
+value after sign-out is refused. An idle timeout applies on top of the absolute
+expiry.
+
+The registry (`src/lib/auth/session-registry.ts`) is an in-memory `Map` in the
+Node runtime. It is **process-local and lost on restart** — the web tier has no
+durable store at this head — and that limitation is stated in the module rather
+than implied away.
+
+`src/middleware.ts` runs in the **Edge** runtime and cannot see that registry, so
+it is a cheap signature-and-expiry pre-filter and **not** the authority. The
+authority is `src/lib/auth/principal.ts`, which every `/api/*` route handler and
+every server component that needs a principal goes through. Do not call
+`verifySession` directly from a Node route; it cannot see a revocation.
+
+### Sign-in requests no Microsoft Graph scope
+
+`src/lib/auth/msal.config.ts` asked for `User.Read` until WP-05, which is a Graph
+resource scope and therefore a Graph consent dependency on the sign-in path.
+Sign-in now requests `openid`, `profile`, `offline_access`, plus the
+application's own API scope when `NEXT_PUBLIC_MYPA_API_SCOPE` names one — and a
+value that points at Graph is dropped rather than honoured.
+`src/lib/auth/msal.config.test.ts` holds that, and holds that no module on the
+sign-in path imports or starts a Graph connector, delta worker, or webhook.
 
 ## Boundary rules
 

@@ -5,6 +5,21 @@
  * (middleware) and the Node runtime (route handlers) alike. The session
  * value is `base64url(payloadJson) + "." + base64url(hmac)`. No identity
  * field is ever read from the client without the signature verifying first.
+ *
+ * **What this module can and cannot decide.** It proves that a cookie was minted
+ * by this deployment and has not passed its absolute expiry. It cannot know
+ * whether the session was *revoked*, because a signed bearer value is valid
+ * until it expires and nothing in it changes when someone signs out. Revocation
+ * is server-side state and lives in `session-registry.ts`, which is Node-only;
+ * `principal.ts` is the resolution that consults both and is the authority every
+ * route handler and server component goes through. Calling `verifySession`
+ * alone is a signature-and-expiry check, and the two callers that do it —
+ * `src/middleware.ts` and this module's own tests — say so where they do it.
+ *
+ * `sid` is what makes revocation possible at all: a random per-sign-in
+ * identifier the registry can be keyed on. Without it a "revoke" could only
+ * revoke a principal, so signing out of one browser would sign the person out of
+ * every other one, and there would be nothing to rotate on sign-in.
  */
 import type { PrincipalSession } from "@/contracts/identity";
 
@@ -55,10 +70,30 @@ function sessionSecret(): string {
   return configured;
 }
 
-interface SessionPayload {
+export interface SessionPayload {
   readonly principal: PrincipalSession;
+  /**
+   * The session identifier this sign-in minted. Random, unguessable, and the
+   * key the server-side registry revokes by.
+   */
+  readonly sid: string;
+  /** Unix seconds at which the session was issued. */
+  readonly iat: number;
   /** Unix seconds after which the session is invalid. */
   readonly exp: number;
+}
+
+/**
+ * A fresh session identifier: 128 bits from the platform CSPRNG.
+ *
+ * `crypto.getRandomValues` rather than anything derived from the principal, the
+ * clock, or a counter — a predictable `sid` would let someone revoke or
+ * impersonate a session they never held.
+ */
+export function newSessionId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
@@ -89,11 +124,21 @@ async function hmacKey(): Promise<CryptoKey> {
   );
 }
 
-/** Encode a principal into a signed session token. */
-export async function encodeSession(principal: PrincipalSession): Promise<string> {
+/**
+ * Encode a principal into a signed session token.
+ *
+ * `sid` is supplied by the caller rather than minted here, because the value has
+ * to be registered server-side in the same act that issues the cookie — a token
+ * carrying a `sid` the registry never heard of would be a session nothing could
+ * revoke.
+ */
+export async function encodeSession(principal: PrincipalSession, sid?: string): Promise<string> {
+  const issued = Math.floor(Date.now() / 1000);
   const payload: SessionPayload = {
     principal,
-    exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS,
+    sid: sid ?? newSessionId(),
+    iat: issued,
+    exp: issued + SESSION_MAX_AGE_SECONDS,
   };
   const payloadBytes = new TextEncoder().encode(JSON.stringify(payload));
   const signature = await crypto.subtle.sign("HMAC", await hmacKey(), payloadBytes as BufferSource);
@@ -101,10 +146,16 @@ export async function encodeSession(principal: PrincipalSession): Promise<string
 }
 
 /**
- * Verify a session token. Returns the principal on success, `null` on any
- * failure — malformed token, bad signature, expiry, missing fields. Fail closed.
+ * Verify a session token's signature and absolute expiry, and return the whole
+ * envelope. Returns `null` on any failure — malformed token, bad signature,
+ * expiry, missing fields. Fail closed.
+ *
+ * **This is not the authority on whether a session is live.** It cannot see a
+ * revocation; see the module docstring and `principal.ts`.
  */
-export async function verifySession(token: string | undefined | null): Promise<PrincipalSession | null> {
+export async function verifySessionEnvelope(
+  token: string | undefined | null,
+): Promise<SessionPayload | null> {
   if (!token) return null;
   const parts = token.split(".");
   if (parts.length !== 2) return null;
@@ -124,9 +175,10 @@ export async function verifySession(token: string | undefined | null): Promise<P
   } catch {
     return null;
   }
-  if (typeof payload.exp !== "number" || payload.exp <= Math.floor(Date.now() / 1000)) {
-    return null;
-  }
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof payload.exp !== "number" || payload.exp <= now) return null;
+  if (typeof payload.iat !== "number" || payload.iat > now + 60) return null;
+  if (typeof payload.sid !== "string" || payload.sid.length < 16) return null;
   const p = payload.principal;
   if (
     !p ||
@@ -138,7 +190,20 @@ export async function verifySession(token: string | undefined | null): Promise<P
   ) {
     return null;
   }
-  return p;
+  return payload;
+}
+
+/**
+ * The principal a token names, on signature and absolute expiry alone.
+ *
+ * Kept because the Edge middleware can use nothing more than this. Every Node
+ * caller must use `resolveSessionPrincipal` from `principal.ts` instead, which
+ * additionally refuses a revoked or idle session.
+ */
+export async function verifySession(
+  token: string | undefined | null,
+): Promise<PrincipalSession | null> {
+  return (await verifySessionEnvelope(token))?.principal ?? null;
 }
 
 /** Cookie attributes shared by set/clear paths. */

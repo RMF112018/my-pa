@@ -131,7 +131,16 @@ NAMED_PROHIBITED_ROOTS = frozenset(
 #: * `starlette` — confined to `adapters/http` by `CONFINED_IMPORT_ROOTS`.
 #: * `uvicorn` — prohibited above by name, which is stricter, so subtracting it
 #:   from the derivation changes nothing; it is listed for the reader.
-SDK_EXEMPT_ROOTS = frozenset({"pydantic", "starlette", "uvicorn"})
+#: * `jwt` — PyJWT stopped being SDK baggage with WP-05 and became a *declared*
+#:   direct runtime dependency, because `MY_PA_AUTH_MODE=entra` verifies RS256
+#:   bearer tokens and the standard library has no JWS implementation. It is
+#:   exempted from the derived prohibition and **confined** by
+#:   `CONFINED_IMPORT_ROOTS` to `infrastructure/security`, which is the same
+#:   treatment Starlette gets and is stricter than "permitted": one module may
+#:   import it and every other module in the tree may not. Deleting it from the
+#:   derivation *without* confining it would have admitted a token library
+#:   package-wide, which is the difference this file exists to keep.
+SDK_EXEMPT_ROOTS = frozenset({"pydantic", "starlette", "uvicorn", "jwt"})
 
 
 def _distribution_name(specifier: str) -> str:
@@ -202,10 +211,15 @@ def _import_roots(distributions: set[str]) -> frozenset[str]:
 #: Everything the MCP SDK drags in, derived from what it declares. See the
 #: module docstring: this is `D-26`'s cost argument, and it was a hand-typed
 #: list that enforced none of it.
-SDK_IMPORT_ROOTS = _import_roots(_dependency_closure("mcp")) - SDK_EXEMPT_ROOTS
+#:
+#: The exemptions are subtracted *when the prohibition is formed* rather than
+#: here, so this stays what its name says — the closure the SDK resolves to —
+#: and the controls below that assert a root is in the closure keep asserting
+#: that rather than quietly becoming assertions about the prohibition.
+SDK_IMPORT_ROOTS = _import_roots(_dependency_closure("mcp"))
 
 #: Dependencies no module under `src/my_pa` may import, by root.
-PROHIBITED_IMPORT_ROOTS = NAMED_PROHIBITED_ROOTS | SDK_IMPORT_ROOTS
+PROHIBITED_IMPORT_ROOTS = NAMED_PROHIBITED_ROOTS | (SDK_IMPORT_ROOTS - SDK_EXEMPT_ROOTS)
 
 #: What counts as "not third party" when reading the package's own imports.
 _STDLIB_ROOTS = frozenset(sys.stdlib_module_names)
@@ -229,7 +243,14 @@ def _imports(path: Path) -> set[str]:
 #: Dependencies the package may import in exactly one subtree, and the subtree.
 #: See the module docstring: a transport library is not "in scope", it is in the
 #: transport.
-CONFINED_IMPORT_ROOTS = {"starlette": "adapters/http", "mcp": "adapters/mcp"}
+CONFINED_IMPORT_ROOTS = {
+    "starlette": "adapters/http",
+    "mcp": "adapters/mcp",
+    # PyJWT. One module verifies bearer tokens; nothing else in the tree may
+    # decode, inspect, or re-verify one, which is what keeps "the token was
+    # checked here" a fact about the wiring rather than a convention.
+    "jwt": "infrastructure/security",
+}
 
 
 @pytest.mark.parametrize("path", _modules(), ids=lambda p: str(p.name))
@@ -255,12 +276,24 @@ REVIEW_PLANTED_ROOTS = (
 
 @pytest.mark.parametrize("root", REVIEW_PLANTED_ROOTS)
 def test_the_derived_prohibition_covers_what_the_sdk_actually_brings(root: str) -> None:
-    """Each root the review planted is prohibited, and by derivation not by name."""
+    """Each root the review planted is covered, and by derivation not by name.
+
+    Five are prohibited outright. `jwt` is the sixth and is covered *differently*
+    since WP-05: PyJWT became a declared direct dependency, so it is exempt from
+    the prohibition and confined to one subtree instead. The third assertion is
+    what keeps that from being a hole — a root that left the prohibition without
+    arriving in the confinement fails here — and it is stricter than the two
+    assertions that preceded it, which said only that the derivation resolved.
+    """
     assert root in SDK_IMPORT_ROOTS, (
-        f"{root!r} is installed by the MCP SDK's dependency closure and is not prohibited"
+        f"{root!r} is installed by the MCP SDK's dependency closure and the derivation missed it"
     )
     assert root not in NAMED_PROHIBITED_ROOTS, (
         f"{root!r} is covered by a typed name; the derivation is not what is being tested"
+    )
+    assert root in PROHIBITED_IMPORT_ROOTS or root in CONFINED_IMPORT_ROOTS, (
+        f"{root!r} is neither prohibited nor confined; the SDK's transitive "
+        "surface is admitted package-wide"
     )
 
 
@@ -311,7 +344,7 @@ def test_the_derivation_prohibits_nothing_the_package_legitimately_uses() -> Non
         f"the package imports {sorted(unaccounted)}, which the derivation prohibits; "
         "either the import is wrong or the root belongs in SDK_EXEMPT_ROOTS with a reason"
     )
-    assert third_party == {"mcp", "psycopg", "pydantic", "sqlalchemy", "starlette"}, (
+    assert third_party == {"jwt", "mcp", "psycopg", "pydantic", "sqlalchemy", "starlette"}, (
         f"the package's third-party surface changed to {sorted(third_party)}"
     )
 
@@ -358,7 +391,16 @@ def test_declared_runtime_dependencies_are_the_agreed_set() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     runtime = data["project"]["dependencies"]
     roots = {re.split(r"[><=!~\[]", item)[0].strip().lower() for item in runtime}
-    assert roots == {"pydantic", "sqlalchemy", "psycopg", "alembic", "starlette", "uvicorn", "mcp"}
+    assert roots == {
+        "pydantic",
+        "sqlalchemy",
+        "psycopg",
+        "alembic",
+        "starlette",
+        "uvicorn",
+        "mcp",
+        "pyjwt",
+    }
 
 
 def test_every_runtime_dependency_declares_a_range() -> None:

@@ -66,6 +66,7 @@ __all__ = [
     "DATABASE_URL_SCHEME",
     "ENV_PREFIX",
     "MAX_FETCH_BYTES_CEILING",
+    "AuthMode",
     "Environment",
     "LogLevel",
     "Settings",
@@ -105,6 +106,27 @@ class Environment(StrEnum):
 
     LOCAL = "local"
     TEST = "test"
+
+
+class AuthMode(StrEnum):
+    """How the HTTP transport establishes the acting Principal.
+
+    Two values, declared rather than inferred. `local_operator` is `D-30` as it
+    has always run: loopback is the trust boundary, the composition root issues
+    one durable local principal, and no credential is read. `entra` requires a
+    bearer token on every request and derives the Principal from its validated
+    `(tid, oid)` claims.
+
+    There is no third value and no inference. A deployment that means to
+    authenticate says so, and one that names `entra` without the configuration
+    it needs does not start — see `Settings._check`. The failure mode this
+    forecloses is the one that matters: a missing tenant ID quietly selecting
+    the unauthenticated mode on a process an operator believed was
+    authenticating.
+    """
+
+    LOCAL_OPERATOR = "local_operator"
+    ENTRA = "entra"
 
 
 class LogLevel(StrEnum):
@@ -174,6 +196,26 @@ class Settings(StrictModel):
 
     environment: Environment = Environment.LOCAL
     log_level: LogLevel = LogLevel.INFO
+    #: Which authentication mode the transport composes. Defaults to the
+    #: unauthenticated loopback mode this build has always run, because that is
+    #: the behaviour every existing deployment has; selecting `entra` is a
+    #: deliberate edit and carries the four fields below with it.
+    auth_mode: AuthMode = AuthMode.LOCAL_OPERATOR
+    #: The four values `entra` mode requires. Each defaults to empty rather than
+    #: to a plausible-looking value, so "unset" and "set to something useless"
+    #: are the same startup failure rather than two different ones.
+    #:
+    #: `repr=False` on all four for the reason `database_url` carries it: these
+    #: are the live tenant's own identifiers, `SECURITY.md` treats a real tenant
+    #: ID as a value that must not be committed or printed, and pytest renders
+    #: the `repr` of a failing assertion's operands. None of them is a
+    #: credential — a tenant ID, an application ID, an issuer URL and a JWKS URL
+    #: are all public knowledge to anyone holding a token — so this closes a
+    #: disclosure channel rather than protecting a secret.
+    entra_tenant_id: str = Field(default="", repr=False)
+    entra_client_id: str = Field(default="", repr=False)
+    entra_issuer: str = Field(default="", repr=False)
+    entra_jwks_uri: str = Field(default="", repr=False)
     redaction_enabled: bool = True
     contract_strict_mode: bool = True
     max_page_size: int = Field(default=200, gt=0, le=1000)
@@ -208,6 +250,7 @@ class Settings(StrictModel):
     @model_validator(mode="after")
     def _check(self) -> Settings:
         self._parsed_database_url = _parse_database_url(self.database_url)
+        self._check_auth_mode()
         if not self.redaction_enabled:
             raise SettingsError(
                 "redaction cannot be disabled; debug mode does not bypass redaction"
@@ -220,6 +263,39 @@ class Settings(StrictModel):
         # at startup instead of at the first `capabilities.get`.
         self.effective_limits()
         return self
+
+    def _check_auth_mode(self) -> None:
+        """`entra` mode without its configuration refuses to start.
+
+        Fail closed, and closed in the direction that matters: the alternative
+        an unconfigured `entra` could have taken is `local_operator`, which
+        serves every request as the local operator with no credential at all.
+        Downgrading silently would turn one missing environment variable into an
+        open gateway, so a missing value ends the process instead.
+
+        The message names the settings and never their values. It is also the
+        whole diagnostic — an operator who sets three of four is told which one
+        is missing, not merely that something is.
+        """
+        if self.auth_mode is not AuthMode.ENTRA:
+            return
+        required = {
+            "entra_tenant_id": self.entra_tenant_id,
+            "entra_client_id": self.entra_client_id,
+            "entra_issuer": self.entra_issuer,
+            "entra_jwks_uri": self.entra_jwks_uri,
+        }
+        missing = sorted(
+            f"{ENV_PREFIX}{name.upper()}" for name, value in required.items() if not value.strip()
+        )
+        if missing:
+            raise SettingsError(
+                f"{ENV_PREFIX}AUTH_MODE is {AuthMode.ENTRA.value!r} and requires "
+                f"{', '.join(missing)}, which {'is' if len(missing) == 1 else 'are'} "
+                "unset or blank. There is no inference and no downgrade to "
+                f"{AuthMode.LOCAL_OPERATOR.value!r}: an unconfigured authenticated "
+                "mode would serve every request as the local operator"
+            )
 
     def parsed_database_url(self) -> URL:
         """`database_url` as validation read it, for `create_database_engine`.

@@ -6,7 +6,7 @@ name: my-pa-nas-contract
 services:
   postgres:
     profiles: [nas-01-contract-only]
-    image: "${MY_PA_POSTGRES_IMAGE:?repository required}@${MY_PA_POSTGRES_IMAGE_DIGEST:?sha256 digest required}"
+    image: "${MY_PA_POSTGRES_IMAGE_ID:?sha256 loaded image id required}"
     platform: linux/amd64
     restart: "no"
     environment:
@@ -21,7 +21,7 @@ services:
 
   gateway:
     profiles: [nas-01-contract-only]
-    image: "${MY_PA_APP_IMAGE:?repository required}@${MY_PA_APP_IMAGE_DIGEST:?sha256 digest required}"
+    image: "${MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}"
     platform: linux/amd64
     user: "${MY_PA_UID:?dedicated service uid required}:${MY_PA_GID:?dedicated service gid required}"
     restart: "no"
@@ -40,7 +40,7 @@ services:
 
   worker-enrollment:
     profiles: [nas-01-contract-only]
-    image: "${MY_PA_APP_IMAGE:?repository required}@${MY_PA_APP_IMAGE_DIGEST:?sha256 digest required}"
+    image: "${MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}"
     platform: linux/amd64
     user: "${MY_PA_UID:?}:${MY_PA_GID:?}"
     restart: "no"
@@ -54,7 +54,7 @@ services:
 
   worker-capture:
     profiles: [nas-01-contract-only]
-    image: "${MY_PA_APP_IMAGE:?repository required}@${MY_PA_APP_IMAGE_DIGEST:?sha256 digest required}"
+    image: "${MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}"
     platform: linux/amd64
     user: "${MY_PA_UID:?}:${MY_PA_GID:?}"
     restart: "no"
@@ -66,11 +66,11 @@ services:
 
   web:
     profiles: [nas-01-contract-only]
-    image: "${MY_PA_WEB_IMAGE:?repository required}@${MY_PA_WEB_IMAGE_DIGEST:?sha256 digest required}"
+    image: "${MY_PA_WEB_IMAGE_ID:?sha256 loaded image id required}"
     platform: linux/amd64
     user: "${MY_PA_UID:?}:${MY_PA_GID:?}"
     restart: "no"
-    command: [npm, run, start]
+    command: [node, server.js]
     environment:
       NODE_ENV: production
       MYPA_GATEWAY_URL: http://gateway:8765

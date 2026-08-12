@@ -228,7 +228,7 @@ select = [
 # this comment claimed the opposite ("so a bare `mypy` checks the same tree CI
 # does"), which was false when written. Both invocations are bare now, so the
 # two agree by construction rather than by a number anyone has to maintain.
-files = ["src", "migrations", "apps"]
+files = ["src", "migrations", "apps", "ops"]
 python_version = "3.12"
 strict = true
 warn_unreachable = true

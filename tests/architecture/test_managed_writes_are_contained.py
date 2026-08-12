@@ -100,6 +100,14 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
     "scripts/migration/reconcile.py": (
         "writes a reconciliation report to an explicit output path."
     ),
+    "ops/nas/write-candidate-manifest.py": (
+        "writes only a non-deployable image manifest into the operator-selected "
+        "candidate artifact directory; it never reads or writes personal or managed bytes."
+    ),
+    "ops/nas/write-image-metadata.py": (
+        "writes only Docker image identity metadata into the operator-selected "
+        "candidate artifact directory; it never reads or writes personal or managed bytes."
+    ),
 }
 
 #: Attribute names that are a filesystem write whatever they are called on,

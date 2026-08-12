@@ -62,6 +62,11 @@ def _compose_networks(block: str) -> set[str]:
     return {item.strip() for item in match.group(1).split(",")} if match else set()
 
 
+def _compose_volume_item_count(block: str) -> int:
+    section = re.search(r"(?ms)^    volumes:\n(.*?)(?=^    [a-z_]+:|\Z)", block)
+    return len(re.findall(r"(?m)^      - ", section.group(1))) if section else 0
+
+
 def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     """Return stable violation codes for real files or deliberately mutated copies."""
 
@@ -225,6 +230,11 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     }
     if any(
         _compose_mounts(blocks[name]) != mounts for name, mounts in expected_compose_mounts.items()
+    ):
+        errors.add("mount_ownership")
+    if any(
+        _compose_volume_item_count(blocks[name]) != len(_compose_mounts(blocks[name]))
+        for name in SERVICES
     ):
         errors.add("mount_ownership")
     expected_compose_networks = {
@@ -413,6 +423,24 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "        target: /var/lib/postgresql/data\n"
             "      - type: bind\n"
             "        source: ./proxy-allowlist.example.caddy\n"
+            "        target: /srv/my-pa/extra\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            "      - ./proxy-allowlist.example.caddy:/srv/my-pa/extra:ro\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            "      - type: volume\n"
+            "        source: unexpected\n"
             "        target: /srv/my-pa/extra\n"
             "    networks: [data-plane]",
             "mount_ownership",

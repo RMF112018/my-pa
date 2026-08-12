@@ -92,6 +92,20 @@ still open for the activation: no tenant, application registration, or credentia
 is configured here, and an unconfigured `entra` refuses to start rather than
 falling back (see `bootstrap.settings`).
 
+`entra` composes `entra_authenticator` instead and issues **no** process
+principal. Every request presents a bearer token, the token's validated
+`(tid, oid)` resolves through `PrincipalIdentityService` to that person's durable
+`principal_id`, and the `Principal` handed to the application is `OPERATOR` and
+authenticated — the same kind, for the same reason, so authorization semantics
+are identical to the loopback mode and only the identifier differs. Widening or
+narrowing authority was not part of turning authentication on, and a different
+kind would have done one or the other silently.
+
+`P00-OD-010` — which mechanism authenticates — is answered for the mechanism and
+still open for the activation: no tenant, application registration, or credential
+is configured here, and an unconfigured `entra` refuses to start rather than
+falling back (see `bootstrap.settings`).
+
 The identifier is durable across process runs (`PKL-MYPA-D-WP03-001`): it is
 derived from a fixed namespace UUID in `my_pa.domain.identity.binding`, not
 issued per run and not derived from the host or the account — so no personal

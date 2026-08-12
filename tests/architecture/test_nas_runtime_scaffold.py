@@ -77,7 +77,9 @@ def _compose_volume_item_count(block: str) -> int:
 
 def _has_noncanonical_read_only(block: str) -> bool:
     tokens = re.findall(r"read_only\s*:\s*([^,}\s]+)", block)
-    occurrences = len(re.findall(r"read_only\s*:", block))
+    # Count the bare word independently so quoted/aliased/noncanonical key
+    # spellings cannot disappear from the strict token parser.
+    occurrences = len(re.findall(r"\bread_only\b", block))
     return len(tokens) != occurrences or any(
         token.lower() not in {"true", "false"} for token in tokens
     )
@@ -442,6 +444,14 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "      - type: bind\n"
             "        source: ./proxy-allowlist.example.caddy\n"
             "        target: /srv/my-pa/extra\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            '        "read_only": true\n'
             "    networks: [data-plane]",
             "mount_ownership",
         ),

@@ -59,17 +59,28 @@ export function registerSession(principalId: string, sid: string, now?: number):
 }
 
 /**
- * Mark `sid` as used, and report whether it is still live.
+ * Mark `sid` as used, and report whether it is still live **for this principal**.
  *
- * `false` means revoked, never registered, or idle past `IDLE_TIMEOUT_SECONDS`.
- * The three are not distinguished: each of them means "not signed in", and
- * telling them apart would tell a caller whether a session it does not hold
- * exists.
+ * `false` means revoked, never registered, idle past `IDLE_TIMEOUT_SECONDS`, or
+ * registered to a different principal than the envelope claims. They are not
+ * distinguished: each of them means "not signed in", and telling them apart
+ * would tell a caller whether a session it does not hold exists.
+ *
+ * **The principal equality check is the WP-08 hardening of WP-07's NOTE 2.**
+ * This registry bound a `sid` to liveness and to a principal, but only liveness
+ * was ever checked, so an envelope naming principal B carrying principal A's
+ * live `sid` resolved to B while touching A's session. Reaching that state
+ * already required the HMAC signing secret — which permits forging any identity
+ * outright — so it was outside the threat model and is still outside it. It is
+ * closed anyway because it is one comparison, and because "the identity in the
+ * envelope and the identity the server registered agree" is a property worth
+ * having stated rather than argued.
  */
-export function touchSession(sid: string, now?: number): boolean {
+export function touchSession(sid: string, principalId: string, now?: number): boolean {
   const at = seconds(now);
   const session = live.get(sid);
   if (session === undefined) return false;
+  if (session.principalId !== principalId) return false;
   if (at - session.lastSeenAt > IDLE_TIMEOUT_SECONDS) {
     revokeSession(sid);
     return false;

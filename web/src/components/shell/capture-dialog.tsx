@@ -14,7 +14,7 @@
  * the text starts a new attempt with a new key. The route scopes the key to the
  * authenticated principal (`ADR-005`, `PKL-MYPA-D-WP03-001`).
  *
- * **The four outcomes below are four different things, and this component keeps
+ * **The six outcomes below are six different things, and this component keeps
  * them apart.** Conflating them is the specific failure this screen can commit,
  * because the person reading it decides whether to keep their note somewhere else
  * on the strength of one line of text:
@@ -29,9 +29,21 @@
  * * **refused** — validation, conflict, authorization, policy. Nothing was
  *   stored, the note stays in the field, and the reason is shown rather than a
  *   generic failure.
- * * **unavailable** — the backend could not be reached. Also nothing stored, but
- *   a different instruction: retrying is worth doing, and the retry reuses the
- *   same attempt key so it cannot become a second capture.
+ * * **unavailable** — the server answered that it could not serve. Also nothing
+ *   stored, but a different instruction: retrying is worth doing, and the retry
+ *   reuses the same attempt key so it cannot become a second capture. This is
+ *   the *reachable* backend saying no; a request that never arrived is the next
+ *   state, not this one.
+ * * **queued offline** — the request never reached the server and the note is
+ *   held, encrypted, in this browser's own storage. It is **not** a save and is
+ *   never rendered as one: nothing on the server knows the note exists, and the
+ *   copy on this device is the only copy. It replays when the connection comes
+ *   back, and the local copy is deleted only once the server's own receipt has
+ *   been checked (`lib/offline/replay.ts`).
+ * * **not held** — the note could not even be queued: no offline storage, no
+ *   storable non-extractable key, or the device queue is at its bound. The note
+ *   stays in the field and the reason is named, because the one thing this
+ *   screen must never do is imply a hold it did not perform.
  *
  * **Enrichment state is not among them**, and its absence is deliberate. The save
  * is durable before any processing runs and no capability this tier can call
@@ -44,6 +56,15 @@ import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { TextField } from "@/components/ui/field";
 import { apiPost } from "@/lib/api/client";
+import { queueCaptureOffline } from "@/lib/offline/capture-queue";
+
+/** The two source classes a person may author. Quick note unless they say otherwise. */
+const CAPTURE_KINDS = [
+  { value: "quick_note", label: "Quick note" },
+  { value: "conversation_log", label: "Conversation log" },
+] as const;
+
+type CaptureKind = (typeof CAPTURE_KINDS)[number]["value"];
 
 /** The two source classes a person may author. Quick note unless they say otherwise. */
 const CAPTURE_KINDS = [
@@ -70,7 +91,9 @@ type Outcome =
   | { readonly kind: "durable"; readonly receiptId: string | null; readonly created: boolean }
   | { readonly kind: "acknowledged"; readonly receiptId: string | null }
   | { readonly kind: "refused"; readonly reason: string }
-  | { readonly kind: "unavailable"; readonly reason: string };
+  | { readonly kind: "unavailable"; readonly reason: string }
+  | { readonly kind: "queued"; readonly entryId: string }
+  | { readonly kind: "not_held"; readonly reason: string };
 
 /**
  * Which acknowledgement this is, read from the route's own answer.
@@ -89,7 +112,22 @@ function acknowledgement(data: CaptureAck): Outcome {
   return { kind: "acknowledged", receiptId };
 }
 
-export function CaptureDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function CaptureDialog({
+  open,
+  onClose,
+  principalId,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /**
+   * The signed-in principal, supplied by the shell from the verified session.
+   *
+   * A queued entry is bound to this value at enqueue and the binding is never
+   * rewritten, so the offline path cannot queue a note under an identity the
+   * server never authenticated.
+   */
+  principalId: string;
+}) {
   const [text, setText] = useState("");
   const [kind, setKind] = useState<CaptureKind>("quick_note");
   const [outcome, setOutcome] = useState<Outcome>({ kind: "idle" });
@@ -137,9 +175,41 @@ export function CaptureDialog({ open, onClose }: { open: boolean; onClose: () =>
           : { kind: "refused", reason },
       );
     } catch {
+      // The request never reached the server, so nothing on the far side knows
+      // this note exists. Hold it on this device rather than telling someone to
+      // retry a note they may close the tab on.
+      await hold();
+    }
+  }
+
+  /**
+   * Queue the note locally, or say plainly that it was not held.
+   *
+   * The attempt key is deliberately *kept* on the queued path: it is minted once
+   * and replayed verbatim, so a note that is queued and later replayed is one
+   * capture rather than two. It is cleared only when the entry is safely held,
+   * so a subsequent save in the same dialog starts its own attempt.
+   */
+  async function hold() {
+    const key = attemptKeyRef.current;
+    if (!key) {
+      setOutcome({ kind: "not_held", reason: "no submission key was minted for this note" });
+      return;
+    }
+    try {
+      const entry = await queueCaptureOffline({
+        principalId,
+        text: text.trim(),
+        captureKind: kind,
+        idempotencyKey: key,
+      });
+      setOutcome({ kind: "queued", entryId: entry.entryId });
+      setText("");
+      attemptKeyRef.current = null;
+    } catch (error) {
       setOutcome({
-        kind: "unavailable",
-        reason: "the request did not reach the server",
+        kind: "not_held",
+        reason: error instanceof Error ? error.message : "this device could not hold the note",
       });
     }
   }
@@ -197,6 +267,20 @@ export function CaptureDialog({ open, onClose }: { open: boolean; onClose: () =>
         {outcome.kind === "refused" ? (
           <p role="alert" data-testid="capture-refused" className="text-sm text-moss-coral">
             Refused, and nothing was stored: {outcome.reason} Your note is still in the field.
+          </p>
+        ) : null}
+        {outcome.kind === "queued" ? (
+          <p role="status" data-testid="capture-queued" className="text-sm text-moss-coral">
+            <strong>Held on this device only</strong> — not saved on the server. The connection
+            could not be reached, so the note is encrypted and kept here, and it will be sent when
+            you are back online. Until then this device holds the only copy.
+            <span className="ml-1 font-mono text-xs">({outcome.entryId})</span>
+          </p>
+        ) : null}
+        {outcome.kind === "not_held" ? (
+          <p role="alert" data-testid="capture-not-held" className="text-sm text-moss-coral">
+            <strong>Not saved and not held.</strong> {outcome.reason} Your note is still in the
+            field — copy it somewhere else before closing this dialog.
           </p>
         ) : null}
         {outcome.kind === "unavailable" ? (

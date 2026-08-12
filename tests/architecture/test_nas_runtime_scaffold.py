@@ -64,7 +64,7 @@ def _compose_networks(block: str) -> set[str]:
 
 def _compose_volume_item_count(block: str) -> int:
     section = re.search(r"(?ms)^    volumes:\n(.*?)(?=^    [a-z_]+:|\Z)", block)
-    return len(re.findall(r"(?m)^      - ", section.group(1))) if section else 0
+    return len(re.findall(r"(?m)^      -(?:[ \t]|$)", section.group(1))) if section else 0
 
 
 def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
@@ -423,6 +423,17 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "        target: /var/lib/postgresql/data\n"
             "      - type: bind\n"
             "        source: ./proxy-allowlist.example.caddy\n"
+            "        target: /srv/my-pa/extra\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            "      -\n"
+            "        type: volume\n"
+            "        source: unexpected_data\n"
             "        target: /srv/my-pa/extra\n"
             "    networks: [data-plane]",
             "mount_ownership",

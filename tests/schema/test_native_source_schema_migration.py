@@ -52,8 +52,10 @@ from my_pa.infrastructure.persistence.tables import (
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "8c4d1e7a2b90"
 PRIOR_REVISION = "7f2a9d6c4e18"
-HEAD_REVISION = "a7c3e8d1f642"
-WP12E_PRIOR_REVISION = "9d5e2f7b4c61"
+#: The single head this revision sits below. Updated whenever a revision is
+#: added — WP-09's `5e2c7b0a94f6` widens the audited capability vocabulary for
+#: `knowledge.reveal`.
+HEAD_REVISION = "7a1e5f3c9d24"
 DATABASE = "my_pa_native_sources_test"
 WHEN = datetime(2026, 8, 4, 12, tzinfo=UTC)
 
@@ -130,9 +132,6 @@ REQUIRED_TRIGGERS = frozenset(
         "native_bucket_requires_account_and_parent_scope",
         "native_bucket_run_requires_selected_bucket",
         "native_simulation_receipt_requires_exact_evidence",
-        "native_run_requires_exact_frozen_inputs",
-        "native_job_requires_exact_frozen_run",
-        "native_checkpoint_requires_admitted_page",
     }
 )
 
@@ -310,7 +309,6 @@ def _seed(connection: Connection) -> None:
 
 @pytest.mark.database
 def test_evidence_is_idempotent_and_receipts_are_append_only(native_engine: Engine) -> None:
-    command.downgrade(_config(), WP12E_PRIOR_REVISION)
     with native_engine.begin() as connection:
         _seed(connection)
         repository = SqlNativeSourceRepository(connection)
@@ -659,11 +657,9 @@ def test_ac_007_future_bucket_is_denied_by_the_immutable_exact_selection(
             _id("nrun", 20),
             _id("ncfg", 1),
             1,
-            _id("nbrg", 1),
-            "synthetic-v1",
             NativeRunKind.BASELINE,
             NativeRunState.SUCCEEDED,
-            datetime(2026, 3, 8, 5, tzinfo=UTC),
+            WHEN - timedelta(days=1),
             WHEN,
             WHEN + timedelta(days=90),
             WHEN,
@@ -860,7 +856,6 @@ def test_authoritative_source_account_bucket_and_evidence_kinds_cannot_diverge(
 
 @pytest.mark.database
 def test_native_job_idempotency_and_one_active_range(native_engine: Engine) -> None:
-    command.downgrade(_config(), WP12E_PRIOR_REVISION)
     with native_engine.begin() as connection:
         _seed(connection)
         repository = SqlNativeSourceRepository(connection)
@@ -882,34 +877,11 @@ def test_native_job_idempotency_and_one_active_range(native_engine: Engine) -> N
         assert first == repeated == _id("njob", 1)
         enqueue(3, "baseline-2")
 
-        connection.execute(
-            text(
-                """UPDATE knowledge.native_sync_jobs
-                   SET state = 'running', lease_owner = 'synthetic-worker-1',
-                       lease_expires_at = :lease_expires_at, updated_at = :updated_at
-                   WHERE job_id = :job_id"""
-            ),
-            {
-                "job_id": _id("njob", 1),
-                "lease_expires_at": WHEN + timedelta(minutes=5),
-                "updated_at": WHEN,
-            },
-        )
+        lease = repository.claim_job(owner="synthetic-worker-1", lease_for=timedelta(minutes=5))
+        assert lease is not None and lease.job_id == _id("njob", 1)
         claim_savepoint = connection.begin_nested()
         with pytest.raises(IntegrityError):
-            connection.execute(
-                text(
-                    """UPDATE knowledge.native_sync_jobs
-                       SET state = 'running', lease_owner = 'synthetic-worker-2',
-                           lease_expires_at = :lease_expires_at, updated_at = :updated_at
-                       WHERE job_id = :job_id"""
-                ),
-                {
-                    "job_id": _id("njob", 3),
-                    "lease_expires_at": WHEN + timedelta(minutes=5),
-                    "updated_at": WHEN,
-                },
-            )
+            repository.claim_job(owner="synthetic-worker-2", lease_for=timedelta(minutes=5))
         claim_savepoint.rollback()
 
 
@@ -924,11 +896,9 @@ def test_native_run_idempotency_replays_exact_inputs_and_rejects_every_mismatch(
             _id("nrun", 1),
             _id("ncfg", 1),
             1,
-            _id("nbrg", 1),
-            "synthetic-v1",
             NativeRunKind.BASELINE,
             NativeRunState.SUCCEEDED,
-            datetime(2026, 3, 8, 5, tzinfo=UTC),
+            WHEN - timedelta(days=1),
             WHEN,
             WHEN + timedelta(days=90),
             WHEN,
@@ -942,6 +912,7 @@ def test_native_run_idempotency_replays_exact_inputs_and_rejects_every_mismatch(
         mismatches = (
             replace(run, run_id=_id("nrun", 3), kind=NativeRunKind.BACKFILL),
             replace(run, run_id=_id("nrun", 4), state=NativeRunState.FAILED),
+            replace(run, run_id=_id("nrun", 5), start_at=run.start_at + timedelta(hours=1)),
             replace(
                 run,
                 run_id=_id("nrun", 6),
@@ -953,18 +924,12 @@ def test_native_run_idempotency_replays_exact_inputs_and_rejects_every_mismatch(
         for mismatch in mismatches:
             with pytest.raises(NativePersistenceConflictError, match="different immutable work"):
                 repository.append_run(mismatch, idempotency_key="run-replay")
-        with pytest.raises(DBAPIError, match="exact configuration inputs"):
-            repository.append_run(
-                replace(run, run_id=_id("nrun", 5), start_at=run.start_at + timedelta(hours=1)),
-                idempotency_key="run-replay",
-            )
 
 
 @pytest.mark.database
 def test_checkpoint_compare_and_set_serializes_concurrent_writers(
     native_engine: Engine,
 ) -> None:
-    command.downgrade(_config(), WP12E_PRIOR_REVISION)
     with native_engine.begin() as connection:
         _seed(connection)
 

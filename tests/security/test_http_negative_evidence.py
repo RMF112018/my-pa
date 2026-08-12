@@ -60,7 +60,7 @@ from tests.conftest import (
 )
 from tests.wire import Reply, Wire, serve
 
-from my_pa.adapters.http import PATH_TEMPLATE, create_http_app
+from my_pa.adapters.http import PATH_TEMPLATE, REMOTE_CAPTURE_PATH, create_http_app
 from my_pa.adapters.normalization import _BUILDERS
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import EvidenceUnavailableError, KnowledgeRecord
@@ -459,8 +459,16 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         principal=operator(),
     )
     routes = [route for route in application.routes if getattr(route, "path", None)]
-    assert [route.path for route in routes] == [PATH_TEMPLATE]
-    assert routes[0].methods == {"POST"}
+    # Two addresses since WP-10, and the newer one is narrower than the older
+    # rather than wider: `REMOTE_CAPTURE_PATH` carries no placeholder at all, so
+    # it reaches exactly `capture.create` and there is no segment through which a
+    # remote client could name any other one. Both are `POST` only. The exact
+    # list rather than a membership test, so a further route is a decision
+    # somebody has to write down here.
+    assert [route.path for route in routes] == [REMOTE_CAPTURE_PATH, PATH_TEMPLATE]
+    assert all(route.methods == {"POST"} for route in routes)
+    assert "{" not in REMOTE_CAPTURE_PATH
+    assert REMOTE_CAPTURE_PATH.endswith(Capability.CAPTURE_CREATE.value)
 
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over HTTP"
     assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"

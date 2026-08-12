@@ -6,7 +6,7 @@ it admitted lives on the version, once, and is not copied here. `CaptureReceipt`
 is what the caller gets back, and it carries an identifier, a digest, and times —
 never the text it acknowledges (`09_LOGICAL_DATA_MODEL.md:271`).
 
-**Four of the vocabularies below admit exactly one value in this build, and that
+**Two of the vocabularies below admit exactly one value in this build, and that
 is a deliberate structural claim rather than an unfinished enumeration.** The
 precedent and the argument are `extractions.trust_level`'s, which also permits
 one value: a column that *can* only say one thing means no writer, no hand-run
@@ -14,33 +14,54 @@ statement, and no later revision can make it say another without changing this
 enum and the frozen literal in the migration that mirrors it. Each pins an open
 decision into the schema:
 
-* `CaptureTransport.LOCAL` — `D-30` issues no credential and the gateway has no
-  ingress, so nothing remote can submit. A row claiming a remote transport
-  cannot be stored while that stands.
 * `CaptureMethod.TYPED_TEXT` — `QC-AC-044` requires that no audio or call
   recording exists in the MVP, and no photo, voice, or share-sheet path is
   built. A row claiming one of those cannot be stored.
-* `TrustState.LOCAL_PRINCIPAL` — `P00-OD-010` has selected no authentication
-  mechanism, so the only principal is the local one the composition root
-  establishes. A row claiming an authenticated remote client cannot be stored.
 * `AdmissionResult.ACCEPTED` — a conflicting key fails the request closed and
   rolls the transaction back, so it stores nothing (`QC-AC-032`), and an
   identical replay reuses the row the unique key already holds rather than
   inserting a second. A stored submission is therefore an accepted one, and this
   is what keeps that true.
 
-`registered_client_id` is **absent** rather than nullable and never written, by
-the rule that keeps `item_count` out of `audit_events`: `RegisteredCaptureClient`
-is deferred (`D-74`) because `D-30`, `O-21` and `P00-OD-010` leave nothing that
-could populate it, and a permanently null column reads as "no client" rather
-than as "no such concept here yet".
+**The other two widened in WP-10, by exactly the forward `ALTER` this docstring
+promised.** `CaptureTransport` and `TrustState` each said "one value now, and a
+later transport widens it by a forward `ALTER` in its own revision rather than by
+editing `1a4c9e77b2d5`". That is what happened, so the prior wording is corrected
+here rather than left standing:
+
+* `CaptureTransport` — `LOCAL` is the loopback gateway, the CLI and MCP, all of
+  which the composition root authenticates as the process principal (`D-30`).
+  `REMOTE_CLIENT` is an authenticated remote submission over the HTTPS ingress,
+  presented by a client credential the operator minted
+  (`domain.capture.client`).
+* `TrustState` — `LOCAL_PRINCIPAL` is what is known about a caller the process
+  itself vouches for. `REGISTERED_CLIENT` is what is known about a caller that
+  presented a credential bound to exactly one Principal.
+
+**The transport is provenance, and it is established by the transport rather
+than declared by the caller.** It arrives through `ApplicationService.invoke`'s
+own parameter — the same trust channel the acting `Principal` arrives on — and
+there is no field on any command, payload, or envelope that could carry it. A
+remote submission therefore lands in the same tables, in the same transaction,
+through the same capability, and differs from a local one in two recorded columns
+and in nothing else.
+
+`registered_client_id` is still **absent** rather than nullable and never
+written, and that is now a bounded residual rather than an impossibility: the
+submission records *that* a registered client submitted it (`trust_state`) and
+not *which*. Naming the client would be a column and a foreign key on a merged
+table; the binding a reader needs — client to Principal — is on the client row
+itself, and the audit event records the Principal. Recorded so the gap is
+legible.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Final
 
 from my_pa.domain.capture.errors import CaptureBoundsError, CaptureError
@@ -57,6 +78,7 @@ __all__ = [
     "CaptureSubmission",
     "CaptureTransport",
     "TrustState",
+    "trust_state_for",
 ]
 
 #: Bounds on the two caller-supplied strings an admission record stores. Both
@@ -71,6 +93,7 @@ class CaptureTransport(StrEnum):
     """How a submission reached this process."""
 
     LOCAL = "local"
+    REMOTE_CLIENT = "remote_client"
 
 
 class CaptureMethod(StrEnum):
@@ -94,6 +117,33 @@ class TrustState(StrEnum):
     """What is known about the submitting client."""
 
     LOCAL_PRINCIPAL = "local_principal"
+    REGISTERED_CLIENT = "registered_client"
+
+
+#: Which trust state each transport implies.
+#:
+#: A mapping rather than a second value threaded beside the transport: the two
+#: columns describe one fact from two angles, and a writer that could set them
+#: independently is a writer that could store `remote_client` beside
+#: `local_principal`. `trust_state_for` reads it rather than defaulting, so a
+#: third transport added without a decision fails loudly here instead of quietly
+#: claiming the local principal's trust.
+_TRUST_STATE_OF: Final[Mapping[CaptureTransport, TrustState]] = MappingProxyType(
+    {
+        CaptureTransport.LOCAL: TrustState.LOCAL_PRINCIPAL,
+        CaptureTransport.REMOTE_CLIENT: TrustState.REGISTERED_CLIENT,
+    }
+)
+
+
+def trust_state_for(transport: CaptureTransport) -> TrustState:
+    """What is known about a caller that reached this process by `transport`."""
+    try:
+        return _TRUST_STATE_OF[transport]
+    except KeyError:
+        raise CaptureError(
+            "no trust state is declared for this transport; declare one beside it"
+        ) from None
 
 
 class AdmissionResult(StrEnum):

@@ -81,15 +81,35 @@ PERMITTED_PERSISTENCE_NAMES = frozenset(
     {"register_source", "observe_object", "get_source", "all_sources"}
 )
 
+#: Every name rule 2 permits `clients.py` to import from persistence.
+#:
+#: Three writers and readers over the client plane, plus `capture_context`, which
+#: is the guard's own constructor rather than a store: this command has to name
+#: the Principal it is acting for in order to be scoped by it, and
+#: `principal_scope` is where that translation lives. No table declaration, for
+#: the reason `sources.py`'s set holds none — a `Table` is a write surface
+#: whatever it is used for — and nothing about a capture, a version, a job, an
+#: enrollment, or an audit event is reachable through any of the four.
+PERMITTED_CLIENT_NAMES = frozenset(
+    {"register_client", "revoke_client", "clients_of", "capture_context"}
+)
+
 #: The commands these rules govern, and — for rule 2 — exactly what each may name
 #: out of `infrastructure.persistence`.
 #:
 #: `health.py`'s empty set is the whole of its claim. It composes an engine,
 #: calls `healthcheck`, and asks Alembic what revision the server is at; it names
 #: no table, no reader, and no writer, so this rule is what keeps it that way.
+#:
+#: `clients.py` (WP-10) is the command that mints credentials, which makes it the
+#: one these rules most need to hold: a command that could reach the application
+#: while also minting the credentials that authenticate future requests would be
+#: the widest hole in the tree. It names four persistence functions and no
+#: capability at all.
 COMMANDS = {
     "sources.py": PERMITTED_PERSISTENCE_NAMES,
     "health.py": frozenset(),
+    "clients.py": PERMITTED_CLIENT_NAMES,
 }
 
 #: The identifier rule 3 forbids anywhere in the file.

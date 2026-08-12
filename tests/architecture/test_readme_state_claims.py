@@ -217,6 +217,14 @@ def test_readme_derives_the_current_alembic_count_and_head() -> None:
         15: "Fifteen",
         16: "Sixteen",
         17: "Seventeen",
+        18: "Eighteen",
+        19: "Nineteen",
+        20: "Twenty",
+        21: "Twenty-one",
+        22: "Twenty-two",
+        23: "Twenty-three",
+        24: "Twenty-four",
+        25: "Twenty-five",
     }
     count, head = _alembic_identity()
     assert count in words, "extend the readable README count vocabulary"
@@ -235,13 +243,21 @@ def test_relationships_are_not_listed_as_unimplemented_once_the_package_exists()
     defect as a rule that scans the wrong section, one layer along, so the list
     the region is *about* is what has to be there before its absence means
     anything.
+
+    The threshold is one entry rather than two. It arrived here as two, keyed to
+    a README on another branch whose not-implemented list was longer; this
+    repository's list currently names a single item, so two would be a spelled
+    count of a set that shrinks as packages land — the defect this file's
+    siblings were just unkeyed from. One entry is the whole of what the absence
+    assertion needs: at zero the region has collapsed and `not in` decides
+    nothing, at one or more it is demonstrably the list.
     """
     assert RELATIONSHIP_PACKAGE.is_dir()
     readme = README.read_text(encoding="utf-8")
     section = readme.split("Not implemented.", 1)[1].split("Accordingly,", 1)[0]
     entries = re.findall(r"^- .+$", section, re.MULTILINE)
-    assert len(entries) >= 2, (
-        f"the README's not-implemented region holds {len(entries)} list entries; "
+    assert entries, (
+        "the README's not-implemented region holds no list entries; "
         "the absence assertion below would be passing on nothing"
     )
     assert "relationship identity and profiles" not in section.lower()

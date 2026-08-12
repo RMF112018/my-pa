@@ -105,15 +105,19 @@ class Wire:
         path: str | None = None,
         content_type: str | None = "application/json",
         omit_content_length: bool = False,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> Reply:
         """Send one request and read the whole answer.
 
         `raw` replaces the encoded document, so a test can send bytes that are
         not JSON at all. `omit_content_length` sends the body with chunked
         framing instead, which is the case the transport refuses.
+        `extra_headers` is what a credential arrives in: WP-10's ingress reads an
+        `Authorization` header, and a test that could not set one could only
+        assert the unauthenticated half.
         """
         body = raw if raw is not None else json.dumps(dict(document or {}))
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = dict(extra_headers or {})
         if content_type is not None:
             headers["content-type"] = content_type
         if not omit_content_length:

@@ -48,13 +48,12 @@ def _compose_mounts(block: str) -> set[tuple[str, str, bool]]:
         block,
     ):
         mounts.add((match.group(1), match.group(2), match.group(3) == "true"))
-    multiline = re.search(
+    multiline_pattern = re.compile(
         r"type:\s*bind\s*\n\s*source:\s*[\"']?([^\n\"']+)[\"']?\s*\n"
-        r"\s*target:\s*([^\s]+)",
-        block,
+        r"\s*target:\s*([^\s]+)(?:\s*\n\s*read_only:\s*(true|false))?"
     )
-    if multiline:
-        mounts.add((multiline.group(1), multiline.group(2), False))
+    for multiline in multiline_pattern.finditer(block):
+        mounts.add((multiline.group(1), multiline.group(2), multiline.group(3) == "true"))
     return mounts
 
 
@@ -406,6 +405,24 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "ops/nas/compose.example.yml",
             'source: "${MY_PA_NAS_ROOT:?explicit NAS root required}/postgres/data"',
             'source: "${MY_PA_NAS_ROOT:?explicit NAS root required}/backups"',
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            "      - type: bind\n"
+            "        source: ./proxy-allowlist.example.caddy\n"
+            "        target: /srv/my-pa/extra\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            "        read_only: true\n"
+            "    networks: [data-plane]",
             "mount_ownership",
         ),
         (

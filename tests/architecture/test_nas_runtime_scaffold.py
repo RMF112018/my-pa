@@ -87,6 +87,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     contract_text = files["ops/nas/runtime-contract.toml"]
     compose = files["ops/nas/compose.example.yml"]
     proxy = files["ops/nas/proxy-allowlist.example.caddy"]
+    proxy = "\n".join(line.split("#", 1)[0].rstrip() for line in proxy.splitlines())
     nas_readme = files["ops/nas/README.md"]
     local_readme = files["ops/compose/README.md"]
     local_compose = files["ops/compose/postgres.yml"]
@@ -1150,8 +1151,27 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/proxy-allowlist.example.caddy",
+            "        method POST",
+            "        method GET # method POST",
+            "remote_capture_route",
+        ),
+        (
+            "ops/nas/proxy-allowlist.example.caddy",
+            "        reverse_proxy gateway:8765",
+            "        # reverse_proxy gateway:8765\n        reverse_proxy other:9999",
+            "remote_capture_route",
+        ),
+        (
+            "ops/nas/proxy-allowlist.example.caddy",
             '@internal_capabilities {\n        respond "not found" 404',
             "@internal_capabilities {\n        reverse_proxy gateway:8765",
+            "generic_ingress",
+        ),
+        (
+            "ops/nas/proxy-allowlist.example.caddy",
+            '@internal_capabilities {\n        respond "not found" 404',
+            '@internal_capabilities {\n        # respond "not found" 404\n'
+            "        reverse_proxy gateway:8765",
             "generic_ingress",
         ),
         (

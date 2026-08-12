@@ -11,14 +11,15 @@ operating_lineage: recovery/pre-20260805-utc-rollback-c9fb513
 operating_lineage_head: 81589cc851905f9d63f5faf0690322682d1e8b85
 operating_lineage_tree: 7eb87fa18f7a9f6718c6c9441dbecdf98453d543
 reauthentication_date: "2026-08-09"
-active_work_package: WP-08
-active_work_package_name: PWA Offline Capture and Principal-Bound Replay
+active_work_package: WP-09
+active_work_package_name: Reveal, Library, Trace, Evidence and Review Integration
 wp_04_status: complete, reviewed, PR #57 open against the lineage, not merged
 wp_05_status: complete, reviewed clean, PR open against the lineage, not merged; stacks on #57
 wp_06_status: complete, reviewed clean, PR open against the lineage, not merged; stacks on #58
 wp_07_status: complete, reviewed clean, PR #60 open against the lineage, not merged; stacks on #59
+wp_08_status: complete, reviewed clean (zero blockers, six NOTEs), PR #61 open against the lineage, not merged; stacks on #60
 supersedes: WP-N01
-completed_work_packages: [WP-01, WP-02, WP-S01, WP-03, WP-04, WP-05, WP-06, WP-07]
+completed_work_packages: [WP-01, WP-02, WP-S01, WP-03, WP-04, WP-05, WP-06, WP-07, WP-08]
 milestone_ms0: WP-01 -> WP-02 -> WP-S01 -> WP-03
 ```
 
@@ -61,7 +62,7 @@ None. An independent review of WP-01 passed with no blocking findings; the two d
 
 - `OD-COMP-001` — the supported native mechanism supplying Apple Tasks/To-Do is undefined; resolved in WP-14. Microsoft Graph must **not** be used as an implicit fallback. Blocks WP-19.
 - `OD-COMP-002` — the current GoodNotes source path / runtime integration requires fresh investigation; the historical NAS-path package is not current authority. Resolved in WP-25. Blocks WP-26.
-- `OD-COMP-004` — the offline encryption-key and signed-out/stale-auth policy must close before WP-08 acceptance.
+- `OD-COMP-004` — the offline encryption-key and signed-out/stale-auth policy must close before WP-08 acceptance. **RESOLVED — see D-17.** Closed under brief §12 (determinable from canonical sources, not an operator escalation under §13): plan doc 09 states a recommended default and the Manager adopted it — *device/browser-local protected key with explicit stale-session quarantine; document limitations*. **Reversible.**
 
 ## Source-of-truth direction
 
@@ -324,3 +325,33 @@ Neither blocks the merge of WP-03, and neither is WP-04 scope by default — bot
 7. **Proposal derivation is text-pattern dependent.** A clean pipeline pass over the reviewer's own note produced 0 proposals where the implementer's note produces ≥1. "Clean run ⇒ proposals" is not unconditional.
 8. **The concurrent-admission test drives `admit_capture` on two connections rather than `service.invoke`**, because an `invoke` opens and commits its own transaction. Correct reason, disclosed in its own docstring; the application layer above is covered sequentially.
 9. **`test_every_python_root_is_type_checked_or_named` still fails** whenever `web/node_modules` is installed (WP-04 NOTE 6, WP-06 NOTE 9). Unchanged, untouched, not weakened; `git diff` over `tests/architecture/` and `.github/` is empty. It is the single failure in both the base and this head.
+
+### D-17 — OD-COMP-004 resolved, and WP-08 built the offline queue to it
+
+- **Decision:** `OD-COMP-004` is closed as **device/browser-local protected key with explicit stale-session quarantine; document limitations.** Adopted by the Manager under brief §12 as the recommended default stated in completion-plan doc 09 — determinable from canonical sources, therefore not an operator escalation under §13. **The decision is reversible.**
+- **Implementation:** AES-GCM 256; key from `crypto.subtle.generateKey(..., extractable: false, ...)`; **one key per `principalId`**, so B's key does not decrypt A's record; stored as a `CryptoKey` in IndexedDB; never exported, serialised, transmitted, or logged; a fresh 96-bit IV per record. **Fails closed with no downgrade** — an environment that cannot hold a non-extractable key refuses the enqueue, and a stored key reading back `extractable === true` is refused rather than used. Proved four ways, including a planted extractable key.
+- **The limitations are documented prominently and deliberately under-claimed**, in `web/src/lib/offline/key.ts` and `web/README.md`: not hardware-backed in most browsers (`extractable: false` is the browser's object model, not a TPM); **any same-origin script execution — XSS, a hostile extension, devtools — can obtain the same handle and call `decrypt`, and against that attacker "the encryption buys essentially nothing"**; local profile access is a partial not total defence; no protection against a compromised device; storage is evictable, and an evicted key renders the queued ciphertext permanently undecryptable with no copy anywhere else. Under-claiming was judged the correct direction and there is nothing here to block on.
+- **Scope:** `web/**` and documentation only. **No `src/`, no `migrations/`, no new capability, no migration.** Single Alembic head `4f1a8b6d92e3` over 23 revisions, unchanged.
+- **The digest concern was raised and closed on evidence, not assumption.** Receipt verification recomputes SHA-256 locally, so a normaliser anywhere between the web tier's `text.trim()` and Python's `digest_of` would have rejected receipts for notes that *were* durably saved — stranding local copies while the server held them. The reviewer traced the whole path in source (`text.trim()` → `buildRequestDocument` → `readCleanBody` → `CreateCapture._text` → `CaptureContent` → `digest_of`) and found no strip, normalise, or truncate; `CaptureContent` uses `.strip()` as a predicate only and refuses over-length rather than truncating. 8/8 vectors matched empirically, including **NFD vs NFC `é`**, the case any normaliser would have collapsed. **No data-integrity finding.**
+- **Evidence:** reviewed head `9bce74f`; `95efc6f` is a post-review documentation-only accuracy correction (§15A: docs-only ⇒ no re-review). Full suite **4179 passed / 1 failed**, identical to base — that 1 is the pre-existing `web/node_modules` architecture failure, untouched and unweakened. Architecture **1831** + that same 1. Web **234 passed / 23 files** against a base of 164/16. ruff clean over 552, mypy clean over 166. Independently reviewed at the exact head: **clean, zero BLOCKERs, six NOTEs**, with four controlled reversions observed red by the reviewer's own hand and restored byte-exact.
+- **Level of proof, stated exactly:** all seven controls are proved at **unit/integration** level at the queue-and-replay boundary — real queue, real key path, real IndexedDB, real fold and replay, **faked network transport**. **No end-to-end browser run was performed and none is claimed.** Per D-15 no reachable configuration admits two identities *and* serves backend data, so an end-to-end account-switch test is not constructible at this head.
+- **Invalidation:** canonical WP-08's own rule — offline key/session/queue schema changes require replay/isolation re-test.
+
+## NOTEs carried out of WP-08 (§15A — recorded, not blocking)
+
+The independent review returned **six NOTEs**. The content of **three** was relayed to this Orchestrator and is recorded verbatim in intent below (items 1–3). The remaining three were relayed to the Manager and **not** to this Orchestrator in detail; they are flagged at the end of this section rather than paraphrased, because inventing their content would be worse than naming the gap. Items 4–6 are **separately-sourced limitations the implementer disclosed and this Orchestrator verified directly** — they are recorded here because they are true and carry forward, not because they are the reviewer's missing three.
+
+### Reviewer NOTEs relayed in detail
+
+1. **The replay Principal check is against a *rendered* identity, not the authenticating session — and the disclosure said otherwise until it was corrected.** `replayQueuedCaptures` compares an entry's stored `principalId` against `currentPrincipalId`, a prop from a server render, while `httpCaptureTransport` posts with `credentials: "same-origin"` and therefore carries whichever cookie the browser holds at that moment. `web/README.md` and the WP-08 commit message both said replay "refuses when the signed-in Principal differs", which overstates it; **corrected in `95efc6f`** in the README and in the `queue.ts`/`replay.ts` docstrings rather than left standing. Not a blocker because the durable cross-principal write is **unreachable at this head** — all three gateway modes were checked; under `local_operator` exactly one Principal is admissible (D-15), unset/`entra` refuse, and the one reachable variant returns `shape: "synthetic"`, which receipt verification rejects so the ciphertext is retained, and which is refused outright when `NODE_ENV=production`. **Discharge condition, verbatim: this becomes release-blocking the moment two identities can hold sessions while the backend serves.** At that point the comparison must be made against the authenticating session.
+2. **`needs_reauth` does not count toward `MAX_REPLAY_ATTEMPTS`, and the docstring's claim is untrue of that class.** The attempt bound does not advance for entries parked in `needs_reauth`, so the documented bound does not hold for them. Recorded as written; needs an owning package.
+3. **Terminal quarantine needs an owning package, and it needs one *before* a second real Principal can share a browser profile.** Nothing releases a quarantined entry — not even signing back in as the original principal — there is no user-initiated discard, and quarantined entries occupy the queue bound indefinitely. Today that is a disclosed limitation on a path that cannot carry a second real identity. **At the point two identities can share a profile it becomes a genuine data-availability defect with no in-app remedy**, and must be owned before then.
+### Implementer-disclosed limitations, verified by this Orchestrator
+
+4. **Browser/PWA validation remains owed under brief §31** (carried forward from WP-07 NOTE 6, and unchanged by this package). No end-to-end browser run has been performed for offline capture, reconnect/replay, account switch, or stale auth. The service worker deliberately does **not** cache HTML documents — a server-rendered page carries `principal.displayName` — so the application does not cold-start offline and offline capture works only in an already-open tab. That refusal traded a feature for an isolation property and is disclosed rather than presented as a capability.
+5. **`fake-indexeddb` is not a browser.** It did round-trip a non-extractable `CryptoKey` (`extractable === false` on read-back, decrypting bytes the first handle sealed), so the real IndexedDB code path was exercised — but structured-clone semantics and transaction auto-commit timing are its implementation, not Chrome's, and queue survival across a real browser restart is **not** proved. Added as a devDependency only; no runtime path imports it.
+6. **The queue byte bound counts ciphertext, not plaintext** — plaintext plus a 16-byte tag per record. Close enough to be useful, but it is not the note length.
+
+### Three reviewer NOTEs whose text this Orchestrator did not receive
+
+**Recorded as an explicit gap, not silently omitted.** The review returned six NOTEs; three reached this Orchestrator in detail (items 1–3 above) and three did not. They are neither reproduced nor guessed at here. **Consult the WP-08 review report for their exact text before starting WP-09** — none was a BLOCKER, so none gates the merge decision, but they carry forward and the next package should not begin from the assumption that this list is complete.

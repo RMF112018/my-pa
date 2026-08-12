@@ -27,8 +27,10 @@ import type {
   Situation,
 } from "@/contracts/views";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
+import { requireSyntheticProvider } from "@/lib/fixtures/gate";
 
 function disclosure(scope: string): DisclosureEnvelope {
+  requireSyntheticProvider();
   return {
     scope,
     coverage: "synthetic",
@@ -45,11 +47,13 @@ function disclosure(scope: string): DisclosureEnvelope {
  * collide with the caller's own.
  */
 export function syntheticPersonId(principal: PrincipalSession): string {
+  requireSyntheticProvider();
   return `person-${principal.principalId}-001`;
 }
 
 /** Deterministic principal-scoped Situations. */
 export function syntheticSituations(principal: PrincipalSession): readonly Situation[] {
+  requireSyntheticProvider();
   const pid = principal.principalId;
   return [
     {
@@ -82,6 +86,7 @@ export function syntheticFrames(
   principal: PrincipalSession,
   situationId: string,
 ): readonly Frame[] {
+  requireSyntheticProvider();
   const pid = principal.principalId;
   if (situationId !== `sit-${pid}-001`) return [];
   return [
@@ -103,6 +108,7 @@ export function syntheticFrames(
 
 /** Deterministic principal-scoped Projects. */
 export function syntheticProjects(principal: PrincipalSession): readonly Project[] {
+  requireSyntheticProvider();
   const pid = principal.principalId;
   return [
     {
@@ -128,6 +134,7 @@ export function syntheticRelationshipEvents(
   principal: PrincipalSession,
   personId: string,
 ): readonly RelationshipEvent[] {
+  requireSyntheticProvider();
   const pid = principal.principalId;
   if (personId !== syntheticPersonId(principal)) return [];
   return [
@@ -172,5 +179,6 @@ export function acceptedTimeline(
   principal: PrincipalSession,
   personId: string,
 ): readonly RelationshipEvent[] {
+  requireSyntheticProvider();
   return syntheticRelationshipEvents(principal, personId).filter((e) => e.accepted);
 }

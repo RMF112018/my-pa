@@ -1,24 +1,88 @@
 /**
- * Review listing route — WP-05 (R4).
+ * Review listing — the principal's own consequential proposal cases.
  *
- * The principal comes from the verified session only; the listing can only
- * ever return that principal's own review cases. This is the web-tier shadow
- * of the Python `review_cases` read path, which is `principal_scoped` so a
- * caller cannot list another principal's cases (MU-AC-04). The response
- * deliberately does not echo an identity field back to the client — the
- * session cookie is the only identity carrier.
+ * Backed by the Python `review.list`, whose read is `principal_scoped`: the
+ * listing is filtered by the acting Principal at the persistence boundary, so a
+ * caller cannot list another Principal's cases (MU-AC-04). The principal this
+ * tier resolves comes from the verified session cookie and nothing else, and the
+ * response deliberately does not echo an identity field back — the cookie is the
+ * only identity carrier.
+ *
+ * **The backend listing carries no content, and this route does not add any.**
+ * `review.list` returns the case, proposal and version identifiers, the proposal
+ * type and state, the risk class, the opened-at moment, the review version and
+ * the latest disposition — and no proposal text, no evidence span, and no impact
+ * summary, because the listing is not the read. The synthetic fixture shape has
+ * all three of those fields; a real case does not, so the two are returned as
+ * different shapes rather than one shape with three invented nulls. `shape` on
+ * the response says which one a reader is holding.
+ *
+ * **`reviewVersion` matters to the caller.** `review.decide` runs under
+ * optimistic concurrency and requires the version the caller believes it is
+ * deciding against, so the listing is where a client learns it.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
+import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticReviewCases } from "@/lib/fixtures/review";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
+import type { BackendReviewCase } from "@/contracts/views";
+
+const SCOPE = "review";
+
+interface PythonReviewCase {
+  readonly review_case_id: string;
+  readonly proposal_id: string;
+  readonly capture_id: string;
+  readonly version_id: string;
+  readonly proposal_type: string;
+  readonly proposal_state: string;
+  readonly risk_class: string;
+  readonly opened_at: string;
+  readonly review_version: number;
+  readonly latest_disposition: string | null;
+}
+
+function toBackendCase(row: PythonReviewCase): BackendReviewCase {
+  return {
+    reviewCaseId: row.review_case_id,
+    proposalId: row.proposal_id,
+    captureId: row.capture_id,
+    versionId: row.version_id,
+    proposalType: row.proposal_type,
+    proposalState: row.proposal_state,
+    riskClass: row.risk_class,
+    openedAt: row.opened_at,
+    reviewVersion: row.review_version,
+    latestDisposition: row.latest_disposition,
+  };
+}
 
 export async function GET(request: NextRequest) {
   const guard = await requirePrincipal(request);
   if (!guard.ok) return guard.response;
 
+  const serving = resolveServing();
+  if (serving.kind === "refused") return serving.response;
+
+  if (serving.kind === "synthetic") {
+    return NextResponse.json({
+      shape: "synthetic",
+      cases: syntheticReviewCases(guard.principal),
+      disclosure: syntheticDisclosure(SCOPE),
+    });
+  }
+
+  const outcome = await callGateway<{ review_cases?: readonly PythonReviewCase[] }>(
+    guard.principal,
+    "review.list",
+  );
+  if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
+
   return NextResponse.json({
-    cases: syntheticReviewCases(guard.principal),
-    disclosure: syntheticDisclosure("review"),
+    shape: "backend",
+    cases: (outcome.result.review_cases ?? []).map(toBackendCase),
+    disclosure: backendDisclosure(SCOPE, outcome.disclosure, transportLimitations()),
   });
 }

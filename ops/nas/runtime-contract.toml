@@ -1,0 +1,126 @@
+schema = "my-pa.nas-runtime-contract.v1"
+status = "contract_only_not_deployable"
+canonical_host = "nas"
+
+[target_platform]
+planning_value = "linux/amd64"
+deployable_only_after_live_confirmation = true
+
+[images]
+build_during_start = false
+require_exact_digest = true
+
+[network]
+data_network = "data-plane"
+data_network_internal = true
+edge_network = "edge-plane"
+edge_network_egress = "firewall_allowlisted_entra_only"
+egress_services = ["gateway", "web"]
+only_host_published_service = "proxy"
+postgres_published = false
+smoke_publish_interface = "loopback"
+pilot_https = "tailscale_serve"
+public_exposure = "forbidden"
+
+[auth]
+pilot_web = "entra"
+scratch_only = "local_operator"
+
+[restart]
+smoke = "no"
+pilot_after_nas_10_and_operator_activation = "unless-stopped"
+
+[services.postgres]
+host = "nas"
+database_credential = true
+mounts = ["postgres_data_rw"]
+
+[services.gateway]
+host = "nas"
+database_credential = true
+mounts = ["config_ro", "managed_documents_rw", "sources_ro"]
+networks = ["data-plane", "edge-plane"]
+container_bind = "0.0.0.0:8765"
+bind_implementation_owned_by = "NAS-04"
+
+[services.worker_enrollment]
+host = "nas"
+database_credential = true
+mounts = ["config_ro", "sources_ro", "goodnotes_ro"]
+networks = ["data-plane"]
+
+[services.worker_capture]
+host = "nas"
+database_credential = true
+mounts = ["config_ro"]
+networks = ["data-plane"]
+
+[services.web]
+host = "nas"
+database_credential = false
+mounts = []
+networks = ["edge-plane"]
+
+[services.proxy]
+host = "nas"
+database_credential = false
+mounts = ["proxy_config_ro"]
+networks = ["edge-plane"]
+
+[services.apple_source_host]
+host = "mac"
+database_credential = false
+general_nas_filesystem_credential = false
+grant_issuer = "nas_application"
+transport = "outbound_poll"
+
+[mounts.config_ro]
+class = "config"
+mode = "read_only"
+
+[mounts.postgres_data_rw]
+class = "postgres_data"
+mode = "read_write"
+owner = "postgres"
+storage = "nas_local"
+
+[mounts.managed_documents_rw]
+class = "managed_documents"
+mode = "read_write"
+owner = "gateway"
+
+[mounts.sources_ro]
+class = "sources"
+mode = "read_only"
+
+[mounts.goodnotes_ro]
+class = "goodnotes"
+mode = "read_only"
+
+[mounts.proxy_config_ro]
+class = "proxy_config"
+mode = "read_only"
+
+[ingress.remote_capture]
+method = "POST"
+path = "/remote/v1/capture.create"
+upstream = "gateway"
+auth = "ClientCredential"
+capability = "capture.create"
+principal_source = "credential"
+caller_principal_forbidden = true
+
+[ingress.generic_capabilities]
+path_family = "/v1/{capability}"
+exposure = "internal_only"
+
+[ingress.apple_machine]
+exposure = "exact_dedicated_paths_only"
+paths_frozen_by = "NAS-07"
+
+[ingress.browser]
+upstream = "web"
+auth = "entra"
+
+[mcp]
+transport = "stdio_only"

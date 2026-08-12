@@ -1,12 +1,15 @@
 # Compose definitions
 
+> **Local development only.** Nothing in this directory is the NAS pilot or
+> production runtime. The accepted NAS contract lives in [`../nas/`](../nas/).
+
 Docker Compose files for the local services `my-pa` depends on. Each file is
 run explicitly by path from the repository root; there is no default
 `docker-compose.yml` and no aggregate stack.
 
 | File | Service | Purpose |
 | --- | --- | --- |
-| [`postgres.yml`](postgres.yml) | `postgres` (`my-pa-postgres`) | The canonical `my_pa` PostgreSQL 17 database |
+| [`postgres.yml`](postgres.yml) | `postgres` (`my-pa-postgres`) | Single-Mac local-development PostgreSQL 17 service; not the NAS pilot |
 
 ```sh
 docker compose -f ops/compose/postgres.yml up -d

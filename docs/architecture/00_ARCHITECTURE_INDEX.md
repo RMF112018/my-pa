@@ -21,6 +21,7 @@
 | [`data-authority.md`](data-authority.md) | Present — proposed for repository review |
 | [`../security/threat-model.md`](../security/threat-model.md) | Present — proposed for repository review |
 | [`../decisions/ADR-003-product-owned-user-authored-source-records.md`](../decisions/ADR-003-product-owned-user-authored-source-records.md) | Accepted — the third authority class |
+| [`../decisions/ADR-008-nas-runtime-topology.md`](../decisions/ADR-008-nas-runtime-topology.md) | Accepted — staged NAS target topology; not deployed |
 
 ## Specification
 
@@ -39,5 +40,6 @@ same PostgreSQL-backed policy and application seams. Alembic owns thirty-four
 revisions at head `b4e8d2c7a613`. The current candidate also includes the
 MossAIc web BFF/PWA, managed documents, GoodNotes, the bounded model gate,
 Frontier MCP, and the Apple source host. These documents describe the resulting
-implementation; they do not authorize live source/database access, deployment,
-production activation, or risk acceptance.
+implementation and the accepted, inactive NAS target. They do not authorize
+live source/database access, deployment, production activation, or risk
+acceptance.

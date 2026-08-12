@@ -42,7 +42,7 @@ from __future__ import annotations
 import io
 import os
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 
@@ -101,7 +101,24 @@ TEXT: Final = "Pour the north slab on Tuesday and confirm the mix design."
 COMMITMENT_START: Final = 0
 COMMITMENT_END: Final = 22
 
-WHEN: Final = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+#: The moment this module's synthetic captures were admitted and decided.
+#:
+#: **Derived from the clock, not written down as a date.** It was
+#: `datetime(2026, 8, 10, 12, 0, tzinfo=UTC)` — an absolute literal that was in
+#: the future when it was written and stopped being so at noon UTC on that day,
+#: at which point every test in this file began erroring in fixture setup. The
+#: mechanism is `_complete_derivation` below and is written out there; the
+#: mechanism *here* is simply that a calendar literal in a test is a fuse, and
+#: the only fix that cannot burn twice is to stop having one.
+#:
+#: An hour behind the run, rather than at it, so that these instants are
+#: unambiguously in the past for any reader and for any future constraint that
+#: cares whether a recorded moment has happened. Nothing at this head compares
+#: an admission or a decision against `now()` — the only time-ordering CHECK
+#: these writers can reach is `a_stage_completes_after_it_starts` — so the offset
+#: buys clarity rather than correctness, and the correctness is bought where the
+#: constraint actually is.
+WHEN: Final = datetime.now(UTC) - timedelta(hours=1)
 
 
 def _config() -> Config:
@@ -190,7 +207,34 @@ def _version_of(connection: object, capture_id: str) -> str:
 
 
 def _complete_derivation(connection: object, version_id: str, *, key: str) -> None:
-    """Record the stage whose completion means "the proposals are all written"."""
+    """Record the stage whose completion means "the proposals are all written".
+
+    **The completion instant is the server's own transaction timestamp, and that
+    is what makes this row valid by construction rather than by luck.**
+    `capture_stage_results` carries `CHECK (completed_at IS NULL OR completed_at
+    >= started_at)` — `a_stage_completes_after_it_starts` — and `started_at` has
+    no parameter on `record_stage_result`: it is filled by the column's
+    `server_default=now()` at `INSERT`. So the only completion this test can
+    supply that the constraint will accept is one at or after the moment the
+    server assigns.
+
+    Reading `now()` here, on the same connection and inside the same
+    transaction, produces *exactly* that moment: PostgreSQL's `now()` is
+    `transaction_timestamp()`, fixed for the life of the transaction, so the
+    value read a statement earlier is the identical value the default will
+    write. `completed_at == started_at` satisfies a `>=` constraint with no
+    margin, no clock-skew assumption between this process and the server, and
+    nothing in the future.
+
+    This replaces a hardcoded `datetime(2026, 8, 10, 12, 0, tzinfo=UTC)`. That
+    literal was ahead of the wall clock when it was written, so `completed_at`
+    was comfortably after the `started_at` the server was assigning — until the
+    wall clock passed it, at which point every capture this module writes
+    violated the CHECK and all six tests died in setup. A relative instant with a
+    fixed forward margin would only have moved the fuse; the transaction
+    timestamp removes it, because the two values are then the same value.
+    """
+    completed_at = connection.execute(text("SELECT now()")).scalar_one()  # type: ignore[attr-defined]
     record_stage_result(
         connection,  # type: ignore[arg-type]
         version_id=version_id,
@@ -200,7 +244,7 @@ def _complete_derivation(connection: object, version_id: str, *, key: str) -> No
         stage_config_sha256=digest_of(f"config-{key}"),
         idempotency_key=digest_of(f"stage-{key}"),
         processing_state=ProcessingState.COMPLETE,
-        completed_at=WHEN,
+        completed_at=completed_at,
     )
 
 

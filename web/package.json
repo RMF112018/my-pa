@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "e2e": "./e2e/stack.sh",
+    "e2e:report": "playwright show-report"
   },
   "dependencies": {
     "@azure/msal-browser": "^5.18.0",
@@ -18,7 +20,9 @@
     "react-dom": "19.1.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@eslint/eslintrc": "^3",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
@@ -27,6 +31,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.5",
+    "axe-core": "^4.13.0",
     "eslint": "^9",
     "eslint-config-next": "15.5.22",
     "fake-indexeddb": "^6.2.5",

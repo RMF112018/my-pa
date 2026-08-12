@@ -18,6 +18,12 @@ const eslintConfig = [
       "out/**",
       "build/**",
       "next-env.d.ts",
+      // Playwright's retained traces, screenshots and reports. Products of a
+      // local browser run, never source; a trace can also carry rendered page
+      // content, which is not something to feed to a linter or a commit.
+      "test-results/**",
+      "playwright-report/**",
+      "blob-report/**",
     ],
   },
 ];

@@ -153,6 +153,11 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.CAPTURE_SEARCH,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
+        # `knowledge.reveal` names a subject, not a source. The rows it
+        # traverses belong to the capture plane, which belongs to no configured
+        # source and no enrollment, so a request that named a scope would be
+        # naming a grant this plane cannot hold.
+        Capability.KNOWLEDGE_REVEAL,
     }
 )
 

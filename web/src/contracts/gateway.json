@@ -38,6 +38,11 @@
       "payloadFields": ["knowledge_id", "enrollment_id", "metadata_only", "max_characters"],
       "probe": { "knowledge_id": "kn_aaaaaaaa11111111", "enrollment_id": "enr_aaaaaaaa11111111" }
     },
+    "knowledge.reveal": {
+      "purpose": "capture_review",
+      "payloadFields": ["subject_id"],
+      "probe": { "subject_id": "cap_aaaaaaaa11111111" }
+    },
     "capture.create": {
       "purpose": "capture_authoring",
       "payloadFields": [

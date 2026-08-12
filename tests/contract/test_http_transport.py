@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the fifteen capabilities is addressable over HTTP
+**Reachability.** Every one of the sixteen capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a sixteenth capability added to the domain arrives as a failing row instead
+here, so a seventeenth capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -68,6 +68,7 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadKnowledge,
     Representation,
+    RevealSubject,
     ReviseCapture,
     SearchCaptures,
     SearchKnowledge,
@@ -162,6 +163,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
         Capability.CAPTURE_LIST: {},
         Capability.CAPTURE_SEARCH: {"query": "synthetic"},
+        Capability.KNOWLEDGE_REVEAL: {"subject_id": capture.capture_id},
         Capability.REVIEW_LIST: {},
         Capability.REVIEW_DECIDE: {
             "review_case_id": review_case.review_case_id,
@@ -223,6 +225,7 @@ def commands_for(
         Capability.CAPTURE_READ: ReadCapture(capture_id=capture_id),
         Capability.CAPTURE_LIST: ListCaptures(),
         Capability.CAPTURE_SEARCH: SearchCaptures(query="synthetic"),
+        Capability.KNOWLEDGE_REVEAL: RevealSubject(subject_id=capture_id),
         Capability.REVIEW_LIST: ListReviewCases(),
         Capability.REVIEW_DECIDE: DecideReviewCase(
             review_case_id=staged_review_case(scene).review_case_id,

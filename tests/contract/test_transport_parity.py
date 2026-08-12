@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-fifteen capabilities. There are two ways to prove that and only one of them stays
+sixteen capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -26,7 +26,7 @@ way to see what a transport *built* rather than what it returned — and compare
 as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
-**And the answers, over all fifteen capabilities and ten refusals.** Each
+**And the answers, over all sixteen capabilities and ten refusals.** Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
 `sources.enroll` alone would make the second and third callers idempotent
@@ -188,6 +188,10 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         },
         Capability.CAPTURE_LIST: {"page_size": 10},
         Capability.CAPTURE_SEARCH: {"query": "synthetic", "page_size": 10},
+        # The staged capture, whose derivation has not run in this world, so
+        # every transport answers the same `unavailable` reveal rather than
+        # the same empty one — which is the parity claim that matters here.
+        Capability.KNOWLEDGE_REVEAL: {"subject_id": capture.capture_id},
         Capability.REVIEW_LIST: {"page_size": 10},
         Capability.REVIEW_DECIDE: {
             "review_case_id": review_case.review_case_id,
@@ -317,7 +321,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 16, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 17, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -988,7 +992,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: fifteen capabilities answered from an empty world prove little."""
+    """Guard the matrix: sixteen capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

@@ -66,14 +66,6 @@ const CAPTURE_KINDS = [
 
 type CaptureKind = (typeof CAPTURE_KINDS)[number]["value"];
 
-/** The two source classes a person may author. Quick note unless they say otherwise. */
-const CAPTURE_KINDS = [
-  { value: "quick_note", label: "Quick note" },
-  { value: "conversation_log", label: "Conversation log" },
-] as const;
-
-type CaptureKind = (typeof CAPTURE_KINDS)[number]["value"];
-
 interface CaptureAck {
   /** `"backend"` (durable) or `"synthetic"` (acknowledged only). */
   readonly shape?: string;

@@ -129,11 +129,17 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadKnowledge,
     Representation,
+    RevealSubject,
     ReviseCapture,
     SearchCaptures,
     SearchKnowledge,
 )
-from my_pa.application.disclosure import Limitation, disclosure_for, unenrolled_disclosure
+from my_pa.application.disclosure import (
+    Limitation,
+    disclosure_for,
+    unavailable_disclosure,
+    unenrolled_disclosure,
+)
 from my_pa.application.errors import (
     AmbiguousRequestError,
     ApplicationError,
@@ -165,6 +171,7 @@ from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
 from my_pa.contracts.v1.disclosure import Disclosure, SourceReference, Truncation
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent, AuditOutcome
 from my_pa.domain.capture.errors import (
@@ -173,6 +180,7 @@ from my_pa.domain.capture.errors import (
     CaptureError,
     EmptyCaptureError,
 )
+from my_pa.domain.capture.reveal import EvidenceState
 from my_pa.domain.capture.review import (
     ReviewConflictError,
     ReviewNotFoundError,
@@ -352,6 +360,15 @@ def _provider_failure(error: ProviderError) -> ApplicationError:
 #: `ADR-003` makes a user-authored record an authority in its own right, so the
 #: level is `source_original` and the basis names the person who wrote it.
 _CAPTURE_TRUST_BASIS: Final = ("user_authored",)
+
+#: What a reveal's trust rests on. The stored rows and nothing else: every value
+#: in the answer was read from `capture_spans`, `capture_proposals`,
+#: `capture_review_decisions`, `capture_assertions` and
+#: `capture_promotion_receipts`, and none of it was computed here. Naming
+#: `stored_evidence_rows` rather than reusing `_CAPTURE_TRUST_BASIS` is the
+#: difference between "the person wrote this" and "these are the rows that
+#: record what was derived from what the person wrote".
+_REVEAL_TRUST_BASIS: Final = ("stored_evidence_rows", "reviewed_promotion")
 
 
 def _capture_content(text: str) -> CaptureContent:
@@ -1224,6 +1241,69 @@ class ApplicationService:
             ),
         )
 
+    def _knowledge_reveal(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: RevealSubject
+    ) -> _Result:
+        """The evidence behind one subject: spans, versions, and the derivation trace.
+
+        **Three answers, and the whole point of the capability is that a caller
+        can tell them apart.**
+
+        * The subject is not this Principal's, or is not there at all -> a
+          `not_found` error, the same one for both. `CaptureRepository.reveal`
+          answers `None` for the two cases because the identifier is compared
+          inside a partitioned statement, so a foreign subject is not found
+          rather than found-and-refused, and this endpoint cannot be used to
+          discover that somebody else's record exists.
+        * The scope could not be searched — a subject kind this evidence model
+          does not cover, or a version whose derivation has not completed -> a
+          **success** whose `state` is `unavailable` and whose envelope carries
+          `CoverageState.UNAVAILABLE`, `partial_result`, the
+          `EVIDENCE_SCOPE_WAS_NOT_SEARCHED` limitation, and the gap in
+          `unavailable_evidence`. Not an error, because nothing failed and a
+          retry may well succeed; and never an empty result, because
+          `INV-PKL-007` forbids reporting unavailable evidence as empty.
+        * Otherwise the rows, with `proposed` and `accepted` in two separate
+          arrays.
+
+        **No enrollment is resolved**, for the reason `_capture_search` states:
+        the rows belong to no configured source and no enrollment, which is why
+        `knowledge.reveal` is in `domain.policy.decision._SCOPELESS`.
+
+        **The answer carries no capture text and no derived value**, and neither
+        `RevealSpanView` nor `RevealProposalView` has a field one could go in.
+        The offsets and the digest are enough for a holder of the version to
+        confirm a citation and are nothing to anyone else, which is what lets a
+        Reveal be shown beside an item without becoming a second read of the
+        content `capture.read` audits under its own capability.
+        """
+        with _translated():
+            reveal = unit_of_work.captures.reveal(
+                command.subject_id, principal_id=authorization.principal.principal_id
+            )
+        if reveal is None:
+            raise NotFoundError(SafeDetail.SUBJECT)
+        view = RevealView.of(reveal)
+        if reveal.state is EvidenceState.UNAVAILABLE:
+            assert reveal.gap is not None  # noqa: S101 - `Reveal` refuses the other shape
+            return _Result(
+                payload=view.to_canonical_dict(),
+                disclosure=unavailable_disclosure(
+                    authorization.at,
+                    unavailable_evidence=(reveal.gap.value,),
+                    trust_basis=_REVEAL_TRUST_BASIS,
+                    extra_limitations=(Limitation.EVIDENCE_SPANS_CARRY_NO_QUOTED_TEXT,),
+                ),
+            )
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_REVEAL_TRUST_BASIS,
+                extra_limitations=(Limitation.EVIDENCE_SPANS_CARRY_NO_QUOTED_TEXT,),
+            ),
+        )
+
     def _review_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListReviewCases
     ) -> _Result:
@@ -1729,6 +1809,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.SOURCES_ENROLL: ApplicationService._sources_enroll,
         Capability.KNOWLEDGE_SEARCH: ApplicationService._knowledge_search,
         Capability.KNOWLEDGE_READ: ApplicationService._knowledge_read,
+        Capability.KNOWLEDGE_REVEAL: ApplicationService._knowledge_reveal,
         Capability.CAPTURE_CREATE: ApplicationService._capture_create,
         Capability.CAPTURE_REVISE: ApplicationService._capture_revise,
         Capability.CAPTURE_READ: ApplicationService._capture_read,

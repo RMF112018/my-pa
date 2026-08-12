@@ -276,6 +276,11 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         for name, networks in expected_compose_networks.items()
     ):
         errors.add("network_planes")
+    if compose_model.get("networks") != {
+        "data-plane": {"internal": True},
+        "edge-plane": {"internal": False},
+    }:
+        errors.add("network_planes")
     if any(not block or "    platform: linux/amd64" not in block for block in blocks.values()):
         errors.add("missing_platform")
     if any("_DIGEST:?sha256 digest required}" not in block for block in blocks.values()):
@@ -411,6 +416,18 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "ops/nas/compose.example.yml",
             "edge-plane:\n    internal: false",
             "edge-plane:\n    internal: true",
+            "network_planes",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "edge-plane:\n    internal: false",
+            "edge-plane:\n    internal: false\n  edge-plane:\n    internal: true",
+            "network_planes",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "data-plane:\n    internal: true",
+            "data-plane:\n    internal: true\n  data-plane:\n    internal: false",
             "network_planes",
         ),
         (

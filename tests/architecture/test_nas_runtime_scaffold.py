@@ -123,6 +123,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "network",
         "auth",
         "restart",
+        "postgres",
         "services",
         "mounts",
         "ingress",
@@ -246,6 +247,16 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         },
         "auth": {"pilot_web": "entra", "scratch_only": "local_operator"},
         "restart": {"smoke": "no", "pilot_after_nas_10_and_operator_activation": "unless-stopped"},
+        "postgres": {
+            "storage": "nas_local_bind",
+            "host_publish": "forbidden",
+            "password_fallback": "forbidden",
+            "migration": "explicit_only",
+            "backup_format": "pg_dump_custom",
+            "restore_target": "scratch_database_only",
+            "tuning_source": "measured_live_nas_resources",
+            "tuning_status": "awaiting_live_measurement",
+        },
         "mounts": {
             "config_ro": {"class": "config", "mode": "read_only"},
             "postgres_data_rw": {
@@ -413,6 +424,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "POSTGRES_DB": "my_pa",
             "POSTGRES_USER": "my_pa",
             "POSTGRES_PASSWORD": "${MY_PA_DB_PASSWORD:?database password required}",
+            "POSTGRES_INITDB_ARGS": "--data-checksums --locale=C.UTF-8 --encoding=UTF8",
         },
         "gateway": {"MY_PA_GATEWAY_BIND_HOST": "0.0.0.0"},  # noqa: S104
         "worker-enrollment": None,
@@ -457,9 +469,11 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "image",
             "platform",
             "restart",
+            "stop_grace_period",
             "environment",
             "volumes",
             "networks",
+            "healthcheck",
         },
         "gateway": {
             "profiles",
@@ -763,8 +777,8 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/compose.example.yml",
-            "    networks: [data-plane]\n\n  gateway:",
-            '    ports: ["0.0.0.0:5432:5432"]\n    networks: [data-plane]\n\n  gateway:',
+            "    networks: [data-plane]\n    healthcheck:",
+            '    ports: ["0.0.0.0:5432:5432"]\n    networks: [data-plane]\n    healthcheck:',
             "postgres_published",
         ),
         (

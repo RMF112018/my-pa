@@ -5,6 +5,7 @@ from my_pa.domain.modeling.gate import (
     ContextManifest,
     ModelProposal,
     ModelRoutePolicy,
+    ReviewBoundModelProposal,
     SemanticRetrievalGate,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "ContextManifest",
     "ModelProposal",
     "ModelRoutePolicy",
+    "ReviewBoundModelProposal",
     "SemanticRetrievalGate",
 ]

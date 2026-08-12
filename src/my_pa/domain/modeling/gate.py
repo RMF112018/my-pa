@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 
 
@@ -49,7 +50,7 @@ class ContextEvidence:
         validate_identifier(self.source_id, IdKind.SOURCE)
         validate_identifier(self.source_object_id, IdKind.SOURCE_OBJECT)
         validate_identifier(self.source_version_id, IdKind.VERSION)
-        if not self.reference_id or len(self.reference_id) > 80:
+        if not self.reference_id or len(self.reference_id.encode()) > 80:
             raise ValueError("an evidence reference is required and bounded")
         if self.instruction_authority:
             raise ValueError("retrieved content cannot have instruction authority")
@@ -77,10 +78,14 @@ class ContextManifest:
             self.prompt_schema_version,
             self.policy_version,
         ):
-            if not value or len(value) > 100:
+            if not value or len(value.encode()) > 100:
                 raise ValueError("model context metadata is required and bounded")
         if not self.evidence:
             raise ValueError("a model context must cite evidence")
+        if len(self.evidence) > 100:
+            raise ValueError("model context evidence exceeds its count bound")
+        if sum(len(item.text.encode()) for item in self.evidence) > 1_048_576:
+            raise ValueError("model context evidence exceeds its aggregate byte bound")
         if any(item.principal_id != self.principal_id for item in self.evidence):
             raise ValueError("model context evidence crossed its Principal boundary")
 
@@ -95,13 +100,46 @@ class ModelProposal:
     confidence: float
 
     def __post_init__(self) -> None:
-        if not self.proposal_type or len(self.proposal_type) > 64:
+        if not self.proposal_type or len(self.proposal_type.encode()) > 64:
             raise ValueError("proposal_type is required and bounded")
-        if not self.normalized_value or len(self.normalized_value) > 4096:
+        if not self.normalized_value or len(self.normalized_value.encode()) > 4096:
             raise ValueError("normalized_value is required and bounded")
-        if not self.evidence_reference_ids or len(set(self.evidence_reference_ids)) != len(
-            self.evidence_reference_ids
+        if (
+            not self.evidence_reference_ids
+            or len(self.evidence_reference_ids) > 16
+            or len(set(self.evidence_reference_ids)) != len(self.evidence_reference_ids)
+            or any(not value or len(value.encode()) > 80 for value in self.evidence_reference_ids)
         ):
             raise ValueError("a proposal must cite distinct evidence")
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be between zero and one")
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewBoundModelProposal:
+    """A model output that can only enter canonical state through Review."""
+
+    proposal_id: str
+    review_case_id: str
+    principal_id: str
+    provider_id: str
+    model_id: str
+    prompt_schema_version: str
+    policy_version: str
+    proposal: ModelProposal
+    authority_state: ProposalState = ProposalState.NEEDS_REVIEW
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.proposal_id, IdKind.PROPOSAL)
+        validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if self.authority_state is not ProposalState.NEEDS_REVIEW:
+            raise ValueError("a model proposal has no authority before canonical Review")
+        for value in (
+            self.provider_id,
+            self.model_id,
+            self.prompt_schema_version,
+            self.policy_version,
+        ):
+            if not value or len(value.encode()) > 100:
+                raise ValueError("model proposal provenance is required and bounded")

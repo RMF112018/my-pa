@@ -134,6 +134,10 @@ private struct ProtectedDirectoryIdentity: Hashable {
 private final class ProtectedSharedProcessLock: @unchecked Sendable {
     let descriptor: Int32
     let identity: ProtectedDirectoryIdentity
+    /// `lockf` locks belong to a process rather than a thread. Same-process
+    /// operations therefore need their own per-root mutex, separate from the
+    /// registry mutex used by retain/release during peer deinitialization.
+    let operationMutex = NSLock()
     var referenceCount: Int
 
     init(descriptor: Int32, identity: ProtectedDirectoryIdentity) {
@@ -529,8 +533,8 @@ public final class ProtectedSpool: @unchecked Sendable {
     }
 
     private func locked<T>(_ operation: () throws -> T) throws -> T {
-        Self.processMutex.lock()
-        defer { Self.processMutex.unlock() }
+        sharedProcessLock.operationMutex.lock()
+        defer { sharedProcessLock.operationMutex.unlock() }
         while Darwin.lockf(sharedProcessLock.descriptor, F_LOCK, 0) != 0 {
             if errno == EINTR { continue }
             throw ProtectedSpoolError.filesystemFailure(errno)

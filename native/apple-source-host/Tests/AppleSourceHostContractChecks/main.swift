@@ -1107,7 +1107,10 @@ struct AppleSourceHostContractChecks {
                         secondaryBox.destroy(after: destroyStarted)
                         destroyFinished.signal()
                     }
-                    destroyStarted.wait()
+                    try require(
+                        destroyStarted.wait(timeout: .now() + 2) == .success,
+                        "Peer destruction did not start within its lifecycle bound"
+                    )
                     var attempts = 0
                     while weakSecondary.value != nil && attempts < 10_000 {
                         usleep(100)
@@ -1124,7 +1127,10 @@ struct AppleSourceHostContractChecks {
                 }
             )
         }
-        destroyFinished.wait()
+        try require(
+            destroyFinished.wait(timeout: .now() + 2) == .success,
+            "Peer deinitialization deadlocked against an active spool operation"
+        )
         try require(
             try crossProcessLockAttempt(lockURL) == 0,
             "External contender remained blocked after the primary operation unlocked"
@@ -2155,7 +2161,7 @@ struct AppleSourceHostContractChecks {
                 // "The body was included" with no body: an inconsistent claim.
                 object["completeness"] = [
                     "bodyIncluded": true,
-                    "bodyByteSize": omitted.completeness.bodyByteSize,
+                    "bodyByteSize": omitted.completeness.bodyByteSize!,
                     "attachmentCount": 0,
                     "attachmentsDescribed": 0,
                 ]

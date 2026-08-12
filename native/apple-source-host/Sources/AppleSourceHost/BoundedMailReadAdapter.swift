@@ -2,24 +2,24 @@ import Foundation
 
 /// How complete a mail record is, stated in numbers rather than in a flag.
 ///
-/// Partiality is always *quantified*: the true body size and the true
-/// attachment count are recorded whether or not the body and the descriptors
-/// were carried. A consumer can therefore tell the difference between "this
-/// message has no body" and "this message's body was too large to carry, and it
-/// was 4 MB", which is the difference a truncation destroys.
+/// Partiality is always explicit. The exact body size is recorded when the
+/// mechanism can learn it within the read bound; it is `nil` when a provider
+/// offers only a conservative whole-message upper bound and the body is refused
+/// before materialization. Attachment count is always exact.
 public struct MailContentCompleteness: Codable, Hashable, Sendable {
     public let bodyIncluded: Bool
-    public let bodyByteSize: Int
+    public let bodyByteSize: Int?
     public let attachmentCount: Int
     public let attachmentsDescribed: Int
 
     public init(
         bodyIncluded: Bool,
-        bodyByteSize: Int,
+        bodyByteSize: Int?,
         attachmentCount: Int,
         attachmentsDescribed: Int
     ) throws {
-        guard bodyByteSize >= 0,
+        guard bodyByteSize.map({ $0 >= 0 }) ?? true,
+              !bodyIncluded || bodyByteSize != nil,
               attachmentCount >= 0,
               attachmentsDescribed >= 0,
               attachmentsDescribed <= attachmentCount,
@@ -45,7 +45,7 @@ public struct MailContentCompleteness: Codable, Hashable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             bodyIncluded: values.decode(Bool.self, forKey: .bodyIncluded),
-            bodyByteSize: values.decode(Int.self, forKey: .bodyByteSize),
+            bodyByteSize: values.decodeIfPresent(Int.self, forKey: .bodyByteSize),
             attachmentCount: values.decode(Int.self, forKey: .attachmentCount),
             attachmentsDescribed: values.decode(Int.self, forKey: .attachmentsDescribed)
         )
@@ -282,14 +282,24 @@ public struct BoundedMailReadAdapter: MailReadAdapter, Sendable {
             providerKey: summary.providerKey
         )
         let content = try mechanism.messageContent(identity)
-        let bodyFits = content.bodyBytes.count <= NativeSourceProtocolV1.maximumMailBodyBytes
+        if let body = content.bodyBytes {
+            guard content.bodyByteSize == body.count else {
+                throw NativeSourceContractError.mailContentInconsistent
+            }
+        }
+        guard content.bodyByteSize.map({ $0 >= 0 }) ?? true,
+              content.attachmentCount >= content.attachments.count
+        else { throw NativeSourceContractError.mailContentInconsistent }
+        let bodyFits = content.bodyBytes.map {
+            $0.count <= NativeSourceProtocolV1.maximumMailBodyBytes
+        } ?? false
         let described = Array(
             content.attachments.prefix(NativeSourceProtocolV1.maximumMailAttachmentDescriptors)
         )
         let completeness = try MailContentCompleteness(
             bodyIncluded: bodyFits,
-            bodyByteSize: content.bodyBytes.count,
-            attachmentCount: content.attachments.count,
+            bodyByteSize: content.bodyByteSize,
+            attachmentCount: content.attachmentCount,
             attachmentsDescribed: described.count
         )
         let payload = try MailRecordContent(

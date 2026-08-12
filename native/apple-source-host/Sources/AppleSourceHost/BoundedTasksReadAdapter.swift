@@ -8,6 +8,8 @@ public struct BoundedTasksReadAdapter: TasksReadAdapter, Sendable {
 
     public init(mechanism: any TasksMechanism) { self.mechanism = mechanism }
 
+    public var descriptor: TasksMechanismDescriptor { mechanism.descriptor }
+
     public func discoverTaskLists() throws -> NativeDiscoverySnapshot {
         try requireAuthorization()
         guard mechanism.descriptor.publishesStableIdentifiers else {

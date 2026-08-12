@@ -23,24 +23,32 @@ public final class ContactsStoreMechanism: ContactsMechanism, @unchecked Sendabl
     private let accountKey: ContactsIdentityComponent
     private let maximumContactsScanned: Int
     private let maximumMembershipsScanned: Int
+    private let maximumContainers: Int
+    private let maximumGroups: Int
 
     public init(
         store: CNContactStore,
         identityEpoch: String,
         maximumContactsScanned: Int = 5_000,
-        maximumMembershipsScanned: Int = 10_000
+        maximumMembershipsScanned: Int = 10_000,
+        maximumContainers: Int = 1_000,
+        maximumGroups: Int = 5_000
     ) throws {
         guard !identityEpoch.isEmpty, identityEpoch.utf8.count <= 200 else {
             throw NativeSourceContractError.contactsIdentityEpochUnavailable
         }
         guard 1...10_000 ~= maximumContactsScanned,
-              1...50_000 ~= maximumMembershipsScanned
+              1...50_000 ~= maximumMembershipsScanned,
+              1...1_000 ~= maximumContainers,
+              1...10_000 ~= maximumGroups
         else { throw NativeSourceContractError.contactsTraversalExceeded }
         self.store = store
         self.identityEpoch = try PlatformIdentity.contacts("contacts-epoch", identityEpoch)
         self.accountKey = try PlatformIdentity.contacts("contacts-account", "platform-default")
         self.maximumContactsScanned = maximumContactsScanned
         self.maximumMembershipsScanned = maximumMembershipsScanned
+        self.maximumContainers = maximumContainers
+        self.maximumGroups = maximumGroups
     }
 
     public func authorizationState() throws -> ContactsAuthorizationState {
@@ -58,7 +66,8 @@ public final class ContactsStoreMechanism: ContactsMechanism, @unchecked Sendabl
     }
 
     public func containers() throws -> [ContactsContainerDescriptor] {
-        try store.containers(matching: nil).map { container in
+        let containers = try boundedContainers()
+        return try containers.map { container in
             ContactsContainerDescriptor(
                 identity: try containerIdentity(container.identifier),
                 kind: kind(container.type),
@@ -69,10 +78,16 @@ public final class ContactsStoreMechanism: ContactsMechanism, @unchecked Sendabl
     }
 
     public func groups() throws -> [ContactsGroupDescriptor] {
-        try store.containers(matching: nil).flatMap { container in
-            try store.groups(
+        let containers = try boundedContainers()
+        var result: [ContactsGroupDescriptor] = []
+        for container in containers {
+            let groups = try store.groups(
                 matching: CNGroup.predicateForGroupsInContainer(withIdentifier: container.identifier)
-            ).map { group in
+            )
+            guard groups.count <= maximumGroups - result.count else {
+                throw NativeSourceContractError.contactsTraversalExceeded
+            }
+            result.append(contentsOf: try groups.map { group in
                 ContactsGroupDescriptor(
                     identity: ContactsGroupIdentity(
                         container: try containerIdentity(container.identifier),
@@ -80,12 +95,15 @@ public final class ContactsStoreMechanism: ContactsMechanism, @unchecked Sendabl
                     ),
                     displayLabel: group.name
                 )
-            }
-        }.sorted { try $0.identity.recordIdentifier().rawValue < $1.identity.recordIdentifier().rawValue }
+            })
+        }
+        return try result.sorted {
+            try $0.identity.recordIdentifier().rawValue < $1.identity.recordIdentifier().rawValue
+        }
     }
 
     public func contacts(_ query: ContactsTraversalQuery) throws -> ContactsTraversalResult {
-        let candidates = try store.containers(matching: nil).filter {
+        let candidates = try boundedContainers().filter {
             try containerIdentity($0.identifier) == query.container
         }
         guard candidates.count == 1, let container = candidates.first else {
@@ -142,9 +160,13 @@ public final class ContactsStoreMechanism: ContactsMechanism, @unchecked Sendabl
             maximum: maximumMembershipsScanned,
             targets: targetContactIdentifiers
         )
-        for group in try store.groups(
+        let groups = try store.groups(
             matching: CNGroup.predicateForGroupsInContainer(withIdentifier: containerIdentifier)
-        ) {
+        )
+        guard groups.count <= maximumGroups else {
+            throw NativeSourceContractError.contactsTraversalExceeded
+        }
+        for group in groups {
             let groupKey = try PlatformIdentity.contacts("contacts-group", group.identifier)
             let request = CNContactFetchRequest(
                 keysToFetch: [CNContactIdentifierKey as CNKeyDescriptor]
@@ -161,6 +183,17 @@ public final class ContactsStoreMechanism: ContactsMechanism, @unchecked Sendabl
             if state.exceeded { throw NativeSourceContractError.contactsTraversalExceeded }
         }
         return try state.result()
+    }
+
+    private func boundedContainers() throws -> [CNContainer] {
+        // Contacts returns this array atomically; the public API offers no
+        // streaming container callback. Refuse immediately after return and
+        // before mapping, property reads, or nested group/contact traversal.
+        let containers = try store.containers(matching: nil)
+        guard containers.count <= maximumContainers else {
+            throw NativeSourceContractError.contactsTraversalExceeded
+        }
+        return containers
     }
 
     private func containerIdentity(_ providerKey: String) throws -> ContactsContainerIdentity {

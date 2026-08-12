@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from my_pa.contracts.ports import ReviewDecisionRequest
 from my_pa.domain.capture.review import Disposition, ReviewNotFoundError
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
-from my_pa.domain.goodnotes.models import SourcePage
+from my_pa.domain.goodnotes.models import GoodNotesSourceBinding, SourcePage
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.search.query import SearchQuery, SearchRequest
 from my_pa.domain.source.enrollment import EnrollmentRequest, EnrollmentScope
@@ -102,24 +103,24 @@ def test_two_principals_reconcile_review_correct_and_search_without_an_oracle(
     service = GoodNotesService()
     scopes: dict[str, tuple[FixtureGoodNotesSource, str]] = {}
     with engine.begin() as connection:
+        source = register_source(
+            connection,
+            provider_kind=SourceProviderKind.FIXTURE,
+            label="Synthetic shared GoodNotes",
+            classification=Classification.SYNTHETIC_TEST,
+            native_root="/synthetic/goodnotes/shared",
+        )
+        observed = observe_object(
+            connection,
+            source_id=source.source_id,
+            native_locator="/synthetic/goodnotes/shared/page.pdf",
+            kind=ObjectKind.FILE,
+            fingerprint="fingerprint-shared",
+            modified_at=WHEN,
+            media_type="application/pdf",
+            size_bytes=32,
+        )
         for principal in (A, B):
-            source = register_source(
-                connection,
-                provider_kind=SourceProviderKind.FIXTURE,
-                label="Synthetic GoodNotes",
-                classification=Classification.SYNTHETIC_TEST,
-                native_root=f"/synthetic/goodnotes/{principal}",
-            )
-            observed = observe_object(
-                connection,
-                source_id=source.source_id,
-                native_locator=f"/synthetic/goodnotes/{principal}/page.pdf",
-                kind=ObjectKind.FILE,
-                fingerprint=f"fingerprint-{principal}",
-                modified_at=WHEN,
-                media_type="application/pdf",
-                size_bytes=32,
-            )
             enrollment = accept_enrollment(
                 connection,
                 EnrollmentRequest(
@@ -129,7 +130,7 @@ def test_two_principals_reconcile_review_correct_and_search_without_an_oracle(
                     scope=EnrollmentScope(object_ids=(observed.source_object_id,)),
                     media_types=("text/plain",),
                     policy_version="policy-v1",
-                    idempotency_key=f"goodnotes-{principal}",
+                    idempotency_key=f"shared-goodnotes-{principal}",
                     max_items=1,
                     max_bytes=1_000_000,
                 ),
@@ -199,3 +200,113 @@ def test_two_principals_reconcile_review_correct_and_search_without_an_oracle(
     assert len(own.matches) == 1
     assert own.matches[0].version_id.startswith("ver_")
     assert foreign.matches == ()
+
+
+def test_goodnotes_manifest_binding_refuses_unregistered_unenrolled_and_mismatched_identity(
+    engine: Engine,
+) -> None:
+    with engine.begin() as connection:
+        source = register_source(
+            connection,
+            provider_kind=SourceProviderKind.FIXTURE,
+            label="Synthetic admission proof",
+            classification=Classification.SYNTHETIC_TEST,
+            native_root="/synthetic/goodnotes/admission-proof",
+        )
+        observed = observe_object(
+            connection,
+            source_id=source.source_id,
+            native_locator="/synthetic/goodnotes/admission-proof/page.pdf",
+            kind=ObjectKind.FILE,
+            fingerprint="admission-proof-v1",
+            modified_at=WHEN,
+            media_type="application/pdf",
+            size_bytes=32,
+        )
+        binding = GoodNotesSourceBinding(
+            source_id=source.source_id,
+            source_object_id=observed.source_object_id,
+            source_version_id=observed.version_id,
+        )
+        repository = PostgresGoodNotesRepository(connection)
+        with pytest.raises(ValueError, match="not bound"):
+            repository.require_admitted_sources(A, (binding,))
+
+        enrollment = accept_enrollment(
+            connection,
+            EnrollmentRequest(
+                source_id=source.source_id,
+                principal_id=A,
+                purpose=Purpose.BOUNDED_ENROLLMENT,
+                scope=EnrollmentScope(object_ids=(observed.source_object_id,)),
+                media_types=("text/plain",),
+                policy_version="policy-v1",
+                idempotency_key="goodnotes-admission-proof",
+                max_items=1,
+                max_bytes=1_000_000,
+            ),
+        ).enrollment
+        record_scope(connection, enrollment.enrollment_id, [observed.source_object_id])
+        repository.require_admitted_sources(A, (binding,))
+
+        pages = fixture_source(
+            principal_id=A,
+            source_id=source.source_id,
+            object_id=observed.source_object_id,
+            version_id=observed.version_id,
+        )
+        service = GoodNotesService()
+        plan = service.plan(
+            principal_id=A,
+            idempotency_key="collision-proof",
+            source=pages,
+            transcriber=FixturePageTranscriber(),
+        )
+        prepared = service.prepare(
+            plan=plan,
+            source=pages,
+            transcriber=FixturePageTranscriber(),
+        )
+        service.persist(prepared, repository)
+        with pytest.raises(ValueError, match="region identity collided"):
+            repository.store_reconciliation(
+                receipt=prepared.receipt,
+                pages=prepared.pages,
+                versions=prepared.versions,
+                regions=(
+                    replace(
+                        prepared.regions[0],
+                        transcription=prepared.regions[0].transcription + " changed",
+                    ),
+                ),
+            )
+
+        for principal, bad in (
+            (B, binding),
+            (
+                A,
+                GoodNotesSourceBinding(
+                    source_id="src_cccccccccccccccccccccccc",
+                    source_object_id=observed.source_object_id,
+                    source_version_id=observed.version_id,
+                ),
+            ),
+            (
+                A,
+                GoodNotesSourceBinding(
+                    source_id=source.source_id,
+                    source_object_id="obj_cccccccccccccccccccccccc",
+                    source_version_id=observed.version_id,
+                ),
+            ),
+            (
+                A,
+                GoodNotesSourceBinding(
+                    source_id=source.source_id,
+                    source_object_id=observed.source_object_id,
+                    source_version_id="ver_cccccccccccccccccccccccc",
+                ),
+            ),
+        ):
+            with pytest.raises(ValueError, match="not bound"):
+                repository.require_admitted_sources(principal, (bad,))

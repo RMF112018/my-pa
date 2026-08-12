@@ -13,34 +13,20 @@ from pathlib import Path, PurePosixPath
 from sqlalchemy.engine import Engine
 
 from my_pa.application.goodnotes import (
-    GoodNotesModelProposalBoundary,
     GoodNotesService,
     PageTranscriber,
     ReadOnlyGoodNotesSource,
     ReconciliationConflictError,
 )
-from my_pa.application.model_gate import BoundedModelGate
 from my_pa.domain.goodnotes.models import ReconciliationReceipt
-from my_pa.domain.modeling.gate import ContextManifest, ModelProposal, ModelRoutePolicy
 from my_pa.infrastructure.goodnotes.local import BoundedLocalOCRTranscriber, ManifestGoodNotesSource
 from my_pa.infrastructure.persistence.goodnotes import PostgresGoodNotesRepository
-
-
-@dataclass(slots=True)
-class _DisabledLocalProvider:
-    provider_id: str = "goodnotes_local_disabled"
-    model_id: str = "none"
-    is_external: bool = False
-
-    def propose(self, manifest: ContextManifest) -> tuple[ModelProposal, ...]:
-        raise RuntimeError("a disabled model provider cannot be invoked")
 
 
 @dataclass(frozen=True, slots=True)
 class LocalGoodNotesRuntime:
     source: ReadOnlyGoodNotesSource
     transcriber: PageTranscriber
-    model_boundary: GoodNotesModelProposalBoundary
 
     def reconcile(
         self,
@@ -56,9 +42,12 @@ class LocalGoodNotesRuntime:
             source=self.source,
             transcriber=self.transcriber,
         )
-        # Short receipt-only connection: closed before OCR/model execution.
+        # Short admission/receipt connection: exact registry + enrollment
+        # identity is proven before OCR/model execution, then closed.
         with engine.connect() as connection:
-            prior = PostgresGoodNotesRepository(connection).receipt(principal_id, idempotency_key)
+            repository = PostgresGoodNotesRepository(connection)
+            service.admit(plan, repository)
+            prior = repository.receipt(principal_id, idempotency_key)
         if prior is not None:
             if prior.request_fingerprint != plan.request_fingerprint:
                 raise ReconciliationConflictError(
@@ -77,7 +66,6 @@ class LocalGoodNotesRuntime:
             plan=plan,
             source=self.source,
             transcriber=self.transcriber,
-            model_boundary=self.model_boundary,
         )
         # The durable transaction starts only after OCR and the proposal gate.
         with engine.begin() as connection:
@@ -92,7 +80,6 @@ def compose_local_goodnotes_runtime(
     ocr_name: str,
     ocr_version: str,
 ) -> LocalGoodNotesRuntime:
-    provider = _DisabledLocalProvider()
     return LocalGoodNotesRuntime(
         source=ManifestGoodNotesSource(
             root=admitted_root,
@@ -102,11 +89,5 @@ def compose_local_goodnotes_runtime(
             command=ocr_command,
             name=ocr_name,
             version=ocr_version,
-        ),
-        model_boundary=GoodNotesModelProposalBoundary(
-            gate=BoundedModelGate(route=ModelRoutePolicy.DISABLED),
-            provider=provider,
-            provider_id=provider.provider_id,
-            model_id=provider.model_id,
         ),
     )

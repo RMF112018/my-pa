@@ -73,7 +73,13 @@ GUARD_MODULE: Final = "my_pa.infrastructure.persistence.principal_scope"
 #: The names that module publishes which *reach* a partition. `PrincipalContext`
 #: is deliberately absent: carrying the context is not using it.
 GUARD_CALLS: Final = frozenset(
-    {"partition_criterion", "principal_scoped", "principal_bound_values", "capture_context"}
+    {
+        "capture_context",
+        "matching_partition_criterion",
+        "partition_criterion",
+        "principal_bound_values",
+        "principal_scoped",
+    }
 )
 
 #: The two partition vocabularies, as column names. Kept here rather than

@@ -29,9 +29,10 @@ let package = Package(
             dependencies: ["AppleSourceHost"],
             linkerSettings: [.linkedFramework("ScriptingBridge")]
         ),
-        // A runnable, deliberately non-activating host boundary.  It admits and
-        // validates operator configuration/checkpoints, but does not construct
-        // framework stores, request TCC, register observers, or enumerate data.
+        // A runnable, deliberately non-activating host boundary. It validates
+        // operator configuration/checkpoints, constructs the inert production
+        // composition, and writes content-free dry-run receipts into a protected
+        // spool. It never requests TCC, registers observers, or enumerates data.
         .executableTarget(
             name: "AppleSourceHostPlatformHost",
             dependencies: ["AppleSourceHost", "AppleSourceHostPlatform"]

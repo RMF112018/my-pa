@@ -20,7 +20,13 @@ supersession_state: NEW_CANDIDATE_NOT_IN_REPOSITORY
 ## 1. Purpose and status
 
 
-`my-pa` is the proposed local-first Personal Knowledge Layer between a local operator, authorized source systems, structured knowledge storage, and model-facing retrieval interfaces. Its first credible outcome is one bounded read-only vertical slice, not a general automation platform.
+`my-pa` is the local-first Personal Knowledge Layer between a local operator,
+authorized source systems, structured knowledge storage, and policy-bound
+retrieval interfaces. The MCV remains one bounded vertical slice, with frontend
+and managed-document implementation admitted only for the current remediation
+objective. This objective-specific reprioritization does not amend repository
+policy; the stale policy inconsistency remains recorded for later, separately
+authorized operator correction.
 
 
 This document refines the accepted foundation in ADR-001 and ADR-002. It does not authorize executable code, NAS/database access, managed writes, deployment, production activation, or risk acceptance. The authenticated authoring basis is `main@3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae`; the exact tree SHA and local worktree state remain unavailable.
@@ -36,16 +42,18 @@ This document refines the accepted foundation in ADR-001 and ADR-002. It does no
 | `CTX-PKL-003` | Operator CLI | Composition surface for administrative actions | Active | Same application policy as HTTP/MCP; no bypass |
 | `CTX-PKL-004` | Gateway process | Request normalization, authorization, query/read coordination | Active | No direct provider/persistence bypass |
 | `CTX-PKL-005` | Worker process | Bounded extraction/index/recovery jobs | Active | Executes persisted authorized work only |
-| `CTX-PKL-006` | PostgreSQL | Planned canonical structured authority and FTS | Active only in later disposable synthetic implementation | Physical target unresolved; no existing DB access authorized |
+| `CTX-PKL-006` | PostgreSQL | Canonical structured authority and FTS | Implemented and validated on disposable synthetic databases | No unknown/existing physical target is authorized |
 | `CTX-PKL-007` | Fixture source provider | Approved bounded read-only source | Active | Original bytes authoritative; adapter cannot mutate |
 | `CTX-PKL-008` | NAS/source providers | Future real read-only sources | Later phase | Must receive configured allowed roots; no discovery outside them |
-| `CTX-PKL-009` | Local model gateway | Optional context consumer/generator | Later phase | Output is proposed/inferred, never source authority |
+| `CTX-PKL-009` | Local model gateway | Optional context consumer/generator | Disabled unless a durable canonical Review router is supplied | Bounded output is proposed/inferred, never source authority |
 | `CTX-PKL-010` | Cloud model provider | External processing boundary | Excluded by default | Raw/private data disclosure prohibited absent separate approval |
-| `CTX-PKL-011` | Managed-document store | Separate write-authority capability | Excluded from MCV | Writes require separate operator authorization and transactions |
+| `CTX-PKL-011` | Managed-document store | Separate product-owned write-authority capability | Implemented for this remediation objective | Designated storage only; no source-system write or deployment authority |
 | `CTX-PKL-012` | Obsidian projection | Rebuildable human-facing view | Later phase | Derived projection, never canonical authority |
-| `CTX-PKL-013` | Email/calendar/contact providers | Personal-data observations | Fixture provider in scope; live access excluded | Separate authorization, privacy, and provider contracts required |
+| `CTX-PKL-013` | Apple Mail/Calendar/Contacts/Tasks providers | Personal-data observations | Bounded mechanisms and protected non-live handoff implemented; live reads excluded | TCC, live data, activation, signing, and deployment require separate authority |
 | `CTX-PKL-015` | Local operator as author | Creates user-authored records through the capture contract | Active under ADR-003 | Authors evidence the product owns; authoring is neither source mutation nor a managed write |
 | `CTX-PKL-014` | Public research providers | External evidence collection | Excluded | No public research or automated profiling in MCV |
+| `CTX-PKL-016` | MossAIc web frontend | Next.js App Router PWA/BFF | Implemented for this remediation objective | Uses public capability contracts; no provider or database bypass |
+| `CTX-PKL-017` | GoodNotes manifest source | Read-only page representations into OCR/Review | Implemented with exact registry/enrollment binding | No traversal, cloud OCR/model, watcher, or live-root admission |
 
 
 ## 3. Current versus target context
@@ -64,6 +72,14 @@ session path without exposing its bearer, and publishes content-free worker
 backlog/liveness states through `capabilities.get` and System. Apple personal
 sources remain first-party and Graph remains off by default.
 
+Current-state correction: the native host can construct its inert production
+composition and place content-free dry-run receipts into the protected spool
+without observing TCC or reading a source. GoodNotes reconciliation is bound to
+exact registry versions and Principal enrollment before OCR, then enters
+ordinary canonical Review/search. Managed documents and the MossAIc frontend
+are implemented under the current objective-specific reprioritization; neither
+fact amends the still-stale policy.
+
 Historical note: the earlier figures (eleven, then twenty-one revisions; eight,
 then twelve capabilities) were accurate at their dated work-package heads. They
 are preserved in campaign records and are not current-state claims.
@@ -72,21 +88,31 @@ are preserved in campaign records and are not current-state claims.
 ### 3.2 MCV target context
 
 
-The smallest target introduces one internal application/domain model and three composition surfaces:
+The implemented target uses one internal application/domain model and four
+composition surfaces:
 
 
 - `my-pa-gateway`: HTTP and MCP adapters over the same application use cases;
 - `my-pa-worker`: durable bounded extraction/index/recovery execution;
 - `my-pa`: operator CLI for administrative use cases.
+- `web`: Next.js PWA/BFF over the same public capability contracts.
 
 
-All three share the same public/domain contracts and policy decisions. PostgreSQL holds structured metadata, provenance, audit, operation/jobs, coverage, extracted text, and lexical indexes. A fixture provider is the only active source boundary. No model is required to complete the MCV.
+All surfaces share the same public/domain contracts and policy decisions.
+PostgreSQL holds structured metadata, provenance, audit, operation/jobs,
+coverage, extracted text, managed-document metadata, Review state, and lexical
+indexes. Repository validation uses synthetic fixtures and disposable databases;
+no live personal source is activated. No model is required for correctness, and
+GoodNotes invokes none.
 
 
 ### 3.3 Later target context
 
 
-Later phases may add a verified NAS provider, managed-document store, personal connectors, knowledge lifecycle, context assembly, relationship intelligence, and projections. These remain future context, not implied MCV components.
+Later phases may add a verified NAS provider, live personal-source activation,
+GoodNotes watcher/live-root operation, canonical-Review-routed model assistance,
+and projections. They remain future context and are not implied by the inert or
+synthetic implementation present here.
 
 
 ## 4. Context diagram
@@ -105,12 +131,15 @@ flowchart LR
     NAS[Future NAS / Source Providers\nread-only]
     LM[Future Local Model Gateway]
     CM[Cloud Model Provider\nprohibited by default]
-    MD[Future Managed Document Store\nseparate write boundary]
+    MD[Managed Document Store\nseparate product-owned write boundary]
     OB[Future Obsidian Projection\nrebuildable]
-    PC[Future Personal Data Providers]
+    PC[Apple Personal Data Providers\nnon-live handoff only]
+    WEB[MossAIc Web PWA/BFF]
+    GN[GoodNotes Manifest + OCR\nregistry/enrollment bound]
 
 
     OP --> CLI
+    OP --> WEB
     HC --> GW
     MC --> GW
     CLI --> GW
@@ -121,17 +150,19 @@ flowchart LR
     WK -. later .-> NAS
     GW -. approved context only .-> LM
     GW -. separately approved disclosure only .-> CM
-    GW -. future authorized writes .-> MD
+    GW --> MD
     DB -. projection feed .-> OB
     WK -. future observations .-> PC
+    GN --> WK
 
 
     classDef excluded stroke-dasharray: 5 5;
-    class CM,MD,OB,PC,NAS,LM excluded;
+    class CM,OB,PC,NAS,LM excluded;
 ```
 
 
-Solid edges are MCV-active conceptual flows. Dashed edges are later-phase or excluded until separately authorized.
+Solid edges are implemented conceptual flows under the current objective.
+Dashed edges remain later-phase or excluded until separately authorized.
 
 
 ## 5. Trust boundaries
@@ -173,16 +204,20 @@ flowchart TB
     BYTES --> WK
     GW -. approved packet .-> LOCAL
     GW -. default deny .-> CLOUD
-    GW -. excluded in MCV .-> STORE
+    GW --> STORE
 ```
 
 
 - `TB-01`: All input is untrusted until authenticated, normalized, validated, and authorized.
 - `TB-02`: Gateway and worker are separate processes but not separate services/domains. Neither may bypass application policy, provenance, or audit responsibilities.
-- `TB-03`: PostgreSQL is trusted for structured state only after a later authorized disposable-database implementation validates migrations and configuration. The physical production/existing database remains unknown.
+- `TB-03`: PostgreSQL is trusted for structured state in the validated disposable
+  synthetic-database path. An unknown/existing physical database and production
+  activation remain unauthorized.
 - `TB-04`: Source adapters and content are untrusted. Containment, type/signature, size, version, and parser controls apply. Retrieved text is never instruction authority.
 - `TB-05`: Model processing is a disclosure boundary. Local is not automatically unrestricted; cloud is prohibited for raw/private MCV data by default.
-- `TB-06`: Managed writes are a distinct authority and transaction boundary and are not present in the MCV.
+- `TB-06`: Managed writes are a distinct product-owned authority and transaction
+  boundary implemented for this objective; they do not grant source-system
+  mutation, deployment, or unknown-target authority.
 
 
 ## 6. MCV data flows
@@ -218,10 +253,14 @@ Worker leases authorized work → adapter revalidates object containment/version
 Client → gateway → authorization/purpose/scope → PostgreSQL FTS or record read → disclosure assembly → transport adapter. Search coverage and freshness are explicit; a missing result is not evidence that unindexed scope contains no match.
 
 
-### `DF-PKL-006` — Model context, later only
+### `DF-PKL-006` — Model context, deferred without canonical Review routing
 
 
-Authorized retrieval result → policy/classification/purpose filter → field-level disclosure packet → local model. Cloud transmission remains denied until a separate operator-approved data eligibility policy and auditable receipt exist.
+Authorized retrieval result → policy/classification/purpose filter → field-level
+disclosure packet → bounded local model → durable canonical Review router. The
+gate refuses before provider invocation when that router is absent. Cloud
+transmission remains denied until a separate operator-approved data eligibility
+policy and auditable receipt exist.
 
 
 ## 7. Authority boundaries
@@ -235,9 +274,9 @@ Authorized retrieval result → policy/classification/purpose filter → field-l
 | Extracted text/search index | Authorized scope | Worker/application only | Derived and source-version-bound |
 | Audit records | Authorized reviewers/operators | Append-only application behavior | Security-relevant audit failure is fail-closed |
 | User-authored records | Owning principal within policy | Owning principal, append-only, through an application command | Immutable versions; no update or delete path; not a managed write |
-| Managed documents | Excluded | Excluded | Separate later capability and authorization |
+| Managed documents | Owning Principal through admitted capability | Versioned application transaction into designated managed storage | Product-owned write only; never source-system mutation |
 | Projection | Later read | Rebuild only | Never canonical |
-| Model output | Later proposal/inference read | Proposal store only after separate lifecycle exists | Cannot mutate source/facts/policy |
+| Model output | Disabled unless canonical Review routing exists | Existing canonical Review plane only | Timeout/count/byte bounded; cannot mutate source/facts/policy |
 
 
 ## 8. Deployment-neutral interfaces
@@ -257,7 +296,9 @@ Architecture documents define ports and contracts, not deployment topology:
 - clock/ID generators for determinism.
 
 
-The initial implementation may compose these inside two Python processes and one CLI. Ports do not imply remote services. A split requires measured scaling, isolation, security, ownership, or deployment need and a new ADR.
+The implementation composes these inside two Python processes, one CLI, and the
+web BFF. Ports do not imply remote services. A split requires measured scaling,
+isolation, security, ownership, or deployment need and a new ADR.
 
 
 ## 9. Read-only source versus managed-write boundary
@@ -268,15 +309,19 @@ flowchart LR
     SRC[(Original Source)] -->|read-only, bounded| SP[Source Provider Port]
     SP --> APP[Application]
     APP --> DB[(Structured Knowledge Authority)]
-    APP -. separately authorized future command .-> MWP[Managed Write Port]
-    MWP -. versioned reversible writes .-> MDS[(Managed Document Store)]
+    APP -->|admitted product-owned command| MWP[Managed Write Port]
+    MWP -->|versioned reversible writes| MDS[(Managed Document Store)]
 
 
     X[Source mutation command] -. prohibited .-> SRC
 ```
 
 
-Source providers expose only list, metadata, bounded fetch, status, and version/fingerprint behavior. They do not expose write methods in MCV contracts. Managed-document writing later uses a separate port, root, transaction, authorization, versioning, retention, and recovery design. The two cannot share a generic read/write provider that allows accidental source mutation.
+Source providers expose only list, metadata, bounded fetch, status, and
+version/fingerprint behavior. They do not expose write methods. Managed-document
+writing uses a separate admitted port, root, transaction, authorization,
+versioning, retention, and recovery design. The two cannot share a generic
+read/write provider that allows accidental source mutation.
 
 
 ## 10. Local and cloud model boundary
@@ -285,6 +330,9 @@ Source providers expose only list, metadata, bounded fetch, status, and version/
 - No model is required for MCV correctness.
 - Retrieved source content is untrusted data and may contain prompt or indirect tool injection.
 - Model requests must be assembled from explicitly allowed fields after classification, purpose, and policy evaluation.
+- The bounded model gate has timeout, proposal-count, aggregate-byte, and field
+  ceilings. It refuses before provider invocation unless an existing canonical
+  Review router is supplied; GoodNotes currently supplies no model route.
 - The default is `cloud_eligible=false` for raw/private content.
 - Cloud processing requires a future operator decision specifying provider, account/container, purpose, field allowlist, retention/training terms, redaction, audit receipt, and revocation.
 - Model output is labeled `proposal` or `inference`, source-referenced where possible, and cannot silently become canonical fact or authorize an action.

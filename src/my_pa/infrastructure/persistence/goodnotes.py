@@ -7,8 +7,10 @@ import hashlib
 from sqlalchemy import (
     ColumnElement,
     Table,
+    any_,
     func,
     insert,
+    literal,
     select,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -29,6 +31,7 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesPageVersion,
     GoodNotesRegionProposal,
     GoodNotesReviewCase,
+    GoodNotesSourceBinding,
     ReconciliationReceipt,
 )
 from my_pa.domain.source.registry import issue_identifier
@@ -38,11 +41,16 @@ from my_pa.infrastructure.persistence.principal_scope import (
     principal_bound_values,
 )
 from my_pa.infrastructure.persistence.tables import (
+    enrollment_objects,
+    enrollments,
     goodnotes_page_versions,
     goodnotes_pages,
     goodnotes_reconciliation_receipts,
     goodnotes_region_proposals,
     goodnotes_review_decisions,
+    source_object_versions,
+    source_objects,
+    sources,
 )
 
 
@@ -54,8 +62,10 @@ def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[s
     return principal_bound_values(values, table, capture_context(principal_id))
 
 
-def _stable_canonical_id(kind: IdKind, region_id: str) -> str:
-    suffix = hashlib.sha256(f"goodnotes\x1f{kind.value}\x1f{region_id}".encode()).hexdigest()[:24]
+def _stable_canonical_id(kind: IdKind, principal_id: str, region_id: str) -> str:
+    suffix = hashlib.sha256(
+        f"goodnotes\x1f{kind.value}\x1f{principal_id}\x1f{region_id}".encode()
+    ).hexdigest()[:24]
     return make_identifier(kind, suffix)
 
 
@@ -76,6 +86,47 @@ class PostgresGoodNotesRepository:
         )
         return None if row is None else _receipt(row)
 
+    def require_admitted_sources(
+        self, principal_id: str, bindings: tuple[GoodNotesSourceBinding, ...]
+    ) -> None:
+        """Bind each manifest version to registry truth and searchable scope."""
+        if not bindings:
+            raise ValueError("a GoodNotes reconciliation requires a source binding")
+        for binding in bindings:
+            admitted = self.connection.execute(
+                select(literal(1))
+                .select_from(
+                    source_object_versions.join(
+                        source_objects,
+                        source_objects.c.source_object_id
+                        == source_object_versions.c.source_object_id,
+                    )
+                    .join(sources, sources.c.source_id == source_objects.c.source_id)
+                    .join(
+                        enrollment_objects,
+                        enrollment_objects.c.source_object_id == source_objects.c.source_object_id,
+                    )
+                    .join(
+                        enrollments,
+                        enrollments.c.enrollment_id == enrollment_objects.c.enrollment_id,
+                    )
+                )
+                .where(
+                    source_object_versions.c.version_id == binding.source_version_id,
+                    source_objects.c.source_object_id == binding.source_object_id,
+                    source_objects.c.source_id == binding.source_id,
+                    sources.c.source_id == binding.source_id,
+                    enrollments.c.source_id == binding.source_id,
+                    partition_criterion(enrollments, capture_context(principal_id)),
+                    literal("text/plain") == any_(enrollments.c.media_types),
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+            if admitted is None:
+                raise ValueError(
+                    "the GoodNotes manifest is not bound to an enrolled registry version"
+                )
+
     def store_reconciliation(
         self,
         *,
@@ -85,93 +136,134 @@ class PostgresGoodNotesRepository:
         regions: tuple[GoodNotesRegionProposal, ...],
     ) -> ReconciliationReceipt:
         for page in pages:
+            expected_page = _bound(
+                goodnotes_pages,
+                page.principal_id,
+                {
+                    "page_id": page.page_id,
+                    "source_id": page.source_id,
+                    "source_object_id": page.source_object_id,
+                    "page_number": page.page_number,
+                },
+            )
             self.connection.execute(
-                pg_insert(goodnotes_pages)
-                .values(
-                    _bound(
-                        goodnotes_pages,
-                        page.principal_id,
-                        {
-                            "page_id": page.page_id,
-                            "source_id": page.source_id,
-                            "source_object_id": page.source_object_id,
-                            "page_number": page.page_number,
-                        },
-                    )
-                )
-                .on_conflict_do_nothing()
+                pg_insert(goodnotes_pages).values(expected_page).on_conflict_do_nothing()
+            )
+            _require_identical(
+                self.connection,
+                goodnotes_pages,
+                page.principal_id,
+                goodnotes_pages.c.page_id == page.page_id,
+                expected_page,
+                "page",
             )
         for version in versions:
+            expected_version = _bound(
+                goodnotes_page_versions,
+                receipt.principal_id,
+                {
+                    "page_version_id": version.page_version_id,
+                    "page_id": version.page_id,
+                    "source_version_id": version.source_version_id,
+                    "content_sha256": version.content_sha256,
+                    "observed_at": version.observed_at,
+                },
+            )
             self.connection.execute(
-                pg_insert(goodnotes_page_versions)
-                .values(
-                    _bound(
-                        goodnotes_page_versions,
-                        receipt.principal_id,
-                        {
-                            "page_version_id": version.page_version_id,
-                            "page_id": version.page_id,
-                            "source_version_id": version.source_version_id,
-                            "content_sha256": version.content_sha256,
-                            "observed_at": version.observed_at,
-                        },
-                    )
-                )
-                .on_conflict_do_nothing()
+                pg_insert(goodnotes_page_versions).values(expected_version).on_conflict_do_nothing()
+            )
+            _require_identical(
+                self.connection,
+                goodnotes_page_versions,
+                receipt.principal_id,
+                goodnotes_page_versions.c.page_version_id == version.page_version_id,
+                expected_version,
+                "page version",
             )
         observed_by_version = {version.page_version_id: version.observed_at for version in versions}
         for region in regions:
-            self.connection.execute(
-                pg_insert(goodnotes_region_proposals)
-                .values(
-                    _bound(
-                        goodnotes_region_proposals,
-                        receipt.principal_id,
-                        {
-                            "region_id": region.region_id,
-                            "proposal_id": _stable_canonical_id(IdKind.PROPOSAL, region.region_id),
-                            "review_case_id": _stable_canonical_id(
-                                IdKind.REVIEW_CASE, region.region_id
-                            ),
-                            "page_version_id": region.page_version_id,
-                            "ordinal": region.ordinal,
-                            "box": {
-                                "x": region.box.x,
-                                "y": region.box.y,
-                                "width": region.box.width,
-                                "height": region.box.height,
-                            },
-                            "transcription": region.transcription,
-                            "confidence": region.confidence,
-                            "extractor": region.extractor,
-                            "extractor_version": region.extractor_version,
-                            "opened_at": observed_by_version[region.page_version_id],
-                        },
-                    )
-                )
-                .on_conflict_do_nothing()
+            expected = _bound(
+                goodnotes_region_proposals,
+                receipt.principal_id,
+                {
+                    "region_id": region.region_id,
+                    "proposal_id": _stable_canonical_id(
+                        IdKind.PROPOSAL, receipt.principal_id, region.region_id
+                    ),
+                    "review_case_id": _stable_canonical_id(
+                        IdKind.REVIEW_CASE, receipt.principal_id, region.region_id
+                    ),
+                    "page_version_id": region.page_version_id,
+                    "ordinal": region.ordinal,
+                    "box": {
+                        "x": region.box.x,
+                        "y": region.box.y,
+                        "width": region.box.width,
+                        "height": region.box.height,
+                    },
+                    "transcription": region.transcription,
+                    "confidence": region.confidence,
+                    "extractor": region.extractor,
+                    "extractor_version": region.extractor_version,
+                    "opened_at": observed_by_version[region.page_version_id],
+                },
             )
+            self.connection.execute(
+                pg_insert(goodnotes_region_proposals).values(expected).on_conflict_do_nothing()
+            )
+            _require_identical(
+                self.connection,
+                goodnotes_region_proposals,
+                receipt.principal_id,
+                goodnotes_region_proposals.c.region_id == region.region_id,
+                expected,
+                "region",
+            )
+        expected_receipt = _bound(
+            goodnotes_reconciliation_receipts,
+            receipt.principal_id,
+            {
+                "receipt_id": receipt.receipt_id,
+                "idempotency_key": receipt.idempotency_key,
+                "request_fingerprint": receipt.request_fingerprint,
+                "page_version_ids": list(receipt.page_version_ids),
+                "created_regions": receipt.created_regions,
+            },
+        )
         self.connection.execute(
             pg_insert(goodnotes_reconciliation_receipts)
-            .values(
-                _bound(
-                    goodnotes_reconciliation_receipts,
-                    receipt.principal_id,
-                    {
-                        "receipt_id": receipt.receipt_id,
-                        "idempotency_key": receipt.idempotency_key,
-                        "request_fingerprint": receipt.request_fingerprint,
-                        "page_version_ids": list(receipt.page_version_ids),
-                        "created_regions": receipt.created_regions,
-                    },
-                )
-            )
+            .values(expected_receipt)
             .on_conflict_do_nothing()
+        )
+        _require_identical(
+            self.connection,
+            goodnotes_reconciliation_receipts,
+            receipt.principal_id,
+            goodnotes_reconciliation_receipts.c.idempotency_key == receipt.idempotency_key,
+            expected_receipt,
+            "receipt",
         )
         stored = self.receipt(receipt.principal_id, receipt.idempotency_key)
         if stored is None or stored.request_fingerprint != receipt.request_fingerprint:
             raise ValueError("the idempotency key is bound to another reconciliation")
         return stored
+
+
+def _require_identical(
+    connection: Connection,
+    table: Table,
+    principal_id: str,
+    identity: ColumnElement[bool],
+    expected: dict[str, object],
+    kind: str,
+) -> None:
+    row = (
+        connection.execute(select(table).where(_mine(table, principal_id), identity))
+        .mappings()
+        .one_or_none()
+    )
+    if row is None or any(row[key] != value for key, value in expected.items()):
+        raise ValueError(f"the stable GoodNotes {kind} identity collided with other content")
 
 
 def _receipt(row: object) -> ReconciliationReceipt:

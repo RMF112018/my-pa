@@ -267,6 +267,7 @@ from my_pa.infrastructure.persistence.extraction import (
     coverage_for,
     extracted_text_in_scope,
 )
+from my_pa.infrastructure.persistence.principal_scope import matching_partition_criterion
 from my_pa.infrastructure.persistence.tables import (
     coverage_limitations,
     enrollments,
@@ -763,6 +764,17 @@ def _goodnotes_scope(enrollment_id: str) -> tuple[ColumnElement[bool], ...]:
             enrollment_id=enrollment_id,
         ),
         authorized_media_type(literal("text/plain", Text), enrollment_id=enrollment_id),
+        # A source object can legitimately be enrolled by more than one
+        # Principal. Object/media authorization alone would therefore expose
+        # one Principal's accepted OCR row through the other's enrollment.
+        # Bind the GoodNotes row's partition to the enrollment partition too.
+        select(literal(1))
+        .where(
+            enrollments.c.enrollment_id == enrollment_id,
+            matching_partition_criterion(enrollments, goodnotes_pages),
+        )
+        .correlate_except(enrollments)
+        .exists(),
         goodnotes_pages.c.source_object_id.not_in(
             select(quarantine_records.c.source_object_id).where(
                 quarantine_records.c.enrollment_id == enrollment_id

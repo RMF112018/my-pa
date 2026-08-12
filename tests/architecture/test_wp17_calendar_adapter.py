@@ -41,6 +41,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 HOST: Final = ROOT / "native" / "apple-source-host"
 SHIPPING: Final = HOST / "Sources" / "AppleSourceHost"
 PLATFORM_SHIPPING: Final = HOST / "Sources" / "AppleSourceHostPlatform"
+PLATFORM_HOST: Final = HOST / "Sources" / "AppleSourceHostPlatformHost"
 MANIFEST: Final = HOST / "Package.swift"
 
 FRAMEWORK_PROBE: Final = HOST / "Compatibility" / "AppleFrameworkCompatibilityProbe"
@@ -313,7 +314,7 @@ def test_no_swift_outside_the_probes_can_reach_an_event_store() -> None:
 
     offenders: dict[str, list[str]] = {}
     for path in _swift_outside_the_probes():
-        if PLATFORM_SHIPPING in path.parents:
+        if PLATFORM_SHIPPING in path.parents or PLATFORM_HOST in path.parents:
             continue
         source = _without_comments(path.read_text(encoding="utf-8"))
         named = sorted(symbol for symbol in EVENT_KIT_SURFACE if symbol in source)
@@ -627,11 +628,17 @@ def test_no_swift_in_the_native_tree_constructs_an_event_store() -> None:
         if "EKEventStore" not in source:
             continue
         name = str(path.relative_to(ROOT))
-        construction_patterns = (
-            EVENT_STORE_CONSTRUCTION[:2]
-            if PLATFORM_SHIPPING in path.parents
-            else EVENT_STORE_CONSTRUCTION
-        )
+        if PLATFORM_SHIPPING in path.parents:
+            construction_patterns = EVENT_STORE_CONSTRUCTION[:2]
+        elif PLATFORM_HOST in path.parents:
+            # The explicitly non-live executable must instantiate the inert
+            # production composition. Permit only the direct zero-argument
+            # construction spelling; typed storage/parameters and `.init`
+            # references remain forbidden, as do all mutation/TCC symbols.
+            assert source.count("EKEventStore()") == 1
+            construction_patterns = EVENT_STORE_CONSTRUCTION[1:4]
+        else:
+            construction_patterns = EVENT_STORE_CONSTRUCTION
         for pattern, what in construction_patterns:
             found = re.search(pattern, source)
             assert found is None, (
@@ -654,13 +661,14 @@ def test_no_swift_in_the_native_tree_constructs_an_event_store() -> None:
     # Non-vacuity: the loop above skips files that never name the type, so it is
     # worth nothing unless some file does. Two are compile-only probes and two
     # are the bounded platform mechanism/composition introduced by the pilot
-    # remediation; only those platform files may hold injected store values.
+    # remediation; the sixth is the exact inert dry-run composition root.
     assert sorted(naming) == [
         "native/apple-source-host/Compatibility/AppleCalendarEventKitProbe/CalendarEventKitShape.swift",
         "native/apple-source-host/Compatibility/AppleFrameworkCompatibilityProbe/FrameworkCompatibility.swift",
         "native/apple-source-host/Sources/AppleSourceHostPlatform/EventKitCalendarMechanism.swift",
         "native/apple-source-host/Sources/AppleSourceHostPlatform/EventKitTasksMechanism.swift",
         "native/apple-source-host/Sources/AppleSourceHostPlatform/PlatformAppleSourceComposition.swift",
+        "native/apple-source-host/Sources/AppleSourceHostPlatformHost/main.swift",
     ], f"the Swift files naming an event store are now {sorted(naming)}"
 
 

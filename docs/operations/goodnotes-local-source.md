@@ -22,6 +22,14 @@ non-regular files, unsupported media, duplicate page identity, digest drift,
 over-wide manifests, and representations above 25 MiB. Canonical inventory
 order is source-object identity then page number and version.
 
+Before OCR starts, every manifest tuple `(source_id, source_object_id,
+source_version_id)` must match the canonical registry relation and the invoking
+Principal must hold an enrollment for that exact object whose admitted output
+types include `text/plain`. Unregistered, mismatched, unenrolled, or differently
+owned identities fail closed. This is also what makes a later accepted region
+reachable through ordinary enrollment-scoped `knowledge.search`; GoodNotes does
+not create a parallel search scope.
+
 The local OCR boundary runs one absolute executable with an explicit argument
 vector and no shell. Page bytes go to stdin; stderr is discarded; stdout must be
 a bounded JSON document containing normalized region boxes, non-empty bounded
@@ -34,7 +42,16 @@ records representation and transcription digests plus extractor name/version,
 and writes proposals only. A human Review acceptance or correction determines
 the accepted text exposed to lexical search, which returns source version and
 page provenance. Replays are idempotent; changed inventory under an existing key
-is refused.
+is refused. Stable proposal and Review identifiers include the Principal, and
+an idempotent insert is accepted only when the already-stored page, version,
+region, and receipt are field-equivalent; a deterministic-ID collision with
+different OCR content or provenance is an error.
+
+GoodNotes invokes no model in the current composition. The optional general
+model gate is disabled unless a caller supplies a durable router into the
+existing canonical Review plane; without that router it refuses before invoking
+the provider. GoodNotes model enrichment remains deferred rather than returning
+or dropping free-floating model output.
 
 Live GoodNotes root admission, OCR engine selection/licensing, background
 watcher activation, personal-data eligibility, and production database use

@@ -27,24 +27,28 @@ public final class AppleMailAutomationMechanism: MailMechanism, @unchecked Senda
     private let maximumAccounts: Int
     private let maximumMailboxes: Int
     private let maximumMatchingMessages: Int
+    private let maximumMailboxDepth: Int
 
     public init(
         generation: String,
         maximumAccounts: Int = 50,
         maximumMailboxes: Int = 500,
-        maximumMatchingMessages: Int = 101
+        maximumMatchingMessages: Int = 101,
+        maximumMailboxDepth: Int = 32
     ) throws {
         guard let generation = MailIdentityComponent(rawValue: generation) else {
             throw NativeSourceContractError.mailGenerationUnavailable
         }
         guard 1...100 ~= maximumAccounts,
               1...1_000 ~= maximumMailboxes,
-              2...101 ~= maximumMatchingMessages
+              2...101 ~= maximumMatchingMessages,
+              1...64 ~= maximumMailboxDepth
         else { throw NativeSourceContractError.mailAutomationTraversalExceeded }
         self.generation = generation
         self.maximumAccounts = maximumAccounts
         self.maximumMailboxes = maximumMailboxes
         self.maximumMatchingMessages = maximumMatchingMessages
+        self.maximumMailboxDepth = maximumMailboxDepth
     }
 
     public func consentState() throws -> MailConsentState {
@@ -67,9 +71,11 @@ public final class AppleMailAutomationMechanism: MailMechanism, @unchecked Senda
     }
 
     public func accounts() throws -> [MailAccountDescriptor] {
-        let values = try mailApplication().elementArray(withCode: Codes.account).map {
-            try requireObject($0)
+        let accountElements = try mailApplication().elementArray(withCode: Codes.account)
+        guard accountElements.count <= maximumAccounts else {
+            throw NativeSourceContractError.mailAutomationTraversalExceeded
         }
+        let values = try accountElements.map { try requireObject($0) }
         guard values.count <= maximumAccounts else {
             throw NativeSourceContractError.mailAutomationTraversalExceeded
         }
@@ -117,7 +123,11 @@ public final class AppleMailAutomationMechanism: MailMechanism, @unchecked Senda
         let summaries = try selected.map { value in
             let message = try requireObject(value)
             let providerID: Int64 = try self.value(message, Codes.id)
-            guard let key = MailIdentityComponent(rawValue: String(providerID)) else {
+            guard providerID >= 0,
+                  let key = MailIdentityComponent(
+                    rawValue: String(format: "%020lld", providerID)
+                  )
+            else {
                 throw NativeSourceContractError.mailInvalidIdentityComponent
             }
             let received: Date = try self.value(message, Codes.dateReceived)
@@ -147,16 +157,35 @@ public final class AppleMailAutomationMechanism: MailMechanism, @unchecked Senda
         let message = try requireObject(
             binding.object.elementArray(withCode: Codes.message).object(withID: providerID)
         )
+        let messageSize: Int = try value(message, Codes.messageSize)
+        guard messageSize >= 0 else {
+            throw NativeSourceContractError.mailContentInconsistent
+        }
         let headers: String = try value(message, Codes.allHeaders)
-        let body: String = try value(message, Codes.content)
         let attachments = try attachmentDescriptors(message)
         guard headers.utf8.count <= NativeSourceProtocolV1.maximumMailHeaderBytes else {
             throw NativeSourceContractError.mailHeaderTooLarge
         }
+        let maximumMaterializable = NativeSourceProtocolV1.maximumMailHeaderBytes
+            + NativeSourceProtocolV1.maximumMailBodyBytes
+        guard messageSize <= maximumMaterializable else {
+            return MailMessageContent(
+                headerBytes: Array(headers.utf8),
+                bodyBytes: nil,
+                bodyByteSize: nil,
+                attachments: attachments.descriptors,
+                attachmentCount: attachments.count
+            )
+        }
+        let body: String = try value(message, Codes.content)
+        let bodyBytes = Array(body.utf8)
         return MailMessageContent(
             headerBytes: Array(headers.utf8),
-            bodyBytes: Array(body.utf8),
-            attachments: attachments
+            bodyBytes: bodyBytes.count <= NativeSourceProtocolV1.maximumMailBodyBytes
+                ? bodyBytes : nil,
+            bodyByteSize: bodyBytes.count,
+            attachments: attachments.descriptors,
+            attachmentCount: attachments.count
         )
     }
 
@@ -169,9 +198,11 @@ public final class AppleMailAutomationMechanism: MailMechanism, @unchecked Senda
 
     private func mailboxBindings() throws -> [MailboxBinding] {
         let application = try mailApplication()
-        let accountObjects = try application.elementArray(withCode: Codes.account).map {
-            try requireObject($0)
+        let accountElements = application.elementArray(withCode: Codes.account)
+        guard accountElements.count <= maximumAccounts else {
+            throw NativeSourceContractError.mailAutomationTraversalExceeded
         }
+        let accountObjects = try accountElements.map { try requireObject($0) }
         guard accountObjects.count <= maximumAccounts else {
             throw NativeSourceContractError.mailAutomationTraversalExceeded
         }
@@ -184,6 +215,7 @@ public final class AppleMailAutomationMechanism: MailMechanism, @unchecked Senda
                 accountID: accountID,
                 parentID: nil,
                 parentPath: accountProviderID,
+                depth: 1,
                 into: &bindings
             )
         }
@@ -195,8 +227,12 @@ public final class AppleMailAutomationMechanism: MailMechanism, @unchecked Senda
         accountID: NativeSourceOpaqueID,
         parentID: NativeSourceOpaqueID?,
         parentPath: String,
+        depth: Int,
         into bindings: inout [MailboxBinding]
     ) throws {
+        guard depth <= maximumMailboxDepth,
+              objects.count <= maximumMailboxes - bindings.count
+        else { throw NativeSourceContractError.mailAutomationTraversalExceeded }
         for raw in objects {
             guard bindings.count < maximumMailboxes else {
                 throw NativeSourceContractError.mailAutomationTraversalExceeded
@@ -222,6 +258,7 @@ public final class AppleMailAutomationMechanism: MailMechanism, @unchecked Senda
                 accountID: accountID,
                 parentID: mailboxID,
                 parentPath: path,
+                depth: depth + 1,
                 into: &bindings
             )
         }
@@ -236,12 +273,12 @@ public final class AppleMailAutomationMechanism: MailMechanism, @unchecked Senda
     }
 
     private func attachmentDescriptors(_ message: SBObject) throws
-        -> [MailAttachmentDescriptor] {
+        -> MailAttachmentInventory {
         let values = message.elementArray(withCode: Codes.attachment)
         guard values.count <= NativeSourceProtocolV1.maximumMailAttachmentDescriptors else {
             throw NativeSourceContractError.mailAttachmentLimitExceeded
         }
-        return try values.map { raw in
+        let descriptors = try values.map { raw in
             let attachment = try requireObject(raw)
             let providerID: String = try value(attachment, Codes.id)
             let mimeType: String = try value(attachment, Codes.mimeType)
@@ -254,6 +291,7 @@ public final class AppleMailAutomationMechanism: MailMechanism, @unchecked Senda
                     ? .omittedOversize : .metadataOnly
             )
         }
+        return MailAttachmentInventory(descriptors: descriptors, count: values.count)
     }
 
     private func value<T>(_ object: SBObject, _ code: AEKeyword) throws -> T {
@@ -298,6 +336,7 @@ private enum Codes {
     static let dateSent = fourCC("drcv")
     static let allHeaders = fourCC("alhe")
     static let content = fourCC("ctnt")
+    static let messageSize = fourCC("msze")
     static let mimeType = fourCC("attp")
     static let fileSize = fourCC("atsz")
 
@@ -306,4 +345,9 @@ private enum Codes {
         precondition(bytes.count == 4)
         return bytes.reduce(0) { ($0 << 8) | UInt32($1) }
     }
+}
+
+private struct MailAttachmentInventory: Sendable {
+    let descriptors: [MailAttachmentDescriptor]
+    let count: Int
 }

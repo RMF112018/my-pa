@@ -17,9 +17,20 @@ public final class EventKitCalendarMechanism: CalendarMechanism, @unchecked Send
     )
 
     private let store: EKEventStore
+    private let maximumCalendars: Int
+    private let maximumEventsScanned: Int
 
-    public init(store: EKEventStore) {
+    public init(
+        store: EKEventStore,
+        maximumCalendars: Int = 1_000,
+        maximumEventsScanned: Int = 10_000
+    ) throws {
+        guard 1...1_000 ~= maximumCalendars,
+              1...100_000 ~= maximumEventsScanned
+        else { throw NativeSourceContractError.calendarUnboundedEnumeration }
         self.store = store
+        self.maximumCalendars = maximumCalendars
+        self.maximumEventsScanned = maximumEventsScanned
     }
 
     public func authorizationState() throws -> CalendarAuthorizationState {
@@ -35,7 +46,11 @@ public final class EventKitCalendarMechanism: CalendarMechanism, @unchecked Send
     }
 
     public func accounts() throws -> [CalendarAccountDescriptor] {
-        let values = Dictionary(grouping: store.calendars(for: .event), by: { $0.source.sourceIdentifier })
+        let calendars = store.calendars(for: .event)
+        guard calendars.count <= maximumCalendars else {
+            throw NativeSourceContractError.calendarUnboundedEnumeration
+        }
+        let values = Dictionary(grouping: calendars, by: { $0.source.sourceIdentifier })
         return try values.map { providerKey, calendars in
             CalendarAccountDescriptor(
                 accountKey: try PlatformIdentity.calendar("calendar-account", providerKey),
@@ -45,7 +60,11 @@ public final class EventKitCalendarMechanism: CalendarMechanism, @unchecked Send
     }
 
     public func calendars() throws -> [CalendarBucketDescriptor] {
-        try store.calendars(for: .event).map { calendar in
+        let calendars = store.calendars(for: .event)
+        guard calendars.count <= maximumCalendars else {
+            throw NativeSourceContractError.calendarUnboundedEnumeration
+        }
+        return try calendars.map { calendar in
             CalendarBucketDescriptor(
                 identity: CalendarBucketIdentity(
                     accountKey: try PlatformIdentity.calendar(
@@ -62,7 +81,11 @@ public final class EventKitCalendarMechanism: CalendarMechanism, @unchecked Send
     }
 
     public func occurrences(_ query: CalendarTraversalQuery) throws -> CalendarTraversalResult {
-        let selected = try store.calendars(for: .event).filter { calendar in
+        let calendars = store.calendars(for: .event)
+        guard calendars.count <= maximumCalendars else {
+            throw NativeSourceContractError.calendarUnboundedEnumeration
+        }
+        let selected = try calendars.filter { calendar in
             CalendarBucketIdentity(
                 accountKey: try PlatformIdentity.calendar(
                     "calendar-account", calendar.source.sourceIdentifier
@@ -78,7 +101,11 @@ public final class EventKitCalendarMechanism: CalendarMechanism, @unchecked Send
             end: Date(timeIntervalSince1970: Double(query.window.endUnixMilliseconds) / 1000),
             calendars: selected
         )
-        let all = try store.events(matching: predicate).map(observation)
+        let state = CalendarEnumerationState(maximum: maximumEventsScanned)
+        store.enumerateEvents(matching: predicate) { event, stop in
+            state.append(event, stop: stop)
+        }
+        let all = try state.result().map(observation)
             .filter { try $0.cursorKey() > (query.afterCursorKey ?? "") }
             .sorted { try $0.cursorKey() < $1.cursorKey() }
         return CalendarTraversalResult(
@@ -170,5 +197,34 @@ public final class EventKitCalendarMechanism: CalendarMechanism, @unchecked Send
     private func required(_ value: Int?) throws -> Int {
         guard let value else { throw NativeSourceContractError.calendarScheduleInconsistent }
         return value
+    }
+}
+
+private final class CalendarEnumerationState: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maximum: Int
+    private var values: [EKEvent] = []
+    private var overflowed = false
+
+    init(maximum: Int) { self.maximum = maximum }
+
+    func append(_ event: EKEvent, stop: UnsafeMutablePointer<ObjCBool>) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard values.count < maximum else {
+            overflowed = true
+            stop.pointee = true
+            return
+        }
+        values.append(event)
+    }
+
+    func result() throws -> [EKEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !overflowed else {
+            throw NativeSourceContractError.calendarUnboundedEnumeration
+        }
+        return values
     }
 }

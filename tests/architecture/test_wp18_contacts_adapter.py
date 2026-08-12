@@ -45,6 +45,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 HOST: Final = ROOT / "native" / "apple-source-host"
 SHIPPING: Final = HOST / "Sources" / "AppleSourceHost"
 PLATFORM_SHIPPING: Final = HOST / "Sources" / "AppleSourceHostPlatform"
+PLATFORM_HOST: Final = HOST / "Sources" / "AppleSourceHostPlatformHost"
 MANIFEST: Final = HOST / "Package.swift"
 
 FRAMEWORK_PROBE: Final = HOST / "Compatibility" / "AppleFrameworkCompatibilityProbe"
@@ -534,11 +535,16 @@ def test_no_swift_in_the_native_tree_constructs_a_contact_store() -> None:
         if "CNContactStore" not in source:
             continue
         name = str(path.relative_to(ROOT))
-        construction_patterns = (
-            CONTACT_STORE_CONSTRUCTION[:2]
-            if PLATFORM_SHIPPING in path.parents
-            else CONTACT_STORE_CONSTRUCTION
-        )
+        if PLATFORM_SHIPPING in path.parents:
+            construction_patterns = CONTACT_STORE_CONSTRUCTION[:2]
+        elif PLATFORM_HOST in path.parents:
+            # The explicitly non-live executable constructs only the inert
+            # production composition. Keep every other instance-bearing form,
+            # permission request, enumeration, and mutation spelling forbidden.
+            assert source.count("CNContactStore()") == 1
+            construction_patterns = CONTACT_STORE_CONSTRUCTION[1:4]
+        else:
+            construction_patterns = CONTACT_STORE_CONSTRUCTION
         for pattern, what in construction_patterns:
             found = re.search(pattern, source)
             assert found is None, (
@@ -559,13 +565,14 @@ def test_no_swift_in_the_native_tree_constructs_a_contact_store() -> None:
         naming[name] = sorted(named)
 
     # Non-vacuity: the loop above skips files that never name the type, so it is
-    # worth nothing unless some file does. Two are probes; the other two are the
-    # bounded platform mechanism/composition and may only receive injected stores.
+    # worth nothing unless some file does. Two are probes, two receive injected
+    # stores, and the last is the exact inert dry-run composition root.
     assert sorted(naming) == [
         "native/apple-source-host/Compatibility/AppleContactsShapeProbe/ContactsShape.swift",
         "native/apple-source-host/Compatibility/AppleFrameworkCompatibilityProbe/FrameworkCompatibility.swift",
         "native/apple-source-host/Sources/AppleSourceHostPlatform/ContactsStoreMechanism.swift",
         "native/apple-source-host/Sources/AppleSourceHostPlatform/PlatformAppleSourceComposition.swift",
+        "native/apple-source-host/Sources/AppleSourceHostPlatformHost/main.swift",
     ], f"the Swift files naming a contact store are now {sorted(naming)}"
 
 

@@ -40,7 +40,7 @@ public struct PlatformAppleSourceComposition: @unchecked Sendable {
         mailGeneration: String
     ) throws {
         self.calendar = BoundedCalendarReadAdapter(
-            mechanism: EventKitCalendarMechanism(store: eventStore)
+            mechanism: try EventKitCalendarMechanism(store: eventStore)
         )
         self.contacts = BoundedContactsReadAdapter(
             mechanism: try ContactsStoreMechanism(
@@ -56,5 +56,22 @@ public struct PlatformAppleSourceComposition: @unchecked Sendable {
         )
         self.mailAvailability = .availableOperatorGatedAutomation
         self.changeSignals = PlatformSourceChangeSignals()
+    }
+
+    /// Resolve selected kinds against the real production adapters without
+    /// observing TCC or touching a source. Accessing these descriptors is inert.
+    public func requireNonLiveHandoff(for kinds: Set<NativeSourceKind>) throws {
+        for kind in kinds {
+            switch kind {
+            case .calendar:
+                _ = calendar.descriptor
+            case .contacts:
+                _ = contacts.descriptor
+            case .tasks:
+                _ = tasks.descriptor
+            case .mail:
+                _ = mail.descriptor
+            }
+        }
     }
 }

@@ -39,6 +39,7 @@ PACKAGE: Final = ROOT / "src" / "my_pa"
 HOST: Final = ROOT / "native" / "apple-source-host"
 SHIPPING: Final = HOST / "Sources" / "AppleSourceHost"
 PLATFORM_SHIPPING: Final = HOST / "Sources" / "AppleSourceHostPlatform"
+PLATFORM_HOST: Final = HOST / "Sources" / "AppleSourceHostPlatformHost"
 PROBE: Final = HOST / "Compatibility" / "AppleFrameworkCompatibilityProbe"
 #: WP-17's EventKit shape probe. Held out of control 1's scan for the same reason
 #: `PROBE` is, and on the same terms: it is compile-only, it is a dependency of
@@ -255,7 +256,7 @@ def test_the_shipping_host_holds_no_write_path_into_an_apple_source() -> None:
     for path in _swift_outside_the_probe():
         source = _without_comments(path.read_text(encoding="utf-8"))
         named = sorted(symbol for symbol in MUTATING_APPLE_SURFACE if symbol in source)
-        if PLATFORM_SHIPPING in path.parents:
+        if PLATFORM_SHIPPING in path.parents or PLATFORM_HOST in path.parents:
             named = [
                 symbol
                 for symbol in named

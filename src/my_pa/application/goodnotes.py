@@ -8,18 +8,17 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
-from my_pa.application.model_gate import BoundedModelGate, ModelGateOutcome, StructuredModelProvider
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.goodnotes.models import (
     GoodNotesPage,
     GoodNotesPageVersion,
     GoodNotesRegionProposal,
+    GoodNotesSourceBinding,
     ReconciliationReceipt,
     SourcePage,
     TranscribedRegion,
     issue_stable_id,
 )
-from my_pa.domain.modeling.gate import ContextEvidence, ContextManifest
 
 
 class ReadOnlyGoodNotesSource(Protocol):
@@ -42,6 +41,10 @@ class PageTranscriber(Protocol):
 
 class GoodNotesRepository(Protocol):
     def receipt(self, principal_id: str, idempotency_key: str) -> ReconciliationReceipt | None: ...
+
+    def require_admitted_sources(
+        self, principal_id: str, bindings: tuple[GoodNotesSourceBinding, ...]
+    ) -> None: ...
 
     def store_reconciliation(
         self,
@@ -91,6 +94,7 @@ class ReconciliationPlan:
     request_fingerprint: str
     page_count: int
     aggregate_bytes: int
+    source_bindings: tuple[GoodNotesSourceBinding, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,48 +104,6 @@ class PreparedGoodNotesReconciliation:
     pages: tuple[GoodNotesPage, ...]
     versions: tuple[GoodNotesPageVersion, ...]
     regions: tuple[GoodNotesRegionProposal, ...]
-    model_gate_states: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class GoodNotesModelProposalBoundary:
-    gate: BoundedModelGate
-    provider: StructuredModelProvider
-    provider_id: str
-    model_id: str
-    prompt_schema_version: str = "goodnotes-region-v1"
-    policy_version: str = "goodnotes-local-v1"
-
-    def invoke(
-        self,
-        *,
-        principal_id: str,
-        source_page: SourcePage,
-        region: GoodNotesRegionProposal,
-    ) -> ModelGateOutcome:
-        evidence = ContextEvidence(
-            reference_id=region.region_id,
-            principal_id=principal_id,
-            source_id=source_page.source_id,
-            source_object_id=source_page.source_object_id,
-            source_version_id=source_page.source_version_id,
-            text=region.transcription,
-            span_start=0,
-            span_end=len(region.transcription),
-        )
-        return self.gate.invoke(
-            self.provider,
-            ContextManifest(
-                principal_id=principal_id,
-                purpose="goodnotes_review_proposal",
-                provider_id=self.provider_id,
-                model_id=self.model_id,
-                prompt_schema_version=self.prompt_schema_version,
-                policy_version=self.policy_version,
-                evidence=(evidence,),
-                external_disclosure_allowed=False,
-            ),
-        )
 
 
 class GoodNotesService:
@@ -166,6 +128,7 @@ class GoodNotesService:
         started = self._monotonic()
         digest = hashlib.sha256(f"{transcriber.name}\x1f{transcriber.version}".encode())
         identities: list[tuple[str, int]] = []
+        source_bindings: set[GoodNotesSourceBinding] = set()
         aggregate_bytes = 0
         count = 0
         for page in _inventory(source, principal_id):
@@ -180,7 +143,16 @@ class GoodNotesService:
             if aggregate_bytes > self.limits.maximum_aggregate_bytes:
                 raise ValueError("the GoodNotes inventory exceeds the aggregate byte bound")
             identities.append((page.source_object_id, page.page_number))
+            source_bindings.add(
+                GoodNotesSourceBinding(
+                    source_id=page.source_id,
+                    source_object_id=page.source_object_id,
+                    source_version_id=page.source_version_id,
+                )
+            )
             _update_fingerprint(digest, page)
+        if count == 0:
+            raise ValueError("the GoodNotes inventory contains no admitted page")
         if len(identities) != len(set(identities)):
             raise ValueError("the GoodNotes inventory repeats a page identity")
         if identities != sorted(identities):
@@ -191,7 +163,19 @@ class GoodNotesService:
             request_fingerprint=digest.hexdigest(),
             page_count=count,
             aggregate_bytes=aggregate_bytes,
+            source_bindings=tuple(sorted(source_bindings)),
         )
+
+    @staticmethod
+    def admit(plan: ReconciliationPlan, repository: GoodNotesRepository) -> None:
+        """Fail closed unless registry identity and Principal enrollment match.
+
+        Ordinary knowledge search is enrollment-scoped and reads accepted
+        GoodNotes text as ``text/plain``. Therefore an exact manifest version
+        is eligible only when its source/object relation exists and this
+        Principal has enrolled that object with ``text/plain`` admitted.
+        """
+        repository.require_admitted_sources(plan.principal_id, plan.source_bindings)
 
     def prepare(
         self,
@@ -199,14 +183,12 @@ class GoodNotesService:
         plan: ReconciliationPlan,
         source: ReadOnlyGoodNotesSource,
         transcriber: PageTranscriber,
-        model_boundary: GoodNotesModelProposalBoundary | None = None,
     ) -> PreparedGoodNotesReconciliation:
         started = self._monotonic()
         fingerprint = hashlib.sha256(f"{transcriber.name}\x1f{transcriber.version}".encode())
         pages: list[GoodNotesPage] = []
         versions: list[GoodNotesPageVersion] = []
         regions: list[GoodNotesRegionProposal] = []
-        model_states: list[str] = []
         aggregate_bytes = 0
         transcription_chars = 0
         for source_page in _inventory(source, plan.principal_id):
@@ -267,15 +249,6 @@ class GoodNotesService:
                     extractor_version=transcriber.version,
                 )
                 regions.append(region)
-                if model_boundary is not None:
-                    model_states.append(
-                        model_boundary.invoke(
-                            principal_id=plan.principal_id,
-                            source_page=source_page,
-                            region=region,
-                        ).state
-                    )
-                    self._check_elapsed(started)
         if (
             fingerprint.hexdigest() != plan.request_fingerprint
             or len(pages) != plan.page_count
@@ -298,7 +271,6 @@ class GoodNotesService:
             pages=tuple(pages),
             versions=tuple(versions),
             regions=tuple(regions),
-            model_gate_states=tuple(model_states),
         )
 
     def persist(
@@ -306,6 +278,7 @@ class GoodNotesService:
         prepared: PreparedGoodNotesReconciliation,
         repository: GoodNotesRepository,
     ) -> ReconciliationReceipt:
+        self.admit(prepared.plan, repository)
         prior = repository.receipt(prepared.plan.principal_id, prepared.plan.idempotency_key)
         if prior is not None:
             return self._replay_or_conflict(prior, prepared.plan.request_fingerprint)
@@ -324,7 +297,6 @@ class GoodNotesService:
         source: ReadOnlyGoodNotesSource,
         transcriber: PageTranscriber,
         repository: GoodNotesRepository,
-        model_boundary: GoodNotesModelProposalBoundary | None = None,
     ) -> ReconciliationReceipt:
         plan = self.plan(
             principal_id=principal_id,
@@ -332,6 +304,7 @@ class GoodNotesService:
             source=source,
             transcriber=transcriber,
         )
+        self.admit(plan, repository)
         prior = repository.receipt(principal_id, idempotency_key)
         if prior is not None:
             return self._replay_or_conflict(prior, plan.request_fingerprint)
@@ -340,7 +313,6 @@ class GoodNotesService:
                 plan=plan,
                 source=source,
                 transcriber=transcriber,
-                model_boundary=model_boundary,
             ),
             repository,
         )

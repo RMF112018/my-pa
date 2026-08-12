@@ -17,13 +17,19 @@ public final class EventKitTasksMechanism: TasksMechanism, @unchecked Sendable {
 
     private let store: EKEventStore
     private let fetchTimeout: DispatchTimeInterval
+    private let maximumLists: Int
 
-    public init(store: EKEventStore, fetchTimeoutSeconds: Int = 30) throws {
-        guard 1...60 ~= fetchTimeoutSeconds else {
+    public init(
+        store: EKEventStore,
+        fetchTimeoutSeconds: Int = 30,
+        maximumLists: Int = 1_000
+    ) throws {
+        guard 1...60 ~= fetchTimeoutSeconds, 1...1_000 ~= maximumLists else {
             throw NativeSourceContractError.tasksTraversalExceeded
         }
         self.store = store
         self.fetchTimeout = .seconds(fetchTimeoutSeconds)
+        self.maximumLists = maximumLists
     }
 
     public func authorizationState() throws -> TasksAuthorizationState {
@@ -37,8 +43,12 @@ public final class EventKitTasksMechanism: TasksMechanism, @unchecked Sendable {
     }
 
     public func accounts() throws -> [NativeSourceAccount] {
+        let calendars = store.calendars(for: .reminder)
+        guard calendars.count <= maximumLists else {
+            throw NativeSourceContractError.tasksTraversalExceeded
+        }
         let grouped = Dictionary(
-            grouping: store.calendars(for: .reminder),
+            grouping: calendars,
             by: { $0.source.sourceIdentifier }
         )
         return try grouped.map { providerKey, calendars in
@@ -51,7 +61,11 @@ public final class EventKitTasksMechanism: TasksMechanism, @unchecked Sendable {
     }
 
     public func lists() throws -> [TaskListDescriptor] {
-        try store.calendars(for: .reminder).map { calendar in
+        let calendars = store.calendars(for: .reminder)
+        guard calendars.count <= maximumLists else {
+            throw NativeSourceContractError.tasksTraversalExceeded
+        }
+        return try calendars.map { calendar in
             TaskListDescriptor(
                 id: try PlatformIdentity.opaque("tasks-list", calendar.calendarIdentifier),
                 accountID: try PlatformIdentity.opaque(
@@ -70,7 +84,11 @@ public final class EventKitTasksMechanism: TasksMechanism, @unchecked Sendable {
         guard limit > 0, limit <= NativeSourceProtocolV1.maximumPageSize else {
             throw NativeSourceContractError.invalidPageLimit
         }
-        let selected = try store.calendars(for: .reminder).filter {
+        let calendars = store.calendars(for: .reminder)
+        guard calendars.count <= maximumLists else {
+            throw NativeSourceContractError.tasksTraversalExceeded
+        }
+        let selected = try calendars.filter {
             try PlatformIdentity.opaque("tasks-list", $0.calendarIdentifier) == list
         }
         guard selected.count == 1, let calendar = selected.first else {
@@ -90,6 +108,9 @@ public final class EventKitTasksMechanism: TasksMechanism, @unchecked Sendable {
     }
 
     private func fetch(predicate: NSPredicate, maximumMaterialized: Int) throws -> [EKReminder] {
+        // EventKit delivers one completed array and exposes no streaming
+        // reminder callback. The deadline can cancel source work; the count
+        // boundary refuses immediately on callback before any property read.
         let state = ReminderFetchState(maximumMaterialized: maximumMaterialized)
         let signal = DispatchSemaphore(value: 0)
         let request = store.fetchReminders(matching: predicate) { reminders in

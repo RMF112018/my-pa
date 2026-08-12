@@ -3,10 +3,12 @@
 This Swift 6.2 package is the native-host foundation for Apple Mail, Calendar,
 Contacts, and Tasks source reads. It retains WP-12A's frozen protocol
 identifier `my-pa.native-source.v1`, provider-neutral immutable values, three
-read-only adapter protocols, and deterministic synthetic adapters.
+read-only adapter protocols plus the bounded Tasks seam, and deterministic
+synthetic adapters.
 
-WP-12D adds the application-facing foundations needed by the later admission
-slice without implementing admission itself:
+WP-12D supplied the application-facing envelope/spool foundations. The current
+candidate also supplies a separately bounded, explicitly non-live production
+composition handoff:
 
 - deterministic, versioned discovery, preflight, read, and handoff envelopes;
 - explicit fail-closed decoding for every invariant-bearing wire/storage value;
@@ -71,8 +73,9 @@ WP-16 adds the Mail adapter, over a mechanism seam rather than over a framework:
 **Neither probe is a dependency of anything else in this package**, so probes
 remain compile-only. The framework-free `AppleSourceHost` target still links no
 Apple personal-data framework. The separately named shipping product
-`AppleSourceHostPlatform` now links EventKit and Contacts and contains the
-production-shaped, read-only Calendar and Contacts mechanisms; it depends only
+`AppleSourceHostPlatform` now links EventKit, Contacts, and ScriptingBridge and
+contains the production-shaped, read-only Calendar, Contacts, Tasks, and Mail
+mechanisms; it depends only
 on the framework-free core. See
 `docs/campaign/WP-16-MAIL-ADAPTER-RECORD.md` for the mechanism matrix and for why
 Apple Mail automation cannot be scoped to reading.
@@ -87,9 +90,22 @@ and structural-type keys, preserves container/group membership, and maps into
 the same bounded adapters used by fixtures. Its composition initializer creates
 no store, requests no permission, registers no observer, and performs no read.
 It carries Calendar/Contacts change-notification names as inert watcher signals.
-Mail remains explicitly unavailable in this platform composition because macOS
-offers no public read store API and ScriptingBridge cannot enforce read-only
-access; Graph and automation are not silent substitutes.
+Mail is implemented through the closed ScriptingBridge read-property mechanism
+and remains separately operator-gated because macOS Automation cannot scope the
+grant to reads. Its source-side predicate, materialization count, recursive
+mailbox depth, message-size/body, header, and attachment bounds all refuse
+rather than widen. Graph remains off by default and is not a silent substitute.
+
+The `apple-source-host handoff --dry-run` executable performs the only admitted
+production composition path in this package. It reads absolute regular-file
+configuration/checkpoint inputs through `openat(O_NOFOLLOW)` with per-file,
+aggregate-byte, selection, and checkpoint caps; constructs the production
+composition; resolves only inert adapter descriptors; and writes one
+content-free receipt per selection to an explicitly targeted owner-only
+`ProtectedSpool` with explicit item/byte/payload limits. It never observes TCC,
+discovers an account, enumerates a source, reads personal data, or activates a
+watcher. The spool artifact is proof of protected handoff reachability, not data
+admission authority.
 
 No repository validation inspects a live account. TCC grants, signing,
 installation, service/watcher activation, application admission, persistence,
@@ -128,6 +144,8 @@ bounded read-only Tasks adapter. Repository
 architecture tests independently scan dependencies, imports, configuration and
 public surfaces.
 
-TCC, signing/notarization, registration, live store construction, application
-admission, persistence, watcher registration, service activation, and
-deployment remain outside this package and require exact operator authority.
+TCC grants, signing/notarization, registration, live source reads, application
+admission of source content, database persistence, watcher registration,
+service activation, and deployment remain outside this package and require
+exact operator authority. The dry-run executable's inert framework-store
+construction and content-free protected receipt grant none of those actions.

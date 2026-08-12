@@ -11,7 +11,6 @@ from typing import ClassVar
 import pytest
 
 from my_pa.application.goodnotes import (
-    GoodNotesModelProposalBoundary,
     GoodNotesReconciliationLimits,
     GoodNotesService,
     ReconciliationConflictError,
@@ -19,14 +18,12 @@ from my_pa.application.goodnotes import (
     SourcePage,
     TranscribedRegion,
 )
-from my_pa.application.model_gate import BoundedModelGate
 from my_pa.bootstrap.goodnotes import compose_local_goodnotes_runtime
 from my_pa.domain.goodnotes.models import (
     GoodNotesPage,
     GoodNotesPageVersion,
     GoodNotesRegionProposal,
 )
-from my_pa.domain.modeling.gate import ContextManifest, ModelProposal, ModelRoutePolicy
 from my_pa.infrastructure.goodnotes.fixture import FixtureGoodNotesSource, FixturePageTranscriber
 from my_pa.infrastructure.goodnotes.local import (
     BoundedLocalOCRTranscriber,
@@ -49,6 +46,10 @@ class MemoryRepository:
 
     def receipt(self, principal_id: str, idempotency_key: str) -> ReconciliationReceipt | None:
         return self.receipts.get((principal_id, idempotency_key))
+
+    def require_admitted_sources(self, principal_id: str, bindings: tuple[object, ...]) -> None:
+        if not bindings:
+            raise ValueError("a reconciliation must bind at least one source version")
 
     def store_reconciliation(
         self,
@@ -332,51 +333,6 @@ def test_aggregate_bytes_regions_and_elapsed_time_are_fail_closed() -> None:
         )
 
 
-def test_model_gate_runs_at_each_region_proposal_boundary() -> None:
-    class Provider:
-        provider_id = "local_goodnotes_test"
-        model_id = "proposal-test"
-        is_external = False
-
-        def __init__(self) -> None:
-            self.manifests: list[ContextManifest] = []
-
-        def propose(self, manifest: ContextManifest) -> tuple[ModelProposal, ...]:
-            self.manifests.append(manifest)
-            return (
-                ModelProposal(
-                    proposal_type="tag",
-                    normalized_value="synthetic",
-                    evidence_reference_ids=(manifest.evidence[0].reference_id,),
-                    confidence=0.8,
-                ),
-            )
-
-    provider = Provider()
-    boundary = GoodNotesModelProposalBoundary(
-        gate=BoundedModelGate(route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY),
-        provider=provider,
-        provider_id=provider.provider_id,
-        model_id=provider.model_id,
-    )
-    service = GoodNotesService()
-    plan = service.plan(
-        principal_id=A,
-        idempotency_key="model-boundary",
-        source=source(),
-        transcriber=FixturePageTranscriber(),
-    )
-    prepared = service.prepare(
-        plan=plan,
-        source=source(),
-        transcriber=FixturePageTranscriber(),
-        model_boundary=boundary,
-    )
-    assert prepared.model_gate_states == ("proposed",)
-    assert len(provider.manifests) == 1
-    assert provider.manifests[0].external_disclosure_allowed is False
-
-
 def test_production_runtime_holds_no_database_connection_during_ocr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -423,24 +379,10 @@ def test_production_runtime_holds_no_database_connection_during_ocr(
             state.events.append("ocr")
             return super().transcribe(page)
 
-    class Disabled:
-        provider_id = "disabled"
-        model_id = "none"
-        is_external = False
-
-        def propose(self, manifest: ContextManifest) -> tuple[ModelProposal, ...]:
-            return ()
-
     monkeypatch.setattr(bootstrap, "PostgresGoodNotesRepository", Repository)
     composed = bootstrap.LocalGoodNotesRuntime(
         source=source(),
         transcriber=Transcriber(),
-        model_boundary=GoodNotesModelProposalBoundary(
-            gate=BoundedModelGate(),
-            provider=Disabled(),
-            provider_id="disabled",
-            model_id="none",
-        ),
     )
     receipt = composed.reconcile(
         engine=Engine(), principal_id=A, idempotency_key="no-db-during-ocr"

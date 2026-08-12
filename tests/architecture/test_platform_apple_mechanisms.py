@@ -29,7 +29,8 @@ def test_calendar_platform_mechanism_uses_only_bounded_read_shapes() -> None:
         "authorizationStatus(for: .event)",
         "calendars(for: .event)",
         "predicateForEvents",
-        "events(matching:",
+        "enumerateEvents(matching:",
+        "maximumEventsScanned",
         "occurrenceDate",
         "lastModifiedDate",
         "query.limit",
@@ -122,7 +123,7 @@ def test_current_swift_check_count_and_contacts_implementation_are_documented() 
 
     readme = (HOST / "README.md").read_text(encoding="utf-8")
     assert "Thirty-seven checks" in readme
-    assert "production-shaped, read-only Calendar and Contacts mechanisms" in readme
+    assert "read-only Calendar, Contacts, Tasks, and Mail" in readme
     assert "ContactsStoreMechanism.swift" in {path.name for path in PLATFORM.iterdir()}
 
     record = (ROOT / "docs" / "campaign" / "WP-18-CONTACTS-ADAPTER-RECORD.md").read_text(
@@ -136,3 +137,37 @@ def test_current_swift_check_count_and_contacts_implementation_are_documented() 
     assert "* **No live mechanism.**" not in record
     assert "platformContactStore` is declared and never" not in record
     assert "ContactsStoreMechanism" in record
+
+
+def test_platform_executable_performs_only_bounded_protected_non_live_handoff() -> None:
+    main = (HOST / "Sources" / "AppleSourceHostPlatformHost" / "main.swift").read_text(
+        encoding="utf-8"
+    )
+    admission = _source("PlatformHostAdmission.swift")
+    for required in (
+        "maximumAggregateInputBytes",
+        "O_NOFOLLOW",
+        "fstat(descriptor",
+        "PlatformAppleSourceComposition(",
+        "ProtectedSpool(",
+        "protectedNonLiveHandoff(",
+    ):
+        assert required in main
+    assert "spool.enqueue" in admission
+    assert 'handoffState: "production_composition_spooled"' in admission
+    for forbidden in ("authorizationState()", "consentState()", "discoverMail()", "readMail("):
+        assert forbidden not in main
+
+
+def test_current_docs_name_the_inert_handoff_and_deferred_goodnotes_model_route() -> None:
+    readme = (HOST / "README.md").read_text(encoding="utf-8")
+    source_index = (ROOT / "docs" / "00_REPOSITORY_SOURCE_INDEX.md").read_text(encoding="utf-8")
+    context = (ROOT / "docs" / "architecture" / "system-context.md").read_text(encoding="utf-8")
+    goodnotes = (ROOT / "docs" / "operations" / "goodnotes-local-source.md").read_text(
+        encoding="utf-8"
+    )
+    assert "content-free protected receipt" in readme
+    assert "closed ScriptingBridge Mail reads" in source_index
+    assert "protected non-live handoff implemented" in context
+    assert "GoodNotes invokes no model" in goodnotes
+    assert "durable router into the\nexisting canonical Review plane" in goodnotes

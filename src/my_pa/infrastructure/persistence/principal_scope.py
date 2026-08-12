@@ -50,6 +50,7 @@ __all__ = [
     "PrincipalContext",
     "UnpartitionedTableError",
     "capture_context",
+    "matching_partition_criterion",
     "partition_criterion",
     "principal_bound_values",
     "principal_scoped",
@@ -150,6 +151,27 @@ def partition_criterion(table: Table, context: PrincipalContext | None) -> Colum
     """
     column, value = _partition_binding(table, context)
     return column == value
+
+
+def matching_partition_criterion(left: Table, right: Table) -> ColumnElement[bool]:
+    """Require two user-scoped tables to occupy the same Principal partition."""
+    left_column = next(
+        (left.c[name] for name in ("principal_id", "owner_principal_id") if name in left.c),
+        None,
+    )
+    right_column = next(
+        (right.c[name] for name in ("principal_id", "owner_principal_id") if name in right.c),
+        None,
+    )
+    if left_column is None:
+        raise UnpartitionedTableError(str(left.fullname))
+    if right_column is None:
+        raise UnpartitionedTableError(str(right.fullname))
+    if isinstance(left_column.type, SqlUuid) != isinstance(right_column.type, SqlUuid):
+        raise UnpartitionedTableError(
+            f"{left.fullname} and {right.fullname} use different Principal vocabularies"
+        )
+    return left_column == right_column
 
 
 def principal_scoped[SelectT: Select[tuple]](  # type: ignore[type-arg]

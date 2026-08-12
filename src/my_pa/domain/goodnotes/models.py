@@ -125,6 +125,20 @@ class SourcePage:
             raise ValueError("unsupported GoodNotes page representation")
 
 
+@dataclass(frozen=True, slots=True, order=True)
+class GoodNotesSourceBinding:
+    """Exact registry identity a GoodNotes manifest must be enrolled to use."""
+
+    source_id: str
+    source_object_id: str
+    source_version_id: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.source_id, IdKind.SOURCE)
+        validate_identifier(self.source_object_id, IdKind.SOURCE_OBJECT)
+        validate_identifier(self.source_version_id, IdKind.VERSION)
+
+
 @dataclass(frozen=True, slots=True)
 class TranscribedRegion:
     box: RegionBox

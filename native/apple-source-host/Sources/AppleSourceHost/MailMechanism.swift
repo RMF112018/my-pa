@@ -406,13 +406,35 @@ public struct MailTraversalResult: Hashable, Sendable {
 
 public struct MailMessageContent: Hashable, Sendable {
     public let headerBytes: [UInt8]
-    public let bodyBytes: [UInt8]
+    /// `nil` means the mechanism refused the body before reading it. When the
+    /// body was read, this is the complete value, never a prefix.
+    public let bodyBytes: [UInt8]?
+    /// Exact size when known. A production mechanism may leave this `nil` when
+    /// it conservatively omits a body from a provider-level size upper bound.
+    public let bodyByteSize: Int?
     public let attachments: [MailAttachmentDescriptor]
+    public let attachmentCount: Int
 
     public init(headerBytes: [UInt8], bodyBytes: [UInt8], attachments: [MailAttachmentDescriptor]) {
         self.headerBytes = headerBytes
         self.bodyBytes = bodyBytes
+        self.bodyByteSize = bodyBytes.count
         self.attachments = attachments
+        self.attachmentCount = attachments.count
+    }
+
+    public init(
+        headerBytes: [UInt8],
+        bodyBytes: [UInt8]?,
+        bodyByteSize: Int?,
+        attachments: [MailAttachmentDescriptor],
+        attachmentCount: Int
+    ) {
+        self.headerBytes = headerBytes
+        self.bodyBytes = bodyBytes
+        self.bodyByteSize = bodyByteSize
+        self.attachments = attachments
+        self.attachmentCount = attachmentCount
     }
 }
 

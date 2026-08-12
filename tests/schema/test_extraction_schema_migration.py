@@ -199,6 +199,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "continuity_lifecycle_events",
         }
     ),
+    # WP-27's managed-document plane: the product's own write plane, and the
+    # first tables in this schema whose rows name bytes on a filesystem.
+    "4c7b2e91d8a5": frozenset(
+        {
+            "managed_documents",
+            "managed_document_versions",
+            "managed_document_submissions",
+            "managed_document_receipts",
+            "managed_document_lifecycle_events",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

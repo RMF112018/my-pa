@@ -130,6 +130,24 @@ class IdKind(StrEnum):
     CONTINUITY_DECISION = "cdec"
     TASK = "tsk"
     LIFECYCLE_EVENT = "lce"
+    #: The managed-document plane (WP-27): the one plane whose records name bytes
+    #: this product wrote. Five prefixes rather than a reuse of the capture
+    #: plane's four, on the argument `CAPTURE_VERSION` makes against reusing
+    #: `VERSION`: a stored reference, a receipt and an audit row have to say which
+    #: plane they belong to, and `rcpt`/`sub` already name a capture admission —
+    #: one prefix for both would make a receipt ambiguous about whether the thing
+    #: it acknowledges is a row of text or a file on disk. `MANAGED_LIFECYCLE` is
+    #: its own prefix rather than a reuse of `LIFECYCLE_EVENT` for the same
+    #: reason: that one names a continuity object's transition.
+    #:
+    #: A version suffix is also what the byte store derives a location from, so
+    #: the shape rule these carry — 8-64 alphanumeric characters, no separator,
+    #: no dot — is load-bearing rather than cosmetic.
+    MANAGED_DOCUMENT = "mdoc"
+    MANAGED_DOCUMENT_VERSION = "mdver"
+    MANAGED_RECEIPT = "mdrcpt"
+    MANAGED_SUBMISSION = "mdsub"
+    MANAGED_LIFECYCLE = "mdlce"
 
 
 class InvalidIdentifierError(ValueError):

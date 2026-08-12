@@ -368,6 +368,15 @@ NATIVE_SOURCE_TRIGGERS: Final[frozenset[str]] = frozenset(
     }
 )
 
+#: WP-27's two append-only triggers, on the managed-document plane's version and
+#: lifecycle tables. Neither is deferred: they refuse an `UPDATE` or a `DELETE`
+#: outright rather than at commit, and there is no multi-statement invariant for
+#: them to wait for.
+MANAGED_DOCUMENT_TRIGGERS: Final = (
+    "managed_document_versions_are_append_only",
+    "managed_document_lifecycle_is_append_only",
+)
+
 _CONSTRAINT = text(
     "SELECT pg_get_constraintdef(con.oid) FROM pg_constraint con "
     "JOIN pg_class rel ON rel.oid = con.conrelid "
@@ -899,6 +908,7 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             *REVIEW_TRIGGERS,
             *RELATIONSHIP_TRIGGERS,
             *NATIVE_SOURCE_TRIGGERS,
+            *MANAGED_DOCUMENT_TRIGGERS,
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

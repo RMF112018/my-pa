@@ -123,6 +123,12 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "decisions",
         "tasks",
         "continuity_lifecycle_events",
+        # WP-27's managed-document plane.
+        "managed_documents",
+        "managed_document_versions",
+        "managed_document_submissions",
+        "managed_document_receipts",
+        "managed_document_lifecycle_events",
         "relationship_people",
         "relationship_organizations",
         "relationship_identity_observations",

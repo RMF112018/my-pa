@@ -132,6 +132,14 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.conversation.event import ConversationChannel, ConversationState
+from my_pa.domain.documents.managed import (
+    MANAGED_MEDIA_TYPES,
+    MAX_MANAGED_DOCUMENT_BYTES,
+    MAX_MANAGED_TITLE_CHARACTERS,
+)
+from my_pa.domain.documents.managed import (
+    LifecycleTransition as ManagedLifecycleTransition,
+)
 from my_pa.domain.extraction.coverage import LimitationReason
 from my_pa.domain.extraction.quarantine import QuarantineReason, QuarantineReviewState
 from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
@@ -4103,4 +4111,234 @@ continuity_lifecycle_events = Table(
         "principal_id",
         "transition",
     ),
+)
+
+
+# --- WP-27: the managed-document plane --------------------------------------
+#
+# The product's own write plane. Four tables, and the shape is deliberately the
+# capture plane's, because the problem is the same one `1a4c9e77b2d5` solved:
+# admit one request exactly once, append an immutable version, issue a receipt,
+# and let the server rather than the writer enforce all three.
+#
+# **The one column that is not here.** There is no path, locator, or storage key
+# anywhere in these tables. A version's bytes live at a location the byte store
+# *derives* from the version identifier, so there is nothing for a row to point
+# at and nothing a row could be edited to point somewhere else. That is also what
+# makes reconciliation possible with no second index: the object tree names its
+# own versions.
+
+#: One row per managed document. Identity and ownership only — no state column
+#: and no head pointer, for the reason `captures` carries neither: state is the
+#: latest lifecycle transition and the head is the greatest version number, both
+#: read from rows that cannot be updated, so there is no denormalised copy for a
+#: second writer to leave disagreeing with the history.
+managed_documents = Table(
+    "managed_documents",
+    METADATA,
+    Column("document_id", Text, primary_key=True),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("document_id", IdKind.MANAGED_DOCUMENT),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    Index("managed_documents_by_owner", "owner_principal_id", "created_at"),
+)
+
+#: One row per immutable version of one managed document. Insert only, enforced
+#: by the server: this package's revision adds a `BEFORE UPDATE OR DELETE`
+#: trigger, exactly as `1a4c9e77b2d5` does for `capture_versions`, because no
+#: CHECK can express "no UPDATE" and immutability has to hold under concurrent
+#: write rather than under the current writer's restraint.
+#:
+#: **`supersedes_version_id` is `UNIQUE`**, so two versions cannot name one
+#: predecessor and a chain is a line rather than a fork. Together with
+#: `one_version_number_per_managed_document` it is also the expected-version
+#: mechanism: a stale writer computes the same successor number and the same
+#: predecessor as the winner, and the server refuses the second insert.
+#:
+#: `title` and `media_type` are metadata and are stored here rather than beside
+#: the bytes. `title` is caller-supplied on a write path, so it is bounded by a
+#: constraint rather than trusted; it is never joined to a path, because the byte
+#: store accepts no path.
+managed_document_versions = Table(
+    "managed_document_versions",
+    METADATA,
+    Column("version_id", Text, primary_key=True),
+    Column(
+        "document_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.managed_documents.document_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("version_number", Integer, nullable=False),
+    Column(
+        "supersedes_version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.managed_document_versions.version_id", ondelete="CASCADE"),
+        unique=True,
+    ),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("media_type", Text, nullable=False),
+    Column("content_sha256", Text, nullable=False),
+    Column("byte_size", BigInteger, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("version_id", IdKind.MANAGED_DOCUMENT_VERSION),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _one_of("media_type", MANAGED_MEDIA_TYPES, name="a_managed_media_type_is_known"),
+    _matches(
+        "content_sha256",
+        DIGEST_PATTERN.pattern,
+        name="a_managed_version_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint("version_number >= 1", name="managed_version_numbers_start_at_one"),
+    CheckConstraint(
+        "(version_number = 1) = (supersedes_version_id IS NULL)",
+        name="only_the_first_managed_version_supersedes_nothing",
+    ),
+    CheckConstraint(
+        f"length(title) BETWEEN 1 AND {MAX_MANAGED_TITLE_CHARACTERS}",
+        name="a_managed_version_carries_a_bounded_title",
+    ),
+    CheckConstraint(
+        f"byte_size BETWEEN 1 AND {MAX_MANAGED_DOCUMENT_BYTES}",
+        name="a_managed_version_carries_bounded_bytes",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_managed_version_records_a_bounded_key",
+    ),
+    UniqueConstraint(
+        "document_id", "version_number", name="one_version_number_per_managed_document"
+    ),
+    Index("managed_document_versions_by_document", "document_id", "version_number"),
+)
+
+#: One row per admitted managed write, and the row whose unique key *is* the
+#: idempotency mechanism. Written first, under `ON CONFLICT DO NOTHING`, so a
+#: replayed request writes nothing at all and the stored `payload_sha256` decides
+#: whether the caller gets the original receipt or a conflict. Both references
+#: are `DEFERRABLE INITIALLY DEFERRED` for the reason `capture_submissions`
+#: states: they are checked at commit, by which time the rows they name exist.
+#:
+#: The collision domain is per Principal, so one Principal's replay can never
+#: return another's receipt.
+managed_document_submissions = Table(
+    "managed_document_submissions",
+    METADATA,
+    Column("submission_id", Text, primary_key=True),
+    Column("idempotency_key", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("payload_sha256", Text, nullable=False),
+    Column("server_received_at", DateTime(timezone=True), nullable=False),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.managed_document_versions.version_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    ),
+    Column(
+        "receipt_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.managed_document_receipts.receipt_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    ),
+    _is_identifier("submission_id", IdKind.MANAGED_SUBMISSION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _matches(
+        "payload_sha256",
+        DIGEST_PATTERN.pattern,
+        name="a_managed_payload_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_managed_submission_records_a_bounded_key",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "idempotency_key",
+        name="a_managed_key_admits_one_submission_per_principal",
+    ),
+)
+
+#: One row per issued managed receipt: safe evidence that one version is durable.
+#: Carries no content. `version_id` is `UNIQUE` because a version is admitted
+#: once, so a second receipt for it would be a second acknowledgement of one act.
+managed_document_receipts = Table(
+    "managed_document_receipts",
+    METADATA,
+    Column("receipt_id", Text, primary_key=True),
+    Column("version_id", Text, nullable=False, unique=True),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("issued_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("receipt_id", IdKind.MANAGED_RECEIPT),
+    _is_identifier("version_id", IdKind.MANAGED_DOCUMENT_VERSION),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_managed_receipt_records_a_bounded_key",
+    ),
+)
+
+#: One append-only row per archive or restore. There is no state column on
+#: `managed_documents` and no update anywhere on this plane: a document's state
+#: is what the latest transition implies, so the history and the state cannot
+#: disagree because there is only the history.
+#:
+#: **Archive is not destruction and this vocabulary is where that is enforced.**
+#: The closed set holds two transitions and neither removes anything; a `deleted`
+#: transition would need a migration to admit, which is the visible act
+#: `AGENTS.md` section 8.2 reserves to the operator.
+managed_document_lifecycle_events = Table(
+    "managed_document_lifecycle_events",
+    METADATA,
+    Column("event_id", Text, primary_key=True),
+    Column(
+        "document_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.managed_documents.document_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("principal_id", Text, nullable=False),
+    Column("transition", Text, nullable=False),
+    # The order the transitions happened in, and the reason it is a number rather
+    # than a timestamp. `now()` is fixed for a whole transaction, so two rows
+    # written in one would tie and "the latest transition" — which *is* the
+    # document's state — would have two answers. The unique constraint also makes
+    # two concurrent archives one winner and one refusal at the server.
+    Column("sequence_number", Integer, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("event_id", IdKind.MANAGED_LIFECYCLE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _one_of(
+        "transition",
+        ManagedLifecycleTransition,
+        name="a_managed_document_transition_is_known",
+    ),
+    CheckConstraint("sequence_number >= 1", name="a_managed_transition_sequence_starts_at_one"),
+    UniqueConstraint(
+        "document_id",
+        "sequence_number",
+        name="one_managed_transition_per_document_sequence",
+    ),
+    Index("managed_document_lifecycle_by_document", "document_id", "sequence_number"),
+    Index("managed_document_lifecycle_by_principal", "principal_id", "recorded_at"),
 )

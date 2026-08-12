@@ -108,6 +108,50 @@ def _pathlike(token: str) -> bool:
 #: Every `## ` heading is one limitation. Numbered, so the count is visible.
 _LIMITATION = re.compile(r"^## \d+\. ", re.MULTILINE)
 
+#: What ends a limitation's text: the next heading of any level, numbered or
+#: not. `_LIMITATION` is the wrong terminator and the first version of
+#: `limitation_section` used it anyway — a scan that only stops at `## N.` runs
+#: straight through an `## Appendix`, a `### ` subheading, or a section that
+#: loses its numbering. Demonstrated on the real document by an independent
+#: review: section 12 renamed, its body rewritten to claim it "GRANTS A PUBLIC
+#: CAPABILITY and has been fully exercised against production people", and the
+#: three asserted phrases moved into a new `## Appendix` — the whole of
+#: `tests/architecture/` passed, 1290 tests agreeing with a limitations
+#: document that had been made to claim production exposure. The commit that
+#: introduced this helper existed to unkey four guards from literals and left
+#: this one keyed to a numbering convention; its sibling `section_of` in
+#: `test_readme_state_claims.py`, written in the same changeset, already used a
+#: heading regex. Anchoring stays `^## N\. ` — the section is identified by its
+#: number — and only the boundary is structural.
+_HEADING = re.compile(r"^#{1,6} ", re.MULTILINE)
+
+
+def limitation_section(text: str, number: int) -> str:
+    """Limitation `number`'s own text, ending where the next limitation begins.
+
+    Bounded by `_HEADING` — the next heading of any level — rather than by the
+    next number written out. Three scans here were wrong in three different
+    ways. `split("## 12.", 1)[1]` ran to end of file, which is right only for as
+    long as 12 is the last section. `split("## 11.")[1].split("## 12.")[0]`
+    names its terminator, so renumbering 12 to 13 with nothing taking 12 widens
+    that scan to end of file with nothing going red — and note the shape:
+    *inserting* a new `## 12.` narrows the scan and goes red, so the hazard is
+    the renumber, not the insert. And this function's own first version bounded
+    itself with `_LIMITATION`, which stops only at `## N.` and therefore runs
+    straight through a heading that is not numbered.
+    """
+    opening = re.compile(rf"^## {number}\. ", re.MULTILINE).search(text)
+    assert opening is not None, (
+        f"the limitations document has no section {number}; a scan anchored on a "
+        "heading that is gone decides nothing"
+    )
+    following = [
+        match.start() for match in _HEADING.finditer(text) if match.start() > opening.start()
+    ]
+    section = text[opening.start() : following[0] if following else len(text)]
+    assert section.strip(), f"limitation {number} is empty"
+    return section
+
 
 def _backticked(document: Path) -> list[str]:
     return _BACKTICKED.findall(document.read_text(encoding="utf-8"))
@@ -236,7 +280,7 @@ def test_limitations_cannot_claim_capture_jobs_are_unconsumed_after_wp7() -> Non
     assert "capture" in worker
 
     text = LIMITATIONS.read_text(encoding="utf-8")
-    section = text.split("## 11.", 1)[1].split("## 12.", 1)[0]
+    section = limitation_section(text, 11)
     stale_claims = (
         "Nothing claims that row",
         "No worker reads `capture_jobs`",
@@ -251,7 +295,7 @@ def test_relationship_limitations_exist_when_relationship_models_exist() -> None
     relationship = ROOT / "src" / "my_pa" / "domain" / "relationship"
     assert relationship.is_dir()
     text = LIMITATIONS.read_text(encoding="utf-8")
-    section = text.split("## 12.", 1)[1]
+    section = limitation_section(text, 12)
     assert "fixture-only read models" in section
     assert "adds no public capability" in section
     assert "live contacts" in section
@@ -260,6 +304,53 @@ def test_relationship_limitations_exist_when_relationship_models_exist() -> None
 # ---- the plants ---------------------------------------------------------------
 
 _THIS = "tests/architecture/test_limitations_cite_evidence.py"
+
+#: A limitations document renumbered the way a new section renumbers one: the
+#: claim that used to be section 12's is section 13's, and 12 says something
+#: else. Both scans this module used to run would still have found the phrase.
+_A_RENUMBERED_DOCUMENT = "\n".join(
+    [
+        "# What the slice does not do",
+        "",
+        "## 11. Capture processing",
+        "",
+        "eleven's own claim",
+        "",
+        "## 12. Something inserted here",
+        "",
+        "an unrelated claim",
+        "",
+        "## 13. Relationship identity",
+        "",
+        "thirteen's own claim",
+        "",
+    ]
+)
+
+
+def test_a_limitation_scan_stops_at_the_next_limitation() -> None:
+    """The boundary is derived, so a renumber narrows the scan instead of opening it.
+
+    Both directions in one test. The plant is the renumbered document: a scan of
+    11 terminated by the literal `## 12.` used to reach `thirteen's own claim`
+    once 12 stopped being the next section, and a scan of 12 with no terminator
+    at all always did. The control is that each section still contains its own
+    text, so this is not a boundary that has narrowed to nothing.
+    """
+    eleven = limitation_section(_A_RENUMBERED_DOCUMENT, 11)
+    twelve = limitation_section(_A_RENUMBERED_DOCUMENT, 12)
+
+    assert "eleven's own claim" in eleven
+    assert "an unrelated claim" in twelve
+    assert "thirteen's own claim" not in eleven
+    assert "thirteen's own claim" not in twelve
+
+    # The last section is the case a missing terminator gets right by accident,
+    # so it is asserted rather than left to be the reason the rule looks fine.
+    assert "thirteen's own claim" in limitation_section(_A_RENUMBERED_DOCUMENT, 13)
+
+    with pytest.raises(AssertionError, match="has no section 14"):
+        limitation_section(_A_RENUMBERED_DOCUMENT, 14)
 
 
 @pytest.mark.parametrize(

@@ -51,7 +51,22 @@ PACKAGE_ID = re.compile(r"^(?P<family>OP|MCP-OP|NAR-OP|NAPDCB-OP)-(?P<number>\d{
 BLOCKING_HEADING = "### Blocking — "
 RESERVED_HEADING = "### Blocking, and reserved"
 NOT_BLOCKING_HEADING = "### Not blocking"
-END_HEADING = "### Five questions"
+
+#: Any *other* heading closes whichever group is open, and that is what ends the
+#: scan. This was the literal `"### Five questions"` until 2026-08-08, which made
+#: this guard's own terminator a spelled count of a set that grows. Adding a
+#: sixth question renamed that heading, the scan ran past it, and the ledger
+#: tables in the following subsections were swept into `not_blocking`. Measured
+#: when it happened: `not_blocking` derived **24** against a stated **19**, and
+#: `test_no_decision_appears_in_two_groups` failed too, because IDs past the
+#: boundary already appear in the groups above. So the guard did not report "the
+#: heading moved" — it reported a wrong number and a spurious duplicate, which is
+#: the failure mode a reader is least likely to diagnose correctly. A guard whose
+#: purpose is to stop a stale count should not itself be keyed to one. Taking the
+#: boundary from the document's structure removes the coupling: renaming a
+#: heading, inserting a subsection, or reordering them can no longer widen the
+#: sweep, and no edit to this file is needed when the question list next grows.
+HEADING = re.compile(r"^#{1,6} ")
 
 _UNITS = [
     "zero",
@@ -128,7 +143,9 @@ def _section_14_groups() -> dict[str, list[str]]:
         if line.startswith(NOT_BLOCKING_HEADING):
             current = "not_blocking"
             continue
-        if line.startswith(END_HEADING):
+        # Checked after the three above so a group heading opens its group
+        # rather than closing the previous one.
+        if HEADING.match(line):
             current = None
             continue
         if current is None:

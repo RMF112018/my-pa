@@ -17,14 +17,16 @@ hazard*, because the next member added to that enum is the moment they stop
 agreeing — and one of the two will change silently. So the test does not care how
 the constraint was written; it cares whether the revision still tracks the domain.
 
-**The allowlist must shrink.** `ALLOWED` is the ten sites, in ten distinct
-sources, carried by the two revisions `D-81` deliberately does not edit
-(`D-92`; the count said "nine sources" in `D-81` and in WP-7's brief, and the
-omitted tenth was `my_pa.contracts.v1.errors.ErrorCode`, which reaches
+**The allowlist must shrink.** `ALLOWED` is the fifteen sites carried by the
+three revisions `D-81` deliberately does not edit (`D-92`; the count said "nine
+sources" in `D-81` and in WP-7's brief, and the omitted tenth was
+`my_pa.contracts.v1.errors.ErrorCode`, which reaches
 `jobs.last_error_code_is_a_public_error_code` without being a `StrEnum` — the
 same undercount `D-81` warns about, repeated inside the row that warns about
-it). Each entry pins the *exact* vocabulary that site emits today, so the guard
-reddens three ways:
+it). Ten of the fifteen were listed before the guard was widened; the last five
+are `4b9f0d27ac31`'s, and the paragraph on the widening below says exactly what
+listing them does and does not buy. Each entry pins the *exact* vocabulary that
+site emits today, so the guard reddens three ways:
 
 - a member added to any listed enum changes an emitted vocabulary — red;
 - a new derived constraint appears in any revision — red, because it is not in
@@ -90,20 +92,36 @@ What would close it is a rule reading each revision's emitted `CHECK` text for
 any enum value it can attribute to a live member — which is a different parse
 from the set equality below, not an extension of it.
 
-**One revision is structurally invisible to this module, and it is disclosed
-rather than fixed** (`D-99`). `migrations/versions/20260801_4b9f0d27ac31_
-create_migration_control_plane.py` calls `METADATA.create_all(bind)` on
+**The blind spot `D-99` disclosed is closed, and closing it moved five sites out
+of "unreachable" and into the allowlist.** Until now this module hard-coded one
+declaration module name, so `migrations/versions/20260801_4b9f0d27ac31_create_
+migration_control_plane.py` — which calls `METADATA.create_all(bind)` on
 `my_pa.infrastructure.migration.control_plane`'s **separate** `MetaData`, never
-imports `DECLARATION`, and holds no `Table` in its namespace — so
-`test_every_revision_declares_its_emission_readably` skips it and `_emitted`
-returns `None` for it. `control_plane.py` derives five further closed-set
-constraints from live enums (`RunStatus`, `PhaseStatus`, `TableState`,
-`QuarantineCode`, `AuditEvent`), and not one of them is reachable from here,
-because `DECLARATION` above hard-codes a single declaration module. That is a
-larger hole than the single-value class named just above: those six are
-detected-and-allowlisted, and this one is unreachable. Closing it means teaching
-this module a second `MetaData`, which is its own package with its own review.
-A control that names its own blind spot beats one that implies totality.
+imports the persistence declaration, and holds no `Table` in its namespace —
+was invisible: `test_every_revision_declares_its_emission_readably` skipped it
+and `_emitted` returned `None`. The fix is structural rather than a second
+constant. `_declaration_modules` walks `my_pa` for every module that declares
+`Table`s against its own module-level `MetaData`, and `_emitted` reads a
+revision's `MetaData` when it exposes neither an emission callable nor
+`_TABLES`. A *third* declaration module written tomorrow is therefore covered
+with no edit here, and `_declared_metadata` — the predicate the walk applies —
+is exercised on a synthetic namespace below so that "would find a third" is a
+measurement rather than a hope.
+
+**What widening it measured, stated because it is the point of widening it.**
+The five constraints `control_plane.py` derives from `RunStatus`,
+`PhaseStatus`, `TableState`, `QuarantineCode` and `AuditEvent` became visible
+all at once, and `test_no_revision_derives_a_closed_set_outside_the_allowlist`
+went red on all five. They are **allowlisted, not frozen**: freezing them means
+editing a merged revision, which this package does not do. So the improvement is
+exactly and only this — five sites that were *structurally unreachable* are now
+*detected and pinned*, on the same terms as the ten that were already listed. A
+member added to any of those five enums now reddens this file. Two of them,
+`phase_status.status_is_known` and `table_progress.state_is_known`, are
+attributed to `PhaseStatus` because `PhaseStatus` and `TableState` declare the
+identical three values and `_live_closed_sets` is keyed by value set; the
+attribution is the documented first-by-dotted-name tie-break, and the hazard it
+records is the real one either way.
 
 Nothing here opens a connection or a path. Every value is read out of the
 repository's own declarations.
@@ -115,8 +133,9 @@ import importlib
 import importlib.util
 import pkgutil
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from enum import StrEnum
+from functools import cache
 from pathlib import Path
 from types import ModuleType
 from typing import Final
@@ -129,9 +148,19 @@ import my_pa
 ROOT = Path(__file__).resolve().parents[2]
 VERSIONS = ROOT / "migrations" / "versions"
 
-#: The module a revision must import from before it can derive anything: the one
-#: place every table in the `knowledge` schema is declared.
-DECLARATION = "my_pa.infrastructure.persistence.tables"
+#: The two declaration modules that exist today, asserted as a **subset** of what
+#: `_declaration_modules` finds rather than as an equality. A subset keeps the
+#: discovery honest — a walk that returned nothing would fail here rather than
+#: quietly reporting that no revision touches a declaration — while leaving a
+#: third declaration module covered automatically instead of forcing an edit,
+#: which is the whole reason the hard-coded name went away. Equality would be a
+#: count of a current set, and those rot.
+KNOWN_DECLARATIONS: Final = frozenset(
+    {
+        "my_pa.infrastructure.persistence.tables",
+        "my_pa.infrastructure.migration.control_plane",
+    }
+)
 
 #: A revision that emits shared-declaration tables exposes them as one of these.
 #: A callable is what a revision uses when it freezes something — it returns
@@ -153,16 +182,29 @@ _EMISSION_LIST: Final = "_TABLES"
 #: site nobody could see — which is this module's entire subject. It was added
 #: with `capture_proposals.a_missing_required_field_is_a_required_field`, and it
 #: names no site that was previously hidden: no revision in the chain emitted an
-#: `ARRAY[…]` literal before that one, which `test_the_allowlist_names_only_
-#: revisions_this_package_does_not_edit` holds at ten.
+#: `ARRAY[…]` literal before that one. `ALLOWED` below is the whole residual set,
+#: and `test_the_allowlist_names_only_revisions_this_package_does_not_edit` holds
+#: it to the revisions listed there rather than to a count restated here — a
+#: spelled figure in a comment is the defect this package exists to remove, and
+#: this one had already gone stale.
 _CLOSED_SET = re.compile(r"IN \(([^)]*)\)|<@ ARRAY\[([^\]]*)\]")
 _LITERAL = re.compile(r"'([^']*)'")
 
 #: Every still-derived site, with the revision that emits it, the closed set it
-#: tracks, and the exact vocabulary it emits today. Ten sites in ten sources,
-#: carried by two revisions, neither of which WP-6 or WP-7 edits — freezing them
-#: is a separate package (`D-81`), and neither package changes the membership of
-#: any of these sets, so none of them fires.
+#: tracks, and the exact vocabulary it emits today. Fifteen sites carried by
+#: three revisions, none of which this package edits — freezing them is a
+#: separate package (`D-81`), and no package here changes the membership of any
+#: of these sets, so none of them fires.
+#:
+#: **The last five are new to the list and not new to the schema.** They were
+#: emitted by `4b9f0d27ac31` all along; what changed is that this module can now
+#: see them, because `_declaration_modules` discovers declaration modules by
+#: shape instead of hard-coding one name. Listing them is the weakest true thing
+#: that can be said: they are not frozen, because freezing them means editing a
+#: merged revision, and each row pins the exact vocabulary the site emits today,
+#: so a member added to `RunStatus`, `PhaseStatus`, `TableState`,
+#: `QuarantineCode` or `AuditEvent` reddens this file. Before the widening none
+#: of that was true of any of them.
 #:
 #: The independent reviewer's list named nine sites and eight sources. Both
 #: numbers were low: `quarantine_review_state_is_known` derives from
@@ -263,6 +305,71 @@ ALLOWED: Final[frozenset[tuple[str, str, str, str, tuple[str, ...]]]] = frozense
             "limitation_reason_is_known",
             "my_pa.domain.extraction.coverage.LimitationReason",
             ("objects_omitted_containment_unproven",),
+        ),
+        (
+            "4b9f0d27ac31",
+            "migration_runs",
+            "status_is_known",
+            "my_pa.infrastructure.migration.control_plane.RunStatus",
+            (
+                "CANCELLED",
+                "COMPLETED",
+                "FAILED",
+                "PAUSED",
+                "PENDING",
+                "ROLLED_BACK",
+                "RUNNING",
+            ),
+        ),
+        (
+            "4b9f0d27ac31",
+            "phase_status",
+            "status_is_known",
+            "my_pa.infrastructure.migration.control_plane.PhaseStatus",
+            ("COMPLETED", "FAILED", "RUNNING"),
+        ),
+        # `TableState`, not `PhaseStatus`. The attribution is `_live_closed_sets`'
+        # first-by-dotted-name tie-break between two enums that declare the same
+        # three values, and it is left as the reflection reports it rather than
+        # corrected by hand: a hand-written source name here would be the one
+        # value in the row that no measurement produced.
+        (
+            "4b9f0d27ac31",
+            "table_progress",
+            "state_is_known",
+            "my_pa.infrastructure.migration.control_plane.PhaseStatus",
+            ("COMPLETED", "FAILED", "RUNNING"),
+        ),
+        (
+            "4b9f0d27ac31",
+            "quarantine_records",
+            "error_code_is_known",
+            "my_pa.infrastructure.migration.control_plane.QuarantineCode",
+            (
+                "DUPLICATE_NATURAL_KEY",
+                "NULL_PRIMARY_KEY",
+                "TARGET_REJECTED_ROW",
+                "TYPE_CAST_FAILURE",
+                "UNSUPPORTED_TEXT_NUL",
+            ),
+        ),
+        (
+            "4b9f0d27ac31",
+            "audit_events",
+            "event_type_is_known",
+            "my_pa.infrastructure.migration.control_plane.AuditEvent",
+            (
+                "IDENTITY_DRIFT_DETECTED",
+                "PHASE_COMPLETED",
+                "PHASE_STARTED",
+                "RUN_COMPLETED",
+                "RUN_CREATED",
+                "RUN_FAILED",
+                "SEQUENCE_RESET",
+                "TABLE_COMPLETED",
+                "TABLE_QUARANTINED_ROWS",
+                "TABLE_STARTED",
+            ),
         ),
     }
 )
@@ -449,6 +556,43 @@ FROZEN: Final[dict[str, dict[str, tuple[str, ...]]]] = {
 }
 
 
+def _declared_metadata(namespace: Mapping[str, object]) -> frozenset[MetaData]:
+    """The `MetaData` objects a namespace declares `Table`s against.
+
+    The structural signature of a declaration module, and the whole of it: a
+    module-level `MetaData`, and at least one module-level `Table` bound to that
+    same object. Nothing here names a module, so a third declaration module is
+    found by the same rule that finds the two that exist.
+
+    Taken as a namespace rather than a module so the rule can be exercised on a
+    synthetic one — `test_the_declaration_predicate_finds_a_module_it_has_never
+    _seen` is what makes "would find a third" a measurement.
+    """
+    metadata = {value for value in namespace.values() if isinstance(value, MetaData)}
+    return frozenset(
+        value.metadata
+        for value in namespace.values()
+        if isinstance(value, Table) and value.metadata in metadata
+    )
+
+
+@cache
+def _declaration_modules() -> dict[str, frozenset[MetaData]]:
+    """Every module of `my_pa` that declares tables, by dotted name.
+
+    Cached because the walk imports the whole package and three callers want it;
+    the result is read and never mutated. Deliberately unguarded for the same
+    reason `_live_closed_sets` is: a module of `my_pa` that cannot be imported is
+    a defect, and swallowing it here would silently shrink this guard's universe.
+    """
+    found: dict[str, frozenset[MetaData]] = {}
+    for module in pkgutil.walk_packages(my_pa.__path__, f"{my_pa.__name__}."):
+        declared = _declared_metadata(vars(importlib.import_module(module.name)))
+        if declared:
+            found[module.name] = declared
+    return found
+
+
 def _live_closed_sets() -> dict[frozenset[str], str]:
     """Every closed set of strings the package declares, by its values.
 
@@ -487,6 +631,15 @@ def _emitted(module: ModuleType) -> list[Table] | None:
     `None` is the raw-SQL revisions of the migration target, which read `.sql`
     files and cannot derive from a Python enum at all.
 
+    **A `MetaData` in the revision's namespace is an emission too**, and reading
+    it is what closes `D-99`'s first blind spot. `4b9f0d27ac31` calls
+    `METADATA.create_all(bind)` unqualified: it holds no `Table` and no
+    `_TABLES`, so before this branch existed it returned `None` and the five
+    closed sets `control_plane.py` derives were unreachable. The branch sits
+    last, after `_TABLES`, because every revision that creates a *subset* of a
+    shared declaration holds both — reading the `MetaData` first would report the
+    whole declaration for revisions that emit five tables out of forty-six.
+
     **A revision that declares `_FROZEN` may not fall through to `_TABLES`**, and
     that refusal is the whole of ledger item 1. Every freezing revision in this
     chain also holds a module-level `_TABLES` list of the *live* declarations —
@@ -520,6 +673,9 @@ def _emitted(module: ModuleType) -> list[Table] | None:
     declared = getattr(module, _EMISSION_LIST, None)
     if isinstance(declared, list):
         return declared
+    metadata = [value for value in vars(module).values() if isinstance(value, MetaData)]
+    if metadata:
+        return [table for held in metadata for table in held.tables.values()]
     return None
 
 
@@ -604,31 +760,75 @@ def test_the_live_closed_sets_are_discovered() -> None:
     )
 
 
+def test_the_declaration_modules_are_discovered_structurally() -> None:
+    """The walk finds both declaration modules, by shape rather than by name.
+
+    Guards everything below that depends on the discovery: a walk that returned
+    nothing would make `test_every_revision_declares_its_emission_readably`
+    `continue` past every revision and stay green while checking nothing, which
+    is the vacuous-guard shape this module exists to refuse.
+
+    Subset, not equality. A third declaration module must be *covered* without
+    an edit here; asserting the exact set would turn coverage into a chore and
+    would be a count of a current set, which rots.
+    """
+    modules = _declaration_modules()
+    assert set(modules) >= KNOWN_DECLARATIONS
+    for name in KNOWN_DECLARATIONS:
+        assert len(modules[name]) == 1, name
+
+
+def test_the_declaration_predicate_finds_a_module_it_has_never_seen() -> None:
+    """A third declaration module, found on a namespace with no name at all.
+
+    Three cases, so the rule is neither blind nor indiscriminate:
+
+    - a namespace holding a `MetaData` and a `Table` bound to it is a
+      declaration, which is the third module nobody has written yet;
+    - a `Table` bound to some *other* `MetaData` that the namespace does not hold
+      is not — that is a revision importing tables, not declaring them, and
+      calling it a declaration module would make `_emitted` read the importer;
+    - a `MetaData` with no table of its own is not, which is the throwaway a
+      revision might hold for reflection.
+    """
+    own = MetaData()
+    foreign = MetaData()
+    third = Table("third", own)
+
+    assert _declared_metadata({"METADATA": own, "third": third}) == frozenset({own})
+    assert _declared_metadata({"borrowed": Table("borrowed", foreign)}) == frozenset()
+    assert _declared_metadata({"METADATA": own}) == frozenset()
+
+
 def test_every_revision_declares_its_emission_readably() -> None:
-    """A revision that reaches the shared declaration must be readable here.
+    """A revision that reaches any declaration module must be readable here.
 
     Without this the guard has a hole shaped like a revision written in a new
     style: it would emit derived constraints, `_emitted` would return `None`,
     and the allowlist would stay green. `D-80` records the same shape arriving
-    through a fixture rather than an assertion.
+    through a fixture rather than an assertion, and `D-99`'s first item was this
+    same hole arriving through a second `MetaData`, which is why the module names
+    below are discovered rather than written down.
     """
+    declarations = _declaration_modules()
+    held = {metadata for group in declarations.values() for metadata in group}
     for revision, module in _revisions():
         touches_declaration = any(
-            getattr(value, "__module__", None) == DECLARATION or value is not None
-            for name, value in vars(module).items()
-            if isinstance(value, Table)
-        ) or any(
-            isinstance(value, list) and value and all(isinstance(item, Table) for item in value)
+            isinstance(value, Table)
+            or (isinstance(value, MetaData) and value in held)
+            or (
+                isinstance(value, list) and value and all(isinstance(item, Table) for item in value)
+            )
             for value in vars(module).values()
         )
         source = (VERSIONS / f"{module.__name__.removeprefix('_revision_')}.py").read_text(
             encoding="utf-8"
         )
-        if DECLARATION not in source and not touches_declaration:
+        if not touches_declaration and not any(name in source for name in declarations):
             continue
         assert _emitted(module) is not None, (
-            f"{revision} imports {DECLARATION} but exposes no readable emission; "
-            f"add {_EMISSION_LIST} or one of {_EMISSION_CALLABLES}"
+            f"{revision} reaches a declaration module but exposes no readable emission; "
+            f"add {_EMISSION_LIST}, one of {_EMISSION_CALLABLES}, or the `MetaData` it creates"
         )
 
 
@@ -646,12 +846,22 @@ def test_no_revision_derives_a_closed_set_outside_the_allowlist() -> None:
 def test_the_allowlist_names_only_revisions_this_package_does_not_edit() -> None:
     """`D-81`'s boundary, held to.
 
-    The revisions WP-6 and WP-7 write or edit carry no derived constraint at
+    The revisions this campaign writes or edits carry no derived constraint at
     all. If one appears in the allowlist, the freeze that closed it has been
     undone and the residual class has grown rather than shrunk.
+
+    Three revisions rather than two since the guard was widened, and the third
+    is the disclosure `D-99` item (1) named: `4b9f0d27ac31` was always deriving,
+    and is listed here for the first time because it is reachable for the first
+    time. Every one of the three is a revision no package in this campaign edits,
+    which is the property the assertion is actually about.
     """
-    assert {revision for revision, *_ in ALLOWED} == {"7e5a1fb93d62", "8b3f5c17d904"}
-    assert len(ALLOWED) == 10
+    assert {revision for revision, *_ in ALLOWED} == {
+        "7e5a1fb93d62",
+        "8b3f5c17d904",
+        "4b9f0d27ac31",
+    }
+    assert len(ALLOWED) == 15
     assert not {revision for revision, *_ in ALLOWED} & set(FROZEN)
 
 
@@ -702,9 +912,17 @@ def test_a_freezing_revision_may_not_fall_through_to_the_live_declaration() -> N
     - a revision with no `_FROZEN` still falls back to `_TABLES`, which is the
       legitimate case the fallback was written for and which the raise must not
       take with it.
+
+    The last two cases are `D-99` item (1)'s: a revision holding only a
+    `MetaData` is read through it, and a revision holding *both* is still read
+    through `_TABLES`. The second is the control that keeps the first honest —
+    without it, `4b9f0d27ac31` would be visible at the price of reporting all
+    forty-six declared tables for the revisions that create five.
     """
-    live = Table("live", MetaData(), CheckConstraint("a IN ('x')", name="a_is_known"))
+    declaration = MetaData()
+    live = Table("live", declaration, CheckConstraint("a IN ('x')", name="a_is_known"))
     frozen_copy = Table("frozen", MetaData(), CheckConstraint("a IN ('y')", name="a_is_known"))
+    other = Table("other", declaration, CheckConstraint("b IN ('z')", name="b_is_known"))
 
     with pytest.raises(AssertionError, match="_EMISSION_CALLABLES"):
         _emitted(_module(_FROZEN={"live": {"a_is_known": "a IN ('y')"}}, _TABLES=[live]))
@@ -718,6 +936,9 @@ def test_a_freezing_revision_may_not_fall_through_to_the_live_declaration() -> N
 
     assert _emitted(_module(_TABLES=[live])) == [live]
     assert _emitted(_module()) is None
+
+    assert _emitted(_module(METADATA=declaration)) == [live, other]
+    assert _emitted(_module(METADATA=declaration, _TABLES=[live])) == [live]
 
 
 @pytest.mark.parametrize("revision", sorted(FROZEN))

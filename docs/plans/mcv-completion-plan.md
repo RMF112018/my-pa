@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-One hundred and nineteen Python modules under `src/my_pa` and one hundred and seven test modules —
+One hundred and nineteen Python modules under `src/my_pa` and one hundred and eight test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -351,7 +351,27 @@ rediscovered.
   assertion** — extractor identity, extractor version, the truncation flag, and
   `observed_at` against `processed_at` can each be corrupted with both test tiers
   green. WP-4 is what builds on those columns, so this belongs first in that
-  package rather than in the middle of its list.
+  package rather than in the middle of its list. *Corrected 2026-08-08: **closed,
+  and the four fields were not in the same state**, which is why the bullet
+  reading them as one item understated part of it and overstated the rest.
+  Measured field by field before anything was written. `observed_at` was already
+  pinned end to end, against the fixture file's modification time — an
+  independent fact, not another read of the row — so nothing was added to it.
+  `extractor` had assertions, and they were **self-referential**: both sides were
+  fed from the same read, so renaming the extractor left them green. That was
+  measured rather than argued — with the constant renamed, the pre-existing
+  assertions passed and only the new one failed. `extractor_version` and
+  `is_truncated` had **no read-back assertion anywhere in the suite**; the three
+  existing `is_truncated` assertions concern disclosure truncation, which is a
+  different thing wearing the same name. Each field is now pinned against an
+  independently known expected value rather than against whatever the row holds,
+  and each was proven non-vacuous by planting a corruption and reading the
+  failure. The truncation flag is parametrised over both values with the
+  known-caught case beside the plant in the same parametrisation, because a
+  boolean pinned only at `False` is satisfied by a column that is always `False`.
+  These land across the FAST, `database` and `e2e` tiers, and only the contract
+  assertions run in FAST — the PostgreSQL round trip is `database`-tier and is
+  not FAST coverage.*
 - **`coverage_for` runs outside `persistence.search`'s redaction path**, so a
   `SQLAlchemyError` from the coverage read escapes carrying SQL and a bound
   identifier. Not the query-leak path, since nothing there binds query text, but
@@ -364,7 +384,22 @@ rediscovered.
   paragraph and scheduled here again.
 - **No `statement_timeout` is configured anywhere.** The functional index removes
   the sequential scan as the only possibility without bounding what a query can
-  cost. WP-4 owns process and connection configuration.
+  cost. WP-4 owns process and connection configuration. *Corrected 2026-08-08:
+  **this bullet is false at `6e491c2`.** `statement_timeout` is configured, on
+  the connection rather than in the server, and it cannot be configured away.
+  `src/my_pa/bootstrap/settings.py:244` carries `statement_timeout_ms` as a
+  validated `MY_PA_` field with `gt=0` and a `DEFAULT_STATEMENT_TIMEOUT_MS`
+  default (`:109`); `src/my_pa/bootstrap/gateway.py:163` and `:166` pass it to
+  **both** engines as a libpq `options` connection parameter. A `database_url`
+  smuggling its own `options=-c statement_timeout=0` is refused rather than
+  honoured — the four cases are pinned in `tests/unit/test_settings.py`
+  (`test_the_statement_timeout_cannot_be_configured_away`,
+  `test_a_misspelled_statement_timeout_is_not_silently_ignored`) and the
+  both-engines property in `tests/unit/test_gateway_composition.py:175`. Closed
+  by #52 at `6e491c2`, which is the change that also wrote this correction's
+  subject into existence. The superseded wording is kept and negated rather than
+  deleted, per the `D-78`/`D-81` shape. No new `D-` identifier is minted — see
+  the identifier-reservation note under section 13's decision table.*
 - **`eligible` is a required integer in the `v1` disclosure** and no integer is
   true for an unmeasured scope. Making it absent is a contract change gated by
   `P00-OD-004`.
@@ -374,6 +409,77 @@ rediscovered.
   (it is `observe_object`); `INDEXED_CONFIGURATIONS` is read as a rebindable
   module global; the offline DDL test asserts constraint names but not index
   names; and `mypy` is configured over a wider tree than the gate runs.
+  *Corrected 2026-08-08: **three of these five are closed at `6e491c2` and this
+  bullet still asserts all five.** Taken in the order written. **(1) The
+  `extractions` check constraint — open**, and the only one of the five whose
+  wording still holds exactly as written. **(2) `record_object`
+  — closed.** No `record_object` symbol occurs anywhere in the repository; the
+  function is `observe_object` at
+  `src/my_pa/infrastructure/persistence/registry.py:246`, and the comment that
+  named the wrong one is gone. Closed by #52 at `6e491c2`. **(3)
+  `INDEXED_CONFIGURATIONS` — closed, and closed more strongly than this bullet
+  asked.** Rebindability was the wrong property to chase: the value is resolved
+  once at import into the `literal_column` every statement in the module holds,
+  so rebinding the global after import changes no statement, and the guard in
+  `_configuration` (`src/my_pa/infrastructure/persistence/search.py:330`) refuses
+  any name outside the closed set before it can reach SQL interpolation.
+  `src/my_pa/infrastructure/persistence/capture_search.py:186` carries the same
+  guard for the second plane. Closed by #52 at `6e491c2`. **(4) The offline DDL
+  test — open, and narrower than this bullet says.** The bullet reads as though
+  index names are unpinned; they are not. Both functional GIN indexes are pinned
+  online by `EXPLAIN`-plan assertion —
+  `tests/search_quality/test_lexical_search.py:3727` for `extractions_full_text`
+  and `tests/search_quality/test_capture_search.py:285` for
+  `capture_versions_full_text`, with the index *definition* additionally checked
+  at `tests/schema/test_capture_schema_migration.py:781`. The residue is the
+  **offline `--sql` review artifact alone**:
+  `test_offline_mode_emits_the_knowledge_ddl_without_connecting`
+  (`tests/schema/test_knowledge_schema_migration.py:182`) asserts the schema, the
+  tables, the unique constraints and the check constraints, and asserts nothing
+  about indexes — so the artifact a reviewer reads without a server does not
+  attest them. That is a disclosure gap in one artifact, not an unpinned index,
+  and it should be stated that way rather than as a wider hole. **It was open
+  when this correction was written and is closed by the change carrying it**:
+  the offline test now asserts three whole `CREATE INDEX` statements rather than
+  three names, because a name alone is satisfied by the same name over a plain
+  btree — the expression and the access method are the part worth attesting. It
+  is a subset assertion and says so, since the chain emits further indexes into
+  `knowledge` that it does not attest. **(5) `mypy` —
+  closed, and closed before either of the two pull requests that have since
+  restated it as open.** `D-64` widened both workflow jobs to a bare
+  `python -m mypy` at `08e7c81` (#33); `pyproject.toml:204` holds
+  `files = ["src", "migrations", "apps"]` and
+  `.github/workflows/repository-checks.yml:101` and `:248` invoke `mypy` with no
+  path argument, so the configured tree and the gated tree agree by construction
+  rather than by a maintained number. **#51's body restated this item as
+  remaining, and #52 did not correct it** — in both cases the list was inherited
+  from this bullet rather than recomputed, which is the defect this correction
+  exists to stop propagating. Neither pull request's history is rewritten; the
+  correction is recorded here, where the list they inherited from lives, and as a
+  comment on #51. **`D-64`'s invariant was held by three prose comments and
+  nothing else until the change carrying this correction, and is now
+  mechanized**: `tests/architecture/test_ci_invokes_mypy_over_the_declared_tree.py`
+  parses the workflow and fails on any `mypy` invocation in any job that carries
+  a path argument, and separately asserts that every repository root holding
+  Python is either in `[tool.mypy] files` or named as deliberately unchecked. It
+  is a parse and not a text search, and the reason is measured: a search for the
+  string `mypy src` in that workflow matches four times, and all four are the
+  prose comments explaining why it must not be written. The parser is
+  hand-written over the block-YAML subset the workflows use, because no YAML
+  library is available to this repository. **Its first version claimed to raise
+  on any construct it did not understand, and that claim was false** — an
+  independent review at `f44f45d` put the `D-64` defect back into the real
+  workflow behind a folded `>` scalar and behind a `.yaml` suffix, and watched
+  the guard stay green both times. A guard that advertises fail-closed and
+  fails open is worse than no guard, because the disclosure buys confidence the
+  mechanism has not earned. The parser now folds `>` per YAML's rules, reads
+  both suffixes GitHub honours, and unquotes only simple quoting while raising
+  on the rest; its docstring is a four-way ledger — what it reads, what it
+  reads without interpreting, what it raises on, and what it ignores — rather
+  than a single claim of totality. The superseded wording is kept and
+  negated rather than deleted,
+  per the `D-78`/`D-81` shape. No new `D-` identifier is minted — see the
+  identifier-reservation note under section 13's decision table.*
 
 ### What the WP-3 reviews cost, and what they bought
 
@@ -1228,7 +1334,7 @@ managed-document write and grants the source-provider port nothing.
 | D-96 | **No twelfth `v1` error code.** `D-82` stands undisturbed | `contracts/v1/errors.py` stays closed at **eleven**. WP-7 does not need a twelfth: the pipeline's idempotency is *stage replay returning prior output* (`11:212`), which is not a client-facing error at all, and `D-82`'s standing disposition — `conflict` with `safe_details: ["idempotency_key"]` — already serves the save path and WP-6 shipped it. **The cost is now measured rather than argued.** A twelfth member moves **two** already-merged constraint texts in opposite directions: `jobs.last_error_code_is_a_public_error_code` is **still derived** in `7e5a1fb93d62` and would move, reddening `test_no_revision_derives_a_closed_set_outside_the_allowlist` and forcing a freeze of a revision WP-7 has no other reason to touch; while `capture_job_error_code_is_a_public_error_code` is **frozen** in `1a4c9e77b2d5` and would *not* move, so head silently stops admitting the new code on the capture plane — the same failure shape `D-91` measured at the capability site. Plus `18_PROPOSED_API_AND_CONTRACT_PACKAGE.md:344`'s generated-client compatibility evidence and an operator-authorized scope change. If a later package wants it, **it needs its own decision row before implementation starts, not at review** | Adopted in WP-7. Invalidated by an operator-authorized `v1` scope change with compatibility evidence |
 | D-97 | `unicode_code_point_v1` is written as a **literal inside the frozen revision**, not read from a Python constant, so `D-86`'s ledger gains no new site | `capture_spans.offset_basis` is constrained to the single value `'unicode_code_point_v1'`. Writing that literal in the revision keeps the value where the freeze mechanism already owns it; deriving it from a Python constant would create a **new** single-value-embedding site of exactly the class `D-86` records as its blind spot, and would oblige the guard's docstring to name it. Confirmed against the specification: **`unicode_code_point_v1` is the specification's own name, not this plan's invention** — `../specs/quick-capture/10_SOURCE_AUTHORITY_AND_PROVENANCE_MODEL.md:82`, again at `../specs/quick-capture/09_LOGICAL_DATA_MODEL.md:177`, and in the contract example at `18:293`. The hypothesis that the plan invented it is **refuted** | Adopted and implemented in WP-7. Invalidated by a second offset scheme, at which point the constraint becomes a closed set and takes the freeze mechanism proper |
 | D-98 | "Every proposal carries at least one span" is a **`DEFERRABLE INITIALLY DEFERRED` constraint trigger**, not an application invariant | PostgreSQL cannot express a `[1..n]` cardinality across tables declaratively. The alternative — an application invariant plus a `database`-marked test — is "immutability as a property of the code that happens to be running", which `1a4c9e77b2d5`'s own docstring rejects for the same reason; and `QC-AC-011` is the criterion most likely to be violated by a future repair script, which does not run the application. Two triggers, not one: `AFTER INSERT` on `capture_proposals` and `AFTER DELETE` on `capture_proposal_spans`, so the rule cannot be evaded by writing the rows and then removing the link. **The `downgrade base` residue was measured, both directions**: `7e5a1fb93d62` drops the schema with `RESTRICT` and `1a4c9e77b2d5` had to drop its function explicitly, so this revision does too — measured, `downgrade base` leaves **only `public.alembic_version`**, and with the explicit `DROP FUNCTION` removed it fails with `DependentObjectsStillExist`. The revision's docstring says so | Adopted and implemented in WP-7. Invalidated by a measured inability to make the trigger's function reversible, which would need its own row rather than a silent fallback to the application invariant |
-| D-99 | The `D-81` guard's blind spots are **disclosed in its own docstring** and **not fixed in WP-7** | Three findings sit outside WP-7's scope and are named rather than absorbed. **(1)** Revision `4b9f0d27ac31` is **structurally invisible** to the guard: it calls `METADATA.create_all(bind)` on `my_pa.infrastructure.migration.control_plane`'s **separate** `MetaData`, never imports `my_pa.infrastructure.persistence.tables`, and holds no `Table` in its namespace, so `test_every_revision_declares_its_emission_readably` `continue`s past it and `_emitted` returns `None` — and `control_plane.py` derives **five** further closed-set constraints from live enums (`RunStatus`, `PhaseStatus`, `TableState`, `QuarantineCode`, `AuditEvent`). This is a larger hole than the documented `D-86` class: not detected-and-allowlisted but structurally unreachable, because `DECLARATION` hard-codes one declaration module. **(2)** The guard's own docstring said "`ALLOWED` is the ten sites in the **three** revisions `D-81` deliberately does not edit" while its data and its own `test_the_allowlist_names_only_revisions_this_package_does_not_edit` both say **two** — a false statement inside the control WP-7 depends on. **(3)** `release_job` has no bounded exponential backoff or jitter against `11:216` — a released job returns to `queued` and is immediately reclaimable — and it is on the **shared** plane, so adding backoff would change enrollment-extraction retry behaviour. **What WP-7 does**: correct (2), and add (1) to the guard's docstring as a **named blind spot**. **What WP-7 does not do**: fix (1) or (3). A control that names its own blind spot beats one that implies totality; widening the guard to a second `MetaData` is its own package with its own review, and (3) is a change to merged behaviour WP-7 has no criterion for | Adopted in WP-7, with (1) and (3) left open and named. Invalidated by a package that widens the guard, which must then delete the disclosure rather than leave it stale |
+| D-99 | The `D-81` guard's blind spots are **disclosed in its own docstring** and **not fixed in WP-7** | Three findings sit outside WP-7's scope and are named rather than absorbed. **(1)** Revision `4b9f0d27ac31` is **structurally invisible** to the guard: it calls `METADATA.create_all(bind)` on `my_pa.infrastructure.migration.control_plane`'s **separate** `MetaData`, never imports `my_pa.infrastructure.persistence.tables`, and holds no `Table` in its namespace, so `test_every_revision_declares_its_emission_readably` `continue`s past it and `_emitted` returns `None` — and `control_plane.py` derives **five** further closed-set constraints from live enums (`RunStatus`, `PhaseStatus`, `TableState`, `QuarantineCode`, `AuditEvent`). This is a larger hole than the documented `D-86` class: not detected-and-allowlisted but structurally unreachable, because `DECLARATION` hard-codes one declaration module. **(2)** The guard's own docstring said "`ALLOWED` is the ten sites in the **three** revisions `D-81` deliberately does not edit" while its data and its own `test_the_allowlist_names_only_revisions_this_package_does_not_edit` both say **two** — a false statement inside the control WP-7 depends on. **(3)** `release_job` has no bounded exponential backoff or jitter against `11:216` — a released job returns to `queued` and is immediately reclaimable — and it is on the **shared** plane, so adding backoff would change enrollment-extraction retry behaviour. **What WP-7 does**: correct (2), and add (1) to the guard's docstring as a **named blind spot**. **What WP-7 does not do**: fix (1) or (3). A control that names its own blind spot beats one that implies totality; widening the guard to a second `MetaData` is its own package with its own review, and (3) is a change to merged behaviour WP-7 has no criterion for | Adopted in WP-7, with (1) and (3) left open and named. Invalidated by a package that widens the guard, which must then delete the disclosure rather than leave it stale. *Corrected 2026-08-08: **that invalidation condition has fired for (1), and this row is corrected rather than left standing.** The guard no longer holds a declaration-module name at all: `_declaration_modules()` discovers them by shape — a module-level `MetaData` plus at least one module-level `Table` bound to it — across a `pkgutil` walk of `my_pa`, so `control_plane` is found, and a third declaration module added tomorrow is covered with no edit to the guard. The blind-spot paragraph is gone from the docstring, as this row required. **(1) is closed and (3) remains open and deferred.** Finding (2) has not recurred: it was a docstring saying "three revisions" where the data said two, WP-7 corrected the word to "two", and the widening now makes three the correct answer again — so the docstring is true, for a different reason than when it was first written. Nothing about (2) is open. What the widening bought is narrower than "fixed" and is stated at that strength in the guard itself: `4b9f0d27ac31`'s five sites moved from **structurally unreachable** to **detected and vocabulary-pinned**, not to frozen. Freezing them means editing a merged revision, which `D-81` exists to avoid. Each allowlist row now records the exact vocabulary its site emits, so a member added to `RunStatus`, `PhaseStatus`, `TableState`, `QuarantineCode` or `AuditEvent` reddens the guard — none of which was true of any of them before. Two further findings came out of the measurement, and both say the hazard was undercounted rather than overcounted: **the independent reviewer's own list of this hole named nine sites and eight sources, and both figures were low** — `quarantine_review_state_is_known` derives from `QuarantineReviewState`, which that list omits, and `jobs.last_error_code_is_a_public_error_code` derives from the public error-code set rather than from a `StrEnum`, so a sweep looking for the declarative enum helper alone never sees it. No count of the allowlist is restated here on purpose; the guard asserts its own size and its own revision set, and a figure copied into this row would rot the way `D-21` describes. No new `D-` identifier is minted — see the identifier-reservation note below this table.* |
 | D-100 | **`D-87`'s cost model is invalidated by measurement and replaced, and the replacement is independently recomputed and confirmed. The budget is accepted at 45.05s against a 60s hard limit, 9.95s under the 55s policy trigger that is the number a package plans against; the marginal cost of a FAST test is ≈42 ms, not ≈16 ms** | `D-87` accepted the FAST budget on a model of **≈16 ms per test, roughly linear in count**, and set its own invalidation condition: "a package introducing a FAST test with a materially different cost profile, **which the re-measurement requirement exists to catch**." **The re-measurement caught it, which is the control working rather than failing.** Measured by the orchestrator on one machine in one session, so the two figures are comparable rather than inherited from separate runs: `main` at `c0854b6` **2400 passed / 367 deselected of 2767 collected, 38.51s**; WP-7 at `61c178a` **2557 passed / 395 deselected of 2952 collected, 45.05s**. That is **+157 selected tests for +6.54 s**, and 6.54 s ÷ 157 = **≈41.7 ms per test**, or 41.7 ÷ 16 = about **2.6×** `D-87`'s figure. **Independently recomputed and confirmed, which is what separates a measurement from a claim.** The reviewer re-derived this row end to end, paired, on one machine in one session from a clean export, and reached the same place by a separate path: `main` at `c0854b6` **2400 passed / 367 deselected of 2767 collected, 38.16 s**; WP-7 at `a06bd95` **2557 passed / 395 deselected of 2952 collected, 44.91 s** — **+157 selected tests for +6.75 s**, and 6.75 s ÷ 157 = **≈43.0 ms per test**, 43.0 ÷ 16 = **≈2.69×**. Both universes are stated inline so either can be re-derived; the selected/deselected/collected counts are identical across the two, and the costs agree to within ≈3%. Wall-clock totals are machine- and session-dependent, so **the ratio is the portable figure and the seconds are not**. **Where it did *not* go, measured rather than assumed — and each percentage named to the measurement it comes from, because these are two different attributions and the narrower one sits inside the wider**: the transport-parity cartesian everyone watches grew `12 × 3` → `13 × 3` for **+2 tests and +0.61 s** (module total 66/8.89 s → 68/9.50 s), so the **cartesian term** is 0.61 ÷ 6.54 = **9.3% of the increase** and **≈91% falls outside it**; the whole `tests/contract` tier — which *contains* that cartesian module — grew **+6 tests and +0.92 s**, so **`tests/contract`** is 0.92 ÷ 6.54 = **14.1%** and **≈86% falls outside `tests/contract`**. **The 86% is the `tests/contract` attribution, not the cartesian one**; the reviewer reproduced the `tests/contract` term at **+6 tests / +0.97 s** = 0.97 ÷ 6.75 = 14.4%, ≈86% outside, in their own universe. The residue is 157 − 6 = ~151 new deterministic units for 6.54 − 0.92 = 5.62 s, and 5.62 s ÷ 151 = **≈37 ms** each, none individually slow enough to enter the slowest-twelve list (whose floor is 0.22 s and whose entries are all pre-existing transport tests). **The consequence for the packages that follow, stated against the denominator that binds — the 55 s policy trigger, not the 60 s hard budget**: headroom to **55 s** is 55 − 45.05 = **9.95 s**, and 9.95 ÷ 0.0417 = **≈239 more FAST tests** at the orchestrator's profile; in the reviewer's universe it is 55 − 44.91 = **10.09 s**, and 10.09 ÷ 0.0430 = **≈235**. **A package plans against ≈235**, the lower of the two, and re-measures before it spends any of it. The **60 s** figure is the hard budget and is kept in view rather than deleted, so a reader can see both denominators and which one binds: headroom to 60 s is **14.95 s ≈ 359 tests** (orchestrator) or **15.09 s ≈ 351** (reviewer), against the ≈930 that `D-87`'s ≈16 ms model predicts for that same 60 s. Crossing 55 s does not fail the build — it fires the standing policy below, which is why 55 s is the planning number and 60 s is only the wall. An earlier statement of this row gave the consequence as ≈360 against the 60 s budget while naming 55 s as the trigger in the same passage; the denominator is corrected here and a bare number whose denominator must be inferred is not left standing, since that inference is how the error arose. **`D-87`'s conclusion survives and only its arithmetic is replaced** — no WP-7 work needs re-marking, because every new behavioural test is already `database`-marked and FAST *selection* was unchanged across the correction cycle; and the standing policy is unchanged: a package that would take FAST past **55 s** moves the cartesian matrices and parity matrices off the FAST tier, and **coverage is not trimmed to fit** (`../../AGENTS.md` section 7). **The next package re-measures on its own machine in its own session before adding FAST tests, and compares against a base it measured itself** — comparing two numbers produced by different agents at different times is what made this figure look like drift until it was measured properly. **`D-87`'s own forward projection is superseded here rather than rewritten in place, because it carries the identical defect this row was corrected for**. **That defect was `MINOR-7`, raised as a MINOR finding against an already-approved head at `a06bd95` and fixed in cycle rather than ledgered — not a BLOCK. The only BLOCK this package has seen was `QC-AC-050` at `4fe30e8`, and it was unrelated. An earlier statement of this sentence called it "the identical defect this row was BLOCKed for", which was false, was written by the orchestrator, and is the stale-claim class landing inside the row that exists to correct a number**: `D-87` reads "the ~22 s of headroom is worth roughly **1400** more FAST tests" while naming **55 s** in the same row as the trigger for moving the matrices off FAST — the 60 s denominator again, against a 55 s policy. Both of `D-87`'s figures are superseded: **≈1400 is wrong twice over**, once on the ≈16 ms model this row replaces and once on the 60 s denominator, and the number a package plans against is **≈235** above. The original row's wording is left verbatim per this campaign's practice of preserving superseded decisions rather than rewriting their history, and `D-87` now carries a dated forward pointer to this row in the `D-78`/`D-81` shape — added beside the ≈1400, not substituted for it — so a reader who never reaches `D-100` is not left planning against a number that is wrong twice over; **the correction is that the defect was a class of two, not a case of one, and the second instance was found by the worker that fixed the first** | Accepted for WP-7 and carried forward. Invalidated by a further re-measurement returning a materially different marginal cost, which must then correct this row's arithmetic rather than restate its conclusion |
 | D-101 | **Resolve WP-8's six overlapping operator decisions as one fail-closed policy** | `O-15` and `RI-OD-011`: deterministic launch context is the only automatically accepted link; inferred links stay proposed. `O-16` and `RI-OD-012`: commitments, decisions, financial facts or amounts, critical dates, contradictions, and sensitive relationship conclusions always require review, regardless of confidence; low-risk technical enrichment alone may avoid mandatory review. `O-17`: an accepted record grants no external-action authority. `O-18`: explicit Conversation Log creates one skeletal event, while a conversation inferred from a Quick Note remains proposed. These are the recommendations already carried by the blocking table, now adopted under the operator authority delegated for WP-8 rather than silently assumed in code | Adopted and implemented in WP-8. Invalidated only by a later explicit operator policy revision, which must change the decision register, code, and tests together |
 | D-102 | **Conversation participants are deferred to WP-9; WP-8 does not add a permanently-empty participant table** | The WP-8 in-scope sentence named participant associations, but this build has no person/organization identity record and WP-7 deliberately restricted entity mentions to deterministic document/project identifiers and URLs. A participant row would therefore have no valid target or writer. Adding nullable free text would duplicate sensitive capture content and contradict the evidence-span rule; adding an unpopulatable table would violate `AGENTS.md` section 2. WP-8 still creates the explicit skeletal Conversation event required by `O-18`, with unknown participants represented by absence as the specification permits. WP-9 owns person identity and unresolved people mentions and is the first package able to populate participant associations honestly | Deferred, not implemented. Invalidated when WP-9 supplies the identity/mention target and a bounded writer. *Corrected 2026-08-08: **the invalidation condition fired and the row was not updated, so this state cell is false at `8dd4ef6`.** WP-9 supplied both halves it named. `migrations/versions/20260804_7f2a9d6c4e18_create_relationship_identity_profiles.py:181` creates `knowledge.relationship_conversation_participants` unconditionally, with `a_conversation_participant_names_one_identity_target` (`:188`) enforcing that exactly one of `person_id` or `unresolved_mention_id` is present — the identity target whose absence was this row's entire reason to defer — plus the two partial unique indexes at `:192` and `:195`, triggers, and a matching `DROP TABLE` in the downgrade. The table is declared in `infrastructure/persistence/tables.py:2209-2210` and read by `infrastructure/persistence/relationships.py:40, 343-344`. **The deferral was correct when it was taken**, and the reasoning that produced it — no identity record, no honest writer, and `AGENTS.md` section 2's bar on an unpopulatable table — is why WP-9 was the right package to own it. Only the terminal state is wrong: it is **implemented by WP-9**, not **deferred**. The superseded wording is kept and negated rather than replaced, per the `D-78`/`D-81` shape. No new `D-` identifier is minted — see the note on identifier reservation below this table.* |
@@ -1448,12 +1554,15 @@ public research, `RI-OD-010` offline posture, `RI-OD-013` importance labels,
 `RI-OD-014` device matrix, `RI-OD-015` voice capture, `RI-OD-017` independent
 usability and privacy review gate before release.
 
-### Five questions this plan raises that no ledger contains
+### Six questions this plan raises that no ledger contains
 
 Ratification on 2026-08-02 answered the third of these outright, changed the
 footing of the first and the fourth, and added a fifth. The answered one is kept
 and marked rather than deleted, because a list that quietly drops the question it
-resolved teaches a reader nothing about how it was resolved.
+resolved teaches a reader nothing about how it was resolved. The sixth was opened
+on 2026-08-08 by a gap #52 disclosed and deliberately left, and it is a contract
+change rather than a repair, which is why it is a question here rather than work
+in a package.
 
 1. **The MCV completion declaration.** *Still reserved to the operator.* `AGENTS.md` section 1
    said the MCV ran "through August 2, 2026." When this was written that was
@@ -1558,6 +1667,36 @@ resolved teaches a reader nothing about how it was resolved.
    assumes. The decision that will eventually be needed is `MCP-OP-001`:
    whether the connector is sequenced after the MCV, as its own package
    recommends, or reprioritised ahead of it. Nothing needs deciding today.
+
+6. **`_Captures.search` lets a `CaptureSearchInternalError` reach the application
+   past the port's vocabulary, and closing it is a contract change.** *Opened
+   2026-08-08.* #52 found this on the way to something else, deliberately did not
+   fix it, and recorded it at the site in
+   `src/my_pa/infrastructure/persistence/unit_of_work.py` — pinned by a test read
+   from the `except` clauses themselves, so closing the gap without removing the
+   note reddens rather than leaving a false sentence behind. That is disclosure
+   done well, and it is why this entry is a question rather than a defect
+   awaiting a worker.
+
+   The reason it is listed here rather than fixed is that the two available
+   repairs are not equivalent, and neither is the orchestrator's to choose.
+   **Either** the port's error vocabulary widens to admit the internal-error
+   case, which changes what every caller of the capture port must handle;
+   **or** the adapter translates the internal error into an existing member of
+   the vocabulary, which is the narrower change but discards the distinction
+   between "the search plane failed" and whatever member it is folded into. The
+   first is a contract change in the sense `P00-OD-004` uses for the `eligible`
+   field; the second is a defect-laundering risk of exactly the kind section 10
+   of `AGENTS.md` forbids, and it would have to be argued rather than assumed
+   safe. Nothing in the repository establishes which the operator wants.
+
+   No `D-` identifier is minted for it — `D-106` and `D-107` are reserved, for
+   the reason recorded under section 13's decision table — and no ledger this
+   plan tracks contains a question it fits, which is why it is here. It blocks no
+   package in section 12 and is deliberately **not** added to the counts above,
+   on the same grounds as the connector's nine: those counts cover the three
+   ledgers this plan tracks, and this is not in one of them. It is direction-
+   neutral: the gap and both repairs are identical under either product line.
 
 ### Nine more package decisions arrived with the v2.2 revision
 

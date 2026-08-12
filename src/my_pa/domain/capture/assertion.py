@@ -73,6 +73,7 @@ class Assertion:
     version_id: str
     proposal_id: str
     decision_id: str
+    principal_id: str
     assertion_type: ProposalType
     state: AssertionState
     accepted_at: datetime
@@ -84,6 +85,7 @@ class Assertion:
             (self.version_id, IdKind.CAPTURE_VERSION),
             (self.proposal_id, IdKind.PROPOSAL),
             (self.decision_id, IdKind.REVIEW_DECISION),
+            (self.principal_id, IdKind.PRINCIPAL),
         ):
             validate_identifier(value, kind)
         ensure_utc(self.accepted_at)
@@ -96,11 +98,16 @@ class PromotionReceipt:
     receipt_id: str
     assertion_id: str
     decision_id: str
+    principal_id: str
     policy_version: str
     issued_at: datetime
 
     def __post_init__(self) -> None:
-        validate_identifier(self.receipt_id, IdKind.RECEIPT)
-        validate_identifier(self.assertion_id, IdKind.ASSERTION)
-        validate_identifier(self.decision_id, IdKind.REVIEW_DECISION)
+        for value, kind in (
+            (self.receipt_id, IdKind.RECEIPT),
+            (self.assertion_id, IdKind.ASSERTION),
+            (self.decision_id, IdKind.REVIEW_DECISION),
+            (self.principal_id, IdKind.PRINCIPAL),
+        ):
+            validate_identifier(value, kind)
         ensure_utc(self.issued_at)

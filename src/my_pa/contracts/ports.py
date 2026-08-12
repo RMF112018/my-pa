@@ -62,6 +62,7 @@ from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.policy.decision import validate_policy_version
+from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.relationship.identity import (
     IdentityCandidateSet,
     IdentityObservation,
@@ -71,6 +72,15 @@ from my_pa.domain.relationship.identity import (
 )
 from my_pa.domain.relationship.profile import OrganizationProfile, PersonProfile
 from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
+from my_pa.domain.situation.situation import (
+    Frame,
+    Project,
+    ProjectState,
+    PulseItem,
+    Situation,
+    SituationState,
+    Trace,
+)
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.provider import SourceProvider
 from my_pa.domain.source.registry import ConfiguredSource
@@ -87,18 +97,24 @@ __all__ = [
     "CaptureSummary",
     "EnrollmentRepository",
     "EvidenceUnavailableError",
+    "FrameRepository",
     "KnowledgeRecord",
     "KnowledgeRepository",
     "Operation",
     "OperationQueue",
     "PortError",
+    "ProjectRepository",
+    "PulseRepository",
+    "RelationshipEventRepository",
     "RelationshipRepository",
     "RepositoryFailureError",
     "ReviewDecisionRequest",
     "ReviewRepository",
     "SearchOutcome",
+    "SituationRepository",
     "SourceProviders",
     "SourceRepository",
+    "TraceRepository",
     "UnitOfWork",
     "UnknownScopeError",
 ]
@@ -460,16 +476,23 @@ class CaptureRepository(ABC):
     carries, so the two halves fail independently: the port offers no such call,
     and the server refuses one made anyway.
 
-    **Nothing here takes an owning principal as a filter** (`D-72`).
-    `owner_principal_id` is stored on every version because `ADR-003` clause 6
-    requires it, and read back so a caller can see who wrote one, but it is not
-    an input to any lookup. Identity in this build is process-scoped, so
-    owner-scoped reads would make a capture unreadable after a restart while
-    enforcing a distinction a single-local-principal deployment cannot make.
+    **Every operation takes the authenticated Principal as an input** (WP-03,
+    `PKL-MYPA-D-WP03-001`, superseding `D-72`). `owner_principal_id` was stored
+    on every version because `ADR-003` clause 6 required it and was read back
+    without ever deciding anything; under the ratified campaign it decides
+    everything: a read, a list, a search, and a revise each answer only within
+    the caller's own partition. `D-72`'s argument — identity was process-scoped,
+    so owner equality would strand captures across restarts — is dissolved
+    rather than overruled: the local operator's identity is now durable
+    (`domain.identity.binding`), so the same person holds the same partition
+    across restarts. The parameter is `principal_id` as the knowledge schema's
+    text vocabulary (`prn_…`) because that is what the rows carry; it is the
+    composition root's authenticated Principal and never a request field
+    (MU-AC-02).
     """
 
     @abstractmethod
-    def admit(self, request: CaptureAdmissionRequest) -> CaptureAdmission:
+    def admit(self, request: CaptureAdmissionRequest, *, principal_id: str) -> CaptureAdmission:
         """Store one capture version and everything that commits with it.
 
         The capture (for a new chain), the version, the receipt, the submission,
@@ -479,27 +502,34 @@ class CaptureRepository(ABC):
         own connection, and this stores the reference (`D-34`).
 
         Raises `domain.capture.errors.CaptureConflictError` when the idempotency
-        key is already bound to different content, and `UnknownScopeError` when
-        `capture_id` names no capture.
+        key is already bound to different content *by this Principal*, and
+        `UnknownScopeError` when `capture_id` names no capture this Principal
+        owns — a capture another Principal owns earns the same refusal a
+        nonexistent one does, so the answer maps nothing. The request's own
+        `principal_id` must equal this parameter and is verified below rather
+        than trusted.
         """
 
     @abstractmethod
-    def version(self, capture_id: str, *, version_id: str | None = None) -> CaptureVersion | None:
+    def version(
+        self, capture_id: str, *, version_id: str | None = None, principal_id: str
+    ) -> CaptureVersion | None:
         """One stored version of `capture_id`, or `None`.
 
         `version_id` omitted means the current one, which is the greatest version
         number the capture holds. Named, it means exactly that version — a
         superseded predecessor included, which is the "independently
         retrievable" half of `QC-AC-010`. A version of another capture is `None`,
-        the same answer as one that does not exist.
+        the same answer as one that does not exist — and a capture another
+        Principal owns is `None` too, the third absence with the same face.
         """
 
     @abstractmethod
-    def captures(self, *, limit: int) -> tuple[CaptureSummary, ...]:
-        """One bounded page of captures, newest first."""
+    def captures(self, *, limit: int, principal_id: str) -> tuple[CaptureSummary, ...]:
+        """One bounded page of the Principal's own captures, newest first."""
 
     @abstractmethod
-    def search(self, request: CaptureSearchRequest) -> CaptureSearchOutcome:
+    def search(self, request: CaptureSearchRequest, *, principal_id: str) -> CaptureSearchOutcome:
         """One bounded page of capture versions whose stored text matched.
 
         Exact at word granularity always, and at character granularity where
@@ -558,8 +588,13 @@ class ReviewRepository(ABC):
     """Review cases and the only port capable of canonical promotion."""
 
     @abstractmethod
-    def cases(self, *, limit: int) -> tuple[ReviewCase, ...]:
-        """One bounded page, oldest case first."""
+    def cases(self, *, limit: int, principal_id: str) -> tuple[ReviewCase, ...]:
+        """One bounded page for this Principal, oldest case first.
+
+        `principal_id` is the authenticated caller's identifier: the page is
+        confined to that Principal's partition, and a case belonging to any
+        other Principal is unreachable through this port (MU-AC-04).
+        """
 
     @abstractmethod
     def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
@@ -819,4 +854,201 @@ class UnitOfWork(ABC):
 
         Inside, because an operator-only command whose audit did not commit must
         not have committed either.
+        """
+
+
+# --- WP-06 R5 continuity ports ---------------------------------------------
+#
+# These ports take explicit descriptive arguments and return domain objects,
+# rather than accepting the `application.commands` continuity commands directly.
+# The reason is the dependency direction `contracts` sits under: a port may
+# reference `domain` and `contracts` and nothing outer, so importing an
+# application command here would invert the layering `test_dependency_direction`
+# enforces. This is the same shape `RelationshipRepository` and `ReviewRepository`
+# already take — the application service unpacks its command and calls the port
+# with plain arguments, and the port answers in domain terms.
+#
+# `principal_id` is a parameter on every method, and it is the authenticated
+# caller's partition, not a caller-supplied field: the concrete repository
+# stamps every write with it and filters every read by it, so a continuity
+# record belonging to another Principal is unreachable through these ports
+# (WP-06 acceptance criteria 1, 3, and 4). `PulseRepository.generate_pulse`
+# additionally reads only accepted state (criterion 2), which the migration
+# pins with `pulse_reads_only_accepted_records`.
+
+
+class SituationRepository(ABC):
+    """Situations: open, close, read one, and list within a Principal's partition."""
+
+    @abstractmethod
+    def open_situation(
+        self,
+        *,
+        principal_id: str,
+        title: str,
+        description: str | None,
+        object_refs: tuple[str, ...],
+    ) -> Situation:
+        """Open one Situation for `principal_id`, issuing its identifier."""
+
+    @abstractmethod
+    def close_situation(self, *, principal_id: str, situation_id: str, outcome: str) -> Situation:
+        """Close one Situation the Principal owns, recording its outcome.
+
+        Refuses when `situation_id` names no Situation in this Principal's
+        partition — a Situation belonging to any other Principal is unreachable.
+        Closing never deletes the objects the Situation referenced.
+        """
+
+    @abstractmethod
+    def get_situation(self, principal_id: str, situation_id: str) -> Situation | None:
+        """Return the Situation the Principal owns, or `None`.
+
+        `None` for one that names nothing in this partition, indistinguishable
+        from one that names a Situation owned by another Principal.
+        """
+
+    @abstractmethod
+    def list_situations(
+        self, principal_id: str, state_filter: SituationState | None = None
+    ) -> tuple[Situation, ...]:
+        """One page of this Principal's Situations, newest first."""
+
+
+class FrameRepository(ABC):
+    """Frames: enter one within a Situation, and read a Situation's frames."""
+
+    @abstractmethod
+    def enter_frame(
+        self,
+        *,
+        principal_id: str,
+        situation_id: str,
+        label: str,
+        evidence_refs: tuple[str, ...],
+        alternatives: tuple[str, ...],
+        obligations: tuple[str, ...],
+        uncertainty: str | None,
+        next_authority: str | None,
+    ) -> Frame:
+        """Enter one Frame in a Situation the Principal owns.
+
+        Refuses when the Situation is not in this Principal's partition, so a
+        Frame can never be attached across the boundary.
+        """
+
+    @abstractmethod
+    def get_frames(self, principal_id: str, situation_id: str) -> tuple[Frame, ...]:
+        """Every Frame of a Situation the Principal owns, newest first."""
+
+
+class TraceRepository(ABC):
+    """Traces: record one derived reconstruction and read it back."""
+
+    @abstractmethod
+    def record_trace(
+        self,
+        *,
+        principal_id: str,
+        object_id: str,
+        object_type: str,
+        time_range_start: datetime | None,
+        time_range_end: datetime | None,
+    ) -> Trace:
+        """Record one Trace for `principal_id`. A Trace is a projection, not evidence."""
+
+    @abstractmethod
+    def get_trace(self, principal_id: str, trace_id: str) -> Trace | None:
+        """Return the Trace the Principal owns, or `None`."""
+
+
+class ProjectRepository(ABC):
+    """Projects: create, read one, list, and link a Situation into one."""
+
+    @abstractmethod
+    def add_project(
+        self,
+        *,
+        principal_id: str,
+        name: str,
+        description: str | None,
+        participants: tuple[str, ...],
+    ) -> Project:
+        """Create one Project for `principal_id`, issuing its identifier."""
+
+    @abstractmethod
+    def get_project(self, principal_id: str, project_id: str) -> Project | None:
+        """Return the Project the Principal owns, or `None`."""
+
+    @abstractmethod
+    def list_projects(
+        self, principal_id: str, state_filter: ProjectState | None = None
+    ) -> tuple[Project, ...]:
+        """One page of this Principal's Projects, newest first."""
+
+    @abstractmethod
+    def link_situation(self, *, principal_id: str, project_id: str, situation_id: str) -> None:
+        """Bind a Situation into a Project, both owned by this Principal.
+
+        Refuses when either the Project or the Situation is not in this
+        Principal's partition. Idempotent per (project, situation).
+        """
+
+
+class RelationshipEventRepository(ABC):
+    """Relationship-timeline events, with acceptance gating what Today/Pulse read."""
+
+    @abstractmethod
+    def record_event(
+        self,
+        *,
+        principal_id: str,
+        person_id: str,
+        event_type: RelationshipEventType,
+        occurred_at: datetime,
+        context: str | None,
+        accepted: bool,
+        source_ref: str | None,
+    ) -> RelationshipEvent:
+        """Record one event on a Person's timeline for `principal_id`.
+
+        `accepted` defaults to a proposed event elsewhere; recorded as given
+        here. A proposed event is never read as an accepted timeline fact.
+        """
+
+    @abstractmethod
+    def list_events(self, principal_id: str, person_id: str) -> tuple[RelationshipEvent, ...]:
+        """Every event on a Person's timeline the Principal owns, newest first.
+
+        Includes proposed and accepted events, clearly distinguished by the
+        `accepted` flag, for the relationship briefing.
+        """
+
+    @abstractmethod
+    def list_accepted_events(self, principal_id: str) -> tuple[RelationshipEvent, ...]:
+        """Only the accepted events across this Principal's relationships.
+
+        This is the accepted-timeline read Today and the briefing use: an event
+        that has not passed a human disposition never appears here.
+        """
+
+
+class PulseRepository(ABC):
+    """Pulse: derived attention recommendations, generated only from accepted state."""
+
+    @abstractmethod
+    def generate_pulse(self, principal_id: str) -> tuple[PulseItem, ...]:
+        """This Principal's active Pulse items, highest priority first.
+
+        Returns only items with `accepted_only` true — the structural encoding
+        of "Today/Pulse read only accepted records" (WP-06 criterion 2), which
+        the schema also pins with the CHECK `pulse_reads_only_accepted_records`.
+        Dismissed items are excluded.
+        """
+
+    @abstractmethod
+    def dismiss_pulse_item(self, principal_id: str, pulse_id: str) -> None:
+        """Dismiss one Pulse item the Principal owns.
+
+        Refuses when `pulse_id` names no item in this Principal's partition.
         """

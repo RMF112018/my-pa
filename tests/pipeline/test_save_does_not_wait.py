@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import Engine, Table, func, select, text
-from tests.pipeline.conftest import RICH_NOTE, Saved, drain, save
+from tests.pipeline.conftest import PRINCIPAL_ID, RICH_NOTE, Saved, drain, save
 
 from my_pa.contracts.ports import CaptureSearchRequest
 from my_pa.domain.capture.submission import CaptureKind
@@ -45,6 +45,7 @@ from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind
 from my_pa.infrastructure.persistence.capture_search import search_captures
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, job_for
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
 from my_pa.infrastructure.persistence.tables import (
     JobState,
@@ -272,7 +273,9 @@ def test_the_saved_capture_is_searchable_before_any_worker_runs(engine: Engine) 
         assert _rows(connection, capture_stage_results) == 0, "a stage had already run"
 
         outcome = search_captures(
-            connection, CaptureSearchRequest(query=SearchQuery("buyout"), limit=10)
+            connection,
+            CaptureSearchRequest(query=SearchQuery("buyout"), limit=10),
+            context=capture_context(PRINCIPAL_ID),
         )
     assert [match.version_id for match in outcome.matches] == [saved.version_id], (
         "a saved capture was not searchable until something processed it. "

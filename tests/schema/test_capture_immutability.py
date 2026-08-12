@@ -64,6 +64,7 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.capture import admit_capture
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -130,6 +131,7 @@ def stored(disposable_database: str) -> Iterator[tuple[Engine, str, str]]:
                     "knowledge.capture_jobs CASCADE"
                 )
             )
+            principal_id = issue_identifier(IdKind.PRINCIPAL)
             admission = admit_capture(
                 connection,
                 CaptureAdmissionRequest(
@@ -138,13 +140,14 @@ def stored(disposable_database: str) -> Iterator[tuple[Engine, str, str]]:
                     idempotency_key="immutability-1",
                     request_id="req-immutability",
                     correlation_id=issue_identifier(IdKind.CORRELATION),
-                    principal_id=issue_identifier(IdKind.PRINCIPAL),
+                    principal_id=principal_id,
                     audit_id=issue_identifier(IdKind.AUDIT),
                     classification=Classification.PRIVATE_LOCAL,
                     processing_policy=ProcessingPolicy.LOCAL_ONLY,
                     server_received_at=WHEN,
                     accepted_at=WHEN,
                 ),
+                context=capture_context(principal_id),
             )
         with engine.connect() as connection:
             operation_id = str(

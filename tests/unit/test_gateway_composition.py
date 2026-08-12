@@ -81,14 +81,20 @@ def test_the_process_acts_as_one_authenticated_local_operator(runtime: GatewayRu
     assert runtime.principal.principal_id.startswith("prn_")
 
 
-def test_two_runs_are_two_principals(runtime: GatewayRuntime) -> None:
-    """Stated rather than hidden: the identifier names a run, not a person.
+def test_two_runs_are_one_principal(runtime: GatewayRuntime) -> None:
+    """The identifier names the local operator, not a run (`PKL-MYPA-D-WP03-001`).
 
-    A stable local identity is part of what `P00-OD-010` settles. Deriving one
-    from the host or the account would put a personal value inside an opaque
-    identifier, which `INV-PKL-005` forbids.
+    This inverts the assertion that stood here under `D-67`: a fresh identifier
+    per composition made an enrollment unreadable by the next invocation and
+    would now strand every stored capture behind a dead principal, because
+    capture ownership is partitioned by `principal_id`. The identifier is
+    derived from a fixed namespace UUID in `my_pa.domain.identity.binding` —
+    not from the host or the account — so no personal value sits inside the
+    opaque identifier, which is the part of `INV-PKL-005` the old test was
+    protecting and this one still does.
     """
-    assert local_principal().principal_id != runtime.principal.principal_id
+    assert local_principal().principal_id == runtime.principal.principal_id
+    assert local_principal().principal_id == local_principal().principal_id
 
 
 def test_the_source_lookup_comes_from_the_transaction_and_not_from_here() -> None:

@@ -308,7 +308,8 @@ def _seed_promotion(
     connection.execute(
         text(
             f"INSERT INTO {SCHEMA}.capture_review_cases (review_case_id, proposal_id, capture_id, "  # noqa: S608
-            "version_id) VALUES (:review_case_id, :proposal_id, :capture_id, :version_id)"
+            "version_id, principal_id) VALUES (:review_case_id, :proposal_id, :capture_id, "
+            ":version_id, :principal_id)"
         ),
         promoted,
     )
@@ -324,9 +325,9 @@ def _seed_promotion(
     connection.execute(
         text(
             f"INSERT INTO {SCHEMA}.capture_assertions (assertion_id, version_id, proposal_id, "  # noqa: S608
-            "decision_id, assertion_type, state, normalized_value, accepted_at) VALUES "
-            "(:assertion_id, :assertion_version_id, :proposal_id, :decision_id, "
-            ":assertion_type, 'accepted', "
+            "decision_id, principal_id, assertion_type, state, normalized_value, accepted_at) "
+            "VALUES (:assertion_id, :assertion_version_id, :proposal_id, :decision_id, "
+            ":principal_id, :assertion_type, 'accepted', "
             ":corrected_value, now())"
         ),
         {
@@ -343,16 +344,16 @@ def _seed_promotion(
     if cite_span:
         connection.execute(
             text(
-                f"INSERT INTO {SCHEMA}.capture_assertion_spans (assertion_id, span_id) "  # noqa: S608
-                "VALUES (:assertion_id, :span_id)"
+                f"INSERT INTO {SCHEMA}.capture_assertion_spans (assertion_id, span_id, "  # noqa: S608
+                "principal_id) VALUES (:assertion_id, :span_id, :principal_id)"
             ),
             promoted,
         )
         if "second_span_id" in promoted:
             connection.execute(
                 text(
-                    f"INSERT INTO {SCHEMA}.capture_assertion_spans (assertion_id, span_id) "  # noqa: S608
-                    "VALUES (:assertion_id, :second_span_id)"
+                    f"INSERT INTO {SCHEMA}.capture_assertion_spans (assertion_id, span_id, "  # noqa: S608
+                    "principal_id) VALUES (:assertion_id, :second_span_id, :principal_id)"
                 ),
                 promoted,
             )
@@ -363,8 +364,8 @@ def _seed_receipt(connection: Connection, promoted: dict[str, str]) -> None:
     connection.execute(
         text(
             f"INSERT INTO {SCHEMA}.capture_promotion_receipts (receipt_id, assertion_id, "  # noqa: S608
-            "decision_id, policy_version) VALUES (:receipt_id, :assertion_id, :decision_id, "
-            "'policy-v1')"
+            "decision_id, principal_id, policy_version) VALUES (:receipt_id, :assertion_id, "
+            ":decision_id, :principal_id, 'policy-v1')"
         ),
         promoted,
     )
@@ -375,13 +376,14 @@ def _decision_request(
     *,
     expected: int,
     disposition: Disposition,
+    principal_id: str,
     corrected_value: str | None = None,
 ) -> ReviewDecisionRequest:
     return ReviewDecisionRequest(
         review_case_id=review_case_id,
         expected_review_version=expected,
         disposition=disposition,
-        principal_id=_identifier("prn", 90),
+        principal_id=principal_id,
         correlation_id=_identifier("corr", 90),
         audit_id=_identifier("audit", 90),
         policy_version="policy-v1",
@@ -869,6 +871,7 @@ def test_proposal_server_guard_allows_only_real_transition_shapes(
                         review_case_id,
                         expected=0,
                         disposition=Disposition.REJECT,
+                        principal_id=routed["principal_id"],
                     ),
                 )
                 is not None
@@ -1449,6 +1452,7 @@ def test_an_acceptance_creates_one_assertion_receipt_and_revalidation_obligation
                     review_case_id,
                     expected=0,
                     disposition=Disposition.CORRECT_AND_ACCEPT,
+                    principal_id=ids["principal_id"],
                     corrected_value="synthetic corrected commitment",
                 ),
             )
@@ -1532,6 +1536,7 @@ def test_rejection_retains_lineage_and_a_stale_second_decision_is_refused(
                     review_case_id,
                     expected=0,
                     disposition=Disposition.REJECT,
+                    principal_id=ids["principal_id"],
                 ),
             )
             assert rejected is not None
@@ -1543,6 +1548,7 @@ def test_rejection_retains_lineage_and_a_stale_second_decision_is_refused(
                         review_case_id,
                         expected=0,
                         disposition=Disposition.DEFER,
+                        principal_id=ids["principal_id"],
                     ),
                 )
 
@@ -1598,6 +1604,7 @@ def test_acceptance_is_terminal_and_every_later_decision_preserves_canonical_row
                             review_case_id,
                             expected=0,
                             disposition=initial,
+                            principal_id=ids["principal_id"],
                             corrected_value=(
                                 "synthetic corrected value"
                                 if initial is Disposition.CORRECT_AND_ACCEPT
@@ -1616,6 +1623,7 @@ def test_acceptance_is_terminal_and_every_later_decision_preserves_canonical_row
                                 review_case_id,
                                 expected=1,
                                 disposition=later,
+                                principal_id=ids["principal_id"],
                                 corrected_value=(
                                     "a later synthetic correction"
                                     if later is Disposition.CORRECT_AND_ACCEPT

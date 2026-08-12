@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+/* Moss brand tokens (MossAIc brand guidelines). */
+:root {
+  --moss-green: #046a38;
+  --moss-gold: #866d4b;
+  --moss-everglade: #204227;
+  --moss-sand: #f6f3ef;
+  --moss-coral: #d06951;
+  --moss-slate: #1f3038;
+  --moss-lime: #67a64a;
+
+  --background: var(--moss-sand);
+  --foreground: var(--moss-slate);
+  --surface: #ffffff;
+  --border: #e2ddd4;
+  --muted: #5c6b73;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-moss-green: var(--moss-green);
+  --color-moss-gold: var(--moss-gold);
+  --color-moss-everglade: var(--moss-everglade);
+  --color-moss-sand: var(--moss-sand);
+  --color-moss-coral: var(--moss-coral);
+  --color-moss-slate: var(--moss-slate);
+  --color-moss-lime: var(--moss-lime);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+/* Visible focus is non-negotiable. */
+:focus-visible {
+  outline: 2px solid var(--moss-green);
+  outline-offset: 2px;
+}

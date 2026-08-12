@@ -1034,18 +1034,20 @@ class ApplicationService:
     def _capture_revise(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReviseCapture
     ) -> _Result:
-        """Append a successor version to an existing capture.
+        """Append a successor version to an existing capture the caller owns.
 
-        Authorized on capability and purpose alone, and **not** on owning the
-        capture (`D-72`). Identity in this build is a property of the serving
-        process — three CLI invocations mint three principals and a gateway
-        restart mints a new one — so an owner-equality check would make a
-        capture unrevisable by anything but the process that wrote it, and would
-        make `QC-AC-013` unprovable across two processes. Under `P00-OD-010`,
-        loopback-only and single-principal, there is no second principal for such
-        a check to distinguish. `docs/operations/mcv-limitations.md` is where
-        that is disclosed, and it is worded as blocking on multi-principal
-        operation.
+        `D-72`'s owner-equality refusal is superseded here
+        (`PKL-MYPA-D-WP03-001`). Its premise — that identity was a property of
+        the serving process, so an owner check would make a capture unrevisable
+        across restarts — dissolved when `local_principal` began deriving the
+        local operator's identifier from a durable UUID namespace
+        (`my_pa.domain.identity.binding`): the same operator now presents the
+        same `principal_id` in every process, so `QC-AC-013` stays provable
+        across two of them. The check itself lives where the data does — the
+        head lookup in the capture store is principal-scoped, so a foreign
+        capture is indistinguishable from an absent one and surfaces as
+        `not_found` rather than as a `forbidden` that would confirm the
+        identifier exists.
         """
         return self._admit(
             unit_of_work,
@@ -1069,11 +1071,12 @@ class ApplicationService:
         is `QC-AC-010`'s "independently retrievable": an edit appends, and the
         predecessor stays readable at its own identifier.
         """
+        principal_id = authorization.principal.principal_id
         with _translated():
             version = unit_of_work.captures.version(
-                command.capture_id, version_id=command.version_id
+                command.capture_id, version_id=command.version_id, principal_id=principal_id
             )
-            current = unit_of_work.captures.version(command.capture_id)
+            current = unit_of_work.captures.version(command.capture_id, principal_id=principal_id)
         if version is None or current is None:
             raise NotFoundError(SafeDetail.CAPTURE_ID)
         view = _capture_version_view(version, is_current=version.version_id == current.version_id)
@@ -1094,7 +1097,9 @@ class ApplicationService:
         """
         page_size = self._page_size(command.page_size)
         with _translated():
-            found = unit_of_work.captures.captures(limit=page_size + 1)
+            found = unit_of_work.captures.captures(
+                limit=page_size + 1, principal_id=authorization.principal.principal_id
+            )
         truncated = len(found) > page_size
         page = found[:page_size]
         return _Result(
@@ -1134,10 +1139,14 @@ class ApplicationService:
         cannot exist, and inventing one would be the fabricated authority
         `_enumerate`'s own docstring refuses.
 
-        **Authorization is capability plus purpose and never owner equality**
-        (`D-72`, `D-67`). Nothing here filters by who wrote a capture, and
-        `capture_text_in_scope` has no owner condition either, so the two ends
-        agree by construction rather than by a comment.
+        **Authorization is capability plus purpose; scope is the caller's own
+        captures.** `D-72`'s "no owner condition" is superseded
+        (`PKL-MYPA-D-WP03-001`): `capture_text_in_scope` now carries the
+        caller's partition as a structural condition, and both counts in the
+        totals statement are partitioned the same way, so neither a match nor a
+        denominator can leak another principal's existence through this
+        endpoint. Capability and purpose still decide *whether* the caller may
+        search; the partition decides *what there is* to search.
 
         **The answer carries no capture text.** `CaptureSearchMatch` has no
         field one could go in — identifiers, a version number, a character
@@ -1176,7 +1185,9 @@ class ApplicationService:
 
         outcome: CaptureSearchOutcome | None = None
         with _translated():
-            outcome = unit_of_work.captures.search(request)
+            outcome = unit_of_work.captures.search(
+                request, principal_id=authorization.principal.principal_id
+            )
         if outcome is None:  # pragma: no cover - `_translated` raises or the call returns
             raise InternalError()
 
@@ -1217,7 +1228,9 @@ class ApplicationService:
         """List review cases without capture or normalized-value content."""
         page_size = self._page_size(command.page_size)
         with _translated():
-            found = unit_of_work.reviews.cases(limit=page_size + 1)
+            found = unit_of_work.reviews.cases(
+                limit=page_size + 1, principal_id=authorization.principal.principal_id
+            )
         truncated = len(found) > page_size
         return _Result(
             payload={
@@ -1375,7 +1388,9 @@ class ApplicationService:
         conflict: ApplicationError | None = None
         with _translated():
             try:
-                admission = unit_of_work.captures.admit(request)
+                admission = unit_of_work.captures.admit(
+                    request, principal_id=authorization.principal.principal_id
+                )
             except CaptureConflictError:
                 # The key is bound to materially different content. `conflict`,
                 # which is one of the eleven public codes; there is no

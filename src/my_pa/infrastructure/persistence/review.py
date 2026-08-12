@@ -28,6 +28,10 @@ from my_pa.domain.capture.review import (
 from my_pa.domain.capture.version import digest_of
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.principal_scope import (
+    PrincipalContext,
+    principal_scoped,
+)
 from my_pa.infrastructure.persistence.proposals import invalidate_proposal, span_faults
 from my_pa.infrastructure.persistence.tables import (
     capture_assertion_spans,
@@ -65,7 +69,17 @@ def routes_to_review(proposal_type: ProposalType, risk_class: RiskClass) -> bool
 
 
 def open_review_case(connection: Connection, proposal_id: str) -> str | None:
-    """Open one case when the proposal is consequential; otherwise return None."""
+    """Open one case when the proposal is consequential; otherwise return None.
+
+    The case is stamped with the *server-stored* owner of the capture version
+    the proposal derives from, never with an identity taken from the caller
+    (MU-AC-02). A review case therefore always shares the partition of the
+    capture it reviews, which is the invariant the cross-Principal isolation
+    tests (MU-AC-04) rely on: no case can be opened into a partition other than
+    the one that owns the underlying evidence. This runs on the async pipeline
+    with no request context, so deriving the Principal from the evidence is the
+    only fail-closed source available.
+    """
     validate_identifier(proposal_id, IdKind.PROPOSAL)
     row = connection.execute(
         select(
@@ -73,6 +87,7 @@ def open_review_case(connection: Connection, proposal_id: str) -> str | None:
             capture_proposals.c.proposal_type,
             capture_proposals.c.risk_class,
             capture_versions.c.capture_id,
+            capture_versions.c.owner_principal_id,
         )
         .join(capture_versions, capture_versions.c.version_id == capture_proposals.c.version_id)
         .where(capture_proposals.c.proposal_id == proposal_id)
@@ -87,6 +102,7 @@ def open_review_case(connection: Connection, proposal_id: str) -> str | None:
             proposal_id=proposal_id,
             capture_id=row.capture_id,
             version_id=row.version_id,
+            principal_id=row.owner_principal_id,
         )
         .on_conflict_do_nothing(index_elements=[capture_review_cases.c.proposal_id])
         .returning(capture_review_cases.c.review_case_id)
@@ -107,8 +123,17 @@ def open_review_case(connection: Connection, proposal_id: str) -> str | None:
     )
 
 
-def review_cases(connection: Connection, *, limit: int) -> tuple[ReviewCase, ...]:
-    """Read one bounded page, oldest first, with current version derived from rows."""
+def review_cases(
+    connection: Connection, *, limit: int, context: PrincipalContext
+) -> tuple[ReviewCase, ...]:
+    """Read one bounded page, oldest first, with current version derived from rows.
+
+    The page is constrained to the requesting Principal's partition through the
+    same fail-closed guard every user-scoped read passes through: a case opened
+    into another Principal's partition is not merely omitted by convention, it
+    cannot be reached from this call at all (MU-AC-04). A missing context is
+    refused rather than widened to every case.
+    """
     if limit < 1:
         raise ValueError("a review page contains at least one case")
     latest_sequence = (
@@ -126,23 +151,29 @@ def review_cases(connection: Connection, *, limit: int) -> tuple[ReviewCase, ...
         .scalar_subquery()
     )
     rows = connection.execute(
-        select(
-            capture_review_cases.c.review_case_id,
-            capture_review_cases.c.proposal_id,
-            capture_review_cases.c.capture_id,
-            capture_review_cases.c.version_id,
-            capture_review_cases.c.opened_at,
-            capture_proposals.c.proposal_type,
-            capture_proposals.c.state,
-            capture_proposals.c.risk_class,
-            func.coalesce(latest_sequence, 0).label("review_version"),
-            latest_disposition.label("latest_disposition"),
+        principal_scoped(
+            select(
+                capture_review_cases.c.review_case_id,
+                capture_review_cases.c.proposal_id,
+                capture_review_cases.c.capture_id,
+                capture_review_cases.c.version_id,
+                capture_review_cases.c.principal_id,
+                capture_review_cases.c.opened_at,
+                capture_proposals.c.proposal_type,
+                capture_proposals.c.state,
+                capture_proposals.c.risk_class,
+                func.coalesce(latest_sequence, 0).label("review_version"),
+                latest_disposition.label("latest_disposition"),
+            )
+            .join(
+                capture_proposals,
+                capture_proposals.c.proposal_id == capture_review_cases.c.proposal_id,
+            )
+            .order_by(capture_review_cases.c.opened_at, capture_review_cases.c.review_case_id)
+            .limit(limit),
+            capture_review_cases,
+            context,
         )
-        .join(
-            capture_proposals, capture_proposals.c.proposal_id == capture_review_cases.c.proposal_id
-        )
-        .order_by(capture_review_cases.c.opened_at, capture_review_cases.c.review_case_id)
-        .limit(limit)
     ).all()
     return tuple(
         ReviewCase(
@@ -150,6 +181,7 @@ def review_cases(connection: Connection, *, limit: int) -> tuple[ReviewCase, ...
             proposal_id=str(row.proposal_id),
             capture_id=str(row.capture_id),
             version_id=str(row.version_id),
+            principal_id=str(row.principal_id),
             proposal_type=ProposalType(row.proposal_type),
             proposal_state=ProposalState(row.state),
             risk_class=RiskClass(row.risk_class),
@@ -164,7 +196,16 @@ def review_cases(connection: Connection, *, limit: int) -> tuple[ReviewCase, ...
 
 
 def decide_review(connection: Connection, request: ReviewDecisionRequest) -> ReviewDecision | None:
-    """Append a reachable disposition and perform its one transition."""
+    """Append a reachable disposition and perform its one transition.
+
+    The case is looked up under the requesting Principal's own partition: the
+    lookup matches only when the case's stored ``principal_id`` equals the
+    deciding Principal, so a decision aimed at another Principal's case finds no
+    row and is refused as `ReviewNotFoundError` rather than mutating a partition
+    the caller does not own (MU-AC-04). The partition here is the deciding
+    Principal from the authenticated request, and it must equal the owner the
+    case was opened under, because both derive from the same capture.
+    """
     case = connection.execute(
         select(
             capture_review_cases.c.proposal_id,
@@ -174,7 +215,10 @@ def decide_review(connection: Connection, request: ReviewDecisionRequest) -> Rev
         .join(
             capture_proposals, capture_proposals.c.proposal_id == capture_review_cases.c.proposal_id
         )
-        .where(capture_review_cases.c.review_case_id == request.review_case_id)
+        .where(
+            capture_review_cases.c.review_case_id == request.review_case_id,
+            capture_review_cases.c.principal_id == request.principal_id,
+        )
         .with_for_update(of=capture_review_cases)
     ).one_or_none()
     if case is None:
@@ -286,7 +330,16 @@ def promote_proposal(
     accepted_at: datetime,
     corrected_value: str | None = None,
 ) -> tuple[str, str]:
-    """Promote only under a stored accepting decision for this proposal."""
+    """Promote only under a stored accepting decision for this proposal.
+
+    The assertion, its span citations, and the promotion receipt are all
+    stamped with the *server-stored* owner of the promoted version — the same
+    Principal the review case and the underlying capture already carry. The
+    promoted record therefore cannot land in a partition other than the one
+    that owns the evidence, and the whole promotion is one transaction: either
+    the assertion, every span citation, and the receipt all commit into that
+    partition, or none do.
+    """
     validate_identifier(proposal_id, IdKind.PROPOSAL)
     if decision_id is None:
         raise ReviewRequiredError("canonical promotion requires a review disposition")
@@ -297,6 +350,11 @@ def promote_proposal(
             capture_proposals.c.proposal_type,
             capture_proposals.c.normalized_value,
             capture_review_decisions.c.disposition,
+            capture_versions.c.owner_principal_id,
+        )
+        .join(
+            capture_versions,
+            capture_versions.c.version_id == capture_proposals.c.version_id,
         )
         .join(
             capture_review_cases,
@@ -324,6 +382,7 @@ def promote_proposal(
 
     assertion_id = issue_identifier(IdKind.ASSERTION)
     receipt_id = issue_identifier(IdKind.RECEIPT)
+    principal_id = row.owner_principal_id
     value = corrected_value if corrected_value is not None else row.normalized_value
     connection.execute(
         capture_assertions.insert().values(
@@ -331,6 +390,7 @@ def promote_proposal(
             version_id=row.version_id,
             proposal_id=proposal_id,
             decision_id=decision_id,
+            principal_id=principal_id,
             assertion_type=row.proposal_type,
             state=AssertionState.ACCEPTED.value,
             normalized_value=value,
@@ -344,7 +404,10 @@ def promote_proposal(
     ).all()
     connection.execute(
         capture_assertion_spans.insert(),
-        [{"assertion_id": assertion_id, "span_id": row.span_id} for row in span_rows],
+        [
+            {"assertion_id": assertion_id, "span_id": row.span_id, "principal_id": principal_id}
+            for row in span_rows
+        ],
     )
     state = (
         ProposalState.CORRECTED_ACCEPTED if corrected_value is not None else ProposalState.ACCEPTED
@@ -363,6 +426,7 @@ def promote_proposal(
             receipt_id=receipt_id,
             assertion_id=assertion_id,
             decision_id=decision_id,
+            principal_id=principal_id,
             policy_version=policy_version,
             issued_at=accepted_at,
         )

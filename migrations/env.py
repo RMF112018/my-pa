@@ -46,7 +46,19 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Apply migrations over a real connection, one transaction for the run."""
+    """Apply migrations over a real connection, one transaction for the run.
+
+    **No `statement_timeout`, and the omission is the decision.** Every other
+    process that builds an engine passes `MY_PA_STATEMENT_TIMEOUT_MS`, because
+    its statements are sized to a request. A migration's are sized to the corpus:
+    this chain creates functional GIN indexes over `knowledge.extractions` and
+    `knowledge.capture_versions` and adds constrained columns to tables the
+    legacy corpus fills, and a `CREATE INDEX` cancelled halfway leaves the
+    database between revisions — a strictly worse failure than the unbounded
+    query the bound exists to prevent. A migration that runs too long is an
+    operator's decision to interrupt, not a timer's.
+    """
+    # statement-timeout-exempt: DDL and index builds are sized to the corpus.
     engine = create_database_engine(database_url)
     try:
         with engine.connect() as connection:

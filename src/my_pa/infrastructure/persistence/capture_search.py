@@ -80,12 +80,14 @@ the two is a change to a merged module rather than a part of this package.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
 from sqlalchemy import (
     Column,
     ColumnElement,
+    Row,
     Select,
     String,
     Table,
@@ -100,7 +102,14 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.engine import Connection, CursorResult
-from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import (
+    DisconnectionError,
+    InterfaceError,
+    OperationalError,
+)
+from sqlalchemy.exc import (
+    TimeoutError as PoolTimeoutError,
+)
 
 from my_pa.contracts.ports import (
     CaptureSearchMatch,
@@ -170,30 +179,17 @@ class CaptureSearchInternalError(Exception):
 def _checked_configuration(name: str) -> str:
     """`name`, if it is one this module may compile into SQL.
 
-    The one place the closed set is enforced, because two callers now write the
-    name into statement text — the predicate below and the confirmation's needle
-    — and a second copy of the check is a second place it can be forgotten.
+    **Called once, at import, by `_PLANE_CONFIGURATIONS`.** It used to be called
+    from three statement builders instead, and it reads `INDEXED_CONFIGURATIONS`
+    — a module attribute — so the set that approved a name was whatever the
+    attribute held when the statement was built rather than what the module
+    declared. `Final` stops `mypy --strict` rebinding it inside the checked tree
+    and stops nothing outside it. Resolving here means the check ran against the
+    declared set, once, before any caller existed.
     """
     if name not in INDEXED_CONFIGURATIONS:
         raise ValueError("unsupported text-search configuration")
     return name
-
-
-def _configuration(name: str) -> ColumnElement[Any]:
-    """The named configuration as a SQL literal, if it is an indexed one.
-
-    A literal and not a bound parameter, and the distinction is the difference
-    between using the functional index and not using it: bound, the predicate
-    compiles to `to_tsvector($1, content)`, and matching that against an index
-    over `to_tsvector('simple', content)` then depends on the server folding the
-    parameter while planning, which it does not do under a generic plan. Writing
-    a name into SQL is safe here because the name came out of a closed set — not
-    because of what `SEARCH_CONFIG` currently is.
-    """
-    return literal_column(f"'{_checked_configuration(name)}'", REGCONFIG)
-
-
-_CONFIG: Final = _configuration(SEARCH_CONFIG)
 
 
 def _superseded_version_ids() -> Select[Any]:
@@ -284,6 +280,57 @@ CAPTURE_VERSIONS: Final = SearchPlane(
     index_name=SEARCH_INDEX,
 )
 
+#: Every plane this module will compile a statement for, beside the configuration
+#: name it may write, checked once at import.
+#:
+#: This is `persistence.search`'s `_CONFIG`, carried across the one thing that
+#: differs: this module is parameterised over a plane, so the name that reaches
+#: `literal_column` arrives through a *parameter* of three public functions —
+#: `document_vector`, `match_statement` and `totals_statement` all take
+#: `plane: SearchPlane`. That is a live path from a caller's value to interpolated
+#: SQL text, and until now the only thing on it was a check that re-read a module
+#: attribute every time it ran. Resolving the pair here makes the admissible names
+#: exactly the ones that passed the check at import, and makes them a property of
+#: this table rather than of what any attribute holds later.
+#:
+#: A tuple of pairs compared by identity, not a mapping. `SearchPlane` holds a
+#: `Column`, whose `__eq__` builds a SQL expression rather than answering a
+#: question, so `plane in some_dict` is a comparison this module should not be
+#: making. Identity is also the stricter rule and the honest one: the constant
+#: above says there is one instance, and a caller holding a plane this module did
+#: not construct is not a caller whose configuration name should be written into
+#: a statement.
+_PLANE_CONFIGURATIONS: Final = (
+    (CAPTURE_VERSIONS, _checked_configuration(CAPTURE_VERSIONS.configuration)),
+)
+
+
+def _configuration_name(plane: SearchPlane) -> str:
+    """The plane's configuration name, as it was checked at import.
+
+    The only way a name reaches statement text, so it is also the only place an
+    unregistered plane is refused. The message names the defect and not the
+    value: a `SearchPlane`'s repr carries a `Table`.
+    """
+    for registered, name in _PLANE_CONFIGURATIONS:
+        if plane is registered:
+            return name
+    raise ValueError("unsupported text-search configuration")
+
+
+def _configuration(plane: SearchPlane) -> ColumnElement[Any]:
+    """The plane's configuration as a SQL literal.
+
+    A literal and not a bound parameter, and the distinction is the difference
+    between using the functional index and not using it: bound, the predicate
+    compiles to `to_tsvector($1, content)`, and matching that against an index
+    over `to_tsvector('simple', content)` then depends on the server folding the
+    parameter while planning, which it does not do under a generic plan. Writing
+    a name into SQL is safe here because the name came out of the table above —
+    not because of what `SEARCH_CONFIG` or `INDEXED_CONFIGURATIONS` currently is.
+    """
+    return literal_column(f"'{_configuration_name(plane)}'", REGCONFIG)
+
 
 def document_vector(plane: SearchPlane = CAPTURE_VERSIONS) -> ColumnElement[Any]:
     """The indexed side of the match.
@@ -292,7 +339,7 @@ def document_vector(plane: SearchPlane = CAPTURE_VERSIONS) -> ColumnElement[Any]
     tree, which is what PostgreSQL matches an index by, and not the same
     characters, which it does not.
     """
-    return func.to_tsvector(_configuration(plane.configuration), plane.text_column)
+    return func.to_tsvector(_configuration(plane), plane.text_column)
 
 
 def _tsquery(request: CaptureSearchRequest) -> ColumnElement[Any]:
@@ -304,7 +351,7 @@ def _tsquery(request: CaptureSearchRequest) -> ColumnElement[Any]:
     ordinary text. The query is a `bindparam` and nothing else touches it.
     """
     return func.websearch_to_tsquery(
-        _configuration(CAPTURE_VERSIONS.configuration),
+        _configuration(CAPTURE_VERSIONS),
         bindparam("capture_search_text", value=request.query.text),
     )
 
@@ -380,7 +427,7 @@ def _confirmation_needle(
     once as an initialisation plan rather than once per candidate row: nothing
     in it depends on the row.
     """
-    configuration = f"'{_checked_configuration(plane.configuration)}'"
+    configuration = f"'{_configuration_name(plane)}'"
     return (
         text(_NEEDLE_SQL.format(configuration=configuration))
         .bindparams(bindparam("capture_search_literal", value=request.query.text))
@@ -518,8 +565,77 @@ def totals_statement(
     )
 
 
-def _execute(connection: Connection, statement: Select[Any]) -> CursorResult[Any]:
-    """Run `statement`, converting any store failure into a bare typed error.
+def _exactly_one(result: CursorResult[Any]) -> Row[Any]:
+    """The single row. Raises for none and for more than one."""
+    return result.one()
+
+
+def _every_row(result: CursorResult[Any]) -> Sequence[Row[Any]]:
+    """Every row the cursor holds."""
+    return result.all()
+
+
+def _execute[Rows](
+    connection: Connection,
+    statement: Select[Any],
+    materialize: Callable[[CursorResult[Any]], Rows],
+) -> Rows:
+    """Run `statement`, materialize its rows, and convert any failure into a bare typed error.
+
+    The classification and the materialization argument are `persistence.search`'s
+    `_execute`, name for name and reason for reason, and that module argues both
+    at length. The short form, because a reader here should not have to go and
+    find it:
+
+    - `materialize` is passed in rather than applied to a returned cursor, so
+      the row-shape errors — `.one()` on an empty or a doubled result — are
+      raised *inside* the handler instead of after it has been left. Structural
+      rather than exploitable: `totals_statement` is an ungrouped aggregate and
+      always returns exactly one row. What was false was the guarantee.
+    - The retryable set is the exception hierarchy's and not a driver's habits.
+      `DisconnectionError` and SQLAlchemy's `TimeoutError` (a pool checkout that
+      waited out `pool_timeout`) are `SQLAlchemyError` subclasses that are
+      neither `OperationalError` nor `InterfaceError`, and the builtin
+      `TimeoutError` is an `OSError` — not a `SQLAlchemyError` at all, so it and
+      the socket failures beside it escaped this function entirely.
+    - The second handler is `Exception` for that last reason: a handler naming
+      one library's base class cannot carry a promise about *any* failure.
+
+    **The widening has a cost, and it is named here rather than left for a
+    reader to discover.** `Exception` also catches the failures that are this
+    module's own bugs — `TypeError`, `KeyError`, `AttributeError` — and turns
+    each into `CaptureSearchInternalError`. The raise is outside the handler, so
+    `__context__` is empty by design, and this repository has no logging anywhere
+    in `src/`. So a programming error inside a read now reaches its caller
+    carrying nothing at all, where before the widening it reached them as a
+    traceback. That is a real loss of debuggability and it is not a laundering of
+    one: the alternative is a handler naming one library's base class, which is
+    exactly how the builtin `TimeoutError` escaped this function entirely. The
+    redaction contract requires the wide handler; the cost is the price of it.
+
+    **Where that error goes next is not what the sibling's copy of this paragraph
+    said, and the difference is a defect rather than a nuance.** In
+    `persistence.search` the cost paragraph ends "`SqlAlchemyUnitOfWork` then
+    flattens it to `RepositoryFailureError`", which is true there because
+    `_Extractions.search` catches `SearchInternalError` by name. This paragraph
+    was copied from it verbatim and the sentence does not survive the move:
+    nothing catches *these* two classes. `CaptureSearchUnavailableError` and
+    `CaptureSearchInternalError` appear nowhere in `src/` or `apps/` outside this
+    module, and `unit_of_work._read` handles `SQLAlchemyError` and
+    `IsolationLevelError`, neither of which they are. So a failure classified
+    here leaves `_Captures.search` as itself, past the port's vocabulary and
+    outside section 10's taxonomy. That is recorded at the call site in
+    `unit_of_work`, it predates this package, and it is not fixed here.
+
+    **What would close it** is a sink that records the original where the caller
+    cannot see it — a logger, or an audit row carrying a correlation identifier
+    the envelope also carries. Neither exists in `src/` today and adding one is a
+    new mechanism rather than a fix to this one, so it is disclosed here and not
+    built.
+
+    `KeyboardInterrupt` and `SystemExit` are unaffected. Both derive from
+    `BaseException` and not from `Exception`, so a cancelled process still dies
+    at the read rather than reporting that the search could not be completed.
 
     The `raise` statements are outside the `except` block on purpose: `raise …
     from None` clears `__cause__` and leaves the original in `__context__`,
@@ -528,10 +644,10 @@ def _execute(connection: Connection, statement: Select[Any]) -> CursorResult[Any
     """
     unavailable = False
     try:
-        return connection.execute(statement)
-    except (OperationalError, InterfaceError):
+        return materialize(connection.execute(statement))
+    except (OperationalError, InterfaceError, DisconnectionError, PoolTimeoutError, OSError):
         unavailable = True
-    except SQLAlchemyError:
+    except Exception:
         unavailable = False
     if unavailable:
         raise CaptureSearchUnavailableError("the capture index could not be read")

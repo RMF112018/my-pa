@@ -18,10 +18,16 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
+from sqlalchemy import Engine, event
 
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime, local_principal
-from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
+from my_pa.bootstrap.settings import (
+    DATABASE_URL_SCHEME,
+    DEFAULT_STATEMENT_TIMEOUT_MS,
+    Settings,
+)
 from my_pa.domain.identity.principal import PrincipalKind
+from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 A_URL = f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere"
@@ -140,3 +146,77 @@ def test_the_composition_reads_the_configured_limits() -> None:
         assert built.service._limits.default_page_size == 10
     finally:
         built.close()
+
+
+class _StopBeforeConnectingError(Exception):
+    """Raised from the `do_connect` listener below, so nothing dials the host."""
+
+
+def connection_parameters(engine: Engine) -> dict[str, object]:
+    """The keyword arguments this engine would hand psycopg, without connecting.
+
+    Read off the `do_connect` event rather than off `create_database_engine`'s
+    call, and the difference is the difference between checking the wiring and
+    checking a mock. `connect_args` does not appear in
+    `dialect.create_connect_args(url)` — measured, not assumed: that is the
+    URL's contribution alone, and it is what the first version of this helper
+    asked. The merged mapping exists only at the moment of connecting, so the
+    listener takes it and refuses to connect.
+    """
+    captured: dict[str, object] = {}
+
+    @event.listens_for(engine, "do_connect")
+    def _capture(
+        dialect: object, record: object, arguments: object, parameters: dict[str, object]
+    ) -> None:
+        captured.update(parameters)
+        raise _StopBeforeConnectingError
+
+    with pytest.raises(_StopBeforeConnectingError):
+        engine.connect()
+    return captured
+
+
+def test_both_pools_bound_what_one_statement_may_cost(runtime: GatewayRuntime) -> None:
+    """The `statement_timeout` reaches both engines, as a connection option.
+
+    Both, and not just the work pool: the audit sink writes on its own
+    connections, and an unbounded write there holds a connection from a pool of
+    five with overflow disabled — the exact cycle two pools exist to prevent,
+    reintroduced from the other side.
+
+    A libpq connection option rather than a `SET` on each connection, so it is in
+    force from the first statement a checkout runs, including the pre-ping.
+    """
+    expected = f"-c statement_timeout={DEFAULT_STATEMENT_TIMEOUT_MS}"
+    for engine in (runtime.work_engine, runtime.audit_engine):
+        assert connection_parameters(engine)["options"] == expected
+
+
+def test_the_bound_is_the_configured_number_and_not_a_literal() -> None:
+    """`D-24`'s shape: the number the engine carries is the one an operator set.
+
+    A hard-coded default in `create_database_engine` would pass the test above
+    for ever while ignoring configuration, which is the failure this asserts
+    against by configuring something the default is not.
+    """
+    built = build_gateway_runtime(Settings(database_url=A_URL, statement_timeout_ms=1234))
+    try:
+        for engine in (built.work_engine, built.audit_engine):
+            assert connection_parameters(engine)["options"] == "-c statement_timeout=1234"
+    finally:
+        built.close()
+
+
+def test_an_engine_built_without_the_setting_carries_no_option() -> None:
+    """The exemption is a real state and not a value that means "none".
+
+    `migrations/env.py` and the two bulk-corpus callers depend on this: passing
+    nothing must leave `statement_timeout` at the server's own setting rather
+    than at some default this function chose for them.
+    """
+    engine = create_database_engine(A_URL)
+    try:
+        assert "options" not in connection_parameters(engine)
+    finally:
+        engine.dispose()

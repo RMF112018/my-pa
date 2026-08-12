@@ -306,11 +306,34 @@ class _Captures(CaptureRepository):
     def search(self, request: CaptureSearchRequest, *, principal_id: str) -> CaptureSearchOutcome:
         """One page of exact matches over stored capture text.
 
-        `_read` translates the store's own failures into the port's vocabulary,
-        which is what keeps `application` free of a SQLAlchemy import; the two
-        errors `capture_search` raises are its own classes for the same reason
-        `persistence.search`'s are, and both are unavailability or an internal
-        fault rather than an answer about the caller's request.
+        **`_read` does not translate this call's failures, and the paragraph that
+        used to stand here said it did.** `_read` catches `OperationalError`,
+        `InterfaceError`, `SQLAlchemyError` and `IsolationLevelError`.
+        `capture_search` does not raise any of them: it converts every failure
+        into `CaptureSearchUnavailableError` or `CaptureSearchInternalError`,
+        which are plain `Exception` subclasses and appear nowhere in `src/` or
+        `apps/` outside the module that defines them. So a failure of this read
+        leaves here **as itself** — past the port's vocabulary, into
+        `application`, outside section 10's taxonomy and with no envelope.
+
+        `_Extractions.search` is the one that does it properly: it wraps its call
+        in an explicit `try` naming `SearchUnavailableError` and
+        `SearchInternalError` and maps them to `EvidenceUnavailableError` and
+        `RepositoryFailureError`. The asymmetry is the defect. The fix is the
+        same shape — this call needs its own translation, not a wider `_read`,
+        because widening `_read` to catch two classes from one sibling module
+        would make every other repository's failures pass through a handler that
+        names them.
+
+        **Recorded rather than fixed, deliberately.** This predates the package
+        that wrote this paragraph: it is not a regression that package
+        introduced, the redaction work it did is what made the gap legible, and
+        closing it changes what `application` receives from `capture.search` —
+        a contract change with its own tests and its own review. It is written
+        here, at the call site, because no guard can see it: the redaction guards
+        are bounded to the two modules that publish a redaction contract, and
+        nothing in `tests/security` exercises a failing capture search through
+        the unit of work.
         """
         return _read(
             lambda: search_captures(

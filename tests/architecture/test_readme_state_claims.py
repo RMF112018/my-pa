@@ -23,6 +23,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.service import _HANDLERS
 from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
@@ -41,6 +43,11 @@ COMPLETION_PLAN = ROOT / "docs" / "plans" / "mcv-completion-plan.md"
 CLAIM = re.compile(r"^Accordingly, (.+?)\n\n", re.DOTALL | re.MULTILINE)
 
 _BACKTICKED = re.compile(r"`([A-Za-z][A-Za-z0-9_.-]*)`")
+
+#: A Markdown heading at any level. A section ends where the next one begins,
+#: which is the document's own boundary rather than a second literal written
+#: here that a rename or a reorder can silently detach.
+_HEADING = re.compile(r"^#{1,6} ", re.MULTILINE)
 
 #: A settings URL that is well formed and unreachable, as in `tests/unit`.
 #: Nothing connects; the limits are what this test is after.
@@ -68,6 +75,73 @@ def published() -> tuple[set[str], str]:
         status.availability.value for status in manifest.content_types
     }
     return availabilities, build_readiness_report(manifest).state.value
+
+
+def section_of(text: str, title: str) -> str:
+    """The named section's own text, ending where the next heading begins.
+
+    `README.split("## Current state", 1)[1]` had no terminator, so a scan called
+    "Current state" actually covered "Approved architectural decisions",
+    "Repository map" and "Boundaries" too. That is not a wider check; it is a
+    check of a different thing. Proven with a plant: the Current state sentence
+    was rewritten to say the opposite — the capture workflows *unproven and
+    untested* — and the phrases it is asserted to contain were moved down into
+    "Boundaries", and every assertion below still passed.
+
+    The boundary is `_HEADING`, so a renamed or reordered section moves the end
+    of the scan with it, and a heading inserted in the middle narrows the scan
+    rather than leaving it silently open to end of file.
+    """
+    opening = re.compile(rf"^#{{1,6}} {re.escape(title)}\s*$", re.MULTILINE).search(text)
+    assert opening is not None, (
+        f"the document has no {title!r} heading. This scan is anchored on it, and a "
+        "scan whose anchor is gone decides nothing."
+    )
+    following = [
+        match.start() for match in _HEADING.finditer(text) if match.start() > opening.start()
+    ]
+    section = text[opening.end() : following[0] if following else len(text)]
+    assert section.strip(), f"the {title!r} section is empty"
+    return section
+
+
+def readme_section(title: str) -> str:
+    """`section_of` over the real README."""
+    return section_of(README.read_text(encoding="utf-8"), title)
+
+
+def test_a_readme_section_stops_at_the_next_heading() -> None:
+    """The plant the reviewer ran, hermetically: the claim moved out of the section.
+
+    `## Current state` used to be split with no terminator, so the scan covered
+    every later section too and a sentence relocated into `## Boundaries`
+    satisfied it. Here the same relocation is written out. The control is the
+    other half — the section still yields its own sentence and the boundary has
+    not narrowed to nothing — and the third case is the one a missing terminator
+    gets right by accident, the last section in the document.
+    """
+    document = "\n".join(
+        [
+            "# my-pa",
+            "",
+            "## Current state",
+            "",
+            "the capture workflows are unproven and untested.",
+            "",
+            "## Boundaries",
+            "",
+            "the capture workflows run end to end over synthetic fixtures.",
+            "",
+        ]
+    )
+
+    current = section_of(document, "Current state")
+    assert "unproven and untested" in current
+    assert "run end to end over synthetic fixtures" not in current
+    assert "run end to end over synthetic fixtures" in section_of(document, "Boundaries")
+
+    with pytest.raises(AssertionError, match="has no 'Repository map' heading"):
+        section_of(document, "Repository map")
 
 
 def test_the_state_paragraph_still_names_states() -> None:
@@ -138,15 +212,31 @@ def test_readme_derives_the_current_alembic_count_and_head() -> None:
 
 
 def test_relationships_are_not_listed_as_unimplemented_once_the_package_exists() -> None:
+    """The not-implemented list, with the emptiness the `not in` below needs.
+
+    The region is bounded by two literals, and `Accordingly,` is a word rather
+    than a heading: a second sentence beginning with it, written anywhere above
+    the current one, collapses the region to nothing and leaves the absence
+    assertion passing on an empty string. A rule that cannot fail is the same
+    defect as a rule that scans the wrong section, one layer along, so the list
+    the region is *about* is what has to be there before its absence means
+    anything.
+    """
     assert RELATIONSHIP_PACKAGE.is_dir()
     readme = README.read_text(encoding="utf-8")
     section = readme.split("Not implemented.", 1)[1].split("Accordingly,", 1)[0]
+    entries = re.findall(r"^- .+$", section, re.MULTILINE)
+    assert len(entries) >= 2, (
+        f"the README's not-implemented region holds {len(entries)} list entries; "
+        "the absence assertion below would be passing on nothing"
+    )
     assert "relationship identity and profiles" not in section.lower()
     assert "fixture" in readme.lower() and "wp-9" in readme.lower()
 
 
 def test_current_state_says_the_synthetic_workflow_runs_but_is_not_deployable() -> None:
-    current = " ".join(README.read_text(encoding="utf-8").split("## Current state", 1)[1].split())
+    """Bounded to the section it names. See `readme_section` for what it was."""
+    current = " ".join(readme_section("Current state").split())
     assert "workflows run end to end over synthetic fixtures" in current
     assert "nothing here is deployable" in current
     assert "no product workflow runs end to end" not in current

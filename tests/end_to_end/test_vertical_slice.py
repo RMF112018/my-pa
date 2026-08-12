@@ -680,7 +680,8 @@ def test_an_identifier_issued_under_one_registered_root_is_denied_under_a_nested
     never given. The containment is asserted below rather than only described.
 
     **The identifier is reached by listing, not by enrolling.** The effective
-    `max_enrollment_depth` is **0** by default (`bootstrap/settings.py:131`) and
+    `max_enrollment_depth` is **0** by default (`Settings` in
+    `bootstrap/settings.py`) and
     the handler refuses a deeper request outright, so no enrollment this
     composition accepts can reach a grandchild. `sources.list` can: it is bounded
     by the registered root and not by the enrolled object set, which is
@@ -1264,8 +1265,15 @@ def test_a_failing_object_is_quarantined_by_name_beside_its_freshness_and_trust(
     )
     assert disclosure.freshness.state.value == "current_for_observed_version"
 
+    # Written out rather than imported, and deliberately not read back off
+    # `record`: `assert extractor` — the truthiness check this replaces — held
+    # for any non-empty string, and the basis comparison below took its expected
+    # value from the very row it was checking. Between them they proved the
+    # answer was self-consistent and nothing at all about what was stored. The
+    # version is asserted because nothing in the suite asserted it anywhere.
     extractor = record["provenance"]["extractor"]
-    assert extractor, "the stored provenance names no extractor"
+    assert extractor == "my_pa.text"
+    assert record["provenance"]["extractor_version"] == "1"
     assert record["provenance"]["trust_level"] == TrustLevel.SOURCE_BOUND_DERIVED.value
     assert disclosure.trust.level is TrustLevel.SOURCE_BOUND_DERIVED
     assert disclosure.trust.basis == (extractor,), (

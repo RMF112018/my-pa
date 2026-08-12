@@ -94,6 +94,35 @@ EXPECTED_CHECK_CONSTRAINTS = frozenset(
     }
 )
 
+#: Index statements the offline `--sql` artifact must carry, written out in the
+#: exact spelling PostgreSQL DDL emits. Restated rather than imported, for the
+#: reason the module docstring gives about the names above.
+#:
+#: **Scope, stated narrowly on purpose.** This closes a gap in *one review
+#: artifact*, not an unpinned index. Both functional text indexes are already
+#: pinned against a live server by `EXPLAIN`-plan assertion —
+#: `tests/search_quality/test_lexical_search.py` for `extractions_full_text` and
+#: `tests/search_quality/test_capture_search.py` for `capture_versions_full_text`
+#: — and `tests/schema/test_capture_schema_migration.py` checks the second one's
+#: definition on the server as well. What none of that covers is the reviewer who
+#: reads `--sql` with no server at all: until now that output could have lost an
+#: index, or had its expression changed from `gin` to `btree` or its
+#: configuration from `english` to `simple`, and this suite would have said
+#: nothing. Three statements, not seventeen: this revision's own index, and the
+#: two functional ones whose *expression* is the thing a reader cannot verify by
+#: eye. The chain emits fourteen more into `knowledge` that are not asserted
+#: here, and the assertion below is a subset test, so a new index does not force
+#: an edit and is not attested either.
+EXPECTED_INDEX_STATEMENTS = frozenset(
+    {
+        "CREATE INDEX jobs_by_state ON knowledge.jobs (state, created_at);",
+        "CREATE INDEX extractions_full_text ON knowledge.extractions "
+        "USING gin (to_tsvector('english', text));",
+        "CREATE INDEX capture_versions_full_text ON knowledge.capture_versions "
+        "USING gin (to_tsvector('simple', content));",
+    }
+)
+
 KNOWLEDGE_REVISION = "7e5a1fb93d62"
 FOUNDATION_HEAD = "6c4d3ea82f10"
 
@@ -177,12 +206,21 @@ def test_the_knowledge_revision_is_in_the_chain_on_the_foundation_head() -> None
     assert revision.down_revision == FOUNDATION_HEAD
     assert len(list(script.walk_revisions())) >= 7
     assert EXPECTED_TABLES and EXPECTED_UNIQUE_CONSTRAINTS and EXPECTED_CHECK_CONSTRAINTS
+    assert EXPECTED_INDEX_STATEMENTS
 
 
 def test_offline_mode_emits_the_knowledge_ddl_without_connecting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`--sql` has to work with no server: it is how the DDL gets reviewed."""
+    """`--sql` has to work with no server: it is how the DDL gets reviewed.
+
+    Indexes are asserted here as whole statements rather than as bare names.
+    A name alone would be satisfied by `CREATE INDEX extractions_full_text ON
+    knowledge.extractions (text)` — the same name over a plain btree, which the
+    online `EXPLAIN` tests would catch and a reader of this artifact would not.
+    `EXPECTED_INDEX_STATEMENTS` says what the gap is and, more importantly, what
+    it is not.
+    """
     monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", "postgresql+psycopg://nobody@nowhere/nothing")
     buffer = io.StringIO()
 
@@ -194,6 +232,8 @@ def test_offline_mode_emits_the_knowledge_ddl_without_connecting(
         assert f"CREATE TABLE {EXPECTED_SCHEMA}.{table}" in emitted
     for constraint in EXPECTED_UNIQUE_CONSTRAINTS | EXPECTED_CHECK_CONSTRAINTS:
         assert constraint in emitted
+    for statement in EXPECTED_INDEX_STATEMENTS:
+        assert statement in emitted, statement
 
 
 @pytest.fixture

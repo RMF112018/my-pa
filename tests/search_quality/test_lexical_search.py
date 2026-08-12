@@ -103,6 +103,7 @@ from my_pa.infrastructure.persistence.search import (
     UnknownEnrollmentError,
     _configuration,
     _coverage,
+    _every_row,
     _execute,
     match_statement,
     search_extractions,
@@ -2995,13 +2996,13 @@ def test_a_cancelled_read_is_unavailable_and_a_broken_statement_is_internal(
         transaction = connection.begin()
         connection.execute(text("SET LOCAL statement_timeout = '1ms'"))
         with pytest.raises(SearchUnavailableError) as unavailable:
-            _execute(connection, select(func.pg_sleep(3)))
+            _execute(connection, select(func.pg_sleep(3)), _every_row)
         transaction.rollback()
 
     with engine.connect() as connection:
         transaction = connection.begin()
         with pytest.raises(SearchInternalError) as internal:
-            _execute(connection, select(literal_column("no_such_column")))
+            _execute(connection, select(literal_column("no_such_column")), _every_row)
         transaction.rollback()
 
     assert str(unavailable.value) == "the lexical index could not be read"

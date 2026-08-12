@@ -674,6 +674,7 @@ def _outcome(
     source_object_id: str | None = None,
     version_id: str | None = None,
     content_version_id: str | None = None,
+    is_truncated: bool = False,
 ) -> ExtractionOutcome:
     observed_version = enrolled.version_id if version_id is None else version_id
     observed_object = enrolled.source_object_id if source_object_id is None else source_object_id
@@ -686,7 +687,52 @@ def _outcome(
         content=content,
         observed_at=OBSERVED_AT,
         processed_at=OBSERVED_AT,
+        is_truncated=is_truncated,
     )
+
+
+@pytest.mark.database
+@pytest.mark.parametrize("truncated", [False, True])
+def test_the_stored_row_carries_the_provenance_the_extractor_recorded(
+    extraction_engine: Engine, truncated: bool
+) -> None:
+    """Every provenance column `record_outcome` writes, read back independently.
+
+    The expected values are written out here — `"my_pa.text"`, `"1"` and the
+    `truncated` parameter — rather than read off `outcome.provenance`. An
+    assertion whose expected value comes from the object under test passes
+    whichever value that object holds, so it measures nothing; that is precisely
+    what `extractor` had, end to end, before this package.
+
+    `truncated` is a parameter and not a constant because `extractions.
+    is_truncated` carries `server_default="false"`. A `False`-only assertion is
+    satisfied by a writer that never sends the column at all, so the `False` row
+    is the control and the `True` row is the measurement, in one parametrization.
+
+    Database tier: this is the round trip through PostgreSQL and does not run in
+    FAST. `tests/contract/test_application_capabilities.py` pins the same three
+    fields on the read side, against a staged record, and does.
+    """
+    with extraction_engine.begin() as connection:
+        enrolled = _enrolled(connection)
+        extraction_id = record_outcome(
+            connection,
+            enrollment_id=enrolled.enrollment_id,
+            outcome=_outcome(enrolled, is_truncated=truncated),
+        )
+
+        stored = connection.execute(
+            text(
+                "SELECT extractor, extractor_version, is_truncated, observed_at "
+                "FROM knowledge.extractions WHERE extraction_id = :id"
+            ),
+            {"id": extraction_id},
+        ).one()
+
+    assert stored[0] == "my_pa.text"
+    assert stored[1] == "1"
+    assert stored[2] is truncated
+    assert stored[3] == OBSERVED_AT
 
 
 @pytest.mark.database

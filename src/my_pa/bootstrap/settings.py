@@ -24,17 +24,20 @@ import os
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Final
-from urllib.parse import urlsplit
 
 from pydantic import Field, ValidationError, model_validator
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_DEPTH
+from my_pa.infrastructure.database.engine import POOL_TIMEOUT_SECONDS
 
 __all__ = [
     "DATABASE_URL_SCHEME",
+    "DEFAULT_STATEMENT_TIMEOUT_MS",
     "ENV_PREFIX",
     "MAX_FETCH_BYTES_CEILING",
     "Environment",
@@ -70,6 +73,41 @@ DATABASE_URL_SCHEME: Final = "postgresql+psycopg"
 #: disagreeing about what a readable document can be.
 MAX_FETCH_BYTES_CEILING: Final = MAX_EXTRACTED_CHARACTERS * 4
 
+#: How long one statement may run before the server cancels it, in milliseconds,
+#: on every engine whose statements are sized to a request. **Chosen, not
+#: inherited: PostgreSQL's own default is `0`, which means no bound at all, and
+#: no `statement_timeout` was configured anywhere in this repository until now.**
+#:
+#: The number is `POOL_TIMEOUT_SECONDS` expressed in milliseconds, and the
+#: equality is the argument rather than a coincidence. One request can wait in
+#: exactly two places: for a connection, bounded by `pool_timeout`, and then on
+#: the server, bounded here. Two ceilings that differ would make the worse of
+#: them the real one while the better one described the system, so there is one
+#: number and a request's total exposure is twice it.
+#:
+#: **Computed rather than asserted.** The sentence above was true and written in
+#: a comment beside a `30_000` literal that nothing derived, so the claim and the
+#: value could part company in silence — the same shape `D-24` corrected and the
+#: same one this module's own package was blocked for. The multiplication is the
+#: control: change the pool timeout and this follows, or it does not compile.
+#:
+#: That it is *far* above a healthy statement is the other half, and it is what
+#: keeps this a bound on a runaway rather than a limit on the work: the reads
+#: this bounds are a keyset-paginated page over a functional GIN index, a
+#: single-row lookup on a primary key, and two ungrouped aggregates. None of them
+#: is within three orders of magnitude of thirty seconds on the corpus this
+#: build serves.
+#:
+#: It is a default and not a constant, which is the whole of `D-24`'s shape: an
+#: operator whose corpus outgrows it raises it without a code change. There is
+#: deliberately **no upper bound** on the field — every positive value is a real
+#: bound, and choosing a ceiling would be choosing for the operator — but there is
+#: a lower one. `gt=0` refuses `0`, which is how PostgreSQL spells "no timeout":
+#: the one value that would turn this setting into the absence of the thing it
+#: configures cannot be reached through configuration. A caller that genuinely
+#: must run unbounded is exempted in code, where the exemption is reviewable.
+DEFAULT_STATEMENT_TIMEOUT_MS: Final = POOL_TIMEOUT_SECONDS * 1000
+
 
 class Environment(StrEnum):
     """Deployment environment. There is no production value in Phase 01."""
@@ -96,18 +134,86 @@ class SettingsError(ValueError):
     """
 
 
+#: The libpq connection parameter a URL may not carry, because
+#: `create_database_engine` writes it. SQLAlchemy merges a URL's query string
+#: into the driver's connect arguments and lets `connect_args` win, so a URL that
+#: sets this would have it **discarded** rather than combined — measured, not
+#: inferred: a URL carrying `options=-c search_path=mine` reaches psycopg as
+#: `options='-c statement_timeout=30000'` and the operator's parameter is gone.
+#:
+#: Refused rather than merged, and merging is the tempting wrong answer. libpq
+#: lets a later `-c` override an earlier one, so concatenating the two strings
+#: would let `options=-c statement_timeout=0` in a URL configure the timeout away
+#: — the exact value `statement_timeout_ms`'s `gt=0` exists to make unreachable,
+#: reached through a different door.
+#:
+#: **Refused in every process, and deliberately wider than the override it
+#: prevents.** The three callers that pass no timeout at all — `migrations/env.py`
+#: and the two bulk-corpus CLIs — would have nothing overridden, so a narrower
+#: rule could let them through. It does not, and the reason is that there is one
+#: `MY_PA_DATABASE_URL` and many readers of it: a rule that fired only where the
+#: override happens would make the same string legal in Alembic and illegal in
+#: the gateway, so an operator's parameter would take effect in one process and
+#: vanish in another. One variable means one thing everywhere. This is settled
+#: rather than provisional, and it is the behaviour the three refusals above
+#: already have — none of them asks which process is loading the settings.
+_REFUSED_URL_PARAMETER: Final = "options"
+
+
 def _validate_database_url(url: str) -> None:
     """Reject a URL the engine could not use, before anything tries to connect.
 
     Names the defect, never the URL: a supplied URL may embed a password.
+
+    **Every rule below reads the URL through `make_url`, which is the parser the
+    engine itself uses, and that is the rule rather than an implementation
+    detail.** This function previously reasoned with `urlsplit`, and the two do
+    not agree: `urlsplit` honours `#` as a fragment delimiter and SQLAlchemy's
+    regex does not, so
+    `…?x=1#&options=-c%20statement_timeout%3D0` presented `urlsplit` with a query
+    of `x=1` and handed psycopg `options='-c statement_timeout=0'` — past the
+    refusal below, and to the exact value `statement_timeout_ms`'s `gt=0` exists
+    to forbid. Special-casing `#` would have closed that URL and left the class
+    open, because the class is *a validator that parses the URL with a different
+    parser than the engine does*, and every other divergence between the two is
+    the same defect wearing different punctuation. Asking the engine's parser
+    makes agreement structural: there is now one parse, and the rules are stated
+    about its result.
+
+    The `options` check fails at configuration time rather than at first connect,
+    which is the difference between a process that refuses to start and one that
+    starts, reports healthy, and silently runs without the parameter its operator
+    set.
     """
-    parsed = urlsplit(url)
-    if parsed.scheme != DATABASE_URL_SCHEME:
+    # `ArgumentError`'s own message names no credential today, but it is a
+    # library message this module does not own, and the raise is placed outside
+    # the handler for the reason `persistence.search._execute` gives at length:
+    # leaving the handler first is what empties `__context__`, where a rendered
+    # traceback would otherwise print whatever the original carried.
+    unparseable = False
+    try:
+        parsed = make_url(url)
+    except ArgumentError:
+        unparseable = True
+    if unparseable or parsed.drivername != DATABASE_URL_SCHEME:
+        # A string SQLAlchemy cannot parse as a URL is reported as the scheme
+        # failure it is, which is also the answer `urlsplit` gave for it.
         raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must use the {DATABASE_URL_SCHEME} scheme")
-    if not parsed.hostname:
+    if not parsed.host:
         raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must name a host")
-    if not parsed.path.lstrip("/"):
+    if not parsed.database:
         raise SettingsError(f"{ENV_PREFIX}DATABASE_URL must name a database")
+    # Case-insensitive: SQLAlchemy passes a query key through unchanged, so
+    # `OPTIONS=` would reach psycopg as an unknown keyword and fail there
+    # instead. Refusing it here reports the real conflict rather than a driver
+    # error three layers down.
+    if any(name.lower() == _REFUSED_URL_PARAMETER for name in parsed.query):
+        raise SettingsError(
+            f"{ENV_PREFIX}DATABASE_URL must not set the libpq "
+            f"{_REFUSED_URL_PARAMETER} parameter; the engine sets it and would "
+            f"discard this one. The statement timeout is configured by "
+            f"{ENV_PREFIX}STATEMENT_TIMEOUT_MS"
+        )
 
 
 class Settings(StrictModel):
@@ -119,6 +225,12 @@ class Settings(StrictModel):
     by `capabilities.get` is the one the enforcing path reads. They are ordinary
     integers with ordinary bounds; the interesting property is not their range
     but that there is exactly one of each.
+
+    `statement_timeout_ms` is a fifth integer and deliberately **not** a fifth
+    limit. `effective_limits` is what `capabilities.get` publishes to a caller,
+    and this bounds the server rather than the answer: no request is refused for
+    exceeding it, no response reports it, and a caller cannot plan around it. It
+    reaches `create_database_engine` and nothing else.
     """
 
     environment: Environment = Environment.LOCAL
@@ -129,6 +241,7 @@ class Settings(StrictModel):
     default_page_size: int = Field(default=50, gt=0, le=1000)
     max_fetch_bytes: int = Field(default=8 * 1024 * 1024, gt=0, le=MAX_FETCH_BYTES_CEILING)
     max_enrollment_depth: int = Field(default=0, ge=0, le=MAX_ENROLLMENT_DEPTH)
+    statement_timeout_ms: int = Field(default=DEFAULT_STATEMENT_TIMEOUT_MS, gt=0)
     database_url: str
 
     @model_validator(mode="after")

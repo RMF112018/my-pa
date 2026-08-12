@@ -26,6 +26,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from tests.conftest import (
     DEFAULT_LIMITS,
     FakeProviders,
@@ -553,13 +554,15 @@ def test_a_query_with_no_terms_is_an_invalid_request_and_not_an_empty_result(
 # ---- knowledge.read --------------------------------------------------------
 
 
-def staged_record(scene: Scene, text: str = "Quarterly revenue review.") -> KnowledgeRecord:
+def staged_record(
+    scene: Scene, text: str = "Quarterly revenue review.", *, is_truncated: bool = False
+) -> KnowledgeRecord:
     record = KnowledgeRecord(
         knowledge_id=issue_identifier(IdKind.KNOWLEDGE),
         enrollment_id=scene.enrollment.enrollment_id,
         media_type=MARKDOWN,
         text=text,
-        is_truncated=False,
+        is_truncated=is_truncated,
         provenance=Provenance(
             source_id=scene.source.source_id,
             source_object_id=scene.markdown.source_object_id,
@@ -574,10 +577,26 @@ def staged_record(scene: Scene, text: str = "Quarterly revenue review.") -> Know
     return record
 
 
+@pytest.mark.parametrize("stored_truncated", [False, True])
 def test_knowledge_read_returns_the_record_and_its_mandatory_provenance(
-    scene: Scene,
+    scene: Scene, stored_truncated: bool
 ) -> None:
-    record = staged_record(scene)
+    """Every provenance field the answer publishes, against a value staged here.
+
+    `extractor` and `extractor_version` are asserted against the literals
+    `staged_record` writes, not against `record.provenance.extractor` — an
+    assertion whose expected value is read back out of the object under test
+    passes whatever that object holds, which is the shape the end-to-end
+    slice carried until this package.
+
+    `stored_truncated` is parametrized because `False` alone proves nothing:
+    the read path spells this field `record.is_truncated or cut`, so a `False`
+    row and a code path that dropped the stored flag entirely give the same
+    answer. The `True` row is the one that measures it, and it is bounded by
+    nothing — no page size is narrowed here — so `cut` is `False` and only the
+    stored flag can carry it through.
+    """
+    record = staged_record(scene, is_truncated=stored_truncated)
     service = build_service(scene.world, scene.providers)
     envelope = run(
         service,
@@ -590,11 +609,15 @@ def test_knowledge_read_returns_the_record_and_its_mandatory_provenance(
     )
     result = succeeded(envelope)
     assert result["text"] == record.text
+    assert result["is_truncated"] is stored_truncated
     provenance = result["provenance"]
     assert isinstance(provenance, dict)
     assert provenance["source_id"] == scene.source.source_id
     assert provenance["version_id"] == scene.markdown.version_id
     assert provenance["trust_level"] == TrustLevel.SOURCE_BOUND_DERIVED.value
+    assert provenance["extractor"] == "my_pa.text"
+    assert provenance["extractor_version"] == "1"
+    assert provenance["observed_at"] == "2026-08-01T00:00:00.000Z"
 
 
 def test_a_bounded_read_truncates_truthfully(scene: Scene) -> None:

@@ -267,6 +267,30 @@ other local PostgreSQL cannot land here by accident. Keep the password out of
 source and out of shell history; supply it with `PGPASSWORD` or `~/.pgpass` and
 build the URL from the environment at runtime.
 
+### Do not put `options` in the URL
+
+`MY_PA_DATABASE_URL` is **refused at startup** if its query string sets the libpq
+`options` parameter:
+
+```
+# refused
+postgresql+psycopg://my_pa@localhost:5433/my_pa?options=-c%20search_path%3Dmine
+```
+
+The application sets `options` itself, to apply the statement timeout, and the
+driver takes one value rather than both — so yours would be discarded with
+nothing said about it. Refusing to start is the signal. Every process refuses it,
+including Alembic, so that one variable means one thing everywhere.
+
+Set the timeout with `MY_PA_STATEMENT_TIMEOUT_MS` instead: milliseconds, greater
+than zero, default 30000. It applies to the gateway, the source CLI, the health
+probe and the worker; migrations and the bulk corpus load run unbounded on
+purpose, because their statements are sized to the corpus rather than to a
+request.
+
+Every other libpq parameter is still accepted in the URL — `sslmode`,
+`connect_timeout`, `application_name` and the rest. Only `options` collides.
+
 ## Back up
 
 ```sh

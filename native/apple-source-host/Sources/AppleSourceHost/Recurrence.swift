@@ -144,14 +144,85 @@ public struct NativeOccurrenceIdentity: Codable, Hashable, Sendable {
     }
 }
 
+/// One expanded occurrence of a UTC-interval series.
+///
+/// **WP-17 changed two things about this type, and both were defects.**
+///
+/// 1. It gained `lifecycle`. Before, a cancelled occurrence was dropped from the
+///    expansion entirely, which made "the 10:00 was cancelled" arrive downstream
+///    as "there was never a 10:00". Absence and cancellation are different facts
+///    and a consumer cannot recover the first from the second. The expander now
+///    emits the occurrence carrying `CalendarOccurrenceLifecycle.cancelled`, in
+///    the slot the series scheduled it for.
+/// 2. It gained a validating `init` and `init(from:)`. Before, it was the only
+///    type in this file with a *synthesized* `Codable`, so its invariants were
+///    bypassable off the wire — which is precisely the defect WP-15 fixed for
+///    the page and cursor ceilings and WP-16 fixed for the mail content bounds.
+///
+/// The invariant is the one that keeps identity honest: a `confirmed` occurrence
+/// must start exactly where its identity says the series scheduled it. Only a
+/// `cancelled` or `detached` occurrence may sit somewhere else, because those are
+/// the two states that mean "not as scheduled".
 public struct NativeCalendarOccurrence: Codable, Hashable, Sendable {
     public let identity: NativeOccurrenceIdentity
     public let bucketID: NativeSourceOpaqueID
     public let timezoneIdentifier: String
     public let startUnixMilliseconds: Int64
     public let endUnixMilliseconds: Int64
-    public let isException: Bool
+    public let lifecycle: CalendarOccurrenceLifecycle
     public let payload: [UInt8]
+
+    public init(
+        identity: NativeOccurrenceIdentity,
+        bucketID: NativeSourceOpaqueID,
+        timezoneIdentifier: String,
+        startUnixMilliseconds: Int64,
+        endUnixMilliseconds: Int64,
+        lifecycle: CalendarOccurrenceLifecycle,
+        payload: [UInt8]
+    ) throws {
+        guard startUnixMilliseconds <= endUnixMilliseconds,
+              !timezoneIdentifier.isEmpty,
+              !timezoneIdentifier.contains(where: { $0.isNewline })
+        else {
+            throw NativeSourceContractError.calendarScheduleInconsistent
+        }
+        if lifecycle == .confirmed {
+            guard startUnixMilliseconds == identity.scheduledStartUnixMilliseconds else {
+                throw NativeSourceContractError.calendarLifecycleInconsistent
+            }
+        }
+        self.identity = identity
+        self.bucketID = bucketID
+        self.timezoneIdentifier = timezoneIdentifier
+        self.startUnixMilliseconds = startUnixMilliseconds
+        self.endUnixMilliseconds = endUnixMilliseconds
+        self.lifecycle = lifecycle
+        self.payload = payload
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case identity, bucketID, timezoneIdentifier, startUnixMilliseconds
+        case endUnixMilliseconds, lifecycle, payload
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            identity: values.decode(NativeOccurrenceIdentity.self, forKey: .identity),
+            bucketID: values.decode(NativeSourceOpaqueID.self, forKey: .bucketID),
+            timezoneIdentifier: values.decode(String.self, forKey: .timezoneIdentifier),
+            startUnixMilliseconds: values.decode(Int64.self, forKey: .startUnixMilliseconds),
+            endUnixMilliseconds: values.decode(Int64.self, forKey: .endUnixMilliseconds),
+            lifecycle: values.decode(CalendarOccurrenceLifecycle.self, forKey: .lifecycle),
+            payload: values.decode([UInt8].self, forKey: .payload)
+        )
+    }
+
+    /// Retained so that callers asking "was this occurrence altered?" keep a
+    /// name for it. It is now derived from the lifecycle rather than stored
+    /// beside it, which removes the state where the two could disagree.
+    public var isException: Bool { lifecycle != .confirmed }
 }
 
 public enum NativeRecurrenceExpander {
@@ -192,14 +263,28 @@ public enum NativeRecurrenceExpander {
             let exception = exceptionBySchedule[scheduled]
             let actualStart = exception?.replacementStartUnixMilliseconds ?? scheduled
             let actualEnd = exception?.replacementEndUnixMilliseconds ?? baseEnd
-            let cancelled = exception != nil && exception?.replacementStartUnixMilliseconds == nil
+            // **A cancelled occurrence is emitted, not omitted.** Dropping it
+            // here — which is what this expander did until WP-17 — made a
+            // cancellation indistinguishable from an occurrence that never
+            // existed, and a consumer cannot recover the first from the second.
+            // A cancelled occurrence keeps the slot the series scheduled it for,
+            // so it is windowed on that slot rather than disappearing out of a
+            // window it belongs in.
+            let lifecycle: CalendarOccurrenceLifecycle
+            if let exception {
+                lifecycle = exception.replacementStartUnixMilliseconds == nil
+                    ? .cancelled
+                    : .detached
+            } else {
+                lifecycle = .confirmed
+            }
             let overlaps = actualStart <= range.endUnixMilliseconds && actualEnd >= range.startUnixMilliseconds
-            if !cancelled && overlaps {
+            if overlaps {
                 guard result.count < maximumOccurrences else {
                     throw NativeSourceContractError.recurrenceLimitExceeded
                 }
                 result.append(
-                    NativeCalendarOccurrence(
+                    try NativeCalendarOccurrence(
                         identity: NativeOccurrenceIdentity(
                             seriesID: series.seriesID,
                             scheduledStartUnixMilliseconds: scheduled
@@ -208,7 +293,7 @@ public enum NativeRecurrenceExpander {
                         timezoneIdentifier: series.timezoneIdentifier,
                         startUnixMilliseconds: actualStart,
                         endUnixMilliseconds: actualEnd,
-                        isException: exception != nil,
+                        lifecycle: lifecycle,
                         payload: series.payload
                     )
                 )

@@ -59,7 +59,15 @@ struct AppleSourceHostContractChecks {
         try checkMailBodyAndAttachmentBoundsOmitMarkAndRefuse()
         try checkMailAttachmentDescriptorBoundsHoldOffTheWire()
         try checkMailPageCursorAndOrderingBounds()
-        print("AppleSourceHostContractChecks: PASS (22 checks)")
+        try checkCalendarAuthorizationFailsClosedAndIsNotAnEmptyPage()
+        try checkCalendarIdentityIsFourLevelInjectiveAndAnchoredToTheOriginal()
+        try checkCalendarRecurrenceExpandsAndCancellationIsNotAnAbsence()
+        try checkCalendarAllDayAndForeignZoneSemantics()
+        try checkCalendarDaylightSavingGapRepeatedHourAndStableWallClock()
+        try checkCalendarHorizonBoundsAndHonestTruncation()
+        try checkCalendarCancellationSurvivesTheAdapterAndIsNotFilterable()
+        try checkCalendarValueBoundsHoldOffTheWire()
+        print("AppleSourceHostContractChecks: PASS (30 checks)")
     }
 
     private static func require(_ condition: Bool, _ message: String) throws {
@@ -549,16 +557,35 @@ struct AppleSourceHostContractChecks {
             startUnixMilliseconds: first,
             endUnixMilliseconds: first + (4 * day)
         )
+        // **WP-17 changed the expectations in this block, and the change is a
+        // correction rather than an accommodation.** Until WP-17 this expander
+        // dropped a cancelled occurrence from its output, so this series of four
+        // expanded to three and the cancelled slot at `first + 2*day` was simply
+        // missing — indistinguishable from an occurrence the series never had.
+        // Cancellation and absence are different facts, so the cancelled
+        // occurrence is now emitted carrying `.cancelled`, the count is four
+        // rather than three, and the missing slot is asserted to be present.
+        // The old expectations were `maximumOccurrences: 3`, `count == 3` and
+        // `[first, first + day, first + (3 * day)]`.
         let occurrences = try NativeRecurrenceExpander.expand(
             series,
             in: range,
-            maximumOccurrences: 3
+            maximumOccurrences: 4
         )
-        try require(occurrences.count == 3, "Cancellation did not preserve bounded expansion")
+        try require(occurrences.count == 4, "Cancellation did not preserve bounded expansion")
         try require(
             occurrences.map(\.identity.scheduledStartUnixMilliseconds)
-                == [first, first + day, first + (3 * day)],
+                == [first, first + day, first + (2 * day), first + (3 * day)],
             "Occurrence identity did not remain anchored to scheduled series time"
+        )
+        try require(
+            occurrences.map(\.lifecycle) == [.confirmed, .detached, .cancelled, .confirmed],
+            "A cancelled occurrence was reported as an absence, or a detached one as confirmed"
+        )
+        try require(
+            occurrences[2].startUnixMilliseconds == first + (2 * day)
+                && occurrences[2].endUnixMilliseconds == first + (2 * day) + 3_600_000,
+            "The cancelled occurrence lost the slot it was cancelled from"
         )
         try require(occurrences[1].isException, "Recurrence exception identity was lost")
         try require(
@@ -2281,6 +2308,1047 @@ struct AppleSourceHostContractChecks {
         mechanism.setFault(.returnKeysOutOfOrder)
         try requireError(.nonCanonicalOrder) { try adapter.readMail(try mailRequest(limit: 3)) }
         mechanism.setFault(.none)
+    }
+
+
+    // MARK: - WP-17 — the calendar adapter
+    //
+    // Level of proof for everything below: **Swift runtime, in one process, over
+    // a mechanism seam driven by a store this harness seeds itself.** No
+    // EventKit event store is constructed anywhere in this repository, no TCC grant is
+    // held or requested, and no calendar belonging to anyone is read. What the
+    // seam buys is that every refusal lives in `BoundedCalendarReadAdapter`, so
+    // these properties hold for any mechanism satisfying it.
+    //
+    // Every fixture value is obviously synthetic: `Calendar Beta`, `Event
+    // Alpha`, `account-alpha`. There is no title, location, attendee or note
+    // field anywhere in the calendar record types, so there is nothing for a
+    // real one to be mistaken for.
+
+    private static func component(_ value: String) throws -> CalendarIdentityComponent {
+        try requireValue(
+            CalendarIdentityComponent(rawValue: value),
+            "The probe identity component \(value) is not admissible"
+        )
+    }
+
+    private static func bucket(_ account: String, _ calendar: String) throws
+        -> CalendarBucketIdentity {
+        CalendarBucketIdentity(
+            accountKey: try component(account),
+            calendarKey: try component(calendar)
+        )
+    }
+
+    private static func seriesIdentity(_ account: String, _ calendar: String, _ series: String)
+        throws -> CalendarSeriesIdentity {
+        CalendarSeriesIdentity(
+            bucket: try bucket(account, calendar),
+            seriesKey: try component(series)
+        )
+    }
+
+    /// The instant a local wall clock names, or a harness failure if it names
+    /// none. Used to seed fixtures at real local times rather than at instants
+    /// somebody computed by hand and cannot re-derive.
+    private static func instant(
+        year: Int,
+        month: Int,
+        day: Int,
+        hour: Int,
+        minute: Int,
+        zone identifier: String
+    ) throws -> Int64 {
+        let zone = try CalendarZone.resolve(identifier)
+        let wallClock = try CalendarWallClock(
+            date: try CalendarDate(year: year, month: month, day: day),
+            hour: hour,
+            minute: minute,
+            second: 0
+        )
+        switch CalendarZone.resolve(wallClock, in: zone) {
+        case let .unique(value):
+            return value
+        case let .ambiguous(earlier, _):
+            return earlier
+        case .skipped:
+            throw ContractCheckError.failed(
+                "The probe wall clock does not exist in \(identifier)"
+            )
+        }
+    }
+
+    private static let calendarZone = "America/New_York"
+
+    /// A five-occurrence 09:00 weekday-shaped series in `Calendar Beta`, with one
+    /// occurrence moved and one cancelled.
+    private static func probeSeries() throws -> CalendarRecurringSeries {
+        let firstStart = try instant(
+            year: 2026, month: 3, day: 3, hour: 9, minute: 0, zone: calendarZone
+        )
+        let movedOriginal = try instant(
+            year: 2026, month: 3, day: 4, hour: 9, minute: 0, zone: calendarZone
+        )
+        let cancelledOriginal = try instant(
+            year: 2026, month: 3, day: 6, hour: 9, minute: 0, zone: calendarZone
+        )
+        _ = firstStart
+        return try CalendarRecurringSeries(
+            identity: try seriesIdentity("account-alpha", "calendar-beta", "series-alpha"),
+            timezoneIdentifier: calendarZone,
+            firstWallClock: try CalendarWallClock(
+                date: try CalendarDate(year: 2026, month: 3, day: 3),
+                hour: 9,
+                minute: 0,
+                second: 0
+            ),
+            durationSeconds: 1800,
+            intervalDays: 1,
+            occurrenceCount: 5,
+            exceptions: [
+                CalendarRecurrenceException(
+                    originalStartUnixMilliseconds: movedOriginal,
+                    replacement: try CalendarTimedInterval.at(
+                        startUnixMilliseconds: movedOriginal + 7_200_000,
+                        endUnixMilliseconds: movedOriginal + 9_000_000,
+                        timezoneIdentifier: calendarZone
+                    )
+                ),
+                CalendarRecurrenceException(
+                    originalStartUnixMilliseconds: cancelledOriginal,
+                    replacement: nil
+                ),
+            ],
+            lastModifiedUnixMilliseconds: 1_770_000_000_000
+        )
+    }
+
+    /// A whole-day occurrence, represented as dates and carrying no instant.
+    private static func probeAllDayOccurrence() throws -> CalendarOccurrence {
+        let day = try CalendarDate(year: 2026, month: 3, day: 5)
+        return try CalendarOccurrence(
+            identity: CalendarOccurrenceIdentity(
+                series: try seriesIdentity("account-alpha", "calendar-beta", "series-whole-day"),
+                originalStartUnixMilliseconds: day.identityAnchorUnixMilliseconds
+            ),
+            lifecycle: .confirmed,
+            schedule: .allDay(try CalendarAllDaySpan(firstDay: day, lastDay: day)),
+            lastModifiedUnixMilliseconds: 1_770_000_000_001
+        )
+    }
+
+    /// One occurrence in a *different* calendar, so that a mechanism answering
+    /// with somebody else's calendar can be caught rather than assumed away.
+    private static func probeOtherCalendarOccurrence() throws -> CalendarOccurrence {
+        let start = try instant(
+            year: 2026, month: 3, day: 4, hour: 14, minute: 0, zone: calendarZone
+        )
+        return try CalendarOccurrence(
+            identity: CalendarOccurrenceIdentity(
+                series: try seriesIdentity("account-alpha", "calendar-gamma", "series-gamma"),
+                originalStartUnixMilliseconds: start
+            ),
+            lifecycle: .confirmed,
+            schedule: .timed(
+                try CalendarTimedInterval.at(
+                    startUnixMilliseconds: start,
+                    endUnixMilliseconds: start + 1_800_000,
+                    timezoneIdentifier: calendarZone
+                )
+            ),
+            lastModifiedUnixMilliseconds: 1_770_000_000_002
+        )
+    }
+
+    private static func calendarDescriptor(
+        publishesOriginalOccurrenceStart: Bool = true
+    ) -> CalendarMechanismDescriptor {
+        CalendarMechanismDescriptor(
+            mechanism: .fixtureSeeded,
+            publishesOriginalOccurrenceStart: publishesOriginalOccurrenceStart,
+            requiresOperatorConsent: false
+        )
+    }
+
+    private static func calendarMechanism(
+        occurrences: [CalendarOccurrence],
+        publishesOriginalOccurrenceStart: Bool = true
+    ) throws -> FixtureCalendarMechanism {
+        try FixtureCalendarMechanism(
+            descriptor: calendarDescriptor(
+                publishesOriginalOccurrenceStart: publishesOriginalOccurrenceStart
+            ),
+            accounts: [
+                CalendarAccountDescriptor(
+                    accountKey: try component("account-alpha"),
+                    displayLabel: "Account Alpha"
+                )
+            ],
+            calendars: [
+                CalendarBucketDescriptor(
+                    identity: try bucket("account-alpha", "calendar-beta"),
+                    displayLabel: "Calendar Beta",
+                    isSelectable: true
+                ),
+                CalendarBucketDescriptor(
+                    identity: try bucket("account-alpha", "calendar-gamma"),
+                    displayLabel: "Calendar Gamma",
+                    isSelectable: true
+                ),
+            ],
+            occurrences: occurrences
+        )
+    }
+
+    /// One occurrence in `Calendar Beta` but well outside every window this
+    /// harness asks for, so that a mechanism which ignores its window has
+    /// something to return that the adapter can catch. Without it the
+    /// `ignoreTheWindow` fault is undetectable and the guard against it is
+    /// vacuous.
+    private static func probeOutOfWindowOccurrence() throws -> CalendarOccurrence {
+        let start = try instant(
+            year: 2027, month: 1, day: 15, hour: 9, minute: 0, zone: calendarZone
+        )
+        return try CalendarOccurrence(
+            identity: CalendarOccurrenceIdentity(
+                series: try seriesIdentity("account-alpha", "calendar-beta", "series-later"),
+                originalStartUnixMilliseconds: start
+            ),
+            lifecycle: .confirmed,
+            schedule: .timed(
+                try CalendarTimedInterval.at(
+                    startUnixMilliseconds: start,
+                    endUnixMilliseconds: start + 1_800_000,
+                    timezoneIdentifier: calendarZone
+                )
+            ),
+            lastModifiedUnixMilliseconds: 1_770_000_000_003
+        )
+    }
+
+    private static func probeOccurrences() throws -> [CalendarOccurrence] {
+        try CalendarSeriesExpander.expand(try probeSeries())
+            + [
+                try probeAllDayOccurrence(),
+                try probeOtherCalendarOccurrence(),
+                try probeOutOfWindowOccurrence(),
+            ]
+    }
+
+    private static func calendarRequest(
+        calendar: String = "calendar-beta",
+        limit: Int = 100,
+        cursor: NativeReadCursor? = nil,
+        bounded: Bool = true
+    ) throws -> NativeReadRequest {
+        let range = try NativeTimeRange(
+            startUnixMilliseconds: try instant(
+                year: 2026, month: 3, day: 1, hour: 0, minute: 0, zone: "UTC"
+            ),
+            endUnixMilliseconds: try instant(
+                year: 2026, month: 3, day: 20, hour: 0, minute: 0, zone: "UTC"
+            )
+        )
+        return try NativeReadRequest(
+            bucketID: try (bucket("account-alpha", calendar)).recordIdentifier(),
+            timeRange: bounded ? range : nil,
+            cursor: cursor,
+            limit: limit
+        )
+    }
+
+    private static func decodedOccurrence(_ record: NativeSourceRecord) throws
+        -> CalendarOccurrence {
+        try JSONDecoder().decode(CalendarOccurrence.self, from: Data(record.payload))
+    }
+
+    /// Control 2. Authorization fails closed, before any read, and a refusal is
+    /// a **different value** from a successful read of an empty calendar.
+    ///
+    /// This is the distinction the campaign has enforced since WP-09 and it is
+    /// the one a calendar gets wrong most expensively: a page of zero records
+    /// means "nothing is scheduled", and returning that when the real answer is
+    /// "we were never allowed to look" is a lie a scheduler will act on.
+    private static func checkCalendarAuthorizationFailsClosedAndIsNotAnEmptyPage() throws {
+        let mechanism = try calendarMechanism(occurrences: try probeOccurrences())
+        let adapter = BoundedCalendarReadAdapter(mechanism: mechanism)
+
+        try require(
+            CalendarAuthorizationState.allCases.count == 4,
+            "The authorization vocabulary is no longer the four states EventKit distinguishes"
+        )
+
+        // Every state that is not `authorized` stops the adapter before it reads,
+        // and that is measured by the fixture's own call counters rather than
+        // argued from the adapter's source.
+        for state in CalendarAuthorizationState.allCases where state != .authorized {
+            mechanism.setAuthorization(state)
+            mechanism.resetCallCounters()
+            try requireProviderFailure(.permissionDenied) { try adapter.discoverCalendars() }
+            try requireProviderFailure(.permissionDenied) {
+                try adapter.readCalendar(try calendarRequest())
+            }
+            try require(
+                mechanism.readCalls == 0,
+                "The adapter made \(mechanism.readCalls) reads with authorization \(state.rawValue)"
+            )
+            try require(
+                mechanism.authorizationCalls == 2,
+                "Authorization was not consulted once per operation"
+            )
+        }
+
+        // The other half, and the half that makes the first one mean something:
+        // an authorized read of a calendar that genuinely holds nothing produces
+        // a *page*. A refusal produces no page at all — the call above cannot
+        // return one, because it throws. Empty and unavailable are therefore
+        // different kinds of thing and not two spellings of one.
+        mechanism.setAuthorization(.authorized)
+        let empty = try calendarMechanism(occurrences: [])
+        let emptyPage = try BoundedCalendarReadAdapter(mechanism: empty)
+            .readCalendar(try calendarRequest())
+        try require(
+            emptyPage.records.isEmpty && emptyPage.nextCursor == nil,
+            "An empty calendar did not read as an empty page"
+        )
+
+        let snapshot = try adapter.discoverCalendars()
+        try require(snapshot.kind == .calendar, "Calendar discovery returned the wrong kind")
+        try require(snapshot.accounts.count == 1, "Calendar discovery lost the account")
+        try require(snapshot.buckets.count == 2, "Calendar discovery lost a calendar")
+        try require(
+            snapshot.buckets.allSatisfy { bucket in
+                snapshot.accounts.contains { $0.id == bucket.accountID }
+            },
+            "A discovered calendar names an account discovery did not report"
+        )
+
+        // A mechanism that cannot name where an occurrence was originally
+        // scheduled cannot anchor an occurrence identity, and is refused rather
+        // than read from with a best guess.
+        let unanchored = try calendarMechanism(
+            occurrences: try probeOccurrences(),
+            publishesOriginalOccurrenceStart: false
+        )
+        try requireError(.calendarOriginalStartUnavailable) {
+            try BoundedCalendarReadAdapter(mechanism: unanchored)
+                .readCalendar(try calendarRequest())
+        }
+    }
+
+    /// Control 1. Four levels, injective composition, and an occurrence key
+    /// anchored to the start the series scheduled rather than the start the
+    /// occurrence currently has.
+    private static func checkCalendarIdentityIsFourLevelInjectiveAndAnchoredToTheOriginal() throws {
+        let account = CalendarAccountIdentity(accountKey: try component("account-alpha"))
+        let bucketIdentity = try bucket("account-alpha", "calendar-beta")
+        let series = try seriesIdentity("account-alpha", "calendar-beta", "series-alpha")
+        let occurrence = CalendarOccurrenceIdentity(
+            series: series,
+            originalStartUnixMilliseconds: 1_770_000_000_000
+        )
+
+        let identifiers = [
+            try account.recordIdentifier().rawValue,
+            try bucketIdentity.recordIdentifier().rawValue,
+            try series.recordIdentifier().rawValue,
+            try occurrence.recordIdentifier().rawValue,
+        ]
+        try require(
+            Set(identifiers).count == 4,
+            "Two of the four identity levels compose to the same identifier"
+        )
+        try require(
+            identifiers.map { $0.filter { $0 == ":" }.count } == [0, 1, 2, 3],
+            "The identity levels are no longer distinguished by their separator count"
+        )
+        try require(
+            identifiers[3].hasPrefix(identifiers[2] + ":")
+                && identifiers[2].hasPrefix(identifiers[1] + ":")
+                && identifiers[1].hasPrefix(identifiers[0] + ":"),
+            "An identity level is no longer a prefix of the level below it"
+        )
+
+        // Injectivity. The separator is excluded from the component alphabet, so
+        // two different component tuples cannot join to one identifier — the
+        // classic collision, where a hyphen is moved across the boundary, is not
+        // representable.
+        try require(
+            CalendarIdentityComponent(rawValue: "calendar:beta") == nil,
+            "A colon in an identity component would make composition ambiguous"
+        )
+        let left = try seriesIdentity("account-alpha", "calendar-beta", "series-alpha")
+        let right = try seriesIdentity("account", "alpha-calendar", "beta-series-alpha")
+        try require(
+            try left.recordIdentifier() != right.recordIdentifier(),
+            "Two distinct series composed to one identifier"
+        )
+
+        // **The anchor.** A detached occurrence moved two hours later keeps the
+        // identifier it had before the move; a *different* occurrence that
+        // genuinely starts at the moved time does not share it. Anchoring to the
+        // actual start instead would make every move read as a delete and a
+        // create.
+        let moved = try CalendarOccurrence(
+            identity: occurrence,
+            lifecycle: .detached,
+            schedule: .timed(
+                try CalendarTimedInterval.at(
+                    startUnixMilliseconds: 1_770_000_000_000 + 7_200_000,
+                    endUnixMilliseconds: 1_770_000_000_000 + 9_000_000,
+                    timezoneIdentifier: calendarZone
+                )
+            ),
+            lastModifiedUnixMilliseconds: 1
+        )
+        try require(
+            try moved.identity.recordIdentifier() == occurrence.recordIdentifier(),
+            "Moving an occurrence changed its identity; the move now reads as a delete and a create"
+        )
+        let unrelated = CalendarOccurrenceIdentity(
+            series: series,
+            originalStartUnixMilliseconds: 1_770_000_000_000 + 7_200_000
+        )
+        try require(
+            try unrelated.recordIdentifier() != moved.identity.recordIdentifier(),
+            "A moved occurrence collided with an occurrence scheduled at its new time"
+        )
+
+        // The occurrence key is order-preserving, which is what makes the cursor
+        // resume in the right place. Raw decimal rendering is not: `-1` sorts
+        // before `-2` and after `10`.
+        let instants: [Int64] = [Int64.min, -86_400_000, -1, 0, 1, 1_770_000_000_000, Int64.max]
+        let keys = instants.map(CalendarIdentityComposition.orderPreservingKey)
+        try require(keys == keys.sorted(), "The occurrence key is no longer order-preserving")
+        try require(
+            Set(keys.map(\.count)).count == 1,
+            "The occurrence key is no longer fixed-width, so lexicographic order is not numeric order"
+        )
+
+        // Refused, never trimmed. Four maximum-length components genuinely
+        // exceed the opaque identifier's ceiling, and a trimmed identity is the
+        // one truncation with no honest partial form: it aliases two occurrences.
+        let long = String(
+            repeating: "a",
+            count: NativeSourceProtocolV1.maximumCalendarIdentityComponentBytes
+        )
+        let longOccurrence = CalendarOccurrenceIdentity(
+            series: CalendarSeriesIdentity(
+                bucket: CalendarBucketIdentity(
+                    accountKey: try component(long),
+                    calendarKey: try component(long)
+                ),
+                seriesKey: try component(long)
+            ),
+            originalStartUnixMilliseconds: 0
+        )
+        try requireError(.calendarIdentityTooLong) { try longOccurrence.recordIdentifier() }
+        try require(
+            CalendarIdentityComponent(rawValue: long + "a") == nil,
+            "The identity component ceiling no longer refuses an over-long component"
+        )
+
+        // A bucket identifier is read back into its two levels, or refused. A
+        // guessed decomposition files an occurrence under the wrong account.
+        let parsed = try CalendarBucketIdentity(bucketID: try bucketIdentity.recordIdentifier())
+        try require(parsed == bucketIdentity, "A bucket identifier did not round-trip")
+        for malformed in ["account-alpha", "a:b:c"] {
+            let identifier = try requireValue(
+                NativeSourceOpaqueID(rawValue: malformed),
+                "The malformed bucket probe is not a valid opaque identifier"
+            )
+            try requireError(.calendarInvalidIdentityComponent) {
+                try CalendarBucketIdentity(bucketID: identifier)
+            }
+        }
+    }
+
+    /// Control 3 and control 4. A rule expands into occurrences, exceptions and
+    /// detached instances — and a cancellation is expanded into an occurrence
+    /// that says it was cancelled, never into a gap.
+    private static func checkCalendarRecurrenceExpandsAndCancellationIsNotAnAbsence() throws {
+        let series = try probeSeries()
+        let occurrences = try CalendarSeriesExpander.expand(series)
+
+        try require(
+            occurrences.count == 5,
+            "The expansion produced \(occurrences.count) occurrences; a cancelled one was dropped"
+        )
+        try require(
+            occurrences.map(\.lifecycle)
+                == [.confirmed, .detached, .confirmed, .cancelled, .confirmed],
+            "The expansion lost a lifecycle state"
+        )
+
+        // The cancelled occurrence is present, is marked, and still carries the
+        // slot it was cancelled from. Absence would carry none of that.
+        let cancelled = occurrences[3]
+        guard case let .timed(cancelledInterval) = cancelled.schedule else {
+            throw ContractCheckError.failed("The cancelled occurrence lost its schedule")
+        }
+        try require(
+            cancelledInterval.startUnixMilliseconds
+                == cancelled.identity.originalStartUnixMilliseconds,
+            "The cancelled occurrence lost the slot it was cancelled from"
+        )
+
+        // The detached occurrence moved, and kept its identity.
+        let detached = occurrences[1]
+        guard case let .timed(detachedInterval) = detached.schedule else {
+            throw ContractCheckError.failed("The detached occurrence lost its schedule")
+        }
+        try require(
+            detachedInterval.startUnixMilliseconds
+                == detached.identity.originalStartUnixMilliseconds + 7_200_000,
+            "The detached occurrence did not move"
+        )
+        try require(
+            detached.identity.series == series.identity,
+            "The detached occurrence left its series"
+        )
+        try require(
+            Set(try occurrences.map { try $0.identity.recordIdentifier().rawValue }).count == 5,
+            "Two expanded occurrences share an identifier"
+        )
+
+        // An exception that names a start the series never scheduled is a
+        // statement about an occurrence that does not exist. Accepting it would
+        // leave the series and its exception list disagreeing silently.
+        let phantom = try CalendarRecurringSeries(
+            identity: series.identity,
+            timezoneIdentifier: series.timezoneIdentifier,
+            firstWallClock: series.firstWallClock,
+            durationSeconds: series.durationSeconds,
+            intervalDays: series.intervalDays,
+            occurrenceCount: series.occurrenceCount,
+            exceptions: [
+                CalendarRecurrenceException(
+                    originalStartUnixMilliseconds: 1,
+                    replacement: nil
+                )
+            ],
+            lastModifiedUnixMilliseconds: 0
+        )
+        try requireError(.calendarLifecycleInconsistent) {
+            try CalendarSeriesExpander.expand(phantom)
+        }
+
+        // The expansion ceiling refuses rather than truncating.
+        try requireError(.recurrenceLimitExceeded) {
+            try CalendarRecurringSeries(
+                identity: series.identity,
+                timezoneIdentifier: series.timezoneIdentifier,
+                firstWallClock: series.firstWallClock,
+                durationSeconds: 0,
+                intervalDays: 1,
+                occurrenceCount: NativeSourceProtocolV1.maximumCalendarSeriesOccurrences + 1,
+                exceptions: [],
+                lastModifiedUnixMilliseconds: 0
+            )
+        }
+
+        // A confirmed occurrence that has moved is an identity that has silently
+        // re-pointed, and it cannot be built.
+        try requireError(.calendarLifecycleInconsistent) {
+            try CalendarOccurrence(
+                identity: CalendarOccurrenceIdentity(
+                    series: series.identity,
+                    originalStartUnixMilliseconds: 1_770_000_000_000
+                ),
+                lifecycle: .confirmed,
+                schedule: .timed(
+                    try CalendarTimedInterval.at(
+                        startUnixMilliseconds: 1_770_000_003_600,
+                        endUnixMilliseconds: 1_770_000_007_200,
+                        timezoneIdentifier: "UTC"
+                    )
+                ),
+                lastModifiedUnixMilliseconds: 0
+            )
+        }
+    }
+
+    /// Control 5, first half: an all-day event stays a whole calendar day for
+    /// every reader, and an event in a foreign zone keeps that zone.
+    private static func checkCalendarAllDayAndForeignZoneSemantics() throws {
+        let day = try CalendarDate(year: 2026, month: 3, day: 5)
+        let span = try CalendarAllDaySpan(firstDay: day, lastDay: day)
+
+        // The representation is dates. There is no start instant on the type to
+        // read, so "midnight local" is not a value this span can take, in any
+        // zone, for any reader.
+        try require(
+            span.firstDay == day && span.lastDay == day,
+            "The all-day span lost its dates"
+        )
+
+        // Its window bounds are the widest offsets any zone on Earth uses,
+        // applied outward. A reader in Kiritimati and a reader in Baker Island
+        // both see the day; neither can exclude it by being in a different zone.
+        try require(
+            span.earliestPossibleStartUnixMilliseconds
+                == day.identityAnchorUnixMilliseconds - (14 * 3_600_000),
+            "The all-day span narrowed its eastward bound"
+        )
+        try require(
+            span.latestPossibleEndUnixMilliseconds
+                == day.identityAnchorUnixMilliseconds + 86_400_000 + (12 * 3_600_000),
+            "The all-day span narrowed its westward bound"
+        )
+        let schedule = CalendarSchedule.allDay(span)
+        try require(schedule.isAllDay, "An all-day schedule stopped reporting itself as one")
+        for zoneOffsetHours in [-12, -5, 0, 1, 9, 14] {
+            let midnightThere =
+                day.identityAnchorUnixMilliseconds - Int64(zoneOffsetHours) * 3_600_000
+            try require(
+                schedule.overlaps(
+                    startUnixMilliseconds: midnightThere,
+                    endUnixMilliseconds: midnightThere + 86_399_999
+                ),
+                "The all-day event fell out of its own day for a reader at UTC\(zoneOffsetHours)"
+            )
+        }
+
+        // An all-day occurrence must be anchored to a whole day. Anchoring one to
+        // some mid-afternoon instant is a value that has already lost the fact
+        // that a whole day was meant.
+        try requireError(.calendarLifecycleInconsistent) {
+            try CalendarOccurrence(
+                identity: CalendarOccurrenceIdentity(
+                    series: try seriesIdentity("account-alpha", "calendar-beta", "series-whole-day"),
+                    originalStartUnixMilliseconds: day.identityAnchorUnixMilliseconds + 1
+                ),
+                lifecycle: .detached,
+                schedule: schedule,
+                lastModifiedUnixMilliseconds: 0
+            )
+        }
+
+        // A foreign zone. The same instant shows a different wall clock in Paris
+        // and in New York, and the interval keeps the event's zone rather than
+        // the reader's — the expected values below are Paris values, so a host
+        // zone leaking in cannot pass this.
+        let start = try instant(year: 2026, month: 6, day: 15, hour: 14, minute: 30, zone: "Europe/Paris")
+        let paris = try CalendarTimedInterval.at(
+            startUnixMilliseconds: start,
+            endUnixMilliseconds: start + 3_600_000,
+            timezoneIdentifier: "Europe/Paris"
+        )
+        try require(
+            paris.startWallClock.hour == 14 && paris.startWallClock.minute == 30,
+            "A Paris event did not keep Paris local time"
+        )
+        try require(
+            paris.endWallClock.hour == 15 && paris.endWallClock.minute == 30,
+            "A Paris event's end did not keep Paris local time"
+        )
+        let newYork = try CalendarTimedInterval.at(
+            startUnixMilliseconds: start,
+            endUnixMilliseconds: start + 3_600_000,
+            timezoneIdentifier: calendarZone
+        )
+        try require(
+            newYork.startWallClock.hour == 8,
+            "The same instant did not render differently in a different zone"
+        )
+        try require(
+            paris.startUnixMilliseconds == newYork.startUnixMilliseconds,
+            "Two renderings of one instant disagreed about the instant"
+        )
+
+        // The instant is the authority and the wall clock is verified against it,
+        // so a declared pair that disagrees is refused rather than believed.
+        try requireError(.calendarScheduleInconsistent) {
+            try CalendarTimedInterval(
+                startUnixMilliseconds: start,
+                endUnixMilliseconds: start + 3_600_000,
+                timezoneIdentifier: "Europe/Paris",
+                startWallClock: try CalendarWallClock(
+                    date: try CalendarDate(year: 2026, month: 6, day: 15),
+                    hour: 9,
+                    minute: 30,
+                    second: 0
+                ),
+                endWallClock: paris.endWallClock
+            )
+        }
+        try requireError(.calendarUnknownTimezone) {
+            try CalendarTimedInterval.at(
+                startUnixMilliseconds: start,
+                endUnixMilliseconds: start,
+                timezoneIdentifier: "Nowhere/Invented"
+            )
+        }
+
+        // Both schedule shapes survive the wire without becoming the other one.
+        for value in [CalendarSchedule.allDay(span), .timed(paris)] {
+            let round = try JSONDecoder().decode(
+                CalendarSchedule.self,
+                from: try JSONEncoder().encode(value)
+            )
+            try require(round == value, "A schedule did not round-trip through JSON")
+        }
+    }
+
+    /// Control 5, second half: the two DST answers that are not "an instant",
+    /// and a series whose local time is stable while its instants are not.
+    private static func checkCalendarDaylightSavingGapRepeatedHourAndStableWallClock() throws {
+        let zone = try CalendarZone.resolve(calendarZone)
+
+        // Spring forward, 2026-03-08. 02:30 local does not happen.
+        let gap = try CalendarWallClock(
+            date: try CalendarDate(year: 2026, month: 3, day: 8),
+            hour: 2,
+            minute: 30,
+            second: 0
+        )
+        guard case .skipped = CalendarZone.resolve(gap, in: zone) else {
+            throw ContractCheckError.failed(
+                "A wall clock inside the spring-forward gap resolved to an instant"
+            )
+        }
+        // And a series defined at that local time is refused rather than shifted
+        // to a nearby instant nobody can tell from a real one.
+        try requireError(.calendarScheduleInconsistent) {
+            try CalendarSeriesExpander.expand(
+                try CalendarRecurringSeries(
+                    identity: try seriesIdentity("account-alpha", "calendar-beta", "series-gap"),
+                    timezoneIdentifier: calendarZone,
+                    firstWallClock: try CalendarWallClock(
+                        date: try CalendarDate(year: 2026, month: 3, day: 7),
+                        hour: 2,
+                        minute: 30,
+                        second: 0
+                    ),
+                    durationSeconds: 1800,
+                    intervalDays: 1,
+                    occurrenceCount: 3,
+                    exceptions: [],
+                    lastModifiedUnixMilliseconds: 0
+                )
+            )
+        }
+
+        // Fall back, 2026-11-01. 01:30 local happens twice, an hour apart, at two
+        // different offsets.
+        let repeated = try CalendarWallClock(
+            date: try CalendarDate(year: 2026, month: 11, day: 1),
+            hour: 1,
+            minute: 30,
+            second: 0
+        )
+        guard case let .ambiguous(earlier, later) = CalendarZone.resolve(repeated, in: zone) else {
+            throw ContractCheckError.failed(
+                "The fall-back repeated hour resolved to a single instant"
+            )
+        }
+        try require(
+            later - earlier == 3_600_000,
+            "The two instants of the repeated hour are not an hour apart"
+        )
+        try require(
+            CalendarZone.offsetSeconds(atUnixMilliseconds: earlier, in: zone)
+                - CalendarZone.offsetSeconds(atUnixMilliseconds: later, in: zone) == 3600,
+            "The repeated hour's two instants are at the same UTC offset"
+        )
+        try require(
+            CalendarZone.wallClock(atUnixMilliseconds: earlier, in: zone) == repeated
+                && CalendarZone.wallClock(atUnixMilliseconds: later, in: zone) == repeated,
+            "One of the repeated hour's instants does not show the wall clock it was resolved from"
+        )
+        try require(
+            CalendarSeriesExpander.ambiguousWallClockTakesTheEarlierInstant,
+            "The ambiguous-wall-clock choice is no longer stated"
+        )
+
+        // **The load-bearing case.** A 09:00 series is stable in local time
+        // across a DST transition, so its UTC instants are *not* evenly spaced.
+        // A fixed-millisecond expander walks such a series an hour off for half
+        // the year, which is why this expander is defined on wall clocks.
+        for (month, day, transitionStep) in [(3, 7, 82_800_000), (10, 31, 90_000_000)] {
+            let series = try CalendarRecurringSeries(
+                identity: try seriesIdentity("account-alpha", "calendar-beta", "series-dst"),
+                timezoneIdentifier: calendarZone,
+                firstWallClock: try CalendarWallClock(
+                    date: try CalendarDate(year: 2026, month: month, day: day),
+                    hour: 9,
+                    minute: 0,
+                    second: 0
+                ),
+                durationSeconds: 1800,
+                intervalDays: 1,
+                occurrenceCount: 3,
+                exceptions: [],
+                lastModifiedUnixMilliseconds: 0
+            )
+            let expanded = try CalendarSeriesExpander.expand(series)
+            let starts = expanded.map(\.identity.originalStartUnixMilliseconds)
+            try require(
+                starts[1] - starts[0] == Int64(transitionStep),
+                "A wall-clock series stepped \(starts[1] - starts[0]) ms across a DST transition"
+            )
+            try require(
+                starts[2] - starts[1] == 86_400_000,
+                "A wall-clock series stopped stepping a whole day away from the transition"
+            )
+            try require(
+                expanded.allSatisfy { occurrence in
+                    guard case let .timed(interval) = occurrence.schedule else { return false }
+                    return interval.startWallClock.hour == 9 && interval.startWallClock.minute == 0
+                },
+                "A wall-clock series lost its local time across a DST transition"
+            )
+        }
+    }
+
+    /// The bounded horizon, honest truncation, and every re-check the adapter
+    /// makes of a mechanism that could be wrong.
+    private static func checkCalendarHorizonBoundsAndHonestTruncation() throws {
+        let mechanism = try calendarMechanism(occurrences: try probeOccurrences())
+        let adapter = BoundedCalendarReadAdapter(mechanism: mechanism)
+
+        // The horizon refuses rather than narrowing, on the initialiser and on
+        // the decode path.
+        let overWide = try NativeTimeRange(
+            startUnixMilliseconds: 0,
+            endUnixMilliseconds: Int64(NativeSourceProtocolV1.maximumCalendarHorizonDays)
+                * 86_400_000 + 1
+        )
+        try requireError(.calendarHorizonExceeded) { try CalendarHorizonWindow(overWide) }
+        try requireDecodeFailure(
+            CalendarHorizonWindow.self,
+            data: try mutatedJSON(
+                try CalendarHorizonWindow(startUnixMilliseconds: 0, endUnixMilliseconds: 0)
+            ) { object in
+                object["endUnixMilliseconds"] =
+                    Int64(NativeSourceProtocolV1.maximumCalendarHorizonDays) * 86_400_000 + 1
+            }
+        )
+        // A calendar has no natural end, so an unbounded read is not a wider
+        // read — it is the unbounded enumeration the horizon exists to prevent.
+        try requireError(.calendarHorizonExceeded) {
+            try adapter.readCalendar(try calendarRequest(bounded: false))
+        }
+
+        // Truncation is declared, and the declaration is cross-checked. Paging
+        // the whole calendar in twos must produce every occurrence exactly once.
+        var collected: [String] = []
+        var cursor: NativeReadCursor?
+        var pages = 0
+        repeat {
+            let page = try adapter.readCalendar(try calendarRequest(limit: 2, cursor: cursor))
+            pages += 1
+            collected.append(contentsOf: page.records.map(\.id.rawValue))
+            cursor = page.nextCursor
+            try require(pages <= 8, "Paging the fixture calendar did not terminate")
+        } while cursor != nil
+        let whole = try adapter.readCalendar(try calendarRequest())
+        try require(
+            collected == whole.records.map(\.id.rawValue),
+            "Paging in twos did not reproduce the single-page read exactly"
+        )
+        try require(
+            Set(collected).count == collected.count,
+            "Paging returned an occurrence twice"
+        )
+        try require(whole.nextCursor == nil, "A complete page still declared more available")
+
+        // Now the faults, which is how the adapter's re-checks are exercised
+        // rather than merely written.
+        for (fault, expected) in [
+            (FixtureCalendarFault.declareWholeStoreEnumeration, NativeSourceContractError
+                .calendarUnboundedEnumeration),
+            (.ignoreTheWindow, .calendarHorizonViolated),
+            (.returnKeysOutOfOrder, .nonCanonicalOrder),
+            (.claimMoreAvailableWithoutFillingThePage, .calendarTruncationUndeclared),
+            (.leakAnotherCalendarsOccurrence, .unknownBucket),
+        ] {
+            mechanism.setFault(fault)
+            try requireError(expected) {
+                try adapter.readCalendar(try calendarRequest())
+            }
+        }
+        mechanism.setFault(.none)
+
+        // The page and cursor ceilings are the protocol's, not this adapter's,
+        // and they still refuse rather than clamp.
+        try requireError(.invalidPageLimit) {
+            try calendarRequest(limit: NativeSourceProtocolV1.maximumPageSize + 1)
+        }
+        try require(
+            NativeReadCursor(
+                rawValue: String(
+                    repeating: "c",
+                    count: NativeSourceProtocolV1.maximumCursorBytes + 1
+                )
+            ) == nil,
+            "The frozen cursor ceiling no longer refuses an over-long cursor"
+        )
+    }
+
+    /// Control 4 at the adapter boundary, measured rather than asserted.
+    ///
+    /// The mechanism-level fault that drops cancellations is **not detectable by
+    /// the adapter** — nothing downstream of a source can tell a suppressed
+    /// cancellation from an occurrence that never existed — so this compares the
+    /// two reads directly. The suppressed page is well-formed, passes every
+    /// check, and is missing a fact. That is the whole argument for representing
+    /// a cancellation instead of omitting it.
+    private static func checkCalendarCancellationSurvivesTheAdapterAndIsNotFilterable() throws {
+        let mechanism = try calendarMechanism(occurrences: try probeOccurrences())
+        let adapter = BoundedCalendarReadAdapter(mechanism: mechanism)
+
+        let honest = try adapter.readCalendar(try calendarRequest())
+        let cancelledRecords = try honest.records.filter {
+            try decodedOccurrence($0).lifecycle == .cancelled
+        }
+        try require(
+            cancelledRecords.count == 1,
+            "The adapter carried \(cancelledRecords.count) cancelled occurrences; it must carry one"
+        )
+        let cancelled = try decodedOccurrence(cancelledRecords[0])
+        guard case let .timed(interval) = cancelled.schedule else {
+            throw ContractCheckError.failed("The cancelled occurrence lost its schedule")
+        }
+        try require(
+            interval.startUnixMilliseconds == cancelled.identity.originalStartUnixMilliseconds,
+            "The cancelled occurrence no longer names the slot it was cancelled from"
+        )
+        try require(
+            cancelledRecords[0].kind == .calendar,
+            "A calendar record was admitted under another source kind"
+        )
+
+        mechanism.setFault(.dropCancelledOccurrences)
+        let suppressed = try adapter.readCalendar(try calendarRequest())
+        mechanism.setFault(.none)
+        try require(
+            suppressed.records.count == honest.records.count - 1,
+            "Suppressing the cancellation did not remove exactly one record"
+        )
+        try require(
+            Set(honest.records.map(\.id.rawValue))
+                .subtracting(suppressed.records.map(\.id.rawValue))
+                == [cancelledRecords[0].id.rawValue],
+            "The suppressed page differs from the honest one somewhere other than the cancellation"
+        )
+    }
+
+    /// Every calendar invariant, re-checked on the decode path.
+    ///
+    /// WP-15's lesson and WP-16's correction, applied to WP-17: a bound that
+    /// exists only on an initialiser holds for values built in Swift and not for
+    /// the same values arriving as JSON, which is the shape a host is actually
+    /// handed. A decoder that *exists* is not a decoder that *validates*, so each
+    /// case below is a malformed document that must be refused.
+    private static func checkCalendarValueBoundsHoldOffTheWire() throws {
+        let series = try seriesIdentity("account-alpha", "calendar-beta", "series-alpha")
+        let start: Int64 = 1_770_000_000_000
+        let confirmed = try CalendarOccurrence(
+            identity: CalendarOccurrenceIdentity(
+                series: series,
+                originalStartUnixMilliseconds: start
+            ),
+            lifecycle: .confirmed,
+            schedule: .timed(
+                try CalendarTimedInterval.at(
+                    startUnixMilliseconds: start,
+                    endUnixMilliseconds: start + 1_800_000,
+                    timezoneIdentifier: calendarZone
+                )
+            ),
+            lastModifiedUnixMilliseconds: 1
+        )
+
+        // A confirmed occurrence whose identity no longer matches where it sits.
+        try requireDecodeFailure(
+            CalendarOccurrence.self,
+            data: try mutatedJSON(confirmed) { object in
+                var identity = try jsonDictionary(object["identity"])
+                identity["originalStartUnixMilliseconds"] = start + 3_600_000
+                object["identity"] = identity
+            }
+        )
+        // An all-day occurrence anchored to something that is not a whole day.
+        try requireDecodeFailure(
+            CalendarOccurrence.self,
+            data: try mutatedJSON(try probeAllDayOccurrence()) { object in
+                var identity = try jsonDictionary(object["identity"])
+                identity["originalStartUnixMilliseconds"] = 1
+                object["identity"] = identity
+                object["lifecycle"] = "detached"
+            }
+        )
+        // A wall clock that disagrees with the instant it claims to render.
+        try requireDecodeFailure(
+            CalendarTimedInterval.self,
+            data: try mutatedJSON(
+                try CalendarTimedInterval.at(
+                    startUnixMilliseconds: start,
+                    endUnixMilliseconds: start + 1_800_000,
+                    timezoneIdentifier: calendarZone
+                )
+            ) { object in
+                var wallClock = try jsonDictionary(object["startWallClock"])
+                wallClock["hour"] = 3
+                object["startWallClock"] = wallClock
+            }
+        )
+        // A component carrying the composition separator, off the wire.
+        try requireDecodeFailure(
+            CalendarIdentityComponent.self,
+            data: Data(#""calendar:beta""#.utf8)
+        )
+        // A date that does not exist.
+        try requireDecodeFailure(
+            CalendarDate.self,
+            data: Data(#"{"year":2026,"month":2,"day":30}"#.utf8)
+        )
+        // An all-day span running backwards.
+        try requireDecodeFailure(
+            CalendarAllDaySpan.self,
+            data: try mutatedJSON(
+                try CalendarAllDaySpan(
+                    firstDay: try CalendarDate(year: 2026, month: 3, day: 5),
+                    lastDay: try CalendarDate(year: 2026, month: 3, day: 6)
+                )
+            ) { object in
+                object["firstDay"] = ["year": 2026, "month": 3, "day": 7]
+            }
+        )
+        // A series whose interval is not a positive number of days.
+        try requireDecodeFailure(
+            CalendarRecurringSeries.self,
+            data: try mutatedJSON(try probeSeries()) { $0["intervalDays"] = 0 }
+        )
+
+        // **Lead B**: the WP-14 occurrence type had a synthesized `Codable` and
+        // therefore no invariant off the wire at all. It now refuses a confirmed
+        // occurrence that has moved, exactly as its WP-17 sibling does.
+        let legacy = try NativeCalendarOccurrence(
+            identity: NativeOccurrenceIdentity(
+                seriesID: try opaque("series-legacy"),
+                scheduledStartUnixMilliseconds: start
+            ),
+            bucketID: try opaque("calendar-beta"),
+            timezoneIdentifier: "UTC",
+            startUnixMilliseconds: start,
+            endUnixMilliseconds: start + 1,
+            lifecycle: .confirmed,
+            payload: []
+        )
+        try requireDecodeFailure(
+            NativeCalendarOccurrence.self,
+            data: try mutatedJSON(legacy) { $0["startUnixMilliseconds"] = start + 1_000 }
+        )
+        try requireDecodeFailure(
+            NativeCalendarOccurrence.self,
+            data: try mutatedJSON(legacy) { $0["endUnixMilliseconds"] = start - 1 }
+        )
+        try requireDecodeFailure(
+            NativeCalendarOccurrence.self,
+            data: try mutatedJSON(legacy) { $0["lifecycle"] = nil }
+        )
     }
 
 }

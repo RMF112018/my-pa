@@ -49,6 +49,27 @@ public enum NativeSourceProtocolV1 {
     /// refused, never trimmed: a truncated identity silently aliases two
     /// different messages onto one record.
     public static let maximumMailIdentityComponentBytes = 64
+
+    // MARK: - WP-17 calendar bounds
+    //
+    // Three bounds, all of which **refuse** rather than clamp. A calendar read
+    // is the one place where clamping is most tempting and least honest: a
+    // horizon quietly narrowed from ten years to one produces a page that is
+    // indistinguishable from "you have nothing scheduled after next spring".
+
+    /// UTF-8 ceiling on one component of a calendar identity. Same doctrine as
+    /// the mail component: composition is refused, never trimmed, because a
+    /// trimmed identity aliases two occurrences onto one record.
+    public static let maximumCalendarIdentityComponentBytes = 64
+    /// Widest window one calendar read may ask for, in whole days. A request
+    /// beyond this is **refused** (`calendarHorizonExceeded`); it is never
+    /// silently narrowed, because a narrowed horizon returns a page that reads
+    /// as complete and is not.
+    public static let maximumCalendarHorizonDays = 366
+    /// Ceiling on the occurrences one series may expand to inside one window.
+    /// Reached means the expansion is refused, not truncated: a series cut
+    /// mid-expansion loses occurrences no cursor describes.
+    public static let maximumCalendarSeriesOccurrences = 512
 }
 
 /// Source categories supported by protocol v1. These are product categories,
@@ -360,4 +381,14 @@ public enum NativeSourceContractError: Error, Equatable, Sendable {
     case mailBodyTooLarge
     case mailAttachmentLimitExceeded
     case mailContentInconsistent
+    case calendarIdentityTooLong
+    case calendarInvalidIdentityComponent
+    case calendarHorizonExceeded
+    case calendarScheduleInconsistent
+    case calendarUnknownTimezone
+    case calendarTruncationUndeclared
+    case calendarLifecycleInconsistent
+    case calendarHorizonViolated
+    case calendarUnboundedEnumeration
+    case calendarOriginalStartUnavailable
 }

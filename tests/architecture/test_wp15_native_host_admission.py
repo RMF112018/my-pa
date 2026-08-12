@@ -39,6 +39,17 @@ PACKAGE: Final = ROOT / "src" / "my_pa"
 HOST: Final = ROOT / "native" / "apple-source-host"
 SHIPPING: Final = HOST / "Sources" / "AppleSourceHost"
 PROBE: Final = HOST / "Compatibility" / "AppleFrameworkCompatibilityProbe"
+#: WP-17's EventKit shape probe. Held out of control 1's scan for the same reason
+#: `PROBE` is, and on the same terms: it is compile-only, it is a dependency of
+#: nothing, and it is **not excused** — `test_wp17_calendar_adapter.py` holds it
+#: to metatypes, key paths and unapplied method references, no instantiation, no
+#: authorization request and no mutating symbol, and re-derives this exemption
+#: set so that widening it again is itself measured.
+#:
+#: Adding it here is a widening of an exemption and is recorded as one. What did
+#: **not** change is control 1's assertion: every Swift file under `native/`
+#: outside the compile-only probes still may name none of `MUTATING_APPLE_SURFACE`.
+CALENDAR_PROBE: Final = HOST / "Compatibility" / "AppleCalendarEventKitProbe"
 MANIFEST: Final = HOST / "Package.swift"
 
 #: Every tree that runs in production. A wiring of the quarantined native plane
@@ -79,17 +90,23 @@ def _native_tree() -> tuple[Path, ...]:
 
 
 def _swift_outside_the_probe() -> tuple[Path, ...]:
-    """Every Swift file under `native/` except the compile-only probe.
+    """Every Swift file under `native/` except the compile-only probes.
 
     Control 1 scans this rather than `Sources/AppleSourceHost` alone. The
     directory a mutating import would actually arrive in is the one nobody
     thought to name — a second target, a helper tool, a new test executable — and
     a guard hard-coded to one directory would stay green while it happened. The
-    probe is the single place these frameworks are permitted, and it is not
+    probes are the only places these frameworks are permitted, and neither is
     excused: `test_the_compatibility_probe_is_compile_only_and_never_linked_into_the_host`
-    holds it to metatype references, no instantiation and no TCC call.
+    holds `PROBE` to metatype references, no instantiation and no TCC call, and
+    `test_wp17_calendar_adapter.py::test_the_event_kit_probe_resolves_symbols_and_reaches_no_store`
+    holds `CALENDAR_PROBE` to the same standard.
     """
-    return tuple(path for path in _swift_files(HOST) if PROBE not in path.parents)
+    return tuple(
+        path
+        for path in _swift_files(HOST)
+        if PROBE not in path.parents and CALENDAR_PROBE not in path.parents
+    )
 
 
 def _source_of(paths: tuple[Path, ...]) -> str:
@@ -126,13 +143,15 @@ def test_the_scan_is_reading_the_host_at_all() -> None:
     assert len(_native_tree()) >= 10
 
     # Control 1's basis is strictly wider than the shipping directory, and the
-    # probe — the one place the personal-data frameworks are allowed — is the
-    # only thing held out of it.
+    # compile-only probes — the only places the personal-data frameworks are
+    # allowed — are the only things held out of it.
+    exempt = set(_swift_files(PROBE)) | set(_swift_files(CALENDAR_PROBE))
+    assert len(_swift_files(CALENDAR_PROBE)) == 1
     scanned = set(_swift_outside_the_probe())
     assert set(shipping) < scanned, "control 1's scan is no wider than Sources/AppleSourceHost"
-    assert scanned.isdisjoint(_swift_files(PROBE))
-    assert scanned | set(_swift_files(PROBE)) == set(_swift_files(HOST)), (
-        "a Swift file under native/ is in neither control 1's scan nor the probe"
+    assert scanned.isdisjoint(exempt)
+    assert scanned | exempt == set(_swift_files(HOST)), (
+        "a Swift file under native/ is in neither control 1's scan nor a probe"
     )
 
 

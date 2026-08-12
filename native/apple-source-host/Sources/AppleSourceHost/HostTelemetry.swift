@@ -55,6 +55,13 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
     case mailMechanismUnsupported = "mail_mechanism_unsupported"
     /// A mail record refused at one of the WP-16 content bounds.
     case mailBoundRefused = "mail_bound_refused"
+    /// A calendar mechanism that cannot satisfy WP-17's preconditions: it cannot
+    /// name an occurrence's original start, or it enumerated the whole store to
+    /// answer a bounded read.
+    case calendarMechanismUnsupported = "calendar_mechanism_unsupported"
+    /// A calendar read refused at one of the WP-17 bounds — the horizon, or an
+    /// identity composition that would not fit.
+    case calendarBoundRefused = "calendar_bound_refused"
     case unclassified = "unclassified"
 
     /// Classify without quoting. `filesystemFailure` carries an `errno`, and even
@@ -91,11 +98,18 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
             case .mailIdentityTooLong, .mailHeaderTooLarge, .mailBodyTooLarge,
                  .mailAttachmentLimitExceeded:
                 self = .mailBoundRefused
+            case .calendarOriginalStartUnavailable, .calendarUnboundedEnumeration:
+                self = .calendarMechanismUnsupported
+            case .calendarHorizonExceeded, .calendarIdentityTooLong:
+                self = .calendarBoundRefused
             case .inconsistentDiscovery, .inconsistentEnvelope, .invalidTimeRange,
                  .mismatchedSourceKind, .unknownBucket, .missingSyntheticPage,
                  .duplicateSyntheticPage, .invalidRecurrence, .recurrenceLimitExceeded,
                  .mailInvalidIdentityComponent, .mailWindowNotDayAligned,
-                 .mailDateBoundViolated, .mailContentInconsistent:
+                 .mailDateBoundViolated, .mailContentInconsistent,
+                 .calendarInvalidIdentityComponent, .calendarScheduleInconsistent,
+                 .calendarUnknownTimezone, .calendarTruncationUndeclared,
+                 .calendarLifecycleInconsistent, .calendarHorizonViolated:
                 self = .malformedEnvelope
             }
         case let provider as NativeProviderFailure:

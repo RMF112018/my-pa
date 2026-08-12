@@ -1,0 +1,42 @@
+# Exact NAS-02 linux/amd64 runtime constraint set.
+# Regenerate deliberately when pyproject.toml changes; image builds also record
+# this file's SHA-256 in their manifest.  This is a resolver lock, not a wheel
+# signature: the image build remains a non-deployable candidate until exported
+# archives and loaded image identities pass the live NAS gate.
+alembic==1.18.5
+annotated-types==0.8.0
+anyio==4.14.2
+ast_serialize==0.6.0
+attrs==26.1.0
+cffi==2.1.0
+click==8.4.2
+cryptography==50.0.0
+h11==0.16.0
+httpcore2==2.9.1
+httpx2==2.9.1
+idna==3.18
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+librt==0.13.0
+Mako==1.3.12
+MarkupSafe==3.0.3
+mcp==2.0.0
+mcp-types==2.0.0
+opentelemetry-api==1.44.0
+packaging==26.2
+psycopg==3.3.4
+psycopg-binary==3.3.4
+pycparser==3.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+PyJWT==2.13.0
+python-multipart==0.0.32
+referencing==0.37.0
+rpds-py==2026.6.3
+SQLAlchemy==2.0.51
+sse-starlette==3.4.6
+starlette==0.52.1
+truststore==0.10.4
+typing-inspection==0.4.2
+typing_extensions==4.16.0
+uvicorn==0.52.1

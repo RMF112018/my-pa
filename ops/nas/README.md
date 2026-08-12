@@ -16,6 +16,25 @@ Files:
   this topology contract from being mistaken for a runnable stack.
 - [`proxy-allowlist.example.caddy`](proxy-allowlist.example.caddy) shows the
   fail-closed route ordering. It is mounted only by the disabled example.
+- [`image-manifest.example.toml`](image-manifest.example.toml) separates the
+  OCI platform-child digest, Docker image/config ID, and exported archive
+  checksum. Its candidate status and placeholder evidence deliberately fail
+  [`image_gate.py`](image_gate.py); only `--live` inspection of the target
+  Docker engine and all three exported archives can pass.
+- Offline app/web/PostgreSQL archives are addressed at runtime by the exact
+  loaded Docker image/config ID because `docker load` does not preserve a
+  registry `RepoDigest`. PostgreSQL candidate creation separately verifies the
+  exported child against the pinned `postgres:17.10` parent index. The OCI
+  child digest, loaded config ID, and archive checksum remain distinct.
+- [`start.sh`](start.sh) is an intentional refusal until the exact live NAS
+  reports `linux/amd64`, loaded digest resolution is proven, and NAS-04 adds the
+  gateway container bind. A later activation may use only Compose `--no-build
+  --pull never` after that gate passes.
+- [`build-candidates.sh`](build-candidates.sh) refuses a dirty source tree and
+  exports linux/amd64 app/web archives plus BuildKit identity metadata. Its
+  output is still non-deployable. [`load-candidates.sh`](load-candidates.sh)
+  remains an explicit operator/device refusal until the live NAS and the exact
+  official PostgreSQL platform-child archive are available.
 
 The existing [`../compose/postgres.yml`](../compose/postgres.yml) remains a
 single-Mac local-development service. It is not a NAS, pilot, or production
@@ -23,7 +42,10 @@ compose file.
 
 Later packages own executable behavior:
 
-- NAS-02 images, platform/digest manifest, load, and no-build start;
+- NAS-02 images supply app/web Dockerfiles and the
+  platform/digest/archive contract.
+  Live NAS inspection, image load, and deployable-manifest issuance remain
+  operator/device gates; no image here is currently deployable;
 - NAS-03 PostgreSQL storage, migration, backup, and scratch restore;
 - NAS-04/05 services and filesystem permissions;
 - NAS-06 private HTTPS ingress, Entra pilot origin, and a verified Microsoft

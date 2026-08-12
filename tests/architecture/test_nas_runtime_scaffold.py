@@ -136,7 +136,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     images = contract.get("images", {})
     if images.get("build_during_start") is not False:
         errors.add("implicit_build")
-    if images.get("require_exact_digest") is not True:
+    if images.get("require_exact_loaded_identity") is not True:
         errors.add("exact_image_digest")
     network = contract.get("network", {})
     if (
@@ -228,7 +228,10 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "planning_value": "linux/amd64",
             "deployable_only_after_live_confirmation": True,
         },
-        "images": {"build_during_start": False, "require_exact_digest": True},
+        "images": {
+            "build_during_start": False,
+            "require_exact_loaded_identity": True,
+        },
         "network": {
             "data_network": "data-plane",
             "data_network_internal": True,
@@ -387,17 +390,13 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         return {"compose_parse"}
     if set(compose_services) != set(SERVICES):
         errors.add("service_set")
-    app_image = (
-        "${MY_PA_APP_IMAGE:?repository required}@${MY_PA_APP_IMAGE_DIGEST:?sha256 digest required}"
-    )
+    app_image = "${MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}"
     expected_images = {
-        "postgres": "${MY_PA_POSTGRES_IMAGE:?repository required}@"
-        "${MY_PA_POSTGRES_IMAGE_DIGEST:?sha256 digest required}",
+        "postgres": "${MY_PA_POSTGRES_IMAGE_ID:?sha256 loaded image id required}",
         "gateway": app_image,
         "worker-enrollment": app_image,
         "worker-capture": app_image,
-        "web": "${MY_PA_WEB_IMAGE:?repository required}@"
-        "${MY_PA_WEB_IMAGE_DIGEST:?sha256 digest required}",
+        "web": "${MY_PA_WEB_IMAGE_ID:?sha256 loaded image id required}",
         "proxy": "${MY_PA_PROXY_IMAGE:?repository required}@"
         "${MY_PA_PROXY_IMAGE_DIGEST:?sha256 digest required}",
     }
@@ -431,7 +430,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "gateway": ["python", "apps/gateway.py", "run"],
         "worker-enrollment": ["python", "apps/worker.py", "run", "--plane", "enrollment"],
         "worker-capture": ["python", "apps/worker.py", "run", "--plane", "capture"],
-        "web": ["npm", "run", "start"],
+        "web": ["node", "server.js"],
         "proxy": None,
     }
     service_user = "${MY_PA_UID:?}:${MY_PA_GID:?}"
@@ -628,7 +627,15 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("network_planes")
     if any(not block or "    platform: linux/amd64" not in block for block in blocks.values()):
         errors.add("missing_platform")
-    if any("_DIGEST:?sha256 digest required}" not in block for block in blocks.values()):
+    exact_identity_markers = {
+        "postgres": "MY_PA_POSTGRES_IMAGE_ID:?sha256 loaded image id required}",
+        "gateway": "MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}",
+        "worker-enrollment": "MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}",
+        "worker-capture": "MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}",
+        "web": "MY_PA_WEB_IMAGE_ID:?sha256 loaded image id required}",
+        "proxy": "_DIGEST:?sha256 digest required}",
+    }
+    if any(marker not in blocks[name] for name, marker in exact_identity_markers.items()):
         errors.add("exact_image_digest")
     if "    ports:" in blocks["postgres"] or "0.0.0.0" in blocks["postgres"]:  # noqa: S104
         errors.add("postgres_published")
@@ -774,7 +781,7 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/compose.example.yml",
-            "${MY_PA_APP_IMAGE_DIGEST:?sha256 digest required}",
+            "${MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}",
             "latest",
             "exact_image_digest",
         ),
@@ -1166,8 +1173,8 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/runtime-contract.toml",
-            "require_exact_digest = true",
-            "require_exact_digest = false",
+            "require_exact_loaded_identity = true",
+            "require_exact_loaded_identity = false",
             "exact_image_digest",
         ),
         (

@@ -8,7 +8,7 @@ deployable_only_after_live_confirmation = true
 
 [images]
 build_during_start = false
-require_exact_digest = true
+require_exact_loaded_identity = true
 
 [network]
 data_network = "data-plane"

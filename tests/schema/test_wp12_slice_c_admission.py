@@ -657,3 +657,108 @@ def test_native_enrichment_routes_exact_source_version_to_existing_governed_revi
         assert connection.scalar(select(func.count()).select_from(capture_review_cases)) == 1
     assert not hasattr(router, "promote")
     assert not hasattr(router, "decide")
+
+
+def _marked_envelope(authority: NativeAdmissionAuthority, marker: str) -> NativeAdmissionEnvelope:
+    """The standing envelope with obviously-synthetic stand-in content planted."""
+    wire: dict[str, Any] = {
+        "metadata": {
+            "protocolVersion": NATIVE_SOURCE_PROTOCOL_V1,
+            "envelopeID": authority.envelope_id,
+            "hostInstanceID": BRIDGE,
+            "emittedAtUnixMilliseconds": 1_775_563_200_000,
+        },
+        "requestID": authority.request_id,
+        "kind": "mail",
+        "accountID": "account.synthetic",
+        "bucketID": "bucket.synthetic",
+        "records": [
+            {
+                "id": "message.synthetic",
+                "bucketID": "bucket.synthetic",
+                "kind": "mail",
+                "sourceRevision": "revision-1",
+                "sourceModifiedUnixMilliseconds": 1_775_563_200_000,
+                "payload": list(marker.encode()),
+            }
+        ],
+        "nextCursor": None,
+    }
+    return NativeAdmissionEnvelope.model_validate(wire)
+
+
+@pytest.mark.database
+def test_wp15_sequential_replay_adds_no_row_and_operational_rows_stay_content_free(
+    c_engine: Engine,
+) -> None:
+    """WP-15 controls 5 and 6, against the real database rather than a fake store.
+
+    The concurrent case is already covered above; this is the ordinary one — the
+    spool item that was admitted, not acknowledged, and handed over again. It must
+    produce the same version identifier and no second row anywhere on the evidence
+    plane.
+
+    The same admission carries an obviously-synthetic marker in the position a
+    message body occupies. The evidence plane is *supposed* to hold source
+    evidence, so the marker is expected there; what must not hold it is anything
+    operational — the audit trail, the preflight observations, the durable
+    authority record, and the progress a status surface renders. Those are the
+    rows an operator, a log shipper or a support bundle sees.
+    """
+    marker = "SYNTHETIC-BODY-MARKER-c0ffee"
+    _seed(c_engine)
+    store = SqlNativeSourceControlStore(c_engine)
+    authority = _authority(store)
+    envelope = _marked_envelope(authority, marker)
+
+    first = store.admit_evidence_durably(envelope, authority, at=WHEN)
+    replayed = SqlNativeSourceControlStore(c_engine).admit_evidence_durably(
+        envelope, authority, at=WHEN
+    )
+    assert [created for _, created in first] == [True]
+    assert [created for _, created in replayed] == [False]
+    assert {version for version, _ in first} == {version for version, _ in replayed}
+
+    with c_engine.connect() as connection:
+        for table in (
+            source_objects,
+            source_object_versions,
+            source_version_evidence,
+            source_observations,
+        ):
+            assert connection.scalar(select(func.count()).select_from(table)) == 1, (
+                f"a replayed admission wrote a second {table.name} row"
+            )
+
+        # Non-vacuity: the marker really did reach durable evidence, so its
+        # absence from the operational rows below is a property of those rows
+        # rather than of an admission that quietly dropped its payload.
+        evidence = "".join(
+            str(row) for row in connection.execute(select(source_version_evidence)).all()
+        )
+        assert marker in evidence or marker.encode().hex() in evidence.lower(), (
+            "the planted marker never reached the evidence plane; the redaction "
+            "assertions below would then prove nothing"
+        )
+
+        for table in (
+            audit_events,
+            native_preflight_observations,
+            native_admission_authorities,
+            native_source_review_routes,
+        ):
+            rendered = "".join(str(row) for row in connection.execute(select(table)).all())
+            assert marker not in rendered, (
+                f"{table.name} carries the content of an admitted record. "
+                "Operational rows hold counts, identifiers, types and error "
+                "classes only"
+            )
+
+    progress = SqlNativeSourceControlStore(c_engine).progress(CONFIGURATION)
+    assert len(progress) == 1
+    assert progress[0].admitted_count == 1
+    assert progress[0].coverage is NativeCoverageState.EVIDENCE_PRESENT
+    rendered_progress = progress[0].to_canonical_json()
+    assert marker not in rendered_progress
+    assert "account.synthetic" not in rendered_progress
+    assert "bucket.synthetic" not in rendered_progress

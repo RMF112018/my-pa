@@ -38,6 +38,7 @@ struct AppleSourceHostContractChecks {
             Darwin._exit(lockProbeExitStatus(path: CommandLine.arguments[2]))
         }
         try checkProtocolVersionAndValueValidation()
+        try checkFrozenPageAndCursorBoundsRefuseRatherThanClamp()
         try checkAllThreeSyntheticAdapters()
         try checkSyntheticDenials()
         try checkIntegratedHostBoundary()
@@ -47,7 +48,10 @@ struct AppleSourceHostContractChecks {
         try checkProtectedSpoolFaultsAndBounds()
         try checkProtectedSpoolNamespaceSubstitution()
         try checkProtectedSpoolLockLifecycle()
-        print("AppleSourceHostContractChecks: PASS (10 checks)")
+        try checkSpoolItemsAreOwnerOnlyRegularFiles()
+        try checkHostLifecycleRefusesIllegalTransitionsAndVersionDrift()
+        try checkOperationalTelemetryIsContentFree()
+        print("AppleSourceHostContractChecks: PASS (14 checks)")
     }
 
     private static func require(_ condition: Bool, _ message: String) throws {
@@ -153,6 +157,135 @@ struct AppleSourceHostContractChecks {
         try requireError(.invalidPageLimit) {
             try NativeReadRequest(bucketID: bucketID, limit: 0)
         }
+    }
+
+    /// The frozen page and cursor bounds, checked at the boundary that would be
+    /// tempted to clamp them.
+    ///
+    /// The failure mode this exists for is not "the bound is missing" — that is
+    /// visible by reading — it is "the bound is honoured by truncation". A host
+    /// that answers a `limit: 5000` read with the first 100 records and no signal
+    /// has silently lost 4900 records, and the caller cannot tell that from a
+    /// bucket that genuinely held 100. So every over-bound input below is
+    /// asserted to *throw*, and every at-bound input is asserted to survive with
+    /// its full size intact.
+    private static func checkFrozenPageAndCursorBoundsRefuseRatherThanClamp() throws {
+        try require(
+            NativeSourceProtocolV1.maximumPageSize == 100,
+            "Frozen page size drifted from 100"
+        )
+        try require(
+            NativeSourceProtocolV1.maximumCursorBytes == 512,
+            "Frozen cursor byte ceiling drifted from 512"
+        )
+
+        let bucketID = try opaque("bounded-bucket")
+
+        // The request limit: accepted at the ceiling, refused above it, never
+        // rewritten down to it.
+        let atCeiling = try NativeReadRequest(
+            bucketID: bucketID,
+            limit: NativeSourceProtocolV1.maximumPageSize
+        )
+        try require(
+            atCeiling.limit == NativeSourceProtocolV1.maximumPageSize,
+            "Request limit at the ceiling was altered"
+        )
+        try requireError(.invalidPageLimit) {
+            try NativeReadRequest(
+                bucketID: bucketID,
+                limit: NativeSourceProtocolV1.maximumPageSize + 1
+            )
+        }
+        try requireError(.invalidPageLimit) {
+            try NativeReadRequest(bucketID: bucketID, limit: 5000)
+        }
+        // …and the same refusal off the wire, where a clamp would be invisible.
+        try requireDecodeFailure(
+            NativeReadRequest.self,
+            data: try mutatedJSON(atCeiling) { $0["limit"] = 5000 }
+        )
+
+        // The cursor ceiling is counted in UTF-8 bytes, not characters, so a
+        // multi-byte cursor is bounded by what it actually costs to store.
+        let ascii = String(repeating: "c", count: NativeSourceProtocolV1.maximumCursorBytes)
+        let atCursorCeiling = try requireValue(
+            NativeReadCursor(rawValue: ascii),
+            "Cursor at the byte ceiling rejected"
+        )
+        try require(
+            atCursorCeiling.rawValue == ascii,
+            "Cursor at the byte ceiling was truncated rather than kept whole"
+        )
+        try require(
+            NativeReadCursor(rawValue: ascii + "c") == nil,
+            "Over-long cursor admitted"
+        )
+        let multibyte = String(
+            repeating: "\u{00E9}",
+            count: NativeSourceProtocolV1.maximumCursorBytes / 2
+        )
+        try require(
+            multibyte.count < multibyte.utf8.count,
+            "The multi-byte cursor probe is not actually multi-byte"
+        )
+        try require(
+            NativeReadCursor(rawValue: multibyte) != nil,
+            "Multi-byte cursor at exactly the byte ceiling rejected"
+        )
+        try require(
+            NativeReadCursor(rawValue: multibyte + "\u{00E9}") == nil,
+            "Multi-byte cursor one character — two bytes — over the ceiling admitted"
+        )
+
+        // The page itself. An over-bound page is refused whole; it is not served
+        // as its first `maximumPageSize` records.
+        let record = NativeSourceRecord(
+            id: try opaque("bounded-record"),
+            bucketID: bucketID,
+            kind: .mail,
+            sourceRevision: "synthetic-v1",
+            sourceModifiedUnixMilliseconds: nil,
+            payload: [0x73]
+        )
+        let full = try NativeReadPage(
+            records: Array(repeating: record, count: NativeSourceProtocolV1.maximumPageSize),
+            nextCursor: atCursorCeiling
+        )
+        try require(
+            full.records.count == NativeSourceProtocolV1.maximumPageSize,
+            "A page at the ceiling lost records"
+        )
+        try requireError(.invalidPageLimit) {
+            try NativeReadPage(
+                records: Array(
+                    repeating: record,
+                    count: NativeSourceProtocolV1.maximumPageSize + 1
+                ),
+                nextCursor: nil
+            )
+        }
+        // Decoding refuses too, so the bound cannot be walked around by handing
+        // the host a JSON page instead of building one.
+        let encodedPage = try JSONEncoder().encode(full)
+        var pageObject = try jsonDictionary(
+            try JSONSerialization.jsonObject(with: encodedPage)
+        )
+        var records = try jsonDictionaryArray(pageObject["records"])
+        records.append(records[0])
+        pageObject["records"] = records
+        try requireDecodeFailure(
+            NativeReadPage.self,
+            data: try JSONSerialization.data(withJSONObject: pageObject, options: [.sortedKeys])
+        )
+        pageObject["records"] = try jsonDictionaryArray(
+            try jsonDictionary(try JSONSerialization.jsonObject(with: encodedPage))["records"]
+        )
+        pageObject["nextCursor"] = ascii + "c"
+        try requireDecodeFailure(
+            NativeReadPage.self,
+            data: try JSONSerialization.data(withJSONObject: pageObject, options: [.sortedKeys])
+        )
     }
 
     private static func checkAllThreeSyntheticAdapters() throws {
@@ -1007,6 +1140,278 @@ struct AppleSourceHostContractChecks {
         return blocked ? 1 : 2
     }
 
+    /// WP-15 control 3, the half the earlier checks left to the directory: an
+    /// item file is a regular file owned by this user at mode 0600, and the
+    /// directory holding it is 0700. Read by `stat` at runtime rather than
+    /// inferred from the `S_IRUSR | S_IWUSR` literal in the source.
+    private static func checkSpoolItemsAreOwnerOnlyRegularFiles() throws {
+        let directory = temporaryDirectory("owner-modes")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let spool = try ProtectedSpool(
+            directory: directory,
+            limits: try ProtectedSpoolLimits(
+                maximumItems: 4,
+                maximumBytes: 64_000,
+                maximumPayloadBytes: 64
+            )
+        )
+        let item = try spoolItem("spool-modes", payload: Array("synthetic".utf8))
+        try require(try spool.enqueue(item) == .enqueued, "Mode fixture did not enqueue")
+
+        for relative in ["pending", "quarantine"] {
+            var directoryInformation = stat()
+            let path = directory.appendingPathComponent(relative, isDirectory: true).path
+            try require(lstat(path, &directoryInformation) == 0, "\(relative) is missing")
+            try require(
+                directoryInformation.st_mode & 0o777 == 0o700,
+                "\(relative) is not 0700"
+            )
+            try require(directoryInformation.st_uid == getuid(), "\(relative) is not owned by us")
+        }
+
+        var itemInformation = stat()
+        let itemPath = directory
+            .appendingPathComponent("pending", isDirectory: true)
+            .appendingPathComponent(item.envelopeID.rawValue + ".pending", isDirectory: false)
+            .path
+        try require(lstat(itemPath, &itemInformation) == 0, "Spool item is missing")
+        try require(
+            itemInformation.st_mode & S_IFMT == S_IFREG,
+            "Spool item is not a regular file"
+        )
+        try require(itemInformation.st_mode & 0o777 == 0o600, "Spool item is not 0600")
+        try require(itemInformation.st_uid == getuid(), "Spool item is not owned by us")
+
+        // The bound refuses; it does not evict. Everything already spooled is
+        // still there after the refusal, and the refusal is an error rather than
+        // a silently shortened queue.
+        let saturated = try ProtectedSpool(
+            directory: directory,
+            limits: try ProtectedSpoolLimits(
+                maximumItems: 1,
+                maximumBytes: 64_000,
+                maximumPayloadBytes: 64
+            )
+        )
+        try requireSpoolError(.itemCapacityExceeded) {
+            try saturated.enqueue(try spoolItem("spool-modes-2", payload: Array("synthetic".utf8)))
+        }
+        try require(
+            try saturated.inventory().items.map(\.envelopeID.rawValue) == ["spool-modes"],
+            "A refused enqueue disturbed what the spool already held"
+        )
+    }
+
+    /// WP-15 control 4 at the host: the lifecycle refuses a version it does not
+    /// speak instead of parsing it as best it can, and refuses a transition that
+    /// would let a host hand off before it negotiated.
+    private static func checkHostLifecycleRefusesIllegalTransitionsAndVersionDrift() throws {
+        let hostID = try opaque("nbrg-lifecycle-0001")
+
+        var wrongVersion = try NativeHostLifecycle(hostInstanceID: hostID)
+        do {
+            _ = try wrongVersion.negotiate(
+                NativeProtocolOffer(supportedVersions: ["my-pa.native-source.v2"])
+            )
+            throw ContractCheckError.failed("A foreign protocol version negotiated")
+        } catch let error as NativeSourceContractError {
+            try require(error == .unsupportedVersion, "Wrong refusal for version drift")
+        }
+        try require(wrongVersion.state == .refused, "Version drift left the lifecycle usable")
+        try require(
+            NativeHostErrorClass(NativeSourceContractError.unsupportedVersion)
+                == .unsupportedVersion,
+            "Version drift did not classify"
+        )
+
+        var skipping = try NativeHostLifecycle(hostInstanceID: hostID)
+        do {
+            try skipping.readyForHandoff()
+            throw ContractCheckError.failed("A host reached handoff without negotiating")
+        } catch let error as NativeHostLifecycleError {
+            try require(
+                error == .illegalTransition(from: .constructed, to: .readyForHandoff),
+                "Wrong refusal for an illegal transition"
+            )
+        }
+
+        var lifecycle = try NativeHostLifecycle(hostInstanceID: hostID)
+        let agreement = try lifecycle.negotiate(
+            NativeProtocolOffer(supportedVersions: NativeSourceProtocolV1.supportedIdentifiers)
+        )
+        try require(
+            agreement.selectedVersion == NativeSourceProtocolV1.identifier,
+            "Negotiation selected a foreign version"
+        )
+        try lifecycle.openedSpool()
+        try lifecycle.readyForHandoff()
+        try require(lifecycle.state == .readyForHandoff, "Lifecycle did not reach handoff")
+        try require(
+            lifecycle.distributionModel == .unsignedDevelopmentBuild,
+            "This build claimed a signed distribution model"
+        )
+        try require(
+            !lifecycle.serviceRegistrationPerformed,
+            "This build claimed a registered service"
+        )
+        try require(
+            NativeHostLifecycle.unsatisfiedActivationPrerequisites.count
+                == NativeHostActivationPrerequisite.allCases.count,
+            "An activation prerequisite was marked satisfied by this build"
+        )
+        lifecycle.stop()
+        do {
+            try lifecycle.openedSpool()
+            throw ContractCheckError.failed("A stopped host reopened its spool")
+        } catch is NativeHostLifecycleError {}
+
+        // Selecting the signed model from code would be a claim this build cannot
+        // support, so it is refused at construction rather than recorded.
+        do {
+            _ = try NativeHostLifecycle(
+                hostInstanceID: hostID,
+                distributionModel: .signedNotarizedLoginItemService
+            )
+            throw ContractCheckError.failed("An unsigned build selected the signed model")
+        } catch let error as NativeHostLifecycleError {
+            try require(
+                error == .activationNotAuthorized(.appleSigningIdentity),
+                "Wrong refusal for an unauthorized distribution model"
+            )
+        }
+    }
+
+    /// WP-15 control 6. The marker below is an obviously-synthetic stand-in for a
+    /// message body: it is spooled as real payload bytes, and then every
+    /// operational value this host can emit is encoded and searched for it.
+    private static func checkOperationalTelemetryIsContentFree() throws {
+        let marker = "SYNTHETIC-BODY-MARKER-c0ffee"
+        let directory = temporaryDirectory("telemetry")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let spool = try ProtectedSpool(
+            directory: directory,
+            limits: try ProtectedSpoolLimits(
+                maximumItems: 4,
+                maximumBytes: 64_000,
+                maximumPayloadBytes: 128
+            )
+        )
+        let hostID = try opaque("nbrg-telemetry-0001")
+        let item = try spoolItem("spool-telemetry", payload: Array(marker.utf8))
+        try require(try spool.enqueue(item) == .enqueued, "Telemetry fixture did not enqueue")
+
+        // The marker really is held by the spool this telemetry describes —
+        // otherwise "absent from telemetry" would be true for an uninteresting
+        // reason.
+        let stored = try spool.item(item.envelopeID)
+        try require(
+            stored.payload == Array(marker.utf8),
+            "The spool did not retain the planted marker, so its absence proves nothing"
+        )
+
+        let health = try spool.health()
+        try require(health.pendingItemCount == 1, "Health did not observe the pending item")
+        try require(health.remainingItems == 3, "Health did not report headroom")
+        try require(!health.atCapacity, "Health reported capacity it has not reached")
+
+        var lifecycle = try NativeHostLifecycle(hostInstanceID: hostID)
+        _ = try lifecycle.negotiate(
+            NativeProtocolOffer(supportedVersions: NativeSourceProtocolV1.supportedIdentifiers)
+        )
+        try lifecycle.openedSpool()
+        try lifecycle.readyForHandoff()
+
+        let report = try NativeHostHealthReport(
+            hostInstanceID: hostID,
+            lifecycle: lifecycle,
+            spool: health,
+            observedAtUnixMilliseconds: 1_775_563_200_000
+        )
+        let enqueued = try NativeHostTelemetryEvent(
+            event: .spoolEnqueued,
+            hostInstanceID: hostID,
+            kind: .mail,
+            itemCount: health.pendingItemCount,
+            byteCount: health.totalBytes,
+            observedAtUnixMilliseconds: 1_775_563_200_000
+        )
+
+        // A refusal is the interesting case: this is where an implementation is
+        // tempted to attach "what went wrong" and take the payload with it.
+        var refusal: NativeHostTelemetryEvent?
+        do {
+            _ = try spool.enqueue(
+                try spoolItem("spool-oversize", payload: Array(repeating: 0x41, count: 4096))
+            )
+        } catch {
+            refusal = try NativeHostTelemetryEvent(
+                refusal: error,
+                event: .spoolRefusedAtCapacity,
+                hostInstanceID: hostID,
+                kind: .mail,
+                observedAtUnixMilliseconds: 1_775_563_200_001
+            )
+        }
+        let refused = try requireValue(refusal, "The oversize payload was not refused")
+        try require(
+            refused.errorClass == .spoolPayloadTooLarge,
+            "The refusal did not classify as an oversize payload"
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let emissions: [Data] = [
+            try encoder.encode(report),
+            try encoder.encode(enqueued),
+            try encoder.encode(refused),
+            try encoder.encode(health),
+            Data("\(report)".utf8),
+            Data("\(enqueued)".utf8),
+            Data("\(refused)".utf8),
+            Data("\(health)".utf8),
+            Data("\(lifecycle)".utf8),
+        ]
+        for emission in emissions {
+            let rendered = String(decoding: emission, as: UTF8.self)
+            try require(
+                !rendered.contains(marker),
+                "An operational emission carried spooled content"
+            )
+            try require(
+                !rendered.contains(directory.path),
+                "An operational emission carried a filesystem path"
+            )
+        }
+
+        // Structural, not lexical: the only free `String` an emitted value holds
+        // is the frozen protocol identifier. Everything else is a number, a
+        // Boolean, an opaque identifier, or a closed enumeration — so there is
+        // nowhere for content to go even if a future caller wanted to put it
+        // there.
+        for value in [try encoder.encode(enqueued), try encoder.encode(report)] {
+            let object = try jsonDictionary(try JSONSerialization.jsonObject(with: value))
+            for (key, entry) in object {
+                guard let text = entry as? String else { continue }
+                let closed = NativeHostTelemetryEventClass.allCases.map(\.rawValue)
+                    + NativeHostErrorClass.allCases.map(\.rawValue)
+                    + NativeHostLifecycleState.allCases.map(\.rawValue)
+                    + NativeHostDistributionModel.allCases.map(\.rawValue)
+                    + NativeSourceKind.allCases.map(\.rawValue)
+                    + [NativeSourceProtocolV1.identifier, hostID.rawValue]
+                try require(
+                    closed.contains(text),
+                    "Emitted field \(key) carries a string outside the closed vocabulary"
+                )
+            }
+        }
+
+        // A health report that claims a registered service is refused on decode:
+        // this build cannot have performed one, so a wire value saying it did is
+        // wrong rather than informative.
+        let forged = try mutatedJSON(report) { $0["serviceRegistrationPerformed"] = true }
+        try requireDecodeFailure(NativeHostHealthReport.self, data: forged)
+    }
+
     private static func trackedSpool(
         _ spool: ProtectedSpool
     ) -> (box: SpoolInstanceBox, weak: WeakSpoolReference) {
@@ -1066,7 +1471,7 @@ struct AppleSourceHostContractChecks {
             sourceModifiedUnixMilliseconds: 1_700_000_000_000,
             payload: [0x73, 0x79, 0x6E]
         )
-        let page = NativeReadPage(records: [record], nextCursor: nil)
+        let page = try NativeReadPage(records: [record], nextCursor: nil)
         let fixture = SyntheticPageFixture(bucketID: bucketID, requestCursor: nil, page: page)
         let request = try NativeReadRequest(bucketID: bucketID, limit: 50)
         return FixtureSet(snapshot: snapshot, fixture: fixture, request: request)
@@ -1114,7 +1519,7 @@ struct AppleSourceHostContractChecks {
             return SyntheticPageFixture(
                 bucketID: bucket.id,
                 requestCursor: nil,
-                page: NativeReadPage(records: [record], nextCursor: nil)
+                page: try NativeReadPage(records: [record], nextCursor: nil)
             )
         }
         return CollisionFixtureSet(snapshot: snapshot, fixtures: fixtures)

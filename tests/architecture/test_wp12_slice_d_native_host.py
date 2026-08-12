@@ -98,7 +98,12 @@ def test_every_invariant_bearing_wire_value_has_explicit_validating_decode() -> 
     recurrence = (SOURCES / "Recurrence.swift").read_text(encoding="utf-8")
     spool = (SOURCES / "ProtectedSpool.swift").read_text(encoding="utf-8")
 
-    assert protocol.count("public init(from decoder: Decoder)") == 5
+    # Six, not five, since WP-15's correction gave `NativeReadPage` the frozen
+    # page bound: a type that carries an invariant and decodes off the wire needs
+    # its own validating decoder, or the bound holds for values built in Swift
+    # and not for the same values arriving as JSON. Raising this number is the
+    # only direction it may ever move without deleting a decoder.
+    assert protocol.count("public init(from decoder: Decoder)") == 6
     assert envelopes.count("public init(from decoder: Decoder)") == 8
     assert recurrence.count("public init(from decoder: Decoder)") == 2
     assert spool.count("public init(from decoder: Decoder)") == 1

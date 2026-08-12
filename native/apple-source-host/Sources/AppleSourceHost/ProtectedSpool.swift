@@ -167,6 +167,10 @@ public final class ProtectedSpool: @unchecked Sendable {
     }()
     private let decoder = JSONDecoder()
 
+    /// The bounds this spool refuses at. Exposed so a health report can state the
+    /// headroom rather than an unanchored occupancy count.
+    public var configuredLimits: ProtectedSpoolLimits { limits }
+
     public init(directory: URL, limits: ProtectedSpoolLimits) throws {
         let rootPath = directory.standardizedFileURL.path
         var rootDescriptor: Int32 = -1

@@ -4,6 +4,16 @@ import Foundation
 public enum NativeSourceProtocolV1 {
     public static let identifier = "my-pa.native-source.v1"
     public static let supportedIdentifiers = [identifier]
+    /// Frozen page ceiling. An unbounded page is an unbounded spool item, so the
+    /// bound belongs to the protocol rather than to whichever adapter happens to
+    /// build the page. Over-bound input is **refused**, never clamped: silently
+    /// serving 100 of the 5000 records asked for is data loss the caller cannot
+    /// see. Must equal `NATIVE_SOURCE_MAX_PAGE_SIZE` in
+    /// `src/my_pa/contracts/v1/native_sources.py`; a test compares the literals.
+    public static let maximumPageSize = 100
+    /// Frozen cursor ceiling, in UTF-8 bytes. Must equal the `next_cursor`
+    /// `max_length` on `NativeAdmissionEnvelope`.
+    public static let maximumCursorBytes = 512
 }
 
 /// Source categories supported by protocol v1. These are product categories,
@@ -158,7 +168,10 @@ public struct NativeReadCursor: RawRepresentable, Codable, Hashable, Sendable {
     public let rawValue: String
 
     public init?(rawValue: String) {
-        guard !rawValue.isEmpty, !rawValue.contains(where: { $0.isWhitespace }) else {
+        guard !rawValue.isEmpty,
+              rawValue.utf8.count <= NativeSourceProtocolV1.maximumCursorBytes,
+              !rawValue.contains(where: { $0.isWhitespace })
+        else {
             return nil
         }
         self.rawValue = rawValue
@@ -208,7 +221,7 @@ public struct NativeReadRequest: Codable, Hashable, Sendable {
         cursor: NativeReadCursor? = nil,
         limit: Int
     ) throws {
-        guard limit > 0 else {
+        guard limit > 0, limit <= NativeSourceProtocolV1.maximumPageSize else {
             throw NativeSourceContractError.invalidPageLimit
         }
         self.bucketID = bucketID
@@ -263,9 +276,28 @@ public struct NativeReadPage: Codable, Hashable, Sendable {
     public let records: [NativeSourceRecord]
     public let nextCursor: NativeReadCursor?
 
-    public init(records: [NativeSourceRecord], nextCursor: NativeReadCursor?) {
+    /// Refuses an over-bound page rather than truncating it. Trimming to the
+    /// ceiling here would drop records the caller never learns about and would
+    /// make `nextCursor` a lie; the honest answer to "more than the protocol
+    /// admits" is to not produce the page at all.
+    public init(records: [NativeSourceRecord], nextCursor: NativeReadCursor?) throws {
+        guard records.count <= NativeSourceProtocolV1.maximumPageSize else {
+            throw NativeSourceContractError.invalidPageLimit
+        }
         self.records = records
         self.nextCursor = nextCursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case records, nextCursor
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            records: values.decode([NativeSourceRecord].self, forKey: .records),
+            nextCursor: values.decodeIfPresent(NativeReadCursor.self, forKey: .nextCursor)
+        )
     }
 }
 

@@ -50,6 +50,7 @@ from sqlalchemy.engine import make_url
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.relationship.identity import (
+    DuplicateCandidateSet,
     IdentityCandidateSet,
     IdentityObservation,
     IdentityResolution,
@@ -577,3 +578,117 @@ def test_b_owns_its_own_partition_in_the_same_database(
         b_again = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_B)
         assert b_again.profile(b_person, expected_domains=("calendar",)) is not None
         assert b_again.profile(person_id, expected_domains=("contacts",)) is None
+
+
+def test_an_accepted_decision_from_another_principal_cannot_authorize_b_s_own_merge(
+    engine: Engine, seeded: tuple[str, str, str]
+) -> None:
+    """The governance authority does not cross the partition either (WP-12).
+
+    Every other negative in this module has B reaching for A's *records*. This
+    one has B reaching for A's *authority*: B opens a perfectly legitimate merge
+    review over two people B genuinely owns, and then names one of A's real,
+    accepting identity-review decisions as the thing that authorized it.
+
+    That is the shape of the defect WP-11 reviewer NOTE 2 records against the
+    continuity acceptance gate — a decision trusted because it exists, accepted,
+    and belongs to *a* Principal, rather than because it decided this case. Here
+    the decision belongs to a *different* Principal and decided a different
+    case, so it fails both bindings at once, and the refusal must be the same
+    one a decision that exists nowhere produces.
+
+    The control at the end is what stops this reading as "B cannot merge": B's
+    own decision, on B's own case, does authorize the merge.
+    """
+    _person_id, _second, _organization = seeded
+
+    # One of A's decisions: real, accepting, and already used to link A's people.
+    with engine.connect() as connection:
+        foreign_decision = str(
+            connection.execute(
+                select(relationship_identity_review_decisions.c.decision_id)
+                .where(relationship_identity_review_decisions.c.principal_id == PRINCIPAL_A)
+                .order_by(relationship_identity_review_decisions.c.decision_id)
+                .limit(1)
+            ).scalar_one()
+        )
+
+    # B's own people and B's own merge review, opened legitimately.
+    b_observations = (_observation(21, source_ordinal=2), _observation(22, source_ordinal=2))
+    with engine.begin() as connection:
+        b = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_B)
+        b.record_observations("contacts", b_observations)
+        b_first = _link_person(
+            b, principal_id=PRINCIPAL_B, person_ordinal=21, observations=(b_observations[0],)
+        )
+        b_second = _link_person(
+            b, principal_id=PRINCIPAL_B, person_ordinal=22, observations=(b_observations[1],)
+        )
+        b_case = b.open_identity_review(
+            DuplicateCandidateSet(
+                candidate_set_id=_id("dups", 23),
+                person_ids=(b_first, b_second),
+                observation_ids=(b_observations[1].observation_id,),
+                created_at=WHEN,
+            ),
+            ResolutionAction.MERGE_PERSON,
+            retained_person_id=b_first,
+            prior_person_id=b_second,
+        )
+
+    def _merge(decision_id: str) -> Callable[[SqlRelationshipRepository], object]:
+        def _run(repository: SqlRelationshipRepository) -> object:
+            repository.apply_resolution(
+                IdentityResolution(
+                    resolution_id=_id("ires", 23),
+                    action=ResolutionAction.MERGE_PERSON,
+                    review_case_id=b_case,
+                    decision_id=decision_id,
+                    retained_person_id=b_first,
+                    prior_person_id=b_second,
+                    observation_ids=(b_observations[1].observation_id,),
+                    decided_at=WHEN,
+                ),
+                display_name="unused",
+            )
+            return None
+
+        return _run
+
+    with engine.connect() as connection:
+        before = _snapshot(connection)
+
+    borrowed = _attempt(engine, PRINCIPAL_B, _merge(foreign_decision))
+    absent = _attempt(engine, PRINCIPAL_B, _merge(_id("rdec", 999)))
+
+    assert borrowed == absent
+    assert borrowed[0] == "IdentityResolutionError"
+    # The refusal names neither the decision nor whose it was.
+    assert foreign_decision not in borrowed[1]
+    assert PRINCIPAL_A not in borrowed[1]
+
+    with engine.connect() as connection:
+        assert _snapshot(connection) == before
+
+    # The control: B's own accepting decision, on B's own case, does authorize
+    # it. Without this the two refusals above would be satisfied by a merge that
+    # never works for anyone.
+    with engine.begin() as connection:
+        b = SqlRelationshipRepository(connection, principal_id=PRINCIPAL_B)
+        own_decision = b.decide_identity_review(
+            b_case, disposition="accept", principal_id=PRINCIPAL_B, decided_at=WHEN
+        )
+        _merge(own_decision)(b)
+        assert b.profile(b_second, expected_domains=("contacts",)) is None
+        merged = b.profile(b_first, expected_domains=("contacts",))
+        assert merged is not None
+        assert merged.observation_ids == tuple(
+            sorted(observation.observation_id for observation in b_observations)
+        )
+
+    # And none of it reached A: A's partition is byte-identical to before.
+    with engine.connect() as connection:
+        after = _snapshot(connection)
+    for name, rows in before.items():
+        a_rows = [row for row in rows if PRINCIPAL_A in row]
+        assert [row for row in after[name] if PRINCIPAL_A in row] == a_rows

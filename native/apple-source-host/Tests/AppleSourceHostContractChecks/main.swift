@@ -942,6 +942,71 @@ struct AppleSourceHostContractChecks {
         try requireSpoolError(.payloadTooLarge) {
             try crashSpool.enqueue(try spoolItem("spool-large", payload: [1, 2, 3, 4, 5]))
         }
+
+        let fullQuarantineDirectory = temporaryDirectory("crash-quarantine-count")
+        defer { try? FileManager.default.removeItem(at: fullQuarantineDirectory) }
+        let fullQuarantineSpool = try ProtectedSpool(
+            directory: fullQuarantineDirectory,
+            limits: try ProtectedSpoolLimits(
+                maximumItems: 1,
+                maximumBytes: 32_000,
+                maximumPayloadBytes: 4,
+                maximumQuarantineItems: 1,
+                maximumQuarantineBytes: 32_000
+            )
+        )
+        let retained = try spoolItem("crash-retained", payload: [1])
+        try require(
+            try fullQuarantineSpool.enqueue(retained) == .enqueued,
+            "Crash count fixture did not enqueue"
+        )
+        try fullQuarantineSpool.quarantine(retained.envelopeID)
+        let countResidue = try spoolItem("crash-count", payload: [2])
+        try requireSpoolError(.injectedCrash) {
+            try fullQuarantineSpool.enqueue(countResidue, fault: .afterTemporarySync)
+        }
+        try requireSpoolError(.quarantineItemCapacityExceeded) {
+            try fullQuarantineSpool.recoverResidues()
+        }
+        try require(
+            try fullQuarantineSpool.inventory().items.contains(where: {
+                $0.envelopeID == countResidue.envelopeID && $0.state == .crashResidue
+            }),
+            "Count-refused recovery did not retain the crash residue"
+        )
+
+        let fullQuarantineBytesDirectory = temporaryDirectory("crash-quarantine-bytes")
+        defer { try? FileManager.default.removeItem(at: fullQuarantineBytesDirectory) }
+        let byteRetained = try spoolItem("crash-bytes-a", payload: [1])
+        let retainedSize = try JSONEncoder().encode(byteRetained).count
+        let fullQuarantineBytesSpool = try ProtectedSpool(
+            directory: fullQuarantineBytesDirectory,
+            limits: try ProtectedSpoolLimits(
+                maximumItems: 1,
+                maximumBytes: 32_000,
+                maximumPayloadBytes: 4,
+                maximumQuarantineItems: 2,
+                maximumQuarantineBytes: Int64(retainedSize)
+            )
+        )
+        try require(
+            try fullQuarantineBytesSpool.enqueue(byteRetained) == .enqueued,
+            "Crash byte fixture did not enqueue"
+        )
+        try fullQuarantineBytesSpool.quarantine(byteRetained.envelopeID)
+        let byteResidue = try spoolItem("crash-bytes-b", payload: [2])
+        try requireSpoolError(.injectedCrash) {
+            try fullQuarantineBytesSpool.enqueue(byteResidue, fault: .afterTemporarySync)
+        }
+        try requireSpoolError(.quarantineByteCapacityExceeded) {
+            try fullQuarantineBytesSpool.recoverResidues()
+        }
+        try require(
+            try fullQuarantineBytesSpool.inventory().items.contains(where: {
+                $0.envelopeID == byteResidue.envelopeID && $0.state == .crashResidue
+            }),
+            "Byte-refused recovery did not retain the crash residue"
+        )
         let unsafeID = try opaque("unsafe-spool-json")
         let unsafeURL = crashDirectory
             .appendingPathComponent("pending", isDirectory: true)

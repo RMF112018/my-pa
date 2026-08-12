@@ -416,7 +416,18 @@ public final class ProtectedSpool: @unchecked Sendable {
                 guard try !entryExists(in: quarantineDescriptor, name: destination) else {
                     throw ProtectedSpoolError.pathCollision
                 }
-                _ = try safeBytes(in: rootDescriptor, name: source)
+                let sourceBytes = try safeBytes(in: rootDescriptor, name: source)
+                let current = try inventoryUnlocked()
+                let quarantine = current.items.filter { $0.state == .quarantine }
+                guard quarantine.count < limits.maximumQuarantineItems else {
+                    throw ProtectedSpoolError.quarantineItemCapacityExceeded
+                }
+                let quarantineBytes = quarantine.reduce(0, { $0 + $1.byteCount })
+                guard quarantineBytes
+                    <= limits.maximumQuarantineBytes - Int64(sourceBytes.count)
+                else {
+                    throw ProtectedSpoolError.quarantineByteCapacityExceeded
+                }
                 guard renameatx_np(
                     rootDescriptor,
                     source,

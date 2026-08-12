@@ -172,6 +172,15 @@ adds the capacity-one quarantine-then-enqueue contract check, and proves that a
 full quarantine refuses without displacing the pending item. This BLOCK is
 historical and cannot satisfy the gate.
 
+An eighth independent audit of corrective head
+`346583af20b1e08533b68afdb1ccceb4893a44dc` returned BLOCK after verifying that
+ordinary quarantine freed pending capacity under its independent bound. It
+found that crash-residue recovery moved `.tmp` evidence into quarantine without
+applying the same quarantine item and byte ceilings. The next corrective head
+applies those ceilings before each recovery move and proves both refusal modes
+leave the crash residue retained in place. This BLOCK is historical and cannot
+satisfy the gate.
+
 ## Independent review gate
 
 No statement in this record means `READY_FOR_PILOT_VALIDATION`, independently

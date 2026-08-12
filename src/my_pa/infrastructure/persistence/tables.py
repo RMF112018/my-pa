@@ -147,10 +147,21 @@ from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.relationship.identity import ResolutionAction
 from my_pa.domain.relationship.profile import EvidenceAuthority
+from my_pa.domain.situation.continuity import (
+    ClosureEvidenceKind,
+    CommitmentDirection,
+    CommitmentState,
+    ContinuityEvidenceState,
+    ContinuityObjectKind,
+    DecisionState,
+    LifecycleTransition,
+    TaskState,
+)
 from my_pa.domain.situation.situation import (
     FrameState,
     ProjectState,
     PulseItemType,
+    PulseReasonCode,
     SituationState,
 )
 from my_pa.domain.source.enrollment import (
@@ -3170,6 +3181,15 @@ project_situations = Table(
     ),
     Column("principal_id", Text, nullable=False),
     Column("linked_at", DateTime(timezone=True), nullable=False),
+    #: What justified this binding, added forward by `8f2b6c4d1a37` (WP-11).
+    #: **Nullable, and that is the honest shape**: rows written before that
+    #: revision were linked with no recorded evidence, and a `NOT NULL` with a
+    #: backfilled default would fabricate a justification that nobody supplied.
+    #: A link written from WP-11 onward carries it, and the `associated` row in
+    #: `continuity_lifecycle_events` carries the same reference, so the
+    #: association is reconstructable from the append-only record rather than
+    #: from this column alone.
+    Column("association_evidence_ref", Text),
     _is_identifier("project_situation_id", IdKind.PROJECT_SITUATION),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     UniqueConstraint("project_id", "situation_id", name="a_situation_links_to_a_project_once"),
@@ -3220,6 +3240,15 @@ pulse_items = Table(
     Column("item_type", Text, nullable=False),
     Column("item_ref", Text, nullable=False),
     Column("reason", Text, nullable=False),
+    #: The closed why-now vocabulary and the evidence under it, added forward by
+    #: `8f2b6c4d1a37` (WP-11). **Neither carries a server default**, deliberately:
+    #: a default would let a writer omit the reason and the basis and still store
+    #: a row, which is precisely the activity-feed row this pair exists to make
+    #: unstorable. Together with the non-empty-array CHECK below they make "no
+    #: Pulse item without an evidentiary basis and a named reason" a property of
+    #: the database rather than of whoever wrote the insert.
+    Column("reason_code", Text, nullable=False),
+    Column("basis_refs", JSONB, nullable=False),
     Column("consequence", Text),
     Column("next_step", Text),
     Column("priority", Integer, nullable=False, server_default=text("5")),
@@ -3229,10 +3258,258 @@ pulse_items = Table(
     _is_identifier("pulse_id", IdKind.PULSE),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("item_type", PulseItemType, name="a_pulse_item_type_is_known"),
+    _one_of("reason_code", PulseReasonCode, name="a_pulse_reason_code_is_known"),
     CheckConstraint("length(trim(item_ref)) > 0", name="a_pulse_item_ref_is_not_blank"),
     CheckConstraint("length(trim(reason)) > 0", name="a_pulse_reason_is_not_blank"),
+    CheckConstraint(
+        "jsonb_typeof(basis_refs) = 'array' AND jsonb_array_length(basis_refs) > 0",
+        name="a_pulse_item_carries_an_evidentiary_basis",
+    ),
     CheckConstraint("priority BETWEEN 1 AND 10", name="a_pulse_priority_is_bounded"),
     CheckConstraint("accepted_only IS TRUE", name="pulse_reads_only_accepted_records"),
     Index("pulse_items_by_principal", "principal_id"),
     Index("pulse_items_by_principal_dismissed", "principal_id", "dismissed_at"),
+)
+
+# ---------------------------------------------------------------------------
+# WP-11: the continuity objects R5 named and had no table for, and the one
+# append-only record that carries their lifecycle and their associations.
+#
+# Four tables, declared here and created by revision `8f2b6c4d1a37` with frozen
+# literals. Each is partitioned exactly as `situations` is — `principal_id` NOT
+# NULL with the opaque-identifier CHECK, a `by_principal` index and a
+# `by_principal_state` index — because every one of them is read by Today/Pulse
+# and by the project/relationship briefing, and invariant 11 makes `principal_id`
+# a mandatory predicate on every one of those reads.
+#
+# **`evidence_state` is on all three objects and defaults to `proposed`.** The
+# default is the safe direction: a writer that forgets to say what it is writing
+# writes a proposal, and continuity reads filter to `accepted`, so the forgetful
+# path produces nothing rather than producing unreviewed continuity.
+# ---------------------------------------------------------------------------
+
+#: `Commitment`: a social obligation between the Principal and one counterparty.
+#: `counterparty_person_id` carries the `per_…` shape CHECK and **no foreign
+#: key**, for two reasons stated rather than assumed. First,
+#: `relationship_people` is itself principal-partitioned, so a foreign key would
+#: be satisfiable across the partition and one Principal could learn that
+#: another's Person row exists by observing which insert succeeded. Second, an
+#: obligation has to be recordable before the identity plane has resolved the
+#: person it is owed to, and a foreign key would drop the obligation instead.
+#: `origin_evidence_ref` is NOT NULL: a commitment nobody can trace back to
+#: something said or written would be this product asserting an obligation on a
+#: person's behalf.
+commitments = Table(
+    "commitments",
+    METADATA,
+    Column("commitment_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("counterparty_person_id", Text, nullable=False),
+    Column("direction", Text, nullable=False),
+    Column("summary", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=text("'open'")),
+    Column("evidence_state", Text, nullable=False, server_default=text("'proposed'")),
+    Column("origin_evidence_ref", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id")),
+    Column("situation_id", Text, ForeignKey(f"{SCHEMA}.situations.situation_id")),
+    Column("due_at", DateTime(timezone=True)),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True)),
+    Column("closure_evidence_ref", Text),
+    Column("accepted_by_review_decision_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("commitment_id", IdKind.COMMITMENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("counterparty_person_id", IdKind.PERSON),
+    _one_of("state", CommitmentState, name="a_commitment_state_is_known"),
+    _one_of("evidence_state", ContinuityEvidenceState, name="a_commitment_evidence_state_is_known"),
+    _one_of("direction", CommitmentDirection, name="a_commitment_direction_is_known"),
+    CheckConstraint("length(trim(summary)) > 0", name="a_commitment_summary_is_not_blank"),
+    CheckConstraint(
+        "length(trim(origin_evidence_ref)) > 0", name="a_commitment_cites_its_origin_evidence"
+    ),
+    CheckConstraint(
+        "(state = 'closed') = (closed_at IS NOT NULL)",
+        name="a_closed_commitment_records_when_it_closed",
+    ),
+    CheckConstraint(
+        "state <> 'closed' OR length(trim(coalesce(closure_evidence_ref, ''))) > 0",
+        name="a_closed_commitment_carries_closure_evidence",
+    ),
+    #: **Accepted continuity cannot exist without the review decision that made
+    #: it accepted.** A biconditional rather than an implication: a `proposed`
+    #: row holding a review decision would be a half-finished promotion.
+    CheckConstraint(
+        "(evidence_state = 'accepted') = (accepted_by_review_decision_id IS NOT NULL)",
+        name="an_accepted_commitment_records_its_review_decision",
+    ),
+    CheckConstraint(
+        "accepted_by_review_decision_id IS NULL "
+        "OR accepted_by_review_decision_id ~ '^rdec_[A-Za-z0-9]{8,64}$'",
+        name="a_commitment_review_decision_is_an_opaque_identifier",
+    ),
+    Index("commitments_by_principal", "principal_id"),
+    Index("commitments_by_principal_state", "principal_id", "state"),
+    Index("commitments_by_principal_evidence_state", "principal_id", "evidence_state"),
+)
+
+#: `Decision`: one decision the Principal holds. `awaiting_authority_ref` is the
+#: "next authority point" the Frame vocabulary already names, and it is what
+#: makes a decision *blocked* in a way a reader can check rather than in a way a
+#: model asserted — the Pulse derivation reads exactly this column.
+decisions = Table(
+    "decisions",
+    METADATA,
+    Column("decision_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("question", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=text("'open'")),
+    Column("evidence_state", Text, nullable=False, server_default=text("'proposed'")),
+    Column("origin_evidence_ref", Text, nullable=False),
+    Column("awaiting_authority_ref", Text),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id")),
+    Column("situation_id", Text, ForeignKey(f"{SCHEMA}.situations.situation_id")),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True)),
+    Column("closure_evidence_ref", Text),
+    Column("accepted_by_review_decision_id", Text),
+    Column("outcome", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("decision_id", IdKind.CONTINUITY_DECISION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("state", DecisionState, name="a_decision_state_is_known"),
+    _one_of("evidence_state", ContinuityEvidenceState, name="a_decision_evidence_state_is_known"),
+    CheckConstraint("length(trim(question)) > 0", name="a_decision_question_is_not_blank"),
+    CheckConstraint(
+        "length(trim(origin_evidence_ref)) > 0", name="a_decision_cites_its_origin_evidence"
+    ),
+    CheckConstraint(
+        "(state = 'closed') = (closed_at IS NOT NULL)",
+        name="a_closed_decision_records_when_it_closed",
+    ),
+    CheckConstraint(
+        "state <> 'closed' OR length(trim(coalesce(closure_evidence_ref, ''))) > 0",
+        name="a_closed_decision_carries_closure_evidence",
+    ),
+    #: **Accepted continuity cannot exist without the review decision that made
+    #: it accepted.** A biconditional rather than an implication: a `proposed`
+    #: row holding a review decision would be a half-finished promotion.
+    CheckConstraint(
+        "(evidence_state = 'accepted') = (accepted_by_review_decision_id IS NOT NULL)",
+        name="an_accepted_decision_records_its_review_decision",
+    ),
+    CheckConstraint(
+        "accepted_by_review_decision_id IS NULL "
+        "OR accepted_by_review_decision_id ~ '^rdec_[A-Za-z0-9]{8,64}$'",
+        name="a_decision_review_decision_is_an_opaque_identifier",
+    ),
+    Index("decisions_by_principal", "principal_id"),
+    Index("decisions_by_principal_state", "principal_id", "state"),
+    Index("decisions_by_principal_evidence_state", "principal_id", "evidence_state"),
+)
+
+#: `Task`: work the Principal holds alone. The absence of a counterparty column
+#: is the whole difference from `commitments` and is structural: there is no
+#: field a counterparty could be written into, so a task cannot quietly become a
+#: social obligation nobody was told about.
+tasks = Table(
+    "tasks",
+    METADATA,
+    Column("task_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=text("'open'")),
+    Column("evidence_state", Text, nullable=False, server_default=text("'proposed'")),
+    Column("origin_evidence_ref", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id")),
+    Column("situation_id", Text, ForeignKey(f"{SCHEMA}.situations.situation_id")),
+    Column("due_at", DateTime(timezone=True)),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True)),
+    Column("closure_evidence_ref", Text),
+    Column("accepted_by_review_decision_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("task_id", IdKind.TASK),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("state", TaskState, name="a_task_state_is_known"),
+    _one_of("evidence_state", ContinuityEvidenceState, name="a_task_evidence_state_is_known"),
+    CheckConstraint("length(trim(title)) > 0", name="a_task_title_is_not_blank"),
+    CheckConstraint(
+        "length(trim(origin_evidence_ref)) > 0", name="a_task_cites_its_origin_evidence"
+    ),
+    CheckConstraint(
+        "(state = 'closed') = (closed_at IS NOT NULL)",
+        name="a_closed_task_records_when_it_closed",
+    ),
+    CheckConstraint(
+        "state <> 'closed' OR length(trim(coalesce(closure_evidence_ref, ''))) > 0",
+        name="a_closed_task_carries_closure_evidence",
+    ),
+    #: **Accepted continuity cannot exist without the review decision that made
+    #: it accepted.** A biconditional rather than an implication: a `proposed`
+    #: row holding a review decision would be a half-finished promotion.
+    CheckConstraint(
+        "(evidence_state = 'accepted') = (accepted_by_review_decision_id IS NOT NULL)",
+        name="an_accepted_task_records_its_review_decision",
+    ),
+    CheckConstraint(
+        "accepted_by_review_decision_id IS NULL "
+        "OR accepted_by_review_decision_id ~ '^rdec_[A-Za-z0-9]{8,64}$'",
+        name="a_task_review_decision_is_an_opaque_identifier",
+    ),
+    Index("tasks_by_principal", "principal_id"),
+    Index("tasks_by_principal_state", "principal_id", "state"),
+    Index("tasks_by_principal_evidence_state", "principal_id", "evidence_state"),
+)
+
+#: `continuity_lifecycle_events`: one append-only row per transition, for all
+#: five continuity object kinds.
+#:
+#: **The CHECK is the point.** `a_closed_transition_carries_evidence` refuses a
+#: `closed` row whose `evidence_ref` is absent or blank, at the server, so a
+#: status field flipping with no trace is not something application code can be
+#: trusted to prevent or forget — it cannot be written. `associated` is held to
+#: the same rule, which is what makes a project/context association
+#: reconstructable from evidence rather than inferred from a foreign key.
+#:
+#: There is no `updated_at` and no update path: rows are appended and read.
+#: `occurred_at` is when the transition happened and `recorded_at` is when this
+#: build learned it, kept apart so a backdated import cannot read as a live
+#: event.
+continuity_lifecycle_events = Table(
+    "continuity_lifecycle_events",
+    METADATA,
+    Column("event_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("object_kind", Text, nullable=False),
+    Column("object_id", Text, nullable=False),
+    Column("transition", Text, nullable=False),
+    Column("evidence_kind", Text, nullable=False),
+    Column("evidence_ref", Text),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("event_id", IdKind.LIFECYCLE_EVENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("object_kind", ContinuityObjectKind, name="a_continuity_object_kind_is_known"),
+    _one_of("transition", LifecycleTransition, name="a_continuity_transition_is_known"),
+    _one_of("evidence_kind", ClosureEvidenceKind, name="a_continuity_evidence_kind_is_known"),
+    CheckConstraint("length(trim(object_id)) > 0", name="a_lifecycle_event_names_its_object"),
+    CheckConstraint(
+        "transition <> 'closed' OR length(trim(coalesce(evidence_ref, ''))) > 0",
+        name="a_closed_transition_carries_evidence",
+    ),
+    CheckConstraint(
+        "transition <> 'associated' OR length(trim(coalesce(evidence_ref, ''))) > 0",
+        name="an_association_carries_evidence",
+    ),
+    Index("continuity_lifecycle_events_by_principal", "principal_id"),
+    Index("continuity_lifecycle_events_by_principal_object", "principal_id", "object_id"),
+    Index(
+        "continuity_lifecycle_events_by_principal_transition",
+        "principal_id",
+        "transition",
+    ),
 )

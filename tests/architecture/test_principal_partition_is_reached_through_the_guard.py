@@ -167,9 +167,11 @@ QUARANTINED: Final = {
         "`tests/security/test_cross_principal_search_isolation.py`."
     ),
     "infrastructure/persistence/situation_repository.py": (
-        "scopes all seven R5 continuity tables by hand-written `principal_id` "
-        "comparisons, registered in HAND_WRITTEN_COMPARISONS below. The "
-        "continuity commands that would drive it are unwired (WP-06)."
+        "scopes all eleven R5/WP-11 continuity tables by hand-written "
+        "`principal_id` comparisons, registered in HAND_WRITTEN_COMPARISONS "
+        "below. Three of the eleven — Situations, Projects and the Pulse — are "
+        "now reached by a capability (WP-11); the continuity *write* path is "
+        "still driven only by `SituationService`, outside `invoke`."
     ),
 }
 
@@ -280,11 +282,33 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("enrollments", "principal_id"),
     ),
     "infrastructure/persistence/review.py": (("capture_review_cases", "principal_id"),),
+    # WP-11 grew this entry from fourteen comparisons to thirty-four, and every
+    # new one is the same shape as the fourteen that were here: a
+    # `<table>.c.principal_id == principal_id` predicate written into the
+    # statement. Three of them read `table.c.principal_id` through the closed
+    # `_OBJECT_TABLE` map rather than through a table variable, which the scanner
+    # sees as the literal name `table`; the map holds only partitioned tables and
+    # is private to the module, so the predicate is on a partitioned table in
+    # every branch. `capture_review_decisions` is the acceptance gate: `accept`
+    # resolves the review decision inside the caller's partition, so a decision
+    # belonging to another Principal cannot promote this Principal's proposal.
     "infrastructure/persistence/situation_repository.py": (
+        ("capture_review_decisions", "principal_id"),
+        ("commitments", "principal_id"),
+        ("commitments", "principal_id"),
+        ("commitments", "principal_id"),
+        ("continuity_lifecycle_events", "principal_id"),
+        ("decisions", "principal_id"),
+        ("decisions", "principal_id"),
+        ("decisions", "principal_id"),
+        ("frames", "principal_id"),
+        ("frames", "principal_id"),
         ("frames", "principal_id"),
         ("projects", "principal_id"),
         ("projects", "principal_id"),
         ("projects", "principal_id"),
+        ("projects", "principal_id"),
+        ("pulse_items", "principal_id"),
         ("pulse_items", "principal_id"),
         ("pulse_items", "principal_id"),
         ("relationship_events", "principal_id"),
@@ -294,6 +318,14 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("situations", "principal_id"),
         ("situations", "principal_id"),
         ("situations", "principal_id"),
+        ("situations", "principal_id"),
+        ("situations", "principal_id"),
+        ("table", "principal_id"),
+        ("table", "principal_id"),
+        ("table", "principal_id"),
+        ("tasks", "principal_id"),
+        ("tasks", "principal_id"),
+        ("tasks", "principal_id"),
         ("traces", "principal_id"),
     ),
 }

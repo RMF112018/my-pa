@@ -59,9 +59,12 @@ from my_pa.contracts.ports import (
     Operation,
     OperationQueue,
     PortError,
+    ProjectRepository,
+    PulseRepository,
     ReviewDecisionRequest,
     ReviewRepository,
     SearchOutcome,
+    SituationRepository,
     SourceProviders,
     SourceRepository,
     UnitOfWork,
@@ -106,6 +109,7 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.common.provenance import Provenance, TrustLevel
+from my_pa.domain.common.time import utc_now
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.identity.operation import Capability
@@ -113,6 +117,21 @@ from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
+from my_pa.domain.situation.continuity import (
+    ClosureEvidenceKind,
+    Commitment,
+    ContinuityEvidenceState,
+)
+from my_pa.domain.situation.continuity import Decision as ContinuityDecision
+from my_pa.domain.situation.continuity import Task as ContinuityTask
+from my_pa.domain.situation.pulse_derivation import FramedObligation, derive_pulse
+from my_pa.domain.situation.situation import (
+    Project,
+    ProjectState,
+    PulseItem,
+    Situation,
+    SituationState,
+)
 from my_pa.domain.source.enrollment import (
     Enrollment,
     EnrollmentConflictError,
@@ -233,6 +252,20 @@ class World:
     derivation_states: dict[str, ProcessingState] = field(default_factory=dict)
     review_cases: list[ReviewCase] = field(default_factory=list)
     review_decisions: list[ReviewDecision] = field(default_factory=list)
+    #: The continuity plane (WP-11). Held as flat lists because the fake's whole
+    #: job is the partition predicate, and a list a filter runs over is the
+    #: clearest place to see one missing. `commitments`, `continuity_tasks` and
+    #: `continuity_decisions` feed the Pulse *derivation*, which the fake runs
+    #: through the same pure function the SQL repository runs — so a test cannot
+    #: pass here against a derivation the store would not reproduce.
+    situations: list[Situation] = field(default_factory=list)
+    projects: list[Project] = field(default_factory=list)
+    project_situations: list[tuple[str, str, str, str]] = field(default_factory=list)
+    commitments: list[Commitment] = field(default_factory=list)
+    continuity_tasks: list[ContinuityTask] = field(default_factory=list)
+    continuity_decisions: list[ContinuityDecision] = field(default_factory=list)
+    framed_obligations: list[FramedObligation] = field(default_factory=list)
+    dismissed_pulse_ids: set[str] = field(default_factory=set)
     audit: list[AuditEvent] = field(default_factory=list)
     commits: int = 0
     rollbacks: int = 0
@@ -907,6 +940,204 @@ class RecordingAudit(AuditSink):
         self.events.append(event)
 
 
+class _Situations(SituationRepository):
+    """Situations over the `World`, with the partition predicate written out.
+
+    The predicate is the point: every method adds `principal_id == <caller>`, so
+    a Situation another Principal owns is answered exactly as an absent one.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def open_situation(
+        self,
+        *,
+        principal_id: str,
+        title: str,
+        description: str | None,
+        object_refs: tuple[str, ...],
+    ) -> Situation:
+        now = utc_now()
+        situation = Situation(
+            situation_id=issue_identifier(IdKind.SITUATION),
+            principal_id=principal_id,
+            title=title,
+            state=SituationState.OPEN,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            description=description,
+            object_refs=tuple(object_refs),
+        )
+        self._world.situations.append(situation)
+        return situation
+
+    def close_situation(
+        self,
+        *,
+        principal_id: str,
+        situation_id: str,
+        outcome: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> Situation:
+        if not evidence_ref.strip():
+            raise ValueError("closing a situation records the evidence that closed it")
+        current = self.get_situation(principal_id, situation_id)
+        if current is None:
+            raise UnknownScopeError
+        now = utc_now()
+        closed = Situation(
+            situation_id=current.situation_id,
+            principal_id=current.principal_id,
+            title=current.title,
+            state=SituationState.CLOSED,
+            opened_at=current.opened_at,
+            created_at=current.created_at,
+            updated_at=now,
+            description=current.description,
+            object_refs=current.object_refs,
+            closed_at=now,
+            outcome=outcome,
+        )
+        self._world.situations[self._world.situations.index(current)] = closed
+        return closed
+
+    def get_situation(self, principal_id: str, situation_id: str) -> Situation | None:
+        return next(
+            (
+                row
+                for row in self._world.situations
+                if row.situation_id == situation_id and row.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def list_situations(
+        self, principal_id: str, state_filter: SituationState | None = None
+    ) -> tuple[Situation, ...]:
+        rows = [row for row in self._world.situations if row.principal_id == principal_id]
+        if state_filter is not None:
+            rows = [row for row in rows if row.state is state_filter]
+        rows.sort(key=lambda row: row.created_at, reverse=True)
+        return tuple(rows)
+
+
+class _Projects(ProjectRepository):
+    """Projects and the Project-Situation link, partitioned like everything else."""
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def add_project(
+        self,
+        *,
+        principal_id: str,
+        name: str,
+        description: str | None,
+        participants: tuple[str, ...],
+    ) -> Project:
+        now = utc_now()
+        project = Project(
+            project_id=issue_identifier(IdKind.PROJECT),
+            principal_id=principal_id,
+            name=name,
+            state=ProjectState.ACTIVE,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            description=description,
+            participants=tuple(participants),
+        )
+        self._world.projects.append(project)
+        return project
+
+    def get_project(self, principal_id: str, project_id: str) -> Project | None:
+        return next(
+            (
+                row
+                for row in self._world.projects
+                if row.project_id == project_id and row.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def list_projects(
+        self, principal_id: str, state_filter: ProjectState | None = None
+    ) -> tuple[Project, ...]:
+        rows = [row for row in self._world.projects if row.principal_id == principal_id]
+        if state_filter is not None:
+            rows = [row for row in rows if row.state is state_filter]
+        rows.sort(key=lambda row: row.created_at, reverse=True)
+        return tuple(rows)
+
+    def link_situation(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        situation_id: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> None:
+        if not evidence_ref.strip():
+            raise ValueError("linking a situation to a project records the evidence for it")
+        project = self.get_project(principal_id, project_id)
+        situation = _Situations(self._world).get_situation(principal_id, situation_id)
+        if project is None or situation is None:
+            raise UnknownScopeError
+        link = (principal_id, project_id, situation_id, evidence_ref)
+        if link not in self._world.project_situations:
+            self._world.project_situations.append(link)
+
+
+class _Pulse(PulseRepository):
+    """The Pulse over the `World`: stored items, and the real derivation.
+
+    `derive_pulse` runs the *production* pure function over the Principal's
+    accepted, open continuity, so a test cannot pass here against a ranking the
+    store would not reproduce. The accepted-only filter is written out below for
+    the same reason the SQL writes it as a `WHERE` clause: it is the property
+    under test, not a convenience.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def generate_pulse(self, principal_id: str) -> tuple[PulseItem, ...]:
+        return ()
+
+    def dismiss_pulse_item(self, principal_id: str, pulse_id: str) -> None:
+        self._world.dismissed_pulse_ids.add(pulse_id)
+
+    def derive_pulse(self, principal_id: str, now: datetime) -> tuple[PulseItem, ...]:
+        return derive_pulse(
+            principal_id=principal_id,
+            now=now,
+            commitments=[
+                row
+                for row in self._world.commitments
+                if row.principal_id == principal_id
+                and row.evidence_state is ContinuityEvidenceState.ACCEPTED
+            ],
+            tasks=[
+                row
+                for row in self._world.continuity_tasks
+                if row.principal_id == principal_id
+                and row.evidence_state is ContinuityEvidenceState.ACCEPTED
+            ],
+            decisions=[
+                row
+                for row in self._world.continuity_decisions
+                if row.principal_id == principal_id
+                and row.evidence_state is ContinuityEvidenceState.ACCEPTED
+            ],
+            obligations=tuple(self._world.framed_obligations),
+            dismissed_pulse_ids=frozenset(self._world.dismissed_pulse_ids),
+        )
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -957,6 +1188,18 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def reviews(self) -> ReviewRepository:
         return _Reviews(self._world)
+
+    @property
+    def situations(self) -> SituationRepository:
+        return _Situations(self._world)
+
+    @property
+    def projects(self) -> ProjectRepository:
+        return _Projects(self._world)
+
+    @property
+    def pulse(self) -> PulseRepository:
+        return _Pulse(self._world)
 
     @property
     def audit(self) -> AuditSink:

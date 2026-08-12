@@ -84,6 +84,21 @@
         "expected_review_version": 0,
         "disposition": "accept"
       }
+    },
+    "continuity.pulse": {
+      "purpose": "capture_review",
+      "payloadFields": [],
+      "probe": {}
+    },
+    "continuity.situations": {
+      "purpose": "capture_review",
+      "payloadFields": ["page_size"],
+      "probe": {}
+    },
+    "continuity.projects": {
+      "purpose": "capture_review",
+      "payloadFields": ["page_size"],
+      "probe": {}
     }
   },
   "_dispositionComment": [

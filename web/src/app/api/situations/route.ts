@@ -1,27 +1,54 @@
 /**
- * Situations — **not backend-backed at this head, and it says so.**
+ * Situations — **real-backed as of WP-11.**
  *
- * Same measurement and same boundary as `/api/pulse`, and it is worth stating
- * separately because the underlying persistence here is further along than the
- * Pulse one. `SqlSituationRepository` is real: `open_situation`, `close_situation`,
- * `get_situation` and `list_situations` all stamp `principal_id` on every write
- * and filter by it on every read, so a Situation belonging to another Principal
- * is indistinguishable from one that does not exist. WP-03's chain created the
- * situation, frame, trace and project tables it writes to.
+ * `SqlSituationRepository` was already real and already principal-scoped; what
+ * was missing was a way to reach it over the transport, and `continuity.situations`
+ * is it. Revision `8f2b6c4d1a37` carries the forward `ALTER` that admits the
+ * name to the audited capability vocabulary.
  *
- * What is missing is the transport, not the read model. `SituationService` is
- * deliberately outside `ApplicationService.invoke` — its commands carry an
- * already-resolved `principal_id` as a partition rather than as a caller-supplied
- * identity — and `POST /v1/{capability}` serves only the fifteen `Capability`
- * members. Adding a sixteenth means widening the frozen `audit_events.capability`
- * CHECK by forward `ALTER`, which is a migration, which this work package is not
- * authorised to write. See `/api/pulse` for the full form of that argument.
+ * The listing returns the acting Principal's Situations and nothing else: the
+ * repository adds `principal_id = <caller>` to the `SELECT`, so a Situation
+ * belonging to another Principal is not filtered out of the answer — it is never
+ * in it. The response does not echo a Principal back, because the session cookie
+ * is the only identity carrier this tier has.
+ *
+ * The backend row carries no per-row disclosure and the fixture shape does, so
+ * the two are returned as different shapes rather than as one shape with an
+ * invented field; `shape` says which one a reader is holding.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
-import { notImplemented, resolveServing } from "@/lib/api/serving";
+import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticSituations } from "@/lib/fixtures/situation";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
+import type { BackendSituation, SituationState } from "@/contracts/views";
+
+const SCOPE = "situations";
+
+interface PythonSituation {
+  readonly situation_id: string;
+  readonly title: string;
+  readonly state: string;
+  readonly description: string | null;
+  readonly object_refs: readonly string[];
+  readonly opened_at: string;
+  readonly closed_at: string | null;
+  readonly outcome: string | null;
+}
+
+function toBackendSituation(row: PythonSituation): BackendSituation {
+  return {
+    situationId: row.situation_id,
+    title: row.title,
+    state: row.state as SituationState,
+    description: row.description,
+    objectRefs: row.object_refs,
+    openedAt: row.opened_at,
+    closedAt: row.closed_at,
+    outcome: row.outcome,
+  };
+}
 
 const SCOPE = "situations";
 
@@ -36,11 +63,24 @@ export async function GET(request: NextRequest) {
 
   const serving = resolveServing();
   if (serving.kind === "refused") return serving.response;
-  if (serving.kind === "backend") return notImplemented(SCOPE, NO_CAPABILITY);
+
+  if (serving.kind === "synthetic") {
+    return NextResponse.json({
+      shape: "synthetic",
+      situations: syntheticSituations(guard.principal),
+      disclosure: syntheticDisclosure(SCOPE),
+    });
+  }
+
+  const outcome = await callGateway<{ situations?: readonly PythonSituation[] }>(
+    guard.principal,
+    "continuity.situations",
+  );
+  if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
 
   return NextResponse.json({
-    shape: "synthetic",
-    situations: syntheticSituations(guard.principal),
-    disclosure: syntheticDisclosure(SCOPE),
+    shape: "backend",
+    situations: (outcome.result.situations ?? []).map(toBackendSituation),
+    disclosure: backendDisclosure(SCOPE, outcome.disclosure, transportLimitations()),
   });
 }

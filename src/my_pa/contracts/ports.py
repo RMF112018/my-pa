@@ -1,4 +1,4 @@
-"""The ports the sixteen capability use cases call, and nothing else.
+"""The ports the nineteen capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -73,6 +73,16 @@ from my_pa.domain.relationship.identity import (
 )
 from my_pa.domain.relationship.profile import OrganizationProfile, PersonProfile
 from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
+from my_pa.domain.situation.continuity import (
+    ClosureEvidenceKind,
+    Commitment,
+    CommitmentDirection,
+    ContinuityEvidenceState,
+    ContinuityLifecycleEvent,
+    ContinuityObjectKind,
+    Decision,
+    Task,
+)
 from my_pa.domain.situation.situation import (
     Frame,
     Project,
@@ -96,6 +106,7 @@ __all__ = [
     "CaptureSearchOutcome",
     "CaptureSearchRequest",
     "CaptureSummary",
+    "ContinuityRepository",
     "EnrollmentRepository",
     "EvidenceUnavailableError",
     "FrameRepository",
@@ -906,6 +917,32 @@ class UnitOfWork(ABC):
 
     @property
     @abstractmethod
+    def situations(self) -> SituationRepository:
+        """The Situation plane, inside this transaction.
+
+        Reached by `continuity.situations` (WP-11). Inside for the reason every
+        other repository is: the listing has to read the same rows under the same
+        snapshot as the disclosure reported beside it.
+        """
+
+    @property
+    @abstractmethod
+    def projects(self) -> ProjectRepository:
+        """The Project plane, inside this transaction. Reached by `continuity.projects`."""
+
+    @property
+    @abstractmethod
+    def pulse(self) -> PulseRepository:
+        """The Pulse plane, inside this transaction. Reached by `continuity.pulse`.
+
+        The derivation runs four `SELECT`s and has to see one consistent picture
+        of the Principal's accepted continuity; four reads across four
+        transactions could rank a commitment that a fifth statement had already
+        closed.
+        """
+
+    @property
+    @abstractmethod
     def audit(self) -> AuditSink:
         """The audit sink, inside this transaction.
 
@@ -949,12 +986,26 @@ class SituationRepository(ABC):
         """Open one Situation for `principal_id`, issuing its identifier."""
 
     @abstractmethod
-    def close_situation(self, *, principal_id: str, situation_id: str, outcome: str) -> Situation:
-        """Close one Situation the Principal owns, recording its outcome.
+    def close_situation(
+        self,
+        *,
+        principal_id: str,
+        situation_id: str,
+        outcome: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> Situation:
+        """Close one Situation the Principal owns, recording its outcome and evidence.
 
         Refuses when `situation_id` names no Situation in this Principal's
         partition — a Situation belonging to any other Principal is unreachable.
         Closing never deletes the objects the Situation referenced.
+
+        **`evidence_kind` and `evidence_ref` are required (WP-11)** and are
+        appended as a `closed` row in `continuity_lifecycle_events` in the same
+        transaction as the state change. An outcome sentence with nothing under
+        it is a status field changing with no trace, which is what this pair
+        exists to refuse; a blank reference raises rather than closing.
         """
 
     @abstractmethod
@@ -1044,7 +1095,15 @@ class ProjectRepository(ABC):
         """One page of this Principal's Projects, newest first."""
 
     @abstractmethod
-    def link_situation(self, *, principal_id: str, project_id: str, situation_id: str) -> None:
+    def link_situation(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        situation_id: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> None:
         """Bind a Situation into a Project, both owned by this Principal.
 
         Refuses when either the Project or the Situation is not in this
@@ -1109,3 +1168,195 @@ class PulseRepository(ABC):
 
         Refuses when `pulse_id` names no item in this Principal's partition.
         """
+
+    @abstractmethod
+    def derive_pulse(self, principal_id: str, now: datetime) -> tuple[PulseItem, ...]:
+        """Derive this Principal's Pulse from accepted continuity, at `now`.
+
+        **A read, and only a read.** It selects the Principal's accepted
+        commitments, tasks, decisions and framed obligations, hands them to
+        `domain.situation.pulse_derivation.derive_pulse`, and returns what comes
+        back. It writes no row, promotes no state, and accepts no review — an
+        implementation that did any of those would be the automatic consequential
+        promotion `QC-AC-020` forbids, arriving through the one path nobody
+        audits because it looks like a listing.
+
+        The acceptance filter is a `WHERE evidence_state = 'accepted'` predicate
+        on every one of those selects, alongside the `principal_id` predicate, so
+        a proposal is excluded by the query rather than by the caller.
+        """
+
+
+# --- WP-11: the continuity objects, their lifecycle, and their associations ---
+
+
+class ContinuityRepository(ABC):
+    """Commitments, Decisions, Tasks, and the append-only record of their lives.
+
+    One port rather than three, because the three objects share exactly one
+    lifecycle, one acceptance gate and one association record, and three ports
+    over one table family would be three copies of the same four methods. The
+    object kind travels as a closed enum, so a caller cannot name a table.
+
+    **Every method takes `principal_id` and it is the authenticated caller's
+    partition.** A commitment, decision or task belonging to another Principal is
+    answered exactly as an absent one: `None` from a getter, absence from a
+    listing, `UnknownScopeError` from a mutation.
+
+    **Proposing and accepting are different methods, and only one of them can
+    produce continuity.** `propose_*` writes `evidence_state = 'proposed'` and
+    has no parameter that could make it write anything else. `accept` is the only
+    path to `'accepted'`, and it requires the identifier of a review decision in
+    the caller's own partition whose disposition accepted something — so a
+    derivation, an import, or a model cannot promote its own output by calling
+    the method it already has.
+    """
+
+    @abstractmethod
+    def propose_commitment(
+        self,
+        *,
+        principal_id: str,
+        counterparty_person_id: str,
+        direction: CommitmentDirection,
+        summary: str,
+        origin_evidence_ref: str,
+        origin_evidence_kind: ClosureEvidenceKind,
+        due_at: datetime | None = None,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+    ) -> Commitment:
+        """Record one proposed social obligation, and its `opened` lifecycle row."""
+
+    @abstractmethod
+    def propose_decision(
+        self,
+        *,
+        principal_id: str,
+        question: str,
+        origin_evidence_ref: str,
+        origin_evidence_kind: ClosureEvidenceKind,
+        awaiting_authority_ref: str | None = None,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+    ) -> Decision:
+        """Record one proposed decision, and its `opened` lifecycle row."""
+
+    @abstractmethod
+    def propose_task(
+        self,
+        *,
+        principal_id: str,
+        title: str,
+        origin_evidence_ref: str,
+        origin_evidence_kind: ClosureEvidenceKind,
+        due_at: datetime | None = None,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+    ) -> Task:
+        """Record one proposed task, and its `opened` lifecycle row."""
+
+    @abstractmethod
+    def accept(
+        self,
+        *,
+        principal_id: str,
+        object_kind: ContinuityObjectKind,
+        object_id: str,
+        review_decision_id: str,
+    ) -> None:
+        """Promote one proposal to accepted continuity, on a review decision.
+
+        `review_decision_id` must name a `capture_review_decisions` row in this
+        Principal's partition whose disposition accepted something. Anything else
+        — a decision that rejected, a decision belonging to another Principal, a
+        well-formed identifier naming nothing — raises `UnknownScopeError` and
+        the object stays a proposal.
+        """
+
+    @abstractmethod
+    def close(
+        self,
+        *,
+        principal_id: str,
+        object_kind: ContinuityObjectKind,
+        object_id: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+        occurred_at: datetime,
+    ) -> None:
+        """Close one object and append the closure evidence, in one transaction.
+
+        The state change and the `closed` lifecycle row are written on the same
+        connection inside the caller's transaction, so a closure whose evidence
+        did not commit did not close anything. `evidence_ref` must be non-blank;
+        the schema refuses the row otherwise.
+        """
+
+    @abstractmethod
+    def associate(
+        self,
+        *,
+        principal_id: str,
+        object_kind: ContinuityObjectKind,
+        object_id: str,
+        project_id: str | None,
+        situation_id: str | None,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> None:
+        """Bind one object to a Project and/or a Situation, citing the evidence.
+
+        Both ends must be in this Principal's partition. The association is
+        recorded twice on purpose: as the object's own `project_id`/`situation_id`
+        so a read is one row, and as an `associated` lifecycle row carrying the
+        evidence that justified it, so *why* it belongs is reconstructable from
+        the append-only record rather than inferred from a column.
+        """
+
+    @abstractmethod
+    def association_evidence(
+        self, principal_id: str, object_id: str
+    ) -> tuple[ContinuityLifecycleEvent, ...]:
+        """Every `associated` row for one object, oldest first.
+
+        This is the answer to "why does this belong to that project": the rows
+        name the evidence, and an object with no association evidence returns
+        nothing rather than a guess.
+        """
+
+    @abstractmethod
+    def lifecycle_events(
+        self, principal_id: str, object_id: str
+    ) -> tuple[ContinuityLifecycleEvent, ...]:
+        """Every lifecycle row for one object, oldest first."""
+
+    @abstractmethod
+    def get_commitment(self, principal_id: str, commitment_id: str) -> Commitment | None:
+        """One commitment in this Principal's partition, or `None`."""
+
+    @abstractmethod
+    def get_decision(self, principal_id: str, decision_id: str) -> Decision | None:
+        """One decision in this Principal's partition, or `None`."""
+
+    @abstractmethod
+    def get_task(self, principal_id: str, task_id: str) -> Task | None:
+        """One task in this Principal's partition, or `None`."""
+
+    @abstractmethod
+    def list_commitments(
+        self, principal_id: str, evidence_state: ContinuityEvidenceState | None = None
+    ) -> tuple[Commitment, ...]:
+        """This Principal's commitments, optionally only the accepted ones."""
+
+    @abstractmethod
+    def list_decisions(
+        self, principal_id: str, evidence_state: ContinuityEvidenceState | None = None
+    ) -> tuple[Decision, ...]:
+        """This Principal's decisions, optionally only the accepted ones."""
+
+    @abstractmethod
+    def list_tasks(
+        self, principal_id: str, evidence_state: ContinuityEvidenceState | None = None
+    ) -> tuple[Task, ...]:
+        """This Principal's tasks, optionally only the accepted ones."""

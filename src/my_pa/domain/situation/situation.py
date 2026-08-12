@@ -53,6 +53,7 @@ __all__ = [
     "ProjectState",
     "PulseItem",
     "PulseItemType",
+    "PulseReasonCode",
     "Situation",
     "SituationState",
     "Trace",
@@ -99,6 +100,34 @@ class PulseItemType(StrEnum):
     OBSERVATION = "observation"
     RELATIONSHIP_EVENT = "relationship_event"
     SITUATION = "situation"
+
+
+class PulseReasonCode(StrEnum):
+    """Why an item is on the Pulse *now*, from a closed vocabulary (WP-11).
+
+    **This is the field that separates a Pulse from an activity feed.** A feed
+    surfaces an item because something happened to it; a Pulse surfaces an item
+    because a named, checkable condition holds about it right now. Every member
+    here names such a condition, and each one is computed from evidence the
+    reader can go and look at — a due moment that has passed, a due moment that
+    is close, a decision waiting on a named authority point, an obligation on a
+    Situation's current Frame that is still unmet.
+
+    Closed, and closed in the schema too
+    (`knowledge.pulse_items.a_pulse_reason_code_is_known`), because an open
+    vocabulary would let "recently updated" be written here and the distinction
+    would be gone in one commit. There is deliberately no member meaning
+    "recent", "new", "active", or "changed": recency is not a reason, and the
+    absence of a member for it is what makes that a structural claim rather than
+    a stylistic one.
+    """
+
+    COMMITMENT_OVERDUE = "commitment_overdue"
+    COMMITMENT_DUE_SOON = "commitment_due_soon"
+    TASK_OVERDUE = "task_overdue"
+    TASK_DUE_SOON = "task_due_soon"
+    DECISION_AWAITING_AUTHORITY = "decision_awaiting_authority"
+    SITUATION_OBLIGATION_UNMET = "situation_obligation_unmet"
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,6 +288,18 @@ class PulseItem:
     that a Pulse item is *derived from accepted records only* — never from a
     proposal — so `priority` orders attention among accepted facts and nothing
     here can surface an unaccepted one.
+
+    **`reason_code` and `basis_refs` are mandatory (WP-11), and that is what
+    makes "not an activity feed" a property rather than a promise.**
+    `reason_code` is the closed why-now vocabulary; `basis_refs` are the records
+    a reader can open to check the reason, and an empty basis is refused here and
+    by the schema CHECK `a_pulse_item_carries_an_evidentiary_basis`. An item that
+    is merely recent has no reason code to write and no basis to cite, so it
+    cannot be constructed and cannot be stored.
+
+    `priority` is a bounded urgency rank on the *item*. Nothing here ranks,
+    scores, or characterises a person: `§22` forbids it, and there is no field
+    one could go in.
     """
 
     pulse_id: str
@@ -266,6 +307,8 @@ class PulseItem:
     item_type: PulseItemType
     item_ref: str
     reason: str
+    reason_code: PulseReasonCode
+    basis_refs: tuple[str, ...]
     generated_at: datetime
     consequence: str | None = None
     next_step: str | None = None
@@ -282,6 +325,10 @@ class PulseItem:
             raise ValueError("a pulse item points at one record")
         if not self.reason.strip():
             raise ValueError("a pulse item states why it is surfaced")
+        if not isinstance(self.reason_code, PulseReasonCode):
+            raise ValueError("a pulse item names one why-now reason code")
+        if not self.basis_refs or any(not str(ref).strip() for ref in self.basis_refs):
+            raise ValueError("a pulse item cites at least one non-blank evidentiary basis")
         if isinstance(self.priority, bool) or not isinstance(self.priority, int):
             raise ValueError("priority is an integer")
         if not 1 <= self.priority <= 10:

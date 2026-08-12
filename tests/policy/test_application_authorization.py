@@ -57,10 +57,13 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListProjects,
     ListReviewCases,
+    ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
@@ -135,6 +138,9 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         # handler, so what the subject names is irrelevant and its shape is not.
         Capability.KNOWLEDGE_REVEAL: RevealSubject(subject_id=issue_identifier(IdKind.CAPTURE)),
         Capability.REVIEW_LIST: ListReviewCases(),
+        Capability.CONTINUITY_PULSE: GetPulse(),
+        Capability.CONTINUITY_SITUATIONS: ListSituations(),
+        Capability.CONTINUITY_PROJECTS: ListProjects(),
         Capability.REVIEW_DECIDE: DecideReviewCase(
             review_case_id=issue_identifier(IdKind.REVIEW_CASE),
             expected_review_version=0,
@@ -283,6 +289,12 @@ SCOPED_CAPABILITIES = [
         Capability.KNOWLEDGE_REVEAL,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
+        # The three continuity reads name a Principal, not a source. A Situation
+        # references objects across planes and owns none of them, so there is no
+        # scope for a request to name (WP-11).
+        Capability.CONTINUITY_PULSE,
+        Capability.CONTINUITY_SITUATIONS,
+        Capability.CONTINUITY_PROJECTS,
     }
 ]
 
@@ -348,6 +360,9 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.KNOWLEDGE_REVEAL,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
+        Capability.CONTINUITY_PULSE,
+        Capability.CONTINUITY_SITUATIONS,
+        Capability.CONTINUITY_PROJECTS,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}
@@ -361,8 +376,8 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
     scopeless = {c for c in Capability if _decision(c, frozenset(), frozenset())}
     assert scopeless == scopeless_capabilities, (
         "the capabilities carrying no source scope are the interface description, "
-        "the capture plane, and the evidence traversal over it, none of which "
-        "belongs to a source"
+        "the capture plane, the evidence traversal over it, and the continuity "
+        "plane, none of which belongs to a source"
     )
 
 

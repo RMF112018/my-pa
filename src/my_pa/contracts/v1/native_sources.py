@@ -18,6 +18,7 @@ from pydantic import Field, model_validator
 from my_pa.contracts.v1.base import StrictModel
 
 __all__ = [
+    "NATIVE_SOURCE_MAX_CURSOR_BYTES",
     "NATIVE_SOURCE_MAX_PAGE_SIZE",
     "NATIVE_SOURCE_PROTOCOL_V1",
     "NativeAccountView",
@@ -38,7 +39,21 @@ __all__ = [
 ]
 
 NATIVE_SOURCE_PROTOCOL_V1: Final = "my-pa.native-source.v1"
+
+#: The frozen page ceiling, held identical to ``NativeSourceProtocolV1.maximumPageSize``
+#: in ``native/apple-source-host/Sources/AppleSourceHost/NativeSourceProtocolV1.swift``.
+#: The host's bound is what stops an unbounded page becoming an unbounded spool
+#: item; this one is what stops the application admitting a page the host would
+#: never have produced. If the two drift, the pair stops being a bound at all, so
+#: an architecture test compares the literals.
 NATIVE_SOURCE_MAX_PAGE_SIZE: Final = 100
+
+#: The frozen cursor ceiling, held identical to
+#: ``NativeSourceProtocolV1.maximumCursorBytes``. Counted in UTF-8 bytes, as the
+#: host counts it: a character ceiling would admit a multi-byte cursor the host
+#: refuses, which is the drift this pair exists to prevent.
+NATIVE_SOURCE_MAX_CURSOR_BYTES: Final = 512
+
 _OPAQUE_ID: Final = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,198}[A-Za-z0-9])?$")
 _REVISION: Final = re.compile(r"\A[^\s]{1,256}\Z")
 
@@ -220,12 +235,16 @@ class NativeAdmissionEnvelope(StrictModel):
     account_id: OpaqueNativeID = Field(alias="accountID")
     bucket_id: OpaqueNativeID = Field(alias="bucketID")
     records: tuple[NativeSourceRecord, ...] = Field(max_length=NATIVE_SOURCE_MAX_PAGE_SIZE)
-    next_cursor: str | None = Field(default=None, alias="nextCursor", max_length=512)
+    next_cursor: str | None = Field(
+        default=None, alias="nextCursor", max_length=NATIVE_SOURCE_MAX_CURSOR_BYTES
+    )
 
     @model_validator(mode="after")
     def _exact_scope(self) -> NativeAdmissionEnvelope:
         if self.next_cursor is not None and (
-            not self.next_cursor or any(character.isspace() for character in self.next_cursor)
+            not self.next_cursor
+            or any(character.isspace() for character in self.next_cursor)
+            or len(self.next_cursor.encode()) > NATIVE_SOURCE_MAX_CURSOR_BYTES
         ):
             raise ValueError("native admission cursor has an invalid shape")
         if any(

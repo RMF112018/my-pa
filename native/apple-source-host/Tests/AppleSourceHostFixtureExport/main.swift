@@ -6,6 +6,12 @@ private struct Export: Encodable {
     let discovery: NativeDiscoveryEnvelope
     let preflight: NativePreflightEnvelope
     let admission: NativeAdmissionEnvelope
+    /// The same admission envelope as the protected spool actually stored and
+    /// read back — not a re-encoding of it. WP-15's replay proof consumes these
+    /// bytes so that what the application admits twice is the spool's own record
+    /// rather than a fixture that merely resembles one.
+    let spoolItem: NativeSpoolItem
+    let spoolHealth: NativeHostSpoolHealth
 }
 
 private func opaque(_ value: String) throws -> NativeSourceOpaqueID {
@@ -47,7 +53,7 @@ private func fixture(
         SyntheticPageFixture(
             bucketID: bucketID,
             requestCursor: nil,
-            page: NativeReadPage(records: [source], nextCursor: nil)
+            page: try NativeReadPage(records: [source], nextCursor: nil)
         )
     )
 }
@@ -115,13 +121,36 @@ struct AppleSourceHostFixtureExport {
                 emittedAtUnixMilliseconds: 1_775_563_200_000
             )
         )
+        let spoolDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("my-pa-wp15-fixture-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: spoolDirectory) }
+        let spool = try ProtectedSpool(
+            directory: spoolDirectory,
+            limits: try ProtectedSpoolLimits(
+                maximumItems: 8,
+                maximumBytes: 1_048_576,
+                maximumPayloadBytes: 65_536
+            )
+        )
+        let staged = try NativeSpoolItem(admissionEnvelope: admission)
+        guard try spool.enqueue(staged) == .enqueued else {
+            throw NativeSourceContractError.inconsistentEnvelope
+        }
+        // A byte-identical re-enqueue is the spool's own idempotency, exercised
+        // here so the exported fixture is one the spool refused to duplicate.
+        guard try spool.enqueue(staged) == .alreadyPresent else {
+            throw NativeSourceContractError.duplicateIdentity
+        }
+        let stored = try spool.item(staged.envelopeID)
         let exported = Export(
             agreement: try host.negotiate(NativeProtocolOffer(
                 supportedVersions: [NativeSourceProtocolV1.identifier]
             )),
             discovery: discovery,
             preflight: preflight,
-            admission: admission
+            admission: admission,
+            spoolItem: stored,
+            spoolHealth: try spool.health()
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

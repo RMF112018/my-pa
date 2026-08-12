@@ -77,7 +77,9 @@ def _compose_volume_item_count(block: str) -> int:
 
 def _has_noncanonical_read_only(block: str) -> bool:
     tokens = re.findall(r"read_only:\s*([^,}\s]+)", block)
-    return any(token.lower() not in {"true", "false"} for token in tokens)
+    return len(tokens) != block.count("read_only:") or any(
+        token.lower() not in {"true", "false"} for token in tokens
+    )
 
 
 def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
@@ -439,6 +441,14 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "      - type: bind\n"
             "        source: ./proxy-allowlist.example.caddy\n"
             "        target: /srv/my-pa/extra\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            "        read_only:\n"
             "    networks: [data-plane]",
             "mount_ownership",
         ),

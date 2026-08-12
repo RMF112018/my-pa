@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route fifteen capability names and none of them mutates a source, and every
+  surface route twenty-six capability names and none of them mutates a source, and every
   capability driven over both transports is shown to have called only the three
   read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -287,8 +287,23 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.KNOWLEDGE_REVEAL,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
+        Capability.CONTINUITY_PULSE,
+        Capability.CONTINUITY_SITUATIONS,
+        Capability.CONTINUITY_PROJECTS,
+        Capability.KNOWLEDGE_COVERAGE,
+        # The managed-document plane names a document, not a source: its rows
+        # carry no `source_id` and no `enrollment_id`, so there is no scope for a
+        # request to name (WP-28). `tests/policy` re-derives this partition from
+        # `evaluate` rather than from a list.
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_READ,
+        Capability.DOCUMENTS_LIST,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
     }
 ]
 
@@ -459,6 +474,21 @@ MUTATING_NAMES = ("write", "create", "update", "delete", "remove", "rename", "mo
 #: `capture.*`, this exemption is a hole; the guard beside it is what says so.
 CAPTURE_CAPABILITIES = frozenset(c for c in Capability if c.value.startswith("capture."))
 
+#: The second exemption, and it is deliberately **one name** rather than a family
+#: (WP-28). `documents.create` is the only `documents.` name the substring proxy
+#: refuses, and it is refused for the same reason `capture.create` is: it writes
+#: a *product-owned* record, not a source. `AGENTS.md` section 4 makes managed
+#: writes a third authority class confined to the designated managed root, and
+#: source roots stay read-only — which is not asserted here by exemption but by
+#: `tests/architecture/test_managed_writes_are_contained.py` structurally and by
+#: `test_no_capability_over_either_transport_calls_anything_but_a_read`
+#: behaviourally, the same guard that carries the property for `capture.*`.
+#:
+#: `documents.revise`, `documents.archive` and `documents.restore` are **not**
+#: exempt: they pass the name check on their own, so exempting them would widen
+#: the hole for nothing. A future `documents.delete` is still caught here.
+MANAGED_DOCUMENT_EXEMPTION = frozenset({Capability.DOCUMENTS_CREATE})
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
@@ -473,8 +503,9 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
     assert {tool.name for tool in TOOLS} == {c.value for c in Capability}
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over a transport"
     assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
-    checked = [c for c in Capability if c not in CAPTURE_CAPABILITIES]
-    assert len(checked) == len(Capability) - len(CAPTURE_CAPABILITIES)
+    exempt = CAPTURE_CAPABILITIES | MANAGED_DOCUMENT_EXEMPTION
+    checked = [c for c in Capability if c not in exempt]
+    assert len(checked) == len(Capability) - len(exempt)
     for capability in checked:
         assert not any(verb in capability.value for verb in MUTATING_NAMES)
     assert {c.value for c in CAPTURE_CAPABILITIES} == {

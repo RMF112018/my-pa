@@ -115,25 +115,49 @@ from typing import Any, Final, assert_never
 from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.commands import (
+    ArchiveManagedDocument,
+    ArchiveManagedDocumentCommand,
     Command,
     CreateCapture,
+    CreateManagedDocument,
+    CreateManagedDocumentCommand,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCorpusCoverage,
+    GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListManagedDocuments,
+    ListManagedDocumentsCommand,
+    ListProjects,
     ListReviewCases,
+    ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
+    ReadManagedDocument,
+    ReadManagedDocumentCommand,
     Representation,
+    RestoreManagedDocument,
+    RestoreManagedDocumentCommand,
+    RevealSubject,
     ReviseCapture,
+    ReviseManagedDocument,
+    ReviseManagedDocumentCommand,
     SearchCaptures,
     SearchKnowledge,
 )
-from my_pa.application.disclosure import Limitation, disclosure_for, unenrolled_disclosure
+from my_pa.application.disclosure import (
+    Limitation,
+    corpus_disclosure,
+    disclosure_for,
+    unavailable_disclosure,
+    unenrolled_disclosure,
+    with_corpus_caveat,
+)
 from my_pa.application.errors import (
     AmbiguousRequestError,
     ApplicationError,
@@ -148,6 +172,8 @@ from my_pa.application.errors import (
     UnsupportedError,
     problem_detail,
 )
+from my_pa.application.managed_documents import ManagedDocumentService
+from my_pa.application.model_gate import BoundedModelGate
 from my_pa.contracts.ports import (
     Acceptance,
     CaptureAdmission,
@@ -155,16 +181,23 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
     EvidenceUnavailableError,
+    ManagedByteStore,
     PortError,
     ReviewDecisionRequest,
     SearchOutcome,
     UnitOfWork,
     UnknownScopeError,
 )
-from my_pa.contracts.v1.capabilities import EffectiveLimits
+from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
 from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
 from my_pa.contracts.v1.disclosure import Disclosure, SourceReference, Truncation
+from my_pa.contracts.v1.documents import (
+    ManagedDocumentListEntry,
+    ManagedDocumentReceiptView,
+    ManagedDocumentVersionView,
+)
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent, AuditOutcome
 from my_pa.domain.capture.errors import (
@@ -173,20 +206,32 @@ from my_pa.domain.capture.errors import (
     CaptureError,
     EmptyCaptureError,
 )
+from my_pa.domain.capture.reveal import EvidenceState
 from my_pa.domain.capture.review import (
+    ReviewCase,
     ReviewConflictError,
     ReviewNotFoundError,
     ReviewUnsupportedError,
 )
-from my_pa.domain.capture.submission import CaptureKind
+from my_pa.domain.capture.submission import CaptureKind, CaptureTransport
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.common.time import format_rfc3339, utc_now
+from my_pa.domain.documents.managed import (
+    DocumentState,
+    ManagedDocumentConflictError,
+    ManagedDocumentError,
+    ManagedDocumentReceipt,
+    MediaTypeNotManagedError,
+    StaleExpectedVersionError,
+    UnmanageableTitleError,
+)
 from my_pa.domain.extraction.coverage import CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus, extract_text
+from my_pa.domain.goodnotes.models import GoodNotesReviewCase
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.policy.decision import POLICY_VERSION
@@ -211,6 +256,7 @@ from my_pa.domain.source.enrollment import (
     EnrollmentScope,
 )
 from my_pa.domain.source.provider import (
+    ENUMERABLE_KINDS,
     ObjectKind,
     ProviderError,
     SourceObject,
@@ -233,6 +279,35 @@ class _Result:
 
     payload: dict[str, Any]
     disclosure: Disclosure
+
+
+def _review_case_payload(case: ReviewCase | GoodNotesReviewCase) -> dict[str, Any]:
+    common = {
+        "review_case_id": case.review_case_id,
+        "proposal_id": case.proposal_id,
+        "proposal_state": case.proposal_state.value,
+        "risk_class": case.risk_class.value,
+        "opened_at": format_rfc3339(case.opened_at),
+        "review_version": case.review_version,
+        "latest_disposition": (
+            None if case.latest_disposition is None else case.latest_disposition.value
+        ),
+    }
+    if isinstance(case, GoodNotesReviewCase):
+        return {
+            **common,
+            "subject_kind": "goodnotes_region",
+            "region_id": case.region_id,
+            "page_version_id": case.page_version_id,
+            "confidence": case.confidence,
+        }
+    return {
+        **common,
+        "subject_kind": "capture_proposal",
+        "capture_id": case.capture_id,
+        "version_id": case.version_id,
+        "proposal_type": case.proposal_type.value,
+    }
 
 
 def _effective_limits(configured: EffectiveLimits) -> EffectiveLimits:
@@ -353,6 +428,21 @@ def _provider_failure(error: ProviderError) -> ApplicationError:
 #: level is `source_original` and the basis names the person who wrote it.
 _CAPTURE_TRUST_BASIS: Final = ("user_authored",)
 
+#: What a reveal's trust rests on. The stored rows and nothing else: every value
+#: in the answer was read from `capture_spans`, `capture_proposals`,
+#: `capture_review_decisions`, `capture_assertions` and
+#: `capture_promotion_receipts`, and none of it was computed here. Naming
+#: `stored_evidence_rows` rather than reusing `_CAPTURE_TRUST_BASIS` is the
+#: difference between "the person wrote this" and "these are the rows that
+#: record what was derived from what the person wrote".
+_REVEAL_TRUST_BASIS: Final = ("stored_evidence_rows", "reviewed_promotion")
+
+#: What a continuity answer rests on. `principal_partition` because every row was
+#: selected under a `principal_id` predicate, and `accepted_continuity` because
+#: the Pulse derivation additionally filters to `evidence_state = 'accepted'`. Two
+#: named bases rather than one, so a reader can tell which claim is which.
+_CONTINUITY_TRUST_BASIS: Final = ("principal_partition", "accepted_continuity")
+
 
 def _capture_content(text: str) -> CaptureContent:
     """Build the domain value, reporting which field a refusal was about.
@@ -424,6 +514,66 @@ def _translated() -> Iterator[None]:
         raise failure
 
 
+@contextmanager
+def _managed_translated() -> Iterator[None]:
+    """Run a managed-document call, classifying what WP-27's plane refuses.
+
+    Inside `_translated`, deliberately, so this sees a `PortError` before that
+    one turns it into the enrollment-shaped `not_found` every other capability
+    wants. `UnknownScopeError` from the managed plane means "no such document in
+    this partition", and reporting `enrollment_id` for it would name a field the
+    request does not have.
+
+    Three refusals, three public codes, and none of them is invented here: a
+    stale expectation and a bound idempotency key are both `conflict` because
+    the request contradicts state that already exists, and a document that
+    exceeds a domain bound or carries nothing is `invalid_request`. **This is
+    classification, not decision** — every one of these was raised by WP-27's
+    domain or repository, and nothing in this layer decides whether a write is
+    permitted.
+
+    A refusal from the *byte store* is not here. `ManagedByteStore` declares no
+    exception vocabulary — `ManagedStoreError` is an infrastructure class the
+    application may not import — so a store failure reaches
+    `invoke`'s terminal catch and answers `internal_error`. That is honest for
+    what those failures are (a full device, a lost root, an object that already
+    exists) and is recorded as a limit rather than papered over with a guess.
+
+    The `raise` is outside the handlers, as everywhere else here: the domain
+    errors carry titles and identifiers in their messages and leaving the
+    handler first is what actually clears `__context__`.
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except UnknownScopeError:
+        failure = NotFoundError(SafeDetail.DOCUMENT_ID)
+    except StaleExpectedVersionError:
+        failure = ConflictError(SafeDetail.EXPECTED_VERSION_NUMBER)
+    except ManagedDocumentConflictError:
+        failure = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+    except UnmanageableTitleError:
+        failure = InvalidRequestError(SafeDetail.TITLE)
+    except MediaTypeNotManagedError:
+        failure = InvalidRequestError(SafeDetail.MEDIA_TYPE)
+    except ManagedDocumentError:
+        # `EmptyDocumentError` and `ManagedDocumentBoundsError`, and any sibling
+        # a later revision of the domain adds. Named as the base rather than as
+        # two leaves so a new bound is refused as a bad request rather than
+        # escaping as `internal_error`.
+        failure = InvalidRequestError(SafeDetail.CONTENT)
+    if failure is not None:
+        raise failure
+
+
+#: What a managed-document answer's trust rests on. `principal_partition`
+#: because every statement under it carries the authenticated partition, and
+#: `product_managed_custody` because the bytes are the product's own — written
+#: into the designated managed root by this product and never read from a source
+#: system. Not `user_authored`: a managed document is not an ADR-003 record.
+_MANAGED_TRUST_BASIS: Final = ("principal_partition", "product_managed_custody")
+
+
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
 
@@ -433,13 +583,50 @@ class ApplicationService:
         unit_of_work: Callable[[], UnitOfWork],
         limits: EffectiveLimits,
         clock: Callable[[], datetime] = utc_now,
+        managed_store: ManagedByteStore | None = None,
+        model_gate: BoundedModelGate | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._limits = _effective_limits(limits)
         self._clock = clock
+        #: The managed-document byte store, or `None` in a process that was never
+        #: told where managed bytes go. `None` is the default because that is
+        #: what an unconfigured `MY_PA_MANAGED_DOCUMENT_ROOT` produces, and a
+        #: build with no managed plane must publish no managed capability rather
+        #: than publish six a caller cannot reach.
+        self._managed_store_or_none = managed_store
+        #: Explicit production composition of the optional proposal plane. The
+        #: default gate is disabled; an enabled gate cannot be constructed
+        #: without its local provider and canonical Review router.
+        self._model_gate = model_gate or BoundedModelGate()
+        #: WP-27's application service, held rather than built per request: it is
+        #: stateless, takes its ports as arguments, and constructing one per call
+        #: would say it held something.
+        self._managed = ManagedDocumentService()
+
+    @property
+    def available_capabilities(self) -> frozenset[Capability]:
+        """What this composed process can actually execute.
+
+        `_HANDLERS` is what this build *implements* and is fixed at import. This
+        is what it can *serve*, which is smaller whenever a capability needs
+        something the composition root did not supply — today, the six
+        `documents.` names in a process with no managed root. It is one answer
+        with two readers: `capabilities.get` publishes it, and the MCP transport
+        publishes the tools derived from it, so a client's tool list and the
+        manifest cannot disagree about what exists.
+        """
+        if self._managed_store_or_none is not None:
+            return frozenset(_HANDLERS)
+        return frozenset(_HANDLERS) - _MANAGED_CAPABILITIES
 
     def invoke(
-        self, metadata: RequestMetadata, command: Command, *, principal: Principal
+        self,
+        metadata: RequestMetadata,
+        command: Command,
+        *,
+        principal: Principal,
+        transport: CaptureTransport = CaptureTransport.LOCAL,
     ) -> ResponseEnvelope:
         """Execute one request and return the envelope describing what happened.
 
@@ -447,6 +634,16 @@ class ApplicationService:
         `metadata.principal_id` is correlation input and is deliberately not
         consulted: a caller-supplied identity is never trusted alone
         (`docs/specs` section 8.2).
+
+        `transport` is the second thing the composition root supplies and the
+        caller cannot (WP-10): how the request reached this process. It defaults
+        to `LOCAL`, which is what the loopback gateway, MCP over stdio and the
+        CLI all are, and the authenticated remote ingress passes
+        `REMOTE_CLIENT`. It is provenance the capture plane stores and it
+        authorizes nothing — the whole point of routing a remote submission
+        through this method is that it takes the *same* path as a local one, and
+        a transport that could change what a request is permitted to do would be
+        a second capture path wearing the first one's name.
 
         **No exception leaves this method.** The first two handlers classify what
         this layer already understands. The third is a terminal catch, and it is
@@ -477,7 +674,12 @@ class ApplicationService:
         unclassified = False
         try:
             result = self._run(
-                metadata, command, principal=principal, correlation_id=correlation_id, at=started_at
+                metadata,
+                command,
+                principal=principal,
+                correlation_id=correlation_id,
+                at=started_at,
+                transport=transport,
             )
         except ApplicationError as error:
             failure = error
@@ -517,6 +719,7 @@ class ApplicationService:
         principal: Principal,
         correlation_id: str,
         at: datetime,
+        transport: CaptureTransport = CaptureTransport.LOCAL,
     ) -> _Result:
         """Authorize, then execute, then commit — or refuse and still commit.
 
@@ -566,6 +769,7 @@ class ApplicationService:
                     correlation_id=correlation_id,
                     request_id=metadata.request_id,
                     at=at,
+                    transport=transport,
                 )
                 if authorization.allowed:
                     return _HANDLERS[command.capability](self, unit_of_work, authorization, command)
@@ -580,12 +784,69 @@ class ApplicationService:
     def _capabilities_get(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetCapabilities
     ) -> _Result:
-        """What this build supports, derived from what it has wired."""
-        manifest = build_capability_manifest(implemented=frozenset(_HANDLERS), limits=self._limits)
+        """What this build supports, derived from what it has wired *and composed*.
+
+        `available_capabilities` rather than `_HANDLERS`: a process with no
+        managed root has the six `documents.` handlers compiled in and cannot
+        serve one, and publishing a name a caller is then refused for would be
+        the manifest describing a different build than the one running.
+        """
+        manifest = build_capability_manifest(
+            implemented=self.available_capabilities, limits=self._limits
+        )
+        try:
+            worker_planes = [
+                {
+                    "plane": plane.plane,
+                    "state": plane.state,
+                    "backlog": plane.backlog,
+                    "dead_lettered": plane.dead_lettered,
+                    "last_heartbeat_at": (
+                        None
+                        if plane.last_heartbeat_at is None
+                        else plane.last_heartbeat_at.isoformat()
+                    ),
+                }
+                for plane in unit_of_work.worker_health.for_principal(
+                    authorization.principal.principal_id
+                )
+            ]
+        except NotImplementedError:
+            # Older/in-memory compositions have no worker plane. Unknown is not
+            # healthy and cannot silently become it.
+            worker_planes = [
+                {
+                    "plane": plane,
+                    "state": "unavailable",
+                    "backlog": None,
+                    "dead_lettered": None,
+                    "last_heartbeat_at": None,
+                }
+                for plane in ("capture", "enrollment")
+            ]
+        readiness = build_readiness_report(manifest, model_route=self._model_gate.route)
+        unhealthy_workers = [
+            plane
+            for plane in worker_planes
+            if plane["state"] == "unavailable"
+            or (plane["state"] in {"worker_absent", "worker_stale"} and plane["backlog"])
+            or (isinstance(plane["dead_lettered"], int) and plane["dead_lettered"] > 0)
+        ]
+        if unhealthy_workers:
+            readiness = ReadinessReport(
+                state=ReadinessState.DEGRADED,
+                implemented_capabilities=readiness.implemented_capabilities,
+                limitations=(
+                    *readiness.limitations,
+                    "Worker-plane health is unavailable, stale, absent for queued work, or "
+                    "reports dead-lettered work; inspect worker_planes.",
+                ),
+            )
         return _Result(
             payload={
                 "manifest": manifest.to_canonical_dict(),
-                "readiness": build_readiness_report(manifest).to_canonical_dict(),
+                "readiness": readiness.to_canonical_dict(),
+                "worker_planes": worker_planes,
             },
             disclosure=unenrolled_disclosure(authorization.at),
         )
@@ -767,7 +1028,9 @@ class ApplicationService:
             subject, state = "enrollment", _state_of_coverage(counts.state())
         elif command.operation_id is not None:
             with _translated():
-                operation = unit_of_work.operations.operation(command.operation_id)
+                operation = unit_of_work.operations.operation(
+                    command.operation_id, principal_id=authorization.principal.principal_id
+                )
             if operation is None:
                 raise NotFoundError(SafeDetail.OPERATION_ID)
             enrollment = self._required_enrollment(authorization, operation.enrollment_id)
@@ -903,6 +1166,25 @@ class ApplicationService:
         to render itself, every message these constructors raise names the rule
         rather than the value, and the public error carries a code and a field
         name and nothing else.
+
+        **A search over partial coverage says so, and that is the one thing added
+        to the envelope here.** A Principal holding another enrollment, or objects
+        of a held source that no enrollment enumerates, gets an answer that is
+        correct for the enrollment it named and is *not* an answer about
+        everything they hold. Without a token there is nothing in the reply that
+        distinguishes those two, which is `docs/specs` section 23's named failure:
+        a search that silently omits unindexed scope and returns a confident
+        answer. `with_corpus_caveat` adds one closed token and sets
+        `partial_result`; it changes no count, no state and no scope, because
+        nothing here measured a wider scope.
+
+        **It is not a widening of this capability's authorization.** The extra
+        read answers about the enrollment set the acting Principal already holds
+        and returns a boolean; no row outside `command.enrollment_id` reaches the
+        page, the coverage, or the disclosure. The search itself is untouched: the
+        envelope below is still the one the search produced, because rebuilding
+        the coverage from a second read would replace a consistent answer with a
+        plausible one.
         """
         self._required_enrollment(authorization, command.enrollment_id)
         request = self._search_request(command)
@@ -923,6 +1205,12 @@ class ApplicationService:
         if outcome is None:
             raise InternalError()
 
+        with _translated():
+            beyond = unit_of_work.knowledge.scope_beyond_enrollment(
+                authorization.principal.principal_id, enrollment_id=command.enrollment_id
+            )
+        disclosure = with_corpus_caveat(outcome.disclosure) if beyond else outcome.disclosure
+
         return _Result(
             payload={
                 "matches": [
@@ -938,7 +1226,72 @@ class ApplicationService:
                     for match in outcome.matches
                 ]
             },
-            disclosure=outcome.disclosure,
+            disclosure=disclosure,
+        )
+
+    def _knowledge_coverage(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetCorpusCoverage,
+    ) -> _Result:
+        """How much of everything this Principal holds has been covered.
+
+        **The answer this build could not previously give.** Coverage is stated
+        per enrollment and never inferred globally, which is right and is also why
+        a Principal holding three enrollments and objects outside all of them
+        could search, receive a clean disclosure, and never learn that most of
+        what they hold was outside the question. This composes the stated
+        coverages instead of replacing them: the payload carries each enrollment's
+        own counts and state unmerged, and the totals beside them are sums that
+        say they are sums.
+
+        **The unknown territory is the point, and it is counts only.** Objects
+        inside the held sources that no enrollment enumerates, and enumerated
+        objects that have reached no outcome. Neither is ever named — no
+        identifier, no locator, no media type — which is `AggregateLimitation`'s
+        rule applied to a wider scope, and the reason the payload has no list
+        anywhere in it.
+
+        The Principal is `authorization.principal.principal_id`, the one the
+        gateway established from its own authenticated context, and never anything
+        the request carried. There is nothing else the request could carry:
+        `GetCorpusCoverage` has no fields.
+        """
+        with _translated():
+            corpus = unit_of_work.knowledge.corpus(
+                authorization.principal.principal_id, observed_at=authorization.at
+            )
+        return _Result(
+            payload={
+                "state": corpus.state().value,
+                "enrollment_count": corpus.enrollment_count,
+                "held_sources": corpus.held_sources,
+                "stated_totals": {
+                    "eligible": corpus.stated_eligible,
+                    "processed": corpus.stated_processed,
+                    "quarantined": corpus.stated_quarantined,
+                    "unsupported": corpus.stated_unsupported,
+                    "are_per_enrollment_sums": corpus.totals_are_per_enrollment_sums,
+                },
+                "enrollments": [
+                    {
+                        "enrollment_id": counts.enrollment_id,
+                        "state": counts.state().value,
+                        "eligible": counts.eligible,
+                        "processed": counts.processed,
+                        "quarantined": counts.quarantined,
+                        "unsupported": counts.unsupported,
+                    }
+                    for counts in corpus.enrollments
+                ],
+                "unknown_territory": {
+                    "objects_in_held_sources": corpus.objects_in_held_sources,
+                    "objects_outside_every_enrollment": corpus.objects_outside_every_enrollment,
+                    "objects_awaiting_an_outcome": corpus.objects_awaiting_an_outcome,
+                },
+            },
+            disclosure=corpus_disclosure(corpus),
         )
 
     def _knowledge_read(
@@ -1222,6 +1575,69 @@ class ApplicationService:
             ),
         )
 
+    def _knowledge_reveal(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: RevealSubject
+    ) -> _Result:
+        """The evidence behind one subject: spans, versions, and the derivation trace.
+
+        **Three answers, and the whole point of the capability is that a caller
+        can tell them apart.**
+
+        * The subject is not this Principal's, or is not there at all -> a
+          `not_found` error, the same one for both. `CaptureRepository.reveal`
+          answers `None` for the two cases because the identifier is compared
+          inside a partitioned statement, so a foreign subject is not found
+          rather than found-and-refused, and this endpoint cannot be used to
+          discover that somebody else's record exists.
+        * The scope could not be searched — a subject kind this evidence model
+          does not cover, or a version whose derivation has not completed -> a
+          **success** whose `state` is `unavailable` and whose envelope carries
+          `CoverageState.UNAVAILABLE`, `partial_result`, the
+          `EVIDENCE_SCOPE_WAS_NOT_SEARCHED` limitation, and the gap in
+          `unavailable_evidence`. Not an error, because nothing failed and a
+          retry may well succeed; and never an empty result, because
+          `INV-PKL-007` forbids reporting unavailable evidence as empty.
+        * Otherwise the rows, with `proposed` and `accepted` in two separate
+          arrays.
+
+        **No enrollment is resolved**, for the reason `_capture_search` states:
+        the rows belong to no configured source and no enrollment, which is why
+        `knowledge.reveal` is in `domain.policy.decision._SCOPELESS`.
+
+        **The answer carries no capture text and no derived value**, and neither
+        `RevealSpanView` nor `RevealProposalView` has a field one could go in.
+        The offsets and the digest are enough for a holder of the version to
+        confirm a citation and are nothing to anyone else, which is what lets a
+        Reveal be shown beside an item without becoming a second read of the
+        content `capture.read` audits under its own capability.
+        """
+        with _translated():
+            reveal = unit_of_work.captures.reveal(
+                command.subject_id, principal_id=authorization.principal.principal_id
+            )
+        if reveal is None:
+            raise NotFoundError(SafeDetail.SUBJECT)
+        view = RevealView.of(reveal)
+        if reveal.state is EvidenceState.UNAVAILABLE:
+            assert reveal.gap is not None  # noqa: S101 - `Reveal` refuses the other shape
+            return _Result(
+                payload=view.to_canonical_dict(),
+                disclosure=unavailable_disclosure(
+                    authorization.at,
+                    unavailable_evidence=(reveal.gap.value,),
+                    trust_basis=_REVEAL_TRUST_BASIS,
+                    extra_limitations=(Limitation.EVIDENCE_SPANS_CARRY_NO_QUOTED_TEXT,),
+                ),
+            )
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_REVEAL_TRUST_BASIS,
+                extra_limitations=(Limitation.EVIDENCE_SPANS_CARRY_NO_QUOTED_TEXT,),
+            ),
+        )
+
     def _review_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListReviewCases
     ) -> _Result:
@@ -1233,27 +1649,7 @@ class ApplicationService:
             )
         truncated = len(found) > page_size
         return _Result(
-            payload={
-                "review_cases": [
-                    {
-                        "review_case_id": case.review_case_id,
-                        "proposal_id": case.proposal_id,
-                        "capture_id": case.capture_id,
-                        "version_id": case.version_id,
-                        "proposal_type": case.proposal_type.value,
-                        "proposal_state": case.proposal_state.value,
-                        "risk_class": case.risk_class.value,
-                        "opened_at": format_rfc3339(case.opened_at),
-                        "review_version": case.review_version,
-                        "latest_disposition": (
-                            None
-                            if case.latest_disposition is None
-                            else case.latest_disposition.value
-                        ),
-                    }
-                    for case in found[:page_size]
-                ]
-            },
+            payload={"review_cases": [_review_case_payload(case) for case in found[:page_size]]},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=("review_policy",),
@@ -1324,6 +1720,481 @@ class ApplicationService:
             ),
         )
 
+    def _continuity_pulse(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetPulse
+    ) -> _Result:
+        """The Principal's why-now list, derived at request time from accepted state.
+
+        **A read that derives, not a listing that was written earlier.** The
+        repository selects this Principal's accepted, open commitments, tasks and
+        decisions and the obligations standing on the current Frames of the
+        Principal's running Situations, and the pure derivation returns the
+        subset for which a named why-now condition holds. An accepted object with
+        no due moment, no named authority point and no unmet obligation is
+        absent, however recently it was written; that absence is the difference
+        between this and an activity feed.
+
+        Every item carries its `reason_code`, the `basis_refs` a reader can open
+        to check it, a consequence and a next step, so the answer explains itself
+        rather than asking to be trusted. Nothing here writes: the derivation
+        promotes no state and accepts no review.
+
+        The Principal is `authorization.principal.principal_id` — the one the
+        gateway established from its own authenticated context — and never
+        anything the request carried.
+        """
+        with _translated():
+            items = unit_of_work.pulse.derive_pulse(
+                authorization.principal.principal_id, self._clock()
+            )
+        return _Result(
+            payload={
+                "pulse_items": [
+                    {
+                        "pulse_id": item.pulse_id,
+                        "item_type": item.item_type.value,
+                        "item_ref": item.item_ref,
+                        "reason_code": item.reason_code.value,
+                        "reason": item.reason,
+                        "basis_refs": list(item.basis_refs),
+                        "consequence": item.consequence,
+                        "next_step": item.next_step,
+                        "priority": item.priority,
+                        "generated_at": format_rfc3339(item.generated_at),
+                    }
+                    for item in items
+                ]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONTINUITY_TRUST_BASIS,
+            ),
+        )
+
+    def _continuity_situations(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListSituations
+    ) -> _Result:
+        """One bounded page of this Principal's Situations, newest first."""
+        page_size = self._page_size(command.page_size)
+        with _translated():
+            found = unit_of_work.situations.list_situations(authorization.principal.principal_id)
+            try:
+                continuity = unit_of_work.continuity_read
+            except NotImplementedError:
+                workspace: dict[str, object] = {}
+            else:
+                principal_id = authorization.principal.principal_id
+                workspace = {
+                    "frames": [
+                        {
+                            "frame_id": frame.frame_id,
+                            "situation_id": frame.situation_id,
+                            "label": frame.label,
+                            "state": frame.state.value,
+                            "evidence_refs": list(frame.evidence_refs),
+                            "alternatives": list(frame.alternatives),
+                            "obligations": list(frame.obligations),
+                            "uncertainty": frame.uncertainty,
+                            "next_authority": frame.next_authority,
+                        }
+                        for frame in continuity.frames(principal_id)
+                    ],
+                    "traces": [
+                        {
+                            "trace_id": trace.trace_id,
+                            "object_id": trace.object_id,
+                            "object_type": trace.object_type,
+                            "source_events": list(trace.source_events),
+                            "gaps": list(trace.gaps),
+                        }
+                        for trace in continuity.traces(principal_id)
+                    ],
+                    "commitments": [
+                        {
+                            "commitment_id": item.commitment_id,
+                            "counterparty_person_id": item.counterparty_person_id,
+                            "summary": item.summary,
+                            "direction": item.direction.value,
+                            "state": item.state.value,
+                            "due_at": None if item.due_at is None else format_rfc3339(item.due_at),
+                            "origin_evidence_ref": item.origin_evidence_ref,
+                        }
+                        for item in continuity.commitments(principal_id)
+                    ],
+                    "decisions": [
+                        {
+                            "decision_id": item.decision_id,
+                            "question": item.question,
+                            "state": item.state.value,
+                            "awaiting_authority_ref": item.awaiting_authority_ref,
+                            "origin_evidence_ref": item.origin_evidence_ref,
+                        }
+                        for item in continuity.decisions(principal_id)
+                    ],
+                    "tasks": [
+                        {
+                            "task_id": item.task_id,
+                            "title": item.title,
+                            "state": item.state.value,
+                            "due_at": None if item.due_at is None else format_rfc3339(item.due_at),
+                            "origin_evidence_ref": item.origin_evidence_ref,
+                        }
+                        for item in continuity.tasks(principal_id)
+                    ],
+                    "relationship_events": [
+                        {
+                            "event_id": event.event_id,
+                            "person_id": event.person_id,
+                            "event_type": event.event_type.value,
+                            "occurred_at": format_rfc3339(event.occurred_at),
+                            "context": event.context,
+                            "source_ref": event.source_ref,
+                        }
+                        for event in continuity.relationship_events(principal_id)
+                    ],
+                }
+        truncated = len(found) > page_size
+        return _Result(
+            payload={
+                "situations": [
+                    {
+                        "situation_id": situation.situation_id,
+                        "title": situation.title,
+                        "state": situation.state.value,
+                        "description": situation.description,
+                        "object_refs": list(situation.object_refs),
+                        "opened_at": format_rfc3339(situation.opened_at),
+                        "closed_at": (
+                            None
+                            if situation.closed_at is None
+                            else format_rfc3339(situation.closed_at)
+                        ),
+                        "outcome": situation.outcome,
+                    }
+                    for situation in found[:page_size]
+                ],
+                **workspace,
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONTINUITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                ),
+                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
+            ),
+        )
+
+    def _continuity_projects(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListProjects
+    ) -> _Result:
+        """One bounded page of this Principal's Projects, newest first."""
+        page_size = self._page_size(command.page_size)
+        with _translated():
+            found = unit_of_work.projects.list_projects(authorization.principal.principal_id)
+        truncated = len(found) > page_size
+        return _Result(
+            payload={
+                "projects": [
+                    {
+                        "project_id": project.project_id,
+                        "name": project.name,
+                        "state": project.state.value,
+                        "description": project.description,
+                        "participants": list(project.participants),
+                        "opened_at": format_rfc3339(project.opened_at),
+                        "closed_at": (
+                            None if project.closed_at is None else format_rfc3339(project.closed_at)
+                        ),
+                    }
+                    for project in found[:page_size]
+                ]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONTINUITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                ),
+                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
+            ),
+        )
+
+    # ---- the managed-document plane ----------------------------------------
+    #
+    # Six handlers, and every one of them is the same three lines: resolve the
+    # byte store, build the WP-27 command with the Principal the authorization
+    # already resolved, and hand both to `ManagedDocumentService`. **No managed
+    # rule is restated here.** Expected-version checking, idempotency, the
+    # replay pre-read, the write ordering, the partition predicate on every
+    # statement and the containment of every byte all stay in WP-27's service,
+    # its repository and its store. What this layer adds is the seat: a
+    # `documents.` request is authorized, audited and refused by exactly the
+    # machinery every other capability meets, which is the whole of what WP-27
+    # left for WP-28 to do.
+    #
+    # `principal_id=authorization.principal.principal_id` is the one thing these
+    # handlers say about identity, and it is the only spelling
+    # `tests/architecture/test_principal_is_never_caller_supplied.py` claim 3
+    # admits. The transport-facing commands have no `principal_id` field at all,
+    # so there is nothing a caller could have supplied for this to be confused
+    # with.
+
+    def _managed_store(self) -> ManagedByteStore:
+        """The composed byte store, or a refusal that this build has no managed plane.
+
+        `unsupported` rather than `internal_error`: a process started with no
+        `MY_PA_MANAGED_DOCUMENT_ROOT` has no managed plane, which is a fact about
+        the build and not a fault in the request. It is also unreachable through
+        a transport — `available_capabilities` withholds every `documents.` name from
+        `capabilities.get` and from the MCP tool list — so this is the floor
+        under that rather than the gate. Two ways to be told the same true thing,
+        and neither is a path that writes bytes somewhere unconfigured.
+        """
+        store = self._managed_store_or_none
+        if store is None:
+            raise UnsupportedError()
+        return store
+
+    def _documents_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateManagedDocument,
+    ) -> _Result:
+        """`documents.create`: the first immutable version of a new managed document."""
+        store = self._managed_store()
+        with _translated(), _managed_translated():
+            receipt = self._managed.create(
+                unit_of_work.managed_documents,
+                store,
+                CreateManagedDocumentCommand(
+                    principal_id=authorization.principal.principal_id,
+                    title=command.title,
+                    media_type=command.media_type,
+                    content=command.content,
+                    idempotency_key=command.idempotency_key,
+                ),
+                at=authorization.at,
+            )
+        return self._managed_receipt(authorization, receipt)
+
+    def _documents_revise(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReviseManagedDocument,
+    ) -> _Result:
+        """`documents.revise`: append a successor version, refusing a stale expectation."""
+        store = self._managed_store()
+        with _translated(), _managed_translated():
+            receipt = self._managed.revise(
+                unit_of_work.managed_documents,
+                store,
+                ReviseManagedDocumentCommand(
+                    principal_id=authorization.principal.principal_id,
+                    document_id=command.document_id,
+                    expected_version_number=command.expected_version_number,
+                    title=command.title,
+                    media_type=command.media_type,
+                    content=command.content,
+                    idempotency_key=command.idempotency_key,
+                ),
+                at=authorization.at,
+            )
+        return self._managed_receipt(authorization, receipt)
+
+    def _documents_read(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadManagedDocument,
+    ) -> _Result:
+        """`documents.read`: one stored version, with its bytes when they were asked for.
+
+        A document this Principal does not own, one that does not exist, and a
+        version identifier belonging to another document are one answer:
+        `not_found`, naming the field and no identifier. WP-27's service collapses
+        the three so the read cannot map identifiers this Principal may not see,
+        and this preserves the collapse rather than re-deriving it.
+        """
+        store = self._managed_store()
+        with _translated(), _managed_translated():
+            found = self._managed.read(
+                unit_of_work.managed_documents,
+                store,
+                ReadManagedDocumentCommand(
+                    principal_id=authorization.principal.principal_id,
+                    document_id=command.document_id,
+                    version_id=command.version_id,
+                    include_bytes=command.include_bytes,
+                ),
+            )
+        if found is None:
+            raise NotFoundError(SafeDetail.DOCUMENT_ID)
+        version = found.version
+        view = ManagedDocumentVersionView(
+            document_id=version.document_id,
+            version_id=version.version_id,
+            version_number=version.version_number,
+            supersedes_version_id=version.supersedes_version_id,
+            title=version.title,
+            media_type=version.media_type,
+            content_sha256=version.content_sha256,
+            byte_size=version.byte_size,
+            recorded_at=version.recorded_at,
+            is_current=found.is_current,
+            state=found.state,
+            content_base64=(
+                None
+                if found.content is None
+                else base64.b64encode(found.content.bytes_).decode("ascii")
+            ),
+        )
+        return _Result(
+            payload={"version": view.to_canonical_dict()},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MANAGED_TRUST_BASIS),
+        )
+
+    def _documents_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListManagedDocuments,
+    ) -> _Result:
+        """`documents.list`: one bounded page of this Principal's documents, newest first.
+
+        Bounded by the same published page size every other listing here uses
+        (`D-24`), so `capabilities.get` states the limit a caller will actually
+        get. One row past the page is read so that truncation is a fact rather
+        than a guess.
+        """
+        page_size = self._page_size(command.limit)
+        # Composed or not composed: the plane is one thing. A listing or a
+        # lifecycle transition needs no bytes, but answering one in a build
+        # with no managed root would be answering about a plane that does not
+        # exist — and would make `tools/list` and `tools/call` disagree, since
+        # `available_capabilities` withholds all six together.
+        self._managed_store()
+        with _translated(), _managed_translated():
+            found = self._managed.list_documents(
+                unit_of_work.managed_documents,
+                ListManagedDocumentsCommand(
+                    principal_id=authorization.principal.principal_id,
+                    limit=page_size + 1,
+                    include_archived=command.include_archived,
+                ),
+            )
+        truncated = len(found) > page_size
+        return _Result(
+            payload={
+                "documents": [
+                    ManagedDocumentListEntry(
+                        document_id=document.document_id,
+                        state=document.state,
+                        title=document.title,
+                        media_type=document.media_type,
+                        version_count=document.version_count,
+                        latest_version_id=document.latest_version_id,
+                        latest_version_number=document.latest_version_number,
+                        created_at=document.created_at,
+                        latest_recorded_at=document.latest_recorded_at,
+                    ).to_canonical_dict()
+                    for document in found[:page_size]
+                ]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_MANAGED_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated, reason="page_size_reached" if truncated else None
+                ),
+                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
+            ),
+        )
+
+    def _documents_archive(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ArchiveManagedDocument,
+    ) -> _Result:
+        """`documents.archive`: withdraw one document from the active set. Destroys nothing."""
+        # Composed or not composed: the plane is one thing. A listing or a
+        # lifecycle transition needs no bytes, but answering one in a build
+        # with no managed root would be answering about a plane that does not
+        # exist — and would make `tools/list` and `tools/call` disagree, since
+        # `available_capabilities` withholds all six together.
+        self._managed_store()
+        with _translated(), _managed_translated():
+            changed = self._managed.archive(
+                unit_of_work.managed_documents,
+                ArchiveManagedDocumentCommand(
+                    principal_id=authorization.principal.principal_id,
+                    document_id=command.document_id,
+                ),
+            )
+        return self._managed_transition(authorization, DocumentState.ARCHIVED, changed=changed)
+
+    def _documents_restore(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RestoreManagedDocument,
+    ) -> _Result:
+        """`documents.restore`: return one archived document to the active set."""
+        # Composed or not composed: the plane is one thing. A listing or a
+        # lifecycle transition needs no bytes, but answering one in a build
+        # with no managed root would be answering about a plane that does not
+        # exist — and would make `tools/list` and `tools/call` disagree, since
+        # `available_capabilities` withholds all six together.
+        self._managed_store()
+        with _translated(), _managed_translated():
+            changed = self._managed.restore(
+                unit_of_work.managed_documents,
+                RestoreManagedDocumentCommand(
+                    principal_id=authorization.principal.principal_id,
+                    document_id=command.document_id,
+                ),
+            )
+        return self._managed_transition(authorization, DocumentState.ACTIVE, changed=changed)
+
+    def _managed_receipt(
+        self, authorization: Authorization, receipt: ManagedDocumentReceipt
+    ) -> _Result:
+        """One managed write's receipt, as the contract publishes it."""
+        view = ManagedDocumentReceiptView(
+            receipt_id=receipt.receipt_id,
+            document_id=receipt.document_id,
+            version_id=receipt.version_id,
+            version_number=receipt.version_number,
+            idempotency_key=receipt.idempotency_key,
+            content_sha256=receipt.content_sha256,
+            byte_size=receipt.byte_size,
+            issued_at=receipt.issued_at,
+            created=receipt.created,
+        )
+        return _Result(
+            payload={"receipt": view.to_canonical_dict()},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MANAGED_TRUST_BASIS),
+        )
+
+    def _managed_transition(
+        self, authorization: Authorization, state: DocumentState, *, changed: bool
+    ) -> _Result:
+        """The answer both lifecycle transitions give: the resulting state, and whether it moved.
+
+        `changed=False` is a success and not a refusal. Archiving an archived
+        document leaves it archived, which is what the caller asked for; reporting
+        a conflict would make an idempotent retry look like a failure.
+        """
+        return _Result(
+            payload={"state": state.value, "changed": changed},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MANAGED_TRUST_BASIS),
+        )
+
     def _admit(
         self,
         unit_of_work: UnitOfWork,
@@ -1383,6 +2254,12 @@ class ApplicationService:
             capture_kind=capture_kind,
             context_source_object_id=context_source_object_id,
             context_source_version_id=context_source_version_id,
+            # Provenance, not a decision. It arrived on `invoke`'s own parameter
+            # from the composition root and reaches the submission row unchanged;
+            # nothing between here and the INSERT reads it, and no branch in this
+            # method depends on it. That is what makes a remote submission the
+            # same transaction rather than a parallel one.
+            transport=authorization.transport,
         )
         admission: CaptureAdmission | None = None
         conflict: ApplicationError | None = None
@@ -1507,7 +2384,13 @@ class ApplicationService:
                 with _translated():
                     children = tuple(provider.list_children(parent))
                 for child in children:
-                    if child.kind is ObjectKind.CONTAINER:
+                    # `ENUMERABLE_KINDS` rather than a literal comparison, and
+                    # the reason is a second caller rather than style: the corpus
+                    # coverage read subtracts exactly these kinds when it counts
+                    # what lies outside every enrollment, and two places deciding
+                    # what an enrollment can hold is the divergence this package
+                    # keeps being blocked for.
+                    if child.kind not in ENUMERABLE_KINDS:
                         descend.append(child.source_object_id)
                         continue
                     found.append(child.source_object_id)
@@ -1727,6 +2610,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.SOURCES_ENROLL: ApplicationService._sources_enroll,
         Capability.KNOWLEDGE_SEARCH: ApplicationService._knowledge_search,
         Capability.KNOWLEDGE_READ: ApplicationService._knowledge_read,
+        Capability.KNOWLEDGE_COVERAGE: ApplicationService._knowledge_coverage,
+        Capability.KNOWLEDGE_REVEAL: ApplicationService._knowledge_reveal,
         Capability.CAPTURE_CREATE: ApplicationService._capture_create,
         Capability.CAPTURE_REVISE: ApplicationService._capture_revise,
         Capability.CAPTURE_READ: ApplicationService._capture_read,
@@ -1734,5 +2619,28 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CAPTURE_SEARCH: ApplicationService._capture_search,
         Capability.REVIEW_LIST: ApplicationService._review_list,
         Capability.REVIEW_DECIDE: ApplicationService._review_decide,
+        Capability.CONTINUITY_PULSE: ApplicationService._continuity_pulse,
+        Capability.CONTINUITY_SITUATIONS: ApplicationService._continuity_situations,
+        Capability.CONTINUITY_PROJECTS: ApplicationService._continuity_projects,
+        Capability.DOCUMENTS_CREATE: ApplicationService._documents_create,
+        Capability.DOCUMENTS_REVISE: ApplicationService._documents_revise,
+        Capability.DOCUMENTS_READ: ApplicationService._documents_read,
+        Capability.DOCUMENTS_LIST: ApplicationService._documents_list,
+        Capability.DOCUMENTS_ARCHIVE: ApplicationService._documents_archive,
+        Capability.DOCUMENTS_RESTORE: ApplicationService._documents_restore,
+    }
+)
+
+#: Which capabilities need a composed byte store. Written out rather than
+#: derived from a name prefix, so admitting another is a decision here and not a
+#: spelling that happens to start with `documents.`.
+_MANAGED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_READ,
+        Capability.DOCUMENTS_LIST,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
     }
 )

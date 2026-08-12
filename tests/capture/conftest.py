@@ -54,14 +54,17 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: collide — the database tier runs serially and these names are server-global.
 DISPOSABLE_DATABASE: Final = "my_pa_capture_plane_test"
 
-#: The five capture tables plus the audit table, emptied between tests. Named
-#: rather than cascaded, so a sixth table is a decision rather than an omission.
+#: The five capture tables, the client plane, and the audit table, emptied
+#: between tests. Named rather than cascaded, so a further table is a decision
+#: rather than an omission — which is why `capture_clients` is here (WP-10)
+#: rather than accumulating credentials across the package.
 _EMPTIED: Final = (
     "knowledge.captures",
     "knowledge.capture_versions",
     "knowledge.capture_receipts",
     "knowledge.capture_submissions",
     "knowledge.capture_jobs",
+    "knowledge.capture_clients",
     "knowledge.audit_events",
 )
 
@@ -77,6 +80,7 @@ CAPTURE_PURPOSE: Final[dict[Capability, Purpose]] = {
     Capability.CAPTURE_REVISE: Purpose.CAPTURE_AUTHORING,
     Capability.CAPTURE_READ: Purpose.CAPTURE_REVIEW,
     Capability.CAPTURE_LIST: Purpose.CAPTURE_REVIEW,
+    Capability.CAPTURE_SEARCH: Purpose.CAPTURE_REVIEW,
 }
 
 

@@ -1,29 +1,168 @@
+/**
+ * Review — the Principal's own consequential proposal cases, from the backend.
+ *
+ * **What this page did until now.** It called `syntheticReviewCases` with no
+ * provider check at all. In a default build that is not a page that shows
+ * fixtures — `lib/fixtures/gate.ts` throws — it is a page that raises an
+ * unhandled error, so the one destination whose entire purpose is *deciding*
+ * was unreachable while `/api/review` and `/api/review/:id/decide` had both been
+ * wired to `review.list` and `review.decide` since WP-11. This page now reaches
+ * the same capability directly, exactly as `today` and `situations` do.
+ *
+ * The four answers are the four `lib/api/surface-answer.ts` decides between, and
+ * the distinction that matters most here is the one between **empty** and
+ * **unavailable**: an empty review queue means "nothing is waiting on you", and
+ * showing that sentence because the gateway was unreachable would tell someone
+ * their queue is clear when it may be full.
+ *
+ * **The synthetic branch is still available and still explicit.** It requires
+ * `MYPA_DATA_PROVIDER=synthetic`, renders the fixture workbench, and is never a
+ * fallback from a failed backend call — the two switches stay separate for the
+ * reason `lib/api/serving.ts` sets out.
+ */
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { SESSION_COOKIE_NAME, verifySession } from "@/lib/auth/session";
+import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { syntheticReviewCases } from "@/lib/fixtures/review";
+import { callGateway } from "@/lib/api/gateway";
+import { syntheticDataEnabled } from "@/lib/api/gateway-config";
+import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { ReviewWorkbench } from "@/components/review/review-workbench";
+import { BackendReviewWorkbench } from "@/components/review/backend-review-workbench";
+import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
+import type { BackendReviewCase } from "@/contracts/views";
 
 export const metadata = { title: "Review — my-pa" };
 
+/** A review queue read at request time, never a cached one. */
+export const dynamic = "force-dynamic";
+
+const SCOPE = "review";
+
+const BLURB =
+  "Proposals wait here for your disposition. Nothing is asserted on your behalf — a captured " +
+  "item becomes a canonical record only when you accept or correct-and-accept it.";
+
+interface PythonReviewCase {
+  readonly review_case_id: string;
+  readonly proposal_id: string;
+  readonly capture_id: string;
+  readonly version_id: string;
+  readonly proposal_type: string;
+  readonly proposal_state: string;
+  readonly risk_class: string;
+  readonly opened_at: string;
+  readonly review_version: number;
+  readonly latest_disposition: string | null;
+}
+
+function toCase(row: PythonReviewCase): BackendReviewCase {
+  return {
+    reviewCaseId: row.review_case_id,
+    proposalId: row.proposal_id,
+    captureId: row.capture_id,
+    versionId: row.version_id,
+    proposalType: row.proposal_type,
+    proposalState: row.proposal_state,
+    riskClass: row.risk_class,
+    openedAt: row.opened_at,
+    reviewVersion: row.review_version,
+    latestDisposition: row.latest_disposition,
+  };
+}
+
 export default async function ReviewPage() {
   const cookieStore = await cookies();
-  const principal = await verifySession(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+  const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
 
-  const cases = syntheticReviewCases(principal);
-
-  return (
-    <section aria-labelledby="review-heading" className="mx-auto max-w-2xl">
+  const heading = (
+    <>
       <h1 id="review-heading" className="mb-1 text-xl font-semibold text-moss-slate">
         Review
       </h1>
-      <p className="mb-4 text-sm text-muted">
-        Proposals wait here for your disposition. Nothing is asserted on your behalf — a captured
-        item becomes a canonical record only when you accept or correct-and-accept it. Every case
-        below is a principal-scoped synthetic fixture; no live sources are connected yet.
-      </p>
-      <ReviewWorkbench cases={cases} />
+      <p className="mb-4 text-sm text-muted">{BLURB}</p>
+    </>
+  );
+
+  const frame = (children: React.ReactNode) => (
+    <section aria-labelledby="review-heading" className="mx-auto max-w-2xl">
+      {heading}
+      {children}
     </section>
+  );
+
+  if (syntheticDataEnabled()) {
+    return frame(
+      <>
+        <p className="mb-3 text-sm text-muted">
+          This build is serving the synthetic provider. Every case below is a principal-scoped
+          fixture and no decision made on it is stored.
+        </p>
+        <ReviewWorkbench cases={syntheticReviewCases(principal)} />
+      </>,
+    );
+  }
+
+  const answer = surfaceAnswer(
+    `${SCOPE}:review.list`,
+    await callGateway<{ review_cases?: readonly PythonReviewCase[] }>(principal, "review.list"),
+    (result) => (result.review_cases ?? []).length,
+  );
+
+  if (answer.kind === "unavailable") {
+    return frame(
+      <SurfaceState
+        kind="unavailable"
+        title="Your review queue could not be read"
+        detail={answer.error.message}
+        limitations={answer.disclosure.limitations}
+        testId="review-queue-unavailable"
+      />,
+    );
+  }
+
+  if (answer.kind === "empty") {
+    return frame(
+      <SurfaceState
+        kind="empty"
+        title="Nothing is waiting on your decision"
+        detail={
+          "The review queue was read and it holds no open case. Proposals appear here when a " +
+          "capture derives something consequential enough to need you."
+        }
+        testId="review-queue-empty"
+      />,
+    );
+  }
+
+  if (answer.kind === "degraded") {
+    return frame(
+      <>
+        <DegradedBanner
+          scope="this review queue"
+          limitations={answer.disclosure.limitations}
+          truncated={answer.disclosure.truncated}
+        />
+        {answer.rowCount === 0 ? (
+          <SurfaceState
+            kind="degraded"
+            title="The queue was read incompletely and returned nothing"
+            detail={
+              "An empty queue is not established by an incomplete read. Cases may be waiting " +
+              "that this answer did not cover."
+            }
+            testId="review-queue-degraded-empty"
+          />
+        ) : (
+          <BackendReviewWorkbench cases={(answer.result.review_cases ?? []).map(toCase)} />
+        )}
+      </>,
+    );
+  }
+
+  return frame(
+    <BackendReviewWorkbench cases={(answer.result.review_cases ?? []).map(toCase)} />,
   );
 }

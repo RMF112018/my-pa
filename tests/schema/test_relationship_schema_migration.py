@@ -23,6 +23,7 @@ from my_pa.domain.relationship.identity import (
     ResolutionAction,
     UnresolvedMention,
 )
+from my_pa.domain.relationship.profile import PersonProfile
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.relationships import SqlRelationshipRepository
 from my_pa.infrastructure.persistence.tables import (
@@ -39,6 +40,7 @@ from my_pa.infrastructure.persistence.tables import (
     relationship_identity_review_cases,
     relationship_identity_review_decisions,
     relationship_observation_links,
+    relationship_organizations,
     relationship_people,
     relationship_resolution_observations,
     relationship_unresolved_mentions,
@@ -2281,3 +2283,578 @@ def test_relationship_revision_round_trips(relationship_engine: Engine) -> None:
             )
         ).all()
     command.upgrade(_config(), "head")
+
+
+# ---------------------------------------------------------------------------
+# WP-12: the governed write plane binds a decision to *its own* case and
+# subject, and a merge is reversible at the read model rather than only at the
+# rows.
+#
+# The obligation these carry is WP-11 reviewer NOTE 2.
+# `SqlContinuityRepository.accept` verifies that a review decision exists,
+# belongs to the Principal, and accepted *something* — but not that it decided
+# *this* object, so one accepting decision there can promote unrelated objects.
+# That defect is on the continuity plane and
+# `tests/architecture/test_relationship_identity_does_not_reach_the_continuity_accept_gate.py`
+# holds the evidence that the relationship identity aggregate does not reach
+# it. These assert the property directly on the plane that *is* reached: an
+# accepting decision authorizes the exact review case, action, people and
+# observations it decided, and nothing else.
+# ---------------------------------------------------------------------------
+
+
+def _merge_state(connection: Connection) -> dict[str, object]:
+    """Who is superseded by whom, and which person each observation identifies."""
+    return {
+        "supersessions": {
+            str(row.person_id): row.superseded_by_person_id
+            for row in connection.execute(
+                select(
+                    relationship_people.c.person_id,
+                    relationship_people.c.superseded_by_person_id,
+                )
+            )
+        },
+        "links": {
+            str(row.observation_id): str(row.person_id)
+            for row in connection.execute(select(relationship_observation_links))
+        },
+    }
+
+
+@pytest.mark.database
+def test_an_accepting_decision_from_another_review_case_cannot_authorize_a_merge(
+    relationship_engine: Engine,
+) -> None:
+    """A decision authorizes the case it decided, not any case in the partition.
+
+    The defect this rules out is the continuity plane's, transplanted: resolve a
+    real, accepting, same-Principal review decision, then present it as the
+    authority for a *different* review case. If `apply_resolution` asked only
+    "does an accepting decision exist for this Principal", the merge would
+    commit — so the merge is attempted with every other field correct and only
+    the decision borrowed, and the identities are read back afterwards.
+
+    Three borrowings are attempted, and all three must be refused:
+
+    * a decision from an unrelated review case;
+    * this case's own accepting decision after a later decision superseded it;
+    * a merge review that was opened but never decided at all.
+
+    The refusal is asserted as the *application*'s `IdentityResolutionError`
+    rather than merely as "something raised", and that distinction is load
+    bearing. Replacing the decision-to-case join in `apply_resolution` with the
+    partition-only predicate the continuity plane uses was run as a controlled
+    reversion: this test reddened, but the failure arrived as a database
+    `RestrictViolation` carrying the same sentence, because the migration
+    enforces the binding again in a trigger. The two layers agree, and asserting
+    the exception class is what keeps this test measuring the application
+    binding instead of silently falling through to the database one.
+    """
+    observations = tuple(_observation(index, "contacts") for index in range(200, 203))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        repository.record_observations("contacts", observations)
+        first = _link_person(repository, person_ordinal=200, observations=(observations[0],))
+        second = _link_person(repository, person_ordinal=201, observations=(observations[1],))
+        # An unrelated review, genuinely accepted, over an unrelated observation.
+        # `_link_person` leaves its accepting decision behind, which is the
+        # decision the borrowings below reach for.
+        _link_person(repository, person_ordinal=202, observations=(observations[2],))
+        unrelated_decision = str(
+            connection.execute(
+                select(relationship_identity_review_decisions.c.decision_id)
+                .order_by(relationship_identity_review_decisions.c.sequence.desc())
+                .limit(1)
+            ).scalar_one()
+        )
+
+    with relationship_engine.connect() as connection:
+        before = _merge_state(connection)
+    assert before["supersessions"] == {first: None, second: None, _id("per", 202): None}
+
+    def _merge_review(connection: Connection, ordinal: int) -> str:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        return repository.open_identity_review(
+            DuplicateCandidateSet(
+                candidate_set_id=_id("dups", ordinal),
+                person_ids=(first, second),
+                observation_ids=(observations[1].observation_id,),
+                created_at=WHEN,
+            ),
+            ResolutionAction.MERGE_PERSON,
+            retained_person_id=first,
+            prior_person_id=second,
+        )
+
+    def _attempt_merge(ordinal: int, review_case_id: str, decision_id: str) -> str:
+        """Apply a merge whose only defect is the authority it names."""
+        with relationship_engine.begin() as connection:
+            repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+            with pytest.raises(IdentityResolutionError) as refusal:
+                repository.apply_resolution(
+                    IdentityResolution(
+                        resolution_id=_id("ires", ordinal),
+                        action=ResolutionAction.MERGE_PERSON,
+                        review_case_id=review_case_id,
+                        decision_id=decision_id,
+                        retained_person_id=first,
+                        prior_person_id=second,
+                        observation_ids=(observations[1].observation_id,),
+                        decided_at=WHEN,
+                    ),
+                    display_name="unused",
+                )
+            return str(refusal.value)
+
+    # (1) An accepting decision that decided a different review case.
+    with relationship_engine.begin() as connection:
+        borrowed_case = _merge_review(connection, 210)
+    borrowed = _attempt_merge(211, borrowed_case, unrelated_decision)
+
+    # (2) This case's own accepting decision, after a later decision replaced it.
+    with relationship_engine.begin() as connection:
+        superseded_case = _merge_review(connection, 220)
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        stale_accept = repository.decide_identity_review(
+            superseded_case, disposition="accept", principal_id=_id("prn", 1), decided_at=WHEN
+        )
+        repository.decide_identity_review(
+            superseded_case, disposition="reject", principal_id=_id("prn", 1), decided_at=WHEN
+        )
+    superseded = _attempt_merge(221, superseded_case, stale_accept)
+
+    # (3) A review that was opened and never decided. The decision identifier is
+    #     well formed and names nothing, which must answer as the other two do.
+    with relationship_engine.begin() as connection:
+        undecided_case = _merge_review(connection, 230)
+    undecided = _attempt_merge(231, undecided_case, _id("rdec", 999))
+
+    assert (
+        borrowed
+        == superseded
+        == undecided
+        == ("identity resolution requires its exact accepted review")
+    )
+
+    # The rows, not the exceptions, are the measurement: nothing was merged.
+    with relationship_engine.connect() as connection:
+        assert _merge_state(connection) == before
+        assert (
+            connection.execute(
+                select(func.count()).select_from(relationship_identity_resolutions)
+            ).scalar_one()
+            == 3  # the three governed links, and no merge
+        )
+
+
+@pytest.mark.database
+def test_a_merge_decision_cannot_be_reused_for_a_different_subject(
+    relationship_engine: Engine,
+) -> None:
+    """The decision is bound to the people and observations it named, not just its case.
+
+    A decision that accepted "merge P200 into P201" must not authorize merging a
+    third person, nor the same pair over an observation the review never saw.
+    Both are attempted against a genuinely accepted merge review.
+    """
+    observations = tuple(_observation(index, "contacts") for index in range(240, 244))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        repository.record_observations("contacts", observations)
+        first = _link_person(repository, person_ordinal=240, observations=(observations[0],))
+        second = _link_person(repository, person_ordinal=241, observations=(observations[1],))
+        third = _link_person(repository, person_ordinal=242, observations=(observations[2],))
+        _link_person(repository, person_ordinal=243, observations=(observations[3],))
+        review_case = repository.open_identity_review(
+            DuplicateCandidateSet(
+                candidate_set_id=_id("dups", 250),
+                person_ids=(first, second),
+                observation_ids=(observations[1].observation_id,),
+                created_at=WHEN,
+            ),
+            ResolutionAction.MERGE_PERSON,
+            retained_person_id=first,
+            prior_person_id=second,
+        )
+        decision = repository.decide_identity_review(
+            review_case, disposition="accept", principal_id=_id("prn", 1), decided_at=WHEN
+        )
+
+    with relationship_engine.connect() as connection:
+        before = _merge_state(connection)
+
+    def _apply(ordinal: int, **overrides: object) -> str:
+        payload: dict[str, object] = {
+            "resolution_id": _id("ires", ordinal),
+            "action": ResolutionAction.MERGE_PERSON,
+            "review_case_id": review_case,
+            "decision_id": decision,
+            "retained_person_id": first,
+            "prior_person_id": second,
+            "observation_ids": (observations[1].observation_id,),
+            "decided_at": WHEN,
+        }
+        payload.update(overrides)
+        with relationship_engine.begin() as connection:
+            repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+            with pytest.raises(IdentityResolutionError) as refusal:
+                repository.apply_resolution(
+                    IdentityResolution(**payload),  # type: ignore[arg-type]
+                    display_name="unused",
+                )
+            return str(refusal.value)
+
+    # A third person substituted for the reviewed prior person.
+    assert _apply(251, prior_person_id=third) == (
+        "identity correction must match the reviewed people"
+    )
+    # The reviewed pair, over an observation the review never named.
+    assert (
+        _apply(252, observation_ids=(observations[3].observation_id,))
+        == "identity resolution must match the reviewed observation set"
+    )
+    # The reviewed pair and observation, under an action the review did not request.
+    assert (
+        _apply(253, action=ResolutionAction.SPLIT_PERSON)
+        == "identity resolution must match the reviewed action"
+    )
+
+    with relationship_engine.connect() as connection:
+        assert _merge_state(connection) == before
+
+
+@pytest.mark.database
+def test_merge_then_split_restores_the_prior_person_at_the_read_model(
+    relationship_engine: Engine,
+) -> None:
+    """The reversibility round trip, read back through `profile` rather than the rows.
+
+    `test_merge_then_governed_split_restores_exact_links_and_keeps_lineage`
+    proves the rows come back. This proves the *person* comes back: after the
+    split, the prior identity is readable again, carries exactly the
+    observations it had before the merge, and its timeline and evidence still
+    cite those same observations. A merge that were reversible only in the link
+    table — leaving the person unreadable, or readable with someone else's
+    evidence — would pass the row-level test and fail here.
+
+    The four profiles are compared as whole values, so nothing is restored
+    approximately.
+    """
+    domains = ("contacts", "email")
+    observations = (_observation(260, "contacts"), _observation(261, "email"))
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        repository.record_observations("contacts", (observations[0],))
+        repository.record_observations("email", (observations[1],))
+        retained = _link_person(repository, person_ordinal=260, observations=(observations[0],))
+        prior = _link_person(repository, person_ordinal=261, observations=(observations[1],))
+        before_retained = repository.profile(retained, expected_domains=domains)
+        before_prior = repository.profile(prior, expected_domains=domains)
+
+    assert before_prior is not None
+    assert before_prior.observation_ids == (observations[1].observation_id,)
+    assert before_prior.display_name == "Synthetic Person 261"
+    # The evidence and the timeline cite the observation, which is what has to
+    # survive the round trip.
+    assert {item.observation_ids for item in before_prior.evidence} == {
+        (observations[1].observation_id,)
+    }
+    assert [item.observation_ids for item in before_prior.timeline] == [
+        (observations[1].observation_id,)
+    ]
+
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        repository.apply_resolution(
+            _accepted_correction(
+                repository,
+                ordinal=262,
+                action=ResolutionAction.MERGE_PERSON,
+                retained_person_id=retained,
+                prior_person_id=prior,
+                observation_ids=(observations[1].observation_id,),
+            ),
+            display_name="unused",
+        )
+
+    with relationship_engine.connect() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        # Merged: the prior identity is gone from the read model, and the
+        # retained one now answers for both observations.
+        assert repository.profile(prior, expected_domains=domains) is None
+        merged = repository.profile(retained, expected_domains=domains)
+        assert merged is not None
+        assert merged.observation_ids == tuple(
+            sorted(observation.observation_id for observation in observations)
+        )
+
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        repository.apply_resolution(
+            _accepted_correction(
+                repository,
+                ordinal=263,
+                action=ResolutionAction.SPLIT_PERSON,
+                retained_person_id=prior,
+                prior_person_id=retained,
+                observation_ids=(observations[1].observation_id,),
+            ),
+            display_name="unused",
+        )
+
+    with relationship_engine.connect() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        after_prior = repository.profile(prior, expected_domains=domains)
+        after_retained = repository.profile(retained, expected_domains=domains)
+
+    # The headline: the prior identity is restored, as a whole value, with the
+    # observations it started with. `as_of` is a wall clock on each coverage
+    # domain, so it is normalized away rather than being the thing that differs.
+    assert after_prior is not None
+    assert after_retained is not None
+    assert _without_as_of(after_prior) == _without_as_of(before_prior)
+    assert _without_as_of(after_retained) == _without_as_of(before_retained)
+
+    # And the reversal kept its lineage rather than erasing the merge: both
+    # corrections are still on the record.
+    with relationship_engine.connect() as connection:
+        actions = [
+            str(row.action)
+            for row in connection.execute(
+                select(relationship_identity_resolutions.c.action).order_by(
+                    relationship_identity_resolutions.c.resolution_sequence
+                )
+            )
+        ]
+    assert actions == [
+        "link_observation",
+        "link_observation",
+        "merge_person",
+        "split_person",
+    ]
+
+
+def _without_as_of(profile: PersonProfile) -> tuple[object, ...]:
+    """A profile as a comparable value, with the read's wall clock removed."""
+    return (
+        profile.person_id,
+        profile.display_name,
+        profile.observation_ids,
+        tuple(
+            (
+                domain.domain,
+                domain.state,
+                domain.observation_ids,
+                domain.observed_at,
+                domain.freshness,
+                domain.limitation,
+                domain.zero_result_basis,
+            )
+            for domain in profile.coverage
+        ),
+        tuple(sorted(profile.evidence, key=lambda item: item.evidence_id)),
+        profile.timeline,
+        profile.aliases,
+        profile.indicators,
+    )
+
+
+@pytest.mark.database
+def test_an_ambiguous_mention_stays_ambiguous_and_never_attaches_to_a_best_match(
+    relationship_engine: Engine,
+) -> None:
+    """Identity ambiguity is a first-class state, not a rounding error.
+
+    An unresolved mention that could plausibly be either of two people must
+    survive *as unresolved*: it is not dropped, and it is not quietly attached
+    to the closest match. The conversation records it as an unresolved
+    participant — `person_id` NULL, `unresolved_mention_id` set — so a reader of
+    the conversation sees the ambiguity rather than a confident wrong answer.
+
+    Resolving it still requires governance, and the two ways of skipping that
+    are both refused: attaching the mention's observation to a candidate as a
+    conversation participant without a resolution, and opening the review with
+    a candidate set of one, which would make "resolution" a formality over a
+    single best match.
+    """
+    observations = tuple(_observation(index, "contacts") for index in range(270, 273))
+    ambiguous = observations[2]
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        repository.record_observations("contacts", observations)
+        first = _link_person(repository, person_ordinal=270, observations=(observations[0],))
+        second = _link_person(repository, person_ordinal=271, observations=(observations[1],))
+        mention = UnresolvedMention(
+            unresolved_mention_id=_id("umen", 270),
+            source_object_id=ambiguous.source_object_id,
+            source_version=ambiguous.source_version,
+            observed_at=WHEN,
+        )
+        repository.record_unresolved_mention(mention)
+        conversation = _create_conversation(connection, 270)
+        participant = repository.attach_conversation_participant(
+            conversation,
+            unresolved_mention_id=mention.unresolved_mention_id,
+            observation_ids=(ambiguous.observation_id,),
+        )
+        # Both people are recorded as candidates. A candidate set is explicitly
+        # not a resolution: `DuplicateCandidateSet` refuses a singleton, so the
+        # ambiguity cannot be narrowed to one person by construction.
+        repository.open_identity_review(
+            DuplicateCandidateSet(
+                candidate_set_id=_id("dups", 275),
+                person_ids=(first, second),
+                observation_ids=(ambiguous.observation_id,),
+                created_at=WHEN,
+            ),
+            ResolutionAction.LINK_OBSERVATION,
+        )
+
+    with relationship_engine.connect() as connection:
+        # It survives.
+        assert (
+            connection.execute(
+                select(func.count())
+                .select_from(relationship_unresolved_mentions)
+                .where(
+                    relationship_unresolved_mentions.c.unresolved_mention_id
+                    == mention.unresolved_mention_id
+                )
+            ).scalar_one()
+            == 1
+        )
+        # It is visible *as ambiguous* on the conversation, naming no person.
+        row = connection.execute(
+            select(
+                relationship_conversation_participants.c.person_id,
+                relationship_conversation_participants.c.unresolved_mention_id,
+            ).where(relationship_conversation_participants.c.participant_id == participant)
+        ).one()
+        assert row.person_id is None
+        assert str(row.unresolved_mention_id) == mention.unresolved_mention_id
+        # And nothing attached it to either candidate.
+        assert (
+            connection.execute(
+                select(func.count())
+                .select_from(relationship_observation_links)
+                .where(relationship_observation_links.c.observation_id == ambiguous.observation_id)
+            ).scalar_one()
+            == 0
+        )
+        assert (
+            connection.execute(
+                select(func.count()).select_from(relationship_identity_resolutions)
+            ).scalar_one()
+            == 2  # the two governed links, and nothing for the ambiguous mention
+        )
+
+    # Skipping the review by asserting the closest match on the conversation is
+    # refused, for either candidate, and identically.
+    for ordinal, person_id in enumerate((first, second), start=280):
+        with relationship_engine.begin() as connection:
+            repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+            with pytest.raises(
+                IdentityResolutionError,
+                match="conversation support must currently identify its resolved participant",
+            ):
+                repository.attach_conversation_participant(
+                    _create_conversation(connection, ordinal),
+                    person_id=person_id,
+                    observation_ids=(ambiguous.observation_id,),
+                )
+
+    # And a candidate set of one is not a thing that can be constructed, so a
+    # "review" that only ever had one answer cannot be opened.
+    with pytest.raises(IdentityResolutionError, match="at least two candidates"):
+        DuplicateCandidateSet(
+            candidate_set_id=_id("dups", 290),
+            person_ids=(first,),
+            observation_ids=(),
+            created_at=WHEN,
+        )
+
+
+@pytest.mark.database
+def test_a_source_contact_row_asserts_nothing_about_a_person_without_governance(
+    relationship_engine: Engine,
+) -> None:
+    """A contact row is an observation. Its organization and role are not facts.
+
+    Ingesting a batch of source rows creates observations and nothing else — no
+    person, no link, no alias, no evidence — so the durable relationship state
+    is untouched by ingestion alone.
+
+    The organization half is the sharp edge, because a contact row is exactly
+    where an employer and a job title arrive. `record_source_affiliation` refuses
+    an observation that has not been through review, and refuses one that review
+    bound to a *different* person, so "Person Alpha works at Example Org One"
+    cannot become an asserted affiliation on the strength of the source row that
+    claimed it. Neither refusal leaves an organization behind, which matters:
+    creating the organization and then failing on the affiliation would still
+    have asserted that the organization is part of this Principal's world.
+    """
+    ungoverned = _observation(300, "contacts")
+    governed = _observation(301, "contacts")
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        assert repository.record_observations("contacts", (ungoverned, governed)) == 2
+
+    # Ingestion alone asserted nothing.
+    with relationship_engine.connect() as connection:
+        assert (
+            connection.execute(
+                select(func.count()).select_from(relationship_identity_observations)
+            ).scalar_one()
+            == 2
+        )
+        for table in (
+            relationship_people,
+            relationship_observation_links,
+            relationship_aliases,
+            relationship_evidence,
+            relationship_affiliations,
+            relationship_identity_resolutions,
+        ):
+            assert connection.execute(select(func.count()).select_from(table)).scalar_one() == 0, (
+                f"recording source observations wrote to {table.name}"
+            )
+
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        person_id = _link_person(repository, person_ordinal=301, observations=(governed,))
+
+    def _affiliate(ordinal: int, observation_id: str) -> str:
+        with relationship_engine.begin() as connection:
+            repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+            with pytest.raises(IdentityResolutionError) as refusal:
+                repository.record_source_affiliation(
+                    organization_id=_id("org", ordinal),
+                    organization_name="Example Org One",
+                    affiliation_id=_id("aff", ordinal),
+                    person_id=person_id,
+                    observation_id=observation_id,
+                    role="Synthetic Role",
+                    effective_from=WHEN,
+                    effective_to=None,
+                )
+            return str(refusal.value)
+
+    expected = "an affiliation requires a governed, source-bound identity observation"
+    # The contact row nobody reviewed.
+    assert _affiliate(300, ungoverned.observation_id) == expected
+    # A second person, and an observation review bound to the *first* one. The
+    # observation is governed; it just does not identify this person.
+    with relationship_engine.begin() as connection:
+        repository = SqlRelationshipRepository(connection, principal_id=_id("prn", 1))
+        other = _observation(302, "contacts")
+        repository.record_observations("contacts", (other,))
+        _link_person(repository, person_ordinal=302, observations=(other,))
+    assert _affiliate(302, other.observation_id) == expected
+
+    # Neither refusal left an organization or an affiliation behind.
+    with relationship_engine.connect() as connection:
+        for table in (relationship_organizations, relationship_affiliations):
+            assert connection.execute(select(func.count()).select_from(table)).scalar_one() == 0, (
+                f"a refused affiliation still wrote to {table.name}"
+            )

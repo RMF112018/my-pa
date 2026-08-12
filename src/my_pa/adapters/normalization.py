@@ -48,27 +48,40 @@ delivered — but the number they enforce is one number.
 
 from __future__ import annotations
 
+from base64 import b64decode
+from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Final
 
 from my_pa.application.commands import (
+    ArchiveManagedDocument,
     Command,
     CreateCapture,
+    CreateManagedDocument,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCorpusCoverage,
+    GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListManagedDocuments,
+    ListProjects,
     ListReviewCases,
+    ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
+    ReadManagedDocument,
     Representation,
+    RestoreManagedDocument,
+    RevealSubject,
     ReviseCapture,
+    ReviseManagedDocument,
     SearchCaptures,
     SearchKnowledge,
 )
@@ -279,8 +292,84 @@ def _search_captures(payload: Mapping[str, Any]) -> Command:
     return SearchCaptures(**payload)
 
 
+def _reveal_subject(payload: Mapping[str, Any]) -> Command:
+    return RevealSubject(**payload)
+
+
 def _list_review_cases(payload: Mapping[str, Any]) -> Command:
     return ListReviewCases(**payload)
+
+
+def _get_pulse(payload: Mapping[str, Any]) -> Command:
+    return GetPulse(**payload)
+
+
+def _list_situations(payload: Mapping[str, Any]) -> Command:
+    return ListSituations(**payload)
+
+
+def _list_projects(payload: Mapping[str, Any]) -> Command:
+    return ListProjects(**payload)
+
+
+def _get_corpus_coverage(payload: Mapping[str, Any]) -> Command:
+    return GetCorpusCoverage(**payload)
+
+
+def _managed_content(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Decode a managed write's base64 `content` into the bytes the command holds.
+
+    Shape conversion, exactly like `_moments` and `_fetch_source`'s
+    representation: JSON has no byte string, the wire form is base64 — which is
+    what `adapters.mcp.tools` publishes as this field's `contentEncoding` — and
+    the command refuses anything that is not `bytes`. So a caller's text would
+    otherwise be rejected for being a string rather than for not decoding.
+
+    `validate=True` is not decoration. Without it `b64decode` silently discards
+    every character outside the alphabet, so `"aGV<>sbG8="` and `"aGVsbG8="`
+    decode to the same bytes and a corrupted body is stored as if it were the
+    one the caller sent. Refused rather than repaired.
+
+    An absent key is left absent so the command's own constructor reports the
+    missing required field, and a non-string is left alone for the same reason:
+    two refusals for one fault would be two different tokens for one mistake.
+    """
+    converted = dict(payload)
+    supplied = converted.get("content")
+    if not isinstance(supplied, str):
+        return converted
+    try:
+        converted["content"] = b64decode(supplied, validate=True)
+    except (BinasciiError, ValueError):
+        pass
+    else:
+        return converted
+    # Outside the handler: the original renders the rejected value.
+    raise InvalidRequestError(SafeDetail.CONTENT)
+
+
+def _create_managed_document(payload: Mapping[str, Any]) -> Command:
+    return CreateManagedDocument(**_managed_content(payload))
+
+
+def _revise_managed_document(payload: Mapping[str, Any]) -> Command:
+    return ReviseManagedDocument(**_managed_content(payload))
+
+
+def _read_managed_document(payload: Mapping[str, Any]) -> Command:
+    return ReadManagedDocument(**payload)
+
+
+def _list_managed_documents(payload: Mapping[str, Any]) -> Command:
+    return ListManagedDocuments(**payload)
+
+
+def _archive_managed_document(payload: Mapping[str, Any]) -> Command:
+    return ArchiveManagedDocument(**payload)
+
+
+def _restore_managed_document(payload: Mapping[str, Any]) -> Command:
+    return RestoreManagedDocument(**payload)
 
 
 def _decide_review_case(payload: Mapping[str, Any]) -> Command:
@@ -309,6 +398,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.SOURCES_ENROLL: _enroll_source,
         Capability.KNOWLEDGE_SEARCH: _search_knowledge,
         Capability.KNOWLEDGE_READ: _read_knowledge,
+        Capability.KNOWLEDGE_REVEAL: _reveal_subject,
         Capability.CAPTURE_CREATE: _create_capture,
         Capability.CAPTURE_REVISE: _revise_capture,
         Capability.CAPTURE_READ: _read_capture,
@@ -316,6 +406,16 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CAPTURE_SEARCH: _search_captures,
         Capability.REVIEW_LIST: _list_review_cases,
         Capability.REVIEW_DECIDE: _decide_review_case,
+        Capability.CONTINUITY_PULSE: _get_pulse,
+        Capability.CONTINUITY_SITUATIONS: _list_situations,
+        Capability.CONTINUITY_PROJECTS: _list_projects,
+        Capability.KNOWLEDGE_COVERAGE: _get_corpus_coverage,
+        Capability.DOCUMENTS_CREATE: _create_managed_document,
+        Capability.DOCUMENTS_REVISE: _revise_managed_document,
+        Capability.DOCUMENTS_READ: _read_managed_document,
+        Capability.DOCUMENTS_LIST: _list_managed_documents,
+        Capability.DOCUMENTS_ARCHIVE: _archive_managed_document,
+        Capability.DOCUMENTS_RESTORE: _restore_managed_document,
     }
 )
 
@@ -325,7 +425,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the fifteen names nothing.
+    not one of the twenty-six names nothing.
     """
     try:
         return Capability(capability)

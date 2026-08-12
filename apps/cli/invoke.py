@@ -53,6 +53,19 @@ def main(argv: list[str] | None = None) -> int:
     """
     runtime = build_gateway_runtime(load_settings())
     try:
+        if runtime.principal is None:
+            # `MY_PA_AUTH_MODE=entra` authenticates per request from a bearer
+            # token, and an argument vector has nowhere to present one. Refused
+            # rather than run as the local operator: a command line that reached
+            # every capability without a credential, on a process configured to
+            # require one, would be exactly the privileged bypass this file
+            # exists not to be.
+            print(
+                "MY_PA_AUTH_MODE is 'entra' and this command carries no credential; "
+                "use the authenticated HTTP surface, or set 'local_operator' deliberately",
+                file=sys.stderr,
+            )
+            return 2
         return run(
             sys.argv[1:] if argv is None else argv,
             runtime.service,

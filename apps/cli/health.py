@@ -106,9 +106,8 @@ NO_REVISION = "none"
 
 
 def _engine() -> Engine:
-    settings = load_settings()
     return create_database_engine(
-        settings.database_url, statement_timeout_ms=settings.statement_timeout_ms
+        load_settings().parsed_database_url(), statement_timeout_ms=30_000
     )
 
 

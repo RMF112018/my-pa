@@ -174,6 +174,61 @@ _IMMUTABILITY_FUNCTION: Final = "capture_versions_stay_as_written"
 _IMMUTABILITY_TRIGGER: Final = "capture_versions_are_append_only"
 
 
+#: WP-04's queue partition, frozen out of this revision.
+#:
+#: `4f1a8b6d92e3` adds `principal_id`, its `principal_id_is_an_opaque_identifier`
+#: CHECK, and a principal-first claim-order index to "capture_jobs". This
+#: revision copies the *live* declaration, so without the subtraction below it
+#: would emit those too — retroactively changing what an already-merged revision
+#: means, which is the `D-48` hazard, and making a base-to-head replay fail on a
+#: duplicate column the moment `4f1a8b6d92e3` runs. Same discipline as
+#: `3c8f1e2a5b74`'s `_freeze_out_wp05_principal`: a local subtraction on a
+#: throwaway copy, never on the shared declaration, which still carries the
+#: column the application reads and writes.
+_WP04_QUEUE_PRINCIPAL_TABLES: Final = frozenset({"capture_jobs"})
+_WP04_PRINCIPAL_CHECK: Final = "principal_id_is_an_opaque_identifier"
+_WP04_PRINCIPAL_INDEXES: Final = frozenset({"capture_jobs_by_principal_claim_order"})
+
+
+def _freeze_out_wp04_queue_principal(copy: Table) -> None:
+    """Remove `4f1a8b6d92e3`'s queue partition from one copied table in place."""
+    if copy.name not in _WP04_QUEUE_PRINCIPAL_TABLES:
+        return
+    for index in [
+        candidate for candidate in copy.indexes if candidate.name in _WP04_PRINCIPAL_INDEXES
+    ]:
+        copy.indexes.discard(index)
+    for constraint in [
+        candidate for candidate in copy.constraints if candidate.name == _WP04_PRINCIPAL_CHECK
+    ]:
+        copy.constraints.discard(constraint)
+    # `Table` exposes no public column removal; `_columns.remove` is how a copied
+    # column is dropped from a throwaway metadata. Neither queue's
+    # `principal_id` carries a foreign key or takes part in a primary key, so the
+    # copy is otherwise intact.
+    copy._columns.remove(copy.c.principal_id)
+
+
+def _freeze_out_remediation_retry_state(copy: Table) -> None:
+    """Keep the 2026-08-12 retry columns in their own forward revision."""
+    if copy.name != "capture_jobs":
+        return
+    for index in [
+        candidate
+        for candidate in copy.indexes
+        if candidate.name == "capture_jobs_by_principal_claim_order"
+    ]:
+        copy.indexes.discard(index)
+    for constraint in [
+        candidate
+        for candidate in copy.constraints
+        if candidate.name == "a_failed_capture_job_is_dead_lettered"
+    ]:
+        copy.constraints.discard(constraint)
+    copy._columns.remove(copy.c.next_attempt_at)
+    copy._columns.remove(copy.c.dead_lettered_at)
+
+
 def _historical_capture_tables() -> list[Table]:
     """The five tables as this revision emits them, with the eight checks frozen.
 
@@ -188,6 +243,8 @@ def _historical_capture_tables() -> list[Table]:
     frozen = MetaData(schema=SCHEMA)
     copies = [table.to_metadata(frozen) for table in _TABLES]
     for copy in copies:
+        _freeze_out_remediation_retry_state(copy)
+        _freeze_out_wp04_queue_principal(copy)
         replacements = _FROZEN.get(copy.name, {})
         for constraint in [
             candidate for candidate in copy.constraints if candidate.name in replacements

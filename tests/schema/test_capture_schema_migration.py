@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with fifteen capabilities and ten
+emits what it emitted on the day it merged, with twenty-six capabilities and twelve
 purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -187,6 +187,22 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "native_sources.retry",
         "native_sources.status",
         "native_sources.sync",
+        # WP-9. `5e2c7b0a94f6` is the forward `ALTER` that admits it.
+        "knowledge.reveal",
+        # WP-11. `8f2b6c4d1a37` is the forward `ALTER` that admits the trio below.
+        "continuity.projects",
+        "continuity.pulse",
+        "continuity.situations",
+        # WP-23. `2d9f4a7c1e58` is the forward `ALTER` that admits it.
+        "knowledge.coverage",
+        # WP-28. `6b3d9a2f8c14` is the forward `ALTER` that admits the plane, and
+        # the same revision widens `purpose_is_known` for the pair they map to.
+        "documents.archive",
+        "documents.create",
+        "documents.list",
+        "documents.read",
+        "documents.restore",
+        "documents.revise",
     }
 )
 
@@ -358,6 +374,15 @@ NATIVE_SOURCE_TRIGGERS: Final[frozenset[str]] = frozenset(
         "native_job_requires_exact_frozen_run",
         "native_checkpoint_requires_admitted_page",
     }
+)
+
+#: WP-27's two append-only triggers, on the managed-document plane's version and
+#: lifecycle tables. Neither is deferred: they refuse an `UPDATE` or a `DELETE`
+#: outright rather than at commit, and there is no multi-statement invariant for
+#: them to wait for.
+MANAGED_DOCUMENT_TRIGGERS: Final = (
+    "managed_document_versions_are_append_only",
+    "managed_document_lifecycle_is_append_only",
 )
 
 _CONSTRAINT = text(
@@ -891,6 +916,9 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             *REVIEW_TRIGGERS,
             *RELATIONSHIP_TRIGGERS,
             *NATIVE_SOURCE_TRIGGERS,
+            *MANAGED_DOCUMENT_TRIGGERS,
+            "goodnotes_page_versions_are_immutable",
+            "goodnotes_region_proposals_are_immutable",
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

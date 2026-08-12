@@ -1,4 +1,4 @@
-"""The ports the fifteen capability use cases call, and nothing else.
+"""The ports the twenty-six capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -52,15 +52,27 @@ from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
+from my_pa.domain.capture.reveal import Reveal
 from my_pa.domain.capture.review import Disposition, ReviewCase, ReviewDecision
-from my_pa.domain.capture.submission import CaptureKind, CaptureReceipt
+from my_pa.domain.capture.submission import CaptureKind, CaptureReceipt, CaptureTransport
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.documents.managed import (
+    DocumentState,
+    LifecycleTransition,
+    ManagedDocument,
+    ManagedDocumentReceipt,
+    ManagedDocumentVersion,
+    validate_managed_media_type,
+    validate_managed_title,
+)
+from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
+from my_pa.domain.goodnotes.models import GoodNotesReviewCase
 from my_pa.domain.policy.decision import validate_policy_version
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.relationship.identity import (
@@ -72,6 +84,16 @@ from my_pa.domain.relationship.identity import (
 )
 from my_pa.domain.relationship.profile import OrganizationProfile, PersonProfile
 from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
+from my_pa.domain.situation.continuity import (
+    ClosureEvidenceKind,
+    Commitment,
+    CommitmentDirection,
+    ContinuityEvidenceState,
+    ContinuityLifecycleEvent,
+    ContinuityObjectKind,
+    Decision,
+    Task,
+)
 from my_pa.domain.situation.situation import (
     Frame,
     Project,
@@ -95,11 +117,17 @@ __all__ = [
     "CaptureSearchOutcome",
     "CaptureSearchRequest",
     "CaptureSummary",
+    "ContinuityReadRepository",
+    "ContinuityRepository",
     "EnrollmentRepository",
     "EvidenceUnavailableError",
     "FrameRepository",
     "KnowledgeRecord",
     "KnowledgeRepository",
+    "ManagedAdmission",
+    "ManagedByteStore",
+    "ManagedDocumentRepository",
+    "ManagedWriteRequest",
     "Operation",
     "OperationQueue",
     "PortError",
@@ -117,6 +145,8 @@ __all__ = [
     "TraceRepository",
     "UnitOfWork",
     "UnknownScopeError",
+    "WorkerHealthRepository",
+    "WorkerPlaneStatus",
 ]
 
 
@@ -329,6 +359,23 @@ class CaptureAdmissionRequest:
     capture_kind: CaptureKind = CaptureKind.QUICK_NOTE
     context_source_object_id: str | None = None
     context_source_version_id: str | None = None
+    #: How the submission reached this process, established by the transport and
+    #: never stated by the caller (WP-10). It defaults to `LOCAL` because that is
+    #: what every path that does not say otherwise is: the loopback gateway, MCP
+    #: over stdio, and the CLI are all the composition root's own process
+    #: principal. The remote ingress is the one caller that says otherwise, and
+    #: it says so through `ApplicationService.invoke`'s own parameter — the same
+    #: trust channel the acting `Principal` arrives on — rather than through any
+    #: field of any command, payload, or envelope.
+    #:
+    #: **It is deliberately outside `payload_digest`.** The digest decides
+    #: whether a replayed idempotency key carries the same request, and two
+    #: submissions of the same note under the same key from the same Principal
+    #: are the same request whether one arrived over loopback and the other over
+    #: the ingress. Including the transport would turn a device retrying over a
+    #: different route into a `409` conflict, which is exactly the failure
+    #: `QC-AC-031` exists to prevent.
+    transport: CaptureTransport = CaptureTransport.LOCAL
 
     @property
     def payload_digest(self) -> str:
@@ -348,6 +395,8 @@ class CaptureAdmissionRequest:
     def __post_init__(self) -> None:
         if not isinstance(self.capture_kind, CaptureKind):
             raise ValueError("an admission names one capture kind")
+        if not isinstance(self.transport, CaptureTransport):
+            raise ValueError("an admission names one transport")
         if (self.context_source_object_id is None) is not (self.context_source_version_id is None):
             raise ValueError("a launch context names both object and version")
         if self.context_source_object_id is not None:
@@ -470,6 +519,15 @@ class CaptureSearchOutcome:
 class CaptureRepository(ABC):
     """The capture plane, as the five operations the capabilities need.
 
+    **`reveal` is the fifth, and it is here rather than behind a port of its
+    own.** It reads captures, versions, spans, proposals, review cases,
+    decisions, assertions and receipts — every one of them a row keyed, directly
+    or through a foreign key, to a capture this Principal owns. A second port
+    would be a second object over the same partition with the same context
+    translation, which is the speculative abstraction the module docstring above
+    forbids; the honest cost is that this interface is now the widest of the
+    five here, and that is stated rather than hidden.
+
     **No update and no delete, and their absence is the port's contribution to
     `QC-AC-010`.** A method that changed a stored version could not be added here
     without also defeating the `BEFORE UPDATE OR DELETE` trigger the schema
@@ -548,6 +606,23 @@ class CaptureRepository(ABC):
         processing succeeded.
         """
 
+    @abstractmethod
+    def reveal(self, subject_id: str, *, principal_id: str) -> Reveal | None:
+        """The evidence behind one subject, or `None` when there is no subject.
+
+        `None` is the *one* absence with three causes, exactly as `version` has:
+        the subject does not exist, the subject belongs to another Principal, or
+        the identifier is well formed and names nothing. A caller that could tell
+        those apart could enumerate another Principal's records by asking, so it
+        cannot.
+
+        A subject kind this build cannot traverse is **not** `None`. It is a
+        `Reveal` in the `unavailable` state naming
+        `EvidenceGap.SUBJECT_KIND_NOT_COVERED`, because "we do not cover this
+        plane" is a fact about this build and says nothing about whether the
+        subject exists.
+        """
+
 
 @dataclass(frozen=True, slots=True)
 class ReviewDecisionRequest:
@@ -588,7 +663,9 @@ class ReviewRepository(ABC):
     """Review cases and the only port capable of canonical promotion."""
 
     @abstractmethod
-    def cases(self, *, limit: int, principal_id: str) -> tuple[ReviewCase, ...]:
+    def cases(
+        self, *, limit: int, principal_id: str
+    ) -> tuple[ReviewCase | GoodNotesReviewCase, ...]:
         """One bounded page for this Principal, oldest case first.
 
         `principal_id` is the authenticated caller's identifier: the page is
@@ -686,8 +763,19 @@ class OperationQueue(ABC):
         """Queue the work an accepted enrollment implies and return its `op_…`."""
 
     @abstractmethod
-    def operation(self, operation_id: str) -> Operation | None:
-        """One operation, or `None` when there is no such job."""
+    def operation(self, operation_id: str, *, principal_id: str) -> Operation | None:
+        """One of `principal_id`'s operations, or `None` when there is no such job.
+
+        The Principal is a parameter rather than something the operation is
+        trusted to carry, so a job queued under one Principal cannot be read
+        through another — the same shape `KnowledgeRepository.read` takes for the
+        grant. It is required and has no default: a default would make an
+        unvisited call site read the whole plane again.
+
+        `None` covers both "no such job" and "not yours", deliberately. Telling
+        them apart would let a caller confirm an operation identifier it has no
+        authority over.
+        """
 
 
 class KnowledgeRepository(ABC):
@@ -708,6 +796,41 @@ class KnowledgeRepository(ABC):
         rather than stated by a caller that would have had to measure it
         somewhere else. `queued` stays the caller's, because work in flight is a
         fact about the job plane and not about the scope.
+        """
+
+    @abstractmethod
+    def corpus(self, principal_id: str, *, observed_at: datetime) -> CorpusCoverage:
+        """Coverage of everything `principal_id` holds, composed from stated facts.
+
+        **A Principal and not a scope, and that is the whole shape of it.** Every
+        other method here takes an enrollment, because coverage "is for a stated
+        enrollment/snapshot and never inferred globally". This one takes the
+        Principal whose enrollments those are, and returns each enrollment's own
+        stated coverage unmerged beside the territory none of them reaches. No
+        source and no enrollment crosses this boundary, so there is no argument a
+        caller could widen: the implementation partitions on
+        `enrollments.principal_id` at the query.
+
+        Not a second coverage definition. The per-enrollment members are the
+        values `coverage` above returns, so a corpus answer and a status answer
+        cannot disagree about one enrollment.
+        """
+
+    @abstractmethod
+    def scope_beyond_enrollment(self, principal_id: str, *, enrollment_id: str) -> bool:
+        """Whether `principal_id` holds scope that `enrollment_id` does not cover.
+
+        **A boolean and not a count, and that is the contract rather than a
+        simplification.** Its one caller is `knowledge.search`, which is
+        authorized for the enrollment it names and for nothing else; a number
+        here would tell that caller the size of a scope its request never
+        authorized, which is the side channel the aggregate-limitation rule
+        permits only for the scope actually in question. "There is scope outside
+        this answer" is what a caller can act on, and it is all of it.
+
+        This does not widen what a search may read. It is asked *beside* the
+        search, answers about the enrollment set the acting Principal already
+        holds, and reaches no row of any enrollment the search does not name.
         """
 
     @abstractmethod
@@ -764,6 +887,25 @@ class SourceProviders(ABC):
     @abstractmethod
     def for_source(self, source_id: str) -> SourceProvider | None:
         """The provider serving `source_id`, or `None` when none is configured."""
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerPlaneStatus:
+    """Content-free operational state for one Principal's worker plane."""
+
+    plane: str
+    state: str
+    backlog: int
+    dead_lettered: int
+    last_heartbeat_at: datetime | None
+
+
+class WorkerHealthRepository(ABC):
+    """Worker liveness and backlog for the authenticated Principal only."""
+
+    @abstractmethod
+    def for_principal(self, principal_id: str) -> tuple[WorkerPlaneStatus, ...]:
+        """Return both worker planes without identifiers or queued content."""
 
 
 class UnitOfWork(ABC):
@@ -849,6 +991,84 @@ class UnitOfWork(ABC):
 
     @property
     @abstractmethod
+    def situations(self) -> SituationRepository:
+        """The Situation plane, inside this transaction.
+
+        Reached by `continuity.situations` (WP-11). Inside for the reason every
+        other repository is: the listing has to read the same rows under the same
+        snapshot as the disclosure reported beside it.
+        """
+
+    @property
+    @abstractmethod
+    def projects(self) -> ProjectRepository:
+        """The Project plane, inside this transaction. Reached by `continuity.projects`."""
+
+    @property
+    @abstractmethod
+    def pulse(self) -> PulseRepository:
+        """The Pulse plane, inside this transaction. Reached by `continuity.pulse`.
+
+        The derivation runs four `SELECT`s and has to see one consistent picture
+        of the Principal's accepted continuity; four reads across four
+        transactions could rank a commitment that a fifth statement had already
+        closed.
+        """
+
+    @property
+    def continuity_read(self) -> ContinuityReadRepository:
+        """Complete accepted continuity read model, inside this transaction.
+
+        Older test doubles intentionally implement only the narrower WP-11 ports;
+        the canonical PostgreSQL composition overrides this property. A caller
+        must treat the absence as an unavailable optional projection, never as
+        an empty authoritative result.
+        """
+        raise NotImplementedError
+
+    @property
+    def worker_health(self) -> WorkerHealthRepository:
+        """Content-free worker readiness inside this transaction.
+
+        Kept optional for older test doubles. Production composition overrides
+        it; a caller that meets this default must report health as unavailable,
+        never healthy.
+        """
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def managed_documents(self) -> ManagedDocumentRepository:
+        """The managed-document rows, inside this transaction (WP-28).
+
+        **WP-27 deliberately kept this off the unit of work and WP-28 puts it
+        on, so the reversal is argued rather than quietly made.** WP-27's reason
+        was reach: the managed write plane would sit on the same object every
+        read capability already holds. What changed is that the plane now has a
+        capability seat, so it is reached the same way every other plane is —
+        through `ApplicationService.invoke`, behind `authorize`, inside the one
+        transaction a request owns — and a handler that had to open a *second*
+        transaction to write a document would put the rows outside the
+        transaction whose rollback is what makes a failed request leave nothing.
+        Reach is bounded by dispatch, not by which object holds the property:
+        `_HANDLERS` gives each capability exactly one handler, and only the
+        `documents.` handlers name this.
+
+        **The byte store is still not here, and that is `AGENTS.md` section 4's
+        actual line.** It separates source providers from managed-document
+        *stores*; this is a repository over `knowledge.managed_documents` and its
+        four sibling tables, which is PostgreSQL like every other repository
+        above. The store — the thing that writes bytes to a filesystem — is
+        composed once at the composition root and handed to `ApplicationService`,
+        so a process with no configured managed root has no store, and the
+        capabilities it serves are not published at all.
+
+        `principal_id` remains a parameter on every method of the port and is
+        the authenticated caller's partition, never a caller-supplied field.
+        """
+
+    @property
+    @abstractmethod
     def audit(self) -> AuditSink:
         """The audit sink, inside this transaction.
 
@@ -892,12 +1112,26 @@ class SituationRepository(ABC):
         """Open one Situation for `principal_id`, issuing its identifier."""
 
     @abstractmethod
-    def close_situation(self, *, principal_id: str, situation_id: str, outcome: str) -> Situation:
-        """Close one Situation the Principal owns, recording its outcome.
+    def close_situation(
+        self,
+        *,
+        principal_id: str,
+        situation_id: str,
+        outcome: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> Situation:
+        """Close one Situation the Principal owns, recording its outcome and evidence.
 
         Refuses when `situation_id` names no Situation in this Principal's
         partition — a Situation belonging to any other Principal is unreachable.
         Closing never deletes the objects the Situation referenced.
+
+        **`evidence_kind` and `evidence_ref` are required (WP-11)** and are
+        appended as a `closed` row in `continuity_lifecycle_events` in the same
+        transaction as the state change. An outcome sentence with nothing under
+        it is a status field changing with no trace, which is what this pair
+        exists to refuse; a blank reference raises rather than closing.
         """
 
     @abstractmethod
@@ -987,7 +1221,15 @@ class ProjectRepository(ABC):
         """One page of this Principal's Projects, newest first."""
 
     @abstractmethod
-    def link_situation(self, *, principal_id: str, project_id: str, situation_id: str) -> None:
+    def link_situation(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        situation_id: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> None:
         """Bind a Situation into a Project, both owned by this Principal.
 
         Refuses when either the Project or the Situation is not in this
@@ -1052,3 +1294,483 @@ class PulseRepository(ABC):
 
         Refuses when `pulse_id` names no item in this Principal's partition.
         """
+
+    @abstractmethod
+    def derive_pulse(self, principal_id: str, now: datetime) -> tuple[PulseItem, ...]:
+        """Derive this Principal's Pulse from accepted continuity, at `now`.
+
+        **A read, and only a read.** It selects the Principal's accepted
+        commitments, tasks, decisions and framed obligations, hands them to
+        `domain.situation.pulse_derivation.derive_pulse`, and returns what comes
+        back. It writes no row, promotes no state, and accepts no review — an
+        implementation that did any of those would be the automatic consequential
+        promotion `QC-AC-020` forbids, arriving through the one path nobody
+        audits because it looks like a listing.
+
+        The acceptance filter is a `WHERE evidence_state = 'accepted'` predicate
+        on every one of those selects, alongside the `principal_id` predicate, so
+        a proposal is excluded by the query rather than by the caller.
+        """
+
+
+# --- Read model for the complete continuity workspace -----------------------
+
+
+class ContinuityReadRepository(ABC):
+    """Principal-scoped accepted read model used by canonical continuity surfaces."""
+
+    @abstractmethod
+    def frames(self, principal_id: str) -> tuple[Frame, ...]:
+        """All frames owned by the Principal, newest first."""
+
+    @abstractmethod
+    def traces(self, principal_id: str) -> tuple[Trace, ...]:
+        """All source-linked traces owned by the Principal, newest first."""
+
+    @abstractmethod
+    def commitments(self, principal_id: str) -> tuple[Commitment, ...]:
+        """Accepted commitments owned by the Principal."""
+
+    @abstractmethod
+    def decisions(self, principal_id: str) -> tuple[Decision, ...]:
+        """Accepted decisions owned by the Principal."""
+
+    @abstractmethod
+    def tasks(self, principal_id: str) -> tuple[Task, ...]:
+        """Accepted tasks owned by the Principal."""
+
+    @abstractmethod
+    def relationship_events(self, principal_id: str) -> tuple[RelationshipEvent, ...]:
+        """Accepted relationship events owned by the Principal."""
+
+
+# --- WP-11: the continuity objects, their lifecycle, and their associations ---
+
+
+class ContinuityRepository(ABC):
+    """Commitments, Decisions, Tasks, and the append-only record of their lives.
+
+    One port rather than three, because the three objects share exactly one
+    lifecycle, one acceptance gate and one association record, and three ports
+    over one table family would be three copies of the same four methods. The
+    object kind travels as a closed enum, so a caller cannot name a table.
+
+    **Every method takes `principal_id` and it is the authenticated caller's
+    partition.** A commitment, decision or task belonging to another Principal is
+    answered exactly as an absent one: `None` from a getter, absence from a
+    listing, `UnknownScopeError` from a mutation.
+
+    **Proposing and accepting are different methods, and only one of them can
+    produce continuity.** `propose_*` writes `evidence_state = 'proposed'` and
+    has no parameter that could make it write anything else. `accept` is the only
+    path to `'accepted'`, and it requires the identifier of a review decision in
+    the caller's own partition whose disposition accepted something — so a
+    derivation, an import, or a model cannot promote its own output by calling
+    the method it already has.
+    """
+
+    @abstractmethod
+    def propose_commitment(
+        self,
+        *,
+        principal_id: str,
+        counterparty_person_id: str,
+        direction: CommitmentDirection,
+        summary: str,
+        origin_evidence_ref: str,
+        origin_evidence_kind: ClosureEvidenceKind,
+        due_at: datetime | None = None,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+    ) -> Commitment:
+        """Record one proposed social obligation, and its `opened` lifecycle row."""
+
+    @abstractmethod
+    def propose_decision(
+        self,
+        *,
+        principal_id: str,
+        question: str,
+        origin_evidence_ref: str,
+        origin_evidence_kind: ClosureEvidenceKind,
+        awaiting_authority_ref: str | None = None,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+    ) -> Decision:
+        """Record one proposed decision, and its `opened` lifecycle row."""
+
+    @abstractmethod
+    def propose_task(
+        self,
+        *,
+        principal_id: str,
+        title: str,
+        origin_evidence_ref: str,
+        origin_evidence_kind: ClosureEvidenceKind,
+        due_at: datetime | None = None,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+    ) -> Task:
+        """Record one proposed task, and its `opened` lifecycle row."""
+
+    @abstractmethod
+    def accept(
+        self,
+        *,
+        principal_id: str,
+        object_kind: ContinuityObjectKind,
+        object_id: str,
+        review_decision_id: str,
+    ) -> None:
+        """Promote one proposal to accepted continuity, on a review decision.
+
+        `review_decision_id` must name a `capture_review_decisions` row in this
+        Principal's partition whose disposition accepted something. Anything else
+        — a decision that rejected, a decision belonging to another Principal, a
+        well-formed identifier naming nothing — raises `UnknownScopeError` and
+        the object stays a proposal.
+        """
+
+    @abstractmethod
+    def close(
+        self,
+        *,
+        principal_id: str,
+        object_kind: ContinuityObjectKind,
+        object_id: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+        occurred_at: datetime,
+    ) -> None:
+        """Close one object and append the closure evidence, in one transaction.
+
+        The state change and the `closed` lifecycle row are written on the same
+        connection inside the caller's transaction, so a closure whose evidence
+        did not commit did not close anything. `evidence_ref` must be non-blank;
+        the schema refuses the row otherwise.
+        """
+
+    @abstractmethod
+    def associate(
+        self,
+        *,
+        principal_id: str,
+        object_kind: ContinuityObjectKind,
+        object_id: str,
+        project_id: str | None,
+        situation_id: str | None,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> None:
+        """Bind one object to a Project and/or a Situation, citing the evidence.
+
+        Both ends must be in this Principal's partition. The association is
+        recorded twice on purpose: as the object's own `project_id`/`situation_id`
+        so a read is one row, and as an `associated` lifecycle row carrying the
+        evidence that justified it, so *why* it belongs is reconstructable from
+        the append-only record rather than inferred from a column.
+        """
+
+    @abstractmethod
+    def association_evidence(
+        self, principal_id: str, object_id: str
+    ) -> tuple[ContinuityLifecycleEvent, ...]:
+        """Every `associated` row for one object, oldest first.
+
+        This is the answer to "why does this belong to that project": the rows
+        name the evidence, and an object with no association evidence returns
+        nothing rather than a guess.
+        """
+
+    @abstractmethod
+    def lifecycle_events(
+        self, principal_id: str, object_id: str
+    ) -> tuple[ContinuityLifecycleEvent, ...]:
+        """Every lifecycle row for one object, oldest first."""
+
+    @abstractmethod
+    def get_commitment(self, principal_id: str, commitment_id: str) -> Commitment | None:
+        """One commitment in this Principal's partition, or `None`."""
+
+    @abstractmethod
+    def get_decision(self, principal_id: str, decision_id: str) -> Decision | None:
+        """One decision in this Principal's partition, or `None`."""
+
+    @abstractmethod
+    def get_task(self, principal_id: str, task_id: str) -> Task | None:
+        """One task in this Principal's partition, or `None`."""
+
+    @abstractmethod
+    def list_commitments(
+        self, principal_id: str, evidence_state: ContinuityEvidenceState | None = None
+    ) -> tuple[Commitment, ...]:
+        """This Principal's commitments, optionally only the accepted ones."""
+
+    @abstractmethod
+    def list_decisions(
+        self, principal_id: str, evidence_state: ContinuityEvidenceState | None = None
+    ) -> tuple[Decision, ...]:
+        """This Principal's decisions, optionally only the accepted ones."""
+
+    @abstractmethod
+    def list_tasks(
+        self, principal_id: str, evidence_state: ContinuityEvidenceState | None = None
+    ) -> tuple[Task, ...]:
+        """This Principal's tasks, optionally only the accepted ones."""
+
+
+# --- WP-27 the managed-document plane ---------------------------------------
+#
+# One port. WP-27 kept it off `UnitOfWork` and WP-28 put it on, once the plane
+# acquired a capability seat and began being reached through
+# `ApplicationService.invoke` inside the request's own transaction; the property's
+# own docstring argues the reversal. The *byte store* is still not on the unit of
+# work and is composed at the composition root, which is the separation
+# `AGENTS.md` section 4 actually draws — source providers and managed-document
+# stores are separate capabilities.
+#
+# The operator paths (`verify`, `back_up`, `restore_from_backup`) still take the
+# repository directly from a connection `apps/cli/managed_documents.py` opens,
+# because they are not requests and have no authorization behind them.
+#
+# `principal_id` is a parameter on every method and it is the authenticated
+# caller's partition, never a caller-supplied field: the concrete repository
+# stamps every write with it and filters every read by it.
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedWriteRequest:
+    """One request to write a managed document version, already normalized.
+
+    **The version identifier is minted by the caller and travels in the request**,
+    which is unusual here and is the ordering the transactional boundary requires:
+    the bytes have to be on the device under some identifier before the row that
+    names them is inserted, so the identifier is issued first and the same value
+    reaches both. `application.managed_documents` is the only thing that mints
+    one, and the store derives a location from it rather than being told one.
+
+    **No bytes.** The digest and the size are what the row records; the bytes went
+    to the byte store, which is the only component that holds them. A request
+    value carrying the content would put a document body on an interface that is
+    logged, compared, and rendered in test failures.
+
+    `document_id` absent means "create", present means "revise" — a difference in
+    the value rather than in a flag, so no request can be ambiguous about which it
+    is. `expected_version_number` is required exactly when revising, because a
+    revision without one is a blind write.
+    """
+
+    document_id: str | None
+    expected_version_number: int | None
+    version_id: str
+    title: str
+    media_type: str
+    content_sha256: str
+    byte_size: int
+    idempotency_key: str
+    correlation_id: str
+    principal_id: str
+    server_received_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.version_id, IdKind.MANAGED_DOCUMENT_VERSION)
+        validate_identifier(self.correlation_id, IdKind.CORRELATION)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if self.document_id is not None:
+            validate_identifier(self.document_id, IdKind.MANAGED_DOCUMENT)
+        if (self.document_id is None) is not (self.expected_version_number is None):
+            raise ValueError(
+                "a managed revision names the version it expects; a creation names none"
+            )
+        if self.expected_version_number is not None and self.expected_version_number < 1:
+            raise ValueError("an expected managed version number starts at one")
+        validate_managed_title(self.title)
+        validate_managed_media_type(self.media_type)
+        if not self.idempotency_key:
+            raise ValueError("a managed write carries an idempotency key")
+        if self.byte_size < 1:
+            raise ValueError("a managed write carries bytes")
+        ensure_utc(self.server_received_at)
+
+    @property
+    def payload_digest(self) -> str:
+        """What makes a replay decidable without a second copy of the content.
+
+        Every field a caller supplied that could differ between two requests
+        carrying one key, and none this layer added: the minted version
+        identifier and the correlation identifier are excluded because they
+        differ on every attempt by construction, and including either would make
+        every retry a conflict.
+        """
+        payload = {
+            "document_id": self.document_id,
+            "expected_version_number": self.expected_version_number,
+            "title": self.title,
+            "media_type": self.media_type,
+            "content_sha256": self.content_sha256,
+            "byte_size": self.byte_size,
+        }
+        return sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedAdmission:
+    """The outcome of one managed write: the receipt, and whether it is new."""
+
+    receipt: ManagedDocumentReceipt
+    created: bool
+
+
+class ManagedDocumentRepository(ABC):
+    """The managed-document plane, inside one transaction.
+
+    Every method is principal-scoped. A document another Principal owns answers
+    exactly what a document that does not exist answers, so a refusal cannot be
+    used to learn that an identifier names something.
+    """
+
+    @abstractmethod
+    def admit(self, request: ManagedWriteRequest) -> ManagedAdmission:
+        """Admit one managed write, or return the receipt its key is bound to.
+
+        Raises `ManagedDocumentConflictError` when the key is bound to a
+        materially different request, `StaleExpectedVersionError` when the named
+        expected version is no longer the head, and `UnknownScopeError` when the
+        request names no document this Principal owns.
+        """
+
+    @abstractmethod
+    def replay_for(
+        self, idempotency_key: str, payload_digest: str, *, principal_id: str
+    ) -> ManagedDocumentReceipt | None:
+        """The receipt this Principal's key is already bound to, or `None`.
+
+        Read before bytes are written, so an ordinary replay stores no second
+        copy of them. It is an optimisation and never the decision: `admit` still
+        relies on the unique constraint, so two concurrent writers that both read
+        `None` still produce one version.
+
+        **It takes the digest, and that is not an optimisation.** A lookup on the
+        key alone would answer a *conflicting* request — the same key carrying a
+        different document — with the original receipt, silently reporting a
+        write that never happened as durable. So a key bound to a different
+        digest raises `ManagedDocumentConflictError` here, exactly as `admit`
+        does when it meets the same case at the unique constraint.
+        """
+
+    @abstractmethod
+    def version(
+        self, document_id: str, *, version_id: str | None = None, principal_id: str
+    ) -> ManagedDocumentVersion | None:
+        """One stored version of a document this Principal owns, or `None`.
+
+        `version_id` omitted returns the head, which is the greatest version
+        number the document holds — read from the rows rather than from a pointer
+        column that could disagree with them.
+        """
+
+    @abstractmethod
+    def versions(
+        self, document_id: str, *, principal_id: str
+    ) -> tuple[ManagedDocumentVersion, ...]:
+        """Every stored version of one document this Principal owns, oldest first."""
+
+    @abstractmethod
+    def documents(
+        self, *, limit: int, principal_id: str, include_archived: bool = False
+    ) -> tuple[ManagedDocument, ...]:
+        """One bounded page of this Principal's documents, newest first."""
+
+    @abstractmethod
+    def state(self, document_id: str, *, principal_id: str) -> DocumentState | None:
+        """Whether a document this Principal owns is active or archived, or `None`."""
+
+    @abstractmethod
+    def transition(
+        self,
+        document_id: str,
+        *,
+        transition: LifecycleTransition,
+        principal_id: str,
+        correlation_id: str,
+    ) -> bool:
+        """Append one lifecycle row, and report whether it changed anything.
+
+        `False` means the document is already in the state the transition would
+        produce, and no row is appended — archiving an archived document is a
+        no-op rather than a second event. Raises `UnknownScopeError` when the
+        identifier names no document this Principal owns.
+        """
+
+    @abstractmethod
+    def restore_version(self, version: ManagedDocumentVersion, *, principal_id: str) -> None:
+        """Insert one version exactly as a backup recorded it.
+
+        The restore path, and the only writer that supplies its own timestamps
+        and version numbers. It refuses a version whose owner is not the
+        Principal being restored, so a tampered backup cannot move a document
+        between partitions.
+        """
+
+    @abstractmethod
+    def known_version_identifiers(self) -> frozenset[str]:
+        """Every managed version identifier the database holds, across Principals.
+
+        **The one unpartitioned read on this plane, and it is unpartitioned on
+        purpose.** Its whole subject is the reverse direction — bytes in the store
+        that no row claims — and a partitioned answer would report every other
+        Principal's objects as orphans, which is how a reclamation deletes live
+        data. It returns opaque identifiers and nothing else: no title, no digest,
+        no owner, no content. Operator use only, from the reconciliation path.
+        """
+
+
+class ManagedByteStore(ABC):
+    """Durable storage for the bytes of managed document versions.
+
+    **No method takes a path, and that absence is the port's whole security
+    property.** Every operation names an opaque `mdver_…` or nothing at all; where
+    the bytes actually live is derived by the implementation from that identifier.
+    A port with a location parameter would put the choice of location on the
+    caller, and the caller is where a traversal enters.
+
+    Separate from `SourceProvider` rather than an extension of it, because
+    `AGENTS.md` section 4 makes source providers and managed-document stores
+    separate capabilities: the source port has no write method and must not gain
+    one, and this port has no read of any source.
+    """
+
+    @abstractmethod
+    def put(self, version_id: str, content: bytes) -> None:
+        """Store `content` as the bytes of `version_id`, durably, exactly once.
+
+        Returns only once the bytes and the name that reaches them are on the
+        device. A second call for the same identifier raises: bytes are written
+        once, and overwriting is the operation this plane does not have.
+        """
+
+    @abstractmethod
+    def read(self, version_id: str) -> bytes:
+        """Return the stored bytes of `version_id`, or raise."""
+
+    @abstractmethod
+    def has(self, version_id: str) -> bool:
+        """Whether `version_id`'s bytes are present as a plain readable file."""
+
+    @abstractmethod
+    def stored_version_ids(self) -> tuple[str, ...]:
+        """Every version identifier this store currently holds bytes for."""
+
+    @abstractmethod
+    def unreadable_entries(self) -> tuple[str, ...]:
+        """Entries in the store that are not well-formed managed version objects."""
+
+    @abstractmethod
+    def put_manifest(self, content: bytes) -> None:
+        """Store the backup manifest at this store's one fixed artifact location."""
+
+    @abstractmethod
+    def read_manifest(self) -> bytes:
+        """Return the backup manifest this store holds."""

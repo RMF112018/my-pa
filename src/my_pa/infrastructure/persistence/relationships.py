@@ -1,4 +1,33 @@
-"""Governed relationship identity persistence and deterministic read models."""
+"""Governed relationship identity persistence and deterministic read models.
+
+**Every statement in this module is bound to the Principal the repository was
+constructed for** (WP-04). All seventeen relationship tables carry a text
+`principal_id` (revision `c1f2d3e4a5b6`), and the partition is reached through
+`persistence.principal_scope` rather than through a comparison written here: a
+second, hand-written owner predicate is the drift that left this module's
+INSERTs stamped and its UPDATEs and SELECTs unfiltered, so a caller holding a
+foreign `person_id` could rewrite another Principal's records.
+
+Three consequences follow, and each is asserted in
+`tests/security/test_cross_principal_relationship_isolation.py`:
+
+* a foreign identifier answers exactly what an absent one answers — `None` from
+  a profile read, and the same `IdentityResolutionError` from every path that
+  requires a governed antecedent, so the refusal cannot be used to learn
+  whether the record exists;
+* an UPDATE that would touch another Principal's row matches no row rather than
+  rewriting it, because the partition predicate is part of the statement rather
+  than a check the caller was asked to remember;
+* the raw-SQL currency check in `profile` carries the partition on every table
+  it names, so the one statement this module cannot express in the Core
+  expression language is not the one hole in the partition.
+
+`decide_identity_review` takes a `principal_id` argument because the decision
+records *who decided*. It is verified against the repository's own Principal and
+a mismatch is refused as `CallerSuppliedPrincipalError`, the same way
+`persistence.capture` verifies an admission request's owner: an argument that
+names a partition is identity from payload whether or not the caller meant it.
+"""
 
 from __future__ import annotations
 
@@ -6,13 +35,15 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from typing import cast
 
-from sqlalchemy import func, insert, select, text, update
+from sqlalchemy import Table, and_, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
+from sqlalchemy.sql.elements import ColumnElement
 
 from my_pa.contracts.ports import RelationshipRepository
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.relationship.identity import (
     Alias,
     DuplicateCandidateSet,
@@ -33,6 +64,12 @@ from my_pa.domain.relationship.profile import (
     TimelineItem,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.principal_scope import (
+    PrincipalContext,
+    capture_context,
+    partition_criterion,
+    principal_bound_values,
+)
 from my_pa.infrastructure.persistence.tables import (
     relationship_affiliations,
     relationship_aliases,
@@ -65,6 +102,62 @@ class SqlRelationshipRepository(RelationshipRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         self._connection = connection
         self._principal_id = principal_id
+        self._context: PrincipalContext = capture_context(principal_id)
+
+    def _mine(self, table: Table) -> ColumnElement[bool]:
+        """`table` constrained to this repository's Principal.
+
+        Every read and every write predicate in this module goes through here,
+        so there is one partition comparison in the relationship plane rather
+        than one per statement.
+        """
+        return partition_criterion(table, self._context)
+
+    def _bound(self, table: Table, **values: object) -> dict[str, object]:
+        """`values` stamped with this repository's Principal for `table`."""
+        return principal_bound_values(dict(values), table, self._context)
+
+    def _require_own_people(self, person_ids: tuple[str, ...]) -> None:
+        """Refuse a candidate set naming a person this Principal does not hold.
+
+        The foreign keys on `relationship_duplicate_members` and
+        `relationship_identity_review_cases` are global, so without this a
+        Principal could open — and then decide and apply — a merge over another
+        Principal's people. The refusal is the same `IdentityResolutionError` a
+        person that does not exist at all produces and names no identifier, so
+        it says nothing about whose record it was.
+        """
+        wanted = set(person_ids)
+        if not wanted:
+            return
+        held = {
+            str(value)
+            for value in self._connection.execute(
+                select(relationship_people.c.person_id).where(
+                    self._mine(relationship_people),
+                    relationship_people.c.person_id.in_(sorted(wanted)),
+                )
+            ).scalars()
+        }
+        if held != wanted:
+            raise IdentityResolutionError("an identity review names a person in scope")
+
+    def _require_own_observations(self, observation_ids: tuple[str, ...]) -> None:
+        """Refuse a candidate set naming an observation this Principal does not hold."""
+        wanted = set(observation_ids)
+        if not wanted:
+            return
+        held = {
+            str(value)
+            for value in self._connection.execute(
+                select(relationship_identity_observations.c.observation_id).where(
+                    self._mine(relationship_identity_observations),
+                    relationship_identity_observations.c.observation_id.in_(sorted(wanted)),
+                )
+            ).scalars()
+        }
+        if held != wanted:
+            raise IdentityResolutionError("an identity review names an observation in scope")
 
     def record_observations(
         self, domain: str, observations: tuple[IdentityObservation, ...]
@@ -80,6 +173,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                     relationship_identity_observations.c.display_name,
                     relationship_identity_observations.c.observed_at,
                 ).where(
+                    self._mine(relationship_identity_observations),
                     relationship_identity_observations.c.source_id == row.source_id,
                     relationship_identity_observations.c.source_object_id == row.source_object_id,
                     relationship_identity_observations.c.source_version == row.source_version,
@@ -98,14 +192,16 @@ class SqlRelationshipRepository(RelationshipRepository):
                 )
             self._connection.execute(
                 insert(relationship_identity_observations).values(
-                    observation_id=row.observation_id,
-                    source_id=row.source_id,
-                    source_object_id=row.source_object_id,
-                    source_version=row.source_version,
-                    source_domain=domain,
-                    display_name=row.display_name,
-                    observed_at=row.observed_at,
-                    principal_id=self._principal_id,
+                    self._bound(
+                        relationship_identity_observations,
+                        observation_id=row.observation_id,
+                        source_id=row.source_id,
+                        source_object_id=row.source_object_id,
+                        source_version=row.source_version,
+                        source_domain=domain,
+                        display_name=row.display_name,
+                        observed_at=row.observed_at,
+                    )
                 )
             )
             count += 1
@@ -130,43 +226,59 @@ class SqlRelationshipRepository(RelationshipRepository):
             raise IdentityResolutionError(
                 "a merge or split candidate set names exactly two reviewed people"
             )
+        # Before anything is written: every person and every observation the
+        # review names has to be one this Principal holds. A foreign identifier
+        # is refused exactly as an absent one is.
+        self._require_own_people(
+            tuple(candidates.person_ids)
+            + tuple(value for value in (retained_person_id, prior_person_id) if value is not None)
+        )
+        self._require_own_observations(tuple(candidates.observation_ids))
         self._connection.execute(
             insert(relationship_duplicate_sets).values(
-                duplicate_set_id=candidates.candidate_set_id,
-                candidate_kind=(
-                    "duplicate"
-                    if isinstance(candidates, DuplicateCandidateSet)
-                    else "identity_resolution"
-                ),
-                created_at=candidates.created_at,
-                principal_id=self._principal_id,
+                self._bound(
+                    relationship_duplicate_sets,
+                    duplicate_set_id=candidates.candidate_set_id,
+                    candidate_kind=(
+                        "duplicate"
+                        if isinstance(candidates, DuplicateCandidateSet)
+                        else "identity_resolution"
+                    ),
+                    created_at=candidates.created_at,
+                )
             )
         )
         for person_id in candidates.person_ids:
             self._connection.execute(
                 insert(relationship_duplicate_members).values(
-                    duplicate_set_id=candidates.candidate_set_id,
-                    person_id=person_id,
-                    principal_id=self._principal_id,
+                    self._bound(
+                        relationship_duplicate_members,
+                        duplicate_set_id=candidates.candidate_set_id,
+                        person_id=person_id,
+                    )
                 )
             )
         for observation_id in candidates.observation_ids:
             self._connection.execute(
                 insert(relationship_duplicate_members).values(
-                    duplicate_set_id=candidates.candidate_set_id,
-                    observation_id=observation_id,
-                    principal_id=self._principal_id,
+                    self._bound(
+                        relationship_duplicate_members,
+                        duplicate_set_id=candidates.candidate_set_id,
+                        observation_id=observation_id,
+                    )
                 )
             )
         review_case_id = issue_identifier(IdKind.REVIEW_CASE)
         self._connection.execute(
             insert(relationship_identity_review_cases).values(
-                review_case_id=review_case_id,
-                duplicate_set_id=candidates.candidate_set_id,
-                requested_action=action.value,
-                retained_person_id=retained_person_id,
-                prior_person_id=prior_person_id,
-                principal_id=self._principal_id,
+                self._bound(
+                    relationship_identity_review_cases,
+                    review_case_id=review_case_id,
+                    duplicate_set_id=candidates.candidate_set_id,
+                    requested_action=action.value,
+                    retained_person_id=retained_person_id,
+                    prior_person_id=prior_person_id,
+                )
             )
         )
         return review_case_id
@@ -181,15 +293,35 @@ class SqlRelationshipRepository(RelationshipRepository):
     ) -> str:
         validate_identifier(review_case_id, IdKind.REVIEW_CASE)
         validate_identifier(principal_id, IdKind.PRINCIPAL)
+        # The deciding Principal is the repository's, not the argument's. The
+        # argument is verified rather than trusted, exactly as
+        # `persistence.capture` verifies an admission request's owner
+        # (MU-AC-02).
+        if principal_id != self._principal_id:
+            raise CallerSuppliedPrincipalError("principal_id")
         if disposition not in {"accept", "defer", "reject"}:
             raise IdentityResolutionError("an identity review disposition is known")
+        # A decision on a review case this Principal does not hold is refused
+        # before a sequence is derived, so a foreign case cannot even be
+        # counted through.
+        case_held = self._connection.execute(
+            select(relationship_identity_review_cases.c.review_case_id).where(
+                self._mine(relationship_identity_review_cases),
+                relationship_identity_review_cases.c.review_case_id == review_case_id,
+            )
+        ).scalar_one_or_none()
+        if case_held is None:
+            raise IdentityResolutionError(
+                "an identity review decision names a review case in scope"
+            )
         sequence = (
             int(
                 self._connection.execute(
                     select(func.count())
                     .select_from(relationship_identity_review_decisions)
                     .where(
-                        relationship_identity_review_decisions.c.review_case_id == review_case_id
+                        self._mine(relationship_identity_review_decisions),
+                        relationship_identity_review_decisions.c.review_case_id == review_case_id,
                     )
                 ).scalar_one()
             )
@@ -198,12 +330,14 @@ class SqlRelationshipRepository(RelationshipRepository):
         decision_id = issue_identifier(IdKind.REVIEW_DECISION)
         self._connection.execute(
             insert(relationship_identity_review_decisions).values(
-                decision_id=decision_id,
-                review_case_id=review_case_id,
-                sequence=sequence,
-                disposition=disposition,
-                principal_id=principal_id,
-                decided_at=decided_at,
+                self._bound(
+                    relationship_identity_review_decisions,
+                    decision_id=decision_id,
+                    review_case_id=review_case_id,
+                    sequence=sequence,
+                    disposition=disposition,
+                    decided_at=decided_at,
+                )
             )
         )
         return decision_id
@@ -217,7 +351,10 @@ class SqlRelationshipRepository(RelationshipRepository):
                 relationship_identity_resolutions.c.retained_person_id,
                 relationship_identity_resolutions.c.prior_person_id,
                 relationship_identity_resolutions.c.decided_at,
-            ).where(relationship_identity_resolutions.c.resolution_id == resolution.resolution_id)
+            ).where(
+                self._mine(relationship_identity_resolutions),
+                relationship_identity_resolutions.c.resolution_id == resolution.resolution_id,
+            )
         ).one_or_none()
         if existing is not None:
             stored_observations = tuple(
@@ -225,8 +362,9 @@ class SqlRelationshipRepository(RelationshipRepository):
                 for value in self._connection.execute(
                     select(relationship_resolution_observations.c.observation_id)
                     .where(
+                        self._mine(relationship_resolution_observations),
                         relationship_resolution_observations.c.resolution_id
-                        == resolution.resolution_id
+                        == resolution.resolution_id,
                     )
                     .order_by(relationship_resolution_observations.c.observation_id)
                 ).scalars()
@@ -243,6 +381,7 @@ class SqlRelationshipRepository(RelationshipRepository):
             current_links = set(
                 self._connection.execute(
                     select(relationship_observation_links.c.observation_id).where(
+                        self._mine(relationship_observation_links),
                         relationship_observation_links.c.resolution_id == resolution.resolution_id,
                         relationship_observation_links.c.person_id == resolution.retained_person_id,
                     )
@@ -250,12 +389,13 @@ class SqlRelationshipRepository(RelationshipRepository):
             )
             state_receipt = self._connection.execute(
                 select(relationship_people.c.state_resolution_id).where(
+                    self._mine(relationship_people),
                     relationship_people.c.person_id
                     == (
                         resolution.prior_person_id
                         if resolution.action is ResolutionAction.MERGE_PERSON
                         else resolution.retained_person_id
-                    )
+                    ),
                 )
             ).scalar_one_or_none()
             if (
@@ -279,13 +419,16 @@ class SqlRelationshipRepository(RelationshipRepository):
                 == relationship_identity_review_cases.c.review_case_id,
             )
             .where(
+                self._mine(relationship_identity_review_cases),
+                self._mine(relationship_identity_review_decisions),
                 relationship_identity_review_cases.c.review_case_id == resolution.review_case_id,
                 relationship_identity_review_decisions.c.decision_id == resolution.decision_id,
                 relationship_identity_review_decisions.c.sequence
                 == select(func.max(relationship_identity_review_decisions.c.sequence))
                 .where(
+                    self._mine(relationship_identity_review_decisions),
                     relationship_identity_review_decisions.c.review_case_id
-                    == resolution.review_case_id
+                    == resolution.review_case_id,
                 )
                 .scalar_subquery(),
             )
@@ -309,6 +452,8 @@ class SqlRelationshipRepository(RelationshipRepository):
                     == relationship_duplicate_members.c.duplicate_set_id,
                 )
                 .where(
+                    self._mine(relationship_duplicate_members),
+                    self._mine(relationship_identity_review_cases),
                     relationship_identity_review_cases.c.review_case_id
                     == resolution.review_case_id,
                     relationship_duplicate_members.c.person_id.is_not(None),
@@ -331,6 +476,8 @@ class SqlRelationshipRepository(RelationshipRepository):
                     == relationship_duplicate_members.c.duplicate_set_id,
                 )
                 .where(
+                    self._mine(relationship_duplicate_members),
+                    self._mine(relationship_identity_review_cases),
                     relationship_identity_review_cases.c.review_case_id
                     == resolution.review_case_id,
                     relationship_duplicate_members.c.observation_id.is_not(None),
@@ -358,7 +505,10 @@ class SqlRelationshipRepository(RelationshipRepository):
                     == relationship_conversation_participants.c.participant_id,
                 )
                 .where(
-                    relationship_conversation_participants.c.person_id == resolution.prior_person_id
+                    self._mine(relationship_conversation_participants),
+                    self._mine(relationship_conversation_observations),
+                    relationship_conversation_participants.c.person_id
+                    == resolution.prior_person_id,
                 )
             ).all()
             support_by_participant: dict[str, tuple[str, set[str]]] = {}
@@ -380,6 +530,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                     )
                 collision = self._connection.execute(
                     select(relationship_conversation_participants.c.participant_id).where(
+                        self._mine(relationship_conversation_participants),
                         relationship_conversation_participants.c.conversation_id == conversation_id,
                         relationship_conversation_participants.c.person_id
                         == resolution.retained_person_id,
@@ -395,45 +546,56 @@ class SqlRelationshipRepository(RelationshipRepository):
         if resolution.action is ResolutionAction.LINK_OBSERVATION:
             self._connection.execute(
                 insert(relationship_people).values(
-                    person_id=resolution.retained_person_id,
-                    display_name=display_name,
-                    created_at=resolution.decided_at,
-                    principal_id=self._principal_id,
+                    self._bound(
+                        relationship_people,
+                        person_id=resolution.retained_person_id,
+                        display_name=display_name,
+                        created_at=resolution.decided_at,
+                    )
                 )
             )
         self._connection.execute(
             insert(relationship_identity_resolutions).values(
-                resolution_id=resolution.resolution_id,
-                action=resolution.action.value,
-                review_case_id=resolution.review_case_id,
-                decision_id=resolution.decision_id,
-                retained_person_id=resolution.retained_person_id,
-                prior_person_id=resolution.prior_person_id,
-                decided_at=resolution.decided_at,
-                principal_id=self._principal_id,
+                self._bound(
+                    relationship_identity_resolutions,
+                    resolution_id=resolution.resolution_id,
+                    action=resolution.action.value,
+                    review_case_id=resolution.review_case_id,
+                    decision_id=resolution.decision_id,
+                    retained_person_id=resolution.retained_person_id,
+                    prior_person_id=resolution.prior_person_id,
+                    decided_at=resolution.decided_at,
+                )
             )
         )
         if resolution.action is ResolutionAction.LINK_OBSERVATION:
             self._connection.execute(
                 update(relationship_people)
-                .where(relationship_people.c.person_id == resolution.retained_person_id)
+                .where(
+                    self._mine(relationship_people),
+                    relationship_people.c.person_id == resolution.retained_person_id,
+                )
                 .values(state_resolution_id=resolution.resolution_id)
             )
         for observation_id in resolution.observation_ids:
             self._connection.execute(
                 insert(relationship_resolution_observations).values(
-                    resolution_id=resolution.resolution_id,
-                    observation_id=observation_id,
-                    principal_id=self._principal_id,
+                    self._bound(
+                        relationship_resolution_observations,
+                        resolution_id=resolution.resolution_id,
+                        observation_id=observation_id,
+                    )
                 )
             )
             self._connection.execute(
                 pg_insert(relationship_observation_links)
                 .values(
-                    observation_id=observation_id,
-                    person_id=resolution.retained_person_id,
-                    resolution_id=resolution.resolution_id,
-                    principal_id=self._principal_id,
+                    self._bound(
+                        relationship_observation_links,
+                        observation_id=observation_id,
+                        person_id=resolution.retained_person_id,
+                        resolution_id=resolution.resolution_id,
+                    )
                 )
                 .on_conflict_do_update(
                     index_elements=[relationship_observation_links.c.observation_id],
@@ -441,6 +603,12 @@ class SqlRelationshipRepository(RelationshipRepository):
                         "person_id": resolution.retained_person_id,
                         "resolution_id": resolution.resolution_id,
                     },
+                    # The conflict target is the observation, which is unique
+                    # across the table rather than within a partition, so the
+                    # DO UPDATE half needs the partition predicate the INSERT
+                    # half gets from `_bound`. Without it an upsert would be an
+                    # unqualified UPDATE wearing an INSERT's clothes.
+                    where=self._mine(relationship_observation_links),
                 )
             )
             if resolution.action is ResolutionAction.LINK_OBSERVATION:
@@ -448,67 +616,85 @@ class SqlRelationshipRepository(RelationshipRepository):
                     str | None,
                     self._connection.execute(
                         select(relationship_identity_observations.c.display_name).where(
-                            relationship_identity_observations.c.observation_id == observation_id
+                            self._mine(relationship_identity_observations),
+                            relationship_identity_observations.c.observation_id == observation_id,
                         )
                     ).scalar_one(),
                 )
                 if alias_value is not None and alias_value.strip():
                     self._connection.execute(
                         insert(relationship_aliases).values(
-                            alias_id=_alias_id(observation_id),
-                            person_id=resolution.retained_person_id,
-                            observation_id=observation_id,
-                            value=alias_value,
-                            principal_id=self._principal_id,
+                            self._bound(
+                                relationship_aliases,
+                                alias_id=_alias_id(observation_id),
+                                person_id=resolution.retained_person_id,
+                                observation_id=observation_id,
+                                value=alias_value,
+                            )
                         )
                     )
                 evidence_id = f"source_{observation_id}"
                 self._connection.execute(
                     pg_insert(relationship_evidence)
                     .values(
-                        evidence_id=evidence_id,
-                        person_id=resolution.retained_person_id,
-                        authority=EvidenceAuthority.SOURCE_OBSERVATION.value,
-                        recorded_at=resolution.decided_at,
-                        principal_id=self._principal_id,
+                        self._bound(
+                            relationship_evidence,
+                            evidence_id=evidence_id,
+                            person_id=resolution.retained_person_id,
+                            authority=EvidenceAuthority.SOURCE_OBSERVATION.value,
+                            recorded_at=resolution.decided_at,
+                        )
                     )
                     .on_conflict_do_nothing(index_elements=[relationship_evidence.c.evidence_id])
                 )
                 self._connection.execute(
                     pg_insert(relationship_evidence_observations)
                     .values(
-                        evidence_id=evidence_id,
-                        observation_id=observation_id,
-                        principal_id=self._principal_id,
+                        self._bound(
+                            relationship_evidence_observations,
+                            evidence_id=evidence_id,
+                            observation_id=observation_id,
+                        )
                     )
                     .on_conflict_do_nothing()
                 )
         if resolution.action in {ResolutionAction.MERGE_PERSON, ResolutionAction.SPLIT_PERSON}:
             evidence_ids = select(relationship_evidence_observations.c.evidence_id).where(
-                relationship_evidence_observations.c.observation_id.in_(resolution.observation_ids)
+                self._mine(relationship_evidence_observations),
+                relationship_evidence_observations.c.observation_id.in_(resolution.observation_ids),
             )
             self._connection.execute(
                 update(relationship_evidence)
-                .where(relationship_evidence.c.evidence_id.in_(evidence_ids))
+                .where(
+                    self._mine(relationship_evidence),
+                    relationship_evidence.c.evidence_id.in_(evidence_ids),
+                )
                 .values(person_id=resolution.retained_person_id)
             )
             self._connection.execute(
                 update(relationship_affiliations)
-                .where(relationship_affiliations.c.observation_id.in_(resolution.observation_ids))
+                .where(
+                    self._mine(relationship_affiliations),
+                    relationship_affiliations.c.observation_id.in_(resolution.observation_ids),
+                )
                 .values(person_id=resolution.retained_person_id)
             )
             self._connection.execute(
                 update(relationship_aliases)
-                .where(relationship_aliases.c.observation_id.in_(resolution.observation_ids))
+                .where(
+                    self._mine(relationship_aliases),
+                    relationship_aliases.c.observation_id.in_(resolution.observation_ids),
+                )
                 .values(person_id=resolution.retained_person_id)
             )
             if participant_ids_to_rebind:
                 self._connection.execute(
                     update(relationship_conversation_participants)
                     .where(
+                        self._mine(relationship_conversation_participants),
                         relationship_conversation_participants.c.participant_id.in_(
                             participant_ids_to_rebind
-                        )
+                        ),
                     )
                     .values(person_id=resolution.retained_person_id)
                 )
@@ -517,7 +703,10 @@ class SqlRelationshipRepository(RelationshipRepository):
                 raise IdentityResolutionError("a merge names its prior person")
             self._connection.execute(
                 update(relationship_people)
-                .where(relationship_people.c.person_id == resolution.prior_person_id)
+                .where(
+                    self._mine(relationship_people),
+                    relationship_people.c.person_id == resolution.prior_person_id,
+                )
                 .values(
                     superseded_by_person_id=resolution.retained_person_id,
                     state_resolution_id=resolution.resolution_id,
@@ -528,7 +717,10 @@ class SqlRelationshipRepository(RelationshipRepository):
                 raise IdentityResolutionError("a split names its current person")
             self._connection.execute(
                 update(relationship_people)
-                .where(relationship_people.c.person_id == resolution.retained_person_id)
+                .where(
+                    self._mine(relationship_people),
+                    relationship_people.c.person_id == resolution.retained_person_id,
+                )
                 .values(
                     superseded_by_person_id=None,
                     state_resolution_id=resolution.resolution_id,
@@ -547,35 +739,49 @@ class SqlRelationshipRepository(RelationshipRepository):
                 relationship_people.c.display_name,
                 relationship_people.c.state_resolution_id,
             ).where(
+                self._mine(relationship_people),
                 relationship_people.c.person_id == person_id,
-                relationship_people.c.principal_id == self._principal_id,
                 relationship_people.c.superseded_by_person_id.is_(None),
             )
         ).one_or_none()
         if person is None:
             return None
+        # The one statement in this module the Core expression language cannot
+        # express, and therefore the one place a partition could go missing
+        # without `principal_scope` noticing. Every one of the fifteen table
+        # references below carries `principal_id = :principal_id`, including
+        # inside the `LEFT JOIN` conditions, where omitting it would let another
+        # Principal's row satisfy — or fail to satisfy — a currency check about
+        # rows this Principal owns.
+        # `tests/architecture/test_principal_partition_is_reached_through_the_guard.py`
+        # asserts that property over the source text, so a statement added here
+        # without the predicate reddens the build rather than passing review.
         state_is_current = self._connection.execute(
             text(
                 """
                 SELECT EXISTS (
                   SELECT 1
                   FROM knowledge.relationship_identity_resolutions state
-                  WHERE state.resolution_id = :state_resolution_id
+                  WHERE state.principal_id = :principal_id
+                    AND state.resolution_id = :state_resolution_id
                     AND state.retained_person_id = :person_id
                     AND (
                       (state.action = 'link_observation' AND NOT EXISTS (
                         SELECT 1
                         FROM knowledge.relationship_identity_resolutions correction
-                        WHERE correction.action = 'merge_person'
+                        WHERE correction.principal_id = :principal_id
+                          AND correction.action = 'merge_person'
                           AND correction.prior_person_id = :person_id
                       ) AND NOT EXISTS (
                         SELECT state_lineage.observation_id
                         FROM knowledge.relationship_resolution_observations state_lineage
-                        WHERE state_lineage.resolution_id = state.resolution_id
+                        WHERE state_lineage.principal_id = :principal_id
+                          AND state_lineage.resolution_id = state.resolution_id
                         EXCEPT
                         SELECT state_link.observation_id
                         FROM knowledge.relationship_observation_links state_link
-                        WHERE state_link.person_id = :person_id
+                        WHERE state_link.principal_id = :principal_id
+                          AND state_link.person_id = :person_id
                           AND state_link.resolution_id = state.resolution_id
                       ))
                       OR
@@ -583,10 +789,11 @@ class SqlRelationshipRepository(RelationshipRepository):
                        AND state.resolution_sequence = (
                          SELECT max(latest.resolution_sequence)
                          FROM knowledge.relationship_identity_resolutions latest
-                         WHERE (latest.retained_person_id = state.retained_person_id
-                                AND latest.prior_person_id = state.prior_person_id)
-                            OR (latest.retained_person_id = state.prior_person_id
-                                AND latest.prior_person_id = state.retained_person_id)
+                         WHERE latest.principal_id = :principal_id
+                           AND ((latest.retained_person_id = state.retained_person_id
+                                 AND latest.prior_person_id = state.prior_person_id)
+                             OR (latest.retained_person_id = state.prior_person_id
+                                 AND latest.prior_person_id = state.retained_person_id))
                        ))
                     )
                 ) AND NOT EXISTS (
@@ -594,7 +801,9 @@ class SqlRelationshipRepository(RelationshipRepository):
                   FROM knowledge.relationship_observation_links link
                   JOIN knowledge.relationship_identity_resolutions receipt
                     ON receipt.resolution_id = link.resolution_id
-                  WHERE link.person_id = :person_id
+                   AND receipt.principal_id = :principal_id
+                  WHERE link.principal_id = :principal_id
+                    AND link.person_id = :person_id
                     AND (
                       receipt.retained_person_id <> :person_id
                       OR receipt.resolution_sequence <> (
@@ -602,7 +811,9 @@ class SqlRelationshipRepository(RelationshipRepository):
                         FROM knowledge.relationship_identity_resolutions latest
                         JOIN knowledge.relationship_resolution_observations latest_observation
                           ON latest_observation.resolution_id = latest.resolution_id
-                        WHERE latest_observation.observation_id = link.observation_id
+                         AND latest_observation.principal_id = :principal_id
+                        WHERE latest.principal_id = :principal_id
+                          AND latest_observation.observation_id = link.observation_id
                       )
                     )
                 ) AND NOT EXISTS (
@@ -611,20 +822,26 @@ class SqlRelationshipRepository(RelationshipRepository):
                   LEFT JOIN knowledge.relationship_resolution_observations lineage
                     ON lineage.resolution_id = link.resolution_id
                    AND lineage.observation_id = link.observation_id
+                   AND lineage.principal_id = :principal_id
                   LEFT JOIN knowledge.relationship_identity_observations observation
                     ON observation.observation_id = link.observation_id
+                   AND observation.principal_id = :principal_id
                   LEFT JOIN knowledge.relationship_evidence evidence
                     ON evidence.evidence_id = 'source_' || link.observation_id
                    AND evidence.person_id = :person_id
                    AND evidence.authority = 'source_observation'
+                   AND evidence.principal_id = :principal_id
                   LEFT JOIN knowledge.relationship_evidence_observations evidence_lineage
                     ON evidence_lineage.evidence_id = evidence.evidence_id
                    AND evidence_lineage.observation_id = link.observation_id
+                   AND evidence_lineage.principal_id = :principal_id
                   LEFT JOIN knowledge.relationship_aliases alias
                     ON alias.observation_id = link.observation_id
                    AND alias.person_id = :person_id
                    AND alias.value = observation.display_name
-                  WHERE link.person_id = :person_id
+                   AND alias.principal_id = :principal_id
+                  WHERE link.principal_id = :principal_id
+                    AND link.person_id = :person_id
                     AND (
                       lineage.observation_id IS NULL
                       OR evidence_lineage.observation_id IS NULL
@@ -638,7 +855,8 @@ class SqlRelationshipRepository(RelationshipRepository):
                          OR length(trim(observation.display_name)) = 0)
                         AND EXISTS (
                           SELECT 1 FROM knowledge.relationship_aliases unexpected_alias
-                          WHERE unexpected_alias.observation_id = link.observation_id
+                          WHERE unexpected_alias.principal_id = :principal_id
+                            AND unexpected_alias.observation_id = link.observation_id
                         )
                       )
                     )
@@ -648,6 +866,7 @@ class SqlRelationshipRepository(RelationshipRepository):
             {
                 "person_id": person_id,
                 "state_resolution_id": person.state_resolution_id,
+                "principal_id": self._principal_id,
             },
         ).scalar_one()
         if not state_is_current:
@@ -665,7 +884,11 @@ class SqlRelationshipRepository(RelationshipRepository):
                 relationship_observation_links.c.observation_id
                 == relationship_identity_observations.c.observation_id,
             )
-            .where(relationship_observation_links.c.person_id == person_id)
+            .where(
+                self._mine(relationship_identity_observations),
+                self._mine(relationship_observation_links),
+                relationship_observation_links.c.person_id == person_id,
+            )
             .order_by(relationship_identity_observations.c.observation_id)
         ).all()
         observation_ids = tuple(str(row.observation_id) for row in observations)
@@ -698,10 +921,20 @@ class SqlRelationshipRepository(RelationshipRepository):
             )
             .outerjoin(
                 relationship_evidence_observations,
-                relationship_evidence_observations.c.evidence_id
-                == relationship_evidence.c.evidence_id,
+                and_(
+                    relationship_evidence_observations.c.evidence_id
+                    == relationship_evidence.c.evidence_id,
+                    # In the ON clause rather than the WHERE clause: an outer
+                    # join whose partition predicate sits in the WHERE clause is
+                    # an inner join, and evidence with no observation rows would
+                    # silently disappear from the profile.
+                    self._mine(relationship_evidence_observations),
+                ),
             )
-            .where(relationship_evidence.c.person_id == person_id)
+            .where(
+                self._mine(relationship_evidence),
+                relationship_evidence.c.person_id == person_id,
+            )
             .order_by(relationship_evidence.c.evidence_id)
         ).all()
         grouped: dict[
@@ -746,7 +979,10 @@ class SqlRelationshipRepository(RelationshipRepository):
             )
             for row in self._connection.execute(
                 select(relationship_aliases)
-                .where(relationship_aliases.c.person_id == person_id)
+                .where(
+                    self._mine(relationship_aliases),
+                    relationship_aliases.c.person_id == person_id,
+                )
                 .order_by(relationship_aliases.c.observation_id)
             )
         )
@@ -764,8 +1000,8 @@ class SqlRelationshipRepository(RelationshipRepository):
         validate_identifier(organization_id, IdKind.ORGANIZATION)
         organization = self._connection.execute(
             select(relationship_organizations.c.display_name).where(
+                self._mine(relationship_organizations),
                 relationship_organizations.c.organization_id == organization_id,
-                relationship_organizations.c.principal_id == self._principal_id,
             )
         ).one_or_none()
         if organization is None:
@@ -778,7 +1014,10 @@ class SqlRelationshipRepository(RelationshipRepository):
                 relationship_affiliations.c.effective_to,
                 relationship_affiliations.c.observation_id,
             )
-            .where(relationship_affiliations.c.organization_id == organization_id)
+            .where(
+                self._mine(relationship_affiliations),
+                relationship_affiliations.c.organization_id == organization_id,
+            )
             .order_by(
                 relationship_affiliations.c.effective_from,
                 relationship_affiliations.c.person_id,
@@ -817,6 +1056,7 @@ class SqlRelationshipRepository(RelationshipRepository):
         validate_identifier(observation_id, IdKind.IDENTITY_OBSERVATION)
         linked = self._connection.execute(
             select(relationship_observation_links.c.observation_id).where(
+                self._mine(relationship_observation_links),
                 relationship_observation_links.c.observation_id == observation_id,
                 relationship_observation_links.c.person_id == person_id,
             )
@@ -827,8 +1067,8 @@ class SqlRelationshipRepository(RelationshipRepository):
             )
         existing_name = self._connection.execute(
             select(relationship_organizations.c.display_name).where(
+                self._mine(relationship_organizations),
                 relationship_organizations.c.organization_id == organization_id,
-                relationship_organizations.c.principal_id == self._principal_id,
             )
         ).scalar_one_or_none()
         if existing_name is not None and existing_name != organization_name:
@@ -838,21 +1078,25 @@ class SqlRelationshipRepository(RelationshipRepository):
         if existing_name is None:
             self._connection.execute(
                 insert(relationship_organizations).values(
-                    organization_id=organization_id,
-                    display_name=organization_name,
-                    principal_id=self._principal_id,
+                    self._bound(
+                        relationship_organizations,
+                        organization_id=organization_id,
+                        display_name=organization_name,
+                    )
                 )
             )
         self._connection.execute(
             insert(relationship_affiliations).values(
-                affiliation_id=affiliation_id,
-                person_id=person_id,
-                organization_id=organization_id,
-                observation_id=observation_id,
-                role=role,
-                effective_from=effective_from,
-                effective_to=effective_to,
-                principal_id=self._principal_id,
+                self._bound(
+                    relationship_affiliations,
+                    affiliation_id=affiliation_id,
+                    person_id=person_id,
+                    organization_id=organization_id,
+                    observation_id=observation_id,
+                    role=role,
+                    effective_from=effective_from,
+                    effective_to=effective_to,
+                )
             )
         )
 
@@ -863,8 +1107,9 @@ class SqlRelationshipRepository(RelationshipRepository):
                 relationship_unresolved_mentions.c.source_version,
                 relationship_unresolved_mentions.c.observed_at,
             ).where(
+                self._mine(relationship_unresolved_mentions),
                 relationship_unresolved_mentions.c.unresolved_mention_id
-                == mention.unresolved_mention_id
+                == mention.unresolved_mention_id,
             )
         ).one_or_none()
         if existing is not None:
@@ -877,11 +1122,13 @@ class SqlRelationshipRepository(RelationshipRepository):
             raise IdentityResolutionError("an unresolved mention identifier cannot be rebound")
         self._connection.execute(
             insert(relationship_unresolved_mentions).values(
-                unresolved_mention_id=mention.unresolved_mention_id,
-                source_object_id=mention.source_object_id,
-                source_version=mention.source_version,
-                observed_at=mention.observed_at,
-                principal_id=self._principal_id,
+                self._bound(
+                    relationship_unresolved_mentions,
+                    unresolved_mention_id=mention.unresolved_mention_id,
+                    source_object_id=mention.source_object_id,
+                    source_version=mention.source_version,
+                    observed_at=mention.observed_at,
+                )
             )
         )
 
@@ -914,6 +1161,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                 str(value)
                 for value in self._connection.execute(
                     select(relationship_observation_links.c.observation_id).where(
+                        self._mine(relationship_observation_links),
                         relationship_observation_links.c.person_id == person_id,
                         relationship_observation_links.c.observation_id.in_(observation_ids),
                     )
@@ -929,8 +1177,9 @@ class SqlRelationshipRepository(RelationshipRepository):
                     relationship_unresolved_mentions.c.source_object_id,
                     relationship_unresolved_mentions.c.source_version,
                 ).where(
+                    self._mine(relationship_unresolved_mentions),
                     relationship_unresolved_mentions.c.unresolved_mention_id
-                    == unresolved_mention_id
+                    == unresolved_mention_id,
                 )
             ).one_or_none()
             if mention is None:
@@ -939,6 +1188,7 @@ class SqlRelationshipRepository(RelationshipRepository):
                 str(value)
                 for value in self._connection.execute(
                     select(relationship_identity_observations.c.observation_id).where(
+                        self._mine(relationship_identity_observations),
                         relationship_identity_observations.c.observation_id.in_(observation_ids),
                         relationship_identity_observations.c.source_object_id
                         == mention.source_object_id,
@@ -954,20 +1204,24 @@ class SqlRelationshipRepository(RelationshipRepository):
         participant_id = issue_identifier(IdKind.CONVERSATION_PARTICIPANT)
         self._connection.execute(
             insert(relationship_conversation_participants).values(
-                participant_id=participant_id,
-                conversation_id=conversation_id,
-                person_id=person_id,
-                unresolved_mention_id=unresolved_mention_id,
-                principal_id=self._principal_id,
+                self._bound(
+                    relationship_conversation_participants,
+                    participant_id=participant_id,
+                    conversation_id=conversation_id,
+                    person_id=person_id,
+                    unresolved_mention_id=unresolved_mention_id,
+                )
             )
         )
         for observation_id in observation_ids:
             self._connection.execute(
                 pg_insert(relationship_conversation_observations)
                 .values(
-                    participant_id=participant_id,
-                    observation_id=observation_id,
-                    principal_id=self._principal_id,
+                    self._bound(
+                        relationship_conversation_observations,
+                        participant_id=participant_id,
+                        observation_id=observation_id,
+                    )
                 )
                 .on_conflict_do_nothing()
             )

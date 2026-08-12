@@ -32,13 +32,51 @@ error-code-to-status table, and the connection pools. Everything it says about
 configuration, the audit trail, and what is *not* covered applies here too: the
 three transports are one composition, and the differences are protocol only.
 
+## Withdrawing the MCP surface (WP-28)
+
+Two independent switches, both read once at startup and neither consulted per
+request.
+
+`MY_PA_MCP_SURFACE_DISABLED` is the kill switch. It is **off by default and the
+surface serves**, which is the opposite default from the remote capture ingress
+and is deliberate: this surface is a pipe an operator starts with
+`apps/gateway.py mcp`, on stdio, with no socket and no credential, so serving is
+already an act rather than an accident. The switch exists to *withdraw* the
+surface from a client already using it. Engaged, `tools/list` publishes nothing
+**and** `tools/call` is refused before the application is reached — a switch that
+only hid the tools would leave every name a client already knows reachable. A
+value that is not a boolean spelling refuses to start rather than being read as
+`false`.
+
+```
+MY_PA_MCP_SURFACE_DISABLED=true apps/gateway.py mcp   # publishes nothing, refuses every call
+```
+
+`MY_PA_MCP_CLIENT_ID` binds the surface to a row in the existing capture-client
+registry. Empty means no client is bound, which is the default. When it is set,
+the process refuses to serve if that client is absent, belongs to another
+Principal, or has been **revoked** — so `apps/cli/clients.py revoke` withdraws
+this surface at the next start, with no second registry and nothing else to
+remember.
+
+**This is identification, not authentication.** stdio carries no credential, so
+the process presents no secret and verifies none. Authenticating an external MCP
+client needs an ingress that does not exist in this build (`EXT-07`/`EXT-08`,
+operator-gated). There is no OAuth authorization server, no PKCE, no resource
+indicators and no per-client profile conformance testing; see
+`docs/operations/mcv-limitations.md` §13a.
+
+**Restart is required for either switch to take effect.** Both are composed once
+in `bootstrap.gateway`, and an already-running process keeps whatever it was
+started with. To withdraw a surface immediately, stop the process.
+
 ## What is the same, and why that matters
 
 All three transports call one function — `adapters/normalization.normalize` —
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all fifteen capabilities.
+`tests/contract/test_transport_parity.py` holds it over all twenty-six capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -117,7 +155,27 @@ one declared capability, `tools`, and nothing else.
 
 ## The tool list
 
-`tools/list` returns fifteen tools whose names are the fifteen capability names.
+`tools/list` returns the tools **this process can serve**, and that is not the
+same as the tools this build implements. The build implements twenty-six, one per
+capability name. A default process publishes **twenty**.
+
+**The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
+configured**, and nothing else gates them. There is no default location and no
+inference: with the variable unset the composition root builds no managed byte
+store, `capabilities.get` omits those names, `tools/list` omits those tools, and
+a `tools/call` naming one is refused `unsupported`. Set the variable and the
+same child publishes all twenty-six. An operator who expects `documents.create`
+on the list and does not find it should look at that variable first — it is the
+only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
+remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
+the same gating and the plane's limits.)
+
+Measured at this head against a real child process — `.venv/bin/python
+apps/gateway.py mcp` — by
+`tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
+(unset: twenty, none beginning `documents.`) and
+`::test_a_child_with_a_managed_root_publishes_every_capability` (set:
+twenty-six).
 
 **Re-executed 2026-08-03** — a real `stdio_client` spawning
 `.venv/bin/python apps/gateway.py mcp` as a child process, against a disposable
@@ -152,6 +210,12 @@ metadata at the top level and the capability's own fields under `payload`.
 that names it again is refused.
 
 ## Calling a tool
+
+**Current-state correction (2026-08-12):** the tool list is derived from all
+**twenty-six** current capabilities, and the schema has **thirty-four** revisions
+at head `b4e8d2c7a613`. `capabilities.get` also reports content-free
+`worker_planes`. The dated transcript below remains historical evidence for its
+stated head.
 
 Arguments are the same document the HTTP body carries. Observed for
 `capabilities.get` with a valid envelope:
@@ -217,6 +281,23 @@ completed and its audit row was still written.
 ---
 
 # The operator CLI
+
+## GoodNotes operator plane
+
+The production-reachable GoodNotes command is `apps/cli/goodnotes.py`. It is
+local-only: set `MY_PA_AUTH_MODE=local_operator`, `MY_PA_GOODNOTES_ROOT` to the
+exact already-admitted source root, and `MY_PA_GOODNOTES_OCR_EXECUTABLE` to an
+absolute local executable. Optional OCR arguments are a JSON string list in
+`MY_PA_GOODNOTES_OCR_ARGUMENTS_JSON`; no shell is used. The command derives the
+durable local Principal and accepts no caller-selected Principal.
+
+Run `reconcile --idempotency-key KEY`. Then use the ordinary authenticated
+`review.list`, `review.decide`, and `knowledge.search` capabilities through
+`apps/cli/invoke.py`; GoodNotes has no parallel review or search command. Reconcile
+first fingerprints the manifest and closes its receipt check, then streams pages
+through the aggregate-bounded OCR/model stage, then opens the durable transaction.
+Never point it at an unverified root or a live personal source outside the
+separately authorized pilot activation.
 
 ## Running it
 

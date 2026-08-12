@@ -109,3 +109,17 @@ public struct SyntheticContactsReadAdapter: ContactsReadAdapter, Sendable {
         try catalog.page(for: request)
     }
 }
+
+public struct SyntheticTasksReadAdapter: TasksReadAdapter, Sendable {
+    private let catalog: SyntheticCatalog
+
+    public init(snapshot: NativeDiscoverySnapshot, pages: [SyntheticPageFixture]) throws {
+        self.catalog = try SyntheticCatalog(kind: .tasks, snapshot: snapshot, pages: pages)
+    }
+
+    public func discoverTaskLists() throws -> NativeDiscoverySnapshot { catalog.snapshot }
+
+    public func readTasks(_ request: NativeReadRequest) throws -> NativeReadPage {
+        try catalog.page(for: request)
+    }
+}

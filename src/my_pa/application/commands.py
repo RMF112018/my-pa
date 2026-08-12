@@ -43,31 +43,54 @@ from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
+from my_pa.domain.documents.managed import (
+    ManagedDocumentError,
+    validate_managed_media_type,
+    validate_managed_title,
+)
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.event import RelationshipEventType
+from my_pa.domain.situation.continuity import ClosureEvidenceKind
 
 __all__ = [
     "AddProjectCommand",
+    "ArchiveManagedDocument",
+    "ArchiveManagedDocumentCommand",
     "CloseSituationCommand",
     "Command",
     "CreateCapture",
+    "CreateManagedDocument",
+    "CreateManagedDocumentCommand",
     "DecideReviewCase",
     "EnrollSource",
     "EnterFrameCommand",
     "FetchSource",
     "GetCapabilities",
+    "GetCorpusCoverage",
+    "GetPulse",
     "GetSourceMetadata",
     "GetSourceStatus",
     "LinkSituationToProjectCommand",
     "ListCaptures",
+    "ListManagedDocuments",
+    "ListManagedDocumentsCommand",
+    "ListProjects",
     "ListReviewCases",
+    "ListSituations",
     "ListSources",
     "OpenSituationCommand",
     "ReadCapture",
     "ReadKnowledge",
+    "ReadManagedDocument",
+    "ReadManagedDocumentCommand",
     "RecordRelationshipEventCommand",
     "Representation",
+    "RestoreManagedDocument",
+    "RestoreManagedDocumentCommand",
+    "RevealSubject",
     "ReviseCapture",
+    "ReviseManagedDocument",
+    "ReviseManagedDocumentCommand",
     "SearchCaptures",
     "SearchKnowledge",
     "TraceObjectCommand",
@@ -87,8 +110,15 @@ class Representation(StrEnum):
     NORMALIZED_TEXT = "normalized_text"
 
 
-def _identifier(value: str, kind: IdKind, detail: SafeDetail) -> str:
-    """Validate one identifier, reporting the field rather than the value."""
+def _identifier(value: str, kind: IdKind | None, detail: SafeDetail) -> str:
+    """Validate one identifier, reporting the field rather than the value.
+
+    `kind` may be `None`, which validates the *shape* — a known prefix and an
+    8-64 character opaque suffix — without requiring one particular prefix. One
+    command needs that: `RevealSubject` accepts more than one subject kind and
+    answers about the kinds it does not traverse rather than refusing them, so
+    pinning a kind here would turn a coverage answer into a validation error.
+    """
     try:
         return validate_identifier(value, kind)
     except InvalidIdentifierError:
@@ -144,6 +174,50 @@ def _positive(value: int | None, detail: SafeDetail) -> int | None:
     if value < 1:
         raise InvalidRequestError(detail)
     return value
+
+
+def _idempotency_key(value: str) -> str:
+    """A write carries a non-empty idempotency key, and the key never reaches a message."""
+    if not value:
+        raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+    return value
+
+
+def _managed_title(value: str) -> str:
+    """The domain's own title rule, reported as a public refusal naming the field.
+
+    The rule stays in `domain.documents.managed` — one place — and this converts
+    its domain error into the transport-facing one, exactly as `_identifier`
+    converts `InvalidIdentifierError`. The domain error's message renders the
+    rejected title, so it is left behind rather than chained.
+    """
+    try:
+        return validate_managed_title(value)
+    except ManagedDocumentError:
+        pass
+    raise InvalidRequestError(SafeDetail.TITLE)
+
+
+def _managed_media_type(value: str) -> str:
+    """The closed managed media-type set, as a public refusal naming the field."""
+    try:
+        return validate_managed_media_type(value)
+    except ManagedDocumentError:
+        pass
+    raise InvalidRequestError(SafeDetail.MEDIA_TYPE)
+
+
+def _managed_content(value: bytes) -> bytes:
+    """Check that a managed write carries bytes, without reading them into a message.
+
+    Presence and type only. The size bound belongs to
+    `domain.documents.managed.ManagedContent`, which the handler builds, for the
+    reason `_text` gives: a bound checked twice is a bound that can drift. The
+    transport's own `MAX_REQUEST_BYTES` refuses a larger document earlier still.
+    """
+    if not isinstance(value, bytes | bytearray):
+        raise InvalidRequestError(SafeDetail.CONTENT)
+    return bytes(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,6 +435,31 @@ class ReadKnowledge:
 
 
 @dataclass(frozen=True, slots=True)
+class RevealSubject:
+    """`knowledge.reveal`: the evidence behind one subject identifier.
+
+    **The subject is validated for shape and not for kind**, and the difference
+    is the point. `_identifier(…, IdKind.CAPTURE, …)` would refuse an `asrt_…`
+    here, and refusing an `enr_…` or a `kn_…` as *malformed* would tell a caller
+    its request was wrong when what is actually true is that this build does not
+    cover that plane. Shape is a request error; coverage is an answer, and
+    `EvidenceGap.SUBJECT_KIND_NOT_COVERED` is where it is given.
+
+    No page size and no cursor. A reveal is bounded by the subject rather than
+    by a page: the evidence behind one capture is however many spans that
+    capture's versions carry, and truncating it would be truncating the
+    explanation of why something is on screen.
+    """
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_REVEAL
+
+    subject_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.subject_id, None, SafeDetail.SUBJECT)
+
+
+@dataclass(frozen=True, slots=True)
 class CreateCapture:
     """`capture.create`: store one user-authored note as the first version of a new capture.
 
@@ -567,6 +666,212 @@ class DecideReviewCase:
             raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
 
 
+@dataclass(frozen=True, slots=True)
+class GetPulse:
+    """`continuity.pulse`: the Principal's why-now list, derived at request time.
+
+    **No payload at all, and that is the shape rather than an omission.** The
+    Pulse is not a query: there is nothing for a caller to filter, page, or sort
+    by, because the ranking is the answer. A `sort` parameter would be the first
+    step back to an activity feed, and there is no field one could put it in.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_PULSE
+
+
+@dataclass(frozen=True, slots=True)
+class ListSituations:
+    """`continuity.situations`: one bounded page of the Principal's Situations."""
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_SITUATIONS
+
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class ListProjects:
+    """`continuity.projects`: one bounded page of the Principal's Projects."""
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS
+
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class GetCorpusCoverage:
+    """`knowledge.coverage`: how much of everything this Principal holds was covered.
+
+    **No payload at all, and that is the shape rather than an omission.** The
+    subject is the acting Principal, which the gateway established and no request
+    may state; there is no enrollment to name, because naming one would produce
+    the per-enrollment answer `sources.status` already gives, and no source to
+    filter by, because a corpus answer filtered to one source is not a corpus
+    answer. A field here would be a way to ask a narrower question under a name
+    that promises a wider one.
+    """
+
+    capability: ClassVar[Capability] = Capability.KNOWLEDGE_COVERAGE
+
+
+# --- WP-28 the managed-document plane, over a transport ----------------------
+#
+# Six commands, one per `documents.` capability, and **not one of them carries a
+# `principal_id`**. That is the whole of how this family differs from the six
+# `…ManagedDocumentCommand` dataclasses further down, and the difference is the
+# reason both exist rather than one being folded into the other:
+#
+# * these are *requests* — built by `adapters.normalization` from a caller's
+#   payload, published field by field in the MCP tool input schema, and holding
+#   only what a caller is allowed to say;
+# * those are *resolved instructions* — built inside
+#   `ApplicationService`'s handlers with
+#   `principal_id=authorization.principal.principal_id`, and consumed by
+#   `application.managed_documents.ManagedDocumentService`.
+#
+# Folding them together would put `principal_id` on the wire. The tool schema is
+# derived from the command dataclass, so a field here is a field a client may
+# send; a required `principal_id` would be a caller naming the partition its
+# write lands in, which is exactly the cross-Principal write `docs/specs`
+# section 8.2 and operating-brief section 18 forbid. Keeping it off the type
+# makes it unspellable rather than merely ignored, and
+# `tests/architecture/test_principal_is_never_caller_supplied.py` claim 3 —
+# written by WP-27 against the day this family was wired — now has real
+# constructions to quantify over.
+#
+# **`content` is `bytes` and `repr=False`**, for the reason `CreateCapture.text`
+# carries it: a document body reaches a traceback, a log record and a pytest
+# assertion message through a dataclass `repr` without anyone deciding it should.
+# On the wire it is base64 text, which `adapters.normalization` decodes and
+# `adapters.mcp.tools` publishes as `contentEncoding: base64`.
+#
+# **No command carries a path, a filename, or a location**, and neither does the
+# port beneath them. `title` is metadata bound for a text column.
+
+
+@dataclass(frozen=True, slots=True)
+class CreateManagedDocument:
+    """`documents.create`: write the first immutable version of a new document.
+
+    Names no document, because creating names nothing that exists. That is the
+    whole difference from `ReviseManagedDocument`, and it is a difference in the
+    type rather than in a nullable field.
+    """
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_CREATE
+
+    title: str
+    media_type: str
+    content: bytes = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _managed_title(self.title)
+        _managed_media_type(self.media_type)
+        _managed_content(self.content)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseManagedDocument:
+    """`documents.revise`: append a successor version to a document.
+
+    `expected_version_number` is required and has no default. A revision that did
+    not state what it was revising would be a blind write, and WP-27's whole
+    expected-version control is that a writer says which version it read.
+    """
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_REVISE
+
+    document_id: str
+    expected_version_number: int
+    title: str
+    media_type: str
+    content: bytes = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.document_id, IdKind.MANAGED_DOCUMENT, SafeDetail.DOCUMENT_ID)
+        if type(self.expected_version_number) is not int or self.expected_version_number < 1:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION_NUMBER)
+        _managed_title(self.title)
+        _managed_media_type(self.media_type)
+        _managed_content(self.content)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadManagedDocument:
+    """`documents.read`: one stored version of one managed document.
+
+    `version_id` omitted means the current version. Named, it means that version —
+    including a superseded one, which is what makes an immutable chain worth
+    keeping. `include_bytes` is false by default so that reading metadata is not
+    silently a read of a document body.
+    """
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_READ
+
+    document_id: str
+    version_id: str | None = None
+    include_bytes: bool = False
+
+    def __post_init__(self) -> None:
+        _identifier(self.document_id, IdKind.MANAGED_DOCUMENT, SafeDetail.DOCUMENT_ID)
+        if self.version_id is not None:
+            _identifier(self.version_id, IdKind.MANAGED_DOCUMENT_VERSION, SafeDetail.VERSION_ID)
+        if not isinstance(self.include_bytes, bool):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ListManagedDocuments:
+    """`documents.list`: one bounded page of this Principal's documents, newest first.
+
+    Carries no bytes at all, which is the line between this capability and
+    `documents.read`: one reaches a body and the other cannot.
+    """
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_LIST
+
+    limit: int | None = None
+    include_archived: bool = False
+
+    def __post_init__(self) -> None:
+        _positive(self.limit, SafeDetail.LIMIT)
+        if not isinstance(self.include_archived, bool):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveManagedDocument:
+    """`documents.archive`: withdraw one document from the active set. Destroys nothing."""
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_ARCHIVE
+
+    document_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.document_id, IdKind.MANAGED_DOCUMENT, SafeDetail.DOCUMENT_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreManagedDocument:
+    """`documents.restore`: return one archived document to the active set."""
+
+    capability: ClassVar[Capability] = Capability.DOCUMENTS_RESTORE
+
+    document_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.document_id, IdKind.MANAGED_DOCUMENT, SafeDetail.DOCUMENT_ID)
+
+
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
 type Command = (
@@ -578,6 +883,7 @@ type Command = (
     | EnrollSource
     | SearchKnowledge
     | ReadKnowledge
+    | RevealSubject
     | CreateCapture
     | ReviseCapture
     | ReadCapture
@@ -585,6 +891,16 @@ type Command = (
     | SearchCaptures
     | ListReviewCases
     | DecideReviewCase
+    | GetPulse
+    | ListSituations
+    | ListProjects
+    | GetCorpusCoverage
+    | CreateManagedDocument
+    | ReviseManagedDocument
+    | ReadManagedDocument
+    | ListManagedDocuments
+    | ArchiveManagedDocument
+    | RestoreManagedDocument
 )
 
 
@@ -635,17 +951,30 @@ class OpenSituationCommand:
 
 @dataclass(frozen=True, slots=True)
 class CloseSituationCommand:
-    """Close one Situation, recording its outcome. Never deletes referenced objects."""
+    """Close one Situation with its outcome and its evidence. Deletes nothing.
+
+    **`evidence_kind` and `evidence_ref` are required (WP-11)** and have no
+    default, because a default would be this command supplying the evidence its
+    caller did not. An outcome sentence with nothing under it is a status field
+    changing with no trace; the pair is what the append-only `closed` lifecycle
+    row is built from.
+    """
 
     principal_id: str
     situation_id: str
     outcome: str
+    evidence_kind: ClosureEvidenceKind
+    evidence_ref: str
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.situation_id, IdKind.SITUATION)
         if not self.outcome.strip():
             raise ValueError("closing a situation records a non-blank outcome")
+        if not isinstance(self.evidence_kind, ClosureEvidenceKind):
+            raise ValueError("closing a situation names one kind of closure evidence")
+        if not self.evidence_ref.strip():
+            raise ValueError("closing a situation cites the evidence that closed it")
 
 
 @dataclass(frozen=True, slots=True)
@@ -694,16 +1023,27 @@ class AddProjectCommand:
 
 @dataclass(frozen=True, slots=True)
 class LinkSituationToProjectCommand:
-    """Bind one Situation into one Project. Unique per (project, situation)."""
+    """Bind one Situation into one Project, citing what justified the binding.
+
+    Unique per (project, situation). The evidence pair is required for the reason
+    `CloseSituationCommand`'s is: an association with no recorded justification is
+    one a later reader can only infer.
+    """
 
     principal_id: str
     project_id: str
     situation_id: str
+    evidence_kind: ClosureEvidenceKind
+    evidence_ref: str
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.project_id, IdKind.PROJECT)
         validate_identifier(self.situation_id, IdKind.SITUATION)
+        if not isinstance(self.evidence_kind, ClosureEvidenceKind):
+            raise ValueError("an association names one kind of evidence")
+        if not self.evidence_ref.strip():
+            raise ValueError("an association cites the evidence that justifies it")
 
 
 @dataclass(frozen=True, slots=True)
@@ -763,3 +1103,147 @@ class TraceObjectCommand:
             and self.time_range_end < self.time_range_start
         ):
             raise ValueError("a trace range ends no earlier than it starts")
+
+
+# --- WP-27 managed-document commands ----------------------------------------
+#
+# A third command family, and it sits beside the WP-06 continuity family for the
+# same reason and with the same shape: these are consumed by the standalone
+# `application.managed_documents.ManagedDocumentService`, a caller resolves the
+# authenticated Principal and passes it in explicitly, and the repository stamps
+# and filters every row by it. They are not part of `Command`, hold no
+# `Capability`, and never reach `invoke`.
+#
+# **That is a scope boundary rather than an oversight, and it is written down
+# here so nobody has to infer it.** WP-27 builds the canonical managed-document
+# application service; exposing managed writes over a transport is WP-28's, which
+# the completion plan states as "managed writes use WP-27 only". A capability seat
+# added here with no transport behind it would publish a name `capabilities.get`
+# reports as available and nothing can reach.
+#
+# **`content` is `bytes` and is `repr=False`**, for the reason `CreateCapture.text`
+# carries it and more so: this is a document body, and a dataclass `repr` reaches
+# a traceback, a log record and a pytest assertion message without anyone deciding
+# it should.
+#
+# **No command carries a path, a filename, or a location.** `title` is metadata,
+# bounded and stored in the database, and the byte store accepts no path
+# parameter at all — so there is nothing on this surface for a traversal to
+# travel in.
+
+
+@dataclass(frozen=True, slots=True)
+class CreateManagedDocumentCommand:
+    """Write the first immutable version of a new managed document.
+
+    Names no document, because creating names nothing that exists. That is the
+    whole difference from `ReviseManagedDocumentCommand`, and it is a difference
+    in the type rather than in a nullable field, so no request can be ambiguous
+    about which it is.
+    """
+
+    principal_id: str
+    title: str
+    media_type: str
+    content: bytes = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_managed_title(self.title)
+        validate_managed_media_type(self.media_type)
+        if not isinstance(self.content, bytes | bytearray):
+            raise ValueError("a managed document version carries bytes")
+        if not self.idempotency_key:
+            raise ValueError("a managed write carries an idempotency key")
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseManagedDocumentCommand:
+    """Append a successor version to a managed document the Principal owns.
+
+    `expected_version_number` is required and has no default. A revision that did
+    not state what it was revising would be a blind write, and the whole of
+    WP-27's expected-version control is that a writer says which version it read
+    before it says what should follow.
+    """
+
+    principal_id: str
+    document_id: str
+    expected_version_number: int
+    title: str
+    media_type: str
+    content: bytes = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.document_id, IdKind.MANAGED_DOCUMENT)
+        if type(self.expected_version_number) is not int or self.expected_version_number < 1:
+            raise ValueError("an expected managed version number starts at one")
+        validate_managed_title(self.title)
+        validate_managed_media_type(self.media_type)
+        if not isinstance(self.content, bytes | bytearray):
+            raise ValueError("a managed document version carries bytes")
+        if not self.idempotency_key:
+            raise ValueError("a managed write carries an idempotency key")
+
+
+@dataclass(frozen=True, slots=True)
+class ReadManagedDocumentCommand:
+    """Read one stored version of a managed document the Principal owns.
+
+    `version_id` omitted means the current version. Named, it means that version —
+    including a superseded one, which is what makes an immutable chain worth
+    keeping. `include_bytes` is false by default so that reading metadata is not
+    silently a read of a document body.
+    """
+
+    principal_id: str
+    document_id: str
+    version_id: str | None = None
+    include_bytes: bool = False
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.document_id, IdKind.MANAGED_DOCUMENT)
+        if self.version_id is not None:
+            validate_identifier(self.version_id, IdKind.MANAGED_DOCUMENT_VERSION)
+
+
+@dataclass(frozen=True, slots=True)
+class ListManagedDocumentsCommand:
+    """One bounded page of the Principal's managed documents, newest first."""
+
+    principal_id: str
+    limit: int = 50
+    include_archived: bool = False
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if type(self.limit) is not int or self.limit < 1:
+            raise ValueError("a page holds at least one managed document")
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveManagedDocumentCommand:
+    """Withdraw one managed document from the active set. Destroys nothing."""
+
+    principal_id: str
+    document_id: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.document_id, IdKind.MANAGED_DOCUMENT)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreManagedDocumentCommand:
+    """Return one archived managed document to the active set."""
+
+    principal_id: str
+    document_id: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.document_id, IdKind.MANAGED_DOCUMENT)

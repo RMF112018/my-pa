@@ -37,7 +37,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import Connection, Engine, text
+from sqlalchemy import CheckConstraint, Connection, Engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
@@ -63,7 +63,7 @@ from my_pa.infrastructure.persistence.extraction import (
 )
 from my_pa.infrastructure.persistence.knowledge import pending_objects
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
-from my_pa.infrastructure.persistence.tables import METADATA
+from my_pa.infrastructure.persistence.tables import METADATA, extractions
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -71,8 +71,8 @@ EXPECTED_SCHEMA = "knowledge"
 
 #: Restated, not imported. The knowledge revision's five, this revision's three,
 #: the audit revision's one, the enrollment-objects revision's one, the capture
-#: revision's five, the proposal revision's seven, and WP-12C's three, each
-#: against the revision that must create them and no other.
+#: revision's five, the proposal revision's seven, WP-12C's three, and WP-06's
+#: seven, each against the revision that must create them and no other.
 KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "7e5a1fb93d62": frozenset(
         {
@@ -172,6 +172,54 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "native_source_review_routes",
         }
     ),
+    "d2e3f4a5b6c7": frozenset(
+        {
+            "situations",
+            "frames",
+            "traces",
+            "projects",
+            "project_situations",
+            "relationship_events",
+            "pulse_items",
+        }
+    ),
+    # WP-10's registered remote capture client. One table, created in raw SQL by
+    # a revision that imports no declaration — `d2e3f4a5b6c7`'s shape — and
+    # declared here so the structural guard covers it exactly as it covers a
+    # revision that copies the declaration.
+    "7a1e5f3c9d24": frozenset({"capture_clients"}),
+    # WP-11's continuity objects and the one append-only record that carries
+    # their lifecycle and their associations. Raw SQL again, and declared here
+    # for the same reason.
+    "8f2b6c4d1a37": frozenset(
+        {
+            "commitments",
+            "decisions",
+            "tasks",
+            "continuity_lifecycle_events",
+        }
+    ),
+    # WP-27's managed-document plane: the product's own write plane, and the
+    # first tables in this schema whose rows name bytes on a filesystem.
+    "4c7b2e91d8a5": frozenset(
+        {
+            "managed_documents",
+            "managed_document_versions",
+            "managed_document_submissions",
+            "managed_document_receipts",
+            "managed_document_lifecycle_events",
+        }
+    ),
+    "91d7b3e5a204": frozenset(
+        {
+            "goodnotes_pages",
+            "goodnotes_page_versions",
+            "goodnotes_region_proposals",
+            "goodnotes_review_decisions",
+            "goodnotes_reconciliation_receipts",
+        }
+    ),
+    "b4e8d2c7a613": frozenset({"worker_heartbeats"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare
@@ -265,26 +313,34 @@ def _config(output_buffer: io.StringIO | None = None) -> Config:
     return Config(str(ROOT / "alembic.ini"), output_buffer=output_buffer)
 
 
-def _tables_created_by(revision: str, down_revision: str | None) -> set[tuple[str, str]]:
+def _tables_created_by(
+    revision: str, down_revision: str | tuple[str, ...] | None
+) -> set[tuple[str, str]]:
     """Every `(schema, table)` one revision emits a `CREATE TABLE` for.
 
     Offline, so it needs no server and stays in the fast tier, and it reads the
     SQL the revision actually produces rather than the list it was written from.
     """
+    if isinstance(down_revision, tuple):
+        # A merge revision joins already-applied parents. Alembic's offline
+        # range syntax cannot express that state and would replay one parent
+        # branch, falsely attributing all of its tables to the merge. This
+        # repository's merge is deliberately DDL-free; its source is guarded by
+        # the migration-specific merge tests.
+        return set()
     buffer = io.StringIO()
     start = down_revision or "base"
     command.upgrade(_config(output_buffer=buffer), f"{start}:{revision}", sql=True)
     return set(_CREATE_TABLE.findall(buffer.getvalue()))
 
 
-def _revisions() -> list[tuple[str, str | None]]:
+def _revisions() -> list[tuple[str, str | tuple[str, ...] | None]]:
     """Every revision in the chain, paired with the one it follows."""
     script = ScriptDirectory.from_config(_config())
-    chain: list[tuple[str, str | None]] = []
+    chain: list[tuple[str, str | tuple[str, ...] | None]] = []
     for revision in script.walk_revisions():
         down = revision.down_revision
-        parent = down if down is None or isinstance(down, str) else down[0]
-        chain.append((revision.revision, parent))
+        chain.append((revision.revision, down))
     return chain
 
 
@@ -343,6 +399,77 @@ def test_each_revision_creates_exactly_the_tables_it_declares(
             f"revision {revision} creates {sorted(created)} in {EXPECTED_SCHEMA}, "
             f"but declares {sorted(expected)}"
         )
+
+
+def _admitted_statuses() -> frozenset[str]:
+    """The values `extraction_status_is_known` admits, read off the declaration.
+
+    Read out of the constraint's own SQL text rather than restated, because a
+    restated copy is exactly the second statement of a vocabulary that the two
+    tests below exist to prevent.
+    """
+    constraint = next(
+        candidate
+        for candidate in extractions.constraints
+        if candidate.name == "extraction_status_is_known"
+    )
+    assert isinstance(constraint, CheckConstraint)
+    return frozenset(re.findall(r"'([^']*)'", str(constraint.sqltext)))
+
+
+def test_the_detector_reads_the_status_vocabulary_off_the_constraint() -> None:
+    """The control that makes the equality below a measurement.
+
+    `_admitted_statuses` finds a constraint by name and parses quoted literals
+    out of its compiled text. Both halves can fail silently: a renamed
+    constraint raises here rather than in the assertion that matters, and a
+    parse that matched nothing would make the test below compare two empty sets
+    and pass. So the non-emptiness and the shape of the text are asserted
+    first, against the real declaration and not a synthetic one.
+    """
+    admitted = _admitted_statuses()
+
+    assert admitted, "the status vocabulary parsed as empty; the check below would be vacuous"
+    assert "status IN (" in str(
+        next(
+            candidate
+            for candidate in extractions.constraints
+            if candidate.name == "extraction_status_is_known"
+        ).sqltext
+    )
+
+
+def test_the_stored_status_vocabulary_is_the_outcome_vocabulary_less_quarantined() -> None:
+    """The storage vocabulary is a strict subset of the outcome vocabulary, by name.
+
+    `ExtractionStatus` is the *outcome* vocabulary: three things can happen to an
+    object and `record_outcome` dispatches on all three. `extractions.status` is
+    the *storage* vocabulary and is two, because the quarantined branch returns a
+    `quarantine_records` row before reaching the insert, so no production path
+    can file the third here.
+
+    Those two facts used to be one fact — the constraint was derived from the
+    enum — and that derivation was what
+    `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`
+    allowlisted for `8b3f5c17d904`. Cutting the derivation to make the state
+    impossible would otherwise cut the only thing that noticed a fourth outcome
+    member, and the new member would then be discovered when a server refused an
+    insert at some later run. **This assertion is what replaces the
+    derivation**, and it lands in the same change that removes it rather than
+    after it. A fourth `ExtractionStatus` member reddens here, at the
+    declaration, and the diff then has to say which vocabulary it belongs to: a
+    fourth thing that can happen and is filed here goes in the literal, and a
+    fourth thing routed elsewhere goes in the subtrahend beside `QUARANTINED`.
+
+    Written as an equality against a *derived* right-hand side and not against a
+    restated pair. `assert _admitted_statuses() == {"extracted", "unsupported"}`
+    would pass unchanged the day a fourth member landed, which is the shape of
+    check this module exists to refuse.
+    """
+    outcomes = {member.value for member in ExtractionStatus}
+
+    assert _admitted_statuses() == outcomes - {ExtractionStatus.QUARANTINED.value}
+    assert _admitted_statuses() < outcomes, "storage must stay a strict subset of outcome"
 
 
 def test_every_declared_table_is_created_by_exactly_one_revision() -> None:

@@ -34,7 +34,7 @@ export function PulseList({ items }: { items: readonly PulseItem[] }) {
                 {item.consequence}
               </p>
               {item.uncertainty ? (
-                <p className="mt-1 text-moss-gold">
+                <p className="mt-1 text-moss-gold-strong">
                   <span className="font-medium">Uncertain:</span> {item.uncertainty}
                 </p>
               ) : null}

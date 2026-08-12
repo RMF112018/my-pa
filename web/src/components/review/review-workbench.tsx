@@ -183,7 +183,7 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
                       </Button>
                     </div>
                     {status.phase === "error" ? (
-                      <p role="alert" className="mt-2 text-moss-coral">
+                      <p role="alert" className="mt-2 text-moss-coral-strong">
                         {status.message}
                       </p>
                     ) : null}

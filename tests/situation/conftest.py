@@ -41,6 +41,8 @@ from my_pa.contracts.ports import (
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
+from my_pa.domain.situation.continuity import ClosureEvidenceKind
+from my_pa.domain.situation.pulse_derivation import derive_pulse
 from my_pa.domain.situation.situation import (
     Frame,
     FrameState,
@@ -48,6 +50,7 @@ from my_pa.domain.situation.situation import (
     ProjectState,
     PulseItem,
     PulseItemType,
+    PulseReasonCode,
     Situation,
     SituationState,
     Trace,
@@ -79,6 +82,9 @@ class InMemorySituationRepository(SituationRepository):
 
     def __init__(self) -> None:
         self._rows: dict[str, Situation] = {}
+        #: The append-only lifecycle record, in the shape the store keeps it:
+        #: one row per close, carrying the evidence that closed it.
+        self.lifecycle: list[tuple[str, ClosureEvidenceKind, str]] = []
 
     def open_situation(
         self,
@@ -103,7 +109,18 @@ class InMemorySituationRepository(SituationRepository):
         self._rows[situation.situation_id] = situation
         return situation
 
-    def close_situation(self, *, principal_id: str, situation_id: str, outcome: str) -> Situation:
+    def close_situation(
+        self,
+        *,
+        principal_id: str,
+        situation_id: str,
+        outcome: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> Situation:
+        if not evidence_ref.strip():
+            raise ValueError("closing a situation records the evidence that closed it")
+        self.lifecycle.append((situation_id, evidence_kind, evidence_ref))
         current = self._rows.get(situation_id)
         # The partition predicate: a Situation owned by another Principal is
         # indistinguishable from one that does not exist.
@@ -234,6 +251,7 @@ class InMemoryProjectRepository(ProjectRepository):
         self._situations = situations
         self._rows: dict[str, Project] = {}
         self._links: set[tuple[str, str, str]] = set()
+        self.association_evidence: dict[tuple[str, str, str], tuple[ClosureEvidenceKind, str]] = {}
 
     def add_project(
         self,
@@ -273,13 +291,28 @@ class InMemoryProjectRepository(ProjectRepository):
         rows.sort(key=lambda row: row.created_at, reverse=True)
         return tuple(rows)
 
-    def link_situation(self, *, principal_id: str, project_id: str, situation_id: str) -> None:
+    def link_situation(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        situation_id: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> None:
+        if not evidence_ref.strip():
+            raise ValueError("linking a situation to a project records the evidence for it")
         project = self.get_project(principal_id, project_id)
         situation = self._situations.get_situation(principal_id, situation_id)
         if project is None or situation is None:
             raise UnknownScopeError
-        # Idempotent per (principal, project, situation).
+        # Idempotent per (principal, project, situation), and the evidence that
+        # justified the association travels with the link.
         self._links.add((principal_id, project_id, situation_id))
+        self.association_evidence[(principal_id, project_id, situation_id)] = (
+            evidence_kind,
+            evidence_ref,
+        )
 
 
 class InMemoryRelationshipEventRepository(RelationshipEventRepository):
@@ -352,6 +385,8 @@ class InMemoryPulseRepository(PulseRepository):
         item_type: PulseItemType,
         item_ref: str,
         reason: str,
+        reason_code: PulseReasonCode = PulseReasonCode.COMMITMENT_OVERDUE,
+        basis_refs: tuple[str, ...] = ("cmt_basis0001basis0001",),
         priority: int = 5,
     ) -> PulseItem:
         item = PulseItem(
@@ -360,6 +395,8 @@ class InMemoryPulseRepository(PulseRepository):
             item_type=item_type,
             item_ref=item_ref,
             reason=reason,
+            reason_code=reason_code,
+            basis_refs=basis_refs,
             generated_at=utc_now(),
             priority=priority,
         )
@@ -377,6 +414,15 @@ class InMemoryPulseRepository(PulseRepository):
         rows.sort(key=lambda row: (row.priority, row.generated_at), reverse=True)
         return tuple(rows)
 
+    def derive_pulse(self, principal_id: str, now: datetime) -> tuple[PulseItem, ...]:
+        """No continuity objects are seeded here, so the derivation is empty.
+
+        Present because the port declares it and this fake implements the port;
+        the derivation's own behaviour is proved against the pure function and
+        against a live server, not here.
+        """
+        return derive_pulse(principal_id=principal_id, now=now)
+
     def dismiss_pulse_item(self, principal_id: str, pulse_id: str) -> None:
         current = self._rows.get(pulse_id)
         if current is None or current.principal_id != principal_id:
@@ -387,6 +433,8 @@ class InMemoryPulseRepository(PulseRepository):
             item_type=current.item_type,
             item_ref=current.item_ref,
             reason=current.reason,
+            reason_code=current.reason_code,
+            basis_refs=current.basis_refs,
             generated_at=current.generated_at,
             consequence=current.consequence,
             next_step=current.next_step,

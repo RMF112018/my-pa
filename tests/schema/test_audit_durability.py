@@ -58,9 +58,13 @@ from my_pa.contracts.ports import (
     EvidenceUnavailableError,
     KnowledgeRecord,
     KnowledgeRepository,
+    ManagedDocumentRepository,
     OperationQueue,
+    ProjectRepository,
+    PulseRepository,
     ReviewRepository,
     SearchOutcome,
+    SituationRepository,
     SourceProviders,
     SourceRepository,
     UnitOfWork,
@@ -69,6 +73,7 @@ from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.domain.audit.events import AuditOutcome
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.identity.operation import Capability
@@ -175,6 +180,12 @@ class _FailingKnowledge(KnowledgeRepository):
             enrollment_id, observed_at=observed_at, eligible=eligible, queued=queued
         )
 
+    def corpus(self, principal_id: str, *, observed_at: datetime) -> CorpusCoverage:
+        return self._inner.corpus(principal_id, observed_at=observed_at)
+
+    def scope_beyond_enrollment(self, principal_id: str, *, enrollment_id: str) -> bool:
+        return self._inner.scope_beyond_enrollment(principal_id, enrollment_id=enrollment_id)
+
     def limitations(self, enrollment_id: str) -> tuple[AggregateLimitation, ...]:
         raise EvidenceUnavailableError("the limitation read was made to fail by this test")
 
@@ -243,6 +254,22 @@ class _FailsAfterTheWork(UnitOfWork):
     @property
     def reviews(self) -> ReviewRepository:
         return self._inner.reviews
+
+    @property
+    def situations(self) -> SituationRepository:
+        return self._inner.situations
+
+    @property
+    def projects(self) -> ProjectRepository:
+        return self._inner.projects
+
+    @property
+    def pulse(self) -> PulseRepository:
+        return self._inner.pulse
+
+    @property
+    def managed_documents(self) -> ManagedDocumentRepository:
+        return self._inner.managed_documents
 
     @property
     def audit(self) -> AuditSink:

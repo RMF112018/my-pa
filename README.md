@@ -2,6 +2,16 @@
 
 `my-pa` is the clean implementation repository for a local-first personal knowledge layer that mediates access to authoritative NAS files, managed documents, personal-data connectors, knowledge records, relationship intelligence, and model-facing context.
 
+## Operating lineage
+
+The current pilot-remediation candidate is developed on
+`bf/pilot-blocker-remediation` from authenticated `main` base
+`9b35476b70fe4fbc03bb8f9835d93c1b71089bbe`. The earlier
+`recovery/pre-20260805-utc-rollback-c9fb513` lineage remains preserved as
+campaign history; it is no longer current-state authority. The exact candidate
+head belongs in the pull request and remediation closeout rather than in this
+file, where every commit would immediately stale it.
+
 ## Current state
 
 The repository contains the Python package `my_pa` under `src/`, the Alembic
@@ -13,7 +23,7 @@ deployable.
 Implemented, and covered by the FAST tier unless noted:
 
 - `contracts/v1` — the public request and response envelope, disclosure, error, and capability shapes.
-- `domain/identity` — capability, purpose, principal, and operation binding, including all fifteen capability names and their operator-only flags. WP-6 added four `capture.*` names and two capture purposes, WP-7 added `capture.search`, and WP-8 added `review.list` and `review.decide` with `review_disposition`; none is operator-only because none grants external authority (`D-70`, `D-91`, `D-101`).
+- `domain/identity` — capability, purpose, principal, and operation binding, including all twenty-six capability names and their operator-only flags. WP-6 added four `capture.*` names and two capture purposes, WP-7 added `capture.search`, and WP-8 added `review.list` and `review.decide` with `review_disposition`; none is operator-only because none grants external authority (`D-70`, `D-91`, `D-101`).
 - `domain/common`, `domain/policy`, `domain/audit` — identifiers, provenance, classification, coverage state, time, policy decisions, and audit events.
 - `domain/source` — the source registry, bounded enrollment with idempotency keys, and the read-only source-provider port.
 - `domain/capture`, `domain/conversation` — the user-authored capture, immutable version, evidence-bound proposals and assertions, closed review policy, and explicit Conversation Log skeleton. Product-owned and append-only under [ADR-003](docs/decisions/ADR-003-product-owned-user-authored-source-records.md); none grants the source-provider port a write method or an external action.
@@ -24,13 +34,13 @@ Implemented, and covered by the FAST tier unless noted:
 - `infrastructure/database/engine` — the connection contract for the canonical database. Covered by the database tier only.
 - `infrastructure/persistence` — source registry, enrollment, job lease and retry, extraction and quarantine, lexical search, the immutable capture/version/receipt plane, WP-7's evidence-bound proposal plane, and WP-8's review/promotion plane. Consequential proposals open review cases; accepting creates a canonical assertion plus policy receipt, rejection retains lineage, and a successor edit that changes a cited slice marks the assertion `revalidation_required`. Explicit Conversation Log creation and deterministic launch context are written in the capture save transaction; no external action client exists. **Capture search is a second full-text plane**, over `knowledge.capture_versions.content` with `simple` plus exact confirmation (`D-90`). Covered by the database tier.
 - `infrastructure/providers/fixture.py` — a read-only fixture source provider that proves root containment, revalidates before read, and normalizes provider errors by errno.
-- `application` — the fifteen capability use cases behind one entry point, one shared authorization and disclosure path, and the capability manifest and readiness report derived from that wiring rather than restated. It reaches persistence and providers only through the ports in `contracts/ports`.
-- `adapters/http` and `apps/gateway.py run` — the HTTP transport and its composition root. All fifteen capabilities are reachable at `POST /v1/<capability>` on `127.0.0.1`, and the response body is the envelope the application produced. Starlette and uvicorn, not FastAPI; no credential is issued, read, or required, and there is no option to bind anywhere but loopback. [`ops/runbooks/gateway-operations.md`](ops/runbooks/gateway-operations.md) covers running it.
-- `adapters/mcp` and `apps/gateway.py mcp` — the same fifteen capabilities over the Model Context Protocol, using the official `mcp` SDK on **stdio only**. The tool list is derived from the capability set and each tool's schema from the command it builds, so nothing about a capability is written down twice. No socket is opened and no credential is read; the SDK's network transports are never imported.
+- `application` — the twenty-six capability use cases behind one entry point, one shared authorization and disclosure path, and the capability manifest and readiness report derived from that wiring rather than restated. It reaches persistence and providers only through the ports in `contracts/ports`.
+- `adapters/http` and `apps/gateway.py run` — the HTTP transport and its composition root. All twenty-six capabilities are reachable at `POST /v1/<capability>` on `127.0.0.1`, and the response body is the envelope the application produced. Starlette and uvicorn, not FastAPI. In `local_operator` mode the process serves one configured Principal without a request credential; in `entra` mode it requires and validates a bearer token. There is no option to bind anywhere but loopback. [`ops/runbooks/gateway-operations.md`](ops/runbooks/gateway-operations.md) covers running it.
+- `adapters/mcp` and `apps/gateway.py mcp` — the same twenty-six capabilities over the Model Context Protocol, using the official `mcp` SDK on **stdio only**. The tool list is derived from the capability set and each tool's schema from the command it builds, so nothing about a capability is written down twice. No socket is opened and no credential is read; the SDK's network transports are never imported.
 - `adapters/cli` and `apps/cli/invoke.py` — the operator CLI, which invokes one capability and writes the envelope to standard output. It is not a privileged bypass: it composes the same runtime the gateway composes, is handed the same principal, and has no option that could change one.
 - `adapters/normalization.py` — the one place a request becomes a `(RequestMetadata, Command)` pair. All three transports call it and none of them can build either value, which is what makes `SPEC-AC-001` a structural property rather than three snapshots that agree today.
 - `infrastructure/migration` — legacy extract and load, the migration control plane, and redaction.
-- Seventeen Alembic revisions covering target schemas and extensions, tables, indexes, foreign keys, the migration control plane, views, the `knowledge` schema, extraction, audit, enrollment, capture, proposal, review/promotion, relationship identity, the native-source control plane, and frozen native baseline inputs; head `a7c3e8d1f642`. Applied and rolled back in the database tier; only SQL generation is checked by FAST. **No revision derives a closed-set constraint from a domain enum** (`D-69`): historical vocabulary is frozen in each emitting revision and widened by an explicit `ALTER` in the revision that widens it, so an already-merged revision goes on emitting the DDL it emitted on the day it merged.
+- Thirty-four Alembic revisions covering the complete local-candidate schema; head `b4e8d2c7a613`. The chain includes an explicit DDL-free merge revision for the retained native-baseline and managed-document histories. Applied and rolled back in the database tier; SQL generation is checked by FAST. **No revision derives a closed-set constraint from a domain enum** (`D-69`): historical vocabulary is frozen in each emitting revision and widened by an explicit `ALTER` in the revision that widens it.
 - `.github/workflows/repository-checks.yml` — document and configuration validation, the FAST tier, a declared-dependency-floor tier, and a database tier run against a disposable PostgreSQL service. The workflow itself carries no test coverage.
 
 The migrated corpus holds 3,263,870 rows across 484 domain tables; 286 of those
@@ -82,10 +92,24 @@ A third entry stood beside them until WP-6 and is recorded the same way:
   [`docs/operations/mcv-limitations.md`](docs/operations/mcv-limitations.md)
   limitation 2 is where that is disclosed).
 
-Not implemented. None of the following exists beyond a scaffold README:
+Not implemented. The following remains outside this candidate:
 
-- managed documents, GoodNotes ingestion, and Obsidian projection;
-- any frontend. The repository contains no JavaScript toolchain and no `package.json`.
+- live activation of personal connectors, production Entra registration, and
+  the Obsidian projection.
+
+A frontend exists under [`web/`](web/README.md): a Next.js App Router PWA
+(MossAIc) whose normal application routes call the Python capability gateway.
+It supports the synthetic development provider and a server-side Entra
+authorization-code + PKCE callback/session path; no caller supplies a Principal
+and the gateway bearer stays in the server-side session registry. The flow is
+verified with synthetic MSAL results only — no live tenant credential or live
+personal data was used — and the candidate is not deployed. Personal-data ingestion is Apple-first: Apple Mail, Calendar, Contacts, and Tasks/To-Do through
+the first-party native Apple architecture
+([`native/apple-source-host/README.md`](native/apple-source-host/README.md)) are
+the active ingestion direction. Microsoft Graph is retained in the product
+definition but **off by default and not an active personal-data ingestion path**;
+Entra authentication is a separate concern from Graph connector activation, and a
+disabled Graph connector must not be reported as a degraded active source.
 
 Accordingly, `capabilities.get` reports every capability `available` and
 readiness `ready`, while PDF still reports `decision_gated` pending
@@ -126,10 +150,10 @@ instrument it rests on.
 
 ## Repository map
 
-Start with [`docs/00_REPOSITORY_SOURCE_INDEX.md`](docs/00_REPOSITORY_SOURCE_INDEX.md).
+Start with [`docs/00_REPOSITORY_SOURCE_INDEX.md`](docs/00_REPOSITORY_SOURCE_INDEX.md). The active campaign state — operating lineage, active work package, branch topology, and reconciliation posture — is [`docs/campaign/CAMPAIGN-BRIEF.md`](docs/campaign/CAMPAIGN-BRIEF.md).
 
 ## Boundaries
 
 Original source systems remain authoritative and read-only by default. Managed output storage is a separate capability. PostgreSQL is the canonical metadata and knowledge store. Obsidian is a rebuildable projection, not the authority.
 
-Schema changes reach the canonical database only through Alembic. Configuration fails closed: an unknown `MY_PA_` variable, an unparseable value, or a database URL that is not `postgresql+psycopg` naming a host and a database is rejected at startup. No source-system mutation, managed-document write, connector access, credential use, live-source read, service activation, deployment, or production action is authorized by the current repository state; each requires separate operator authorization.
+Schema changes reach the canonical database only through Alembic. Configuration fails closed: an unknown `MY_PA_` variable, an unparseable value, or a database URL that is not `postgresql+psycopg` naming a host and a database is rejected at startup. Implemented authentication and managed-document mechanisms do not authorize live credentials or storage. No source-system mutation, live connector or personal-data access, credential creation/disclosure/rotation, service activation, deployment, or production action is authorized by the current repository state; each requires separate operator authorization.

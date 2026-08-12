@@ -70,6 +70,15 @@ PLAN = ROOT / "docs" / "plans" / "mcv-completion-plan.md"
 #: its rows say what was true when they were written.
 SWEPT_ROOTS = ("apps", "ops", "src", "tests")
 
+#: Swept files that sit under none of those roots. `README.md` states current
+#: capability and schema figures in the same prose shapes the roots are read
+#: for, and it lives at the repository root, so until this constant existed
+#: every count in it was bound to nothing — including one this repository's own
+#: package added. A root-relative file list rather than a fifth entry in
+#: `SWEPT_ROOTS`, because sweeping `.` would pull in the plan's register and
+#: every other document whose rows are history rather than current state.
+SWEPT_FILES = ("README.md",)
+
 SKIPPED_DIRECTORIES = frozenset({"__pycache__", ".ruff_cache", ".mypy_cache", ".pytest_cache"})
 
 #: `src/my_pa.egg-info/` is a build artifact, untracked, and holds a stale copy
@@ -130,6 +139,21 @@ _ORDINAL_UNITS = (
     "seventeenth",
     "eighteenth",
     "nineteenth",
+    # The twenties, added when the capability set reached nineteen and
+    # `a twentieth capability` became the ordinal a correct claim would use. The
+    # tuple is indexed by value, so it has to be dense and in order; the next
+    # boundary announces itself the same way this one did, with an `IndexError`
+    # in the green-half plant rather than with a false pass.
+    "twentieth",
+    "twenty-first",
+    "twenty-second",
+    "twenty-third",
+    "twenty-fourth",
+    "twenty-fifth",
+    "twenty-sixth",
+    "twenty-seventh",
+    "twenty-eighth",
+    "twenty-ninth",
 )
 
 
@@ -254,18 +278,10 @@ def alembic_head() -> str:
     here is: the head moves whenever a revision is added, and a written head is
     a claim with a shelf life.
     """
-    revisions: dict[str, str | None] = {}
-    identifier = re.compile(r"^revision: str = \"(?P<id>[0-9a-f]+)\"", re.MULTILINE)
-    parent = re.compile(r"^down_revision: str \| None = \"(?P<id>[0-9a-f]+)\"", re.MULTILINE)
-    for path in revision_files():
-        text = path.read_text(encoding="utf-8")
-        found = identifier.search(text)
-        if found is None:
-            continue
-        below = parent.search(text)
-        revisions[found["id"]] = below["id"] if below else None
-    parents = {below for below in revisions.values() if below is not None}
-    heads = sorted(set(revisions) - parents)
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    heads = list(ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini"))).get_heads())
     assert len(heads) == 1, f"expected a single Alembic head, found {heads}"
     return heads[0]
 
@@ -323,6 +339,16 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "four capabilities",
         "four capabilities were added, and the only change here",
         "a delta this package applied, not the size of the set",
+    ),
+    (
+        "README.md",
+        "four capabilities",
+        "was in the not-implemented list below",
+        "the same WP-6 delta, in the entry recording what one not-implemented "
+        "item became; not the size of any set. Stated as a delta because the "
+        "first version of this row called it the size of the `capture.*` subset "
+        '"named in full", and that was false: `capture.*` holds five members, '
+        "not four, once `capture.search` is counted",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
@@ -392,6 +418,10 @@ def swept_files() -> list[Path]:
                 continue
             if path == Path(__file__).resolve():
                 continue
+            found.append(path)
+    for file_name in SWEPT_FILES:
+        path = ROOT / file_name
+        if path.is_file():
             found.append(path)
     return sorted(found)
 
@@ -797,12 +827,22 @@ def test_a_planted_claim_of_every_shape_is_caught(tmp_path: Path) -> None:
 
 
 def test_a_correct_claim_of_every_shape_passes(tmp_path: Path) -> None:
-    """The green half. A rule that flagged every number would prove nothing."""
+    """The green half. A rule that flagged every number would prove nothing.
+
+    The cardinals come from `SPELLED` rather than from `_UNITS`, and that is the
+    boundary this module's own note on `SPELLED` predicted: `_UNITS` is dense
+    from zero to nineteen and the capability set reached twenty in WP-23, so the
+    bare index raised `IndexError` — a refusal rather than a false pass, which is
+    the direction it was built to fail in. `SPELLED` is the inverse of the
+    *built* cardinal map and so keeps spelling past every boundary the map
+    itself covers. `_ORDINAL_UNITS` is still indexed directly, because it is a
+    written tuple whose next boundary announces itself the same way this one did.
+    """
     planted = tmp_path / "planted.md"
     planted.write_text(
-        f"The set is closed at {_UNITS[capability_count()]}. There are "
-        f"{_UNITS[capability_count()]} capability names and "
-        f"{_UNITS[purpose_count()]} purposes, so a "
+        f"The set is closed at {SPELLED[capability_count()]}. There are "
+        f"{SPELLED[capability_count()]} capability names and "
+        f"{SPELLED[purpose_count()]} purposes, so a "
         f"{_ORDINAL_UNITS[capability_count() + 1]} capability would be new.\n",
         encoding="utf-8",
     )

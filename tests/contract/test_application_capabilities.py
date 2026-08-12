@@ -1,4 +1,4 @@
-"""All fifteen capabilities execute real behaviour, and disclose what they did.
+"""All twenty-six capabilities execute real behaviour, and disclose what they did.
 
 Each test below runs one capability through `ApplicationService.invoke` — the
 only public entry point there is — against the real fixture source provider and
@@ -132,9 +132,26 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
     )
     readiness = result["readiness"]
     assert isinstance(readiness, dict)
-    assert readiness["state"] == ReadinessState.READY.value
+    assert readiness["state"] == ReadinessState.DEGRADED.value
     assert readiness["implemented_capabilities"] == len(Capability)
     assert readiness["limitations"]
+    assert "Worker-plane health" in readiness["limitations"][-1]
+    assert result["worker_planes"] == [
+        {
+            "plane": "capture",
+            "state": "unavailable",
+            "backlog": None,
+            "dead_lettered": None,
+            "last_heartbeat_at": None,
+        },
+        {
+            "plane": "enrollment",
+            "state": "unavailable",
+            "backlog": None,
+            "dead_lettered": None,
+            "last_heartbeat_at": None,
+        },
+    ]
 
 
 def test_the_manifest_reports_the_media_types_the_extractor_can_actually_read(

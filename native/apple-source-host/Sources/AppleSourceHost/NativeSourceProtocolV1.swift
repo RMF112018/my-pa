@@ -4,8 +4,90 @@ import Foundation
 public enum NativeSourceProtocolV1 {
     public static let identifier = "my-pa.native-source.v1"
     public static let supportedIdentifiers = [identifier]
+    /// Frozen page ceiling. An unbounded page is an unbounded spool item, so the
+    /// bound belongs to the protocol rather than to whichever adapter happens to
+    /// build the page. Over-bound input is **refused**, never clamped: silently
+    /// serving 100 of the 5000 records asked for is data loss the caller cannot
+    /// see. Must equal `NATIVE_SOURCE_MAX_PAGE_SIZE` in
+    /// `src/my_pa/contracts/v1/native_sources.py`; a test compares the literals.
     public static let maximumPageSize = 100
+    /// Frozen cursor ceiling, in UTF-8 bytes. Must equal the `next_cursor`
+    /// `max_length` on `NativeAdmissionEnvelope`.
     public static let maximumCursorBytes = 512
+
+    // MARK: - WP-16 mail content bounds
+    //
+    // Four bounds, and they do three different things on purpose. A bound that
+    // always did the same thing would be wrong for at least one of these cases:
+    //
+    // * a body over `maximumMailBodyBytes` is **omitted whole and marked**, with
+    //   its true size recorded, because a body cut at a byte boundary is loss the
+    //   consumer cannot see, while an omission with the real size attached is
+    //   loss the consumer can measure and re-fetch;
+    // * a header block over `maximumMailHeaderBytes` **refuses the record**,
+    //   because headers are the record's identity and provenance and there is no
+    //   honest partial form of them;
+    // * attachments over `maximumMailAttachmentDescriptors` are **described up to
+    //   the ceiling and marked**, with the true count recorded;
+    // * `maximumMailAttachmentBytes` never gates bytes, because attachment bytes
+    //   are never carried at all — `MailAttachmentDescriptor` has no field to put
+    //   them in. It gates the *disposition*, so an attachment too large for a
+    //   future fetch path is labelled as such at discovery time.
+
+    /// Largest message body carried inside one record. Above this the body is
+    /// omitted and `MailContentCompleteness` records that it was.
+    public static let maximumMailBodyBytes = 262_144
+    /// Largest header block carried inside one record. Above this the record is
+    /// refused: there is no partial header block worth admitting.
+    public static let maximumMailHeaderBytes = 65_536
+    /// Largest number of attachment descriptors carried inside one record.
+    public static let maximumMailAttachmentDescriptors = 32
+    /// Attachment size above which the descriptor must be marked
+    /// `omittedOversize`. No attachment bytes are ever carried at any size.
+    public static let maximumMailAttachmentBytes = 26_214_400
+    /// UTF-8 ceiling on one component of a mail message identity. Composition is
+    /// refused, never trimmed: a truncated identity silently aliases two
+    /// different messages onto one record.
+    public static let maximumMailIdentityComponentBytes = 64
+
+    // MARK: - WP-17 calendar bounds
+    //
+    // Three bounds, all of which **refuse** rather than clamp. A calendar read
+    // is the one place where clamping is most tempting and least honest: a
+    // horizon quietly narrowed from ten years to one produces a page that is
+    // indistinguishable from "you have nothing scheduled after next spring".
+
+    /// UTF-8 ceiling on one component of a calendar identity. Same doctrine as
+    /// the mail component: composition is refused, never trimmed, because a
+    /// trimmed identity aliases two occurrences onto one record.
+    public static let maximumCalendarIdentityComponentBytes = 64
+    /// Widest window one calendar read may ask for, in whole days. A request
+    /// beyond this is **refused** (`calendarHorizonExceeded`); it is never
+    /// silently narrowed, because a narrowed horizon returns a page that reads
+    /// as complete and is not.
+    public static let maximumCalendarHorizonDays = 366
+    /// Ceiling on the occurrences one series may expand to inside one window.
+    /// Reached means the expansion is refused, not truncated: a series cut
+    /// mid-expansion loses occurrences no cursor describes.
+    public static let maximumCalendarSeriesOccurrences = 512
+
+    // MARK: - WP-18 contacts bounds
+    //
+    // Two bounds, and both **refuse**. Neither has an honest partial form: a
+    // trimmed identity aliases two people onto one record, and a trimmed
+    // membership list reports "this person is in no other group" where the
+    // source said otherwise. Truncating either is the §28 laundering the
+    // campaign keeps naming.
+
+    /// UTF-8 ceiling on one component of a contact identity. Same doctrine as
+    /// the mail and calendar components: composition is refused, never trimmed.
+    public static let maximumContactsIdentityComponentBytes = 64
+    /// Ceiling on the groups one contact observation may declare membership of
+    /// inside its container. Reached means the observation is **refused**
+    /// (`contactsGroupLimitExceeded`), never silently shortened: membership is
+    /// structure, and a shortened membership list is indistinguishable from a
+    /// person who is genuinely in fewer groups.
+    public static let maximumContactGroupMemberships = 64
 }
 
 /// Source categories supported by protocol v1. These are product categories,
@@ -14,6 +96,7 @@ public enum NativeSourceKind: String, Codable, CaseIterable, Sendable {
     case mail
     case calendar
     case contacts
+    case tasks
 }
 
 /// An identifier whose provider locator remains outside the public protocol.
@@ -162,7 +245,8 @@ public struct NativeReadCursor: RawRepresentable, Codable, Hashable, Sendable {
     public init?(rawValue: String) {
         guard !rawValue.isEmpty,
               rawValue.utf8.count <= NativeSourceProtocolV1.maximumCursorBytes,
-              !rawValue.contains(where: { $0.isWhitespace }) else {
+              !rawValue.contains(where: { $0.isWhitespace })
+        else {
             return nil
         }
         self.rawValue = rawValue
@@ -267,10 +351,28 @@ public struct NativeReadPage: Codable, Hashable, Sendable {
     public let records: [NativeSourceRecord]
     public let nextCursor: NativeReadCursor?
 
-    public init(records: [NativeSourceRecord], nextCursor: NativeReadCursor?) {
-        precondition(records.count <= NativeSourceProtocolV1.maximumPageSize)
+    /// Refuses an over-bound page rather than truncating it. Trimming to the
+    /// ceiling here would drop records the caller never learns about and would
+    /// make `nextCursor` a lie; the honest answer to "more than the protocol
+    /// admits" is to not produce the page at all.
+    public init(records: [NativeSourceRecord], nextCursor: NativeReadCursor?) throws {
+        guard records.count <= NativeSourceProtocolV1.maximumPageSize else {
+            throw NativeSourceContractError.invalidPageLimit
+        }
         self.records = records
         self.nextCursor = nextCursor
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case records, nextCursor
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            records: values.decode([NativeSourceRecord].self, forKey: .records),
+            nextCursor: values.decodeIfPresent(NativeReadCursor.self, forKey: .nextCursor)
+        )
     }
 }
 
@@ -288,4 +390,40 @@ public enum NativeSourceContractError: Error, Equatable, Sendable {
     case inconsistentEnvelope
     case invalidRecurrence
     case recurrenceLimitExceeded
+    case mailGenerationUnavailable
+    case mailIdentityTooLong
+    case mailInvalidIdentityComponent
+    case mailDateBoundNotSourceSide
+    case mailDateBoundViolated
+    case mailWindowNotDayAligned
+    case mailHeaderTooLarge
+    case mailBodyTooLarge
+    case mailAttachmentLimitExceeded
+    case mailContentInconsistent
+    case mailAutomationTraversalExceeded
+    case calendarIdentityTooLong
+    case calendarInvalidIdentityComponent
+    case calendarHorizonExceeded
+    case calendarScheduleInconsistent
+    case calendarUnknownTimezone
+    case calendarTruncationUndeclared
+    case calendarLifecycleInconsistent
+    case calendarHorizonViolated
+    case calendarUnboundedEnumeration
+    case calendarOriginalStartUnavailable
+    case contactsIdentityTooLong
+    case contactsInvalidIdentityComponent
+    case contactsIdentityEpochUnavailable
+    case contactsIdentityEpochMismatch
+    case contactsKeySetWidened
+    case contactsMembershipUnavailable
+    case contactsMembershipInconsistent
+    case contactsUnknownGroup
+    case contactsGroupLimitExceeded
+    case contactsTruncationUndeclared
+    case contactsUnboundedEnumeration
+    case contactsTraversalExceeded
+    case tasksIdentityInconsistent
+    case tasksTruncationUndeclared
+    case tasksTraversalExceeded
 }

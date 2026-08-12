@@ -54,6 +54,50 @@ export interface ReviewCase {
   readonly openedAt: IsoTimestamp;
 }
 
+/**
+ * One review case exactly as `review.list` emits it, and no more.
+ *
+ * Separate from `ReviewCase` above rather than merged with it, because the two
+ * carry genuinely different things. `ReviewCase` is the workbench's view and has
+ * `proposalSummary`, `evidence` and `impactSummary`; the backend listing has none
+ * of the three — it carries no capture or normalized-value content at all, by
+ * design, since a listing is not a read. Filling those fields with empty strings
+ * and empty arrays would report "no evidence" where the truth is "not returned
+ * by this capability", so the shapes stay distinct and `/api/review` says which
+ * one it is returning.
+ */
+export interface BackendReviewCase {
+  readonly reviewCaseId: OpaqueId;
+  readonly proposalId: OpaqueId;
+  readonly captureId: OpaqueId;
+  readonly versionId: OpaqueId;
+  readonly proposalType: string;
+  readonly proposalState: string;
+  readonly riskClass: string;
+  readonly openedAt: IsoTimestamp;
+  /** The version a `review.decide` must state to win the optimistic-concurrency check. */
+  readonly reviewVersion: number;
+  readonly latestDisposition: string | null;
+}
+
+/**
+ * The immutable receipt a real disposition produced, as `review.decide` emits it.
+ *
+ * `assertionId` and `receiptId` are null for a disposition that promotes nothing
+ * — a reject, defer or mark-unresolved records the decision without minting an
+ * assertion — and that null is the honest report of what happened rather than a
+ * missing field.
+ */
+export interface ReviewDecisionReceipt {
+  readonly reviewCaseId: OpaqueId;
+  readonly decisionId: OpaqueId;
+  readonly reviewVersion: number;
+  readonly disposition: string;
+  readonly proposalState: string;
+  readonly assertionId: OpaqueId | null;
+  readonly receiptId: OpaqueId | null;
+}
+
 export type ReviewDisposition = "accept" | "correct" | "reject" | "defer" | "unresolved";
 
 /** Situation lifecycle — parity with the Python `SituationState`. */
@@ -110,4 +154,105 @@ export interface PulseItem {
   readonly nextStep: string;
   readonly evidenceRefs: readonly OpaqueId[];
   readonly disclosure: DisclosureEnvelope;
+}
+
+/**
+ * The Pulse as the backend derives it, which is a different thing from the
+ * `PulseItem` above and therefore a different type.
+ *
+ * `PulseItem` is the fixture shape: a title, a reason, a consequence, a next
+ * step. A derived item has no title at all — nothing wrote one — and carries
+ * three things the fixture shape has no field for and which are the whole point
+ * of the derivation: a closed `reasonCode` naming *why now*, the `basisRefs` a
+ * reader can open to check that reason, and a bounded `priority` that is an
+ * evidentiary urgency rank rather than a position in a stream. Merging the two
+ * would mean inventing a title and dropping the basis, which is exactly the
+ * flattening that turns a Pulse back into a feed.
+ *
+ * `itemRef` names the accepted record the item is about; `generatedAt` is the
+ * moment of the read and is identical across every item in one answer, so it
+ * cannot be used to order them.
+ */
+export interface BackendPulseItem {
+  readonly pulseId: OpaqueId;
+  readonly itemType: string;
+  readonly itemRef: OpaqueId;
+  readonly reasonCode: string;
+  readonly reason: string;
+  readonly basisRefs: readonly OpaqueId[];
+  readonly consequence: string | null;
+  readonly nextStep: string | null;
+  readonly priority: number;
+  readonly generatedAt: IsoTimestamp;
+}
+
+/**
+ * A Situation as `continuity.situations` returns it.
+ *
+ * Separate from `Situation` above for the reason `BackendReviewCase` is
+ * separate from `ReviewCase`: the fixture shape carries a `disclosure` on every
+ * row and a `principalId`, and the backend listing carries neither — the
+ * disclosure belongs to the answer rather than to each row, and the Principal is
+ * the session's and is never echoed back.
+ */
+export interface BackendSituation {
+  readonly situationId: OpaqueId;
+  readonly title: string;
+  readonly state: SituationState;
+  readonly description: string | null;
+  readonly objectRefs: readonly OpaqueId[];
+  readonly openedAt: IsoTimestamp;
+  readonly closedAt: IsoTimestamp | null;
+  readonly outcome: string | null;
+}
+
+/** A Project as `continuity.projects` returns it. Same distinction as above. */
+export interface BackendProject {
+  readonly projectId: OpaqueId;
+  readonly name: string;
+  readonly state: ProjectState;
+  readonly description: string | null;
+  readonly participants: readonly string[];
+  readonly openedAt: IsoTimestamp;
+  readonly closedAt: IsoTimestamp | null;
+}
+
+/**
+ * One stored capture as `capture.list` returns it.
+ *
+ * **There is no text field, and its absence is structural rather than an
+ * omission.** The Python `CaptureListEntry` has no field content could go in
+ * (`QC-AC-041`), so a listing cannot become a second read of what was captured.
+ * This shape mirrors that exactly: identifiers, an owner, counts, and two
+ * moments. A renderer that wanted to show a preview would have to fetch it, and
+ * fetching it is a different capability under a different audit.
+ *
+ * `ownerPrincipalId` is the backend's own answer about the row, not the caller's
+ * session identity re-stated — it is rendered so a reader can see that every row
+ * they were shown belongs to them.
+ */
+export interface BackendCaptureEntry {
+  readonly captureId: OpaqueId;
+  readonly ownerPrincipalId: OpaqueId;
+  readonly createdAt: IsoTimestamp;
+  readonly versionCount: number;
+  readonly latestVersionId: OpaqueId;
+  readonly latestVersionNumber: number;
+  readonly latestRecordedAt: IsoTimestamp;
+}
+
+/**
+ * One hit from `capture.search`.
+ *
+ * Carries no snippet and no text for the same reason the listing carries none,
+ * so a reader can see *that* a capture matched and not *why*. The backend states
+ * that limitation on the answer; the Library surface renders it rather than
+ * quietly presenting a hit list as if it were self-explanatory.
+ */
+export interface BackendCaptureMatch {
+  readonly captureId: OpaqueId;
+  readonly versionId: OpaqueId;
+  readonly versionNumber: number;
+  readonly characterCount: number;
+  readonly recordedAt: IsoTimestamp;
 }

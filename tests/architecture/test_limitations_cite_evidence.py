@@ -57,6 +57,7 @@ TRACKED_ROOTS = (
     "scripts/",
     "src/",
     "tests/",
+    "web/",
 )
 
 #: Suffixes of repository-**root** files a citation may name.

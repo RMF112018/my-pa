@@ -327,7 +327,7 @@ public struct NativeAdmissionEnvelope: Codable, Hashable, Sendable {
         try self.init(
             metadata: metadata,
             request: request,
-            page: NativeReadPage(records: records, nextCursor: nextCursor)
+            page: try NativeReadPage(records: records, nextCursor: nextCursor)
         )
     }
 }

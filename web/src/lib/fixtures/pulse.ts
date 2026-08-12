@@ -4,12 +4,20 @@
  * Every item is labeled `coverage: "synthetic"` / `authority:
  * "synthetic_fixture"` so the UI never presents fixture data as real.
  * Real projections replace this module when the backend read models land.
+ *
+ * **Both exports are gated** (`./gate`). `syntheticDisclosure` is gated as
+ * firmly as the data is, because the label is the half that can lie on its own:
+ * a route that attached it to a real backend answer, or that attached a real
+ * disclosure to fixture data, would be misreporting provenance in the one field
+ * a reader has to check provenance with.
  */
 import type { PulseItem } from "@/contracts/views";
 import type { PrincipalSession } from "@/contracts/identity";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
+import { requireSyntheticProvider } from "@/lib/fixtures/gate";
 
 export function syntheticDisclosure(scope: string): DisclosureEnvelope {
+  requireSyntheticProvider();
   return {
     scope,
     coverage: "synthetic",
@@ -22,6 +30,7 @@ export function syntheticDisclosure(scope: string): DisclosureEnvelope {
 
 /** Deterministic synthetic Pulse for a principal. */
 export function syntheticPulse(principal: PrincipalSession): readonly PulseItem[] {
+  requireSyntheticProvider();
   const pid = principal.principalId;
   return [
     {

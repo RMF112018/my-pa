@@ -48,18 +48,8 @@ DOMAIN_SCHEMAS = (
 
 
 def _engine() -> Engine:
-    """The engine every subcommand here runs on.
-
-    **No `statement_timeout`, deliberately.** This CLI loads and verifies a
-    4.37 GB legacy corpus: a batch insert, a `COUNT(*)` over a fully populated
-    domain table, and the constraint checks that follow one are statements sized
-    to the corpus rather than to a request. Bounding them would convert a slow
-    load into a failed one. The gateway, the source CLI, the health probe and the
-    worker all pass `MY_PA_STATEMENT_TIMEOUT_MS`; this is one of the three places
-    that must not.
-    """
-    # statement-timeout-exempt: bulk corpus load, sized to the corpus.
-    return create_database_engine(load_settings().database_url)
+    # statement-timeout-exempt: operator migration phases carry their own bounds.
+    return create_database_engine(load_settings().parsed_database_url(), statement_timeout_ms=None)
 
 
 def _init_run(args: argparse.Namespace) -> int:

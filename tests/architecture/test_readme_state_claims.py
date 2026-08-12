@@ -29,9 +29,11 @@ from my_pa.application.capabilities import build_capability_manifest, build_read
 from my_pa.application.service import _HANDLERS
 from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
 from my_pa.contracts.v1.capabilities import Availability, ReadinessState
+from my_pa.domain.identity.operation import Capability
 
 ROOT = Path(__file__).resolve().parents[2]
 README = ROOT / "README.md"
+WEB_README = ROOT / "web" / "README.md"
 RELATIONSHIP_PACKAGE = ROOT / "src" / "my_pa" / "domain" / "relationship"
 SOURCE_INDEX = ROOT / "docs" / "00_REPOSITORY_SOURCE_INDEX.md"
 SPECS_INDEX = ROOT / "docs" / "specs" / "README.md"
@@ -52,6 +54,24 @@ _HEADING = re.compile(r"^#{1,6} ", re.MULTILINE)
 #: A settings URL that is well formed and unreachable, as in `tests/unit`.
 #: Nothing connects; the limits are what this test is after.
 _A_URL = f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere"
+
+#: The paragraph naming the frontend's personal-data ingestion posture:
+#: Apple-first, and Microsoft Graph retained but off by default. Anchored on
+#: its opening words and read to the next blank line, for the same reason the
+#: state paragraph is: reflowing it is safe, moving or dropping it is not silent.
+INGESTION_CLAIM = re.compile(r"^A frontend exists under.+?\n\n", re.DOTALL | re.MULTILINE)
+
+
+def frontend_paragraph() -> str:
+    """The paragraph stating the ingestion posture, or a loud failure if it moved."""
+    match = INGESTION_CLAIM.search(README.read_text(encoding="utf-8"))
+    assert match is not None, (
+        "The README paragraph beginning 'A frontend exists under' is gone. It is "
+        "the only place the Apple-first / Graph-off-by-default ingestion posture "
+        "is stated, and these tests are what keeps that statement true. Move the "
+        "anchor deliberately, not by watching this pass."
+    )
+    return match.group(0)
 
 
 def claimed_tokens() -> set[str]:
@@ -176,19 +196,13 @@ def test_the_readme_names_the_readiness_state_the_build_reports() -> None:
 
 
 def _alembic_identity() -> tuple[int, str]:
-    revisions: dict[str, str | None] = {}
-    identifier = re.compile(r'^revision: str = "(?P<id>[0-9a-f]+)"', re.MULTILINE)
-    parent = re.compile(r'^down_revision: str \| None = "(?P<id>[0-9a-f]+)"', re.MULTILINE)
-    for path in sorted((ROOT / "migrations" / "versions").glob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        found = identifier.search(text)
-        if found is None:
-            continue
-        below = parent.search(text)
-        revisions[found["id"]] = below["id"] if below else None
-    heads = set(revisions) - {value for value in revisions.values() if value is not None}
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
+    heads = script.get_heads()
     assert len(heads) == 1
-    return len(revisions), heads.pop()
+    return len(list(script.walk_revisions())), heads[0]
 
 
 def test_readme_derives_the_current_alembic_count_and_head() -> None:
@@ -199,6 +213,23 @@ def test_readme_derives_the_current_alembic_count_and_head() -> None:
         15: "Fifteen",
         16: "Sixteen",
         17: "Seventeen",
+        18: "Eighteen",
+        19: "Nineteen",
+        20: "Twenty",
+        21: "Twenty-one",
+        22: "Twenty-two",
+        23: "Twenty-three",
+        24: "Twenty-four",
+        25: "Twenty-five",
+        26: "Twenty-six",
+        27: "Twenty-seven",
+        28: "Twenty-eight",
+        29: "Twenty-nine",
+        30: "Thirty",
+        31: "Thirty-one",
+        32: "Thirty-two",
+        33: "Thirty-three",
+        34: "Thirty-four",
     }
     count, head = _alembic_identity()
     assert count in words, "extend the readable README count vocabulary"
@@ -217,13 +248,21 @@ def test_relationships_are_not_listed_as_unimplemented_once_the_package_exists()
     defect as a rule that scans the wrong section, one layer along, so the list
     the region is *about* is what has to be there before its absence means
     anything.
+
+    The threshold is one entry rather than two. It arrived here as two, keyed to
+    a README on another branch whose not-implemented list was longer; this
+    repository's list currently names a single item, so two would be a spelled
+    count of a set that shrinks as packages land — the defect this file's
+    siblings were just unkeyed from. One entry is the whole of what the absence
+    assertion needs: at zero the region has collapsed and `not in` decides
+    nothing, at one or more it is demonstrably the list.
     """
     assert RELATIONSHIP_PACKAGE.is_dir()
     readme = README.read_text(encoding="utf-8")
     section = readme.split("Not implemented.", 1)[1].split("Accordingly,", 1)[0]
     entries = re.findall(r"^- .+$", section, re.MULTILINE)
-    assert len(entries) >= 2, (
-        f"the README's not-implemented region holds {len(entries)} list entries; "
+    assert entries, (
+        "the README's not-implemented region holds no list entries; "
         "the absence assertion below would be passing on nothing"
     )
     assert "relationship identity and profiles" not in section.lower()
@@ -251,3 +290,127 @@ def test_wp12_stays_provisional_and_operator_authorized_without_boundary_inferen
     assert "mcv is not complete" in normalized
     assert "wp-12 is post-mcv" not in normalized
     assert "no repository wp-12 exists" not in normalized
+
+
+def test_readme_declares_the_current_remediation_lineage_and_preserves_history() -> None:
+    """Current branch/base authority and the former lineage must not blur."""
+    readme = README.read_text(encoding="utf-8")
+    assert "## Operating lineage" in readme, "The README's 'Operating lineage' section is gone."
+    section = readme.split("## Operating lineage", 1)[1].split("## Current state", 1)[0]
+    assert "bf/pilot-blocker-remediation" in section
+    assert "9b35476b70fe4fbc03bb8f9835d93c1b71089bbe" in section
+    assert "recovery/pre-20260805-utc-rollback-c9fb513" in section
+    assert "campaign history" in section and "no longer current-state authority" in section
+
+
+def test_current_state_docs_name_the_current_capability_and_migration_counts() -> None:
+    """Protect the two exact-state figures that repeatedly went stale."""
+    documents = {
+        "system context": ROOT / "docs" / "architecture" / "system-context.md",
+        "gateway runbook": ROOT / "ops" / "runbooks" / "gateway-operations.md",
+        "MCP runbook": ROOT / "ops" / "runbooks" / "mcp-and-cli-operations.md",
+    }
+    for label, path in documents.items():
+        text = path.read_text(encoding="utf-8")
+        assert "twenty-six" in text, f"{label} lost the current capability count"
+        assert "thirty-four" in text, f"{label} lost the current revision count"
+        assert "b4e8d2c7a613" in text, f"{label} lost the current Alembic head"
+
+
+def test_readme_declares_apple_first_personal_data_ingestion() -> None:
+    """The four Apple source families must all still be named, by name."""
+    paragraph = frontend_paragraph()
+    assert "Personal-data ingestion is Apple-first" in paragraph, (
+        "The README's frontend paragraph no longer states that personal-data "
+        "ingestion is Apple-first."
+    )
+    for source in ("Apple Mail", "Calendar", "Contacts", "Tasks/To-Do"):
+        assert source in paragraph, (
+            f"The README's frontend paragraph no longer names {source!r} among "
+            "the Apple source families ingestion is drawn from."
+        )
+    assert "native Apple architecture" in paragraph, (
+        "The README's frontend paragraph no longer attributes ingestion to the "
+        "native Apple architecture."
+    )
+
+
+def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
+    """Keep the web current-state map tied to the route source, not campaign history."""
+    text = WEB_README.read_text(encoding="utf-8")
+    lowered = text.lower()
+    for route in (
+        "/api/capture",
+        "/api/library",
+        "/api/projects",
+        "/api/pulse",
+        "/api/relationships/:personId/timeline",
+        "/api/reveal",
+        "/api/review",
+        "/api/situations",
+        "/api/system",
+        "/api/session",
+        "/auth/sign-in",
+        "/auth/callback",
+    ):
+        assert route in text, f"web README lost current route {route}"
+
+    capability_values = {capability.value for capability in Capability}
+    routed = set()
+    for path in (ROOT / "web" / "src" / "app" / "api").rglob("route.ts"):
+        routed.update(re.findall(r'["\']([a-z]+(?:\.[a-z]+)+)["\']', path.read_text()))
+    routed &= capability_values
+    assert routed, "the API route scan found no capability names"
+    documented = set(re.findall(r"`([a-z]+(?:\.[a-z]+)+)`", text))
+    assert routed <= documented, (
+        f"web README omits routed capabilities {sorted(routed - documented)}"
+    )
+    assert "twenty-six capability names" in lowered
+    assert "worker_planes" in text and "capture" in text and "enrollment" in text
+    assert "managed-document lifecycle" in lowered
+
+
+def test_web_readme_does_not_restore_superseded_frontend_claims() -> None:
+    text = WEB_README.read_text(encoding="utf-8").lower()
+    for stale in (
+        "operating lineage",
+        "relationship timeline | `/api/relationships/:id/timeline` | **not wired**",
+        "this tier holds none",
+        "implements no real sign-in",
+        "dispatches fifteen",
+        "none exists",
+    ):
+        assert stale not in text, f"web README restored stale claim: {stale}"
+    for current in (
+        "authorization-code",
+        "pkce s256",
+        "process-local",
+        "server-held bearer",
+        "explicitly release it for retry or delete the local copy",
+    ):
+        assert current in text, f"web README lost current claim: {current}"
+
+
+def test_root_readme_distinguishes_credentialless_local_mode_from_entra() -> None:
+    text = README.read_text(encoding="utf-8")
+    assert "no credential is issued, read, or required" not in text
+    assert "`local_operator` mode" in text
+    assert "`entra` mode it requires and validates a bearer token" in text
+    assert "credential creation/disclosure/rotation" in text
+
+
+def test_readme_declares_graph_off_by_default_and_entra_separate_from_activation() -> None:
+    """Retained-but-inactive is a specific, invertible claim; guard the wording
+    that makes it specific rather than a generic mention of Microsoft Graph."""
+    paragraph = frontend_paragraph()
+    assert "off by default and not an active personal-data ingestion path" in paragraph, (
+        "The README's frontend paragraph no longer states that Microsoft Graph "
+        "is off by default and not an active personal-data ingestion path."
+    )
+    assert "Entra authentication" in paragraph, (
+        "The README's frontend paragraph no longer mentions Entra authentication."
+    )
+    assert "separate concern from Graph connector activation" in paragraph, (
+        "The README's frontend paragraph no longer states that Entra "
+        "authentication is a separate concern from Graph connector activation."
+    )

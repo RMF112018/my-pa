@@ -23,6 +23,8 @@ import io
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Final
+from uuid import uuid4
 
 import pytest
 from alembic import command
@@ -620,7 +622,22 @@ def test_reusing_a_key_with_a_different_request_is_a_conflict(
     assert raised.value.enrollment_id == accepted.enrollment.enrollment_id
 
 
-def _enqueued(connection: Connection, *, max_attempts: int = 3) -> str:
+#: The Principal whose queue every job test below claims from.
+#:
+#: One value rather than a fresh identifier per job, because `claim_job` is
+#: partitioned by Principal (WP-04, revision `4f1a8b6d92e3`): the contended
+#: tests enqueue two jobs and expect two workers to take one each, which is a
+#: claim about `SKIP LOCKED` and not about the partition, so both jobs have to
+#: be in the same partition for the claim to be reachable at all.
+QUEUE_PRINCIPAL: Final = "prn_qqqq0004qqqqqqqqqqqqqq00000004"
+
+
+def _enqueued(
+    connection: Connection,
+    *,
+    max_attempts: int = 3,
+    principal_id: str = QUEUE_PRINCIPAL,
+) -> str:
     """A source, an enrollment, and one queued job. Returns the operation id."""
     source = register_source(
         connection,
@@ -630,7 +647,12 @@ def _enqueued(connection: Connection, *, max_attempts: int = 3) -> str:
         native_root=NATIVE_ROOT,
     )
     accepted = accept_enrollment(
-        connection, _request(source.source_id, issue_identifier(IdKind.PRINCIPAL))
+        connection,
+        _request(
+            source.source_id,
+            principal_id,
+            idempotency_key=f"enroll-{uuid4().hex[:10]}",
+        ),
     )
     return enqueue_job(connection, accepted.enrollment.enrollment_id, max_attempts=max_attempts)
 
@@ -671,15 +693,22 @@ def test_a_worker_that_crashes_on_its_final_attempt_reaches_a_terminal_state(
     """
     with knowledge_engine.begin() as connection:
         operation_id = _enqueued(connection, max_attempts=1)
-        claimed = claim_job(connection, owner="worker-one", lease_seconds=60)
+        claimed = claim_job(
+            connection, principal_id=QUEUE_PRINCIPAL, owner="worker-one", lease_seconds=60
+        )
         assert claimed is not None
         assert claimed.attempt == 1
 
         # The worker vanishes: it neither completes nor releases.
         _expire_lease(connection, operation_id)
 
-        assert claim_job(connection, owner="worker-two", lease_seconds=60) is None
-        assert job_state(connection, operation_id) is JobState.FAILED
+        assert (
+            claim_job(
+                connection, principal_id=QUEUE_PRINCIPAL, owner="worker-two", lease_seconds=60
+            )
+            is None
+        )
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.FAILED
         # Terminal in the column, not only in the answer.
         assert _stored_row(connection, operation_id) == ("failed", None, "unavailable")
 
@@ -695,18 +724,23 @@ def test_an_abandoned_final_attempt_reads_as_failed_before_anything_reclaims_it(
     """
     with knowledge_engine.begin() as connection:
         operation_id = _enqueued(connection, max_attempts=1)
-        assert claim_job(connection, owner="worker-one", lease_seconds=60) is not None
+        assert (
+            claim_job(
+                connection, principal_id=QUEUE_PRINCIPAL, owner="worker-one", lease_seconds=60
+            )
+            is not None
+        )
         _expire_lease(connection, operation_id)
 
         # Reported terminal immediately, without a write.
-        assert job_state(connection, operation_id) is JobState.FAILED
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.FAILED
         assert _stored_row(connection, operation_id)[0] == "running"
 
-        assert reap_abandoned_jobs(connection) == 1
+        assert reap_abandoned_jobs(connection, principal_id=QUEUE_PRINCIPAL) == 1
         assert _stored_row(connection, operation_id) == ("failed", None, "unavailable")
         # Idempotent: the first call left nothing for the second.
-        assert reap_abandoned_jobs(connection) == 0
-        assert job_state(connection, operation_id) is JobState.FAILED
+        assert reap_abandoned_jobs(connection, principal_id=QUEUE_PRINCIPAL) == 0
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.FAILED
 
 
 @pytest.mark.database
@@ -716,10 +750,15 @@ def test_a_live_lease_is_not_reaped_however_many_attempts_it_has_used(
     """The paired negative: work in progress on its last attempt is still running."""
     with knowledge_engine.begin() as connection:
         operation_id = _enqueued(connection, max_attempts=1)
-        assert claim_job(connection, owner="worker-one", lease_seconds=600) is not None
+        assert (
+            claim_job(
+                connection, principal_id=QUEUE_PRINCIPAL, owner="worker-one", lease_seconds=600
+            )
+            is not None
+        )
 
-        assert reap_abandoned_jobs(connection) == 0
-        assert job_state(connection, operation_id) is JobState.RUNNING
+        assert reap_abandoned_jobs(connection, principal_id=QUEUE_PRINCIPAL) == 0
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.RUNNING
         assert _stored_row(connection, operation_id)[0] == "running"
         assert complete_job(connection, operation_id, owner="worker-one") is True
 
@@ -737,19 +776,22 @@ def test_a_job_is_claimed_once_and_an_expired_lease_is_reclaimed(
             classification=Classification.SYNTHETIC_TEST,
             native_root=NATIVE_ROOT,
         )
-        accepted = accept_enrollment(
-            connection, _request(source.source_id, issue_identifier(IdKind.PRINCIPAL))
-        )
+        accepted = accept_enrollment(connection, _request(source.source_id, QUEUE_PRINCIPAL))
         operation_id = enqueue_job(connection, accepted.enrollment.enrollment_id)
 
-        first = claim_job(connection, owner="worker-one", lease_seconds=1)
+        first = claim_job(
+            connection, principal_id=QUEUE_PRINCIPAL, owner="worker-one", lease_seconds=1
+        )
         assert first is not None
         assert first.operation_id == operation_id
         assert first.attempt == 1
-        assert job_state(connection, operation_id) is JobState.RUNNING
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.RUNNING
 
         # A live lease is not claimable by anyone else.
-        assert claim_job(connection, owner="worker-two", lease_seconds=1) is None
+        assert (
+            claim_job(connection, principal_id=QUEUE_PRINCIPAL, owner="worker-two", lease_seconds=1)
+            is None
+        )
 
     with knowledge_engine.begin() as connection:
         # Expire the lease the way a crashed worker would: by the server clock.
@@ -760,7 +802,9 @@ def test_a_job_is_claimed_once_and_an_expired_lease_is_reclaimed(
             ),
             {"operation_id": operation_id},
         )
-        second = claim_job(connection, owner="worker-two", lease_seconds=60)
+        second = claim_job(
+            connection, principal_id=QUEUE_PRINCIPAL, owner="worker-two", lease_seconds=60
+        )
         assert second is not None
         assert second.operation_id == operation_id
         assert second.attempt == 2
@@ -768,7 +812,9 @@ def test_a_job_is_claimed_once_and_an_expired_lease_is_reclaimed(
         # The worker that lost the lease cannot report on the work.
         assert complete_job(connection, operation_id, owner="worker-one") is False
         assert complete_job(connection, operation_id, owner="worker-two") is True
-        assert job_state(connection, operation_id) is JobState.SUCCEEDED
+        assert (
+            job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.SUCCEEDED
+        )
 
 
 @pytest.mark.database
@@ -781,12 +827,12 @@ def test_attempts_are_bounded_and_end_in_a_terminal_state(knowledge_engine: Engi
             classification=Classification.SYNTHETIC_TEST,
             native_root=NATIVE_ROOT,
         )
-        accepted = accept_enrollment(
-            connection, _request(source.source_id, issue_identifier(IdKind.PRINCIPAL))
-        )
+        accepted = accept_enrollment(connection, _request(source.source_id, QUEUE_PRINCIPAL))
         operation_id = enqueue_job(connection, accepted.enrollment.enrollment_id, max_attempts=2)
 
-        claimed = claim_job(connection, owner="worker-one", lease_seconds=60)
+        claimed = claim_job(
+            connection, principal_id=QUEUE_PRINCIPAL, owner="worker-one", lease_seconds=60
+        )
         assert claimed is not None
         assert (
             release_job(
@@ -798,7 +844,9 @@ def test_attempts_are_bounded_and_end_in_a_terminal_state(knowledge_engine: Engi
             is JobState.QUEUED
         )
 
-        claimed = claim_job(connection, owner="worker-one", lease_seconds=60)
+        claimed = claim_job(
+            connection, principal_id=QUEUE_PRINCIPAL, owner="worker-one", lease_seconds=60
+        )
         assert claimed is not None
         assert claimed.attempt == 2
         assert (
@@ -812,8 +860,13 @@ def test_attempts_are_bounded_and_end_in_a_terminal_state(knowledge_engine: Engi
         )
 
         # Exhausted work is not handed out again.
-        assert claim_job(connection, owner="worker-one", lease_seconds=60) is None
-        assert job_state(connection, operation_id) is JobState.FAILED
+        assert (
+            claim_job(
+                connection, principal_id=QUEUE_PRINCIPAL, owner="worker-one", lease_seconds=60
+            )
+            is None
+        )
+        assert job_state(connection, operation_id, principal_id=QUEUE_PRINCIPAL) is JobState.FAILED
 
 
 #: Long enough that a healthy claim never trips it, short enough that a claim
@@ -839,8 +892,8 @@ def test_two_simultaneous_workers_do_not_take_the_same_job(knowledge_engine: Eng
     with knowledge_engine.connect() as alpha, knowledge_engine.connect() as beta:
         beta.execute(text(f"SET LOCAL statement_timeout = '{CONTENDED_CLAIM_TIMEOUT_MS}ms'"))
 
-        first = claim_job(alpha, owner="worker-one", lease_seconds=60)
-        second = claim_job(beta, owner="worker-two", lease_seconds=60)
+        first = claim_job(alpha, principal_id=QUEUE_PRINCIPAL, owner="worker-one", lease_seconds=60)
+        second = claim_job(beta, principal_id=QUEUE_PRINCIPAL, owner="worker-two", lease_seconds=60)
 
         assert first is not None
         assert second is not None
@@ -862,11 +915,14 @@ def test_a_contended_claim_yields_rather_than_waiting(knowledge_engine: Engine) 
     with knowledge_engine.connect() as alpha, knowledge_engine.connect() as beta:
         beta.execute(text(f"SET LOCAL statement_timeout = '{CONTENDED_CLAIM_TIMEOUT_MS}ms'"))
 
-        first = claim_job(alpha, owner="worker-one", lease_seconds=60)
+        first = claim_job(alpha, principal_id=QUEUE_PRINCIPAL, owner="worker-one", lease_seconds=60)
         assert first is not None
         assert first.operation_id == operation_id
 
-        assert claim_job(beta, owner="worker-two", lease_seconds=60) is None
+        assert (
+            claim_job(beta, principal_id=QUEUE_PRINCIPAL, owner="worker-two", lease_seconds=60)
+            is None
+        )
 
 
 @pytest.mark.database

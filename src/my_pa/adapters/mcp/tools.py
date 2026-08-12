@@ -81,11 +81,30 @@ def _schema_for(annotation: Any) -> dict[str, Any] | None:  # noqa: ANN401 - a t
         # has a name for which kind, so this publishes the wire shape rather than
         # the Python type.
         return {"type": "string", "format": "date-time"}
+    if annotation is bytes:
+        # A command holds real `bytes` — a managed document body — and JSON has
+        # no byte string, so the wire form is base64 and
+        # `adapters.normalization` is what decodes it, exactly as it converts a
+        # string into a `datetime`. This publishes the wire shape rather than the
+        # Python type, and `contentEncoding` is JSON Schema's own name for which
+        # kind of string it is. Nothing here says how large one may be: the
+        # request ceiling belongs to `adapters.normalization` and the document
+        # ceiling to `domain.documents.managed`, and restating either as a
+        # `maxLength` would be a third copy able to disagree with both.
+        return {"type": "string", "contentEncoding": "base64"}
     origin = get_origin(annotation)
     if origin is UnionType or origin is Union:
         optional = [member for member in get_args(annotation) if member is not type(None)]
         return _schema_for(optional[0]) if len(optional) == 1 else None
     if origin is tuple:
+        # `arguments` is also what a caller's request document is called in
+        # `server.py`, and `tests/architecture/test_mcp_is_a_thin_adapter.py`
+        # forbids reading a field out of one. That guard follows the *value* — a
+        # request taints only the parameters it arrives in and the locals it flows
+        # into — so a local this module binds to a tuple of type arguments is not
+        # a request whatever it is called. The plain name is kept deliberately: a
+        # guard rewritten to match names again would report this line, which is
+        # the regression showing up as a failure rather than as a rename.
         arguments = get_args(annotation)
         if len(arguments) == 2 and arguments[1] is Ellipsis:
             item = _schema_for(arguments[0])
@@ -149,6 +168,8 @@ def input_schema_for(command: type) -> dict[str, Any]:
     required only when the command has a field that is.
     """
     properties, required, definitions = _envelope_schema()
+    # `payload` for the reason `arguments` above carries: this is a generated
+    # JSON Schema built from a command type, and nothing a caller sent reaches it.
     payload = payload_schema_for(command)
     properties[PAYLOAD_KEY] = payload
     if payload["required"]:

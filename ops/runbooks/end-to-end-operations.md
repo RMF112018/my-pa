@@ -1,5 +1,12 @@
 # End-to-end operations
 
+> **2026-08-12 local-candidate correction.** The exact remediation candidate is
+> at Alembic head `b4e8d2c7a613` (34 revisions). The older step transcripts
+> below remain historical evidence at their explicitly named heads; do not use
+> their head values as current-state claims. Current blocker closure and
+> validation are recorded in
+> [`../../docs/campaign/PILOT-BLOCKER-REMEDIATION-20260812.md`](../../docs/campaign/PILOT-BLOCKER-REMEDIATION-20260812.md).
+
 The ordered sequence for standing the local candidate up from an empty database,
 walking one enrollment from registration to `knowledge.read`, and stopping both
 processes cleanly.
@@ -337,10 +344,10 @@ Consequences, stated rather than worked around:
 ## What this sequence does not establish
 
 `docs/operations/mcv-limitations.md` is the list. The four that matter most for
-an operator reading this page: the corpus is four synthetic objects and nothing
-wider; there is no authentication mechanism and no principal beyond the local
-one; recovery is proven for a killed worker and an expired lease and for nothing
-else; and a database reachable but lacking `knowledge.audit_events`, which
+an operator reading this page: the corpus is synthetic and nothing wider has
+been proved; Entra authentication and multi-principal worker consumption now
+exist but no live tenant has exercised them; recovery evidence remains bounded;
+and a database reachable but lacking `knowledge.audit_events`, which
 `9c6b4a18ed72` creates, answers `internal_error` from the application to every
 capability, while one revision short of head it answers `internal_error` to
 `sources.enroll` alone — which is why step 1 exists and why it checks head

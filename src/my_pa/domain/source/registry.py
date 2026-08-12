@@ -68,6 +68,7 @@ class SourceProviderKind(StrEnum):
     APPLE_MAIL = "apple_mail"
     APPLE_CALENDAR = "apple_calendar"
     APPLE_CONTACTS = "apple_contacts"
+    APPLE_TASKS = "apple_tasks"
 
 
 class InvalidSourceLabelError(ValueError):

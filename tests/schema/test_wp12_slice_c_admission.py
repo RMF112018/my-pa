@@ -9,6 +9,7 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
+from itertools import count
 from threading import Barrier
 from typing import Any
 
@@ -189,14 +190,19 @@ def _binding() -> NativeBucketBindingRecord:
     )
 
 
-def _authority(store: SqlNativeSourceControlStore) -> NativeAdmissionAuthority:
+_AUTHORITY_REQUESTS = count(1)
+
+
+def _authority(
+    store: SqlNativeSourceControlStore, *, request_id: str | None = None
+) -> NativeAdmissionAuthority:
     snapshot = store.latest_configuration(CONFIGURATION)
     assert snapshot is not None
     return store.issue_sync_authority(
         snapshot.configuration,
         _binding(),
         audit_id=AUDIT,
-        request_id="read.synthetic",
+        request_id=request_id or f"read.synthetic.{next(_AUTHORITY_REQUESTS)}",
         issued_at=WHEN,
         expires_at=WHEN + timedelta(minutes=5),
     )
@@ -231,7 +237,27 @@ def _envelope(
     return NativeAdmissionEnvelope.model_validate(wire)
 
 
+@pytest.mark.database
+def test_authority_issuance_reuses_one_request_for_spool_recovery(c_engine: Engine) -> None:
+    _seed(c_engine)
+    store = SqlNativeSourceControlStore(c_engine)
+    first = _authority(store, request_id="read.recoverable")
+    replay = _authority(store, request_id="read.recoverable")
+
+    assert replay == first
+
+
 class _PagedSyntheticHost:
+    def acknowledge(self, envelope_id: str) -> None:
+        del envelope_id
+
+    def pending(self, selection: NativeBucketSelection) -> dict[str, Any] | None:
+        del selection
+        return None
+
+    def quarantine(self, envelope_id: str) -> None:
+        del envelope_id
+
     def negotiate(self, supported_versions: tuple[str, ...]) -> str:
         assert supported_versions == (NATIVE_SOURCE_PROTOCOL_V1,)
         return NATIVE_SOURCE_PROTOCOL_V1

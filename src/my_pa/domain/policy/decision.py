@@ -153,6 +153,40 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.CAPTURE_SEARCH,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
+        # `knowledge.reveal` names a subject, not a source. The rows it
+        # traverses belong to the capture plane, which belongs to no configured
+        # source and no enrollment, so a request that named a scope would be
+        # naming a grant this plane cannot hold.
+        Capability.KNOWLEDGE_REVEAL,
+        # The three continuity reads name a Principal, not a source. Situations,
+        # Projects and the Pulse belong to no configured source and to no
+        # enrollment — a Situation *references* objects across planes and owns
+        # none of them — so a request that named a scope would be naming a grant
+        # this plane cannot hold, exactly as `knowledge.reveal` cannot.
+        Capability.CONTINUITY_PULSE,
+        Capability.CONTINUITY_SITUATIONS,
+        Capability.CONTINUITY_PROJECTS,
+        # `knowledge.coverage` names a Principal, not a source. Its whole subject
+        # is "everything you hold", which the store derives from
+        # `enrollments.principal_id`; a request that named a scope would be asking
+        # a corpus-wide question about one source, and answering it would be
+        # answering a different question from the one authorized. The scope it
+        # reads is therefore not caller-stated at all, which is what puts it here
+        # rather than under the held-scope rule below.
+        Capability.KNOWLEDGE_COVERAGE,
+        # The managed-document plane names a document, not a source. A managed
+        # document is the product's own custody under `AGENTS.md` section 4 —
+        # written into the designated managed root and never into a source root —
+        # so its rows carry no `source_id` and no `enrollment_id` for a scope to
+        # be compared against, exactly as a capture's do not. Requiring one would
+        # make the whole plane permanently unusable; naming one would be naming a
+        # grant this plane cannot hold.
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_READ,
+        Capability.DOCUMENTS_LIST,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
     }
 )
 

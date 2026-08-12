@@ -63,26 +63,36 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
     CaptureSummary,
+    ContinuityReadRepository,
     EnrollmentRepository,
     EvidenceUnavailableError,
     KnowledgeRecord,
     KnowledgeRepository,
+    ManagedDocumentRepository,
     Operation,
     OperationQueue,
+    ProjectRepository,
+    PulseRepository,
     RepositoryFailureError,
     ReviewDecisionRequest,
     ReviewRepository,
     SearchOutcome,
+    SituationRepository,
     SourceProviders,
     SourceRepository,
     UnitOfWork,
     UnknownScopeError,
+    WorkerHealthRepository,
+    WorkerPlaneStatus,
 )
 from my_pa.contracts.v1.status import SourceStatusState
+from my_pa.domain.capture.reveal import Reveal
 from my_pa.domain.capture.review import ReviewCase, ReviewDecision
 from my_pa.domain.capture.version import CaptureVersion
+from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
+from my_pa.domain.goodnotes.models import GoodNotesReviewCase
 from my_pa.domain.search.query import SearchRequest
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.registry import ConfiguredSource
@@ -93,24 +103,34 @@ from my_pa.infrastructure.persistence.capture import (
     capture_version,
 )
 from my_pa.infrastructure.persistence.capture_search import search_captures
+from my_pa.infrastructure.persistence.continuity_read import SqlContinuityReadRepository
 from my_pa.infrastructure.persistence.enrollment import (
     accept_enrollment,
     enrollments_for_principal,
     record_scope,
 )
 from my_pa.infrastructure.persistence.extraction import coverage_for
+from my_pa.infrastructure.persistence.goodnotes import (
+    decide_goodnotes_review,
+    goodnotes_review_cases,
+    is_goodnotes_review_case,
+)
 from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
 from my_pa.infrastructure.persistence.knowledge import (
+    corpus_coverage,
     latest_limitations,
     outcome_for_object,
     read_extraction,
+    scope_beyond_enrollment,
 )
+from my_pa.infrastructure.persistence.managed_documents import SqlManagedDocumentRepository
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.registry import (
     UnknownSourceError,
     get_source,
     source_of_object,
 )
+from my_pa.infrastructure.persistence.reveal import reveal_subject
 from my_pa.infrastructure.persistence.review import decide_review, review_cases
 from my_pa.infrastructure.persistence.search import (
     SearchInternalError,
@@ -118,7 +138,13 @@ from my_pa.infrastructure.persistence.search import (
     UnknownEnrollmentError,
     search_extractions,
 )
+from my_pa.infrastructure.persistence.situation_repository import (
+    SqlProjectRepository,
+    SqlPulseRepository,
+    SqlSituationRepository,
+)
 from my_pa.infrastructure.persistence.tables import JobState
+from my_pa.infrastructure.persistence.worker_health import worker_plane_health
 from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
 
 __all__ = ["SqlAlchemyUnitOfWork"]
@@ -229,9 +255,9 @@ class _Operations(OperationQueue):
     def enqueue(self, enrollment_id: str) -> str:
         return _read(lambda: enqueue_job(self._connection, enrollment_id))
 
-    def operation(self, operation_id: str) -> Operation | None:
+    def operation(self, operation_id: str, *, principal_id: str) -> Operation | None:
         def statement() -> Operation | None:
-            found = job_for(self._connection, operation_id)
+            found = job_for(self._connection, operation_id, principal_id=principal_id)
             if found is None:
                 return None
             return Operation(
@@ -247,12 +273,40 @@ class _Operations(OperationQueue):
         return _read(statement)
 
 
+class _WorkerHealth(WorkerHealthRepository):
+    """The two content-free worker-plane reads on this transaction."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def for_principal(self, principal_id: str) -> tuple[WorkerPlaneStatus, ...]:
+        def statement() -> tuple[WorkerPlaneStatus, ...]:
+            return tuple(
+                WorkerPlaneStatus(
+                    plane=health.plane,
+                    state=health.state,
+                    backlog=health.backlog,
+                    dead_lettered=health.dead_lettered,
+                    last_heartbeat_at=health.last_heartbeat_at,
+                )
+                for health in (
+                    worker_plane_health(
+                        self._connection, principal_id=principal_id, plane_name=plane
+                    )
+                    for plane in ("capture", "enrollment")
+                )
+            )
+
+        return _read(statement)
+
+
 class _Captures(CaptureRepository):
     """The capture plane, over `persistence.capture`.
 
-    Four methods and no fifth. There is no `update` and no `delete` here
-    because there is none in the module below it and none the server would
-    accept: `capture_versions` carries a trigger that refuses both.
+    Five methods, and none of them writes over a stored version. There is no
+    `update` and no `delete` here because there is none in the module below it
+    and none the server would accept: `capture_versions` carries a trigger that
+    refuses both.
 
     `search` reaches a second module, `persistence.capture_search`, rather than
     `persistence.capture`: the capture plane's lexical index is its own concern
@@ -341,6 +395,20 @@ class _Captures(CaptureRepository):
             )
         )
 
+    def reveal(self, subject_id: str, *, principal_id: str) -> Reveal | None:
+        """The evidence behind one subject, read through the same one context.
+
+        `persistence.reveal` rather than `persistence.capture`, for the reason
+        `search` reaches `persistence.capture_search`: the traversal spans the
+        proposal, review and promotion tables as well as the capture ones, and
+        the module that writes a capture has no reason to hold any of them.
+        """
+        return _read(
+            lambda: reveal_subject(
+                self._connection, subject_id, context=capture_context(principal_id)
+            )
+        )
+
 
 class _Reviews(ReviewRepository):
     """The governed review and promotion plane."""
@@ -348,15 +416,35 @@ class _Reviews(ReviewRepository):
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
-    def cases(self, *, limit: int, principal_id: str) -> tuple[ReviewCase, ...]:
-        return _read(
-            lambda: review_cases(
+    def cases(
+        self, *, limit: int, principal_id: str
+    ) -> tuple[ReviewCase | GoodNotesReviewCase, ...]:
+        def statement() -> tuple[ReviewCase | GoodNotesReviewCase, ...]:
+            capture = review_cases(
                 self._connection, limit=limit, context=capture_context(principal_id)
             )
-        )
+            goodnotes = goodnotes_review_cases(
+                self._connection, principal_id=principal_id, limit=limit
+            )
+            combined: list[ReviewCase | GoodNotesReviewCase] = sorted(
+                [*capture, *goodnotes],
+                key=lambda case: (case.opened_at, case.review_case_id),
+            )
+            return tuple(combined[:limit])
+
+        return _read(statement)
 
     def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
-        return _read(lambda: decide_review(self._connection, request))
+        def statement() -> ReviewDecision | None:
+            if is_goodnotes_review_case(
+                self._connection,
+                review_case_id=request.review_case_id,
+                principal_id=request.principal_id,
+            ):
+                return decide_goodnotes_review(self._connection, request)
+            return decide_review(self._connection, request)
+
+        return _read(statement)
 
 
 class _Knowledge(KnowledgeRepository):
@@ -394,6 +482,34 @@ class _Knowledge(KnowledgeRepository):
             # traceback does not render the frames of a coverage read.
             failure = RepositoryFailureError("the coverage read could not be completed")
         raise failure
+
+    def corpus(self, principal_id: str, *, observed_at: datetime) -> CorpusCoverage:
+        """The Principal's whole corpus, translated like every other read here.
+
+        The `ValueError` guard is `coverage`'s and for the same reasons plus one
+        of its own: `CorpusCoverage` refuses a composition whose parts contradict
+        each other — an enrollment stated twice, more objects outside the
+        enrollments than the sources hold, or a state that claims a complete
+        corpus while something is outstanding. Each of those is a broken store or
+        a broken derivation rather than a request problem, and retrying reads the
+        same rows and fails the same way.
+        """
+
+        def statement() -> CorpusCoverage:
+            return corpus_coverage(self._connection, principal_id, observed_at=observed_at)
+
+        try:
+            return _read(statement)
+        except ValueError:
+            failure = RepositoryFailureError("the corpus coverage read could not be completed")
+        raise failure
+
+    def scope_beyond_enrollment(self, principal_id: str, *, enrollment_id: str) -> bool:
+        return _read(
+            lambda: scope_beyond_enrollment(
+                self._connection, principal_id, enrollment_id=enrollment_id
+            )
+        )
 
     def limitations(self, enrollment_id: str) -> tuple[AggregateLimitation, ...]:
         return _read(lambda: latest_limitations(self._connection, enrollment_id))
@@ -559,6 +675,31 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def reviews(self) -> ReviewRepository:
         return _Reviews(self._open)
+
+    @property
+    def situations(self) -> SituationRepository:
+        return SqlSituationRepository(self._open)
+
+    @property
+    def projects(self) -> ProjectRepository:
+        return SqlProjectRepository(self._open)
+
+    @property
+    def pulse(self) -> PulseRepository:
+        return SqlPulseRepository(self._open)
+
+    @property
+    def continuity_read(self) -> ContinuityReadRepository:
+        return SqlContinuityReadRepository(self._open)
+
+    @property
+    def worker_health(self) -> WorkerHealthRepository:
+        return _WorkerHealth(self._open)
+
+    @property
+    def managed_documents(self) -> ManagedDocumentRepository:
+        """The managed-document rows, on this transaction's connection (WP-28)."""
+        return SqlManagedDocumentRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

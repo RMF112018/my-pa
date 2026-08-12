@@ -41,6 +41,7 @@ from my_pa.contracts.v1.capabilities import (
 )
 from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES
 from my_pa.domain.identity.operation import Capability, is_operator_only
+from my_pa.domain.modeling.gate import ModelRoutePolicy
 
 __all__ = [
     "DECISION_GATED_MEDIA_TYPE",
@@ -101,7 +102,11 @@ def build_capability_manifest(
     )
 
 
-def _limitations(manifest: CapabilityManifest, implemented: int) -> tuple[str, ...]:
+def _limitations(
+    manifest: CapabilityManifest,
+    implemented: int,
+    model_route: ModelRoutePolicy,
+) -> tuple[str, ...]:
     """What a caller should know about a build in this state.
 
     Derived from the manifest rather than written beside it, so a limitation
@@ -130,10 +135,19 @@ def _limitations(manifest: CapabilityManifest, implemented: int) -> tuple[str, .
     limitations.append(
         "Listings stop at the page size and issue no continuation cursor; truncation is disclosed."
     )
+    if model_route is ModelRoutePolicy.DISABLED:
+        limitations.append(
+            "Model proposals and semantic retrieval are disabled; deterministic lexical "
+            "retrieval remains active."
+        )
     return tuple(limitations)
 
 
-def build_readiness_report(manifest: CapabilityManifest) -> ReadinessReport:
+def build_readiness_report(
+    manifest: CapabilityManifest,
+    *,
+    model_route: ModelRoutePolicy = ModelRoutePolicy.DISABLED,
+) -> ReadinessReport:
     """Return readiness derived from `manifest`.
 
     Counting the manifest rather than asserting a state means the report cannot
@@ -152,5 +166,5 @@ def build_readiness_report(manifest: CapabilityManifest) -> ReadinessReport:
     return ReadinessReport(
         state=state,
         implemented_capabilities=implemented,
-        limitations=_limitations(manifest, implemented),
+        limitations=_limitations(manifest, implemented, model_route),
     )

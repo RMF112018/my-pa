@@ -56,12 +56,14 @@ from typing import Final
 
 from sqlalchemy import (
     ARRAY,
+    JSON,
     BigInteger,
     Boolean,
     CheckConstraint,
     Column,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Identity,
@@ -70,6 +72,7 @@ from sqlalchemy import (
     LargeBinary,
     MetaData,
     PrimaryKeyConstraint,
+    String,
     Table,
     Text,
     UniqueConstraint,
@@ -88,6 +91,7 @@ from my_pa.domain.capture.classification import (
     EntityType,
     ResolutionState,
 )
+from my_pa.domain.capture.client import ClientState
 from my_pa.domain.capture.context import (
     ContextLinkAuthority,
     ContextLinkRole,
@@ -131,6 +135,14 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.conversation.event import ConversationChannel, ConversationState
+from my_pa.domain.documents.managed import (
+    MANAGED_MEDIA_TYPES,
+    MAX_MANAGED_DOCUMENT_BYTES,
+    MAX_MANAGED_TITLE_CHARACTERS,
+)
+from my_pa.domain.documents.managed import (
+    LifecycleTransition as ManagedLifecycleTransition,
+)
 from my_pa.domain.extraction.coverage import LimitationReason
 from my_pa.domain.extraction.quarantine import QuarantineReason, QuarantineReviewState
 from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
@@ -147,10 +159,21 @@ from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.relationship.identity import ResolutionAction
 from my_pa.domain.relationship.profile import EvidenceAuthority
+from my_pa.domain.situation.continuity import (
+    ClosureEvidenceKind,
+    CommitmentDirection,
+    CommitmentState,
+    ContinuityEvidenceState,
+    ContinuityObjectKind,
+    DecisionState,
+    LifecycleTransition,
+    TaskState,
+)
 from my_pa.domain.situation.situation import (
     FrameState,
     ProjectState,
     PulseItemType,
+    PulseReasonCode,
     SituationState,
 )
 from my_pa.domain.source.enrollment import (
@@ -498,8 +521,19 @@ jobs = Table(
     Column("lease_owner", Text),
     Column("lease_expires_at", DateTime(timezone=True)),
     Column("last_error_code", Text),
+    Column("next_attempt_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("dead_lettered_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # The queue's own partition (WP-04, revision `4f1a8b6d92e3`). Ownership was
+    # transitive through `enrollment_id -> enrollments.principal_id` until then,
+    # which made the dequeue a global FIFO: `claim_job` ordered by
+    # `(created_at, operation_id)` across every Principal's work at once, so one
+    # Principal's backlog decided when another's work ran, and a count of
+    # outstanding work was a count of everybody's. A predicate cannot be written
+    # against a column that does not exist, so the column comes first.
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("state", JobState),
     CheckConstraint(
         "last_error_code IS NULL OR last_error_code IN ("
@@ -516,11 +550,24 @@ jobs = Table(
         name="a_job_is_running_exactly_while_leased",
     ),
     CheckConstraint(
+        f"(state = '{JobState.FAILED.value}') = (dead_lettered_at IS NOT NULL)",
+        name="a_failed_job_is_dead_lettered",
+    ),
+    CheckConstraint(
         f"attempt_count >= 0 AND max_attempts BETWEEN 1 AND {DEFAULT_MAX_ATTEMPTS * 10} "
         "AND attempt_count <= max_attempts",
         name="attempts_are_bounded",
     ),
     Index("jobs_by_state", "state", "created_at"),
+    # Principal first, then the claim's own ordering, so the dequeue reads one
+    # Principal's queue rather than filtering the whole table.
+    Index(
+        "jobs_by_principal_claim_order",
+        "principal_id",
+        "state",
+        "next_attempt_at",
+        "created_at",
+    ),
 )
 
 #: One row per object that reached an extraction outcome, under one enrollment.
@@ -549,6 +596,30 @@ jobs = Table(
 #: authority, and a column that can only be `source_bound_derived` means no
 #: writer, hand-run statement, or later revision can file derived text as
 #: original.
+#:
+#: **`status`'s storage vocabulary is a strict subset of the outcome vocabulary,
+#: and the two are different things.** `ExtractionStatus` has three members
+#: because three things can happen to an object, and `record_outcome` dispatches
+#: on all three. Only two of them are ever *filed here*: the quarantined branch
+#: returns a `quarantine_records` row before it reaches the insert, so no
+#: production path can produce `status = 'quarantined'` in this table. The
+#: constraint below is therefore written against the two, not derived from the
+#: enum.
+#:
+#: **It is the paragraph at the top of this comment, enforced instead of
+#: stated.** "A quarantined object is *not* a row here" was written above the
+#: constraint that admitted exactly such a row — a rule declared in prose and
+#: checked by nothing, in the same declaration, which is the `D-69` and `D-81`
+#: shape this campaign exists to remove. The narrowing does not add a new claim;
+#: it makes the claim already made here structural. And this table's own rule,
+#: stated for `trust_level` above and for `_refuse_an_unauthorized_object` in
+#: `persistence.extraction`, is that the price of a state being *impossible*
+#: rather than merely unreported is worth paying.
+#: `test_the_stored_status_vocabulary_is_the_outcome_vocabulary_less_quarantined`
+#: in `tests/schema/test_extraction_schema_migration.py` is what makes the subset
+#: relation a checked claim rather than a comment: a fourth outcome member
+#: reddens there, at the declaration, instead of being refused by the server at
+#: some later run.
 extractions = Table(
     "extractions",
     METADATA,
@@ -582,7 +653,14 @@ extractions = Table(
     Column("is_truncated", Boolean, nullable=False, server_default="false"),
     Column("observed_at", DateTime(timezone=True), nullable=False),
     Column("processed_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
-    _one_of("status", ExtractionStatus, name="extraction_status_is_known"),
+    # An inline literal, deliberately not a module-level named `frozenset`. A
+    # named one would be discovered as a live closed set by
+    # `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`,
+    # and `8b3f5c17d904` emits this table, so the already-merged revision would
+    # go on silently tracking whatever that name held — the exact hazard `D-81`
+    # exists to control, moved rather than removed. Measured: a named frozenset
+    # of these same two values puts the site straight back into `_derived_sites`.
+    _one_of("status", frozenset({"extracted", "unsupported"}), name="extraction_status_is_known"),
     CheckConstraint(
         f"trust_level = '{TrustLevel.SOURCE_BOUND_DERIVED.value}'",
         name="derived_text_is_never_source_original",
@@ -1060,9 +1138,16 @@ capture_jobs = Table(
     Column("lease_owner", Text),
     Column("lease_expires_at", DateTime(timezone=True)),
     Column("last_error_code", Text),
+    Column("next_attempt_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("dead_lettered_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # The capture queue's partition, for the reason `jobs.principal_id` carries
+    # one. Ownership here was transitive through
+    # `version_id -> capture_versions.owner_principal_id`.
+    Column("principal_id", Text, nullable=False),
     _is_identifier("operation_id", IdKind.OPERATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("state", JobState, name="capture_job_state_is_known"),
     CheckConstraint(
         "last_error_code IS NULL OR last_error_code IN ("
@@ -1079,11 +1164,84 @@ capture_jobs = Table(
         name="a_capture_job_is_running_exactly_while_leased",
     ),
     CheckConstraint(
+        f"(state = '{JobState.FAILED.value}') = (dead_lettered_at IS NOT NULL)",
+        name="a_failed_capture_job_is_dead_lettered",
+    ),
+    CheckConstraint(
         f"attempt_count >= 0 AND max_attempts BETWEEN 1 AND {DEFAULT_MAX_ATTEMPTS * 10} "
         "AND attempt_count <= max_attempts",
         name="capture_job_attempts_are_bounded",
     ),
     Index("capture_jobs_by_state", "state", "created_at"),
+    Index(
+        "capture_jobs_by_principal_claim_order",
+        "principal_id",
+        "state",
+        "next_attempt_at",
+        "created_at",
+    ),
+)
+
+#: Content-free worker liveness. It names only opaque Principal/owner tokens,
+#: the closed queue plane, timestamps, and whether shutdown completed.
+worker_heartbeats = Table(
+    "worker_heartbeats",
+    METADATA,
+    Column("worker_owner", Text, primary_key=True),
+    # One Entra-mode worker reports the same opaque owner for every Principal
+    # whose stored queue it serves, so the Principal is part of the key.
+    Column("principal_id", Text, primary_key=True),
+    Column("plane", Text, nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("heartbeat_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("stopped_at", DateTime(timezone=True)),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("plane IN ('capture', 'enrollment')", name="worker_plane_is_known"),
+    CheckConstraint(
+        "worker_owner ~ '^[A-Za-z0-9_-]{4,64}$'",
+        name="worker_owner_is_a_bounded_opaque_token",
+    ),
+    Index("worker_heartbeats_by_principal_plane", "principal_id", "plane", "heartbeat_at"),
+)
+
+#: One row per registered remote capture client (WP-10).
+#:
+#: **The table is the binding.** A client row names exactly one `principal_id`
+#: and there is no column that could name a second, so "a client credential
+#: cannot capture on behalf of another Principal" is a property of the schema
+#: rather than of a predicate somebody remembered to write. It is partitioned on
+#: that same column, so every operator-facing read of the plane goes through
+#: `principal_scope` like the rest of the capture plane.
+#:
+#: **`secret_sha256` and nothing else.** There is no plaintext column, no
+#: reversible encoding, and no `last_used_at` — the first because a stored secret
+#: is a stolen secret, the last because it would be a per-request write on the
+#: ingress path recording when a device was used, which is behavioural metadata
+#: this build has no use for and `SECURITY.md` would rather not hold.
+#:
+#: **Revocation is a state, not a delete.** `state` closes to `ClientState` and
+#: `revoked_at` is `NOT NULL` exactly when the state is `revoked`, so a revoked
+#: row cannot lose the fact of when it happened and an active row cannot claim
+#: one. A deleted row would make "revoked" and "never registered" the same
+#: observation for an operator reading the table.
+capture_clients = Table(
+    "capture_clients",
+    METADATA,
+    Column("client_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("secret_sha256", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("revoked_at", DateTime(timezone=True)),
+    _is_identifier("client_id", IdKind.CAPTURE_CLIENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("state", ClientState, name="capture_client_state_is_known"),
+    _matches("secret_sha256", DIGEST_PATTERN.pattern, name="client_secret_is_a_sha256_digest"),
+    CheckConstraint(
+        f"(state = '{ClientState.REVOKED.value}') = (revoked_at IS NOT NULL)",
+        name="a_client_is_revoked_exactly_when_it_records_a_revocation",
+    ),
+    Index("capture_clients_by_principal", "principal_id", "created_at", "client_id"),
 )
 
 #: `P-02`'s output: the conservative processing text and the mapping that takes
@@ -2363,567 +2521,6 @@ relationship_conversation_observations = Table(
     Index("relationship_conversation_observations_by_principal", "principal_id"),
 )
 
-# WP-12 provider-neutral source evidence and native control plane. Provider
-# locators occur only on account/bucket infrastructure rows; no domain value
-# imported above carries one.
-source_version_evidence = Table(
-    "source_version_evidence",
-    METADATA,
-    Column("evidence_id", Text, primary_key=True),
-    Column(
-        "version_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.source_object_versions.version_id"),
-        nullable=False,
-    ),
-    Column("evidence_kind", Text, nullable=False),
-    Column("payload", LargeBinary, nullable=False),
-    Column("payload_sha256", Text, nullable=False),
-    Column("byte_count", BigInteger, nullable=False),
-    Column("recorded_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("evidence_id", IdKind.SOURCE_EVIDENCE),
-    CheckConstraint(
-        "evidence_kind IN ('calendar_event', 'contact', 'mail_message')",
-        name="source_evidence_kind_is_known",
-    ),
-    CheckConstraint(
-        "payload_sha256 ~ '^[0-9a-f]{64}$'",
-        name="source_evidence_digest_is_sha256",
-    ),
-    CheckConstraint(
-        "byte_count = octet_length(payload)",
-        name="source_evidence_byte_count_matches_payload",
-    ),
-    UniqueConstraint(
-        "version_id",
-        "evidence_kind",
-        "payload_sha256",
-        name="source_version_evidence_is_idempotent",
-    ),
-)
-
-native_bridges = Table(
-    "native_bridges",
-    METADATA,
-    Column("bridge_id", Text, primary_key=True),
-    Column("protocol_version", Text, nullable=False),
-    Column("label", Text, nullable=False),
-    Column("created_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("bridge_id", IdKind.NATIVE_BRIDGE),
-    UniqueConstraint("protocol_version", "label", name="a_native_bridge_identity_is_stable"),
-)
-
-native_bridge_observations = Table(
-    "native_bridge_observations",
-    METADATA,
-    Column("observation_id", Text, primary_key=True),
-    Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
-    Column("available", Boolean, nullable=False),
-    Column("protocol_version", Text, nullable=False),
-    Column("observed_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("observation_id", IdKind.SOURCE_OBSERVATION),
-)
-
-native_source_accounts = Table(
-    "native_source_accounts",
-    METADATA,
-    Column("account_id", Text, primary_key=True),
-    Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
-    Column("source_id", Text, ForeignKey(f"{SCHEMA}.sources.source_id"), nullable=False),
-    Column("source_kind", Text, nullable=False),
-    Column("label", Text, nullable=False),
-    Column("private_locator", Text, nullable=False),
-    Column("first_observed_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("account_id", IdKind.NATIVE_ACCOUNT),
-    _one_of("source_kind", NativeSourceKind, name="native_account_source_kind_is_known"),
-    UniqueConstraint(
-        "bridge_id",
-        "source_kind",
-        "private_locator",
-        name="native_account_locator_is_issued_once",
-    ),
-)
-
-native_source_buckets = Table(
-    "native_source_buckets",
-    METADATA,
-    Column("bucket_id", Text, primary_key=True),
-    Column(
-        "account_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.native_source_accounts.account_id"),
-        nullable=False,
-    ),
-    Column("parent_bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id")),
-    Column("source_kind", Text, nullable=False),
-    Column("label", Text, nullable=False),
-    Column("private_locator", Text, nullable=False),
-    Column("selectable", Boolean, nullable=False),
-    Column("first_observed_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("bucket_id", IdKind.NATIVE_BUCKET),
-    _one_of("source_kind", NativeSourceKind, name="native_bucket_source_kind_is_known"),
-    CheckConstraint(
-        "parent_bucket_id IS NULL OR parent_bucket_id <> bucket_id",
-        name="a_native_bucket_cannot_parent_itself",
-    ),
-    UniqueConstraint(
-        "account_id",
-        "private_locator",
-        name="native_bucket_locator_is_issued_once",
-    ),
-)
-
-native_discovery_snapshots = Table(
-    "native_discovery_snapshots",
-    METADATA,
-    Column("discovery_id", Text, primary_key=True),
-    Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
-    Column("snapshot_sha256", Text, nullable=False),
-    Column("observed_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("discovery_id", IdKind.NATIVE_DISCOVERY),
-    CheckConstraint(
-        "snapshot_sha256 ~ '^[0-9a-f]{64}$'",
-        name="native_discovery_digest_is_sha256",
-    ),
-    UniqueConstraint(
-        "bridge_id",
-        "snapshot_sha256",
-        name="native_discovery_snapshot_is_idempotent",
-    ),
-)
-
-native_configuration_revisions = Table(
-    "native_configuration_revisions",
-    METADATA,
-    Column("configuration_id", Text, nullable=False),
-    Column("revision", Integer, nullable=False),
-    Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
-    Column("timezone_name", Text, nullable=False),
-    Column("start_date", Date, nullable=False),
-    Column("start_at", DateTime(timezone=True), nullable=False),
-    Column("cutoff_at", DateTime(timezone=True), nullable=False),
-    Column("calendar_horizon_at", DateTime(timezone=True), nullable=False),
-    Column("selection_sha256", Text, nullable=False),
-    Column("created_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("configuration_id", IdKind.NATIVE_CONFIGURATION),
-    CheckConstraint("revision >= 1", name="native_configuration_revision_starts_at_one"),
-    CheckConstraint("start_at <= cutoff_at", name="native_configuration_range_is_ordered"),
-    CheckConstraint(
-        "calendar_horizon_at = cutoff_at + interval '90 days'",
-        name="native_calendar_horizon_is_ninety_days",
-    ),
-    CheckConstraint(
-        "selection_sha256 ~ '^[0-9a-f]{64}$'",
-        name="native_configuration_selection_digest_is_sha256",
-    ),
-    PrimaryKeyConstraint("configuration_id", "revision"),
-)
-
-native_configuration_buckets = Table(
-    "native_configuration_buckets",
-    METADATA,
-    Column("configuration_id", Text, nullable=False),
-    Column("revision", Integer, nullable=False),
-    Column(
-        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
-    ),
-    ForeignKeyConstraint(
-        ["configuration_id", "revision"],
-        [
-            f"{SCHEMA}.native_configuration_revisions.configuration_id",
-            f"{SCHEMA}.native_configuration_revisions.revision",
-        ],
-    ),
-    PrimaryKeyConstraint("configuration_id", "revision", "bucket_id"),
-)
-
-native_preflight_observations = Table(
-    "native_preflight_observations",
-    METADATA,
-    Column("observation_id", Text, primary_key=True),
-    Column("configuration_id", Text, nullable=False),
-    Column("configuration_revision", Integer, nullable=False),
-    Column("bucket_id", Text, nullable=False),
-    Column("state", Text, nullable=False),
-    Column("failure", Text),
-    Column("observed_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("observation_id", IdKind.SOURCE_OBSERVATION),
-    ForeignKeyConstraint(
-        ["configuration_id", "configuration_revision", "bucket_id"],
-        [
-            f"{SCHEMA}.native_configuration_buckets.configuration_id",
-            f"{SCHEMA}.native_configuration_buckets.revision",
-            f"{SCHEMA}.native_configuration_buckets.bucket_id",
-        ],
-        name="native_preflight_requires_selected_bucket",
-    ),
-    CheckConstraint(
-        "state IN ('reachable', 'permission_denied', 'unavailable', 'identity_drift')",
-        name="native_preflight_state_is_known",
-    ),
-    CheckConstraint(
-        "failure IS NULL OR failure IN ('permission_denied', 'account_unavailable', "
-        "'bucket_unavailable', 'transient_unavailable')",
-        name="native_preflight_failure_is_known",
-    ),
-    CheckConstraint(
-        "(state = 'reachable' AND failure IS NULL) OR "
-        "(state = 'permission_denied' AND failure = 'permission_denied') OR "
-        "(state = 'unavailable' AND failure IN "
-        "('account_unavailable', 'bucket_unavailable', 'transient_unavailable')) OR "
-        "(state = 'identity_drift' AND failure = 'bucket_unavailable')",
-        name="native_preflight_state_and_failure_agree",
-    ),
-    Index(
-        "native_preflight_latest_by_bucket",
-        "configuration_id",
-        "configuration_revision",
-        "bucket_id",
-        "observed_at",
-    ),
-)
-
-native_admission_authorities = Table(
-    "native_admission_authorities",
-    METADATA,
-    Column("authority_id", Text, primary_key=True),
-    Column("audit_id", Text, ForeignKey(f"{SCHEMA}.audit_events.audit_id"), nullable=False),
-    Column("configuration_id", Text, nullable=False),
-    Column("configuration_revision", Integer, nullable=False),
-    Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
-    Column("bucket_id", Text, nullable=False),
-    Column("source_id", Text, ForeignKey(f"{SCHEMA}.sources.source_id"), nullable=False),
-    Column("host_instance_id", Text, nullable=False),
-    Column("envelope_id", Text, nullable=False),
-    Column("request_id", Text, nullable=False),
-    Column("issued_at", DateTime(timezone=True), nullable=False),
-    Column("expires_at", DateTime(timezone=True), nullable=False),
-    Column("consumed_at", DateTime(timezone=True)),
-    Column("admission_sha256", Text),
-    _is_identifier("authority_id", IdKind.NATIVE_AUTHORITY),
-    _is_identifier("host_instance_id", IdKind.NATIVE_BRIDGE),
-    ForeignKeyConstraint(
-        ["configuration_id", "configuration_revision", "bucket_id"],
-        [
-            f"{SCHEMA}.native_configuration_buckets.configuration_id",
-            f"{SCHEMA}.native_configuration_buckets.revision",
-            f"{SCHEMA}.native_configuration_buckets.bucket_id",
-        ],
-        name="native_authority_requires_selected_bucket",
-    ),
-    CheckConstraint("bridge_id = host_instance_id", name="native_authority_binds_host"),
-    CheckConstraint("expires_at > issued_at", name="native_authority_has_positive_lifetime"),
-    CheckConstraint(
-        "expires_at <= issued_at + interval '10 minutes'",
-        name="native_authority_lifetime_is_bounded",
-    ),
-    CheckConstraint(
-        "length(envelope_id) BETWEEN 1 AND 200 AND length(request_id) BETWEEN 1 AND 200",
-        name="native_authority_wire_ids_are_bounded",
-    ),
-    CheckConstraint(
-        "(consumed_at IS NULL) = (admission_sha256 IS NULL)",
-        name="native_authority_consumption_is_complete",
-    ),
-    CheckConstraint(
-        "admission_sha256 IS NULL OR admission_sha256 ~ '^[0-9a-f]{64}$'",
-        name="native_authority_admission_digest_is_sha256",
-    ),
-    UniqueConstraint("envelope_id", name="native_authority_envelope_is_issued_once"),
-)
-
-native_source_review_routes = Table(
-    "native_source_review_routes",
-    METADATA,
-    Column(
-        "source_version_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.source_object_versions.version_id"),
-        nullable=False,
-    ),
-    Column(
-        "proposal_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.capture_proposals.proposal_id"),
-        nullable=False,
-        unique=True,
-    ),
-    Column(
-        "review_case_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.capture_review_cases.review_case_id"),
-        nullable=False,
-        unique=True,
-    ),
-    Column("routed_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("source_version_id", IdKind.VERSION),
-    _is_identifier("proposal_id", IdKind.PROPOSAL),
-    _is_identifier("review_case_id", IdKind.REVIEW_CASE),
-    PrimaryKeyConstraint("source_version_id", "proposal_id"),
-)
-
-native_sync_runs = Table(
-    "native_sync_runs",
-    METADATA,
-    Column("run_id", Text, primary_key=True),
-    Column("configuration_id", Text, nullable=False),
-    Column("configuration_revision", Integer, nullable=False),
-    Column("run_kind", Text, nullable=False),
-    Column("state", Text, nullable=False),
-    Column("start_at", DateTime(timezone=True), nullable=False),
-    Column("cutoff_at", DateTime(timezone=True), nullable=False),
-    Column("calendar_horizon_at", DateTime(timezone=True), nullable=False),
-    Column("idempotency_key", Text, nullable=False),
-    Column("recorded_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("run_id", IdKind.NATIVE_RUN),
-    _one_of("run_kind", NativeRunKind, name="native_run_kind_is_known"),
-    _one_of("state", NativeRunState, name="native_run_state_is_known"),
-    ForeignKeyConstraint(
-        ["configuration_id", "configuration_revision"],
-        [
-            f"{SCHEMA}.native_configuration_revisions.configuration_id",
-            f"{SCHEMA}.native_configuration_revisions.revision",
-        ],
-    ),
-    CheckConstraint("start_at <= cutoff_at", name="native_run_range_is_ordered"),
-    CheckConstraint(
-        "calendar_horizon_at = cutoff_at + interval '90 days'",
-        name="native_run_calendar_horizon_is_ninety_days",
-    ),
-    UniqueConstraint(
-        "configuration_id",
-        "configuration_revision",
-        "idempotency_key",
-        name="native_sync_run_idempotency_is_scoped",
-    ),
-)
-
-native_bucket_runs = Table(
-    "native_bucket_runs",
-    METADATA,
-    Column("bucket_run_id", Text, primary_key=True),
-    Column("run_id", Text, ForeignKey(f"{SCHEMA}.native_sync_runs.run_id"), nullable=False),
-    Column(
-        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
-    ),
-    Column("state", Text, nullable=False),
-    Column("item_count", BigInteger, nullable=False),
-    Column("recorded_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("bucket_run_id", IdKind.NATIVE_BUCKET_RUN),
-    _one_of("state", NativeRunState, name="native_bucket_run_state_is_known"),
-    CheckConstraint("item_count >= 0", name="native_bucket_run_count_is_not_negative"),
-    UniqueConstraint("run_id", "bucket_id", name="one_native_bucket_receipt_per_run"),
-)
-
-native_sync_jobs = Table(
-    "native_sync_jobs",
-    METADATA,
-    Column("job_id", Text, primary_key=True),
-    Column("configuration_id", Text, nullable=False),
-    Column("configuration_revision", Integer, nullable=False),
-    Column(
-        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
-    ),
-    Column("range_start", DateTime(timezone=True), nullable=False),
-    Column("range_end", DateTime(timezone=True), nullable=False),
-    Column("state", Text, nullable=False),
-    Column("lease_owner", Text),
-    Column("lease_expires_at", DateTime(timezone=True)),
-    Column("idempotency_key", Text, nullable=False),
-    Column("created_at", DateTime(timezone=True), nullable=False),
-    Column("updated_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("job_id", IdKind.NATIVE_JOB),
-    ForeignKeyConstraint(
-        ["configuration_id", "configuration_revision"],
-        [
-            f"{SCHEMA}.native_configuration_revisions.configuration_id",
-            f"{SCHEMA}.native_configuration_revisions.revision",
-        ],
-    ),
-    ForeignKeyConstraint(
-        ["configuration_id", "configuration_revision", "bucket_id"],
-        [
-            f"{SCHEMA}.native_configuration_buckets.configuration_id",
-            f"{SCHEMA}.native_configuration_buckets.revision",
-            f"{SCHEMA}.native_configuration_buckets.bucket_id",
-        ],
-        name="native_job_requires_selected_bucket",
-    ),
-    CheckConstraint(
-        "state IN ('failed', 'queued', 'running', 'succeeded')",
-        name="native_sync_job_state_is_known",
-    ),
-    CheckConstraint("range_start <= range_end", name="native_sync_job_range_is_ordered"),
-    CheckConstraint(
-        "(state = 'running') = (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)",
-        name="a_native_job_is_running_exactly_while_leased",
-    ),
-    UniqueConstraint(
-        "configuration_id",
-        "configuration_revision",
-        "bucket_id",
-        "idempotency_key",
-        name="native_sync_job_idempotency_is_scoped",
-    ),
-    Index(
-        "one_active_native_lease_per_bucket_range",
-        "bucket_id",
-        "range_start",
-        "range_end",
-        unique=True,
-        postgresql_where=text("state = 'running'"),
-    ),
-)
-
-native_checkpoints = Table(
-    "native_checkpoints",
-    METADATA,
-    Column("checkpoint_id", Text, primary_key=True),
-    Column(
-        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
-    ),
-    Column("sequence", BigInteger, nullable=False),
-    Column(
-        "previous_checkpoint_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.native_checkpoints.checkpoint_id"),
-        unique=True,
-    ),
-    Column("cursor_private", Text, nullable=False),
-    Column("cursor_digest", Text, nullable=False),
-    Column("recorded_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("checkpoint_id", IdKind.NATIVE_CHECKPOINT),
-    CheckConstraint("sequence >= 1", name="native_checkpoint_sequence_starts_at_one"),
-    CheckConstraint(
-        "(sequence = 1) = (previous_checkpoint_id IS NULL)",
-        name="native_checkpoint_predecessor_matches_sequence",
-    ),
-    CheckConstraint(
-        "cursor_digest ~ '^[0-9a-f]{64}$'",
-        name="native_checkpoint_digest_is_sha256",
-    ),
-    UniqueConstraint("bucket_id", "sequence", name="native_checkpoint_sequence_is_monotonic"),
-)
-
-source_observations = Table(
-    "source_observations",
-    METADATA,
-    Column("observation_id", Text, primary_key=True),
-    Column(
-        "source_object_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.source_objects.source_object_id"),
-        nullable=False,
-    ),
-    Column(
-        "version_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.source_object_versions.version_id"),
-        nullable=False,
-    ),
-    Column(
-        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
-    ),
-    Column("observed_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("observation_id", IdKind.SOURCE_OBSERVATION),
-    UniqueConstraint(
-        "version_id",
-        "bucket_id",
-        name="source_version_observation_is_idempotent",
-    ),
-)
-
-source_memberships = Table(
-    "source_memberships",
-    METADATA,
-    Column("membership_id", Text, primary_key=True),
-    Column(
-        "parent_bucket_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"),
-        nullable=False,
-    ),
-    Column(
-        "source_object_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.source_objects.source_object_id"),
-        nullable=False,
-    ),
-    Column(
-        "version_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.source_object_versions.version_id"),
-        nullable=False,
-    ),
-    Column("observed_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("membership_id", IdKind.SOURCE_MEMBERSHIP),
-    UniqueConstraint(
-        "parent_bucket_id",
-        "version_id",
-        name="source_membership_version_is_idempotent",
-    ),
-)
-
-native_watcher_simulations = Table(
-    "native_watcher_simulations",
-    METADATA,
-    Column("simulation_id", Text, nullable=False),
-    Column("sequence", Integer, nullable=False),
-    Column(
-        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
-    ),
-    Column("state", Text, nullable=False),
-    Column("recorded_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("simulation_id", IdKind.NATIVE_SIMULATION),
-    _one_of("state", WatcherSimulationState, name="native_simulation_state_is_known"),
-    CheckConstraint("sequence >= 1", name="native_simulation_sequence_starts_at_one"),
-    PrimaryKeyConstraint("simulation_id", "sequence"),
-)
-
-native_simulation_receipts = Table(
-    "native_simulation_receipts",
-    METADATA,
-    Column("receipt_id", Text, primary_key=True),
-    Column("simulation_id", Text, nullable=False),
-    Column("simulation_sequence", Integer, nullable=False),
-    Column(
-        "checkpoint_id",
-        Text,
-        ForeignKey(f"{SCHEMA}.native_checkpoints.checkpoint_id"),
-        nullable=False,
-    ),
-    Column("terminal_state", Text, nullable=False),
-    Column("recorded_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("receipt_id", IdKind.NATIVE_SIMULATION_RECEIPT),
-    ForeignKeyConstraint(
-        ["simulation_id", "simulation_sequence"],
-        [
-            f"{SCHEMA}.native_watcher_simulations.simulation_id",
-            f"{SCHEMA}.native_watcher_simulations.sequence",
-        ],
-    ),
-    CheckConstraint(
-        "terminal_state IN ('simulation_complete', 'simulation_failed')",
-        name="native_simulation_receipt_state_is_terminal",
-    ),
-    UniqueConstraint("simulation_id", name="one_receipt_per_native_simulation"),
-)
-
-native_live_activation_gates = Table(
-    "native_live_activation_gates",
-    METADATA,
-    Column("gate_id", Text, primary_key=True),
-    Column(
-        "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
-    ),
-    Column("state", Text, nullable=False),
-    Column("reason_code", Text, nullable=False),
-    Column("recorded_at", DateTime(timezone=True), nullable=False),
-    _is_identifier("gate_id", IdKind.NATIVE_LIVE_GATE),
-    _one_of("state", LiveActivationGateState, name="native_live_gate_state_is_known"),
-    UniqueConstraint("bucket_id", name="one_native_live_gate_per_bucket"),
-)
-
 # ---------------------------------------------------------------------------
 # WP-06 (R5): the relationship / project continuity surface.
 #
@@ -3082,6 +2679,15 @@ project_situations = Table(
     ),
     Column("principal_id", Text, nullable=False),
     Column("linked_at", DateTime(timezone=True), nullable=False),
+    #: What justified this binding, added forward by `8f2b6c4d1a37` (WP-11).
+    #: **Nullable, and that is the honest shape**: rows written before that
+    #: revision were linked with no recorded evidence, and a `NOT NULL` with a
+    #: backfilled default would fabricate a justification that nobody supplied.
+    #: A link written from WP-11 onward carries it, and the `associated` row in
+    #: `continuity_lifecycle_events` carries the same reference, so the
+    #: association is reconstructable from the append-only record rather than
+    #: from this column alone.
+    Column("association_evidence_ref", Text),
     _is_identifier("project_situation_id", IdKind.PROJECT_SITUATION),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     UniqueConstraint("project_id", "situation_id", name="a_situation_links_to_a_project_once"),
@@ -3132,6 +2738,15 @@ pulse_items = Table(
     Column("item_type", Text, nullable=False),
     Column("item_ref", Text, nullable=False),
     Column("reason", Text, nullable=False),
+    #: The closed why-now vocabulary and the evidence under it, added forward by
+    #: `8f2b6c4d1a37` (WP-11). **Neither carries a server default**, deliberately:
+    #: a default would let a writer omit the reason and the basis and still store
+    #: a row, which is precisely the activity-feed row this pair exists to make
+    #: unstorable. Together with the non-empty-array CHECK below they make "no
+    #: Pulse item without an evidentiary basis and a named reason" a property of
+    #: the database rather than of whoever wrote the insert.
+    Column("reason_code", Text, nullable=False),
+    Column("basis_refs", JSONB, nullable=False),
     Column("consequence", Text),
     Column("next_step", Text),
     Column("priority", Integer, nullable=False, server_default=text("5")),
@@ -3141,8 +2756,13 @@ pulse_items = Table(
     _is_identifier("pulse_id", IdKind.PULSE),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("item_type", PulseItemType, name="a_pulse_item_type_is_known"),
+    _one_of("reason_code", PulseReasonCode, name="a_pulse_reason_code_is_known"),
     CheckConstraint("length(trim(item_ref)) > 0", name="a_pulse_item_ref_is_not_blank"),
     CheckConstraint("length(trim(reason)) > 0", name="a_pulse_reason_is_not_blank"),
+    CheckConstraint(
+        "jsonb_typeof(basis_refs) = 'array' AND jsonb_array_length(basis_refs) > 0",
+        name="a_pulse_item_carries_an_evidentiary_basis",
+    ),
     CheckConstraint("priority BETWEEN 1 AND 10", name="a_pulse_priority_is_bounded"),
     CheckConstraint("accepted_only IS TRUE", name="pulse_reads_only_accepted_records"),
     Index("pulse_items_by_principal", "principal_id"),
@@ -3169,7 +2789,7 @@ source_version_evidence = Table(
     Column("recorded_at", DateTime(timezone=True), nullable=False),
     _is_identifier("evidence_id", IdKind.SOURCE_EVIDENCE),
     CheckConstraint(
-        "evidence_kind IN ('calendar_event', 'contact', 'mail_message')",
+        "evidence_kind IN ('calendar_event', 'contact', 'mail_message', 'task')",
         name="source_evidence_kind_is_known",
     ),
     CheckConstraint(
@@ -3769,4 +3389,606 @@ native_live_activation_gates = Table(
     _is_identifier("gate_id", IdKind.NATIVE_LIVE_GATE),
     _one_of("state", LiveActivationGateState, name="native_live_gate_state_is_known"),
     UniqueConstraint("bucket_id", name="one_native_live_gate_per_bucket"),
+)
+
+# ---------------------------------------------------------------------------
+# WP-11: the continuity objects R5 named and had no table for, and the one
+# append-only record that carries their lifecycle and their associations.
+#
+# Four tables, declared here and created by revision `8f2b6c4d1a37` with frozen
+# literals. Each is partitioned exactly as `situations` is — `principal_id` NOT
+# NULL with the opaque-identifier CHECK, a `by_principal` index and a
+# `by_principal_state` index — because every one of them is read by Today/Pulse
+# and by the project/relationship briefing, and invariant 11 makes `principal_id`
+# a mandatory predicate on every one of those reads.
+#
+# **`evidence_state` is on all three objects and defaults to `proposed`.** The
+# default is the safe direction: a writer that forgets to say what it is writing
+# writes a proposal, and continuity reads filter to `accepted`, so the forgetful
+# path produces nothing rather than producing unreviewed continuity.
+# ---------------------------------------------------------------------------
+
+#: `Commitment`: a social obligation between the Principal and one counterparty.
+#: `counterparty_person_id` carries the `per_…` shape CHECK and **no foreign
+#: key**, for two reasons stated rather than assumed. First,
+#: `relationship_people` is itself principal-partitioned, so a foreign key would
+#: be satisfiable across the partition and one Principal could learn that
+#: another's Person row exists by observing which insert succeeded. Second, an
+#: obligation has to be recordable before the identity plane has resolved the
+#: person it is owed to, and a foreign key would drop the obligation instead.
+#: `origin_evidence_ref` is NOT NULL: a commitment nobody can trace back to
+#: something said or written would be this product asserting an obligation on a
+#: person's behalf.
+commitments = Table(
+    "commitments",
+    METADATA,
+    Column("commitment_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("counterparty_person_id", Text, nullable=False),
+    Column("direction", Text, nullable=False),
+    Column("summary", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=text("'open'")),
+    Column("evidence_state", Text, nullable=False, server_default=text("'proposed'")),
+    Column("origin_evidence_ref", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id")),
+    Column("situation_id", Text, ForeignKey(f"{SCHEMA}.situations.situation_id")),
+    Column("due_at", DateTime(timezone=True)),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True)),
+    Column("closure_evidence_ref", Text),
+    Column("accepted_by_review_decision_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("commitment_id", IdKind.COMMITMENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("counterparty_person_id", IdKind.PERSON),
+    _one_of("state", CommitmentState, name="a_commitment_state_is_known"),
+    _one_of("evidence_state", ContinuityEvidenceState, name="a_commitment_evidence_state_is_known"),
+    _one_of("direction", CommitmentDirection, name="a_commitment_direction_is_known"),
+    CheckConstraint("length(trim(summary)) > 0", name="a_commitment_summary_is_not_blank"),
+    CheckConstraint(
+        "length(trim(origin_evidence_ref)) > 0", name="a_commitment_cites_its_origin_evidence"
+    ),
+    CheckConstraint(
+        "(state = 'closed') = (closed_at IS NOT NULL)",
+        name="a_closed_commitment_records_when_it_closed",
+    ),
+    CheckConstraint(
+        "state <> 'closed' OR length(trim(coalesce(closure_evidence_ref, ''))) > 0",
+        name="a_closed_commitment_carries_closure_evidence",
+    ),
+    #: **Accepted continuity cannot exist without the review decision that made
+    #: it accepted.** A biconditional rather than an implication: a `proposed`
+    #: row holding a review decision would be a half-finished promotion.
+    CheckConstraint(
+        "(evidence_state = 'accepted') = (accepted_by_review_decision_id IS NOT NULL)",
+        name="an_accepted_commitment_records_its_review_decision",
+    ),
+    CheckConstraint(
+        "accepted_by_review_decision_id IS NULL "
+        "OR accepted_by_review_decision_id ~ '^rdec_[A-Za-z0-9]{8,64}$'",
+        name="a_commitment_review_decision_is_an_opaque_identifier",
+    ),
+    Index("commitments_by_principal", "principal_id"),
+    Index("commitments_by_principal_state", "principal_id", "state"),
+    Index("commitments_by_principal_evidence_state", "principal_id", "evidence_state"),
+)
+
+#: `Decision`: one decision the Principal holds. `awaiting_authority_ref` is the
+#: "next authority point" the Frame vocabulary already names, and it is what
+#: makes a decision *blocked* in a way a reader can check rather than in a way a
+#: model asserted — the Pulse derivation reads exactly this column.
+decisions = Table(
+    "decisions",
+    METADATA,
+    Column("decision_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("question", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=text("'open'")),
+    Column("evidence_state", Text, nullable=False, server_default=text("'proposed'")),
+    Column("origin_evidence_ref", Text, nullable=False),
+    Column("awaiting_authority_ref", Text),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id")),
+    Column("situation_id", Text, ForeignKey(f"{SCHEMA}.situations.situation_id")),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True)),
+    Column("closure_evidence_ref", Text),
+    Column("accepted_by_review_decision_id", Text),
+    Column("outcome", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("decision_id", IdKind.CONTINUITY_DECISION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("state", DecisionState, name="a_decision_state_is_known"),
+    _one_of("evidence_state", ContinuityEvidenceState, name="a_decision_evidence_state_is_known"),
+    CheckConstraint("length(trim(question)) > 0", name="a_decision_question_is_not_blank"),
+    CheckConstraint(
+        "length(trim(origin_evidence_ref)) > 0", name="a_decision_cites_its_origin_evidence"
+    ),
+    CheckConstraint(
+        "(state = 'closed') = (closed_at IS NOT NULL)",
+        name="a_closed_decision_records_when_it_closed",
+    ),
+    CheckConstraint(
+        "state <> 'closed' OR length(trim(coalesce(closure_evidence_ref, ''))) > 0",
+        name="a_closed_decision_carries_closure_evidence",
+    ),
+    #: **Accepted continuity cannot exist without the review decision that made
+    #: it accepted.** A biconditional rather than an implication: a `proposed`
+    #: row holding a review decision would be a half-finished promotion.
+    CheckConstraint(
+        "(evidence_state = 'accepted') = (accepted_by_review_decision_id IS NOT NULL)",
+        name="an_accepted_decision_records_its_review_decision",
+    ),
+    CheckConstraint(
+        "accepted_by_review_decision_id IS NULL "
+        "OR accepted_by_review_decision_id ~ '^rdec_[A-Za-z0-9]{8,64}$'",
+        name="a_decision_review_decision_is_an_opaque_identifier",
+    ),
+    Index("decisions_by_principal", "principal_id"),
+    Index("decisions_by_principal_state", "principal_id", "state"),
+    Index("decisions_by_principal_evidence_state", "principal_id", "evidence_state"),
+)
+
+#: `Task`: work the Principal holds alone. The absence of a counterparty column
+#: is the whole difference from `commitments` and is structural: there is no
+#: field a counterparty could be written into, so a task cannot quietly become a
+#: social obligation nobody was told about.
+tasks = Table(
+    "tasks",
+    METADATA,
+    Column("task_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=text("'open'")),
+    Column("evidence_state", Text, nullable=False, server_default=text("'proposed'")),
+    Column("origin_evidence_ref", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id")),
+    Column("situation_id", Text, ForeignKey(f"{SCHEMA}.situations.situation_id")),
+    Column("due_at", DateTime(timezone=True)),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True)),
+    Column("closure_evidence_ref", Text),
+    Column("accepted_by_review_decision_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("task_id", IdKind.TASK),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("state", TaskState, name="a_task_state_is_known"),
+    _one_of("evidence_state", ContinuityEvidenceState, name="a_task_evidence_state_is_known"),
+    CheckConstraint("length(trim(title)) > 0", name="a_task_title_is_not_blank"),
+    CheckConstraint(
+        "length(trim(origin_evidence_ref)) > 0", name="a_task_cites_its_origin_evidence"
+    ),
+    CheckConstraint(
+        "(state = 'closed') = (closed_at IS NOT NULL)",
+        name="a_closed_task_records_when_it_closed",
+    ),
+    CheckConstraint(
+        "state <> 'closed' OR length(trim(coalesce(closure_evidence_ref, ''))) > 0",
+        name="a_closed_task_carries_closure_evidence",
+    ),
+    #: **Accepted continuity cannot exist without the review decision that made
+    #: it accepted.** A biconditional rather than an implication: a `proposed`
+    #: row holding a review decision would be a half-finished promotion.
+    CheckConstraint(
+        "(evidence_state = 'accepted') = (accepted_by_review_decision_id IS NOT NULL)",
+        name="an_accepted_task_records_its_review_decision",
+    ),
+    CheckConstraint(
+        "accepted_by_review_decision_id IS NULL "
+        "OR accepted_by_review_decision_id ~ '^rdec_[A-Za-z0-9]{8,64}$'",
+        name="a_task_review_decision_is_an_opaque_identifier",
+    ),
+    Index("tasks_by_principal", "principal_id"),
+    Index("tasks_by_principal_state", "principal_id", "state"),
+    Index("tasks_by_principal_evidence_state", "principal_id", "evidence_state"),
+)
+
+#: `continuity_lifecycle_events`: one append-only row per transition, for all
+#: five continuity object kinds.
+#:
+#: **The CHECK is the point.** `a_closed_transition_carries_evidence` refuses a
+#: `closed` row whose `evidence_ref` is absent or blank, at the server, so a
+#: status field flipping with no trace is not something application code can be
+#: trusted to prevent or forget — it cannot be written. `associated` is held to
+#: the same rule, which is what makes a project/context association
+#: reconstructable from evidence rather than inferred from a foreign key.
+#:
+#: There is no `updated_at` and no update path: rows are appended and read.
+#: `occurred_at` is when the transition happened and `recorded_at` is when this
+#: build learned it, kept apart so a backdated import cannot read as a live
+#: event.
+continuity_lifecycle_events = Table(
+    "continuity_lifecycle_events",
+    METADATA,
+    Column("event_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("object_kind", Text, nullable=False),
+    Column("object_id", Text, nullable=False),
+    Column("transition", Text, nullable=False),
+    Column("evidence_kind", Text, nullable=False),
+    Column("evidence_ref", Text),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("event_id", IdKind.LIFECYCLE_EVENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("object_kind", ContinuityObjectKind, name="a_continuity_object_kind_is_known"),
+    _one_of("transition", LifecycleTransition, name="a_continuity_transition_is_known"),
+    _one_of("evidence_kind", ClosureEvidenceKind, name="a_continuity_evidence_kind_is_known"),
+    CheckConstraint("length(trim(object_id)) > 0", name="a_lifecycle_event_names_its_object"),
+    CheckConstraint(
+        "transition <> 'closed' OR length(trim(coalesce(evidence_ref, ''))) > 0",
+        name="a_closed_transition_carries_evidence",
+    ),
+    CheckConstraint(
+        "transition <> 'associated' OR length(trim(coalesce(evidence_ref, ''))) > 0",
+        name="an_association_carries_evidence",
+    ),
+    Index("continuity_lifecycle_events_by_principal", "principal_id"),
+    Index("continuity_lifecycle_events_by_principal_object", "principal_id", "object_id"),
+    Index(
+        "continuity_lifecycle_events_by_principal_transition",
+        "principal_id",
+        "transition",
+    ),
+)
+
+
+# --- WP-27: the managed-document plane --------------------------------------
+#
+# The product's own write plane. Four tables, and the shape is deliberately the
+# capture plane's, because the problem is the same one `1a4c9e77b2d5` solved:
+# admit one request exactly once, append an immutable version, issue a receipt,
+# and let the server rather than the writer enforce all three.
+#
+# **The one column that is not here.** There is no path, locator, or storage key
+# anywhere in these tables. A version's bytes live at a location the byte store
+# *derives* from the version identifier, so there is nothing for a row to point
+# at and nothing a row could be edited to point somewhere else. That is also what
+# makes reconciliation possible with no second index: the object tree names its
+# own versions.
+
+#: One row per managed document. Identity and ownership only — no state column
+#: and no head pointer, for the reason `captures` carries neither: state is the
+#: latest lifecycle transition and the head is the greatest version number, both
+#: read from rows that cannot be updated, so there is no denormalised copy for a
+#: second writer to leave disagreeing with the history.
+managed_documents = Table(
+    "managed_documents",
+    METADATA,
+    Column("document_id", Text, primary_key=True),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("document_id", IdKind.MANAGED_DOCUMENT),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    Index("managed_documents_by_owner", "owner_principal_id", "created_at"),
+)
+
+#: One row per immutable version of one managed document. Insert only, enforced
+#: by the server: this package's revision adds a `BEFORE UPDATE OR DELETE`
+#: trigger, exactly as `1a4c9e77b2d5` does for `capture_versions`, because no
+#: CHECK can express "no UPDATE" and immutability has to hold under concurrent
+#: write rather than under the current writer's restraint.
+#:
+#: **`supersedes_version_id` is `UNIQUE`**, so two versions cannot name one
+#: predecessor and a chain is a line rather than a fork. Together with
+#: `one_version_number_per_managed_document` it is also the expected-version
+#: mechanism: a stale writer computes the same successor number and the same
+#: predecessor as the winner, and the server refuses the second insert.
+#:
+#: `title` and `media_type` are metadata and are stored here rather than beside
+#: the bytes. `title` is caller-supplied on a write path, so it is bounded by a
+#: constraint rather than trusted; it is never joined to a path, because the byte
+#: store accepts no path.
+managed_document_versions = Table(
+    "managed_document_versions",
+    METADATA,
+    Column("version_id", Text, primary_key=True),
+    Column(
+        "document_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.managed_documents.document_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("version_number", Integer, nullable=False),
+    Column(
+        "supersedes_version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.managed_document_versions.version_id", ondelete="CASCADE"),
+        unique=True,
+    ),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("media_type", Text, nullable=False),
+    Column("content_sha256", Text, nullable=False),
+    Column("byte_size", BigInteger, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("version_id", IdKind.MANAGED_DOCUMENT_VERSION),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _one_of("media_type", MANAGED_MEDIA_TYPES, name="a_managed_media_type_is_known"),
+    _matches(
+        "content_sha256",
+        DIGEST_PATTERN.pattern,
+        name="a_managed_version_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint("version_number >= 1", name="managed_version_numbers_start_at_one"),
+    CheckConstraint(
+        "(version_number = 1) = (supersedes_version_id IS NULL)",
+        name="only_the_first_managed_version_supersedes_nothing",
+    ),
+    CheckConstraint(
+        f"length(title) BETWEEN 1 AND {MAX_MANAGED_TITLE_CHARACTERS}",
+        name="a_managed_version_carries_a_bounded_title",
+    ),
+    CheckConstraint(
+        f"byte_size BETWEEN 1 AND {MAX_MANAGED_DOCUMENT_BYTES}",
+        name="a_managed_version_carries_bounded_bytes",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_managed_version_records_a_bounded_key",
+    ),
+    UniqueConstraint(
+        "document_id", "version_number", name="one_version_number_per_managed_document"
+    ),
+    Index("managed_document_versions_by_document", "document_id", "version_number"),
+)
+
+#: One row per admitted managed write, and the row whose unique key *is* the
+#: idempotency mechanism. Written first, under `ON CONFLICT DO NOTHING`, so a
+#: replayed request writes nothing at all and the stored `payload_sha256` decides
+#: whether the caller gets the original receipt or a conflict. Both references
+#: are `DEFERRABLE INITIALLY DEFERRED` for the reason `capture_submissions`
+#: states: they are checked at commit, by which time the rows they name exist.
+#:
+#: The collision domain is per Principal, so one Principal's replay can never
+#: return another's receipt.
+managed_document_submissions = Table(
+    "managed_document_submissions",
+    METADATA,
+    Column("submission_id", Text, primary_key=True),
+    Column("idempotency_key", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("payload_sha256", Text, nullable=False),
+    Column("server_received_at", DateTime(timezone=True), nullable=False),
+    Column(
+        "version_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.managed_document_versions.version_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    ),
+    Column(
+        "receipt_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.managed_document_receipts.receipt_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    ),
+    _is_identifier("submission_id", IdKind.MANAGED_SUBMISSION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _matches(
+        "payload_sha256",
+        DIGEST_PATTERN.pattern,
+        name="a_managed_payload_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_managed_submission_records_a_bounded_key",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "idempotency_key",
+        name="a_managed_key_admits_one_submission_per_principal",
+    ),
+)
+
+#: One row per issued managed receipt: safe evidence that one version is durable.
+#: Carries no content. `version_id` is `UNIQUE` because a version is admitted
+#: once, so a second receipt for it would be a second acknowledgement of one act.
+managed_document_receipts = Table(
+    "managed_document_receipts",
+    METADATA,
+    Column("receipt_id", Text, primary_key=True),
+    Column("version_id", Text, nullable=False, unique=True),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("issued_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("receipt_id", IdKind.MANAGED_RECEIPT),
+    _is_identifier("version_id", IdKind.MANAGED_DOCUMENT_VERSION),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_managed_receipt_records_a_bounded_key",
+    ),
+)
+
+#: One append-only row per archive or restore. There is no state column on
+#: `managed_documents` and no update anywhere on this plane: a document's state
+#: is what the latest transition implies, so the history and the state cannot
+#: disagree because there is only the history.
+#:
+#: **Archive is not destruction and this vocabulary is where that is enforced.**
+#: The closed set holds two transitions and neither removes anything; a `deleted`
+#: transition would need a migration to admit, which is the visible act
+#: `AGENTS.md` section 8.2 reserves to the operator.
+managed_document_lifecycle_events = Table(
+    "managed_document_lifecycle_events",
+    METADATA,
+    Column("event_id", Text, primary_key=True),
+    Column(
+        "document_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.managed_documents.document_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("principal_id", Text, nullable=False),
+    Column("transition", Text, nullable=False),
+    # The order the transitions happened in, and the reason it is a number rather
+    # than a timestamp. `now()` is fixed for a whole transaction, so two rows
+    # written in one would tie and "the latest transition" — which *is* the
+    # document's state — would have two answers. The unique constraint also makes
+    # two concurrent archives one winner and one refusal at the server.
+    Column("sequence_number", Integer, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("event_id", IdKind.MANAGED_LIFECYCLE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _one_of(
+        "transition",
+        ManagedLifecycleTransition,
+        name="a_managed_document_transition_is_known",
+    ),
+    CheckConstraint("sequence_number >= 1", name="a_managed_transition_sequence_starts_at_one"),
+    UniqueConstraint(
+        "document_id",
+        "sequence_number",
+        name="one_managed_transition_per_document_sequence",
+    ),
+    Index("managed_document_lifecycle_by_document", "document_id", "sequence_number"),
+    Index("managed_document_lifecycle_by_principal", "principal_id", "recorded_at"),
+)
+
+# Bounded GoodNotes page/version and proposal plane. These declarations live in
+# the canonical metadata so schema parity and Principal partition guards cover
+# the runtime repository rather than a private second metadata graph.
+goodnotes_pages = Table(
+    "goodnotes_pages",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("page_id", String(30), primary_key=True),
+    Column("source_id", String(72), nullable=False),
+    Column("source_object_id", String(72), nullable=False),
+    Column("page_number", Integer, nullable=False),
+    CheckConstraint("page_number >= 1", name="goodnotes_page_number_is_positive"),
+    UniqueConstraint(
+        "principal_id", "source_object_id", "page_number", name="one_goodnotes_page_identity"
+    ),
+)
+
+goodnotes_page_versions = Table(
+    "goodnotes_page_versions",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("page_version_id", String(30), primary_key=True),
+    Column("page_id", String(30), nullable=False),
+    Column("source_version_id", String(72), nullable=False),
+    Column("content_sha256", String(64), nullable=False),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    ForeignKeyConstraint(
+        ["principal_id", "page_id"],
+        [f"{SCHEMA}.goodnotes_pages.principal_id", f"{SCHEMA}.goodnotes_pages.page_id"],
+    ),
+    UniqueConstraint(
+        "principal_id", "page_id", "source_version_id", name="one_goodnotes_observed_version"
+    ),
+)
+
+goodnotes_region_proposals = Table(
+    "goodnotes_region_proposals",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("region_id", String(30), primary_key=True),
+    Column("proposal_id", Text, nullable=False, unique=True),
+    Column("review_case_id", Text, nullable=False, unique=True),
+    Column("page_version_id", String(30), nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("box", JSON, nullable=False),
+    Column("transcription", Text, nullable=False),
+    Column("confidence", Float, nullable=False),
+    Column("extractor", String(100), nullable=False),
+    Column("extractor_version", String(100), nullable=False),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("proposal_id", IdKind.PROPOSAL),
+    _is_identifier("review_case_id", IdKind.REVIEW_CASE),
+    CheckConstraint("ordinal >= 0", name="goodnotes_region_ordinal_is_nonnegative"),
+    CheckConstraint(
+        "confidence >= 0 AND confidence <= 1",
+        name="goodnotes_region_confidence_is_bounded",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "page_version_id"],
+        [
+            f"{SCHEMA}.goodnotes_page_versions.principal_id",
+            f"{SCHEMA}.goodnotes_page_versions.page_version_id",
+        ],
+    ),
+    UniqueConstraint(
+        "principal_id", "page_version_id", "ordinal", name="one_goodnotes_region_ordinal"
+    ),
+)
+
+goodnotes_review_decisions = Table(
+    "goodnotes_review_decisions",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("decision_id", Text, primary_key=True),
+    Column("region_id", String(30), nullable=False),
+    Column("review_case_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("disposition", String(32), nullable=False),
+    Column("corrected_text", Text),
+    Column("knowledge_id", Text, unique=True),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("decided_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("decision_id", IdKind.REVIEW_DECISION),
+    _is_identifier("review_case_id", IdKind.REVIEW_CASE),
+    _is_identifier("knowledge_id", IdKind.KNOWLEDGE),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    CheckConstraint("sequence >= 1", name="goodnotes_review_sequence_is_positive"),
+    CheckConstraint(
+        "disposition IN ('accept', 'correct_and_accept', 'reject', 'defer', 'mark_unresolved')",
+        name="goodnotes_disposition_is_known",
+    ),
+    CheckConstraint(
+        "(disposition = 'correct_and_accept' AND length(corrected_text) > 0) OR "
+        "(disposition <> 'correct_and_accept' AND corrected_text IS NULL)",
+        name="goodnotes_correction_matches_disposition",
+    ),
+    CheckConstraint(
+        "(disposition IN ('accept', 'correct_and_accept')) = (knowledge_id IS NOT NULL)",
+        name="accepted_goodnotes_region_has_knowledge_identity",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "region_id"],
+        [
+            f"{SCHEMA}.goodnotes_region_proposals.principal_id",
+            f"{SCHEMA}.goodnotes_region_proposals.region_id",
+        ],
+    ),
+    ForeignKeyConstraint(
+        ["review_case_id"], [f"{SCHEMA}.goodnotes_region_proposals.review_case_id"]
+    ),
+    UniqueConstraint(
+        "review_case_id", "sequence", name="one_goodnotes_decision_per_review_sequence"
+    ),
+)
+
+goodnotes_reconciliation_receipts = Table(
+    "goodnotes_reconciliation_receipts",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("receipt_id", String(30), nullable=False, unique=True),
+    Column("idempotency_key", String(200), primary_key=True),
+    Column("request_fingerprint", String(64), nullable=False),
+    Column("page_version_ids", JSON, nullable=False),
+    Column("created_regions", Integer, nullable=False),
+    CheckConstraint("created_regions >= 0", name="goodnotes_created_regions_is_nonnegative"),
 )

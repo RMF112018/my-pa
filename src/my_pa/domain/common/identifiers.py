@@ -44,6 +44,12 @@ class IdKind(StrEnum):
     CAPTURE_VERSION = "capver"
     RECEIPT = "rcpt"
     SUBMISSION = "sub"
+    #: A registered remote capture client (WP-10). Its own prefix rather than a
+    #: reuse of `PRINCIPAL`, because a client is a credential bearer bound to a
+    #: Principal and not a Principal: one prefix for both would make a stored
+    #: reference ambiguous about which of the two it names, and the binding is
+    #: exactly the distinction that must stay legible.
+    CAPTURE_CLIENT = "cclt"
     #: The capture *processing* plane: what the pipeline derived from a stored
     #: version. Each is its own prefix rather than a shared `derived_` one,
     #: because an audit row or a stored reference has to say which record it
@@ -112,6 +118,36 @@ class IdKind(StrEnum):
     PROJECT_SITUATION = "psit"
     RELATIONSHIP_EVENT = "revt"
     PULSE = "puls"
+    #: The continuity objects WP-11 adds, and the one append-only record that
+    #: carries their lifecycle. `CONTINUITY_DECISION` is deliberately not
+    #: `REVIEW_DECISION`: `rdec` names a reviewer's disposition of one proposal
+    #: and `cdec` names a decision the Principal holds and has to take, and a
+    #: shared prefix would make a stored reference ambiguous about which of the
+    #: two it points at — the same argument `CAPTURE_VERSION` makes against
+    #: reusing `VERSION`. `LIFECYCLE_EVENT` is its own prefix rather than a reuse
+    #: of `RELATIONSHIP_EVENT` for the same reason.
+    COMMITMENT = "cmt"
+    CONTINUITY_DECISION = "cdec"
+    TASK = "tsk"
+    LIFECYCLE_EVENT = "lce"
+    #: The managed-document plane (WP-27): the one plane whose records name bytes
+    #: this product wrote. Five prefixes rather than a reuse of the capture
+    #: plane's four, on the argument `CAPTURE_VERSION` makes against reusing
+    #: `VERSION`: a stored reference, a receipt and an audit row have to say which
+    #: plane they belong to, and `rcpt`/`sub` already name a capture admission —
+    #: one prefix for both would make a receipt ambiguous about whether the thing
+    #: it acknowledges is a row of text or a file on disk. `MANAGED_LIFECYCLE` is
+    #: its own prefix rather than a reuse of `LIFECYCLE_EVENT` for the same
+    #: reason: that one names a continuity object's transition.
+    #:
+    #: A version suffix is also what the byte store derives a location from, so
+    #: the shape rule these carry — 8-64 alphanumeric characters, no separator,
+    #: no dot — is load-bearing rather than cosmetic.
+    MANAGED_DOCUMENT = "mdoc"
+    MANAGED_DOCUMENT_VERSION = "mdver"
+    MANAGED_RECEIPT = "mdrcpt"
+    MANAGED_SUBMISSION = "mdsub"
+    MANAGED_LIFECYCLE = "mdlce"
 
 
 class InvalidIdentifierError(ValueError):

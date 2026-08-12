@@ -202,6 +202,7 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.SOURCES_ENROLL, Purpose.BOUNDED_ENROLLMENT),
         (Capability.KNOWLEDGE_SEARCH, Purpose.KNOWLEDGE_SEARCH),
         (Capability.KNOWLEDGE_READ, Purpose.KNOWLEDGE_READ),
+        (Capability.KNOWLEDGE_REVEAL, Purpose.CAPTURE_REVIEW),
         (Capability.CAPTURE_CREATE, Purpose.CAPTURE_AUTHORING),
         (Capability.CAPTURE_REVISE, Purpose.CAPTURE_AUTHORING),
         (Capability.CAPTURE_READ, Purpose.CAPTURE_REVIEW),
@@ -209,6 +210,19 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.CAPTURE_SEARCH, Purpose.CAPTURE_REVIEW),
         (Capability.REVIEW_LIST, Purpose.CAPTURE_REVIEW),
         (Capability.REVIEW_DECIDE, Purpose.REVIEW_DISPOSITION),
+        (Capability.CONTINUITY_PULSE, Purpose.CAPTURE_REVIEW),
+        (Capability.CONTINUITY_SITUATIONS, Purpose.CAPTURE_REVIEW),
+        (Capability.CONTINUITY_PROJECTS, Purpose.CAPTURE_REVIEW),
+        (Capability.KNOWLEDGE_COVERAGE, Purpose.STATUS_OBSERVATION),
+        # WP-28's managed-document plane. A purpose pair of its own rather than
+        # a reuse of the capture or knowledge pair, and the writes and the reads
+        # are separated: a purpose wide enough to cover both would grant both.
+        (Capability.DOCUMENTS_CREATE, Purpose.DOCUMENT_AUTHORING),
+        (Capability.DOCUMENTS_REVISE, Purpose.DOCUMENT_AUTHORING),
+        (Capability.DOCUMENTS_ARCHIVE, Purpose.DOCUMENT_AUTHORING),
+        (Capability.DOCUMENTS_RESTORE, Purpose.DOCUMENT_AUTHORING),
+        (Capability.DOCUMENTS_READ, Purpose.DOCUMENT_READ),
+        (Capability.DOCUMENTS_LIST, Purpose.DOCUMENT_READ),
     }
 )
 
@@ -232,8 +246,8 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # empty the table below. The three numbers are written out rather than
     # derived from each other: the arithmetic is what makes the second a check on
     # the enums, and the literals are what make it a check on the arithmetic.
-    assert len(PERMITTED_PAIRS) == 17
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 17 == 133
+    assert len(PERMITTED_PAIRS) == 28
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 28 == 284
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

@@ -52,6 +52,7 @@ from my_pa.infrastructure.persistence.tables import (
     capture_assertion_spans,
     capture_assertions,
     capture_classifications,
+    capture_clients,
     capture_context_links,
     capture_conversations,
     capture_entity_mentions,
@@ -112,6 +113,18 @@ SYNCHRONOUS_CAPTURE_METADATA: tuple[Table, ...] = (
     capture_conversations,
 )
 
+#: The operator-owned control plane the save never touches (WP-10).
+#:
+#: `capture_clients` is a `knowledge.capture_*` table and is neither a downstream
+#: output nor synchronous metadata: it holds credentials an operator minted with
+#: `apps/cli/clients.py`, written by a command rather than by a request, and a
+#: save that wrote one would be a capture path minting a credential. It is a
+#: third category rather than a fourth entry in `DOWNSTREAM_OUTPUTS` because the
+#: reason it is empty after a save is different — the pipeline has not run yet
+#: versus nothing in a request can write here at all — and a registry that
+#: collapses two different reasons stops explaining either.
+OPERATOR_OWNED_CONTROL_PLANE: tuple[Table, ...] = (capture_clients,)
+
 #: The first persisted evidence that a pipeline stage has begun. Locking only
 #: this table makes an accidental inline worker wait at its first observable
 #: downstream boundary without locking `capture_spans` or `capture_review_cases`,
@@ -149,7 +162,9 @@ def test_the_save_transaction_commits_no_downstream_output(engine: Engine) -> No
 
         # The one processing artefact the save may commit: a statement that work
         # is owed. `queued` and not `running`, so nothing has claimed it.
-        record = job_for(connection, saved.operation_id, plane=CAPTURE_JOBS)
+        record = job_for(
+            connection, saved.operation_id, principal_id=PRINCIPAL_ID, plane=CAPTURE_JOBS
+        )
         assert record is not None, "the save queued no processing job at all"
         assert record.state is JobState.QUEUED
         assert record.subject_id == saved.version_id
@@ -217,7 +232,9 @@ def test_explicit_conversation_and_context_commit_atomically_without_enrichment(
         assert tuple(conversation) == (saved.capture_id, saved.version_id, "skeletal", "unknown")
         for table in DOWNSTREAM_OUTPUTS:
             assert _rows(connection, table) == 0, table.name
-        record = job_for(connection, saved.operation_id, plane=CAPTURE_JOBS)
+        record = job_for(
+            connection, saved.operation_id, principal_id=PRINCIPAL_ID, plane=CAPTURE_JOBS
+        )
         assert record is not None and record.state is JobState.QUEUED
         assert _rows(connection, capture_stage_results) == 0
 
@@ -247,7 +264,12 @@ def test_explicit_conversation_and_context_commit_atomically_without_enrichment(
                 ).scalar_one()
                 == 0
             ), table.name
-        assert job_for(connection, rolled_back.operation_id, plane=CAPTURE_JOBS) is None
+        assert (
+            job_for(
+                connection, rolled_back.operation_id, principal_id=PRINCIPAL_ID, plane=CAPTURE_JOBS
+            )
+            is None
+        )
 
 
 def test_the_saved_capture_is_searchable_before_any_worker_runs(engine: Engine) -> None:
@@ -266,7 +288,9 @@ def test_the_saved_capture_is_searchable_before_any_worker_runs(engine: Engine) 
         saved = save(connection, RICH_NOTE)
 
     with engine.connect() as connection:
-        record = job_for(connection, saved.operation_id, plane=CAPTURE_JOBS)
+        record = job_for(
+            connection, saved.operation_id, principal_id=PRINCIPAL_ID, plane=CAPTURE_JOBS
+        )
         assert record is not None and record.state is JobState.QUEUED, (
             "a worker had already run, so `before any worker runs` is not what this test measured"
         )
@@ -349,7 +373,14 @@ def test_the_pipeline_tables_this_test_covers_are_all_of_them(engine: Engine) ->
         and table.name.startswith("capture_")
         and table.name not in save_owned
     }
-    recorded = {table.name for table in (*DOWNSTREAM_OUTPUTS, *SYNCHRONOUS_CAPTURE_METADATA)}
+    recorded = {
+        table.name
+        for table in (
+            *DOWNSTREAM_OUTPUTS,
+            *SYNCHRONOUS_CAPTURE_METADATA,
+            *OPERATOR_OWNED_CONTROL_PLANE,
+        )
+    }
     assert derived == recorded, (
         f"the declaration holds {sorted(derived)} and this module lists "
         f"{sorted(recorded)}. A table missing from the "

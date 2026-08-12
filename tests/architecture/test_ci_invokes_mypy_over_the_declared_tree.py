@@ -735,6 +735,7 @@ def test_every_python_root_is_type_checked_or_named() -> None:
         root
         for path in ROOT.glob("*/**/*.py")
         if "__pycache__" not in path.parts
+        and "node_modules" not in path.parts
         and (root := path.relative_to(ROOT).parts[0]) not in ignored
         and not root.startswith(".")
     }

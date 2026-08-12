@@ -101,6 +101,7 @@ class RegisteredSourceProviders(SourceProviders):
                 SourceProviderKind.APPLE_MAIL
                 | SourceProviderKind.APPLE_CALENDAR
                 | SourceProviderKind.APPLE_CONTACTS
+                | SourceProviderKind.APPLE_TASKS
             ):
                 raise NativeSourceAdapterUnavailableError(
                     "native source adapters are not composed in WP-12B"

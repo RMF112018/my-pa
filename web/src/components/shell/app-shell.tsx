@@ -9,6 +9,7 @@ import type { PrincipalSession } from "@/contracts/identity";
 import { ContextHeader } from "@/components/shell/context-header";
 import { NavRail, MobileNav } from "@/components/shell/nav";
 import { CaptureDialog } from "@/components/shell/capture-dialog";
+import { OfflineQueueStatus } from "@/components/offline/offline-queue-status";
 import { Button } from "@/components/ui/button";
 
 export function AppShell({
@@ -38,7 +39,12 @@ export function AppShell({
       >
         + Capture
       </Button>
-      <CaptureDialog open={captureOpen} onClose={() => setCaptureOpen(false)} />
+      <CaptureDialog
+        open={captureOpen}
+        onClose={() => setCaptureOpen(false)}
+        principalId={principal.principalId}
+      />
+      <OfflineQueueStatus principalId={principal.principalId} />
     </div>
   );
 }

@@ -71,8 +71,10 @@ def main() -> int:
     document = json.loads(args.registry.read_text(encoding="utf-8"))
     scan = redaction.scan((REPOSITORY_ROOT / root for root in SCAN_ROOTS), base=REPOSITORY_ROOT)
 
-    # statement-timeout-exempt: reconciliation counts every migrated row.
-    engine = create_database_engine(load_settings().database_url)
+    # statement-timeout-exempt: reconciliation may compare the full synthetic corpus.
+    engine = create_database_engine(
+        load_settings().parsed_database_url(), statement_timeout_ms=None
+    )
     try:
         report = reconciliation.reconcile(engine, args.source, registry, document, scan)
     finally:

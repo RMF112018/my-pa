@@ -43,18 +43,17 @@ from typing import Final
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, Engine, text
+from sqlalchemy import Connection, Engine, func, select, text
 from sqlalchemy.engine import make_url
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.classification import Classification
-from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.extraction.coverage import LimitationReason
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.source.enrollment import EnrollmentRequest, EnrollmentScope
 from my_pa.domain.source.provider import ObjectKind
-from my_pa.domain.source.registry import SourceProviderKind, issue_identifier
+from my_pa.domain.source.registry import SourceProviderKind
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs.worker import (
     JobExecutionError,
@@ -75,7 +74,15 @@ from my_pa.infrastructure.persistence.jobs import (
     job_state,
 )
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
-from my_pa.infrastructure.persistence.tables import DEFAULT_MAX_ATTEMPTS, JobState
+from my_pa.infrastructure.persistence.tables import (
+    DEFAULT_MAX_ATTEMPTS,
+    JobState,
+    worker_heartbeats,
+)
+from my_pa.infrastructure.persistence.worker_health import (
+    record_worker_heartbeat,
+    worker_plane_health,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -102,6 +109,14 @@ def _administer(maintenance: Engine, *statements: object) -> None:
     with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
         for statement in statements:
             connection.execute(statement)  # type: ignore[arg-type]
+
+
+#: The Principal whose queue these tests claim from. One value rather than a
+#: fresh identifier per enrollment, because `claim_job` is partitioned by
+#: Principal (WP-04, revision `4f1a8b6d92e3`): a worker claims its own
+#: Principal's work and no one else's, so every job a run is meant to see
+#: has to be queued under the Principal that run names.
+WORKER_PRINCIPAL = "prn_wwww0004wwwwwwwwwwwwww00000004"
 
 
 @pytest.fixture(scope="module")
@@ -140,7 +155,13 @@ def engine(disposable_database: str) -> Iterator[Engine]:
         built.dispose()
 
 
-def _enqueue(engine: Engine, key: str, *, max_attempts: int = DEFAULT_MAX_ATTEMPTS) -> str:
+def _enqueue(
+    engine: Engine,
+    key: str,
+    *,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    principal_id: str = WORKER_PRINCIPAL,
+) -> str:
     """One source, one observed object, one enrollment, and one queued job."""
     with engine.begin() as connection:
         source = register_source(
@@ -164,7 +185,7 @@ def _enqueue(engine: Engine, key: str, *, max_attempts: int = DEFAULT_MAX_ATTEMP
             connection,
             EnrollmentRequest(
                 source_id=source.source_id,
-                principal_id=issue_identifier(IdKind.PRINCIPAL),
+                principal_id=principal_id,
                 purpose=Purpose.BOUNDED_ENROLLMENT,
                 scope=EnrollmentScope(object_ids=(observed.source_object_id,)),
                 media_types=("text/markdown",),
@@ -286,6 +307,7 @@ def test_the_worker_claims_executes_and_completes(engine: Engine) -> None:
 
     run = run_worker(
         engine,
+        principal_id=WORKER_PRINCIPAL,
         owner=issue_worker_owner(),
         handler=handler,
         stop=threading.Event(),
@@ -325,6 +347,7 @@ def test_a_failed_attempt_is_released_and_keeps_what_it_had_committed(engine: En
 
     run = run_worker(
         engine,
+        principal_id=WORKER_PRINCIPAL,
         owner=issue_worker_owner(),
         handler=handler,
         stop=threading.Event(),
@@ -356,6 +379,7 @@ def test_poison_work_stops_being_claimed_once_its_attempts_are_spent(engine: Eng
 
     run = run_worker(
         engine,
+        principal_id=WORKER_PRINCIPAL,
         owner=issue_worker_owner(),
         handler=handler,
         stop=threading.Event(),
@@ -378,8 +402,16 @@ def test_poison_work_stops_being_claimed_once_its_attempts_are_spent(engine: Eng
 
     # And a fresh worker cannot pick it up either.
     with engine.begin() as connection:
-        assert claim_job(connection, owner=issue_worker_owner(), lease_seconds=60) is None
-        assert job_state(connection, operation_id) is JobState.FAILED
+        assert (
+            claim_job(
+                connection,
+                principal_id=WORKER_PRINCIPAL,
+                owner=issue_worker_owner(),
+                lease_seconds=60,
+            )
+            is None
+        )
+        assert job_state(connection, operation_id, principal_id=WORKER_PRINCIPAL) is JobState.FAILED
 
 
 @pytest.mark.database
@@ -416,6 +448,7 @@ def test_a_worker_stops_writing_at_the_object_its_lease_was_taken(engine: Engine
 
     run = run_worker(
         engine,
+        principal_id=WORKER_PRINCIPAL,
         owner=issue_worker_owner(),
         handler=steal,
         stop=threading.Event(),
@@ -461,6 +494,7 @@ def test_a_worker_whose_lease_merely_expired_also_stops_writing(engine: Engine) 
 
     run = run_worker(
         engine,
+        principal_id=WORKER_PRINCIPAL,
         owner=issue_worker_owner(),
         handler=outlive,
         stop=threading.Event(),
@@ -488,7 +522,10 @@ def test_the_lease_assertion_answers_about_the_owner_the_clock_and_the_state(
     holder = issue_worker_owner()
     stranger = issue_worker_owner()
     with engine.begin() as connection:
-        assert claim_job(connection, owner=holder, lease_seconds=60) is not None
+        assert (
+            claim_job(connection, principal_id=WORKER_PRINCIPAL, owner=holder, lease_seconds=60)
+            is not None
+        )
 
     with engine.begin() as connection:
         assert hold_lease(connection, operation_id, owner=holder) is True
@@ -531,7 +568,7 @@ def test_a_crashed_worker_loses_no_job_and_the_next_claim_recovers_it(engine: En
     operation_id = _enqueue(engine, "crashed")
     dead = issue_worker_owner()
     with engine.begin() as connection:
-        claimed = claim_job(connection, owner=dead, lease_seconds=1)
+        claimed = claim_job(connection, principal_id=WORKER_PRINCIPAL, owner=dead, lease_seconds=1)
     assert claimed is not None
     assert claimed.operation_id == operation_id
 
@@ -546,6 +583,7 @@ def test_a_crashed_worker_loses_no_job_and_the_next_claim_recovers_it(engine: En
     handler = Recorder()
     run = run_worker(
         engine,
+        principal_id=WORKER_PRINCIPAL,
         owner=issue_worker_owner(),
         handler=handler,
         stop=threading.Event(),
@@ -581,7 +619,13 @@ def test_a_stop_signal_ends_the_loop_without_abandoning_the_job_it_holds(
         # As if SIGTERM arrived here.
         stop.set()
 
-    run = run_worker(engine, owner=issue_worker_owner(), handler=stopping, stop=stop)
+    run = run_worker(
+        engine,
+        principal_id=WORKER_PRINCIPAL,
+        owner=issue_worker_owner(),
+        handler=stopping,
+        stop=stop,
+    )
 
     assert stop.is_set()
     assert (run.claimed, run.completed, run.iterations) == (1, 1, 1)
@@ -621,13 +665,27 @@ def test_a_signal_between_the_claim_and_the_work_still_finishes_the_claimed_job(
     real_claim = claim_job
 
     def claim_then_signal(
-        connection: Connection, *, owner: str, lease_seconds: int, plane: JobPlane = ENROLLMENT_JOBS
+        connection: Connection,
+        *,
+        owner: str,
+        lease_seconds: int,
+        principal_id: str | None,
+        plane: JobPlane = ENROLLMENT_JOBS,
+        respect_retry_schedule: bool = False,
     ) -> LeasedJob | None:
-        # `plane` is accepted and passed through rather than dropped: WP-7 gave
-        # the loop a second job plane, so a seam that swallowed the argument
-        # would silently claim from the enrollment plane whatever the caller
-        # asked for — the same shape of defect this test is about.
-        job = real_claim(connection, owner=owner, lease_seconds=lease_seconds, plane=plane)
+        # `plane` and `principal_id` are both accepted and passed through rather
+        # than dropped: WP-7 gave the loop a second job plane and WP-04 gave the
+        # claim a partition, so a seam that swallowed either would silently claim
+        # from the wrong table, or from every Principal at once — the same shape
+        # of defect this test is about.
+        job = real_claim(
+            connection,
+            owner=owner,
+            lease_seconds=lease_seconds,
+            principal_id=principal_id,
+            plane=plane,
+            respect_retry_schedule=respect_retry_schedule,
+        )
         if job is not None:
             # As if SIGTERM arrived in the instant after the claim committed.
             stop.set()
@@ -637,7 +695,13 @@ def test_a_signal_between_the_claim_and_the_work_still_finishes_the_claimed_job(
         "my_pa.infrastructure.jobs.worker.claim_job", claim_then_signal, raising=True
     )
 
-    run = run_worker(engine, owner=issue_worker_owner(), handler=handler, stop=stop)
+    run = run_worker(
+        engine,
+        principal_id=WORKER_PRINCIPAL,
+        owner=issue_worker_owner(),
+        handler=handler,
+        stop=stop,
+    )
 
     assert stop.is_set()
     assert (run.claimed, run.completed, run.lost) == (1, 1, 0)
@@ -661,7 +725,13 @@ def test_a_worker_already_told_to_stop_claims_nothing(engine: Engine) -> None:
     stop.set()
     handler = Recorder()
 
-    run = run_worker(engine, owner=issue_worker_owner(), handler=handler, stop=stop)
+    run = run_worker(
+        engine,
+        principal_id=WORKER_PRINCIPAL,
+        owner=issue_worker_owner(),
+        handler=handler,
+        stop=stop,
+    )
 
     assert (run.iterations, run.claimed) == (0, 0)
     assert handler.calls == 0
@@ -676,14 +746,111 @@ def test_two_workers_over_one_job_execute_it_once(engine: Engine) -> None:
     second = Recorder()
 
     run_worker(
-        engine, owner=issue_worker_owner(), handler=first, stop=threading.Event(), max_iterations=1
+        engine,
+        principal_id=WORKER_PRINCIPAL,
+        owner=issue_worker_owner(),
+        handler=first,
+        stop=threading.Event(),
+        max_iterations=1,
     )
     run_worker(
-        engine, owner=issue_worker_owner(), handler=second, stop=threading.Event(), max_iterations=1
+        engine,
+        principal_id=WORKER_PRINCIPAL,
+        owner=issue_worker_owner(),
+        handler=second,
+        stop=threading.Event(),
+        max_iterations=1,
     )
 
     assert (first.calls, second.calls) == (1, 0)
     assert _limitations(engine) == 1
+
+
+@pytest.mark.database
+def test_entra_worker_consumes_rows_for_distinct_stored_principals_without_rebinding(
+    engine: Engine,
+) -> None:
+    """The trusted global worker consumes stored partitions, never a caller's Principal."""
+    other = "prn_eeee0005eeeeeeeeeeeeeeee00000005"
+    first = _enqueue(engine, "entra-first", principal_id=WORKER_PRINCIPAL)
+    second = _enqueue(engine, "entra-second", principal_id=other)
+    seen: list[tuple[str, str]] = []
+
+    def record(worker_engine: Engine, job: LeasedJob, owner: str) -> None:
+        seen.append((job.operation_id, job.principal_id))
+
+    run = run_worker(
+        engine,
+        principal_id=None,
+        owner=issue_worker_owner(),
+        handler=record,
+        stop=threading.Event(),
+        max_iterations=2,
+    )
+
+    assert run.completed == 2
+    assert set(seen) == {(first, WORKER_PRINCIPAL), (second, other)}
+    with engine.connect() as connection:
+        assert job_state(connection, first, principal_id=WORKER_PRINCIPAL) is JobState.SUCCEEDED
+        assert job_state(connection, second, principal_id=other) is JobState.SUCCEEDED
+        assert job_state(connection, first, principal_id=other) is None
+        assert job_state(connection, second, principal_id=WORKER_PRINCIPAL) is None
+
+
+@pytest.mark.database
+def test_backlog_without_a_live_worker_is_never_reported_healthy(engine: Engine) -> None:
+    """Backlog, a live heartbeat, and an explicit stop remain distinguishable."""
+    _enqueue(engine, "health")
+    owner = issue_worker_owner()
+    other = "prn_hhhh0006hhhhhhhhhhhhhhhh00000006"
+    with engine.begin() as connection:
+        absent = worker_plane_health(
+            connection,
+            principal_id=WORKER_PRINCIPAL,
+            plane_name="enrollment",
+        )
+        assert (absent.state, absent.backlog) == ("worker_absent", 1)
+        record_worker_heartbeat(
+            connection,
+            owner=owner,
+            principal_id=WORKER_PRINCIPAL,
+            plane="enrollment",
+        )
+        record_worker_heartbeat(
+            connection,
+            owner=owner,
+            principal_id=other,
+            plane="enrollment",
+        )
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(worker_heartbeats)
+                .where(worker_heartbeats.c.worker_owner == owner)
+            )
+            == 2
+        )
+    with engine.begin() as connection:
+        live = worker_plane_health(
+            connection,
+            principal_id=WORKER_PRINCIPAL,
+            plane_name="enrollment",
+        )
+        assert (live.state, live.backlog) == ("working", 1)
+        record_worker_heartbeat(
+            connection,
+            owner=owner,
+            principal_id=WORKER_PRINCIPAL,
+            plane="enrollment",
+            stopped=True,
+        )
+    with engine.connect() as connection:
+        stopped = worker_plane_health(
+            connection,
+            principal_id=WORKER_PRINCIPAL,
+            plane_name="enrollment",
+        )
+        assert (stopped.state, stopped.backlog) == ("worker_absent", 1)
 
 
 @pytest.mark.database
@@ -702,6 +869,7 @@ def test_an_unclassified_handler_failure_is_recorded_as_internal_error(engine: E
 
     run = run_worker(
         engine,
+        principal_id=WORKER_PRINCIPAL,
         owner=issue_worker_owner(),
         handler=explode,
         stop=threading.Event(),
@@ -723,6 +891,7 @@ def test_the_loop_refuses_an_out_of_range_bound(field: str, value: int) -> None:
     with pytest.raises(ValueError, match=field.replace("_", "_")):
         run_worker(
             create_database_engine("postgresql+psycopg://nobody@127.0.0.1:1/nothing"),
+            principal_id=WORKER_PRINCIPAL,
             owner=issue_worker_owner(),
             handler=Recorder(),
             stop=threading.Event(),

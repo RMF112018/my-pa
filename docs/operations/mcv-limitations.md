@@ -49,22 +49,27 @@ about a measurement taken for this document name the database and the date.
 
 ---
 
-## 1. One local principal, loopback only, and no authentication mechanism
+## 1. Authentication is implemented; live Entra activation is not proven
 
-The gateway binds `127.0.0.1` and has no option to bind elsewhere. No credential
-is issued, read, or required; no TLS is configured; no ingress is activated.
-`P00-OD-010` — which authentication mechanism this uses — is **open** and
-reserved to the operator, and `D-30` builds the capture endpoint behind that
-boundary rather than exposing it.
+The local gateway still binds `127.0.0.1` and configures either an explicit
+`local_operator` mode or an Entra bearer-verification mode. The web BFF now has a
+Node-only Entra authorization-code + PKCE start/callback/session path. It checks
+state and nonce, derives identity from MSAL-validated claims, keeps the access
+token in the server session registry, and forwards it only from server to
+gateway. No browser request or payload supplies a Principal or bearer.
 
-**Do not read this as "authentication is not needed yet".** Read it as: there is
-exactly one principal, it is the process, and there is nothing to authenticate
-*against*.
+What remains unproven is live activation: there is no repository credential,
+tenant registration, public ingress, TLS termination, or live-tenant test. The
+authorization-code protocol is tested with an injected synthetic MSAL result;
+the Python verifier is tested with synthetic signed JWTs. Do not turn either
+into a claim that a tenant is configured or production-ready.
 
 Evidence: `apps/gateway.py`, `src/my_pa/bootstrap/gateway.py`,
-`PHASE-00-OPEN-DECISION-LEDGER.md`.
+`web/src/lib/auth/entra-code-flow.ts`,
+`web/src/lib/auth/entra-session.test.ts`,
+`tests/security/test_entra_authentication.py`.
 
-## 2. The local operator is one durable principal; live multi-principal identity is still not wired to the runtime
+## 2. Multi-principal runtime wiring exists; live tenant operation remains unproven
 
 **Rewritten 2026-08-05 (WP-03, `PKL-MYPA-D-WP03-001`).** This limitation was
 headed "ownership survives only as long as the serving process", and that was
@@ -80,12 +85,11 @@ CLI invocation, a gateway process, a gateway process after a restart — acts as
 composes two runtimes over one database and asserts the identifiers are equal
 and that the second runtime revises and reads what the first wrote.
 
-Nothing can still be supplied an identity from outside: the envelope's
-`principal_id` is correlation input (`contracts/v1/envelope.py`,
-`application/service.py`), `apps/cli/invoke.py` refuses a `--principal` option
-deliberately, and a capture admission whose payload names a principal other
-than the authenticated one is refused as `CallerSuppliedPrincipalError`
-(MU-AC-02).
+No caller can supply the acting identity: the envelope's `principal_id` remains
+correlation input (`contracts/v1/envelope.py`, `application/service.py`),
+`apps/cli/invoke.py` refuses a `--principal` option, and a capture admission
+whose payload names a principal is refused. In Entra mode identity instead
+arrives through the separately validated bearer boundary.
 
 **Captures are now owner-scoped.** `capture.read`, `capture.list`,
 `capture.search` and the revise path of `capture.create` resolve against the
@@ -98,18 +102,15 @@ limitation argued that adding the owner check would make `QC-AC-013` unprovable
 across processes; that was true only while the owner died with its process, and
 the durable binding is what made both halves hold at once.
 
-**What still blocks: no live identity reaches the serving runtime.** The
-identity plane (`identity.user_accounts`, WP-01) mints durable principals from
-validated Entra claims, and the capture plane partitions on whatever
-authenticated principal it is handed — but the gateway composition still hands
-it only the local operator, because `P00-OD-010` (which authentication
-mechanism fronts this) is **open** and reserved to the operator, and `D-30`
-refuses ingress. Cross-principal isolation is proven on synthetic principals
-(`tests/security/test_cross_principal_capture_isolation.py`), not on live ones.
+**What changed in the remediation candidate.** In Entra mode the gateway derives
+the acting Principal from a validated `(tid, oid)` token and the trusted worker
+consumes the Principal already stamped on each queue row instead of binding the
+process to `local_principal`. Local mode remains fixed to the durable local
+operator. Cross-principal reads remain partitioned, and the worker has no CLI or
+request argument that can name a partition.
 
-**Invalidation trigger: operator resolution of `P00-OD-010`.** That decision
-supplies the mechanism that puts a second authenticated principal in front of
-the runtime; the enforcement it would rely on is already in place and tested.
+**What still blocks:** no live tenant credential or personal data has exercised
+this chain. Production registration and activation are operator-gated.
 
 Recorded as `D-67` and `D-72` in `docs/plans/mcv-completion-plan.md`, both now
 superseded by `PKL-MYPA-D-WP03-001` (`docs/decisions/ADR-005-principal-partitioned-capture.md`).
@@ -119,6 +120,7 @@ Evidence: `src/my_pa/bootstrap/gateway.py`,
 `src/my_pa/infrastructure/persistence/capture.py`,
 `tests/capture/test_owner_is_the_partition.py::test_a_capture_created_by_one_runtime_is_revised_and_read_by_another`,
 `tests/security/test_cross_principal_capture_isolation.py`,
+`tests/concurrency/test_worker_lease_loop.py::test_entra_worker_consumes_rows_for_distinct_stored_principals_without_rebinding`,
 `ops/runbooks/end-to-end-operations.md`.
 
 ## 3. The corpus is four synthetic objects, and nothing has been proven wider
@@ -341,6 +343,163 @@ Evidence: `src/my_pa/domain/relationship/`,
 `tests/relationship/test_relationship_domain.py::test_profile_coverage_fails_closed_unless_it_names_the_exact_observation_set`,
 `tests/provider_conformance/test_personal_fixture_provider.py::test_personal_source_port_and_adapter_expose_no_mutation_method`,
 `docs/plans/mcv-completion-plan.md`.
+
+## 13. Managed documents: a capability seat since WP-28, and two stores that are not one transaction
+
+WP-27 implements the product-owned write plane: a designated managed root, stable
+document identity, immutable versions, expected-version checking, idempotency,
+receipts, archive/restore, backup/restore and an integrity check. Source roots
+stay read-only, and the byte store refuses a managed root that is, contains, or
+lies inside a configured source root, after resolving both.
+
+**WP-28 gave it a capability seat, and that is what changed.** Six
+`documents.` capabilities under two purposes of their own reach
+`ManagedDocumentService` through `ApplicationService.invoke`, so a managed
+operation is authorized, audited and refused by the machinery every other
+capability meets. WP-27's statement that "a managed operation writes no
+`audit_events` row" is **superseded**: every managed request now writes one.
+
+**What the row says, exactly, because it is easy to over-read.** `authorize`
+records the *decision* on the audit sink's own connection and commits it there
+(`D-34`), before the handler runs. So a policy refusal — a purpose the capability
+does not permit — is recorded as `denied` with its reason. A refusal raised by the
+*handler* — a stale `expected_version_number`, an idempotency key bound to a
+different request, a document another Principal owns — rolls the work back and
+leaves a row that says `allowed`, because authorization *was* granted and that
+remains true. `outcome` carries the **authorization decision** and not the result
+of the work, and that is `invoke`'s pre-existing semantics for **all 26**
+capabilities rather than anything the managed plane introduced. **Nothing writes
+a second event to say the work then failed**, for this plane or any other.
+
+**The join that would settle it does not exist, and an earlier version of this
+section said it did.** It told an operator to "join the version and lifecycle
+rows to see whether anything landed". That is not performable. No `managed_*`
+table carries an `audit_id` or a `request_id`; the only shared column name is
+`correlation_id`, and the value on `managed_document_versions`,
+`managed_document_submissions` and `managed_document_lifecycle_events` is minted
+inside `ManagedDocumentService` and is a **different value** from the one on the
+`audit_events` row `invoke` wrote for the same request. Neither is passed to the
+other. What is actually available is heuristic: the same `principal_id`, the same
+capability, and two timestamps close together. For an operator reconciling one
+request on a single-operator process that is usually enough to form a belief, and
+it is never enough to prove one — two `documents.create` calls from the same
+Principal in the same second cannot be told apart.
+
+**This must close before `EXT-08`.** Once a non-operator client drives this
+surface, the audit is the only record of what that client did, and "the Principal
+attempted `documents.create`, and a version appeared at about the same time" is
+an inference rather than a trail. Closing it means carrying one identifier across
+the boundary — the `invoke` correlation identifier into the managed rows, or the
+`audit_id` — and it is not carried today. It is a prerequisite of external client
+activation rather than of this package, and it is recorded here as an open item
+rather than described as a control that exists.
+
+**A process with no `MY_PA_MANAGED_DOCUMENT_ROOT` publishes none of the six.**
+`capabilities.get` omits them and the MCP tool list omits them, and a call by name
+is refused `unsupported`. There is no default location and no inference.
+
+**The filesystem and the database are not one transaction, and the product does
+not claim they are.** Bytes are written and fsynced before the metadata rows are
+inserted, so the failure that survives a crash is **bytes with no row** —
+unreachable, reclaimable, reported by `verify` as an orphan, and never cleaned up
+automatically. The reverse, a row naming absent bytes, is what the ordering
+refuses to produce.
+
+**Archive withdraws a document from the active set; it does not lock it.** The
+two lifecycle transitions are reversible state changes and nothing more, so
+revising an archived document succeeds — the revision creates the next version
+and the document stays `archived`. This is the specified behaviour rather than a
+gap in the checks: there is no seal, and no operation refuses a write on the
+strength of the current state. An operator who reads "archived" as "frozen" will
+be wrong.
+
+**Not implemented, deliberately:** hard delete of a managed document (out of
+scope, and irreversible destruction of canonical data is reserved to the operator
+under `AGENTS.md` section 8.2); automatic reclamation of orphaned bytes; comments
+on a managed document; copy and relocate — neither has a caller, and a location
+is not something this plane exposes at all. A backup carries versions and their
+bytes and **not** the lifecycle rows, the submissions, or the receipts. A
+restored plane is **active**: a document that was archived when the backup was
+taken comes back active and has to be archived again, and an idempotency key used
+before the restore is free again afterwards.
+
+**The intermediate-component TOCTOU window WP-27 disclosed is closed (WP-28).**
+Every write and every read is now performed relative to a directory descriptor:
+the chain from the root down is walked once with `O_DIRECTORY | O_NOFOLLOW`,
+holding a descriptor at each level, and the create, the link, the unlink and the
+read are `openat`/`linkat`/`unlinkat` against it. A descriptor names an inode, so
+after the walk there is no component left to swap.
+`tests/security/test_managed_store_toctou.py` reproduces the attack at the instant
+the window opens, shows the *previous* publication landing bytes outside the root
+under it, and shows this one refusing.
+
+**What that does not cover, stated so it is not read as more.** The managed root
+itself is opened by name — once for every anchored step rather than once per
+public call, which is five times during a single `put` — and is the one component
+no descriptor sits above; a root replaced between any two of those opens is a
+different root. A platform
+without directory-relative syscalls cannot hold the guarantee, and the store
+**refuses** rather than reverting to name-based calls, so such a build fails to
+write rather than writing less safely. The precondition for the original attack —
+local write access inside the managed root as the product's own UID — was never
+what made it a NOTE and is unchanged.
+
+**Nothing here has run against a real managed root.** Every test writes into
+`tmp_path`; pointing the plane at an operator's real storage is `EXT-10` and
+remains an operator action.
+
+Evidence: `src/my_pa/domain/documents/managed.py`,
+`src/my_pa/infrastructure/managed_document_stores/filesystem/store.py`,
+`src/my_pa/application/managed_documents.py`,
+`ops/runbooks/managed-document-operations.md`,
+`tests/security/test_managed_document_containment.py::test_no_managed_store_method_accepts_a_path`,
+`tests/architecture/test_managed_writes_are_contained.py::test_every_filesystem_write_is_the_managed_store_or_is_registered`,
+`tests/database/test_managed_documents.py::test_a_rolled_back_write_leaves_bytes_with_no_row_and_verify_finds_them`,
+`tests/database/test_managed_documents.py::test_a_backup_restores_into_a_fresh_root_and_an_emptied_database`,
+`tests/database/test_managed_document_audit.py`,
+`tests/security/test_managed_store_toctou.py`,
+`tests/schema/test_managed_document_capability_migration.py`.
+
+## 13a. The Frontier MCP surface (WP-28)
+
+**Thin adapter, and the claim is a parse rather than a promise.**
+`tests/architecture/test_mcp_is_a_thin_adapter.py` reads every module under
+`src/my_pa/adapters/mcp/` and asserts a closed import allowlist, no forbidden
+operation in applied or unapplied form, exactly one `normalize` and one `invoke`,
+no capability name written anywhere in the package, and no read of a field out of
+a caller's request. The last two exist because a plant that wrote expected-version
+and idempotency logic inline in the transport passed every other claim.
+
+**stdio only.** No socket is opened and the SDK's SSE, streamable-HTTP and
+WebSocket servers are named and forbidden by import.
+
+**The kill switch.** `MY_PA_MCP_SURFACE_DISABLED` is **off by default and the
+surface serves** — it is a pipe an operator starts deliberately, not a network
+listener. Engaging it empties `tools/list` *and* refuses `tools/call` before the
+application is reached. A malformed value refuses to start.
+
+**Client binding is identification, not authentication.** `MY_PA_MCP_CLIENT_ID`
+binds the surface to a row in the existing `capture_clients` registry and the
+process refuses to serve when that row is absent, foreign or **revoked** — so
+`revoke_client` withdraws the surface at the next start. stdio carries no
+credential, so nothing is verified and nothing is presented.
+
+**Not built, and named rather than implied.** There is **no OAuth 2.1
+authorization server, no PKCE, no resource indicators and no per-external-client
+profile conformance testing**. Not because they were skipped: none of them has
+anything to run over. They are properties of an *ingress*, and this build has
+none — `EXT-07` (external ingress) and `EXT-08` (client activation) are
+operator-gated and untouched. Any statement that this surface is "OAuth-ready" or
+"conformance-tested against a client profile" would be false.
+
+**No live NAS source provider.** Source reads over MCP go through the existing
+`sources.*` capabilities and the fixture provider, which are read-only; a live
+NAS provider is `EXT-10`-gated and is not built.
+
+Evidence: `src/my_pa/adapters/mcp/server.py`, `src/my_pa/adapters/mcp/tools.py`,
+`tests/architecture/test_mcp_is_a_thin_adapter.py`,
+`tests/security/test_mcp_surface_controls.py`,
+`tests/security/test_mcp_and_cli_negative_evidence.py`.
 
 ---
 

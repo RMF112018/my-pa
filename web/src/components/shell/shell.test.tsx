@@ -48,11 +48,16 @@ describe("app shell", () => {
     expect(todayLinks.some((l) => l.getAttribute("aria-current") === "page")).toBe(true);
   });
 
-  it("opens Capture, focuses the field, and saves to the stub", async () => {
+  it("opens Capture, focuses the field, and sends one attempt-keyed submission", async () => {
     const user = userEvent.setup();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
-        JSON.stringify({ receiptId: "rcpt-1", created: true, status: "acknowledged_not_persisted" }),
+        JSON.stringify({
+          shape: "backend",
+          status: "persisted",
+          created: true,
+          receipt: { receiptId: "rcpt_aaaaaaaa11111111" },
+        }),
         { status: 200 },
       ),
     );
@@ -63,19 +68,22 @@ describe("app shell", () => {
     const field = screen.getByTestId("capture-field");
     await waitFor(() => expect(field).toHaveFocus());
 
-    await user.type(field, "confirm pour window");
+    await user.type(field, "synthetic note delta");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent("Captured. It will appear in Review."),
+      expect(screen.getByTestId("capture-durable")).toHaveTextContent(
+        "Saved. Your note is stored and will appear in Review.",
+      ),
     );
     expect(fetchSpy).toHaveBeenCalledWith(
       "/api/capture",
       expect.objectContaining({ method: "POST" }),
     );
     const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
-    expect(body.text).toBe("confirm pour window");
-    expect(body.mode).toBe("text");
+    expect(body.text).toBe("synthetic note delta");
+    // The kind is a default rather than a step: nothing was selected.
+    expect(body.captureKind).toBe("quick_note");
     expect(body.idempotencyKey).toMatch(/^cap-[0-9a-f-]+$/);
     // The payload must never carry identity fields.
     expect(Object.keys(body)).not.toContain("principalId");

@@ -38,9 +38,12 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
+from typing import Final
 
 import pytest
 
+from my_pa.application.commands import CreateManagedDocumentCommand
+from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import (
     Acceptance,
@@ -55,12 +58,19 @@ from my_pa.contracts.ports import (
     EnrollmentRepository,
     KnowledgeRecord,
     KnowledgeRepository,
+    ManagedAdmission,
+    ManagedByteStore,
+    ManagedDocumentRepository,
+    ManagedWriteRequest,
     Operation,
     OperationQueue,
     PortError,
+    ProjectRepository,
+    PulseRepository,
     ReviewDecisionRequest,
     ReviewRepository,
     SearchOutcome,
+    SituationRepository,
     SourceProviders,
     SourceRepository,
     UnitOfWork,
@@ -79,7 +89,18 @@ from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.capture.errors import CaptureConflictError
+from my_pa.domain.capture.pipeline import ProcessingState
 from my_pa.domain.capture.proposal import ProposalState, ProposalType, RiskClass
+from my_pa.domain.capture.reveal import (
+    EvidenceGap,
+    EvidenceState,
+    Reveal,
+    RevealedAssertion,
+    RevealedProposal,
+    RevealedSpan,
+    RevealedVersion,
+    RevealSubjectKind,
+)
 from my_pa.domain.capture.review import (
     Disposition,
     ReviewCase,
@@ -92,8 +113,19 @@ from my_pa.domain.capture.submission import CaptureReceipt
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
-from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.common.provenance import Provenance, TrustLevel
+from my_pa.domain.common.time import utc_now
+from my_pa.domain.documents.managed import (
+    DocumentState,
+    LifecycleTransition,
+    ManagedDocument,
+    ManagedDocumentConflictError,
+    ManagedDocumentReceipt,
+    ManagedDocumentVersion,
+    StaleExpectedVersionError,
+)
+from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.identity.operation import Capability
@@ -101,6 +133,21 @@ from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
+from my_pa.domain.situation.continuity import (
+    ClosureEvidenceKind,
+    Commitment,
+    ContinuityEvidenceState,
+)
+from my_pa.domain.situation.continuity import Decision as ContinuityDecision
+from my_pa.domain.situation.continuity import Task as ContinuityTask
+from my_pa.domain.situation.pulse_derivation import FramedObligation, derive_pulse
+from my_pa.domain.situation.situation import (
+    Project,
+    ProjectState,
+    PulseItem,
+    Situation,
+    SituationState,
+)
 from my_pa.domain.source.enrollment import (
     Enrollment,
     EnrollmentConflictError,
@@ -128,6 +175,42 @@ DEFAULT_LIMITS = EffectiveLimits(
     max_fetch_bytes=8 * 1024 * 1024,
     max_enrollment_depth=0,
 )
+
+
+#: The two subject prefixes the evidence model can be walked back from, written
+#: out here rather than imported from `infrastructure.persistence.reveal`: a fake
+#: that read the implementation's own map would agree with it however that map
+#: changed, which is the one thing a fake must not do.
+_REVEALABLE: Final[dict[IdKind, RevealSubjectKind]] = {
+    IdKind.CAPTURE: RevealSubjectKind.CAPTURE,
+    IdKind.ASSERTION: RevealSubjectKind.ASSERTION,
+}
+
+
+def _revealable_kind(subject_id: str) -> RevealSubjectKind | None:
+    """The subject kind this identifier names, or `None` for one not covered."""
+    kind, _ = parse_identifier(subject_id)
+    return _REVEALABLE.get(kind)
+
+
+def _evidence_state(
+    versions: tuple[RevealedVersion, ...],
+    spans: tuple[RevealedSpan, ...],
+    proposed: tuple[RevealedProposal, ...],
+    accepted: tuple[RevealedAssertion, ...],
+) -> tuple[EvidenceState, EvidenceGap | None]:
+    """Which of the three answers the rows in hand support, in the same order.
+
+    Evidence first, then the derivation gap, then `no_evidence` — restated here
+    rather than imported for the reason `_REVEALABLE` is restated: a fake that
+    called the implementation's own decision would agree with it by
+    construction, and the ordering is exactly what the tests are about.
+    """
+    if spans or proposed or accepted:
+        return EvidenceState.EVIDENCE, None
+    if not all(version.derivation_is_complete for version in versions):
+        return EvidenceState.UNAVAILABLE, EvidenceGap.DERIVATION_HAS_NOT_COMPLETED
+    return EvidenceState.NO_EVIDENCE, None
 
 
 @dataclass
@@ -164,8 +247,66 @@ class World:
     capture_versions: list[CaptureVersion] = field(default_factory=list)
     capture_receipts: dict[str, CaptureReceipt] = field(default_factory=dict)
     capture_keys: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
+    #: Every admission request the store was *asked* to perform, in order, whether
+    #: it was created, replayed, or refused. Recorded rather than derived from the
+    #: rows above because two claims need the request itself: which transport the
+    #: composition root vouched for (WP-10 records it on the submission), and
+    #: whether a refused transport request reached the store at all — a question
+    #: "no version was written" cannot answer, since a replay writes none either.
+    capture_admissions: list[CaptureAdmissionRequest] = field(default_factory=list)
+    #: The evidence plane, as the three collections a reveal traverses. Keyed by
+    #: `version_id` because that is what the rows are keyed by: a span is
+    #: measured against a version, a proposal is derived from one, and an
+    #: assertion is promoted from a proposal on one. `derivation_states` is the
+    #: `capture_stage_results` row for the proposal-persisting stage, absent when
+    #: that stage has not run — which is the distinction the fake exists to make
+    #: reachable, since "no evidence" and "the derivation has not finished" are
+    #: the same empty collections and different answers.
+    capture_spans: dict[str, tuple[RevealedSpan, ...]] = field(default_factory=dict)
+    capture_proposals: dict[str, tuple[RevealedProposal, ...]] = field(default_factory=dict)
+    capture_assertions: dict[str, tuple[RevealedAssertion, ...]] = field(default_factory=dict)
+    derivation_states: dict[str, ProcessingState] = field(default_factory=dict)
     review_cases: list[ReviewCase] = field(default_factory=list)
     review_decisions: list[ReviewDecision] = field(default_factory=list)
+    #: The managed-document plane (WP-27, reachable behind a capability seat since
+    #: WP-28). Flat lists for the reason the continuity ones are: this fake's only
+    #: job is the partition predicate and the version chain, and a list a filter
+    #: runs over is the clearest place to see one missing. `managed_keys` stands
+    #: in for the unique index on `managed_document_submissions
+    #: (owner_principal_id, idempotency_key)` — per-Principal, so the same key
+    #: held by two Principals is two independent admissions and never a replay.
+    #:
+    #: **What this fake cannot prove, stated where it is built.** There is no
+    #: `BEFORE UPDATE OR DELETE` trigger on a Python list, so immutability is a
+    #: property of this class not writing and never of the storage; and there is
+    #: no unique constraint, so two concurrent writers producing one version is
+    #: not demonstrable here. Both claims belong to `tests/database`, against a
+    #: server that actually refuses.
+    managed_documents: list[ManagedDocument] = field(default_factory=list)
+    managed_versions: list[ManagedDocumentVersion] = field(default_factory=list)
+    managed_keys: dict[tuple[str, str], tuple[str, ManagedDocumentReceipt]] = field(
+        default_factory=dict
+    )
+    managed_states: dict[str, DocumentState] = field(default_factory=dict)
+    #: Where the managed bytes are. On the `World` rather than on the service so
+    #: that a test staging a document and the service reading one are looking at
+    #: the same objects, and so a deep copy of the world (which is how the parity
+    #: suite gives each transport its own) copies the bytes with the rows.
+    managed_store: ManagedByteStore = field(default_factory=lambda: _ManagedBytes())
+    #: The continuity plane (WP-11). Held as flat lists because the fake's whole
+    #: job is the partition predicate, and a list a filter runs over is the
+    #: clearest place to see one missing. `commitments`, `continuity_tasks` and
+    #: `continuity_decisions` feed the Pulse *derivation*, which the fake runs
+    #: through the same pure function the SQL repository runs — so a test cannot
+    #: pass here against a derivation the store would not reproduce.
+    situations: list[Situation] = field(default_factory=list)
+    projects: list[Project] = field(default_factory=list)
+    project_situations: list[tuple[str, str, str, str]] = field(default_factory=list)
+    commitments: list[Commitment] = field(default_factory=list)
+    continuity_tasks: list[ContinuityTask] = field(default_factory=list)
+    continuity_decisions: list[ContinuityDecision] = field(default_factory=list)
+    framed_obligations: list[FramedObligation] = field(default_factory=list)
+    dismissed_pulse_ids: set[str] = field(default_factory=set)
     audit: list[AuditEvent] = field(default_factory=list)
     commits: int = 0
     rollbacks: int = 0
@@ -314,12 +455,21 @@ class _Operations(OperationQueue):
         self._world.jobs[operation_id] = (enrollment_id, SourceStatusState.QUEUED)
         return operation_id
 
-    def operation(self, operation_id: str) -> Operation | None:
+    def operation(self, operation_id: str, *, principal_id: str) -> Operation | None:
         self._world.fail("operation")
         found = self._world.jobs.get(operation_id)
         if found is None:
             return None
         enrollment_id, state = found
+        # The queue is partitioned by Principal (WP-04), and the fake derives
+        # that partition the way the schema does — transitively, through the
+        # enrollment the job is about — rather than storing a second copy of it.
+        # A job belonging to another Principal is `None` here for the same
+        # reason the real statement's partition predicate matches no row, and it
+        # is the same `None` an unknown operation gives.
+        owner = next((e for e in self._world.enrollments if e.enrollment_id == enrollment_id), None)
+        if owner is None or owner.principal_id != principal_id:
+            return None
         return Operation(operation_id=operation_id, enrollment_id=enrollment_id, state=state)
 
 
@@ -363,6 +513,85 @@ class _Knowledge(KnowledgeRepository):
             quarantined=quarantined,
             unsupported=unsupported,
             limitations=self._world.limitations.get(enrollment_id, ()),
+        )
+
+    def corpus(self, principal_id: str, *, observed_at: datetime) -> CorpusCoverage:
+        """Compose this Principal's stated coverages, and count what none of them reach.
+
+        The members come from `self.coverage`, not from a second walk of the
+        world, for the reason the SQL repository composes `coverage_for`: a fake
+        that computed a corpus its own way could let a test pass against
+        arithmetic the store would not reproduce.
+
+        Two honest differences from the store, stated rather than glossed. The
+        world's `objects` carry no kind, so `ENUMERABLE_KINDS` has nothing to
+        filter here — a container is not a thing this fake can hold. And
+        `objects_awaiting_an_outcome` counts distinct object identifiers across
+        every held enrollment, which is exactly what the `count(distinct …)` in
+        `corpus_coverage` counts.
+        """
+        self._world.fail("corpus")
+        held = tuple(
+            sorted(
+                enrollment.enrollment_id
+                for enrollment in self._world.enrollments
+                if enrollment.principal_id == principal_id
+            )
+        )
+        if not held:
+            return CorpusCoverage(observed_at=observed_at, principal_id=principal_id)
+        sources = {
+            enrollment.source_id
+            for enrollment in self._world.enrollments
+            if enrollment.principal_id == principal_id
+        }
+        in_sources = {
+            object_id
+            for object_id, source_id in self._world.objects.items()
+            if source_id in sources
+        }
+        enumerated = {
+            object_id for enrollment in held for object_id in self._world.scopes.get(enrollment, ())
+        }
+        awaiting = {
+            object_id
+            for enrollment in held
+            for object_id in self._world.scopes.get(enrollment, ())
+            if self._world.outcomes.get(enrollment, {}).get(object_id) is None
+        }
+        return CorpusCoverage(
+            observed_at=observed_at,
+            principal_id=principal_id,
+            enrollments=tuple(
+                self.coverage(enrollment, observed_at=observed_at) for enrollment in held
+            ),
+            held_sources=len(sources),
+            objects_in_held_sources=len(in_sources),
+            objects_outside_every_enrollment=len(in_sources - enumerated),
+            objects_awaiting_an_outcome=len(awaiting),
+        )
+
+    def scope_beyond_enrollment(self, principal_id: str, *, enrollment_id: str) -> bool:
+        """Whether this Principal holds scope the named enrollment does not cover.
+
+        The store's two conditions, reproduced rather than approximated: another
+        enrollment of the same Principal, or an object of a held source that no
+        enrollment of theirs enumerates.
+        """
+        self._world.fail("scope_beyond_enrollment")
+        mine = [e for e in self._world.enrollments if e.principal_id == principal_id]
+        if any(e.enrollment_id != enrollment_id for e in mine):
+            return True
+        enumerated = {
+            object_id
+            for enrollment in mine
+            for object_id in self._world.scopes.get(enrollment.enrollment_id, ())
+        }
+        sources = {e.source_id for e in mine}
+        return any(
+            object_id not in enumerated
+            for object_id, source_id in self._world.objects.items()
+            if source_id in sources
         )
 
     def limitations(self, enrollment_id: str) -> tuple[AggregateLimitation, ...]:
@@ -413,6 +642,7 @@ class _Captures(CaptureRepository):
 
     def admit(self, request: CaptureAdmissionRequest, *, principal_id: str) -> CaptureAdmission:
         self._world.fail("admit")
+        self._world.capture_admissions.append(request)
         if request.principal_id != principal_id:
             # The same refusal the store makes: admission is bound to the
             # authenticated principal, never to one the payload carries
@@ -581,6 +811,130 @@ class _Captures(CaptureRepository):
             truncated=len(found) > request.limit,
         )
 
+    def reveal(self, subject_id: str, *, principal_id: str) -> Reveal | None:
+        """The evidence behind one subject, reproducing the rule and not the SQL.
+
+        Three rules, each reproduced rather than approximated, because each is
+        one this tier is meant to prove:
+
+        * a subject kind outside the covered two is an `unavailable` reveal and
+          never `None`, so "we do not cover that plane" cannot arrive as "no such
+          thing";
+        * a capture this principal does not own is `None`, the same value an
+          absent one yields, so a foreign identifier maps nothing;
+        * the state is decided from the rows in hand by the same three-way test
+          the store's traversal applies — evidence first, then the derivation
+          gap, and `no_evidence` only for a scope whose every version finished.
+
+        What this fake **cannot** prove is that the real statements are scoped at
+        the query rather than filtered afterwards. That claim is a property of
+        the SQL and belongs to `tests/database/test_reveal_isolation.py`, against
+        a server.
+        """
+        self._world.fail("reveal")
+        kind = _revealable_kind(subject_id)
+        if kind is None:
+            return Reveal(
+                subject_id=subject_id,
+                subject_kind=None,
+                state=EvidenceState.UNAVAILABLE,
+                gap=EvidenceGap.SUBJECT_KIND_NOT_COVERED,
+            )
+        if kind is RevealSubjectKind.ASSERTION:
+            return self._reveal_assertion(subject_id, principal_id=principal_id)
+        owner = self._world.captures.get(subject_id, (None, None))[0]
+        if owner != principal_id:
+            return None
+        versions = self._revealed_versions(subject_id, principal_id=principal_id)
+        version_ids = [version.version_id for version in versions]
+        spans = tuple(
+            span
+            for version_id in version_ids
+            for span in self._world.capture_spans.get(version_id, ())
+        )
+        proposed = tuple(
+            proposal
+            for version_id in version_ids
+            for proposal in self._world.capture_proposals.get(version_id, ())
+        )
+        accepted = tuple(
+            assertion
+            for version_id in version_ids
+            for assertion in self._world.capture_assertions.get(version_id, ())
+        )
+        state, gap = _evidence_state(versions, spans, proposed, accepted)
+        return Reveal(
+            subject_id=subject_id,
+            subject_kind=kind,
+            state=state,
+            gap=gap,
+            capture_id=subject_id,
+            versions=versions,
+            spans=spans,
+            proposed=proposed,
+            accepted=accepted,
+        )
+
+    def _reveal_assertion(self, assertion_id: str, *, principal_id: str) -> Reveal | None:
+        """One accepted record and what it rests on, inside the caller's partition."""
+        for version in self._world.capture_versions:
+            if version.owner_principal_id != principal_id:
+                continue
+            for assertion in self._world.capture_assertions.get(version.version_id, ()):
+                if assertion.assertion_id != assertion_id:
+                    continue
+                cited = set(assertion.span_ids)
+                versions = self._revealed_versions(version.capture_id, principal_id=principal_id)
+                return Reveal(
+                    subject_id=assertion_id,
+                    subject_kind=RevealSubjectKind.ASSERTION,
+                    state=EvidenceState.EVIDENCE,
+                    capture_id=version.capture_id,
+                    versions=tuple(
+                        candidate
+                        for candidate in versions
+                        if candidate.version_id == version.version_id
+                    ),
+                    spans=tuple(
+                        span
+                        for span in self._world.capture_spans.get(version.version_id, ())
+                        if span.span_id in cited
+                    ),
+                    proposed=tuple(
+                        proposal
+                        for proposal in self._world.capture_proposals.get(version.version_id, ())
+                        if proposal.proposal_id == assertion.proposal_id
+                    ),
+                    accepted=(assertion,),
+                )
+        return None
+
+    def _revealed_versions(
+        self, capture_id: str, *, principal_id: str
+    ) -> tuple[RevealedVersion, ...]:
+        """The caller's own versions of one capture, with their derivation state."""
+        mine = sorted(
+            (
+                version
+                for version in self._world.capture_versions
+                if version.capture_id == capture_id and version.owner_principal_id == principal_id
+            ),
+            key=lambda version: version.version_number,
+        )
+        latest = mine[-1].version_number if mine else None
+        return tuple(
+            RevealedVersion(
+                version_id=version.version_id,
+                capture_id=capture_id,
+                version_number=version.version_number,
+                is_current=version.version_number == latest,
+                content_sha256=version.content.digest,
+                recorded_at=version.recorded_at,
+                derivation_state=self._world.derivation_states.get(version.version_id),
+            )
+            for version in mine
+        )
+
     def _head(self, capture_id: str, *, principal_id: str) -> CaptureVersion | None:
         """The greatest version number the caller's capture holds, derived not stored.
 
@@ -706,6 +1060,438 @@ class RecordingAudit(AuditSink):
         self.events.append(event)
 
 
+class _ManagedBytes(ManagedByteStore):
+    """Managed version bytes in a dict, for the transports that need a plane.
+
+    **Deliberately not a fake of containment.** `FilesystemManagedByteStore` is
+    where a path is resolved, refused, and proved to lie under the managed root,
+    and none of that is imitated here — there is no path in this class at all,
+    which is the honest position for a dict: a fake that grew a `_root` attribute
+    would let a containment test pass against something that never touched a
+    filesystem. Containment is proved in `tests/architecture` structurally and in
+    `tests/database` against the real store under a temporary directory.
+
+    What this *does* preserve is the two behaviours the application depends on:
+    bytes are written once — a second `put` for the same identifier raises, as
+    `O_CREAT|O_EXCL` does — and a read of an unstored identifier raises rather
+    than answering empty.
+    """
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.manifest: bytes | None = None
+
+    def put(self, version_id: str, content: bytes) -> None:
+        if version_id in self.objects:
+            raise FileExistsError("the managed object already exists")
+        self.objects[version_id] = bytes(content)
+
+    def read(self, version_id: str) -> bytes:
+        stored = self.objects.get(version_id)
+        if stored is None:
+            raise FileNotFoundError("the managed object is not stored")
+        return stored
+
+    def has(self, version_id: str) -> bool:
+        return version_id in self.objects
+
+    def stored_version_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self.objects))
+
+    def unreadable_entries(self) -> tuple[str, ...]:
+        return ()
+
+    def put_manifest(self, content: bytes) -> None:
+        self.manifest = bytes(content)
+
+    def read_manifest(self) -> bytes:
+        if self.manifest is None:
+            raise FileNotFoundError("no manifest is stored")
+        return self.manifest
+
+
+class _ManagedDocuments(ManagedDocumentRepository):
+    """The managed-document plane over a `World`, partition predicate written out.
+
+    Every method takes `principal_id` and every one of them filters on it, in the
+    same shape the SQL repository does: a document another Principal owns answers
+    exactly what a document that does not exist answers, so no method here can be
+    used to learn that an identifier names something.
+
+    Written out rather than delegated to a helper for a reason WP-23 bought: a
+    partition predicate factored into one place is a predicate one caller can
+    forget to use, and this fake exists so a missing filter is visible.
+
+    See `World`'s own comment for the two things a list cannot demonstrate —
+    trigger-enforced immutability and a unique constraint under concurrency —
+    both of which are proved in `tests/database` against a real server.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def admit(self, request: ManagedWriteRequest) -> ManagedAdmission:
+        key = (request.principal_id, request.idempotency_key)
+        bound = self._world.managed_keys.get(key)
+        if bound is not None:
+            digest, receipt = bound
+            if digest != request.payload_digest:
+                raise ManagedDocumentConflictError(
+                    "the idempotency key is bound to a different request"
+                )
+            return ManagedAdmission(receipt=receipt, created=False)
+
+        if request.document_id is None:
+            document_id = issue_identifier(IdKind.MANAGED_DOCUMENT)
+            previous: ManagedDocumentVersion | None = None
+            number = 1
+        else:
+            document_id = request.document_id
+            previous = self.version(document_id, principal_id=request.principal_id)
+            if previous is None:
+                raise UnknownScopeError("the request names no stored managed document")
+            if previous.version_number != request.expected_version_number:
+                raise StaleExpectedVersionError("the expected version is not this document's head")
+            number = previous.version_number + 1
+
+        version = ManagedDocumentVersion(
+            version_id=request.version_id,
+            document_id=document_id,
+            version_number=number,
+            supersedes_version_id=None if previous is None else previous.version_id,
+            owner_principal_id=request.principal_id,
+            title=request.title,
+            media_type=request.media_type,
+            content_sha256=request.content_sha256,
+            byte_size=request.byte_size,
+            idempotency_key=request.idempotency_key,
+            correlation_id=request.correlation_id,
+            recorded_at=request.server_received_at,
+        )
+        self._world.managed_versions.append(version)
+        if previous is None:
+            self._world.managed_states[document_id] = DocumentState.ACTIVE
+        receipt = ManagedDocumentReceipt(
+            receipt_id=issue_identifier(IdKind.MANAGED_RECEIPT),
+            document_id=document_id,
+            version_id=version.version_id,
+            version_number=version.version_number,
+            idempotency_key=request.idempotency_key,
+            content_sha256=request.content_sha256,
+            byte_size=request.byte_size,
+            issued_at=request.server_received_at,
+            created=True,
+        )
+        self._world.managed_keys[key] = (request.payload_digest, receipt)
+        return ManagedAdmission(receipt=receipt, created=True)
+
+    def replay_for(
+        self, idempotency_key: str, payload_digest: str, *, principal_id: str
+    ) -> ManagedDocumentReceipt | None:
+        bound = self._world.managed_keys.get((principal_id, idempotency_key))
+        if bound is None:
+            return None
+        digest, receipt = bound
+        if digest != payload_digest:
+            raise ManagedDocumentConflictError(
+                "the idempotency key is bound to a different request"
+            )
+        # `created=False`: a replay stored nothing new, and a caller retrying
+        # after a lost response has to be able to tell.
+        return replace(receipt, created=False)
+
+    def _owned(self, document_id: str, principal_id: str) -> list[ManagedDocumentVersion]:
+        return sorted(
+            (
+                row
+                for row in self._world.managed_versions
+                if row.document_id == document_id and row.owner_principal_id == principal_id
+            ),
+            key=lambda row: row.version_number,
+        )
+
+    def version(
+        self, document_id: str, *, version_id: str | None = None, principal_id: str
+    ) -> ManagedDocumentVersion | None:
+        owned = self._owned(document_id, principal_id)
+        if not owned:
+            return None
+        if version_id is None:
+            return owned[-1]
+        return next((row for row in owned if row.version_id == version_id), None)
+
+    def versions(
+        self, document_id: str, *, principal_id: str
+    ) -> tuple[ManagedDocumentVersion, ...]:
+        return tuple(self._owned(document_id, principal_id))
+
+    def documents(
+        self, *, limit: int, principal_id: str, include_archived: bool = False
+    ) -> tuple[ManagedDocument, ...]:
+        if limit < 1:
+            raise ValueError("a page holds at least one managed document")
+        found: list[ManagedDocument] = []
+        for document_id in {
+            row.document_id
+            for row in self._world.managed_versions
+            if row.owner_principal_id == principal_id
+        }:
+            owned = self._owned(document_id, principal_id)
+            state = self._world.managed_states.get(document_id, DocumentState.ACTIVE)
+            if state is DocumentState.ARCHIVED and not include_archived:
+                continue
+            head = owned[-1]
+            found.append(
+                ManagedDocument(
+                    document_id=document_id,
+                    owner_principal_id=principal_id,
+                    state=state,
+                    title=head.title,
+                    media_type=head.media_type,
+                    version_count=len(owned),
+                    latest_version_id=head.version_id,
+                    latest_version_number=head.version_number,
+                    created_at=owned[0].recorded_at,
+                    latest_recorded_at=head.recorded_at,
+                )
+            )
+        found.sort(key=lambda row: (row.latest_recorded_at, row.document_id), reverse=True)
+        return tuple(found[:limit])
+
+    def state(self, document_id: str, *, principal_id: str) -> DocumentState | None:
+        if not self._owned(document_id, principal_id):
+            return None
+        return self._world.managed_states.get(document_id, DocumentState.ACTIVE)
+
+    def transition(
+        self,
+        document_id: str,
+        *,
+        transition: LifecycleTransition,
+        principal_id: str,
+        correlation_id: str,
+    ) -> bool:
+        current = self.state(document_id, principal_id=principal_id)
+        if current is None:
+            raise UnknownScopeError("the request names no stored managed document")
+        wanted = (
+            DocumentState.ARCHIVED
+            if transition is LifecycleTransition.ARCHIVED
+            else DocumentState.ACTIVE
+        )
+        self._world.managed_states[document_id] = wanted
+        return current is not wanted
+
+    def restore_version(self, version: ManagedDocumentVersion, *, principal_id: str) -> None:
+        if version.owner_principal_id != principal_id:
+            raise UnknownScopeError("the request names no stored managed document")
+        if any(row.version_id == version.version_id for row in self._world.managed_versions):
+            return
+        self._world.managed_versions.append(version)
+        self._world.managed_states.setdefault(version.document_id, DocumentState.ACTIVE)
+
+    def known_version_identifiers(self) -> frozenset[str]:
+        return frozenset(row.version_id for row in self._world.managed_versions)
+
+
+class _Situations(SituationRepository):
+    """Situations over the `World`, with the partition predicate written out.
+
+    The predicate is the point: every method adds `principal_id == <caller>`, so
+    a Situation another Principal owns is answered exactly as an absent one.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def open_situation(
+        self,
+        *,
+        principal_id: str,
+        title: str,
+        description: str | None,
+        object_refs: tuple[str, ...],
+    ) -> Situation:
+        now = utc_now()
+        situation = Situation(
+            situation_id=issue_identifier(IdKind.SITUATION),
+            principal_id=principal_id,
+            title=title,
+            state=SituationState.OPEN,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            description=description,
+            object_refs=tuple(object_refs),
+        )
+        self._world.situations.append(situation)
+        return situation
+
+    def close_situation(
+        self,
+        *,
+        principal_id: str,
+        situation_id: str,
+        outcome: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> Situation:
+        if not evidence_ref.strip():
+            raise ValueError("closing a situation records the evidence that closed it")
+        current = self.get_situation(principal_id, situation_id)
+        if current is None:
+            raise UnknownScopeError
+        now = utc_now()
+        closed = Situation(
+            situation_id=current.situation_id,
+            principal_id=current.principal_id,
+            title=current.title,
+            state=SituationState.CLOSED,
+            opened_at=current.opened_at,
+            created_at=current.created_at,
+            updated_at=now,
+            description=current.description,
+            object_refs=current.object_refs,
+            closed_at=now,
+            outcome=outcome,
+        )
+        self._world.situations[self._world.situations.index(current)] = closed
+        return closed
+
+    def get_situation(self, principal_id: str, situation_id: str) -> Situation | None:
+        return next(
+            (
+                row
+                for row in self._world.situations
+                if row.situation_id == situation_id and row.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def list_situations(
+        self, principal_id: str, state_filter: SituationState | None = None
+    ) -> tuple[Situation, ...]:
+        rows = [row for row in self._world.situations if row.principal_id == principal_id]
+        if state_filter is not None:
+            rows = [row for row in rows if row.state is state_filter]
+        rows.sort(key=lambda row: row.created_at, reverse=True)
+        return tuple(rows)
+
+
+class _Projects(ProjectRepository):
+    """Projects and the Project-Situation link, partitioned like everything else."""
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def add_project(
+        self,
+        *,
+        principal_id: str,
+        name: str,
+        description: str | None,
+        participants: tuple[str, ...],
+    ) -> Project:
+        now = utc_now()
+        project = Project(
+            project_id=issue_identifier(IdKind.PROJECT),
+            principal_id=principal_id,
+            name=name,
+            state=ProjectState.ACTIVE,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            description=description,
+            participants=tuple(participants),
+        )
+        self._world.projects.append(project)
+        return project
+
+    def get_project(self, principal_id: str, project_id: str) -> Project | None:
+        return next(
+            (
+                row
+                for row in self._world.projects
+                if row.project_id == project_id and row.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def list_projects(
+        self, principal_id: str, state_filter: ProjectState | None = None
+    ) -> tuple[Project, ...]:
+        rows = [row for row in self._world.projects if row.principal_id == principal_id]
+        if state_filter is not None:
+            rows = [row for row in rows if row.state is state_filter]
+        rows.sort(key=lambda row: row.created_at, reverse=True)
+        return tuple(rows)
+
+    def link_situation(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        situation_id: str,
+        evidence_kind: ClosureEvidenceKind,
+        evidence_ref: str,
+    ) -> None:
+        if not evidence_ref.strip():
+            raise ValueError("linking a situation to a project records the evidence for it")
+        project = self.get_project(principal_id, project_id)
+        situation = _Situations(self._world).get_situation(principal_id, situation_id)
+        if project is None or situation is None:
+            raise UnknownScopeError
+        link = (principal_id, project_id, situation_id, evidence_ref)
+        if link not in self._world.project_situations:
+            self._world.project_situations.append(link)
+
+
+class _Pulse(PulseRepository):
+    """The Pulse over the `World`: stored items, and the real derivation.
+
+    `derive_pulse` runs the *production* pure function over the Principal's
+    accepted, open continuity, so a test cannot pass here against a ranking the
+    store would not reproduce. The accepted-only filter is written out below for
+    the same reason the SQL writes it as a `WHERE` clause: it is the property
+    under test, not a convenience.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def generate_pulse(self, principal_id: str) -> tuple[PulseItem, ...]:
+        return ()
+
+    def dismiss_pulse_item(self, principal_id: str, pulse_id: str) -> None:
+        self._world.dismissed_pulse_ids.add(pulse_id)
+
+    def derive_pulse(self, principal_id: str, now: datetime) -> tuple[PulseItem, ...]:
+        return derive_pulse(
+            principal_id=principal_id,
+            now=now,
+            commitments=[
+                row
+                for row in self._world.commitments
+                if row.principal_id == principal_id
+                and row.evidence_state is ContinuityEvidenceState.ACCEPTED
+            ],
+            tasks=[
+                row
+                for row in self._world.continuity_tasks
+                if row.principal_id == principal_id
+                and row.evidence_state is ContinuityEvidenceState.ACCEPTED
+            ],
+            decisions=[
+                row
+                for row in self._world.continuity_decisions
+                if row.principal_id == principal_id
+                and row.evidence_state is ContinuityEvidenceState.ACCEPTED
+            ],
+            obligations=tuple(self._world.framed_obligations),
+            dismissed_pulse_ids=frozenset(self._world.dismissed_pulse_ids),
+        )
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -756,6 +1542,23 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def reviews(self) -> ReviewRepository:
         return _Reviews(self._world)
+
+    @property
+    def situations(self) -> SituationRepository:
+        return _Situations(self._world)
+
+    @property
+    def projects(self) -> ProjectRepository:
+        return _Projects(self._world)
+
+    @property
+    def pulse(self) -> PulseRepository:
+        return _Pulse(self._world)
+
+    @property
+    def managed_documents(self) -> ManagedDocumentRepository:
+        """The managed-document plane over this `World` (WP-28)."""
+        return _ManagedDocuments(self._world)
 
     @property
     def audit(self) -> AuditSink:
@@ -890,7 +1693,10 @@ class Scene:
 
 
 def build_service(
-    world: World, providers: FakeProviders, limits: EffectiveLimits = DEFAULT_LIMITS
+    world: World,
+    providers: FakeProviders,
+    limits: EffectiveLimits = DEFAULT_LIMITS,
+    managed_store: ManagedByteStore | None = None,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -906,6 +1712,11 @@ def build_service(
         unit_of_work=lambda: FakeUnitOfWork(world),
         limits=limits,
         clock=lambda: WHEN,
+        # Composed by default, because a service composed *without* one publishes
+        # a smaller capability set — and a suite that quantifies over `Capability`
+        # would then be quantifying over names its own service refuses. A test
+        # about the unconfigured build passes `None` explicitly and says so.
+        managed_store=world.managed_store if managed_store is None else managed_store,
     )
 
 
@@ -999,6 +1810,45 @@ def staged_capture(scene: Scene, *, text: str = "a synthetic note") -> CaptureVe
     )
     assert stored is not None
     return stored
+
+
+def staged_managed_document(
+    scene: Scene,
+    *,
+    title: str = "Synthetic managed note",
+    body: bytes = b"# Synthetic managed note",
+) -> ManagedDocumentReceipt:
+    """One stored managed document inside `scene`'s world, so the reads have an answer.
+
+    Written through `ManagedDocumentService` and the fake ports rather than
+    pushed into `World` directly, for the reason `staged_capture` is: the version
+    number, the supersession link and the receipt are then the ones an admission
+    produces, and a test cannot stage a state the writer cannot reach.
+
+    The Principal is `scene.principal`'s and is passed as the resolved partition,
+    which is the same thing `ApplicationService`'s handlers pass.
+
+    One per scene, like `staged_review_case`: a payload table and a command table
+    that each staged their own would be naming two different documents, and the
+    comparison between them would then be measuring the staging rather than the
+    request.
+    """
+    for (owner, key), (_, receipt) in scene.world.managed_keys.items():
+        if owner == scene.principal.principal_id and key.startswith("staged-managed-"):
+            return receipt
+    unit_of_work = FakeUnitOfWork(scene.world)
+    store = scene.world.managed_store
+    return ManagedDocumentService().create(
+        unit_of_work.managed_documents,
+        store,
+        CreateManagedDocumentCommand(
+            principal_id=scene.principal.principal_id,
+            title=title,
+            media_type="text/markdown",
+            content=body,
+            idempotency_key=f"staged-managed-{len(scene.world.managed_keys)}",
+        ),
+    )
 
 
 def staged_review_case(scene: Scene, capture: CaptureVersion | None = None) -> ReviewCase:

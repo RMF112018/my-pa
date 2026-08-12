@@ -49,25 +49,37 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from my_pa.application.commands import (
+    ArchiveManagedDocument,
     Command,
     CreateCapture,
+    CreateManagedDocument,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCorpusCoverage,
+    GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListManagedDocuments,
+    ListProjects,
     ListReviewCases,
+    ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
+    ReadManagedDocument,
+    RestoreManagedDocument,
+    RevealSubject,
     ReviseCapture,
+    ReviseManagedDocument,
     SearchCaptures,
     SearchKnowledge,
 )
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.audit.events import audit_event_for
+from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.identity.operation import Capability
@@ -110,6 +122,18 @@ class Authorization:
     decision: PolicyDecision
     requested_source_ids: frozenset[str]
     enrollments: tuple[Enrollment, ...]
+    #: How the request reached this process (WP-10). Established by the
+    #: composition root and carried here for the same reason `request_id` is:
+    #: a use case that records an admission has to record how it arrived, and
+    #: handing every handler the transport separately would be a second channel
+    #: for something the request context already knows.
+    #:
+    #: **It authorizes nothing.** `evaluate` never sees it and no branch below
+    #: reads it; it is provenance the capture plane stores, exactly as
+    #: `request_id` is correlation the capture plane stores. A future rule that
+    #: *did* decide on it would be a policy about transports, and it would
+    #: belong in `domain.policy.decision` with the rest of them.
+    transport: CaptureTransport = CaptureTransport.LOCAL
 
     @property
     def allowed(self) -> bool:
@@ -135,7 +159,11 @@ class Authorization:
 
 
 def _requested_scope(
-    unit_of_work: UnitOfWork, command: Command, enrollments: tuple[Enrollment, ...]
+    unit_of_work: UnitOfWork,
+    command: Command,
+    enrollments: tuple[Enrollment, ...],
+    *,
+    principal_id: str,
 ) -> frozenset[str]:
     """The sources this command would read, derived from the command itself."""
     match command:
@@ -151,8 +179,31 @@ def _requested_scope(
             | ReadCapture()
             | ListCaptures()
             | SearchCaptures()
+            | RevealSubject()
             | ListReviewCases()
             | DecideReviewCase()
+            | GetPulse()
+            | ListSituations()
+            | ListProjects()
+            # A corpus answer names a Principal and no source. The scope it
+            # reports is read from `enrollments.principal_id` inside the
+            # repository, so there is nothing here for a caller to state and
+            # nothing for this function to resolve; `_SCOPELESS` is where that
+            # empty set is read as a measurement rather than as a failed lookup.
+            | GetCorpusCoverage()
+            # A managed document belongs to no configured source and no
+            # enrollment: it is the product's own custody under `AGENTS.md`
+            # section 4, written into the designated managed root and never into
+            # a source root, and its rows carry no `source_id` for a scope to be
+            # compared against. The same measurement a capture makes, for the
+            # same reason, and `_SCOPELESS` in `domain.policy.decision` is where
+            # all six are read that way rather than denied for resolving nothing.
+            | CreateManagedDocument()
+            | ReviseManagedDocument()
+            | ReadManagedDocument()
+            | ListManagedDocuments()
+            | ArchiveManagedDocument()
+            | RestoreManagedDocument()
         ):
             return frozenset()
         case CreateCapture():
@@ -165,7 +216,7 @@ def _requested_scope(
         case SearchKnowledge() | ReadKnowledge():
             return _scope_of_enrollment(command.enrollment_id, enrollments)
         case GetSourceStatus():
-            return _status_scope(unit_of_work, command, enrollments)
+            return _status_scope(unit_of_work, command, enrollments, principal_id=principal_id)
 
 
 def _scope_of_enrollment(enrollment_id: str, enrollments: tuple[Enrollment, ...]) -> frozenset[str]:
@@ -180,15 +231,30 @@ def _scope_of_enrollment(enrollment_id: str, enrollments: tuple[Enrollment, ...]
 
 
 def _status_scope(
-    unit_of_work: UnitOfWork, command: GetSourceStatus, enrollments: tuple[Enrollment, ...]
+    unit_of_work: UnitOfWork,
+    command: GetSourceStatus,
+    enrollments: tuple[Enrollment, ...],
+    *,
+    principal_id: str,
 ) -> frozenset[str]:
-    """The source behind whichever single subject a status request named."""
+    """The source behind whichever single subject a status request named.
+
+    `principal_id` is the *resolved* Principal — `authorize`'s own argument, the
+    one `enrollments` was read for — and never anything the command carries. It
+    reaches the operation queue because the queue is partitioned by it (WP-04):
+    the enrollment branch was already confined to the caller's own enrollments,
+    and this makes the operation branch answer `None` for a foreign job at the
+    persistence layer rather than resolving it and then failing to place it in a
+    scope.
+    """
     if command.source_id is not None:
         return frozenset({command.source_id})
     if command.enrollment_id is not None:
         return _scope_of_enrollment(command.enrollment_id, enrollments)
     if command.operation_id is not None:
-        operation = unit_of_work.operations.operation(command.operation_id)
+        operation = unit_of_work.operations.operation(
+            command.operation_id, principal_id=principal_id
+        )
         if operation is None:
             return frozenset()
         return _scope_of_enrollment(operation.enrollment_id, enrollments)
@@ -212,6 +278,7 @@ def authorize(
     request_id: str,
     at: datetime,
     classification: Classification = Classification.PRIVATE_LOCAL,
+    transport: CaptureTransport = CaptureTransport.LOCAL,
 ) -> Authorization:
     """Decide one request, record the decision, and return what was decided.
 
@@ -232,10 +299,16 @@ def authorize(
     `correlation_id` is issued by the caller rather than here, because the same
     identifier has to appear on the response envelope of a request that never
     reached this function at all.
+
+    `transport` is carried through onto the `Authorization` and is read by
+    nothing in this module. See the field's own comment: it is provenance, not
+    authority, and the policy decision is computed without it.
     """
     validate_identifier(correlation_id, IdKind.CORRELATION)
     enrollments = unit_of_work.enrollments.for_principal(principal.principal_id)
-    requested = _requested_scope(unit_of_work, command, enrollments)
+    requested = _requested_scope(
+        unit_of_work, command, enrollments, principal_id=principal.principal_id
+    )
     decision = evaluate(
         PolicyRequest(
             principal=principal,
@@ -274,4 +347,5 @@ def authorize(
         decision=decision,
         requested_source_ids=requested,
         enrollments=enrollments,
+        transport=transport,
     )

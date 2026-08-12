@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the fifteen capabilities is addressable over HTTP
+**Reachability.** Every one of the twenty-six capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a sixteenth capability added to the domain arrives as a failing row instead
+here, so a twenty-seventh capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -29,6 +29,7 @@ already has a meaning for, and with nothing of the failure in the body.
 from __future__ import annotations
 
 import json
+from base64 import b64encode
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -45,6 +46,7 @@ from tests.conftest import (
     metadata_for,
     operator,
     staged_capture,
+    staged_managed_document,
     staged_review_case,
     staged_search,
 )
@@ -54,21 +56,32 @@ from my_pa.adapters.http import create_http_app
 from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
+    ArchiveManagedDocument,
     Command,
     CreateCapture,
+    CreateManagedDocument,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCorpusCoverage,
+    GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListManagedDocuments,
+    ListProjects,
     ListReviewCases,
+    ListSituations,
     ListSources,
     ReadCapture,
     ReadKnowledge,
+    ReadManagedDocument,
     Representation,
+    RestoreManagedDocument,
+    RevealSubject,
     ReviseCapture,
+    ReviseManagedDocument,
     SearchCaptures,
     SearchKnowledge,
 )
@@ -123,6 +136,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     """
     capture = staged_capture(scene)
     review_case = staged_review_case(scene, capture)
+    document = staged_managed_document(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id},
@@ -162,12 +176,47 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
         Capability.CAPTURE_LIST: {},
         Capability.CAPTURE_SEARCH: {"query": "synthetic"},
+        Capability.KNOWLEDGE_REVEAL: {"subject_id": capture.capture_id},
         Capability.REVIEW_LIST: {},
+        Capability.CONTINUITY_PULSE: {},
+        Capability.CONTINUITY_SITUATIONS: {},
+        Capability.CONTINUITY_PROJECTS: {},
+        # The corpus answer takes no payload: its subject is the acting
+        # Principal, which no request may state.
+        Capability.KNOWLEDGE_COVERAGE: {},
         Capability.REVIEW_DECIDE: {
             "review_case_id": review_case.review_case_id,
             "expected_review_version": 0,
             "disposition": "reject",
         },
+        # The managed-document plane (WP-28). `document` is staged before the
+        # world is copied per transport, so all three see the same stored chain
+        # and a revise is the same revise everywhere. `content` is base64 on the
+        # wire — JSON has no byte string — and no payload here carries a
+        # `principal_id`, because the commands have no such field: the partition
+        # comes from the authorization and cannot be stated.
+        Capability.DOCUMENTS_CREATE: {
+            "title": "Synthetic parity document",
+            "media_type": "text/markdown",
+            "content": b64encode(b"# Synthetic parity document").decode("ascii"),
+            "idempotency_key": "parity-document-0001",
+        },
+        Capability.DOCUMENTS_REVISE: {
+            "document_id": document.document_id,
+            "expected_version_number": document.version_number,
+            "title": "Synthetic parity document, revised",
+            "media_type": "text/markdown",
+            "content": b64encode(b"# Synthetic parity document, revised").decode("ascii"),
+            "idempotency_key": "parity-document-revise-0001",
+        },
+        Capability.DOCUMENTS_READ: {
+            "document_id": document.document_id,
+            "version_id": document.version_id,
+            "include_bytes": True,
+        },
+        Capability.DOCUMENTS_LIST: {"limit": 10, "include_archived": True},
+        Capability.DOCUMENTS_ARCHIVE: {"document_id": document.document_id},
+        Capability.DOCUMENTS_RESTORE: {"document_id": document.document_id},
     }
 
 
@@ -185,6 +234,7 @@ def commands_for(
     normalisation test below compares the two, and a comparison against the
     function under test would prove only that it agrees with itself.
     """
+    document = staged_managed_document(scene)
     return {
         Capability.CAPABILITIES_GET: GetCapabilities(),
         Capability.SOURCES_LIST: ListSources(source_id=scene.source.source_id),
@@ -223,12 +273,39 @@ def commands_for(
         Capability.CAPTURE_READ: ReadCapture(capture_id=capture_id),
         Capability.CAPTURE_LIST: ListCaptures(),
         Capability.CAPTURE_SEARCH: SearchCaptures(query="synthetic"),
+        Capability.KNOWLEDGE_REVEAL: RevealSubject(subject_id=capture_id),
         Capability.REVIEW_LIST: ListReviewCases(),
+        Capability.CONTINUITY_PULSE: GetPulse(),
+        Capability.CONTINUITY_SITUATIONS: ListSituations(),
+        Capability.CONTINUITY_PROJECTS: ListProjects(),
+        Capability.KNOWLEDGE_COVERAGE: GetCorpusCoverage(),
         Capability.REVIEW_DECIDE: DecideReviewCase(
             review_case_id=staged_review_case(scene).review_case_id,
             expected_review_version=0,
             disposition=Disposition.REJECT,
         ),
+        Capability.DOCUMENTS_CREATE: CreateManagedDocument(
+            title="Synthetic parity document",
+            media_type="text/markdown",
+            content=b"# Synthetic parity document",
+            idempotency_key="parity-document-0001",
+        ),
+        Capability.DOCUMENTS_REVISE: ReviseManagedDocument(
+            document_id=document.document_id,
+            expected_version_number=document.version_number,
+            title="Synthetic parity document, revised",
+            media_type="text/markdown",
+            content=b"# Synthetic parity document, revised",
+            idempotency_key="parity-document-revise-0001",
+        ),
+        Capability.DOCUMENTS_READ: ReadManagedDocument(
+            document_id=document.document_id,
+            version_id=document.version_id,
+            include_bytes=True,
+        ),
+        Capability.DOCUMENTS_LIST: ListManagedDocuments(limit=10, include_archived=True),
+        Capability.DOCUMENTS_ARCHIVE: ArchiveManagedDocument(document_id=document.document_id),
+        Capability.DOCUMENTS_RESTORE: RestoreManagedDocument(document_id=document.document_id),
     }
 
 
@@ -260,6 +337,9 @@ class RecordingService(ApplicationService):
             unit_of_work=lambda: FakeUnitOfWork(world),
             limits=DEFAULT_LIMITS,
             clock=lambda: WHEN,
+            # The same store the `World` holds, so a document staged into the
+            # world and one written through this service are the same bytes.
+            managed_store=world.managed_store,
         )
         self.envelopes: list[ResponseEnvelope] = []
 

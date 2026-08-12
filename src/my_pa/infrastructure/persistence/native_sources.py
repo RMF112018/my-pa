@@ -990,7 +990,10 @@ class SqlNativeBaselineStore:
             ).all()
             for bucket in selected:
                 kind = ContractNativeSourceKind(str(bucket.source_kind))
-                current_inventory = kind is ContractNativeSourceKind.CONTACTS
+                current_inventory = kind in {
+                    ContractNativeSourceKind.CONTACTS,
+                    ContractNativeSourceKind.TASKS,
+                }
                 range_end = (
                     cutoff
                     if kind is not ContractNativeSourceKind.CALENDAR
@@ -1367,20 +1370,6 @@ class SqlNativeSourceControlStore:
         issued_at: datetime,
         expires_at: datetime,
     ) -> NativeAdmissionAuthority:
-        authority_id = issue_identifier(IdKind.NATIVE_AUTHORITY)
-        authority = NativeAdmissionAuthority(
-            authority_id=authority_id,
-            configuration_id=configuration.configuration_id,
-            configuration_revision=configuration.revision,
-            bridge_id=configuration.bridge_id,
-            bucket_id=binding.bucket_id,
-            source_id=binding.source_id,
-            audit_id=audit_id,
-            envelope_id=authority_id,
-            request_id=request_id,
-            issued_at=issued_at,
-            expires_at=expires_at,
-        )
         with self._engine.begin() as connection:
             self._lock_configuration(connection, configuration.configuration_id)
             latest = connection.execute(
@@ -1423,6 +1412,48 @@ class SqlNativeSourceControlStore:
                 or str(selected.bridge_id) != configuration.bridge_id
             ):
                 raise NativeAdmissionAuthorityError("native authority issuance scope is stale")
+            existing = connection.execute(
+                select(native_admission_authorities)
+                .where(
+                    native_admission_authorities.c.configuration_id
+                    == configuration.configuration_id,
+                    native_admission_authorities.c.configuration_revision == configuration.revision,
+                    native_admission_authorities.c.bucket_id == binding.bucket_id,
+                    native_admission_authorities.c.request_id == request_id,
+                    native_admission_authorities.c.expires_at >= ensure_utc(issued_at),
+                )
+                .order_by(native_admission_authorities.c.issued_at.desc())
+                .limit(1)
+            ).one_or_none()
+            if existing is not None:
+                row = existing._mapping
+                return NativeAdmissionAuthority(
+                    authority_id=str(row["authority_id"]),
+                    configuration_id=str(row["configuration_id"]),
+                    configuration_revision=int(row["configuration_revision"]),
+                    bridge_id=str(row["bridge_id"]),
+                    bucket_id=str(row["bucket_id"]),
+                    source_id=str(row["source_id"]),
+                    audit_id=str(row["audit_id"]),
+                    envelope_id=str(row["envelope_id"]),
+                    request_id=str(row["request_id"]),
+                    issued_at=row["issued_at"],
+                    expires_at=row["expires_at"],
+                )
+            authority_id = issue_identifier(IdKind.NATIVE_AUTHORITY)
+            authority = NativeAdmissionAuthority(
+                authority_id=authority_id,
+                configuration_id=configuration.configuration_id,
+                configuration_revision=configuration.revision,
+                bridge_id=configuration.bridge_id,
+                bucket_id=binding.bucket_id,
+                source_id=binding.source_id,
+                audit_id=audit_id,
+                envelope_id=authority_id,
+                request_id=request_id,
+                issued_at=issued_at,
+                expires_at=expires_at,
+            )
             connection.execute(
                 insert(native_admission_authorities).values(
                     authority_id=authority.authority_id,
@@ -1484,6 +1515,31 @@ class SqlNativeSourceControlStore:
                 selection=ExactBucketSelection(bucket_ids),
                 created_at=row.created_at,
             )
+        )
+
+    def authority_for_envelope(self, envelope_id: str) -> NativeAdmissionAuthority | None:
+        """Load exact durable authority for one retained protected-spool envelope."""
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                select(native_admission_authorities).where(
+                    native_admission_authorities.c.envelope_id == envelope_id
+                )
+            ).one_or_none()
+        if row is None:
+            return None
+        value = row._mapping
+        return NativeAdmissionAuthority(
+            authority_id=str(value["authority_id"]),
+            configuration_id=str(value["configuration_id"]),
+            configuration_revision=int(value["configuration_revision"]),
+            bridge_id=str(value["bridge_id"]),
+            bucket_id=str(value["bucket_id"]),
+            source_id=str(value["source_id"]),
+            audit_id=str(value["audit_id"]),
+            envelope_id=str(value["envelope_id"]),
+            request_id=str(value["request_id"]),
+            issued_at=value["issued_at"],
+            expires_at=value["expires_at"],
         )
 
     def progress(self, configuration_id: str) -> tuple[NativeBucketProgress, ...]:
@@ -1656,6 +1712,7 @@ class SqlNativeSourceControlStore:
         if grant is None or selected is None:
             raise NativeAdmissionAuthorityError("native admission authority was not found")
         durable = grant._mapping
+        prior_digest = durable["admission_sha256"]
         exact = (
             str(durable["audit_id"]) == authority.audit_id
             and str(durable["configuration_id"]) == authority.configuration_id
@@ -1682,7 +1739,6 @@ class SqlNativeSourceControlStore:
             and envelope.request_id == authority.request_id
             and authority.issued_at <= recorded_at <= authority.expires_at
         )
-        prior_digest = durable["admission_sha256"]
         if not exact or (prior_digest is not None and str(prior_digest) != admission_digest):
             raise NativeAdmissionAuthorityError("native admission authority did not match")
         return ContractNativeSourceKind(str(selected.source_kind)), admission_digest
@@ -1834,11 +1890,13 @@ class SqlNativeSourceControlStore:
                 ContractNativeSourceKind.MAIL: ObjectKind.MAIL_MESSAGE,
                 ContractNativeSourceKind.CALENDAR: ObjectKind.CALENDAR_EVENT,
                 ContractNativeSourceKind.CONTACTS: ObjectKind.CONTACT,
+                ContractNativeSourceKind.TASKS: ObjectKind.TASK,
             }[source_kind]
             media_type = {
                 ObjectKind.MAIL_MESSAGE: "message/rfc822",
                 ObjectKind.CALENDAR_EVENT: "application/calendar+json",
                 ObjectKind.CONTACT: "application/contact+json",
+                ObjectKind.TASK: "application/task+json",
             }[object_kind]
             repository = SqlNativeSourceRepository(connection)
             for record in envelope.records:

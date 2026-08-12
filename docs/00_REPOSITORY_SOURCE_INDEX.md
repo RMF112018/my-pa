@@ -1,5 +1,9 @@
 # Repository Source Index
 
+## Operating lineage
+
+The current remediation candidate is `bf/pilot-blocker-remediation`, forked from authenticated `main@9b35476b70fe4fbc03bb8f9835d93c1b71089bbe`. Its exact moving head/tree and clean-worktree evidence are recorded in PR #73 and the final-state report rather than embedded self-referentially here. The older `recovery/pre-20260805-utc-rollback-c9fb513` lineage remains preserved and is classified in [`docs/campaign/PILOT-BLOCKER-REMEDIATION-20260812.md`](campaign/PILOT-BLOCKER-REMEDIATION-20260812.md); it is no longer the operating candidate.
+
 ## Normative governance
 
 - [`AGENTS.md`](../AGENTS.md) — principal repository and coding-agent policy.
@@ -20,7 +24,9 @@
 - [`docs/architecture/system-context.md`](architecture/system-context.md) — actors, external systems, trust and authority boundaries.
 - [`docs/architecture/module-boundaries.md`](architecture/module-boundaries.md) — module ownership, dependency direction, and split triggers.
 - [`docs/architecture/data-authority.md`](architecture/data-authority.md) — data ownership, authority, lifecycle, and disclosure.
-- [`native/apple-source-host/README.md`](../native/apple-source-host/README.md) — WP-12D's source-built Swift protocol-v1 synthetic host: immutable versioned discovery/preflight/read envelopes, deterministic Mail/Calendar/Contacts adapters, bounded recurrence identity, and an owner-only atomic bounded spool; no live Apple framework, permission, activation, database, network, application admission, or source-mutation authority.
+- [`native/apple-source-host/README.md`](../native/apple-source-host/README.md) — source-built Swift protocol-v1 core plus separately bounded `AppleSourceHostPlatform` shipping product: streamed/bounded Calendar and minimum-key Contacts, bounded Tasks, closed ScriptingBridge Mail reads, recurrence identity, and owner-only atomic spool. Its executable has a descriptor-relative content-free dry-run and a distinct expiring-grant, one-page read/envelope/handoff path whose bridge/request/envelope IDs are issued by the authenticated Python application. It cannot request permission, reach a database/network, or mutate a source; the live path is implemented but was not executed.
+- [`web/README.md`](../web/README.md) — Next.js/PWA runtime, development modes, and validation commands.
+- [`web/src/contracts/README.md`](../web/src/contracts/README.md) — frontend contract ownership and generated-shape boundary.
 
 ## Specifications
 
@@ -44,6 +50,14 @@ Also indexed by identity only: the **Native Apple Personal Data Capture Bridge**
 
 - [`docs/plans/mcv-completion-plan.md`](plans/mcv-completion-plan.md) — current gap audit and integrated work-package plan: what the repository contains, what the accepted specification requires, and which dispatched workstreams are deferred and why.
 
+## Campaign
+
+- [`docs/campaign/PILOT-BLOCKER-REMEDIATION-20260812.md`](campaign/PILOT-BLOCKER-REMEDIATION-20260812.md) — current candidate authority record: objective, authenticated `main` basis, selective lineage reconciliation, blocker-closure matrix, safety boundaries, validation record, and exact-head independent-review gate.
+- [`docs/campaign/CAMPAIGN-BRIEF.md`](campaign/CAMPAIGN-BRIEF.md) — historical/superseded 2026-08-09 recovery-lineage snapshot through WP-03. It is retained for traceability and is not authority for present campaign state, work selection, or repository lineage.
+- [`docs/campaign/WORK-PACKAGE-MAP.md`](campaign/WORK-PACKAGE-MAP.md) — historical: the superseded Moss v4.0 campaign's work-package sequencing (WP-00 through WP-09). Superseded by `MYPA-CANONICAL-APPLICATION-COMPLETION-PLAN-20260809-001`; see the banner at the top of the file.
+- [`docs/campaign/RATIFICATION-MYPA-MOSS-V4-20260805.md`](campaign/RATIFICATION-MYPA-MOSS-V4-20260805.md) — historical: the 2026-08-05 product-package ratification record for the superseded Moss v4.0 campaign.
+- [`docs/campaign/REPOSITORY-TRUTH-REPORT-20260805.md`](campaign/REPOSITORY-TRUTH-REPORT-20260805.md) — historical: the 2026-08-05 repository truth report against `main` head `88e8d81…`, superseded by the 2026-08-09 reauthentication against the recovery lineage.
+
 ## Security
 
 - [`docs/security/threat-model.md`](security/threat-model.md) — entry points, abuse cases, controls, and residual risk.
@@ -53,6 +67,7 @@ Also indexed by identity only: the **Native Apple Personal Data Capture Bridge**
 Running the local candidate on one machine. A procedure under `ops/runbooks/` is written only after it has been executed; deployment, production activation, and destructive data operations remain operator-gated (`AGENTS.md` section 5).
 
 - [`docs/operations/mcv-limitations.md`](operations/mcv-limitations.md) — what the MCV slice does **not** do, each limitation citing the test or measurement that bounds it. Read this before reading the runbooks as a statement of capability.
+- [`docs/operations/goodnotes-local-source.md`](operations/goodnotes-local-source.md) — manifest-indexed read-only GoodNotes source, bounded local OCR JSON contract, provenance/Review/search flow, and operator-gated live boundaries.
 - [`ops/runbooks/README.md`](../ops/runbooks/README.md) — owning index for the operational runbooks: the database, the worker, the gateway, the other two transports, and the end-to-end operator sequence.
 - [`apps/cli/README.md`](../apps/cli/README.md) — the four operator programs: the capability transport, the source configuration plane, the runtime probe, and the migration control plane.
 - [`ops/postgres/README.md`](../ops/postgres/README.md) — the PostgreSQL instance itself: image, tuning, locale, collation contract, cluster-creation settings, and reset procedure.
@@ -64,6 +79,7 @@ Running the local candidate on one machine. A procedure under `ops/runbooks/` is
 - [`migrations/versions/README.md`](../migrations/versions/README.md) — the revision files themselves, and the naming they follow.
 - [`src/my_pa/infrastructure/database/README.md`](../src/my_pa/infrastructure/database/README.md) — the engine, its pool, and the health check the runtime probe calls.
 - [`fixtures/mcv/README.md`](../fixtures/mcv/README.md) — the synthetic corpus the read-only vertical slice is proven over. Synthetic throughout; `P00-OD-009` is open and no live root is configured.
+- [`fixtures/remote-capture/README.md`](../fixtures/remote-capture/README.md) — the synthetic, principal-free iOS Shortcut request contract for Remote Capture; it contains no credential or live endpoint.
 - [`evidence/README.md`](../evidence/README.md) — owning index for acceptance and completion evidence.
 - [`evidence/completion/README.md`](../evidence/completion/README.md) — the completion records themselves, with their Drive provenance.
 

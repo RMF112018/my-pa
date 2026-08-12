@@ -10,7 +10,7 @@ in a public status, audit event, exception, or receipt.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from hashlib import sha256
 from typing import Any, Protocol, assert_never
@@ -201,6 +201,15 @@ class NativeSourceHost(Protocol):
         at: datetime,
     ) -> Mapping[str, Any]: ...
 
+    def acknowledge(self, envelope_id: str) -> None:
+        """Remove one protected item only after durable application admission."""
+
+    def pending(self, selection: NativeBucketSelection) -> Mapping[str, Any] | None:
+        """Return the one retained exact-scope item before any new source read."""
+
+    def quarantine(self, envelope_id: str) -> None:
+        """Move a stale retained item aside without deleting its recovery evidence."""
+
 
 class NativeSourceStore(Protocol):
     """Statements required by current C use cases, with no worker/checkpoint methods."""
@@ -244,6 +253,8 @@ class NativeSourceStore(Protocol):
         issued_at: datetime,
         expires_at: datetime,
     ) -> NativeSyncAuthority: ...
+
+    def authority_for_envelope(self, envelope_id: str) -> NativeSyncAuthority | None: ...
 
     def prevalidate_authority(
         self, envelope: NativeAdmissionEnvelope, authority: NativeSyncAuthority, *, at: datetime
@@ -291,11 +302,13 @@ def _kind_for_provider(kind: NativeSourceKind) -> str:
             return "apple_calendar"
         case NativeSourceKind.CONTACTS:
             return "apple_contacts"
+        case NativeSourceKind.TASKS:
+            return "apple_tasks"
     assert_never(kind)
 
 
 class NativeSourceController:
-    """One bounded synthetic-only controller for the eleven C capabilities."""
+    """Authenticated controller for the bounded native-source capabilities."""
 
     def __init__(
         self,
@@ -791,17 +804,59 @@ class NativeSourceController:
             if start > end:
                 raise ValueError("native-source page range is not ordered")
             time_range = (start, end)
-        authority = self.lifecycle(
+        snapshot = self._store.latest_configuration(configuration_id)
+        if snapshot is None or not snapshot.active:
+            raise AdmissionDeniedError("native configuration is not active")
+        binding = self._bindings((bucket_id,), snapshot.configuration.bridge_id)[0]
+        selection = self._host_selections((binding,))[0]
+        retained = self._host.pending(selection)
+        if retained is not None:
+            envelope = NativeAdmissionEnvelope.model_validate(retained)
+            authority = self._store.authority_for_envelope(envelope.metadata.envelope_id)
+            if authority is None:
+                raise AdmissionDeniedError("retained native envelope has no durable authority")
+            if (
+                authority.configuration_id != configuration_id
+                or authority.configuration_revision != snapshot.configuration.revision
+                or authority.bridge_id != snapshot.configuration.bridge_id
+                or authority.bucket_id != bucket_id
+                or authority.source_id != binding.source_id
+            ):
+                raise AdmissionDeniedError("retained native envelope escaped requested scope")
+            self._authorize(
+                control_context,
+                NativeSourceCapability.SYNC,
+                frozenset({binding.source_id}),
+            )
+            recovered_context = replace(admission_context, request_id=authority.request_id)
+            try:
+                admission = self.admit(
+                    recovered_context,
+                    authority=authority,
+                    wire_envelope=retained,
+                    checkpoint_job_id=checkpoint_job_id,
+                    checkpoint_run_id=checkpoint_run_id,
+                )
+            except AdmissionDeniedError:
+                self._host.quarantine(authority.envelope_id)
+                raise
+            self._host.acknowledge(authority.envelope_id)
+            return NativeReadPageReceipt(
+                admission=admission,
+                authority_id=authority.authority_id,
+                next_cursor=envelope.next_cursor,
+            )
+        issued = self.lifecycle(
             control_context,
             capability=NativeSourceCapability.SYNC,
             configuration_id=configuration_id,
             bucket_id=bucket_id,
         )
-        if not isinstance(authority, NativeSyncAuthority):
+        if not isinstance(issued, NativeSyncAuthority):
             raise RuntimeError("native sync did not issue page authority")
-        binding = self._bindings((bucket_id,), authority.bridge_id)[0]
+        authority = issued
         wire = self._host.read(
-            self._host_selections((binding,))[0],
+            selection,
             time_range=time_range,
             cursor=cursor,
             limit=limit,
@@ -818,6 +873,7 @@ class NativeSourceController:
             checkpoint_job_id=checkpoint_job_id,
             checkpoint_run_id=checkpoint_run_id,
         )
+        self._host.acknowledge(authority.envelope_id)
         return NativeReadPageReceipt(
             admission=admission,
             authority_id=authority.authority_id,

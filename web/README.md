@@ -1,80 +1,170 @@
-# `web/` — MossAIc frontend shell
+# MossAIc web application
 
-**Status:** `IMPLEMENTING` (WP-02 / R1)
+`web/` is the Next.js App Router PWA for the current local candidate. It is a
+browser-facing shell and backend-for-frontend (BFF) over the Python capability
+gateway; it is not a second source of domain truth.
 
-The Next.js (App Router) progressive web app for `my-pa`, decided by
-[`docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md`](../docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md).
-Routed by `docs/00_REPOSITORY_SOURCE_INDEX.md`.
+## Current implementation
 
-## What WP-02 delivers — and what it does not
+The normal application path is backend-served. Server routes resolve a
+Principal from the signed application session, call the loopback Python gateway,
+and pass through the gateway's disclosure and refusal semantics. The browser
+cannot submit a Principal or a gateway bearer.
 
-Delivered:
+An explicitly enabled synthetic provider remains available for development and
+is refused when `NODE_ENV=production`. It does not silently replace an
+unconfigured or unavailable backend.
 
-- The five destinations — **Today, Situations, Review, Library, System** — inside a
-  persistent shell (context header, desktop navigation rail, mobile bottom navigation),
-  with landmarks, visible focus, and a skip link.
-- The **identity boundary**: HMAC-signed HttpOnly session cookie, Edge-runtime route
-  guard (`src/middleware.ts`), server-side re-verification in the signed-in layout, and
-  claims validation with the same rules as the Python identity domain — home-tenant
-  check, UUID `oid`, and outright rejection of caller-supplied identity fields
-  (`src/lib/auth/claims.ts`).
-- A **synthetic identity provider** (`src/lib/auth/synthetic.ts`) with two fixed
-  development principals in a synthetic tenant. No live Entra registration, tenant id,
-  or personal data anywhere. The real MSAL wiring has a configuration seam
-  (`src/lib/auth/msal.config.ts`) and is inert until one exists.
-- **Canonical TypeScript contracts** (`src/contracts/`) — parity mirror of the Python
-  contract and domain vocabulary; see `src/contracts/README.md`.
-- **Capture** and **Reveal** affordances posting to stub API routes that acknowledge
-  with `coverage: "synthetic"` disclosures; a principal-scoped synthetic **Pulse** on
-  Today; honest "not yet connected" states on Situations and Library; full
-  disclosure on System.
-- **PWA install surface**: web manifest plus a minimal network-only service worker.
-  No offline queue — that is WP-04 (R3).
+The Python contract contains twenty-six capability names. The System route reads
+the live `capabilities.get` manifest, including each capability's runtime
+availability, instead of restating an availability count in this tier. Six of
+those names are the managed-document lifecycle (`documents.create`,
+`documents.revise`, `documents.read`, `documents.list`, `documents.archive`, and
+`documents.restore`). They are implemented in the Python application and become
+available only when the gateway composition has a managed root; this web package
+does not currently expose a managed-document screen or API route.
 
-WP-05 (R4) adds the **Review workbench**: a principal-scoped listing (`/api/review`) and
-per-case disposition route (`/api/review/:id/decide`) that turn a proposal into a
-canonical record only on an explicit accept / correct-and-accept, returning the immutable
-receipt the promotion issues. Correct-and-accept preserves the original proposal. The
-listing and every disposition are scoped to the signed-in principal — a foreign case is
-`not_found`, never disclosed — the web-tier shadow of the Python `review_cases` /
-`decide_review` partition (MU-AC-04). Cases are principal-scoped synthetic fixtures until
-the Python read models are wired.
+## Routes and capability mapping
 
-WP-06 (R5) adds the **relationship / project continuity** surfaces. The **Situation board**
-(`/situations`, `/api/situations`, `/api/projects`) gathers the principal's Situations and
-Projects into one purposeful view — a Situation references records it does not own and shows
-their state without claiming authority. The **relationship timeline**
-(`/relationships/:personId`, `/api/relationships/:personId/timeline`) shows a person's
-accepted interactions, meetings, and commitments in time order. Both read **only accepted
-records**: a proposed (not-accepted) relationship event never surfaces on a timeline, the
-web-tier shadow of the Python `list_accepted_events` filter, and this is the WP-06 gate that
-Today/Pulse and timelines read only accepted records. Every listing is scoped to the signed-in
-principal, and a person that does not resolve in the caller's own partition is `not_found` —
-a foreign person and an unknown person are indistinguishable (MU-AC-05). Records are
-principal-scoped synthetic fixtures until the Python continuity read models are wired.
+All application pages require a verified session. `/sign-in` is public;
+`/auth/sign-in` and `/auth/callback` implement the Entra redirect flow.
 
-Not delivered here: capture persistence and the processing pipeline (WP-03), offline
-(WP-04), the Microsoft Graph connector (WP-07), AI processing (WP-08), and the To-Do
-projection (WP-09).
+| UI or BFF route | Backend capability | Current behavior |
+|---|---|---|
+| `/today`, `GET /api/pulse` | `continuity.pulse` | Ranked accepted commitments, tasks, decisions, and current obligations |
+| `/situations`, `GET /api/situations` | `continuity.situations` | Principal-scoped Situation list and relationship events |
+| `GET /api/projects` | `continuity.projects` | Principal-scoped Project list used by the Situation surface |
+| `/relationships/:personId`, `GET /api/relationships/:personId/timeline` | `continuity.situations` | Filters the accepted relationship events returned by the continuity read model for that person |
+| `/library`, `GET /api/library` | `knowledge.read`, `knowledge.search`, `capture.search`, or `capture.list` | Chooses one capability from the request shape; no synthetic Library fixture is invented |
+| `POST /api/reveal` | `knowledge.reveal` | Preserves `evidence`, `no_evidence`, and `unavailable` as distinct answers |
+| `/review`, `GET /api/review` | `review.list` | Lists the acting Principal's review cases |
+| `POST /api/review/:id/decide` | `review.decide` | Applies an optimistic-concurrency review decision |
+| `POST /api/capture` | `capture.create` | Persists a Quick Capture with backend-owned idempotency and a verifiable receipt |
+| `/system`, `GET /api/system` | `capabilities.get` | Reports the runtime manifest, readiness, and worker planes; connected-source enumeration remains unknown because no v1 capability provides it |
+| `POST /api/session` | none | Synthetic development sign-in only; refused in Entra mode and in production |
 
-## Commands
+The relationship timeline is therefore implemented, but it is not a separate
+public capability. It is a projection of `relationship_events` already returned
+by `continuity.situations`. Microsoft Graph remains off by default and is not an
+active personal-data source; Entra authentication does not activate Graph.
 
-```bash
-cd web
-npm install
-npm run dev        # development server
-npm run lint       # eslint
-npm run typecheck  # tsc --noEmit
-npm test           # vitest (unit + component)
-npm run build      # production build
+## Worker-plane reporting
+
+`GET /api/system` returns the gateway's `worker_planes` data as
+`backend.workerPlanes`. The two current planes are `capture` and `enrollment`.
+Each reports its state, backlog, dead-letter count, and last heartbeat when
+known.
+
+The gateway degrades readiness when worker health is unavailable, when queued
+work has an absent or stale worker, or when a plane has dead-lettered work. An
+absent worker with no backlog is reported as `idle_or_not_required`; the web tier
+does not reinterpret that as a running worker. If the System route cannot reach
+the gateway, it renders the refusal rather than an empty healthy state.
+
+## Authentication and gateway identity
+
+`MYPA_AUTH_MODE` is required and has exactly two values:
+
+- `synthetic` exposes fixed development principals. It is refused in production.
+- `entra` uses a Node-only MSAL authorization-code flow with a confidential client at `/auth/sign-in` and
+  `/auth/callback`. The flow validates state and nonce, uses PKCE S256, consumes
+  callback state before token exchange, expires abandoned flows after ten
+  minutes, and bounds the number of live pending flows. The access token, client
+  secret, PKCE verifier, and nonce stay server-side. The `HttpOnly` session cookie
+  contains signed Principal/session identifiers, never the access token.
+
+The Entra path requires the application's own gateway API scope. A Microsoft
+Graph scope is rejected. No live app registration, tenant credential, or
+personal-data account is stored in this repository or exercised by the test
+suite.
+
+`MYPA_GATEWAY_AUTH_MODE` separately describes the Python gateway:
+
+- `local_operator` sends no credential. The gateway serves one configured
+  process Principal, and the web tier admits only the matching synthetic
+  Principal so browser sessions cannot imply backend partitioning that does not
+  exist.
+- `entra` requires the server-held bearer produced by the completed Entra flow.
+  Missing bearer state is a refusal; the BFF never falls back to an
+  unauthenticated request or caller-supplied identity.
+
+The session and pending-flow registries are process-local. A Node restart safely
+invalidates their entries and requires sign-in again. Multi-instance deployment
+would require a shared, bounded server-side registry and is not claimed here.
+
+## Configuration
+
+Copy `.env.example` only as a list of non-secret variable names. Supply real
+values out of band and never commit them.
+
+| Variable | Required use |
+|---|---|
+| `MYPA_SESSION_SECRET` | At least 32 characters; signs the application session cookie |
+| `MYPA_AUTH_MODE` | `synthetic` or `entra`; no default |
+| `MYPA_GATEWAY_URL` | Absolute HTTP(S) URL for the Python gateway; no default |
+| `MYPA_GATEWAY_AUTH_MODE` | `local_operator` or `entra`; must match the Python gateway |
+| `MYPA_DATA_PROVIDER` | Optional explicit `synthetic` fixture switch; unset means off |
+| `MYPA_ENTRA_HOME_TENANT_ID` | Required in Entra mode; accepted home tenant |
+| `MYPA_ENTRA_CLIENT_ID` | Required in Entra mode; server-only app identifier |
+| `MYPA_ENTRA_CLIENT_SECRET` | Required in Entra mode; server-only credential |
+| `MYPA_ENTRA_REDIRECT_URI` | Required in Entra mode; callback URI |
+| `MYPA_ENTRA_API_SCOPE` | Required in Entra mode; this application's gateway scope |
+
+A minimal synthetic development configuration is:
+
+```sh
+export MYPA_SESSION_SECRET='replace-with-a-local-random-value-of-at-least-32-characters'
+export MYPA_AUTH_MODE=synthetic
+export MYPA_GATEWAY_URL=http://127.0.0.1:8000
+export MYPA_GATEWAY_AUTH_MODE=local_operator
+export MYPA_DATA_PROVIDER=synthetic
+npm run dev
 ```
 
-## Boundary rules
+The placeholder above is documentation, not an acceptable shared or deployed
+secret. Generate a local value out of band.
 
-1. Identity derives only from the verified session; request payloads carrying
-   `principal_id`/`principalId`/`tid`/`oid` are rejected at the client wrapper
-   (`src/lib/api/client.ts`) and again at every route (`src/lib/api/guard.ts`).
-2. Every API response carries a `DisclosureEnvelope`; synthetic data is always
-   labeled synthetic, in the payload and in the UI.
-3. Nothing is asserted on the user's behalf; the shell language keeps proposals
-   and dispositions distinct even while the pipeline is a stub.
+## Offline Quick Capture
+
+Quick Capture can retain encrypted notes in IndexedDB while the gateway is
+unavailable. The queue fails closed at 50 retained entries or 1,000,000 bytes
+and never evicts an older note to admit a new one. Replay is foreground-only: it
+runs while the application is open, not as a background-sync guarantee.
+
+An entry is deleted automatically only after a backend `persisted` receipt
+matches its idempotency key and content digest. A note owned by another signed-in
+Principal is quarantined before decryption or transport. The owning Principal can
+explicitly release it for retry or delete the local copy; those controls do not
+permit one Principal to act on another's entry.
+
+## Validation
+
+From `web/`:
+
+```sh
+npm test
+npm run lint
+npm run typecheck
+npm run build
+```
+
+The browser suite uses a disposable PostgreSQL database, a loopback Python
+gateway in `local_operator` mode, and Next.js servers for both healthy and
+unreachable-gateway cases. It runs desktop Chrome and a Pixel 7 viewport:
+
+```sh
+npm run e2e
+```
+
+The suite requires the repository Python environment and the local PostgreSQL
+authentication/configuration described by `e2e/stack.sh`. It does not use a live
+Entra tenant or live personal data.
+
+## Boundaries
+
+This package does not authorize deployment, production activation, live
+personal-data connector access, source-system mutation, credential creation or
+rotation, or an amendment of repository policy. Synthetic provider behavior is
+development evidence, not production readiness. Current campaign decisions and
+exact-head evidence belong in the remediation/PR/final-state records, not in
+this package README.

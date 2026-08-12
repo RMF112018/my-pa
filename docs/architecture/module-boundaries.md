@@ -1,16 +1,14 @@
 ---
 artifact_id: ARCH-PKL-MB-001
 artifact_type: Module-boundary architecture
-version: 0.1.0
-status: PROPOSED_FOR_REPOSITORY_REVIEW
+version: 1.0.0
+status: CURRENT_REPOSITORY_ARCHITECTURE
 feature_id: FEATURE-PKL-001
 phase_id: PHASE-00
 repository: RMF112018/my-pa
-authenticated_head_sha: 3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae
-authenticated_tree_sha: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
-planning_basis_sha: b8563870afcf87b63e4cde6e0a48bfc59f0bd5b7
+authenticated_base_sha: 9b35476b70fe4fbc03bb8f9835d93c1b71089bbe
 classification: INTERNAL_ARCHITECTURE
-supersession_state: NEW_CANDIDATE_NOT_IN_REPOSITORY
+supersession_state: CURRENT
 ---
 
 
@@ -20,10 +18,10 @@ supersession_state: NEW_CANDIDATE_NOT_IN_REPOSITORY
 ## 1. Decision and status
 
 
-The implementation remains one Python modular monolith in `RMF112018/my-pa`, consistent with ADR-001. It has separately runnable gateway and worker processes and an operator CLI, but one domain, one application model, and one repository. This document constrains later implementation; it does not create executable modules or authorize implementation.
+The implementation is one Python modular monolith in `RMF112018/my-pa`, consistent with ADR-001. It has separately runnable gateway and worker processes and operator CLI programs, but one domain, one application model, and one repository. This document records the current implemented boundaries.
 
 
-Authenticated basis: `main@3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae`. Exact tree SHA and local worktree state are unavailable. The package must be revalidated before repository integration.
+Authenticated branch basis: `main@9b35476b70fe4fbc03bb8f9835d93c1b71089bbe`. The remediation PR records its exact reviewed head and validation evidence; later commits invalidate that exact-head evidence.
 
 
 ## 2. Rationale
@@ -131,14 +129,15 @@ A directory is not implementation authority. Only modules needed by the accepted
 vertical slice should be created. `adapters/mcp` and `adapters/cli` were named
 above by `D-23` before either existed; WP-4B2b built both, and the amendment
 here is that sentence catching up rather than a change of shape. `apps/cli/`
-now holds **three** programs — `migration.py`, `invoke.py`, and WP-4B3's
-`sources.py` — and `apps/gateway.py` serves both surfaces section 5.10 gives it,
+now holds operator programs including `migration.py`, `invoke.py`, `sources.py`,
+and the later capture, managed-document, GoodNotes, and identity commands;
+`apps/gateway.py` serves both surfaces section 5.10 gives it,
 HTTP under `run` and MCP under `mcp`. Every other reserved directory still holds
 a README and nothing else.
 
-Two of the three are operator commands and one is a transport, and the split is
+The operator commands and transport entry point share this directory, and the split is
 the reason they sit together rather than a reason to separate them. `invoke.py`
-invokes one of the twelve capabilities and therefore composes
+invokes one of the twenty-six capabilities and therefore composes
 `bootstrap.gateway.build_gateway_runtime`, exactly as the served transports do,
 so it cannot differ from them in a limit, a clock, or a principal.
 `migration.py` and `sources.py` invoke none, compose their own engine, and reach
@@ -150,7 +149,7 @@ capability set is closed at eight by the canonical contract". `D-68` narrows
 `D-42`'s general premise for the capture family alone — `capture.create` is
 named by the canonical package in six places, and the other three are a
 repository decision under `ADR-003:107`, which reserves capability names to "an
-implementing work package and its pull request". The set is twelve, and it is
+implementing work package and its pull request". The set is twenty-six, and it is
 closed against a ninth *source-registration* capability rather than against a
 ninth member.
 
@@ -203,7 +202,7 @@ Owns transport-neutral public request/response/disclosure/error schemas and appl
 ### 5.3 `application`
 
 
-Owns the twelve public capability use cases; request normalization; semantic validation; principal/purpose/scope authorization; enrollment normalization/idempotency; capture admission, idempotent replay, and the durable-first save; source, knowledge, and capture orchestration; disclosure construction; operation/cancellation/recovery coordination; transaction boundaries; and mapping internal failures to public errors.
+Owns the twenty-six public capability use cases; request normalization; semantic validation; principal/purpose/scope authorization; enrollment normalization/idempotency; capture admission, idempotent replay, and the durable-first save; source, knowledge, capture, and managed-document orchestration; disclosure construction; operation/cancellation/recovery coordination; transaction boundaries; and mapping internal failures to public errors.
 
 
 It does not parse HTTP/MCP, execute SQL, open files, call provider SDKs, or embed process lifecycle.
@@ -443,7 +442,7 @@ Microservices, generic plugins, generalized agent frameworks, Redis/Celery, grap
 
 - `MB-AC-001`: Every responsibility has one clear owner and dependency direction.
 - `MB-AC-002`: Domain/application are isolated from transport, ORM, provider, parser, host, and database details.
-- `MB-AC-003`: Source providers cannot mutate; managed writes remain a separate excluded boundary.
+- `MB-AC-003`: Source providers cannot mutate; objective-authorized managed writes remain a separate product-owned boundary.
 - `MB-AC-004`: Jobs, policy, audit, provenance, and transactions are constrained without unsupported infrastructure.
 - `MB-AC-005`: Testing seams and architecture rules are enforceable in Phases 01–05.
 - `MB-AC-006`: Future areas are identified without becoming current implementations/frameworks.
@@ -452,7 +451,7 @@ Microservices, generic plugins, generalized agent frameworks, Redis/Celery, grap
 ## 15. Invalidation and next gate
 
 
-Material changes to ADR-001, composition roots, dependency direction, source/managed-write separation, public capability set, or structured authority invalidate this candidate. Next gate is a separately authorized document-only repository integration and independent exact-head review; implementation remains unauthorized.
+Material changes to ADR-001, composition roots, dependency direction, source/managed-write separation, public capability set, or structured authority invalidate this record. Managed-document writes are implemented only under this remediation objective's explicit reprioritization and remain separate from source providers; this statement records implementation and does not amend `AGENTS.md`. Candidate acceptance requires applicable validation and independent review against the exact current head. Live personal-data access, source mutation, deployment, and other operator-reserved actions remain unauthorized by this document.
 
 
 ## 16. Related documents

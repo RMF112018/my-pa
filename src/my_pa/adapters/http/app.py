@@ -65,12 +65,35 @@ milliseconds with two threads. A synchronous endpoint cannot, so the achievable
 guarantee is that the stall is bounded and self-clearing rather than absent, and
 the tests assert exactly that and not more.
 
-**No credential is issued, read, or required** (`D-30`). The acting principal is
-supplied by the composition root and is a property of the process, not of the
-request; `metadata.principal_id` arrives from the caller and stays what the
-contract says it is, correlation input the application does not trust.
-`P00-OD-010` is open and selecting an authentication mechanism belongs to the
-operator, so this module has no notion of one to select.
+**Two ways the acting principal arrives, and the transport chooses neither.**
+`create_http_app` takes exactly one of `principal` and `authenticate`, and
+composing it with both or with neither is a `ValueError` at startup rather than a
+default.
+
+* With `principal` this is `D-30` unchanged: the acting principal is supplied by
+  the composition root and is a property of the process, not of the request. No
+  credential is issued, read, or required.
+* With `authenticate` every request must present `Authorization: Bearer <token>`
+  and the composition root turns it into a `Principal`. This module does not
+  verify a token, does not know what a claim is, and names no `PrincipalKind` —
+  it reads one header, hands it over with the request document, and maps a
+  refusal onto a status. The decision stays where every other decision is.
+
+Either way `metadata.principal_id` arrives from the caller and stays what the
+contract says it is, correlation input the application does not trust, and
+`tests/architecture/test_principal_is_never_caller_supplied.py` is what keeps
+that a measurement.
+
+**`401` is HTTP's own answer, like `404` and `405` are.** Authentication happens
+before a request exists — before `normalize` has built one and therefore before
+there is a `request_id` an envelope could be addressed to — so the answer is a
+`ProblemDetail` alone, exactly as an unroutable URL is. It carries the `denied`
+code, because that is what it is in the application's vocabulary, and the status
+is HTTP's answer about a credential rather than the application's about a
+request. The body is a fixed refusal: no token, no claim, no header, and no hint
+of which of the several ways it failed, since each of those distinctions is an
+oracle. `_STATUS` is untouched and still maps every public error code, which is
+the invariant `AC-1` needs.
 """
 
 from __future__ import annotations
@@ -78,7 +101,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -89,12 +112,18 @@ from starlette.responses import Response
 from starlette.routing import Route
 
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
-from my_pa.application.errors import ApplicationError, InvalidRequestError, problem_detail
+from my_pa.application.errors import (
+    ApplicationError,
+    DeniedError,
+    InvalidRequestError,
+    problem_detail,
+)
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.principal import Principal
+from my_pa.domain.identity.user_account import TokenClaimsError
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = ["PATH_TEMPLATE", "create_http_app"]
@@ -106,6 +135,16 @@ PATH_TEMPLATE: Final = "/v1/{capability}"
 
 #: The one media type this transport reads and writes.
 _JSON: Final = "application/json"
+
+#: The header a bearer credential arrives in, and the challenge sent back with a
+#: refusal. Both are RFC 6750's; neither is a name this transport invented.
+_CREDENTIAL_HEADER: Final = "authorization"
+_CHALLENGE: Final = "Bearer"
+
+#: HTTP's answer when a request carried no usable credential. Not in `_STATUS`
+#: on purpose: `_STATUS` maps the eleven public *error codes*, and this is not
+#: one of them — see the module docstring.
+_UNAUTHENTICATED: Final = 401
 
 #: How long a client has to deliver the body it announced, before the request is
 #: refused and the worker thread released.
@@ -256,6 +295,26 @@ def _problem_response(error: ApplicationError) -> Response:
     )
 
 
+def _unauthenticated_response() -> Response:
+    """The one answer every authentication failure gets.
+
+    Built from `DeniedError` so the typed code in the body is the application's
+    own `denied` rather than a second vocabulary this transport invented, and
+    returned with `401` because the caller's problem is a credential rather than
+    an authority — the same reason `not_a_request` returns HTTP's `404` under an
+    `invalid_request` body. The challenge header states the scheme and nothing
+    else: no `realm`, no `error_description`, and no scope, because each of those
+    describes the deployment to whoever asks.
+    """
+    problem = problem_detail(DeniedError(), correlation_id=issue_identifier(IdKind.CORRELATION))
+    return Response(
+        problem.to_canonical_json(),
+        status_code=_UNAUTHENTICATED,
+        media_type=_JSON,
+        headers={"www-authenticate": _CHALLENGE},
+    )
+
+
 def _envelope_response(envelope: ResponseEnvelope) -> Response:
     """Return the envelope the application produced, verbatim."""
     status = 200 if envelope.error is None else _STATUS[envelope.error.code]
@@ -302,17 +361,43 @@ def _document(body: bytes) -> Mapping[str, Any]:
     raise InvalidRequestError()
 
 
-def create_http_app(service: ApplicationService, *, principal: Principal) -> Starlette:
-    """The ASGI application serving `service` as the one local `principal`.
+def create_http_app(
+    service: ApplicationService,
+    *,
+    principal: Principal | None = None,
+    authenticate: Callable[[str | None, Mapping[str, Any]], Principal] | None = None,
+) -> Starlette:
+    """The ASGI application serving `service`, in exactly one of two modes.
 
     `principal` is the authenticated context the composition root established.
     It is fixed for the life of the process because the process is what the
     trust boundary is: one local operator behind a loopback socket (`D-30`).
+
+    `authenticate` is the alternative: the composition root's per-request
+    authentication, given the raw `Authorization` header and the request
+    document, returning the acting `Principal` or raising `TokenClaimsError`.
+
+    Exactly one, checked here rather than defaulted. Neither would be a
+    transport that cannot name a caller; both would be a transport with two
+    answers to the same question, and the safe-looking resolution — prefer the
+    authenticator, fall back to the fixed principal — is precisely the silent
+    permissive fallback this mode exists to remove.
     """
+    if (principal is None) == (authenticate is None):
+        raise ValueError(
+            "compose the transport with exactly one of `principal` (the fixed "
+            "local-operator mode) or `authenticate` (the per-request mode)"
+        )
     body = _Body()
 
+    def fixed_principal() -> Principal:
+        """The composed process principal, in the mode that has one."""
+        if principal is None:  # pragma: no cover - the composition check forbids this
+            raise ValueError("this transport was composed without a fixed principal")
+        return principal
+
     def invoke(request: Request) -> Response:
-        """One request: map it, run it once, map the answer back."""
+        """One request: map it, authenticate it, run it once, map the answer back."""
         try:
             _check_media_type(request)
             declared = _declared_length(request)
@@ -322,7 +407,7 @@ def create_http_app(service: ApplicationService, *, principal: Principal) -> Sta
                 # than trusted, so the bound above is a bound on what was read
                 # and not only on what was promised.
                 raise InvalidRequestError()
-            metadata, command = normalize(request.path_params["capability"], _document(received))
+            document = _document(received)
         except (ClientDisconnect, TimeoutError):
             # "malformed, incomplete, or contradictory" — the request stopped
             # arriving, either because the client went away or because it never
@@ -331,7 +416,23 @@ def create_http_app(service: ApplicationService, *, principal: Principal) -> Sta
             return _problem_response(InvalidRequestError())
         except ApplicationError as refusal:
             return _problem_response(refusal)
-        return _envelope_response(service.invoke(metadata, command, principal=principal))
+
+        if authenticate is None:
+            # `D-30`: no header is read at all, because none is required.
+            acting = fixed_principal()
+        else:
+            # Before `normalize`, so an unauthenticated caller is refused
+            # without this process building a command for it.
+            try:
+                acting = authenticate(request.headers.get(_CREDENTIAL_HEADER), document)
+            except TokenClaimsError:
+                return _unauthenticated_response()
+
+        try:
+            metadata, command = normalize(request.path_params["capability"], document)
+        except ApplicationError as refusal:
+            return _problem_response(refusal)
+        return _envelope_response(service.invoke(metadata, command, principal=acting))
 
     def not_a_request(request: Request, exception: Exception) -> Response:
         """A URL that addresses no capability, answered in the same vocabulary.

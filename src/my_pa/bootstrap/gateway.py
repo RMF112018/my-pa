@@ -66,14 +66,31 @@ all fail.
 
 ## The principal
 
-One `Principal`, issued at startup, `OPERATOR`, authenticated. Loopback is the
-trust boundary and a local principal is the only principal (`D-30`); no
-credential is issued, read, or required, and no authentication mechanism is
-selected, because `P00-OD-010` is open and that choice is the operator's.
+**Two modes, selected by configuration and never inferred**
+(`MY_PA_AUTH_MODE`). Activating authentication is an edit to an environment
+variable, not to this file.
+
+`local_operator` is `D-30` unchanged and is the default: one `Principal`, issued
+at startup, `OPERATOR`, authenticated. Loopback is the trust boundary and a local
+principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
 the fifteen capabilities.
+
+`entra` composes `entra_authenticator` instead and issues **no** process
+principal. Every request presents a bearer token, the token's validated
+`(tid, oid)` resolves through `PrincipalIdentityService` to that person's durable
+`principal_id`, and the `Principal` handed to the application is `OPERATOR` and
+authenticated — the same kind, for the same reason, so authorization semantics
+are identical to the loopback mode and only the identifier differs. Widening or
+narrowing authority was not part of turning authentication on, and a different
+kind would have done one or the other silently.
+
+`P00-OD-010` — which mechanism authenticates — is answered for the mechanism and
+still open for the activation: no tenant, application registration, or credential
+is configured here, and an unconfigured `entra` refuses to start rather than
+falling back (see `bootstrap.settings`).
 
 The identifier is durable across process runs (`PKL-MYPA-D-WP03-001`): it is
 derived from a fixed namespace UUID in `my_pa.domain.identity.binding`, not
@@ -109,20 +126,47 @@ exactly the cycle above, at exactly five concurrent requests.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import Engine
 
+from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.service import ApplicationService
-from my_pa.bootstrap.settings import Settings
+from my_pa.bootstrap.settings import AuthMode, Settings
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.identity.principal import Principal, PrincipalKind
+from my_pa.domain.identity.user_account import TokenClaimsError
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
+from my_pa.infrastructure.security.principal_identity import PrincipalIdentityService
 
-__all__ = ["GatewayRuntime", "build_gateway_runtime", "local_principal"]
+__all__ = [
+    "Authenticator",
+    "GatewayRuntime",
+    "build_gateway_runtime",
+    "entra_authenticator",
+    "local_principal",
+]
+
+#: How a transport asks the composition root who is calling. The first argument
+#: is the raw `Authorization` header value as the transport received it, or
+#: `None`; the second is the request document. It returns the acting `Principal`
+#: or raises `TokenClaimsError`, which is the only outcome a transport is
+#: allowed to distinguish.
+#:
+#: A plain callable rather than a protocol or a port: there is one implementation
+#: and one caller, and `AGENTS.md` section 2 says that is the point at which an
+#: interface would be the defect.
+Authenticator = Callable[[str | None, Mapping[str, Any]], Principal]
+
+#: The scheme a bearer credential is presented under, per RFC 6750.
+_BEARER = "bearer"
 
 
 def local_principal() -> Principal:
@@ -142,6 +186,78 @@ def local_principal() -> Principal:
     )
 
 
+def _bearer_token(credential: str | None) -> str:
+    """The token inside an `Authorization: Bearer …` value, or a refusal.
+
+    Refuses an absent header, a different scheme, and an empty token, all as the
+    same error: a caller learns that it is not authenticated, not which of the
+    three ways it failed to present a credential.
+    """
+    if credential is None:
+        raise TokenClaimsError("a bearer token is required; access is denied")
+    scheme, _, presented = credential.partition(" ")
+    if scheme.strip().lower() != _BEARER or not presented.strip():
+        raise TokenClaimsError("a bearer token is required; access is denied")
+    return presented.strip()
+
+
+def entra_authenticator(settings: Settings, work_engine: Engine) -> Authenticator:
+    """Compose the per-request authentication `entra` mode performs.
+
+    Three steps, in an order a caller cannot reshuffle: verify the token against
+    the configured issuer and audience, then hand its claims to
+    `PrincipalIdentityService`, which rejects a payload carrying identity,
+    validates the home tenant, and resolves the durable `principal_id`.
+
+    **Which payload is checked, and why it is the payload rather than the whole
+    document.** `contracts.v1.RequestMetadata` makes `principal_id` a *required*
+    envelope field on every public request and its own docstring says what it is:
+    correlation input the application does not read. So the envelope always names
+    a principal, and refusing every document that does so would refuse every
+    legal request. `adapters.normalization.PAYLOAD_KEY` is where a capability's
+    own arguments live and is what MU-AC-02 means by a request payload — an
+    identity field there is a caller trying to name the partition its request
+    runs in, and it is refused. The envelope's stated `principal_id` cannot shift
+    the resolved Principal either, and that is a stronger property than refusing
+    it: it is proved by the resolution never reading it.
+
+    **The transaction is this function's, not the request's.** The resolution
+    runs in its own short transaction and commits before the request begins,
+    because `ApplicationService.invoke` opens the request's transaction *after*
+    it has been given a Principal, and there is no Principal until this has run.
+    The consequence is small and worth naming: a request that then fails leaves
+    the account row behind. That is the correct direction — an account seen is an
+    account seen, and the alternative would be re-minting a `principal_id` on
+    every failed request.
+
+    It takes one work connection and returns it before the request takes its own,
+    so no request ever holds two at once and the pool arithmetic in this module's
+    docstring is unchanged.
+    """
+    verifier = EntraTokenVerifier(
+        audience=settings.entra_client_id,
+        issuer=settings.entra_issuer,
+        signing_key=jwks_signing_key_source(settings.entra_jwks_uri),
+    )
+    identity = PrincipalIdentityService(home_tenant_id=settings.entra_tenant_id)
+
+    def authenticate(credential: str | None, document: Mapping[str, Any]) -> Principal:
+        claims = verifier.claims(_bearer_token(credential))
+        declared = document.get(PAYLOAD_KEY)
+        payload = declared if isinstance(declared, Mapping) else {}
+        with work_engine.begin() as connection:
+            authenticated = identity.authenticate(
+                connection, claims=claims, payload=payload, now=datetime.now(UTC)
+            )
+        return Principal(
+            principal_id=capture_principal_id(authenticated.account.principal_id),
+            kind=PrincipalKind.OPERATOR,
+            authenticated=True,
+        )
+
+    return authenticate
+
+
 @dataclass(frozen=True, slots=True)
 class GatewayRuntime:
     """The application, the principal, and the two engines behind them.
@@ -152,7 +268,15 @@ class GatewayRuntime:
     """
 
     service: ApplicationService
-    principal: Principal
+    #: The one process principal, in `local_operator` mode, and `None` in
+    #: `entra` mode — where there is no process principal at all, because every
+    #: request carries its own. `None` rather than a leftover local operator, so
+    #: a transport composed with the wrong field in the authenticated mode fails
+    #: at composition instead of serving every caller as the operator.
+    principal: Principal | None
+    #: How a request is authenticated, in `entra` mode, and `None` in
+    #: `local_operator` mode. Exactly one of this and `principal` is set.
+    authenticate: Authenticator | None
     work_engine: Engine
     audit_engine: Engine
 
@@ -176,12 +300,14 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     def unit_of_work() -> UnitOfWork:
         return SqlAlchemyUnitOfWork(work_engine, audit=audit)
 
+    entra = settings.auth_mode is AuthMode.ENTRA
     return GatewayRuntime(
         service=ApplicationService(
             unit_of_work=unit_of_work,
             limits=settings.effective_limits(),
         ),
-        principal=local_principal(),
+        principal=None if entra else local_principal(),
+        authenticate=entra_authenticator(settings, work_engine) if entra else None,
         work_engine=work_engine,
         audit_engine=audit_engine,
     )

@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { SESSION_COOKIE_NAME, verifySession } from "@/lib/auth/session";
+import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
+import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { msalSeamConfig } from "@/lib/auth/msal.config";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +14,7 @@ export const metadata = { title: "System — my-pa" };
  */
 export default async function SystemPage() {
   const cookieStore = await cookies();
-  const principal = await verifySession(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+  const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
 
   const msal = msalSeamConfig();

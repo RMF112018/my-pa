@@ -116,7 +116,11 @@ _SOURCE_PROVIDER_NOTICE = (
 def _run(args: argparse.Namespace) -> int:
     settings = load_settings()
     runtime = build_gateway_runtime(settings)
-    application = create_http_app(runtime.service, principal=runtime.principal)
+    application = (
+        create_http_app(runtime.service, principal=runtime.principal)
+        if runtime.authenticate is None
+        else create_http_app(runtime.service, authenticate=runtime.authenticate)
+    )
     server = uvicorn.Server(
         uvicorn.Config(
             application,
@@ -159,6 +163,20 @@ def _mcp(args: argparse.Namespace) -> int:
     """
     settings = load_settings()
     runtime = build_gateway_runtime(settings)
+    if runtime.principal is None:
+        # `entra` mode authenticates per request from a bearer token, and stdio
+        # has nowhere to present one. Refused rather than served as the local
+        # operator: an operator who configured authentication and then reached
+        # every capability without a token would have been given the opposite of
+        # what they asked for.
+        runtime.close()
+        print(
+            "refusing    mcp on stdio carries no credential and MY_PA_AUTH_MODE is 'entra'; "
+            "serve the authenticated surface over HTTP, or set 'local_operator' deliberately",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
     print(f"serving     mcp on stdio as {SERVER_NAME}", file=sys.stderr)
     print(_SOURCE_PROVIDER_NOTICE, file=sys.stderr, flush=True)
     try:

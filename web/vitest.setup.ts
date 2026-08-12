@@ -16,3 +16,15 @@ import "@testing-library/jest-dom/vitest";
  * exists only inside this process.
  */
 process.env.MYPA_SESSION_SECRET ??= "synthetic-test-signing-key-0000000000000000";
+
+/**
+ * The identity provider, supplied explicitly for the same reason.
+ *
+ * `src/lib/auth/mode.ts` has no default: an unset `MYPA_AUTH_MODE` throws
+ * `MissingAuthModeError` rather than assuming the synthetic provider, because
+ * assuming it would give a deployment that had configured nothing a working
+ * passwordless sign-in. The tests that exercise sign-in say which provider they
+ * are signing in against, and `src/app/api/session/route.test.ts` asserts that
+ * the unset and production cases still refuse.
+ */
+process.env.MYPA_AUTH_MODE ??= "synthetic";

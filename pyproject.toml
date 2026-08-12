@@ -145,8 +145,35 @@ classifiers = [
 #                     imported. Removal path: a hand-written JSON-RPC loop over
 #                     stdio, which would mean owning protocol conformance for a
 #                     specification that changes without us.
+#   PyJWT[crypto]     RS256 verification of the Entra bearer tokens
+#                     `MY_PA_AUTH_MODE=entra` requires, confined to
+#                     `infrastructure/security/entra_token.py` the way Starlette
+#                     is confined to the transport. The standard library has no
+#                     JWS implementation, and the defects a hand-written one
+#                     ships with are the alg-confusion family — a token
+#                     declaring `alg: none`, or an HS256 token signed with the
+#                     RSA public key the verifier publishes — which look like
+#                     working code until someone tries them. Floor at 2.10
+#                     because that is what `mcp` already declares, so the two
+#                     resolve together and the `dependency-floor` job installs
+#                     one version rather than a conflict; ceiling at the next
+#                     major. The `crypto` extra is what supplies `cryptography`,
+#                     without which RS256 is unavailable and only HMAC works.
+#                     Maintenance cost is already paid: the distribution is
+#                     installed in every environment today, transitively through
+#                     `mcp`, and declaring it directly is what stops a resolver
+#                     dropping it silently. Security surface: it parses and
+#                     verifies a token this process was handed, and
+#                     `jwt.PyJWKClient` fetches the issuer's published keys over
+#                     `urllib` from the configured URL and from nothing else.
+#                     Removal path: a hand-written JWS verifier over
+#                     `cryptography`, which is installed for the same reason —
+#                     that would mean owning the algorithm allowlist, the key
+#                     selection, and the clock arithmetic, which is exactly where
+#                     this class of defect lives.
 dependencies = [
   "pydantic>=2.12,<3",
+  "PyJWT[crypto]>=2.10,<3",
   "SQLAlchemy>=2.0.20,<3",
   "psycopg[binary]>=3.2,<4",
   "alembic>=1.13,<2",

@@ -70,6 +70,24 @@ public enum NativeSourceProtocolV1 {
     /// Reached means the expansion is refused, not truncated: a series cut
     /// mid-expansion loses occurrences no cursor describes.
     public static let maximumCalendarSeriesOccurrences = 512
+
+    // MARK: - WP-18 contacts bounds
+    //
+    // Two bounds, and both **refuse**. Neither has an honest partial form: a
+    // trimmed identity aliases two people onto one record, and a trimmed
+    // membership list reports "this person is in no other group" where the
+    // source said otherwise. Truncating either is the §28 laundering the
+    // campaign keeps naming.
+
+    /// UTF-8 ceiling on one component of a contact identity. Same doctrine as
+    /// the mail and calendar components: composition is refused, never trimmed.
+    public static let maximumContactsIdentityComponentBytes = 64
+    /// Ceiling on the groups one contact observation may declare membership of
+    /// inside its container. Reached means the observation is **refused**
+    /// (`contactsGroupLimitExceeded`), never silently shortened: membership is
+    /// structure, and a shortened membership list is indistinguishable from a
+    /// person who is genuinely in fewer groups.
+    public static let maximumContactGroupMemberships = 64
 }
 
 /// Source categories supported by protocol v1. These are product categories,
@@ -391,4 +409,15 @@ public enum NativeSourceContractError: Error, Equatable, Sendable {
     case calendarHorizonViolated
     case calendarUnboundedEnumeration
     case calendarOriginalStartUnavailable
+    case contactsIdentityTooLong
+    case contactsInvalidIdentityComponent
+    case contactsIdentityEpochUnavailable
+    case contactsIdentityEpochMismatch
+    case contactsKeySetWidened
+    case contactsMembershipUnavailable
+    case contactsMembershipInconsistent
+    case contactsUnknownGroup
+    case contactsGroupLimitExceeded
+    case contactsTruncationUndeclared
+    case contactsUnboundedEnumeration
 }

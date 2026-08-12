@@ -45,15 +45,21 @@ MANIFEST: Final = HOST / "Package.swift"
 FRAMEWORK_PROBE: Final = HOST / "Compatibility" / "AppleFrameworkCompatibilityProbe"
 MAIL_PROBE: Final = HOST / "Compatibility" / "AppleMailAutomationShapeProbe"
 EVENT_KIT_PROBE: Final = HOST / "Compatibility" / "AppleCalendarEventKitProbe"
+#: WP-18's Contacts shape probe, on the same footing as the other three. Its own
+#: constraints live in `test_wp18_contacts_adapter.py`; it appears here because
+#: the probe *set* is what this module's exemption and count guards are about,
+#: and a probe missing from the set is a directory nothing holds to anything.
+CONTACTS_PROBE: Final = HOST / "Compatibility" / "AppleContactsShapeProbe"
 
-#: The three compile-only probe targets. Each is declared in `Package.swift` on
+#: The four compile-only probe targets. Each is declared in `Package.swift` on
 #: the same footing, each is a dependency of nothing, and each is the only place
 #: its framework may be named.
-PROBES: Final = (FRAMEWORK_PROBE, MAIL_PROBE, EVENT_KIT_PROBE)
+PROBES: Final = (FRAMEWORK_PROBE, MAIL_PROBE, EVENT_KIT_PROBE, CONTACTS_PROBE)
 PROBE_TARGETS: Final = (
     "AppleFrameworkCompatibilityProbe",
     "AppleMailAutomationShapeProbe",
     "AppleCalendarEventKitProbe",
+    "AppleContactsShapeProbe",
 )
 
 MECHANISM: Final = SHIPPING / "CalendarMechanism.swift"
@@ -66,9 +72,31 @@ LEGACY_RECURRENCE: Final = SHIPPING / "Recurrence.swift"
 PROTOCOL: Final = SHIPPING / "NativeSourceProtocolV1.swift"
 
 
+#: A closed `/* … */` span, non-greedy so nested openers do not swallow code.
+BLOCK_COMMENT: Final = re.compile(r"/\*[\s\S]*?\*/")
+
+
 def _without_comments(source: str) -> str:
+    """Drop comment text, keeping every line that also carries code.
+
+    Whole-line `//` prose stays invisible on purpose: a guard that reddens on
+    the paragraph explaining it is a guard somebody deletes.
+
+    Closed `/* … */` **spans** are blanked before that line filter rather than
+    their lines being dropped whole. Dropping the line was fail-open: a comment
+    that ends mid-line leaves code after it, so `/* shape */ <forbidden code>`
+    compiled and was invisible to every text guard here. WP-18's reviewer proved
+    it against this helper's copy in `test_wp18_contacts_adapter.py`, and the
+    helper is shared by WP-15 through WP-18, so all four are corrected together.
+    Blanking preserves newlines, and an opener with no closer still starts its
+    line with `/*` and is dropped as before.
+    """
+    blanked = BLOCK_COMMENT.sub(
+        lambda match: "".join("\n" if character == "\n" else " " for character in match.group(0)),
+        source,
+    )
     return "\n".join(
-        line for line in source.splitlines() if not line.lstrip().startswith(("//", "*", "/*"))
+        line for line in blanked.splitlines() if not line.lstrip().startswith(("//", "*", "/*"))
     )
 
 
@@ -81,7 +109,7 @@ def _probe_files() -> set[Path]:
 
 
 def _swift_outside_the_probes() -> tuple[Path, ...]:
-    """Every Swift file under `native/` except the three compile-only probes.
+    """Every Swift file under `native/` except the four compile-only probes.
 
     Wider than the shipping directory on purpose, and for the reason WP-15's
     correction established: the directory an EventKit import would actually
@@ -198,11 +226,13 @@ def test_the_wp17_scan_is_reading_the_calendar_adapter_at_all() -> None:
     assert scanned | _probe_files() == set(_swift_files(HOST)), (
         "a Swift file under native/ is in neither the EventKit scan nor a probe"
     )
-    # The exemption set is exactly three directories. Widening it again should be
-    # a decision somebody makes here, not a side effect of adding a target.
-    assert len(_probe_files()) == 3, (
+    # The exemption set is exactly four directories. Widening it again should be
+    # a decision somebody makes here, not a side effect of adding a target. It was
+    # three until WP-18 added the Contacts shape probe, and the widening is
+    # recorded in that package's record rather than absorbed silently.
+    assert len(_probe_files()) == 4, (
         f"the compile-only probe set holds {len(_probe_files())} files. Each probe "
-        "is one file and there are three of them; a fourth is a fourth place an "
+        "is one file and there are four of them; a fifth is a fifth place an "
         "Apple framework is permitted, and that is a decision rather than a diff"
     )
 
@@ -700,7 +730,11 @@ def test_the_event_kit_probe_resolves_symbols_and_reaches_no_store() -> None:
 
 
 def test_the_three_probes_are_compile_only_and_never_linked_into_the_host() -> None:
-    """WP-16's count guard, extended to the third probe.
+    """WP-16's count guard, extended to the third probe and then the fourth.
+
+    The name is left alone deliberately: renaming a test changes an identifier
+    other records cite, and the count it enforces is `PROBE_TARGETS`, which is
+    asserted below rather than spelled in the name.
 
     Counted, not walked, for the reason WP-16 recorded after finding out the hard
     way: splitting `Package.swift` on `name: "AppleSourceHost"` lands on the
@@ -714,7 +748,7 @@ def test_the_three_probes_are_compile_only_and_never_linked_into_the_host() -> N
     assert "let package = Package(" in manifest and manifest.count('"AppleSourceHost"') >= 3, (
         "the manifest scan is not reading Package.swift"
     )
-    assert len(PROBE_TARGETS) == 3, "the probe target set stopped naming all three probes"
+    assert len(PROBE_TARGETS) == 4, "the probe target set stopped naming all four probes"
 
     for probe_target in PROBE_TARGETS:
         occurrences = manifest.count(f'"{probe_target}"')

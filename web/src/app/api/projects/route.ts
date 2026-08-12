@@ -41,6 +41,13 @@ function toBackendProject(row: PythonProject): BackendProject {
   };
 }
 
+const SCOPE = "projects";
+
+const NO_CAPABILITY =
+  "Projects has no backend capability. A principal-scoped Project read model exists in " +
+  "PostgreSQL, but no member of the v1 capability set exposes it over the gateway, and " +
+  "adding one requires widening a frozen audit CHECK constraint by migration.";
+
 export async function GET(request: NextRequest) {
   const guard = await requirePrincipal(request);
   if (!guard.ok) return guard.response;

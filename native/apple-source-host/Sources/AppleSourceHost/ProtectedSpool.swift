@@ -407,6 +407,11 @@ public final class ProtectedSpool: @unchecked Sendable {
             let names = try directoryNames(rootDescriptor)
                 .filter { $0.hasSuffix(".tmp") }
                 .sorted()
+            let current = try inventoryUnlocked()
+            let quarantine = current.items.filter { $0.state == .quarantine }
+            var projectedQuarantineCount = quarantine.count
+            var projectedQuarantineBytes = quarantine.reduce(0, { $0 + $1.byteCount })
+            var recovery: [(source: String, destination: String)] = []
             for source in names {
                 let stem = String(source.dropLast(".tmp".count))
                 guard let envelopeID = NativeSourceOpaqueID(rawValue: stem) else {
@@ -417,28 +422,26 @@ public final class ProtectedSpool: @unchecked Sendable {
                     throw ProtectedSpoolError.pathCollision
                 }
                 let sourceBytes = try safeBytes(in: rootDescriptor, name: source)
-                let current = try inventoryUnlocked()
-                let quarantine = current.items.filter { $0.state == .quarantine }
-                guard quarantine.count < limits.maximumQuarantineItems else {
+                projectedQuarantineCount += 1
+                guard projectedQuarantineCount <= limits.maximumQuarantineItems else {
                     throw ProtectedSpoolError.quarantineItemCapacityExceeded
                 }
-                let quarantineBytes = quarantine.reduce(0, { $0 + $1.byteCount })
-                guard quarantineBytes
-                    <= limits.maximumQuarantineBytes - Int64(sourceBytes.count)
-                else {
+                projectedQuarantineBytes += Int64(sourceBytes.count)
+                guard projectedQuarantineBytes <= limits.maximumQuarantineBytes else {
                     throw ProtectedSpoolError.quarantineByteCapacityExceeded
                 }
+                recovery.append((source: source, destination: destination))
+            }
+            for candidate in recovery {
                 guard renameatx_np(
                     rootDescriptor,
-                    source,
+                    candidate.source,
                     quarantineDescriptor,
-                    destination,
+                    candidate.destination,
                     UInt32(RENAME_EXCL)
                 ) == 0 else {
                     throw ProtectedSpoolError.filesystemFailure(errno)
                 }
-            }
-            if !names.isEmpty {
                 try syncDirectory(rootDescriptor)
                 try syncDirectory(quarantineDescriptor)
             }

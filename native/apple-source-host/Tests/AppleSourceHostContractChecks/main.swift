@@ -975,6 +975,47 @@ struct AppleSourceHostContractChecks {
             "Count-refused recovery did not retain the crash residue"
         )
 
+        let batchDirectory = temporaryDirectory("crash-quarantine-batch")
+        defer { try? FileManager.default.removeItem(at: batchDirectory) }
+        let batchSpool = try ProtectedSpool(
+            directory: batchDirectory,
+            limits: try ProtectedSpoolLimits(
+                maximumItems: 2,
+                maximumBytes: 32_000,
+                maximumPayloadBytes: 4,
+                maximumQuarantineItems: 2,
+                maximumQuarantineBytes: 32_000
+            )
+        )
+        let batchRetained = try spoolItem("batch-retained", payload: [1])
+        try require(
+            try batchSpool.enqueue(batchRetained) == .enqueued,
+            "Crash batch fixture did not enqueue its retained item"
+        )
+        try batchSpool.quarantine(batchRetained.envelopeID)
+        let batchFirst = try spoolItem("batch-crash-a", payload: [2])
+        let batchSecond = try spoolItem("batch-crash-b", payload: [3])
+        try requireSpoolError(.injectedCrash) {
+            try batchSpool.enqueue(batchFirst, fault: .afterTemporarySync)
+        }
+        try requireSpoolError(.injectedCrash) {
+            try batchSpool.enqueue(batchSecond, fault: .afterTemporarySync)
+        }
+        try requireSpoolError(.quarantineItemCapacityExceeded) {
+            try batchSpool.recoverResidues()
+        }
+        let refusedBatch = try batchSpool.inventory()
+        try require(
+            refusedBatch.items.filter { $0.state == .quarantine }.map(\.envelopeID)
+                == [batchRetained.envelopeID],
+            "Batch preflight moved a residue before refusing cumulative capacity"
+        )
+        try require(
+            Set(refusedBatch.items.filter { $0.state == .crashResidue }.map(\.envelopeID))
+                == Set([batchFirst.envelopeID, batchSecond.envelopeID]),
+            "Batch preflight did not retain every refused crash residue"
+        )
+
         let fullQuarantineBytesDirectory = temporaryDirectory("crash-quarantine-bytes")
         defer { try? FileManager.default.removeItem(at: fullQuarantineBytesDirectory) }
         let byteRetained = try spoolItem("crash-bytes-a", payload: [1])

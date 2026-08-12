@@ -181,6 +181,15 @@ applies those ceilings before each recovery move and proves both refusal modes
 leave the crash residue retained in place. This BLOCK is historical and cannot
 satisfy the gate.
 
+A ninth independent audit of corrective head
+`525efd4561091ea898f854e235fa98478f45afda` returned BLOCK after verifying the
+recovery ceilings. It found that recovery could rename an early residue and
+then refuse a later one before either directory was synchronized. The next
+corrective head preflights the complete recovery batch before mutation,
+synchronizes both directories after every completed rename, and proves a
+cumulatively over-limit two-residue batch leaves every residue untouched. This
+BLOCK is historical and cannot satisfy the gate.
+
 ## Independent review gate
 
 No statement in this record means `READY_FOR_PILOT_VALIDATION`, independently

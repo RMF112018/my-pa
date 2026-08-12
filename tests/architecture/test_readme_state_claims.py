@@ -290,24 +290,29 @@ def test_wp12_stays_provisional_and_operator_authorized_without_boundary_inferen
     assert "no repository wp-12 exists" not in normalized
 
 
-def test_readme_declares_the_operating_lineage_branch_and_denies_main_authority() -> None:
-    """WP-01 exists to establish exactly this pair; guard both halves of it.
-
-    A stale README predating WP-01 names no operating lineage at all, so both
-    assertions must hold against the actual `## Operating lineage` section
-    rather than anywhere in the file.
-    """
+def test_readme_declares_the_current_remediation_lineage_and_preserves_history() -> None:
+    """Current branch/base authority and the former lineage must not blur."""
     readme = README.read_text(encoding="utf-8")
     assert "## Operating lineage" in readme, "The README's 'Operating lineage' section is gone."
     section = readme.split("## Operating lineage", 1)[1].split("## Current state", 1)[0]
-    assert "recovery/pre-20260805-utc-rollback-c9fb513" in section, (
-        "The README's Operating lineage section no longer names the operating "
-        "lineage branch `recovery/pre-20260805-utc-rollback-c9fb513`."
-    )
-    assert "`main` is not the current operating lineage" in section, (
-        "The README's Operating lineage section no longer states that GitHub's "
-        "default `main` branch is not operating-lineage authority."
-    )
+    assert "bf/pilot-blocker-remediation" in section
+    assert "9b35476b70fe4fbc03bb8f9835d93c1b71089bbe" in section
+    assert "recovery/pre-20260805-utc-rollback-c9fb513" in section
+    assert "campaign history" in section and "no longer current-state authority" in section
+
+
+def test_current_state_docs_name_the_current_capability_and_migration_counts() -> None:
+    """Protect the two exact-state figures that repeatedly went stale."""
+    documents = {
+        "system context": ROOT / "docs" / "architecture" / "system-context.md",
+        "gateway runbook": ROOT / "ops" / "runbooks" / "gateway-operations.md",
+        "MCP runbook": ROOT / "ops" / "runbooks" / "mcp-and-cli-operations.md",
+    }
+    for label, path in documents.items():
+        text = path.read_text(encoding="utf-8")
+        assert "twenty-six" in text, f"{label} lost the current capability count"
+        assert "thirty-four" in text, f"{label} lost the current revision count"
+        assert "b4e8d2c7a613" in text, f"{label} lost the current Alembic head"
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

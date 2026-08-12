@@ -1188,7 +1188,9 @@ worker_heartbeats = Table(
     "worker_heartbeats",
     METADATA,
     Column("worker_owner", Text, primary_key=True),
-    Column("principal_id", Text, nullable=False),
+    # One Entra-mode worker reports the same opaque owner for every Principal
+    # whose stored queue it serves, so the Principal is part of the key.
+    Column("principal_id", Text, primary_key=True),
     Column("plane", Text, nullable=False),
     Column("started_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("heartbeat_at", DateTime(timezone=True), nullable=False, server_default=func.now()),

@@ -1,5 +1,5 @@
 /**
- * Sign-in — synthetic identity provider only.
+ * Sign-in — selected by the deployment's fail-closed identity mode.
  *
  * A **server** component, which it had to become: the set of principals this
  * deployment admits depends on `MYPA_GATEWAY_AUTH_MODE`, and that is server
@@ -11,10 +11,11 @@
  * this screen offers one sign-in. The screen and `POST /api/session` cannot
  * disagree about it, because neither holds its own copy of the list.
  *
- * The real Entra/MSAL flow replaces this screen when a real app registration
- * exists (see `lib/auth/msal.config.ts`).
+ * In Entra mode the page offers one link to the server-side authorization-code
+ * flow. It never imports MSAL Browser, accepts claims, or receives a token.
  */
 import { admissibleSyntheticPrincipals } from "@/lib/auth/synthetic";
+import { authMode } from "@/lib/auth/mode";
 import { SignInForm } from "@/app/sign-in/sign-in-form";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +36,29 @@ import { Badge } from "@/components/ui/badge";
 export const dynamic = "force-dynamic";
 
 export default function SignInPage() {
+  const mode = authMode();
+  if (mode === "entra") {
+    return (
+      <main id="main" className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 p-6">
+        <div className="text-center">
+          <h1 className="text-2xl font-semibold text-moss-green">my-pa</h1>
+          <p className="mt-1 text-sm text-muted">MossAIc personal assistant</p>
+        </div>
+        <Card>
+          <div className="flex items-center justify-between">
+            <CardTitle>Sign in</CardTitle>
+            <Badge>Microsoft Entra</Badge>
+          </div>
+          <CardBody>
+            <p>Continue through the configured home tenant. Identity is derived from the validated callback.</p>
+            <a className="mt-4 inline-flex rounded-md bg-moss-green px-4 py-2 text-white" href="/auth/sign-in">
+              Continue with Microsoft Entra
+            </a>
+          </CardBody>
+        </Card>
+      </main>
+    );
+  }
   const offered = admissibleSyntheticPrincipals().map((p) => ({ key: p.key, label: p.label }));
 
   return (

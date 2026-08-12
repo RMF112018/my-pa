@@ -19,26 +19,26 @@ afterEach(() => {
 
 describe("sign-in scopes", () => {
   it("requests the OIDC set and nothing else by default", () => {
-    vi.stubEnv("NEXT_PUBLIC_MYPA_API_SCOPE", "");
+    vi.stubEnv("MYPA_ENTRA_API_SCOPE", "");
     expect(msalSeamConfig().scopes).toEqual(["openid", "profile", "offline_access"]);
   });
 
   it("carries no Graph resource scope", () => {
-    vi.stubEnv("NEXT_PUBLIC_MYPA_API_SCOPE", "");
+    vi.stubEnv("MYPA_ENTRA_API_SCOPE", "");
     for (const scope of msalSeamConfig().scopes) {
       expect(isGraphScope(scope), `${scope} is a Graph resource scope`).toBe(false);
     }
   });
 
   it("never requests User.Read, which is what made sign-in depend on Graph", () => {
-    vi.stubEnv("NEXT_PUBLIC_MYPA_API_SCOPE", "https://graph.microsoft.com/User.Read");
+    vi.stubEnv("MYPA_ENTRA_API_SCOPE", "https://graph.microsoft.com/User.Read");
     expect(msalSeamConfig().scopes).not.toContain("User.Read");
     expect(msalSeamConfig().scopes).toEqual([...SIGN_IN_SCOPES]);
     expect(apiScope()).toBeNull();
   });
 
   it("adds the application's own API scope when one is configured", () => {
-    vi.stubEnv("NEXT_PUBLIC_MYPA_API_SCOPE", "api://mypa-backend/access_as_user");
+    vi.stubEnv("MYPA_ENTRA_API_SCOPE", "api://mypa-backend/access_as_user");
     expect(msalSeamConfig().scopes).toEqual([...SIGN_IN_SCOPES, "api://mypa-backend/access_as_user"]);
   });
 
@@ -50,7 +50,7 @@ describe("sign-in scopes", () => {
       "User.Read",
       "Mail.ReadWrite",
     ]) {
-      vi.stubEnv("NEXT_PUBLIC_MYPA_API_SCOPE", graph);
+      vi.stubEnv("MYPA_ENTRA_API_SCOPE", graph);
       expect(isGraphScope(graph), `${graph} should be recognised as Graph`).toBe(true);
       expect(apiScope()).toBeNull();
       expect(msalSeamConfig().scopes).toEqual([...SIGN_IN_SCOPES]);
@@ -75,6 +75,9 @@ describe("sign-in scopes", () => {
 const SIGN_IN_PATH_ROOTS = [
   "src/app/sign-in/page.tsx",
   "src/app/api/session/route.ts",
+  "src/app/auth/sign-in/route.ts",
+  "src/app/auth/callback/route.ts",
+  "src/lib/auth/entra-code-flow.ts",
   "src/lib/auth/msal.config.ts",
   "src/lib/auth/mode.ts",
   "src/lib/auth/claims.ts",

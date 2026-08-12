@@ -104,6 +104,7 @@ class SourcePage:
     page_number: int
     observed_at: datetime
     content: bytes = field(repr=False)
+    representation_media_type: str = "application/octet-stream"
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
@@ -112,6 +113,14 @@ class SourcePage:
         validate_identifier(self.source_version_id, IdKind.VERSION)
         if self.page_number < 1 or not self.content:
             raise ValueError("a non-empty source page is required")
+        ensure_utc(self.observed_at)
+        if self.representation_media_type not in {
+            "application/pdf",
+            "image/jpeg",
+            "image/png",
+            "application/octet-stream",
+        }:
+            raise ValueError("unsupported GoodNotes page representation")
 
 
 @dataclass(frozen=True, slots=True)

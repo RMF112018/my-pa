@@ -52,7 +52,10 @@ def record_worker_heartbeat(
     )
     connection.execute(
         statement.on_conflict_do_update(
-            index_elements=[worker_heartbeats.c.worker_owner],
+            index_elements=[
+                worker_heartbeats.c.worker_owner,
+                worker_heartbeats.c.principal_id,
+            ],
             set_={
                 "heartbeat_at": func.now(),
                 "stopped_at": func.now() if stopped else None,

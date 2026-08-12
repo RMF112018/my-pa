@@ -211,6 +211,12 @@ that names it again is refused.
 
 ## Calling a tool
 
+**Current-state correction (2026-08-12):** the tool list is derived from all
+**twenty-six** current capabilities, and the schema has **thirty-four** revisions
+at head `b4e8d2c7a613`. `capabilities.get` also reports content-free
+`worker_planes`. The dated transcript below remains historical evidence for its
+stated head.
+
 Arguments are the same document the HTTP body carries. Observed for
 `capabilities.get` with a valid envelope:
 

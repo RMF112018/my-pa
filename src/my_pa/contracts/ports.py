@@ -144,6 +144,8 @@ __all__ = [
     "TraceRepository",
     "UnitOfWork",
     "UnknownScopeError",
+    "WorkerHealthRepository",
+    "WorkerPlaneStatus",
 ]
 
 
@@ -884,6 +886,25 @@ class SourceProviders(ABC):
         """The provider serving `source_id`, or `None` when none is configured."""
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerPlaneStatus:
+    """Content-free operational state for one Principal's worker plane."""
+
+    plane: str
+    state: str
+    backlog: int
+    dead_lettered: int
+    last_heartbeat_at: datetime | None
+
+
+class WorkerHealthRepository(ABC):
+    """Worker liveness and backlog for the authenticated Principal only."""
+
+    @abstractmethod
+    def for_principal(self, principal_id: str) -> tuple[WorkerPlaneStatus, ...]:
+        """Return both worker planes without identifiers or queued content."""
+
+
 class UnitOfWork(ABC):
     """One transaction, and the repositories that run inside it.
 
@@ -999,6 +1020,16 @@ class UnitOfWork(ABC):
         the canonical PostgreSQL composition overrides this property. A caller
         must treat the absence as an unavailable optional projection, never as
         an empty authoritative result.
+        """
+        raise NotImplementedError
+
+    @property
+    def worker_health(self) -> WorkerHealthRepository:
+        """Content-free worker readiness inside this transaction.
+
+        Kept optional for older test doubles. Production composition overrides
+        it; a caller that meets this default must report health as unavailable,
+        never healthy.
         """
         raise NotImplementedError
 

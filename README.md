@@ -4,7 +4,13 @@
 
 ## Operating lineage
 
-The operating lineage for this repository is `recovery/pre-20260805-utc-rollback-c9fb513` at commit `c9fb513a2afadf98f29b6d5ec3ad69db69e5ec1a` (tree `9975318c731ac6150f251df7bdee5475c3b529d8`), reauthenticated 2026-08-09 as an exact match to the completion plan's planning-time claim. GitHub reporting `main` as the repository's default branch is metadata, not operating-lineage authority; `main` is not the current operating lineage. [`docs/campaign/CAMPAIGN-BRIEF.md`](docs/campaign/CAMPAIGN-BRIEF.md) carries the full branch topology, migration state, and reconciliation posture bound to this head.
+The current pilot-remediation candidate is developed on
+`bf/pilot-blocker-remediation` from authenticated `main` base
+`9b35476b70fe4fbc03bb8f9835d93c1b71089bbe`. The earlier
+`recovery/pre-20260805-utc-rollback-c9fb513` lineage remains preserved as
+campaign history; it is no longer current-state authority. The exact candidate
+head belongs in the pull request and remediation closeout rather than in this
+file, where every commit would immediately stale it.
 
 ## Current state
 
@@ -86,11 +92,25 @@ A third entry stood beside them until WP-6 and is recorded the same way:
   [`docs/operations/mcv-limitations.md`](docs/operations/mcv-limitations.md)
   limitation 2 is where that is disclosed).
 
-Not implemented. None of the following exists beyond a scaffold README:
+Not implemented. The following remains outside this candidate:
 
-- managed documents, GoodNotes ingestion, and Obsidian projection.
+- live activation of personal connectors, production Entra registration, and
+  the Obsidian projection.
 
-A frontend exists under [`web/`](web/README.md): a Next.js App Router PWA (MossAIc) with a synthetic Entra-shaped identity boundary, built across WP-00 through WP-06 of the superseded Moss v4.0 campaign recorded in [`docs/campaign/CAMPAIGN-BRIEF.md`](docs/campaign/CAMPAIGN-BRIEF.md). It runs against synthetic fixtures only — no live Entra tenant, no live Microsoft Graph connector — and it is not deployable. Personal-data ingestion is Apple-first: Apple Mail, Calendar, Contacts, and Tasks/To-Do through the first-party native Apple architecture ([`native/apple-source-host/README.md`](native/apple-source-host/README.md)) are the active ingestion direction. Microsoft Graph is retained in the product definition but **off by default and not an active personal-data ingestion path**; Entra authentication used by the frontend's synthetic identity boundary is a separate concern from Graph connector activation, and a disabled Graph connector must not be reported as a degraded active source.
+A frontend exists under [`web/`](web/README.md): a Next.js App Router PWA
+(MossAIc) whose normal application routes call the Python capability gateway.
+It supports the synthetic development provider and a server-side Entra
+authorization-code + PKCE callback/session path; no caller supplies a Principal
+and the gateway bearer stays in the server-side session registry. The flow is
+verified with synthetic MSAL results only — no live tenant credential or live
+personal data was used — and the candidate is not deployed. Personal-data
+Personal-data ingestion is Apple-first: Apple Mail, Calendar, Contacts, and Tasks/To-Do through
+the first-party native Apple architecture
+([`native/apple-source-host/README.md`](native/apple-source-host/README.md)) are
+the active ingestion direction. Microsoft Graph is retained in the product
+definition but **off by default and not an active personal-data ingestion path**;
+Entra authentication is a separate concern from Graph connector activation, and a
+disabled Graph connector must not be reported as a degraded active source.
 
 Accordingly, `capabilities.get` reports every capability `available` and
 readiness `ready`, while PDF still reports `decision_gated` pending

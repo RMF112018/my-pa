@@ -131,6 +131,12 @@ curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
        "payload":{}}'
 ```
 
+**Current-state correction (2026-08-12):** the candidate has **twenty-six**
+capabilities and **thirty-four** Alembic revisions at head `b4e8d2c7a613`.
+`capabilities.get` now also returns `worker_planes`; backlog without a live
+heartbeat is `worker_absent`/`worker_stale`, never silently healthy. The dated
+transcript below remains historical evidence for its stated head.
+
 **Re-executed 2026-08-03**, against a disposable database at head
 `1a4c9e77b2d5`, because WP-6 changed what this answers. Observed: `200`,
 `content-type: application/json`, and an envelope whose `result.manifest` lists

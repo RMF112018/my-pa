@@ -54,7 +54,19 @@ This document refines the accepted foundation in ADR-001 and ADR-002. It does no
 ### 3.1 Authenticated current repository state
 
 
-The current repository is no longer a documentation-only scaffold; that sentence was true when this document was authored and is not true now. The `my_pa` package implements the public `v1` contracts, the domain identity, policy, audit, source, extraction, and search models, PostgreSQL persistence for the source registry, bounded enrollment, jobs, extraction, quarantine, coverage, and lexical search, and a read-only fixture source provider. WP-6 added the user-authored capture domain and its five `knowledge` tables, which `ADR-003` makes a third authority class rather than a source-system write. Alembic owns the schema history at twenty-one revisions, head `d2e3f4a5b6c7` — re-derived from `migrations/versions/` on the operating lineage `recovery/pre-20260805-utc-rollback-c9fb513`, where the figure written here previously (eleven revisions, head `1a4c9e77b2d5`) had been stale since the WP-00 through WP-06 revisions landed. This paragraph said next that composition still did not exist — no application service binding a capability, and no gateway, worker, or transport process running. That is no longer true either: WP-4A wired the first eight capability use cases behind one entry point and WP-6 brought the total to twelve, WP-4B1 through WP-4B2b made `apps/gateway.py` and `apps/worker.py` real processes serving HTTP and MCP, and WP-4B3 gave the worker an extraction executor and `apps/cli/` an operator command that registers a source, which is what the slice needed to run end to end. [`../../README.md`](../../README.md) holds the current inventory and is the file to correct when this drifts again.
+The repository is an executable local candidate, not a documentation scaffold.
+The `my_pa` application exposes twenty-six capabilities through HTTP, MCP, and
+CLI composition, with PostgreSQL Principal partitioning and two worker planes.
+Alembic owns thirty-four revisions at head `b4e8d2c7a613`, including the merge of
+the retained native-baseline and managed-document histories. The web BFF calls
+those capabilities, supports a server-side Entra authorization-code + PKCE
+session path without exposing its bearer, and publishes content-free worker
+backlog/liveness states through `capabilities.get` and System. Apple personal
+sources remain first-party and Graph remains off by default.
+
+Historical note: the earlier figures (eleven, then twenty-one revisions; eight,
+then twelve capabilities) were accurate at their dated work-package heads. They
+are preserved in campaign records and are not current-state claims.
 
 
 ### 3.2 MCV target context

@@ -1,9 +1,16 @@
 # `web/` — MossAIc frontend shell
 
-**Status:** four of the seven acceptance surfaces are wired to the Python
-gateway; three are not, and this file says which and why. The synthetic fixture
-provider is off unless explicitly configured, and in a default build no route and
-no page can produce fixture data at all.
+**Status (current candidate, 2026-08-12):** normal Capture, Library, Review,
+Reveal, Pulse, Project, Situation, relationship, and System surfaces call the
+Python gateway; the synthetic fixture provider remains an explicit development
+mode. Entra mode uses a Node-only authorization-code + PKCE start/callback path,
+validates state and nonce, issues an HttpOnly app session, and keeps the gateway
+bearer out of the cookie and browser. Tests use an injected synthetic MSAL result;
+live registration and activation remain operator-gated.
+
+The `WP-nn` narrative below is retained as delivery history. Where it describes
+a surface as synthetic-only or not wired, this current-state notice and the
+route code take precedence.
 
 The Next.js (App Router) progressive web app for `my-pa`, decided by
 [`docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md`](../docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md).
@@ -34,9 +41,10 @@ Delivered:
 - A **synthetic identity provider** (`src/lib/auth/synthetic.ts`) with two fixed
   development principals in a synthetic tenant — narrowed to **one** whenever the
   gateway runs `local_operator` and therefore has one identity (`D-15`; see
-  "`MYPA_GATEWAY_AUTH_MODE`" below). No live Entra registration, tenant id,
-  or personal data anywhere. The real MSAL wiring has a configuration seam
-  (`src/lib/auth/msal.config.ts`) and is inert until one exists.
+  "`MYPA_GATEWAY_AUTH_MODE`" below), plus a server-only Entra authorization-code
+  path (`src/lib/auth/entra-code-flow.ts`, `src/app/auth/`) that is inert until
+  complete server configuration exists. No live tenant or personal data is in
+  the repository.
 - **Canonical TypeScript contracts** (`src/contracts/`) — parity mirror of the Python
   contract and domain vocabulary; see `src/contracts/README.md`.
 - **Capture**, wired to the durable `capture.create` path, with the four outcomes
@@ -568,7 +576,7 @@ every server component that needs a principal goes through. Do not call
 `src/lib/auth/msal.config.ts` asked for `User.Read` until WP-05, which is a Graph
 resource scope and therefore a Graph consent dependency on the sign-in path.
 Sign-in now requests `openid`, `profile`, `offline_access`, plus the
-application's own API scope when `NEXT_PUBLIC_MYPA_API_SCOPE` names one — and a
+application's own API scope when server-only `MYPA_ENTRA_API_SCOPE` names one — and a
 value that points at Graph is dropped rather than honoured.
 `src/lib/auth/msal.config.test.ts` holds that, and holds that no module on the
 sign-in path imports or starts a Graph connector, delta worker, or webhook.

@@ -82,6 +82,8 @@ from my_pa.contracts.ports import (
     SourceRepository,
     UnitOfWork,
     UnknownScopeError,
+    WorkerHealthRepository,
+    WorkerPlaneStatus,
 )
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.capture.reveal import Reveal
@@ -136,6 +138,7 @@ from my_pa.infrastructure.persistence.situation_repository import (
     SqlSituationRepository,
 )
 from my_pa.infrastructure.persistence.tables import JobState
+from my_pa.infrastructure.persistence.worker_health import worker_plane_health
 from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
 
 __all__ = ["SqlAlchemyUnitOfWork"]
@@ -259,6 +262,33 @@ class _Operations(OperationQueue):
                 # subject is a version.
                 enrollment_id=found.subject_id,
                 state=_public_state(found.state),
+            )
+
+        return _read(statement)
+
+
+class _WorkerHealth(WorkerHealthRepository):
+    """The two content-free worker-plane reads on this transaction."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def for_principal(self, principal_id: str) -> tuple[WorkerPlaneStatus, ...]:
+        def statement() -> tuple[WorkerPlaneStatus, ...]:
+            return tuple(
+                WorkerPlaneStatus(
+                    plane=health.plane,
+                    state=health.state,
+                    backlog=health.backlog,
+                    dead_lettered=health.dead_lettered,
+                    last_heartbeat_at=health.last_heartbeat_at,
+                )
+                for health in (
+                    worker_plane_health(
+                        self._connection, principal_id=principal_id, plane_name=plane
+                    )
+                    for plane in ("capture", "enrollment")
+                )
             )
 
         return _read(statement)
@@ -635,6 +665,10 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def continuity_read(self) -> ContinuityReadRepository:
         return SqlContinuityReadRepository(self._open)
+
+    @property
+    def worker_health(self) -> WorkerHealthRepository:
+        return _WorkerHealth(self._open)
 
     @property
     def managed_documents(self) -> ManagedDocumentRepository:

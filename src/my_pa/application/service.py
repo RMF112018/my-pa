@@ -187,7 +187,7 @@ from my_pa.contracts.ports import (
     UnitOfWork,
     UnknownScopeError,
 )
-from my_pa.contracts.v1.capabilities import EffectiveLimits
+from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
 from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
 from my_pa.contracts.v1.disclosure import Disclosure, SourceReference, Truncation
 from my_pa.contracts.v1.documents import (
@@ -757,10 +757,59 @@ class ApplicationService:
         manifest = build_capability_manifest(
             implemented=self.available_capabilities, limits=self._limits
         )
+        try:
+            worker_planes = [
+                {
+                    "plane": plane.plane,
+                    "state": plane.state,
+                    "backlog": plane.backlog,
+                    "dead_lettered": plane.dead_lettered,
+                    "last_heartbeat_at": (
+                        None
+                        if plane.last_heartbeat_at is None
+                        else plane.last_heartbeat_at.isoformat()
+                    ),
+                }
+                for plane in unit_of_work.worker_health.for_principal(
+                    authorization.principal.principal_id
+                )
+            ]
+        except NotImplementedError:
+            # Older/in-memory compositions have no worker plane. Unknown is not
+            # healthy and cannot silently become it.
+            worker_planes = [
+                {
+                    "plane": plane,
+                    "state": "unavailable",
+                    "backlog": None,
+                    "dead_lettered": None,
+                    "last_heartbeat_at": None,
+                }
+                for plane in ("capture", "enrollment")
+            ]
+        readiness = build_readiness_report(manifest)
+        unhealthy_workers = [
+            plane
+            for plane in worker_planes
+            if plane["state"] == "unavailable"
+            or (plane["state"] in {"worker_absent", "worker_stale"} and plane["backlog"])
+            or (isinstance(plane["dead_lettered"], int) and plane["dead_lettered"] > 0)
+        ]
+        if unhealthy_workers:
+            readiness = ReadinessReport(
+                state=ReadinessState.DEGRADED,
+                implemented_capabilities=readiness.implemented_capabilities,
+                limitations=(
+                    *readiness.limitations,
+                    "Worker-plane health is unavailable, stale, absent for queued work, or "
+                    "reports dead-lettered work; inspect worker_planes.",
+                ),
+            )
         return _Result(
             payload={
                 "manifest": manifest.to_canonical_dict(),
-                "readiness": build_readiness_report(manifest).to_canonical_dict(),
+                "readiness": readiness.to_canonical_dict(),
+                "worker_planes": worker_planes,
             },
             disclosure=unenrolled_disclosure(authorization.at),
         )

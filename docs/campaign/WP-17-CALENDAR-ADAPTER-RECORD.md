@@ -1,5 +1,15 @@
 # WP-17 — Apple Calendar Live Adapter
 
+> **Current-head correction (2026-08-12 pilot remediation).** This historical
+> record accurately describes WP-17's original proof, but its statements that no
+> EventKit mechanism exists in the repository are no longer current. The
+> separately bounded `AppleSourceHostPlatform` product now contains an injected,
+> read-only EventKit mechanism and inert composition. It creates no store,
+> requests no TCC grant, names no mutation, and repository validation reads no
+> live calendar. The framework-free core and all original adapter refusals remain.
+> Current candidate scope and external gates are recorded in
+> `PILOT-BLOCKER-REMEDIATION-20260812.md`.
+
 Branch: `bf/wp-17-apple-calendar-adapter`. Base: `fd333da46a20447d67b99c115023a7a9bdc41464`.
 
 This record states what WP-17 proved, **at what level it proved it**, and what it

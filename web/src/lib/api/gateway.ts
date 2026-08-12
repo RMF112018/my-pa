@@ -216,8 +216,8 @@ function requestHeaders(principal: PrincipalSession):
     failure: unavailable(
       "no_forwardable_credential",
       "MYPA_GATEWAY_AUTH_MODE is 'entra', so the gateway requires a bearer token, and " +
-        "this tier's session carries none — no real Entra sign-in is implemented here. " +
-        "The request is refused rather than sent unauthenticated or with a fabricated token.",
+        "this tier's current server-side session carries none. The request is refused " +
+        "rather than sent unauthenticated or with a fabricated token.",
     ),
   };
 }

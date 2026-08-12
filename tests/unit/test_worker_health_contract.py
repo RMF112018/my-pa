@@ -23,3 +23,7 @@ def test_worker_heartbeat_is_content_free_and_principal_scoped() -> None:
         "heartbeat_at",
         "stopped_at",
     }
+    assert [column.name for column in worker_heartbeats.primary_key.columns] == [
+        "worker_owner",
+        "principal_id",
+    ]

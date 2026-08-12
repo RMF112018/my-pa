@@ -74,7 +74,11 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const outcome = await callGateway<{ manifest: unknown; readiness: unknown }>(
+  const outcome = await callGateway<{
+    manifest: unknown;
+    readiness: unknown;
+    worker_planes: unknown;
+  }>(
     guard.principal,
     "capabilities.get",
   );
@@ -83,7 +87,11 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     ...identity,
     dataProvider: "backend",
-    backend: { manifest: outcome.result.manifest, readiness: outcome.result.readiness },
+    backend: {
+      manifest: outcome.result.manifest,
+      readiness: outcome.result.readiness,
+      workerPlanes: outcome.result.worker_planes,
+    },
     connectedSources: null,
     disclosure: backendDisclosure(SCOPE, outcome.disclosure, [
       SOURCES_UNKNOWN,

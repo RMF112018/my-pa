@@ -1,7 +1,7 @@
 # Apple source host protocol boundary
 
-This Swift 6.2 package is the WP-12D synthetic native-host foundation for Apple
-Mail, Calendar, and Contacts source reads. It retains WP-12A's frozen protocol
+This Swift 6.2 package is the native-host foundation for Apple Mail, Calendar,
+Contacts, and Tasks source reads. It retains WP-12A's frozen protocol
 identifier `my-pa.native-source.v1`, provider-neutral immutable values, three
 read-only adapter protocols, and deterministic synthetic adapters.
 
@@ -68,20 +68,35 @@ WP-16 adds the Mail adapter, over a mechanism seam rather than over a framework:
   compiles no script and **sends no Apple event**. Its table is checked against
   Apple's own `Mail.sdef` by the repository's architecture tests.
 
-**Neither probe is a dependency of anything else in this package**, so the
-shipping target still links no Apple framework. See
+**Neither probe is a dependency of anything else in this package**, so probes
+remain compile-only. The framework-free `AppleSourceHost` target still links no
+Apple personal-data framework. The separately named shipping product
+`AppleSourceHostPlatform` now links EventKit and Contacts and contains the
+production-shaped, read-only Calendar and Contacts mechanisms; it depends only
+on the framework-free core. See
 `docs/campaign/WP-16-MAIL-ADAPTER-RECORD.md` for the mechanism matrix and for why
 Apple Mail automation cannot be scoped to reading.
 
 The package declares `platforms: [.macOS(.v13)]` because `SMAppService` is macOS
 13+ and MailKit is macOS 12+.
 
-The package has no external dependency and its production target imports no
-Apple personal-data framework. It does not request permissions, inspect a live
-account, install or activate a service, open a network or database connection,
-or mutate a source. Its synthetic adapters are contract fixtures, not evidence
-that a live adapter is feasible. The spool stores only explicitly supplied
-handoff bytes and has no application, database, or network client.
+The package has no external package dependency. Its platform target accepts
+injected `EKEventStore` and `CNContactStore` values, observes authorization,
+uses EventKit's bounded event predicate, requests only the Contacts identifier
+and structural-type keys, preserves container/group membership, and maps into
+the same bounded adapters used by fixtures. Its composition initializer creates
+no store, requests no permission, registers no observer, and performs no read.
+It carries Calendar/Contacts change-notification names as inert watcher signals.
+Mail remains explicitly unavailable in this platform composition because macOS
+offers no public read store API and ScriptingBridge cannot enforce read-only
+access; Graph and automation are not silent substitutes.
+
+No repository validation inspects a live account. TCC grants, signing,
+installation, service/watcher activation, application admission, persistence,
+and live data remain operator-gated. Neither platform mechanism names a save,
+remove, commit, save request, consent request, database, network client, or
+source mutation. The spool stores only explicitly supplied handoff bytes and has
+no application, database, or network client.
 
 Run its bounded validation with:
 
@@ -110,6 +125,6 @@ ordering. Repository
 architecture tests independently scan dependencies, imports, configuration and
 public surfaces.
 
-Live framework adapters, TCC, signing/notarization, registration, application
-admission, persistence, watchers, service activation, and deployment remain
-outside this package and require their owning later slice and authority.
+TCC, signing/notarization, registration, live store construction, application
+admission, persistence, watcher registration, service activation, and
+deployment remain outside this package and require exact operator authority.

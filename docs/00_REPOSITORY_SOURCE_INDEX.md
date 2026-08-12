@@ -24,7 +24,7 @@ The operating lineage for this repository is `recovery/pre-20260805-utc-rollback
 - [`docs/architecture/system-context.md`](architecture/system-context.md) — actors, external systems, trust and authority boundaries.
 - [`docs/architecture/module-boundaries.md`](architecture/module-boundaries.md) — module ownership, dependency direction, and split triggers.
 - [`docs/architecture/data-authority.md`](architecture/data-authority.md) — data ownership, authority, lifecycle, and disclosure.
-- [`native/apple-source-host/README.md`](../native/apple-source-host/README.md) — WP-12D's source-built Swift protocol-v1 synthetic host: immutable versioned discovery/preflight/read envelopes, deterministic Mail/Calendar/Contacts adapters, bounded recurrence identity, and an owner-only atomic bounded spool; no live Apple framework, permission, activation, database, network, application admission, or source-mutation authority.
+- [`native/apple-source-host/README.md`](../native/apple-source-host/README.md) — source-built Swift protocol-v1 core plus separately bounded `AppleSourceHostPlatform` shipping product: deterministic fixtures, injected read-only EventKit Calendar and minimum-key Contacts mechanisms, explicit Mail public-read limitation, Tasks, recurrence identity, and owner-only atomic spool; no live store construction, permission request, activation, database, network, or source-mutation authority.
 - [`web/README.md`](../web/README.md) — Next.js/PWA runtime, development modes, and validation commands.
 - [`web/src/contracts/README.md`](../web/src/contracts/README.md) — frontend contract ownership and generated-shape boundary.
 
@@ -67,6 +67,7 @@ Also indexed by identity only: the **Native Apple Personal Data Capture Bridge**
 Running the local candidate on one machine. A procedure under `ops/runbooks/` is written only after it has been executed; deployment, production activation, and destructive data operations remain operator-gated (`AGENTS.md` section 5).
 
 - [`docs/operations/mcv-limitations.md`](operations/mcv-limitations.md) — what the MCV slice does **not** do, each limitation citing the test or measurement that bounds it. Read this before reading the runbooks as a statement of capability.
+- [`docs/operations/goodnotes-local-source.md`](operations/goodnotes-local-source.md) — manifest-indexed read-only GoodNotes source, bounded local OCR JSON contract, provenance/Review/search flow, and operator-gated live boundaries.
 - [`ops/runbooks/README.md`](../ops/runbooks/README.md) — owning index for the operational runbooks: the database, the worker, the gateway, the other two transports, and the end-to-end operator sequence.
 - [`apps/cli/README.md`](../apps/cli/README.md) — the four operator programs: the capability transport, the source configuration plane, the runtime probe, and the migration control plane.
 - [`ops/postgres/README.md`](../ops/postgres/README.md) — the PostgreSQL instance itself: image, tuning, locale, collation contract, cluster-creation settings, and reset procedure.

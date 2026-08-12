@@ -67,8 +67,10 @@ import threading
 from collections.abc import Mapping
 from types import FrameType, MappingProxyType
 
+from sqlalchemy import select
+
 from my_pa.bootstrap.gateway import local_principal
-from my_pa.bootstrap.settings import load_settings
+from my_pa.bootstrap.settings import AuthMode, load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs.capture_pipeline import process_capture_version
 from my_pa.infrastructure.jobs.extraction import extract_enrollment
@@ -81,6 +83,7 @@ from my_pa.infrastructure.jobs.worker import (
     run_worker,
 )
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, ENROLLMENT_JOBS, JobPlane
+from my_pa.infrastructure.persistence.tables import JobState
 from my_pa.infrastructure.persistence.worker_health import record_worker_heartbeat
 
 #: The two planes this process can serve, and the handler each one's work needs.
@@ -134,17 +137,35 @@ def _run(args: argparse.Namespace) -> int:
     owner = issue_worker_owner()
     stop = threading.Event()
     _install_stop_handlers(stop)
-    principal_id = local_principal().principal_id
+    # Local/synthetic operation intentionally remains one partition. Entra mode
+    # consumes the Principal already stamped on each queued row; no command-line
+    # flag or request is allowed to name a Principal.
+    principal_id = (
+        local_principal().principal_id if settings.auth_mode is AuthMode.LOCAL_OPERATOR else None
+    )
+    heartbeat_principals: set[str] = {principal_id} if principal_id is not None else set()
 
     def heartbeat(*, stopped: bool = False) -> None:
         with engine.begin() as connection:
-            record_worker_heartbeat(
-                connection,
-                owner=owner,
-                principal_id=principal_id,
-                plane=args.plane,
-                stopped=stopped,
-            )
+            if not stopped:
+                heartbeat_principals.update(
+                    str(value)
+                    for value in connection.scalars(
+                        select(plane.table.c.principal_id)
+                        .where(
+                            plane.table.c.state.in_([JobState.QUEUED.value, JobState.RUNNING.value])
+                        )
+                        .distinct()
+                    )
+                )
+            for heartbeat_principal in heartbeat_principals:
+                record_worker_heartbeat(
+                    connection,
+                    owner=owner,
+                    principal_id=heartbeat_principal,
+                    plane=args.plane,
+                    stopped=stopped,
+                )
 
     try:
         heartbeat()
@@ -153,12 +174,9 @@ def _run(args: argparse.Namespace) -> int:
             owner=owner,
             handler=handler,
             stop=stop,
-            # The Principal this process acts as, derived from the durable
-            # local-operator binding by `bootstrap.gateway` — the same value the
-            # gateway presents, and the same one across restarts. A worker
-            # claims its own Principal's work and no one else's (WP-04); there
-            # is no flag for this, because a flag would be a caller naming a
-            # partition.
+            # Local mode is fixed to the process Principal. Entra mode is the
+            # trusted global consumer described above; either way there is no
+            # caller-controlled Principal argument.
             principal_id=principal_id,
             plane=plane,
             max_iterations=1 if args.once else args.max_iterations,

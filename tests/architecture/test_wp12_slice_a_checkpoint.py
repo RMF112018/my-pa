@@ -83,11 +83,15 @@ def test_native_v1_target_has_no_live_or_mutating_surface() -> None:
         path.read_text(encoding="utf-8")
         for path in sorted((NATIVE_PACKAGE / "Sources").rglob("*.swift"))
     )
+    framework_free_core = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((NATIVE_PACKAGE / "Sources" / "AppleSourceHost").rglob("*.swift"))
+    )
 
     assert ".package(" not in package
     assert NativeSourceProtocolIdentifier.value in sources
     for fragment in NativeSourceProtocolIdentifier.forbidden_fragments:
-        assert fragment not in sources
+        assert fragment not in framework_free_core
 
 
 class NativeSourceProtocolIdentifier:

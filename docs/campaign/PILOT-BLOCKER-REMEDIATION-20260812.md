@@ -36,11 +36,11 @@ capability, not merged wholesale:
 |---|---|---|
 | recovery lineage and WP-03 through WP-13 | PORT / ALREADY_PRESENT | identity, Principal partitioning, durable Capture, Entra-ready gateway, offline/remote Capture, Reveal, continuity, relationships, and PWA surfaces share one runtime |
 | WP-12E frozen baseline | PORT with ancestry reconciliation | admitted-page-bound baseline/checkpoint behavior retained; the merge revision joins it to managed documents without DDL |
-| WP-15 through WP-18 | PORT | source-built native host and bounded read-only Mail, Calendar, and Contacts adapters retained |
+| WP-15 through WP-18 | PORT + CLOSE GAP | source-built core and bounded adapters retained; separately bounded shipping target now implements injected EventKit Calendar and minimum-key Contacts mechanisms; Mail's missing public read API remains explicit |
 | missing Tasks/To Do, watcher, and operations deltas | REIMPLEMENT | Tasks adapter/probe, bounded watcher/cursor/backoff/calendar horizon, retry/dead-letter and worker-liveness semantics added on the candidate |
 | WP-23 and WP-27 | PORT | PKL/coverage and managed-document planes retained with Principal and read/write-root separation |
 | WP-28 | PORT | stdio Frontier MCP thin adapter, kill switch, conformance and filesystem-race controls retained |
-| GoodNotes and bounded model gate | REIMPLEMENT | read-only fixture source, stable page/version/region provenance, Review/correction/search, model-off default, proposal-only output, prompt-injection and semantic gates added |
+| GoodNotes and bounded model gate | REIMPLEMENT | read-only manifest-indexed local source, bounded no-shell OCR seam plus deterministic fixture, stable page/version/region provenance, production composition, Review/correction/search, model-off default, proposal-only output, prompt-injection and semantic gates added |
 | `bf/extractions-quarantined-debt`, `bf/mcv-neutral-remainder`, Dependabot | PRESERVE_ONLY / SUPERSEDED | no unique blocker-closing behavior remains outside this candidate; no wholesale merge performed |
 
 ## Blocker closure matrix
@@ -50,8 +50,8 @@ capability, not merged wholesale:
 | 001 — durable Quick Capture | web Capture calls the authenticated BFF, which invokes `capture.create`; PostgreSQL commits source/version/submission/receipt/job before success; replay/conflict/restart and two-Principal behavior remain structural | capture transaction, remote transaction, recovery, cross-Principal, web gateway and route tests |
 | 002 — incoherent lineage | one selective candidate, one 34-revision history, DDL-free branch merge, head `b4e8d2c7a613`; retained lines classified above | Alembic heads, empty/head/round-trip/denotation tests, this record and PR ancestry |
 | 003 — synthetic/stub normal UI | normal Capture, Library, Review, Reveal, Pulse, Projects, Situations, Frames, Trace, commitments, decisions, tasks and relationship timeline call backend capabilities; synthetic data remains opt-in test/dev | web route/gateway/session tests, TypeScript/lint, optimized Next.js build |
-| 004 — Apple plane incomplete | source-built Swift host; bounded read-only Mail, Calendar, Contacts and Tasks; application admission; frozen baseline; reconciliation; cursor watcher; overlap, rolling calendar horizon, pause and bounded failure semantics | 37 Swift contract checks, EventKit compile probe, Python native-source/baseline/watcher/schema tests; no live TCC claim |
-| 005 — knowledge/tool set | PKL coverage and lexical/evidence retrieval, model-off proposal gate, GoodNotes Review/search, managed-document version/idempotency/archive/restore, and stdio Frontier MCP are integrated | database, model, GoodNotes, managed-document, MCP and security/conformance tests |
+| 004 — Apple plane incomplete | source-built Swift core and separately bounded platform product; real read-only EventKit Calendar and minimum-key Contacts mechanisms; explicit unsupported Mail public-read status; Tasks, application admission, frozen baseline, reconciliation, cursor watcher, overlap, rolling calendar horizon, pause and bounded failure semantics | Swift build/contract checks and platform architecture guards; Python native-source/baseline/watcher/schema tests; no store construction, live data, or TCC claim |
+| 005 — knowledge/tool set | PKL coverage and lexical/evidence retrieval, model-off proposal gate, manifest-indexed GoodNotes source, bounded local OCR, stable provenance, Review/search, managed-document version/idempotency/archive/restore, and stdio Frontier MCP are integrated | local-source/OCR/reconciliation tests, database, model, managed-document, MCP and security/conformance tests |
 | 006 — offline/remote/operations | Principal-bound encrypted offline queue and replay controls, dedicated remote Capture credential plane and iOS Shortcut fixture, retry/dead-letter, worker heartbeat health, statement timeouts, backup/restore rehearsal and runbooks | web offline tests, remote socket/database tests, worker/recovery/health tests, restored database at exact Alembic head |
 
 ## Safety and external prerequisites
@@ -75,10 +75,10 @@ Validation is against synthetic fixtures and disposable PostgreSQL only. The
 final exact totals, commit/tree, PR identity, and independent-review result are
 recorded in the PR and final implementation report. At implementation closeout:
 
-- Ruff and mypy pass across 174 typed source files; 2,464 architecture guards
+- Ruff and mypy pass across 211 typed source files; 2,485 architecture guards
   pass;
-- 5,214 non-schema Python tests and 274 schema/migration tests pass;
-- web unit (287 tests), lint, TypeScript, optimized production build, and
+- 5,242 non-schema Python tests and 274 schema/migration tests pass;
+- web unit (294 tests), lint, TypeScript, optimized production build, and
   browser E2E (69 passed, 1 conditional skip) pass;
 - Swift builds and `AppleSourceHostContractChecks` passes 37 checks;
 - empty-to-head, revision round-trip, migration denotation, database,

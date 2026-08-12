@@ -38,6 +38,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 PACKAGE: Final = ROOT / "src" / "my_pa"
 HOST: Final = ROOT / "native" / "apple-source-host"
 SHIPPING: Final = HOST / "Sources" / "AppleSourceHost"
+PLATFORM_SHIPPING: Final = HOST / "Sources" / "AppleSourceHostPlatform"
 PROBE: Final = HOST / "Compatibility" / "AppleFrameworkCompatibilityProbe"
 #: WP-17's EventKit shape probe. Held out of control 1's scan for the same reason
 #: `PROBE` is, and on the same terms: it is compile-only, it is a dependency of
@@ -254,11 +255,19 @@ def test_the_shipping_host_holds_no_write_path_into_an_apple_source() -> None:
     for path in _swift_outside_the_probe():
         source = _without_comments(path.read_text(encoding="utf-8"))
         named = sorted(symbol for symbol in MUTATING_APPLE_SURFACE if symbol in source)
+        if PLATFORM_SHIPPING in path.parents:
+            named = [
+                symbol
+                for symbol in named
+                if symbol
+                not in {"import EventKit", "import Contacts", "EKEventStore", "CNContactStore"}
+            ]
         if named:
             offenders[str(path.relative_to(ROOT))] = named
     assert offenders == {}, (
-        f"{offenders} name a mutating Apple symbol or a personal-data framework "
-        "import. WP-15's first control is that the host can read an Apple source "
+        f"{offenders} name a mutating Apple symbol or an unbounded personal-data "
+        "framework import. The platform mechanism target may name only the two "
+        "read stores; WP-15's first control is that the host can read an Apple source "
         "and cannot mutate one; naming one of these ends that property whether or "
         "not the call site is reached today, and whether or not the file sits in "
         "the shipping target directory"

@@ -226,6 +226,7 @@ class LeasedJob(NamedTuple):
 
     operation_id: str
     subject_id: str
+    principal_id: str
     attempt: int
     lease_expires_at: datetime
 
@@ -303,7 +304,7 @@ def enqueue_job(
 
 
 def reap_abandoned_jobs(
-    connection: Connection, *, principal_id: str, plane: JobPlane = ENROLLMENT_JOBS
+    connection: Connection, *, principal_id: str | None, plane: JobPlane = ENROLLMENT_JOBS
 ) -> int:
     """Fail every job whose worker abandoned its final attempt. Returns the count.
 
@@ -316,11 +317,17 @@ def reap_abandoned_jobs(
     worker stopped being available before it reported anything. Claiming to know
     more than that would be a guess written into the record.
     """
-    validate_identifier(principal_id, IdKind.PRINCIPAL)
+    if principal_id is not None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+    partition = (
+        true()
+        if principal_id is None
+        else partition_criterion(plane.table, capture_context(principal_id))
+    )
     statement = (
         plane.table.update()
         .where(
-            partition_criterion(plane.table, capture_context(principal_id)),
+            partition,
             _abandoned(plane),
         )
         .values(
@@ -340,7 +347,7 @@ def claim_job(
     *,
     owner: str,
     lease_seconds: int,
-    principal_id: str,
+    principal_id: str | None,
     plane: JobPlane = ENROLLMENT_JOBS,
     respect_retry_schedule: bool = False,
 ) -> LeasedJob | None:
@@ -357,7 +364,8 @@ def claim_job(
     the convergence has to happen.
     """
     _validate_owner(owner)
-    validate_identifier(principal_id, IdKind.PRINCIPAL)
+    if principal_id is not None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
     if not 1 <= lease_seconds <= MAX_LEASE_SECONDS:
         raise ValueError(f"lease_seconds must be between 1 and {MAX_LEASE_SECONDS}")
 
@@ -365,13 +373,20 @@ def claim_job(
 
     table = plane.table
     retry_due = table.c.next_attempt_at <= func.now() if respect_retry_schedule else true()
-    # Both halves carry the partition. The subquery so the row this worker locks
-    # is one of its own Principal's rather than the table's oldest — a claim that
-    # selected globally and filtered on update would take no other Principal's
-    # row, but would queue behind one, which is the same starvation the global
-    # FIFO caused. The UPDATE so nothing can be leased outside the partition even
-    # if the subquery is later changed.
-    mine = partition_criterion(table, capture_context(principal_id))
+    # In local mode both halves carry the partition. The subquery therefore
+    # locks one of that Principal's rows rather than a foreign oldest row. In
+    # Entra worker mode both halves deliberately carry `true()`, and the trusted
+    # process receives the row's stored Principal in the RETURNING result.
+    # `None` is reserved to the trusted worker composition root in Entra mode:
+    # it lets one process consume each stored Principal's queue without binding
+    # the process to the local synthetic Principal. The claimed row returns its
+    # own stored principal and every handler derives ownership from the stored
+    # subject; request/transport callers still have no global read or claim.
+    mine = (
+        true()
+        if principal_id is None
+        else partition_criterion(table, capture_context(principal_id))
+    )
     claimable = (
         select(table.c.operation_id)
         .where(
@@ -406,18 +421,22 @@ def claim_job(
         .returning(
             table.c.operation_id,
             table.c[plane.subject],
+            table.c.principal_id,
             table.c.attempt_count,
             table.c.lease_expires_at,
         )
     )
-    row: Row[tuple[str, str, int, datetime]] | None = connection.execute(statement).one_or_none()
+    row: Row[tuple[str, str, str, int, datetime]] | None = connection.execute(
+        statement
+    ).one_or_none()
     if row is None:
         return None
     return LeasedJob(
         operation_id=str(row[0]),
         subject_id=str(row[1]),
-        attempt=int(row[2]),
-        lease_expires_at=row[3],
+        principal_id=str(row[2]),
+        attempt=int(row[3]),
+        lease_expires_at=row[4],
     )
 
 

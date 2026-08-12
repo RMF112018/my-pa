@@ -44,6 +44,7 @@ from my_pa.contracts.v1.native_sources import (
 ROOT: Final = Path(__file__).resolve().parents[2]
 HOST: Final = ROOT / "native" / "apple-source-host"
 SHIPPING: Final = HOST / "Sources" / "AppleSourceHost"
+PLATFORM_SHIPPING: Final = HOST / "Sources" / "AppleSourceHostPlatform"
 MANIFEST: Final = HOST / "Package.swift"
 
 FRAMEWORK_PROBE: Final = HOST / "Compatibility" / "AppleFrameworkCompatibilityProbe"
@@ -483,7 +484,7 @@ CONTACTS_MUTATION_SURFACE: Final = (
     "import ContactsUI",
     "CNContactViewController",
     "CNContactPickerViewController",
-    "CNContactStoreDidChange",
+    "deleteContainer",
     "executeSave",
     "addContact",
     "updateContact",
@@ -495,6 +496,7 @@ CONTACTS_MUTATION_SURFACE: Final = (
     "removeMember",
     "addSubgroup",
     "removeSubgroup",
+    "updateContainer",
     "requestAccess",
 )
 
@@ -532,7 +534,12 @@ def test_no_swift_in_the_native_tree_constructs_a_contact_store() -> None:
         if "CNContactStore" not in source:
             continue
         name = str(path.relative_to(ROOT))
-        for pattern, what in CONTACT_STORE_CONSTRUCTION:
+        construction_patterns = (
+            CONTACT_STORE_CONSTRUCTION[:2]
+            if PLATFORM_SHIPPING in path.parents
+            else CONTACT_STORE_CONSTRUCTION
+        )
+        for pattern, what in construction_patterns:
             found = re.search(pattern, source)
             assert found is None, (
                 f"{name} {what} (`{found.group(0) if found else ''}`). No Swift file "
@@ -552,10 +559,13 @@ def test_no_swift_in_the_native_tree_constructs_a_contact_store() -> None:
         naming[name] = sorted(named)
 
     # Non-vacuity: the loop above skips files that never name the type, so it is
-    # worth nothing unless some file does. Two do, and both are compile-only probes.
+    # worth nothing unless some file does. Two are probes; the other two are the
+    # bounded platform mechanism/composition and may only receive injected stores.
     assert sorted(naming) == [
         "native/apple-source-host/Compatibility/AppleContactsShapeProbe/ContactsShape.swift",
         "native/apple-source-host/Compatibility/AppleFrameworkCompatibilityProbe/FrameworkCompatibility.swift",
+        "native/apple-source-host/Sources/AppleSourceHostPlatform/ContactsStoreMechanism.swift",
+        "native/apple-source-host/Sources/AppleSourceHostPlatform/PlatformAppleSourceComposition.swift",
     ], f"the Swift files naming a contact store are now {sorted(naming)}"
 
 

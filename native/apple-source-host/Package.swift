@@ -13,9 +13,17 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "AppleSourceHost", targets: ["AppleSourceHost"]),
+        // The production-shaped macOS mechanism layer.  It links EventKit and
+        // Contacts and is inert until an operator-owned process supplies stores
+        // and invokes it.  The core protocol target remains framework-free.
+        .library(name: "AppleSourceHostPlatform", targets: ["AppleSourceHostPlatform"]),
     ],
     targets: [
         .target(name: "AppleSourceHost"),
+        .target(
+            name: "AppleSourceHostPlatform",
+            dependencies: ["AppleSourceHost"]
+        ),
         // OD-COMP-009 compile-only compatibility probe. Deliberately NOT a
         // dependency of `AppleSourceHost`: the shipping module must keep linking
         // none of these frameworks while every `swift build` still re-proves that

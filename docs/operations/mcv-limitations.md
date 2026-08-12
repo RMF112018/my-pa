@@ -49,22 +49,27 @@ about a measurement taken for this document name the database and the date.
 
 ---
 
-## 1. One local principal, loopback only, and no authentication mechanism
+## 1. Authentication is implemented; live Entra activation is not proven
 
-The gateway binds `127.0.0.1` and has no option to bind elsewhere. No credential
-is issued, read, or required; no TLS is configured; no ingress is activated.
-`P00-OD-010` — which authentication mechanism this uses — is **open** and
-reserved to the operator, and `D-30` builds the capture endpoint behind that
-boundary rather than exposing it.
+The local gateway still binds `127.0.0.1` and configures either an explicit
+`local_operator` mode or an Entra bearer-verification mode. The web BFF now has a
+Node-only Entra authorization-code + PKCE start/callback/session path. It checks
+state and nonce, derives identity from MSAL-validated claims, keeps the access
+token in the server session registry, and forwards it only from server to
+gateway. No browser request or payload supplies a Principal or bearer.
 
-**Do not read this as "authentication is not needed yet".** Read it as: there is
-exactly one principal, it is the process, and there is nothing to authenticate
-*against*.
+What remains unproven is live activation: there is no repository credential,
+tenant registration, public ingress, TLS termination, or live-tenant test. The
+authorization-code protocol is tested with an injected synthetic MSAL result;
+the Python verifier is tested with synthetic signed JWTs. Do not turn either
+into a claim that a tenant is configured or production-ready.
 
 Evidence: `apps/gateway.py`, `src/my_pa/bootstrap/gateway.py`,
-`PHASE-00-OPEN-DECISION-LEDGER.md`.
+`web/src/lib/auth/entra-code-flow.ts`,
+`web/src/lib/auth/entra-session.test.ts`,
+`tests/security/test_entra_authentication.py`.
 
-## 2. The local operator is one durable principal; live multi-principal identity is still not wired to the runtime
+## 2. Multi-principal runtime wiring exists; live tenant operation remains unproven
 
 **Rewritten 2026-08-05 (WP-03, `PKL-MYPA-D-WP03-001`).** This limitation was
 headed "ownership survives only as long as the serving process", and that was
@@ -80,12 +85,11 @@ CLI invocation, a gateway process, a gateway process after a restart — acts as
 composes two runtimes over one database and asserts the identifiers are equal
 and that the second runtime revises and reads what the first wrote.
 
-Nothing can still be supplied an identity from outside: the envelope's
-`principal_id` is correlation input (`contracts/v1/envelope.py`,
-`application/service.py`), `apps/cli/invoke.py` refuses a `--principal` option
-deliberately, and a capture admission whose payload names a principal other
-than the authenticated one is refused as `CallerSuppliedPrincipalError`
-(MU-AC-02).
+No caller can supply the acting identity: the envelope's `principal_id` remains
+correlation input (`contracts/v1/envelope.py`, `application/service.py`),
+`apps/cli/invoke.py` refuses a `--principal` option, and a capture admission
+whose payload names a principal is refused. In Entra mode identity instead
+arrives through the separately validated bearer boundary.
 
 **Captures are now owner-scoped.** `capture.read`, `capture.list`,
 `capture.search` and the revise path of `capture.create` resolve against the
@@ -98,18 +102,15 @@ limitation argued that adding the owner check would make `QC-AC-013` unprovable
 across processes; that was true only while the owner died with its process, and
 the durable binding is what made both halves hold at once.
 
-**What still blocks: no live identity reaches the serving runtime.** The
-identity plane (`identity.user_accounts`, WP-01) mints durable principals from
-validated Entra claims, and the capture plane partitions on whatever
-authenticated principal it is handed — but the gateway composition still hands
-it only the local operator, because `P00-OD-010` (which authentication
-mechanism fronts this) is **open** and reserved to the operator, and `D-30`
-refuses ingress. Cross-principal isolation is proven on synthetic principals
-(`tests/security/test_cross_principal_capture_isolation.py`), not on live ones.
+**What changed in the remediation candidate.** In Entra mode the gateway derives
+the acting Principal from a validated `(tid, oid)` token and the trusted worker
+consumes the Principal already stamped on each queue row instead of binding the
+process to `local_principal`. Local mode remains fixed to the durable local
+operator. Cross-principal reads remain partitioned, and the worker has no CLI or
+request argument that can name a partition.
 
-**Invalidation trigger: operator resolution of `P00-OD-010`.** That decision
-supplies the mechanism that puts a second authenticated principal in front of
-the runtime; the enforcement it would rely on is already in place and tested.
+**What still blocks:** no live tenant credential or personal data has exercised
+this chain. Production registration and activation are operator-gated.
 
 Recorded as `D-67` and `D-72` in `docs/plans/mcv-completion-plan.md`, both now
 superseded by `PKL-MYPA-D-WP03-001` (`docs/decisions/ADR-005-principal-partitioned-capture.md`).
@@ -119,6 +120,7 @@ Evidence: `src/my_pa/bootstrap/gateway.py`,
 `src/my_pa/infrastructure/persistence/capture.py`,
 `tests/capture/test_owner_is_the_partition.py::test_a_capture_created_by_one_runtime_is_revised_and_read_by_another`,
 `tests/security/test_cross_principal_capture_isolation.py`,
+`tests/concurrency/test_worker_lease_loop.py::test_entra_worker_consumes_rows_for_distinct_stored_principals_without_rebinding`,
 `ops/runbooks/end-to-end-operations.md`.
 
 ## 3. The corpus is four synthetic objects, and nothing has been proven wider

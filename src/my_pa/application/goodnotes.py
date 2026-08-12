@@ -24,8 +24,11 @@ class ReadOnlyGoodNotesSource(Protocol):
 
 
 class PageTranscriber(Protocol):
-    name: str
-    version: str
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def version(self) -> str: ...
 
     def transcribe(self, page: SourcePage) -> tuple[TranscribedRegion, ...]: ...
 
@@ -62,6 +65,8 @@ class ReconciliationConflictError(ValueError):
 
 
 class GoodNotesService:
+    maximum_pages_per_reconciliation = 500
+
     def reconcile(
         self,
         *,
@@ -75,6 +80,13 @@ class GoodNotesService:
         if not idempotency_key or len(idempotency_key) > 200:
             raise ValueError("a bounded idempotency key is required")
         inventory = source.inventory(principal_id)
+        if len(inventory) > self.maximum_pages_per_reconciliation:
+            raise ValueError("the GoodNotes inventory exceeds the reconciliation bound")
+        identity_keys = [(page.source_object_id, page.page_number) for page in inventory]
+        if len(identity_keys) != len(set(identity_keys)):
+            raise ValueError("the GoodNotes inventory repeats a page identity")
+        if identity_keys != sorted(identity_keys):
+            raise ValueError("the GoodNotes inventory is not canonically ordered")
         fingerprint = _inventory_fingerprint(inventory, transcriber)
         prior = repository.receipt(principal_id, idempotency_key)
         if prior is not None:
@@ -102,7 +114,13 @@ class GoodNotesService:
             page_id = issue_stable_id(
                 "gnpg", source_page.source_object_id, str(source_page.page_number)
             )
-            version_id = issue_stable_id("gnver", page_id, source_page.source_version_id, digest)
+            version_id = issue_stable_id(
+                "gnver",
+                page_id,
+                source_page.source_version_id,
+                source_page.representation_media_type,
+                digest,
+            )
             pages.append(
                 GoodNotesPage(
                     page_id=page_id,
@@ -178,7 +196,8 @@ def _inventory_fingerprint(inventory: tuple[SourcePage, ...], transcriber: PageT
     for page in inventory:
         digest.update(
             f"{page.principal_id}\x1f{page.source_id}\x1f{page.source_object_id}\x1f"
-            f"{page.source_version_id}\x1f{page.page_number}\x1f".encode()
+            f"{page.source_version_id}\x1f{page.page_number}\x1f"
+            f"{page.representation_media_type}\x1f".encode()
         )
         digest.update(hashlib.sha256(page.content).digest())
     return digest.hexdigest()

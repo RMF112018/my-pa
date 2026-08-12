@@ -26,11 +26,10 @@ Two things are proved, and they are different claims:
    the transport rather than restated: `metadata.principal_id` is correlation
    input and is read by nothing.
 
-**`local_operator` mode is the mode under test, and that is deliberate.** It is
-what a BFF deployment can actually run today: `POST /api/session` on the web tier
-implements no real Entra sign-in, so no session there holds a bearer token to
-forward, and the BFF refuses `entra` mode rather than sending an unauthenticated
-request or minting one. The isolation claim proved here is therefore "a stated
+**`local_operator` mode is the mode under test, and that is deliberate.** The
+server-side Entra authorization-code path is covered with a synthetic MSAL
+exchange in the web suite; this process test instead isolates the credentialless
+local composition. The isolation claim proved here is therefore "a stated
 identity changes nothing", which is the claim that holds in both modes — not "two
 principals are partitioned", which this mode cannot express and which this test
 does not assert.
@@ -300,3 +299,16 @@ def test_capabilities_get_reports_the_manifest_the_system_route_publishes(
         contract["capabilities"]
     ), "the manifest does not name every capability the BFF is allowed to address"
     assert result["readiness"]["implemented_capabilities"] > 0
+    assert {plane["plane"] for plane in result["worker_planes"]} == {
+        "capture",
+        "enrollment",
+    }
+    states = {plane["state"] for plane in result["worker_planes"]}
+    assert states <= {"idle_or_not_required", "worker_absent"}
+    if "worker_absent" in states:
+        assert result["readiness"]["state"] == "degraded"
+        assert any(
+            plane["backlog"] > 0
+            for plane in result["worker_planes"]
+            if plane["state"] == "worker_absent"
+        )

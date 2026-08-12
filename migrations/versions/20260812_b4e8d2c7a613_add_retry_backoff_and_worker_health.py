@@ -41,14 +41,15 @@ def upgrade() -> None:
           ON knowledge.capture_jobs (principal_id, state, next_attempt_at, created_at);
 
         CREATE TABLE knowledge.worker_heartbeats (
-          worker_owner text PRIMARY KEY
+          worker_owner text
             CHECK (worker_owner ~ '^[A-Za-z0-9_-]{4,64}$'),
           principal_id text NOT NULL
             CHECK (principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'),
           plane text NOT NULL CHECK (plane IN ('capture', 'enrollment')),
           started_at timestamptz NOT NULL DEFAULT now(),
           heartbeat_at timestamptz NOT NULL DEFAULT now(),
-          stopped_at timestamptz
+          stopped_at timestamptz,
+          PRIMARY KEY (worker_owner, principal_id)
         );
         CREATE INDEX worker_heartbeats_by_principal_plane
           ON knowledge.worker_heartbeats (principal_id, plane, heartbeat_at);

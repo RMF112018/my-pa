@@ -74,20 +74,29 @@ export interface MsalSeamConfig {
  * through configuration instead of through code.
  */
 export function apiScope(): string | null {
-  const configured = process.env.NEXT_PUBLIC_MYPA_API_SCOPE?.trim();
+  // Server-side BFF flow. A gateway scope is configuration, but it is not a
+  // browser setting and therefore deliberately has no NEXT_PUBLIC_ prefix.
+  const configured = process.env.MYPA_ENTRA_API_SCOPE?.trim();
   if (!configured || isGraphScope(configured)) return null;
   return configured;
 }
 
 export function msalSeamConfig(): MsalSeamConfig {
-  const clientId = process.env.NEXT_PUBLIC_MYPA_ENTRA_CLIENT_ID ?? "";
-  const tenantId = process.env.NEXT_PUBLIC_MYPA_ENTRA_TENANT_ID ?? "";
+  const clientId = process.env.MYPA_ENTRA_CLIENT_ID ?? "";
+  const tenantId = process.env.MYPA_ENTRA_HOME_TENANT_ID ?? "";
+  const redirectUri = process.env.MYPA_ENTRA_REDIRECT_URI ?? "";
+  const hasCredential = (process.env.MYPA_ENTRA_CLIENT_SECRET?.trim().length ?? 0) > 0;
   const own = apiScope();
   return {
     clientId,
     authority: tenantId ? `https://login.microsoftonline.com/${tenantId}` : "",
-    redirectUri: "/auth/callback",
+    redirectUri,
     scopes: own ? [...SIGN_IN_SCOPES, own] : [...SIGN_IN_SCOPES],
-    enabled: clientId.length > 0 && tenantId.length > 0,
+    enabled:
+      clientId.length > 0 &&
+      tenantId.length > 0 &&
+      redirectUri.length > 0 &&
+      hasCredential &&
+      own !== null,
   };
 }

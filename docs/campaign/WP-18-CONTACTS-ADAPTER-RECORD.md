@@ -1,5 +1,15 @@
 # WP-18 — Apple Contacts Live Adapter
 
+> **Current-head correction (2026-08-12 pilot remediation).** This historical
+> record accurately describes WP-18's original proof, but its statements that no
+> Contacts mechanism exists in the repository are no longer current. The
+> separately bounded `AppleSourceHostPlatform` product now contains an injected,
+> minimum-key Contacts mechanism and inert composition. It creates no store,
+> requests no TCC grant, names no save surface, and repository validation reads
+> no live contact. The identity epoch remains application-supplied because the
+> framework publishes none. Current scope and external gates are recorded in
+> `PILOT-BLOCKER-REMEDIATION-20260812.md`.
+
 Branch: `bf/wp-18-apple-contacts-adapter`. Base: `06282a3d29e978ef8ec4ddd1fa79d2eedef67c0a`.
 
 This record states what WP-18 proved, **at what level it proved it**, and what it

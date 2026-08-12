@@ -69,6 +69,14 @@ interface Readiness {
   readonly limitations?: readonly string[];
 }
 
+interface WorkerPlane {
+  readonly plane?: string;
+  readonly state?: string;
+  readonly backlog?: number | null;
+  readonly dead_lettered?: number | null;
+  readonly last_heartbeat_at?: string | null;
+}
+
 const READINESS_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
   ready: "green",
   degraded: "gold",
@@ -99,13 +107,18 @@ export default async function SystemPage() {
 
   const outcome = synthetic
     ? null
-    : await callGateway<{ manifest?: Manifest; readiness?: Readiness }>(
+    : await callGateway<{
+        manifest?: Manifest;
+        readiness?: Readiness;
+        worker_planes?: readonly WorkerPlane[];
+      }>(
         principal,
         "capabilities.get",
       );
 
   const manifest = outcome?.ok ? outcome.result.manifest : undefined;
   const readiness = outcome?.ok ? outcome.result.readiness : undefined;
+  const workerPlanes = outcome?.ok ? outcome.result.worker_planes : undefined;
   const available = (manifest?.capabilities ?? []).filter(
     (entry) => entry.availability === "available",
   );
@@ -276,6 +289,29 @@ export default async function SystemPage() {
                   </ul>
                 </>
               ) : null}
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardTitle>Background workers</CardTitle>
+            <CardBody>
+              {workerPlanes && workerPlanes.length > 0 ? (
+                <ul className="space-y-2" data-testid="system-worker-planes">
+                  {workerPlanes.map((plane) => (
+                    <li key={plane.plane ?? "unknown"}>
+                      <strong>{plane.plane ?? "unknown"}</strong>: {plane.state ?? "unknown"}
+                      {typeof plane.backlog === "number" ? ` — ${plane.backlog} queued/running` : ""}
+                      {typeof plane.dead_lettered === "number"
+                        ? `, ${plane.dead_lettered} dead-lettered`
+                        : ""}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p role="alert" data-testid="system-worker-planes-unknown">
+                  Worker-plane health is unavailable. This is not reported as healthy.
+                </p>
+              )}
             </CardBody>
           </Card>
 

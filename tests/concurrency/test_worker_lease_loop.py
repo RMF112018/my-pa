@@ -43,7 +43,7 @@ from typing import Final
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, Engine, text
+from sqlalchemy import Connection, Engine, func, select, text
 from sqlalchemy.engine import make_url
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
@@ -74,7 +74,15 @@ from my_pa.infrastructure.persistence.jobs import (
     job_state,
 )
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
-from my_pa.infrastructure.persistence.tables import DEFAULT_MAX_ATTEMPTS, JobState
+from my_pa.infrastructure.persistence.tables import (
+    DEFAULT_MAX_ATTEMPTS,
+    JobState,
+    worker_heartbeats,
+)
+from my_pa.infrastructure.persistence.worker_health import (
+    record_worker_heartbeat,
+    worker_plane_health,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -147,7 +155,13 @@ def engine(disposable_database: str) -> Iterator[Engine]:
         built.dispose()
 
 
-def _enqueue(engine: Engine, key: str, *, max_attempts: int = DEFAULT_MAX_ATTEMPTS) -> str:
+def _enqueue(
+    engine: Engine,
+    key: str,
+    *,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    principal_id: str = WORKER_PRINCIPAL,
+) -> str:
     """One source, one observed object, one enrollment, and one queued job."""
     with engine.begin() as connection:
         source = register_source(
@@ -171,7 +185,7 @@ def _enqueue(engine: Engine, key: str, *, max_attempts: int = DEFAULT_MAX_ATTEMP
             connection,
             EnrollmentRequest(
                 source_id=source.source_id,
-                principal_id=WORKER_PRINCIPAL,
+                principal_id=principal_id,
                 purpose=Purpose.BOUNDED_ENROLLMENT,
                 scope=EnrollmentScope(object_ids=(observed.source_object_id,)),
                 media_types=("text/markdown",),
@@ -655,7 +669,7 @@ def test_a_signal_between_the_claim_and_the_work_still_finishes_the_claimed_job(
         *,
         owner: str,
         lease_seconds: int,
-        principal_id: str,
+        principal_id: str | None,
         plane: JobPlane = ENROLLMENT_JOBS,
         respect_retry_schedule: bool = False,
     ) -> LeasedJob | None:
@@ -750,6 +764,93 @@ def test_two_workers_over_one_job_execute_it_once(engine: Engine) -> None:
 
     assert (first.calls, second.calls) == (1, 0)
     assert _limitations(engine) == 1
+
+
+@pytest.mark.database
+def test_entra_worker_consumes_rows_for_distinct_stored_principals_without_rebinding(
+    engine: Engine,
+) -> None:
+    """The trusted global worker consumes stored partitions, never a caller's Principal."""
+    other = "prn_eeee0005eeeeeeeeeeeeeeee00000005"
+    first = _enqueue(engine, "entra-first", principal_id=WORKER_PRINCIPAL)
+    second = _enqueue(engine, "entra-second", principal_id=other)
+    seen: list[tuple[str, str]] = []
+
+    def record(worker_engine: Engine, job: LeasedJob, owner: str) -> None:
+        seen.append((job.operation_id, job.principal_id))
+
+    run = run_worker(
+        engine,
+        principal_id=None,
+        owner=issue_worker_owner(),
+        handler=record,
+        stop=threading.Event(),
+        max_iterations=2,
+    )
+
+    assert run.completed == 2
+    assert set(seen) == {(first, WORKER_PRINCIPAL), (second, other)}
+    with engine.connect() as connection:
+        assert job_state(connection, first, principal_id=WORKER_PRINCIPAL) is JobState.SUCCEEDED
+        assert job_state(connection, second, principal_id=other) is JobState.SUCCEEDED
+        assert job_state(connection, first, principal_id=other) is None
+        assert job_state(connection, second, principal_id=WORKER_PRINCIPAL) is None
+
+
+@pytest.mark.database
+def test_backlog_without_a_live_worker_is_never_reported_healthy(engine: Engine) -> None:
+    """Backlog, a live heartbeat, and an explicit stop remain distinguishable."""
+    _enqueue(engine, "health")
+    owner = issue_worker_owner()
+    other = "prn_hhhh0006hhhhhhhhhhhhhhhh00000006"
+    with engine.begin() as connection:
+        absent = worker_plane_health(
+            connection,
+            principal_id=WORKER_PRINCIPAL,
+            plane_name="enrollment",
+        )
+        assert (absent.state, absent.backlog) == ("worker_absent", 1)
+        record_worker_heartbeat(
+            connection,
+            owner=owner,
+            principal_id=WORKER_PRINCIPAL,
+            plane="enrollment",
+        )
+        record_worker_heartbeat(
+            connection,
+            owner=owner,
+            principal_id=other,
+            plane="enrollment",
+        )
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(worker_heartbeats)
+                .where(worker_heartbeats.c.worker_owner == owner)
+            )
+            == 2
+        )
+    with engine.begin() as connection:
+        live = worker_plane_health(
+            connection,
+            principal_id=WORKER_PRINCIPAL,
+            plane_name="enrollment",
+        )
+        assert (live.state, live.backlog) == ("working", 1)
+        record_worker_heartbeat(
+            connection,
+            owner=owner,
+            principal_id=WORKER_PRINCIPAL,
+            plane="enrollment",
+            stopped=True,
+        )
+    with engine.connect() as connection:
+        stopped = worker_plane_health(
+            connection,
+            principal_id=WORKER_PRINCIPAL,
+            plane_name="enrollment",
+        )
+        assert (stopped.state, stopped.backlog) == ("worker_absent", 1)
 
 
 @pytest.mark.database

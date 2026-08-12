@@ -289,7 +289,10 @@ jobs:
     # instead of acting on it. No new marker is introduced — one would need
     # `pyproject.toml` and both `-m` expressions above as well.
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The FULL-tier target remains 15 minutes of test execution. Allow five
+    # additional minutes for checkout, dependency installation, service startup,
+    # and teardown so the job-level timeout does not pre-empt an in-budget suite.
+    timeout-minutes: 20
 
     services:
       postgres:

@@ -184,6 +184,14 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     ),
     "domain/modeling/gate.py": (("item", "principal_id"),),
     "infrastructure/goodnotes/fixture.py": (("page", "principal_id"),),
+    # The admitted manifest's owner is untrusted source metadata. The source
+    # receives the authenticated Principal from the application and selects only
+    # exact matches; GoodNotesService rechecks every returned SourcePage before
+    # deriving or storing an identity.
+    "infrastructure/goodnotes/local.py": (
+        ("entry", "principal_id"),
+        ("entry", "principal_id"),
+    ),
     "infrastructure/persistence/goodnotes.py": (
         ("page", "principal_id"),
         ("receipt", "principal_id"),

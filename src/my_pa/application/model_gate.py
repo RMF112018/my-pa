@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-import queue
-import threading
-from collections.abc import Iterable
+import multiprocessing
+import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Protocol
+from multiprocessing.connection import Connection
+from typing import Protocol, cast
 
 from my_pa.domain.common.identifiers import IdKind, make_identifier, validate_identifier
 from my_pa.domain.modeling.gate import (
@@ -59,6 +60,8 @@ class BoundedModelGate:
         self,
         *,
         route: ModelRoutePolicy = ModelRoutePolicy.DISABLED,
+        provider: StructuredModelProvider | None = None,
+        review_router: CanonicalModelReviewRouter | None = None,
         semantic_gate: SemanticRetrievalGate | None = None,
         timeout_seconds: float = 30.0,
         maximum_proposals: int = 50,
@@ -71,6 +74,12 @@ class BoundedModelGate:
         if not 1 <= maximum_aggregate_bytes <= 1_048_576:
             raise ValueError("model proposal bytes are outside their bound")
         self.route = route
+        if route is not ModelRoutePolicy.DISABLED and (provider is None or review_router is None):
+            raise ValueError(
+                "an enabled model route requires its provider and canonical Review route"
+            )
+        self.provider = provider
+        self.review_router = review_router
         self.semantic_gate = semantic_gate or SemanticRetrievalGate()
         self.timeout_seconds = timeout_seconds
         self.maximum_proposals = maximum_proposals
@@ -78,51 +87,27 @@ class BoundedModelGate:
 
     def invoke(
         self,
-        provider: StructuredModelProvider,
         manifest: ContextManifest,
-        *,
-        review_router: CanonicalModelReviewRouter | None = None,
     ) -> ModelGateOutcome:
         if self.route is ModelRoutePolicy.DISABLED:
             return ModelGateOutcome(state="disabled")
+        provider = self.provider
+        review_router = self.review_router
+        if provider is None or review_router is None:
+            return ModelGateOutcome(state="denied", failure_code="model_route_not_composed")
         if provider.provider_id != manifest.provider_id or provider.model_id != manifest.model_id:
             return ModelGateOutcome(state="denied", failure_code="provider_identity_mismatch")
-        if provider.is_external and not manifest.external_disclosure_allowed:
+        # This route is intentionally local-only. A manifest disclosure flag is
+        # evidence for a future external route, not authority to widen this one.
+        if provider.is_external:
             return ModelGateOutcome(state="denied", failure_code="external_disclosure_denied")
-        if review_router is None:
-            # Model outputs are never returned as free-floating values. Until a
-            # caller supplies the existing canonical Review persistence route,
-            # the optional model path is disabled before provider invocation.
-            return ModelGateOutcome(
-                state="denied", failure_code="canonical_review_route_unavailable"
-            )
-        result: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
-
-        def invoke_bounded() -> None:
-            try:
-                proposals: list[ModelProposal] = []
-                aggregate_bytes = 0
-                for proposal in provider.propose(manifest):
-                    if not isinstance(proposal, ModelProposal):
-                        raise ValueError("model output is not a structured proposal")
-                    proposals.append(proposal)
-                    aggregate_bytes += _proposal_bytes(proposal)
-                    if (
-                        len(proposals) > self.maximum_proposals
-                        or aggregate_bytes > self.maximum_aggregate_bytes
-                    ):
-                        result.put_nowait(("exceeded", ()))
-                        return
-                result.put_nowait(("ok", tuple(proposals)))
-            except Exception:
-                # Provider errors are deliberately collapsed: source text,
-                # prompts and remote error bodies are not safe diagnostics.
-                result.put_nowait(("unavailable", ()))
-
-        threading.Thread(target=invoke_bounded, daemon=True).start()
-        try:
-            state, value = result.get(timeout=self.timeout_seconds)
-        except queue.Empty:
+        deadline = time.monotonic() + self.timeout_seconds
+        state, value = _run_killable(
+            _provider_worker,
+            (provider, manifest, self.maximum_proposals, self.maximum_aggregate_bytes),
+            self.timeout_seconds,
+        )
+        if state == "timeout":
             return ModelGateOutcome(state="unavailable", failure_code="model_timeout")
         if state == "exceeded":
             return ModelGateOutcome(state="denied", failure_code="model_output_exceeded")
@@ -140,9 +125,13 @@ class BoundedModelGate:
             _review_bound(manifest, provider, proposal, ordinal)
             for ordinal, proposal in enumerate(proposals)
         )
-        try:
-            routed = review_router.route(review_bound)
-        except Exception:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return ModelGateOutcome(state="unavailable", failure_code="model_timeout")
+        state, routed = _run_killable(_router_worker, (review_router, review_bound), remaining)
+        if state == "timeout":
+            return ModelGateOutcome(state="unavailable", failure_code="review_route_timeout")
+        if state != "ok" or not isinstance(routed, tuple):
             return ModelGateOutcome(state="unavailable", failure_code="review_route_unavailable")
         if len(routed) != len(review_bound) or any(
             reference.proposal_id != proposal.proposal_id
@@ -151,6 +140,73 @@ class BoundedModelGate:
         ):
             return ModelGateOutcome(state="denied", failure_code="review_route_mismatch")
         return ModelGateOutcome(state="proposed", proposals=routed)
+
+
+def _run_killable(
+    target: Callable[..., None],
+    arguments: tuple[object, ...],
+    timeout_seconds: float,
+) -> tuple[str, object]:
+    """Run external/model work in a process that can be forcibly reaped."""
+    context = multiprocessing.get_context("fork")
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(target=target, args=(*arguments, sender))
+    process.start()
+    sender.close()
+    try:
+        if not receiver.poll(timeout_seconds):
+            process.terminate()
+            process.join(timeout=1)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=1)
+            return ("timeout", ())
+        return cast(tuple[str, object], receiver.recv())
+    except (EOFError, OSError):
+        return ("unavailable", ())
+    finally:
+        receiver.close()
+        if process.is_alive():
+            process.terminate()
+        process.join(timeout=1)
+
+
+def _provider_worker(
+    provider: StructuredModelProvider,
+    manifest: ContextManifest,
+    maximum_proposals: int,
+    maximum_aggregate_bytes: int,
+    sender: Connection,
+) -> None:
+    try:
+        proposals: list[ModelProposal] = []
+        aggregate_bytes = 0
+        for proposal in provider.propose(manifest):
+            if not isinstance(proposal, ModelProposal):
+                raise ValueError("model output is not a structured proposal")
+            proposals.append(proposal)
+            aggregate_bytes += _proposal_bytes(proposal)
+            if len(proposals) > maximum_proposals or aggregate_bytes > maximum_aggregate_bytes:
+                sender.send(("exceeded", ()))
+                return
+        sender.send(("ok", tuple(proposals)))
+    except Exception:
+        sender.send(("unavailable", ()))
+    finally:
+        sender.close()
+
+
+def _router_worker(
+    router: CanonicalModelReviewRouter,
+    proposals: tuple[ReviewBoundModelProposal, ...],
+    sender: Connection,
+) -> None:
+    try:
+        sender.send(("ok", router.route(proposals)))
+    except Exception:
+        sender.send(("unavailable", ()))
+    finally:
+        sender.close()
 
 
 def _proposal_bytes(proposal: ModelProposal) -> int:

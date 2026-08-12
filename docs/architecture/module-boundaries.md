@@ -138,7 +138,7 @@ a README and nothing else.
 
 Two of the three are operator commands and one is a transport, and the split is
 the reason they sit together rather than a reason to separate them. `invoke.py`
-invokes one of the twelve capabilities and therefore composes
+invokes one of the twenty-six capabilities and therefore composes
 `bootstrap.gateway.build_gateway_runtime`, exactly as the served transports do,
 so it cannot differ from them in a limit, a clock, or a principal.
 `migration.py` and `sources.py` invoke none, compose their own engine, and reach

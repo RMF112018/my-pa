@@ -2,7 +2,7 @@
 
 ## Operating lineage
 
-The operating lineage for this repository is `recovery/pre-20260805-utc-rollback-c9fb513` at head `c9fb513a2afadf98f29b6d5ec3ad69db69e5ec1a` (tree `9975318c731ac6150f251df7bdee5475c3b529d8`), reauthenticated 2026-08-09. GitHub's default branch (`main`) is repository metadata, not operating-lineage authority. [`docs/campaign/CAMPAIGN-BRIEF.md`](campaign/CAMPAIGN-BRIEF.md) is the authoritative record of this binding, the recomputed branch topology, and the reconciliation posture toward the other long-lived branches.
+The current remediation candidate is `bf/pilot-blocker-remediation`, forked from authenticated `main@9b35476b70fe4fbc03bb8f9835d93c1b71089bbe`. Its exact moving head/tree and clean-worktree evidence are recorded in PR #73 and the final-state report rather than embedded self-referentially here. The older `recovery/pre-20260805-utc-rollback-c9fb513` lineage remains preserved and is classified in [`docs/campaign/PILOT-BLOCKER-REMEDIATION-20260812.md`](campaign/PILOT-BLOCKER-REMEDIATION-20260812.md); it is no longer the operating candidate.
 
 ## Normative governance
 
@@ -24,7 +24,7 @@ The operating lineage for this repository is `recovery/pre-20260805-utc-rollback
 - [`docs/architecture/system-context.md`](architecture/system-context.md) — actors, external systems, trust and authority boundaries.
 - [`docs/architecture/module-boundaries.md`](architecture/module-boundaries.md) — module ownership, dependency direction, and split triggers.
 - [`docs/architecture/data-authority.md`](architecture/data-authority.md) — data ownership, authority, lifecycle, and disclosure.
-- [`native/apple-source-host/README.md`](../native/apple-source-host/README.md) — source-built Swift protocol-v1 core plus separately bounded `AppleSourceHostPlatform` shipping product: streamed/bounded Calendar and minimum-key Contacts, bounded Tasks, closed ScriptingBridge Mail reads, recurrence identity, and owner-only atomic spool. Its executable can construct the inert production composition and durably spool content-free dry-run receipts from descriptor-relative bounded inputs; it cannot request permission, read a live source during that handoff, activate, reach a database/network, or mutate a source.
+- [`native/apple-source-host/README.md`](../native/apple-source-host/README.md) — source-built Swift protocol-v1 core plus separately bounded `AppleSourceHostPlatform` shipping product: streamed/bounded Calendar and minimum-key Contacts, bounded Tasks, closed ScriptingBridge Mail reads, recurrence identity, and owner-only atomic spool. Its executable has a descriptor-relative content-free dry-run and a distinct expiring-grant, one-page-per-selection read/envelope/handoff lifecycle. It cannot request permission, reach a database/network, or mutate a source; the live path was implemented but not executed.
 - [`web/README.md`](../web/README.md) — Next.js/PWA runtime, development modes, and validation commands.
 - [`web/src/contracts/README.md`](../web/src/contracts/README.md) — frontend contract ownership and generated-shape boundary.
 

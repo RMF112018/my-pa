@@ -139,7 +139,7 @@ def test_current_swift_check_count_and_contacts_implementation_are_documented() 
     assert "ContactsStoreMechanism" in record
 
 
-def test_platform_executable_performs_only_bounded_protected_non_live_handoff() -> None:
+def test_platform_executable_separates_dry_run_from_explicit_authorized_read() -> None:
     main = (HOST / "Sources" / "AppleSourceHostPlatformHost" / "main.swift").read_text(
         encoding="utf-8"
     )
@@ -151,12 +151,30 @@ def test_platform_executable_performs_only_bounded_protected_non_live_handoff() 
         "PlatformAppleSourceComposition(",
         "ProtectedSpool(",
         "protectedNonLiveHandoff(",
+        '"--authorized-single-pass"',
+        '"--authorization-grant"',
+        "authorizedSinglePassHandoff(",
     ):
         assert required in main
     assert "spool.enqueue" in admission
     assert 'handoffState: "production_composition_spooled"' in admission
-    for forbidden in ("authorizationState()", "consentState()", "discoverMail()", "readMail("):
+    for required in (
+        "PlatformAuthorizedReadGrant",
+        "validateAuthorizedRead(",
+        "NativeHostLifecycle(",
+        "NativeReadRequest(",
+        "composition.read(",
+        "NativeAdmissionEnvelope(",
+        "NativeSpoolItem(admissionEnvelope:",
+        'activationState: "authorized_single_pass_complete"',
+    ):
+        assert required in admission
+    for forbidden in ("authorizationState()", "consentState()", "discoverMail()"):
         assert forbidden not in main
+
+    dry_run_branch = main.split("if let grant", 1)[1].split("} else {", 1)[1]
+    assert "protectedNonLiveHandoff(" in dry_run_branch
+    assert "authorizedSinglePassHandoff(" not in dry_run_branch
 
 
 def test_current_docs_name_the_inert_handoff_and_deferred_goodnotes_model_route() -> None:
@@ -168,6 +186,18 @@ def test_current_docs_name_the_inert_handoff_and_deferred_goodnotes_model_route(
     )
     assert "content-free protected receipt" in readme
     assert "closed ScriptingBridge Mail reads" in source_index
-    assert "protected non-live handoff implemented" in context
+    assert "operator-gated single-pass read/handoff implemented" in context
     assert "GoodNotes invokes no model" in goodnotes
-    assert "durable router into the\nexisting canonical Review plane" in goodnotes
+    assert "durable router into the existing canonical\nReview plane" in goodnotes
+    assert "provider and router processes share one killable deadline" in goodnotes
+    assert "status: CURRENT_REPOSITORY_ARCHITECTURE" in context
+    assert "authenticated_head_sha:" not in context
+    assert "NEW_CANDIDATE_NOT_IN_REPOSITORY" not in context
+    assert "current tree SHA, local worktree status" not in context
+
+    cli_source = (ROOT / "apps" / "cli" / "sources.py").read_text(encoding="utf-8")
+    module_boundaries = (ROOT / "docs" / "architecture" / "module-boundaries.md").read_text(
+        encoding="utf-8"
+    )
+    assert "twenty-six" in cli_source and "twelve since WP-6" not in cli_source
+    assert "twenty-six capabilities" in module_boundaries

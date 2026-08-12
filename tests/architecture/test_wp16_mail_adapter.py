@@ -430,6 +430,17 @@ def test_a_mail_body_is_carried_whole_or_omitted_whole_and_never_trimmed() -> No
         )
 
 
+def test_mail_refuses_the_total_message_bound_before_materializing_headers_or_attachments() -> None:
+    source = _source(PLATFORM_MAIL)
+    size_check = source.index("messageSize")
+    headers = source.index("let headers:")
+    attachments = source.index("let attachments =")
+    body = source.index("let body:")
+    assert size_check < headers < attachments < body
+    assert "maximumMailHeaderBytes" in source[size_check:headers]
+    assert "maximumMailBodyBytes" in source[size_check:headers]
+
+
 def test_every_mail_content_bound_is_enforced_on_the_decode_path_too() -> None:
     """WP-15's lesson, applied to the content bounds.
 

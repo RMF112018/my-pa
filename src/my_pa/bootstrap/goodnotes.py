@@ -48,6 +48,7 @@ class LocalGoodNotesRuntime:
             repository = PostgresGoodNotesRepository(connection)
             service.admit(plan, repository)
             prior = repository.receipt(principal_id, idempotency_key)
+            service.require_within_deadline(plan)
         if prior is not None:
             if prior.request_fingerprint != plan.request_fingerprint:
                 raise ReconciliationConflictError(
@@ -69,7 +70,9 @@ class LocalGoodNotesRuntime:
         )
         # The durable transaction starts only after OCR and the proposal gate.
         with engine.begin() as connection:
-            return service.persist(prepared, PostgresGoodNotesRepository(connection))
+            receipt = service.persist(prepared, PostgresGoodNotesRepository(connection))
+            service.require_within_deadline(plan)
+            return receipt
 
 
 def compose_local_goodnotes_runtime(

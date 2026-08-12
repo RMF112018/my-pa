@@ -86,9 +86,11 @@ private func readBounded<T: Decodable>(
 private func run(_ arguments: [String]) throws {
     guard arguments.count >= 13,
           arguments[1] == "handoff",
-          arguments[2] == "--dry-run"
+          arguments[2] == "--dry-run" || arguments[2] == "--authorized-single-pass"
     else { throw HostError.usage }
+    let authorizedSinglePass = arguments[2] == "--authorized-single-pass"
     var configurationPath: String?
+    var authorizationGrantPath: String?
     var spoolPath: String?
     var maximumSpoolItems: Int?
     var maximumSpoolBytes: Int64?
@@ -115,6 +117,8 @@ private func run(_ arguments: [String]) throws {
                 throw HostError.inputNotBounded
             }
             checkpointPaths.append(value)
+        case "--authorization-grant" where authorizationGrantPath == nil:
+            authorizationGrantPath = value
         default:
             throw HostError.usage
         }
@@ -146,7 +150,18 @@ private func run(_ arguments: [String]) throws {
             )
         )
     }
-    _ = try PlatformHostAdmission.validate(configuration: configuration, checkpoints: checkpoints)
+    let grant: PlatformAuthorizedReadGrant?
+    if authorizedSinglePass {
+        guard let authorizationGrantPath else { throw HostError.usage }
+        grant = try readBounded(
+            authorizationGrantPath,
+            as: PlatformAuthorizedReadGrant.self,
+            remainingAggregateBytes: &remainingAggregateBytes
+        )
+    } else {
+        guard authorizationGrantPath == nil else { throw HostError.usage }
+        grant = nil
+    }
     let composition = try PlatformAppleSourceComposition(
         eventStore: EKEventStore(),
         contactStore: CNContactStore(),
@@ -161,12 +176,24 @@ private func run(_ arguments: [String]) throws {
             maximumPayloadBytes: maximumPayloadBytes
         )
     )
-    let summary = try PlatformHostAdmission.protectedNonLiveHandoff(
-        configuration: configuration,
-        checkpoints: checkpoints,
-        composition: composition,
-        spool: spool
-    )
+    let summary: PlatformHostAdmissionSummary
+    if let grant {
+        summary = try PlatformHostAdmission.authorizedSinglePassHandoff(
+            configuration: configuration,
+            checkpoints: checkpoints,
+            grant: grant,
+            nowUnixMilliseconds: Int64(Date().timeIntervalSince1970 * 1_000),
+            composition: composition,
+            spool: spool
+        )
+    } else {
+        summary = try PlatformHostAdmission.protectedNonLiveHandoff(
+            configuration: configuration,
+            checkpoints: checkpoints,
+            composition: composition,
+            spool: spool
+        )
+    }
     FileHandle.standardOutput.write(try JSONEncoder().encode(summary))
     FileHandle.standardOutput.write(Data([0x0a]))
 }

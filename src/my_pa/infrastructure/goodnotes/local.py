@@ -233,13 +233,16 @@ class BoundedLocalOCRTranscriber:
         if not 1 <= self.maximum_regions <= _MAX_REGIONS:
             raise ValueError("the OCR region bound is invalid")
 
-    def transcribe(self, page: SourcePage) -> tuple[TranscribedRegion, ...]:
+    def transcribe(
+        self, page: SourcePage, *, timeout_seconds: float | None = None
+    ) -> tuple[TranscribedRegion, ...]:
         if page.representation_media_type not in _SUPPORTED_MEDIA_TYPES:
             raise GoodNotesTranscriptionError("the page representation is not OCR eligible")
         if len(page.content) > self.maximum_input_bytes:
             raise GoodNotesTranscriptionError("the page representation exceeds the OCR bound")
         argv = (*self.command, "--media-type", page.representation_media_type)
-        returncode, output, overflowed = self._run_bounded(argv, page.content)
+        effective_timeout = min(self.timeout_seconds, timeout_seconds or self.timeout_seconds)
+        returncode, output, overflowed = self._run_bounded(argv, page.content, effective_timeout)
         if returncode != 0 or overflowed:
             raise GoodNotesTranscriptionError("the local OCR command returned no admissible result")
         try:
@@ -253,7 +256,9 @@ class BoundedLocalOCRTranscriber:
         except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
             raise GoodNotesTranscriptionError("the local OCR result is invalid") from error
 
-    def _run_bounded(self, argv: tuple[str, ...], content: bytes) -> tuple[int, bytes, bool]:
+    def _run_bounded(
+        self, argv: tuple[str, ...], content: bytes, timeout_seconds: float
+    ) -> tuple[int, bytes, bool]:
         try:
             process = subprocess.Popen(  # noqa: S603 - explicit argv, no shell
                 argv,
@@ -295,7 +300,7 @@ class BoundedLocalOCRTranscriber:
         writer.start()
         reader.start()
         try:
-            returncode = process.wait(timeout=self.timeout_seconds)
+            returncode = process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired as error:
             process.kill()
             process.wait()

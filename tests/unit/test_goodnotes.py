@@ -151,7 +151,10 @@ def test_changed_inventory_conflicts_with_consumed_idempotency_key() -> None:
 
 def test_transcriber_failure_leaves_no_deterministic_record() -> None:
     class BrokenTranscriber(FixturePageTranscriber):
-        def transcribe(self, page: SourcePage) -> tuple[TranscribedRegion, ...]:
+        def transcribe(
+            self, page: SourcePage, *, timeout_seconds: float | None = None
+        ) -> tuple[TranscribedRegion, ...]:
+            del timeout_seconds
             raise RuntimeError("synthetic OCR failure")
 
     repository = MemoryRepository()
@@ -333,6 +336,26 @@ def test_aggregate_bytes_regions_and_elapsed_time_are_fail_closed() -> None:
         )
 
 
+def test_prepare_reuses_the_plan_deadline_instead_of_starting_a_second_window() -> None:
+    times = iter((0.0, 0.1, 1.1))
+    service = GoodNotesService(
+        limits=GoodNotesReconciliationLimits(maximum_elapsed_seconds=1),
+        monotonic=lambda: next(times),
+    )
+    plan = service.plan(
+        principal_id=A,
+        idempotency_key="one-deadline",
+        source=source(),
+        transcriber=FixturePageTranscriber(),
+    )
+    with pytest.raises(TimeoutError, match="elapsed-time"):
+        service.prepare(
+            plan=plan,
+            source=source(),
+            transcriber=FixturePageTranscriber(),
+        )
+
+
 def test_production_runtime_holds_no_database_connection_during_ocr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -374,10 +397,12 @@ def test_production_runtime_holds_no_database_connection_during_ocr(
             return kwargs["receipt"]  # type: ignore[return-value]
 
     class Transcriber(FixturePageTranscriber):
-        def transcribe(self, page: SourcePage) -> tuple[TranscribedRegion, ...]:
+        def transcribe(
+            self, page: SourcePage, *, timeout_seconds: float | None = None
+        ) -> tuple[TranscribedRegion, ...]:
             assert not state.connected
             state.events.append("ocr")
-            return super().transcribe(page)
+            return super().transcribe(page, timeout_seconds=timeout_seconds)
 
     monkeypatch.setattr(bootstrap, "PostgresGoodNotesRepository", Repository)
     composed = bootstrap.LocalGoodNotesRuntime(

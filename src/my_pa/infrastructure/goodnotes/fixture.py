@@ -27,7 +27,10 @@ class FixturePageTranscriber:
     name: str = "fixture_utf8_region"
     version: str = "1"
 
-    def transcribe(self, page: SourcePage) -> tuple[TranscribedRegion, ...]:
+    def transcribe(
+        self, page: SourcePage, *, timeout_seconds: float | None = None
+    ) -> tuple[TranscribedRegion, ...]:
+        del timeout_seconds
         text = page.content.decode("utf-8")
         if not text.strip():
             return ()

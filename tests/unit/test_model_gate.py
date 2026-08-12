@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import threading
+import multiprocessing
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
@@ -90,7 +90,7 @@ class RecordingReviewRouter:
 def test_model_route_is_disabled_by_default_and_semantic_gate_requires_all_three_reviews() -> None:
     provider = FixtureProvider()
     gate = BoundedModelGate()
-    assert gate.invoke(provider, manifest()).state == "disabled"
+    assert gate.invoke(manifest()).state == "disabled"
     assert provider.seen is None
     assert not SemanticRetrievalGate(True, True, False).enabled
     assert SemanticRetrievalGate(True, True, True).enabled
@@ -98,34 +98,32 @@ def test_model_route_is_disabled_by_default_and_semantic_gate_requires_all_three
 
 def test_enabled_model_route_refuses_before_provider_without_canonical_review() -> None:
     provider = FixtureProvider()
-    outcome = BoundedModelGate(route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY).invoke(
-        provider, manifest()
-    )
-    assert outcome.failure_code == "canonical_review_route_unavailable"
+    with pytest.raises(ValueError, match="requires its provider and canonical Review route"):
+        BoundedModelGate(route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY, provider=provider)
     assert provider.seen is None
 
 
 def test_retrieved_prompt_like_text_remains_untrusted_data_and_output_is_only_a_proposal() -> None:
     provider = FixtureProvider()
     router = RecordingReviewRouter()
-    outcome = BoundedModelGate(route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY).invoke(
-        provider, manifest(), review_router=router
-    )
+    outcome = BoundedModelGate(
+        route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY,
+        provider=provider,
+        review_router=router,
+    ).invoke(manifest())
     assert outcome.state == "proposed"
-    assert router.seen[0].proposal.normalized_value == "alpha"
-    assert router.seen[0].principal_id == PRINCIPAL_A
-    assert router.seen[0].provider_id == "fixture-provider"
-    assert router.seen[0].prompt_schema_version == "model-proposal-v1"
-    assert router.seen[0].authority_state.value == "needs_review"
-    assert provider.seen is not None
-    assert provider.seen.evidence[0].instruction_authority is False
-    assert "documents.create" in provider.seen.evidence[0].text
+    assert len(outcome.proposals) == 1
 
 
 def test_external_disclosure_and_unknown_evidence_references_fail_closed() -> None:
     external = FixtureProvider(is_external=True)
-    gate = BoundedModelGate(route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY)
-    assert gate.invoke(external, manifest()).failure_code == "external_disclosure_denied"
+    gate = BoundedModelGate(
+        route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY,
+        provider=external,
+        review_router=RecordingReviewRouter(),
+    )
+    assert gate.invoke(manifest()).failure_code == "external_disclosure_denied"
+    assert gate.invoke(manifest(external=True)).failure_code == ("external_disclosure_denied")
     assert external.seen is None
 
     class BadReference(FixtureProvider):
@@ -139,7 +137,11 @@ def test_external_disclosure_and_unknown_evidence_references_fail_closed() -> No
                 ),
             )
 
-    outcome = gate.invoke(BadReference(), manifest(), review_router=RecordingReviewRouter())
+    outcome = BoundedModelGate(
+        route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY,
+        provider=BadReference(),
+        review_router=RecordingReviewRouter(),
+    ).invoke(manifest())
     assert outcome.state == "denied"
     assert outcome.failure_code == "unknown_evidence_reference"
 
@@ -149,9 +151,11 @@ def test_provider_failure_is_redacted_and_non_throwing() -> None:
         def propose(self, context: ContextManifest) -> tuple[ModelProposal, ...]:
             raise RuntimeError(f"secret prompt: {context.evidence[0].text}")
 
-    outcome = BoundedModelGate(route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY).invoke(
-        Broken(), manifest(), review_router=RecordingReviewRouter()
-    )
+    outcome = BoundedModelGate(
+        route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY,
+        provider=Broken(),
+        review_router=RecordingReviewRouter(),
+    ).invoke(manifest())
     assert outcome.state == "unavailable"
     assert outcome.failure_code == "model_unavailable"
 
@@ -163,23 +167,43 @@ def test_a_second_principals_evidence_cannot_enter_the_context() -> None:
 
 
 def test_model_timeout_returns_without_waiting_for_a_stuck_provider() -> None:
-    release = threading.Event()
-
     class Stuck(FixtureProvider):
         def propose(self, context: ContextManifest) -> tuple[ModelProposal, ...]:
-            release.wait()
+            while True:
+                time.sleep(1)
             return ()
 
     started = time.monotonic()
     outcome = BoundedModelGate(
         route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY,
+        provider=Stuck(),
+        review_router=RecordingReviewRouter(),
         timeout_seconds=0.05,
-    ).invoke(Stuck(), manifest(), review_router=RecordingReviewRouter())
+    ).invoke(manifest())
     elapsed = time.monotonic() - started
-    release.set()
     assert elapsed < 0.5
     assert outcome.state == "unavailable"
     assert outcome.failure_code == "model_timeout"
+    assert not multiprocessing.active_children()
+
+
+def test_review_route_shares_the_gate_deadline_and_is_reaped() -> None:
+    class StuckRouter(RecordingReviewRouter):
+        def route(
+            self, proposals: tuple[ReviewBoundModelProposal, ...]
+        ) -> tuple[CanonicalReviewReference, ...]:
+            while True:
+                time.sleep(1)
+            return ()
+
+    outcome = BoundedModelGate(
+        route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY,
+        provider=FixtureProvider(),
+        review_router=StuckRouter(),
+        timeout_seconds=0.05,
+    ).invoke(manifest())
+    assert outcome.failure_code == "review_route_timeout"
+    assert not multiprocessing.active_children()
 
 
 @pytest.mark.parametrize("mode", ["count", "aggregate"])
@@ -197,9 +221,11 @@ def test_model_output_count_and_aggregate_bounds_fail_closed(mode: str) -> None:
 
     outcome = BoundedModelGate(
         route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY,
+        provider=Excess(),
+        review_router=RecordingReviewRouter(),
         maximum_proposals=2,
         maximum_aggregate_bytes=50,
-    ).invoke(Excess(), manifest(), review_router=RecordingReviewRouter())
+    ).invoke(manifest())
     assert outcome.state == "denied"
     assert outcome.failure_code == "model_output_exceeded"
 

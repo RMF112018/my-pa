@@ -173,6 +173,7 @@ from my_pa.application.errors import (
     problem_detail,
 )
 from my_pa.application.managed_documents import ManagedDocumentService
+from my_pa.application.model_gate import BoundedModelGate
 from my_pa.contracts.ports import (
     Acceptance,
     CaptureAdmission,
@@ -583,6 +584,7 @@ class ApplicationService:
         limits: EffectiveLimits,
         clock: Callable[[], datetime] = utc_now,
         managed_store: ManagedByteStore | None = None,
+        model_gate: BoundedModelGate | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._limits = _effective_limits(limits)
@@ -593,6 +595,10 @@ class ApplicationService:
         #: build with no managed plane must publish no managed capability rather
         #: than publish six a caller cannot reach.
         self._managed_store_or_none = managed_store
+        #: Explicit production composition of the optional proposal plane. The
+        #: default gate is disabled; an enabled gate cannot be constructed
+        #: without its local provider and canonical Review router.
+        self._model_gate = model_gate or BoundedModelGate()
         #: WP-27's application service, held rather than built per request: it is
         #: stateless, takes its ports as arguments, and constructing one per call
         #: would say it held something.
@@ -818,7 +824,7 @@ class ApplicationService:
                 }
                 for plane in ("capture", "enrollment")
             ]
-        readiness = build_readiness_report(manifest)
+        readiness = build_readiness_report(manifest, model_route=self._model_gate.route)
         unhealthy_workers = [
             plane
             for plane in worker_planes

@@ -7,8 +7,8 @@ read-only adapter protocols plus the bounded Tasks seam, and deterministic
 synthetic adapters.
 
 WP-12D supplied the application-facing envelope/spool foundations. The current
-candidate also supplies a separately bounded, explicitly non-live production
-composition handoff:
+candidate also supplies a separately bounded production composition with a
+non-live proof path and an independently authorized single-pass read path:
 
 - deterministic, versioned discovery, preflight, read, and handoff envelopes;
 - explicit fail-closed decoding for every invariant-bearing wire/storage value;
@@ -96,8 +96,7 @@ grant to reads. Its source-side predicate, materialization count, recursive
 mailbox depth, message-size/body, header, and attachment bounds all refuse
 rather than widen. Graph remains off by default and is not a silent substitute.
 
-The `apple-source-host handoff --dry-run` executable performs the only admitted
-production composition path in this package. It reads absolute regular-file
+The `apple-source-host handoff --dry-run` executable reads absolute regular-file
 configuration/checkpoint inputs through `openat(O_NOFOLLOW)` with per-file,
 aggregate-byte, selection, and checkpoint caps; constructs the production
 composition; resolves only inert adapter descriptors; and writes one
@@ -106,6 +105,16 @@ content-free receipt per selection to an explicitly targeted owner-only
 discovers an account, enumerates a source, reads personal data, or activates a
 watcher. The spool artifact is proof of protected handoff reachability, not data
 admission authority.
+
+The separate `handoff --authorized-single-pass` path additionally requires an
+absolute, bounded, expiring `my-pa.apple-source-read-grant.v1` artifact whose
+configuration identity matches and whose authorization literal is exact. Only
+then does it negotiate the lifecycle, open the protected spool, read one
+checkpointed bounded page from each selected Calendar, Contacts, Tasks, or Mail
+bucket, wrap the page in a versioned immutable admission envelope, and enqueue
+it for application pickup. Merely setting `activationRequested` is refused.
+This repository implements that operator-gated lifecycle but did not invoke it:
+no TCC grant or live personal-data access was authorized for validation.
 
 No repository validation inspects a live account. TCC grants, signing,
 installation, service/watcher activation, application admission, persistence,
@@ -144,8 +153,9 @@ bounded read-only Tasks adapter. Repository
 architecture tests independently scan dependencies, imports, configuration and
 public surfaces.
 
-TCC grants, signing/notarization, registration, live source reads, application
-admission of source content, database persistence, watcher registration,
-service activation, and deployment remain outside this package and require
-exact operator authority. The dry-run executable's inert framework-store
-construction and content-free protected receipt grant none of those actions.
+TCC grants, signing/notarization, registration, execution against live sources,
+database persistence, watcher registration, service activation, and deployment
+remain outside the validation performed here and require exact operator
+authority. The dry-run executable's inert framework-store construction and
+content-free protected receipt grant none of those actions, and the active path
+refuses without its separate exact grant.

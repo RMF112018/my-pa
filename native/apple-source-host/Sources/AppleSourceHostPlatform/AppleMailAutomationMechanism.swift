@@ -158,25 +158,16 @@ public final class AppleMailAutomationMechanism: MailMechanism, @unchecked Senda
             binding.object.elementArray(withCode: Codes.message).object(withID: providerID)
         )
         let messageSize: Int = try value(message, Codes.messageSize)
-        guard messageSize >= 0 else {
+        let maximumMaterializable = NativeSourceProtocolV1.maximumMailHeaderBytes
+            + NativeSourceProtocolV1.maximumMailBodyBytes
+        guard messageSize >= 0, messageSize <= maximumMaterializable else {
             throw NativeSourceContractError.mailContentInconsistent
         }
         let headers: String = try value(message, Codes.allHeaders)
-        let attachments = try attachmentDescriptors(message)
         guard headers.utf8.count <= NativeSourceProtocolV1.maximumMailHeaderBytes else {
             throw NativeSourceContractError.mailHeaderTooLarge
         }
-        let maximumMaterializable = NativeSourceProtocolV1.maximumMailHeaderBytes
-            + NativeSourceProtocolV1.maximumMailBodyBytes
-        guard messageSize <= maximumMaterializable else {
-            return MailMessageContent(
-                headerBytes: Array(headers.utf8),
-                bodyBytes: nil,
-                bodyByteSize: nil,
-                attachments: attachments.descriptors,
-                attachmentCount: attachments.count
-            )
-        }
+        let attachments = try attachmentDescriptors(message)
         let body: String = try value(message, Codes.content)
         let bodyBytes = Array(body.utf8)
         return MailMessageContent(

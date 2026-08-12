@@ -2,15 +2,13 @@
 artifact_id: ARCH-PKL-SC-001
 artifact_type: System-context architecture
 version: 0.1.0
-status: PROPOSED_FOR_REPOSITORY_REVIEW
+status: CURRENT_REPOSITORY_ARCHITECTURE
 feature_id: FEATURE-PKL-001
 phase_id: PHASE-00
 repository: RMF112018/my-pa
-authenticated_head_sha: 3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae
-authenticated_tree_sha: UNAVAILABLE_FROM_AUTHENTICATED_CONNECTOR
-planning_basis_sha: b8563870afcf87b63e4cde6e0a48bfc59f0bd5b7
+authenticated_base_sha: 9b35476b70fe4fbc03bb8f9835d93c1b71089bbe
 classification: INTERNAL_ARCHITECTURE
-supersession_state: NEW_CANDIDATE_NOT_IN_REPOSITORY
+supersession_state: CURRENT
 ---
 
 
@@ -29,7 +27,7 @@ policy; the stale policy inconsistency remains recorded for later, separately
 authorized operator correction.
 
 
-This document refines the accepted foundation in ADR-001 and ADR-002. It does not authorize executable code, NAS/database access, managed writes, deployment, production activation, or risk acceptance. The authenticated authoring basis is `main@3e6f7218b424f8f7dc6c5bac78956dfffe0cb8ae`; the exact tree SHA and local worktree state remain unavailable.
+This document refines the accepted foundation in ADR-001 and ADR-002. It does not itself authorize NAS/database access, deployment, production activation, or risk acceptance. Its remediation lineage starts at authenticated base `main@9b35476b70fe4fbc03bb8f9835d93c1b71089bbe`; the candidate's exact head/tree and clean-worktree evidence are maintained in the pull request and final-state record, where they can be updated without a self-referential commit hash.
 
 
 ## 2. Actors and external systems
@@ -49,7 +47,7 @@ This document refines the accepted foundation in ADR-001 and ADR-002. It does no
 | `CTX-PKL-010` | Cloud model provider | External processing boundary | Excluded by default | Raw/private data disclosure prohibited absent separate approval |
 | `CTX-PKL-011` | Managed-document store | Separate product-owned write-authority capability | Implemented for this remediation objective | Designated storage only; no source-system write or deployment authority |
 | `CTX-PKL-012` | Obsidian projection | Rebuildable human-facing view | Later phase | Derived projection, never canonical authority |
-| `CTX-PKL-013` | Apple Mail/Calendar/Contacts/Tasks providers | Personal-data observations | Bounded mechanisms and protected non-live handoff implemented; live reads excluded | TCC, live data, activation, signing, and deployment require separate authority |
+| `CTX-PKL-013` | Apple Mail/Calendar/Contacts/Tasks providers | Personal-data observations | Bounded mechanisms and operator-gated single-pass read/handoff implemented; no live read executed | TCC, live data, activation, signing, and deployment require separate authority |
 | `CTX-PKL-015` | Local operator as author | Creates user-authored records through the capture contract | Active under ADR-003 | Authors evidence the product owns; authoring is neither source mutation nor a managed write |
 | `CTX-PKL-014` | Public research providers | External evidence collection | Excluded | No public research or automated profiling in MCV |
 | `CTX-PKL-016` | MossAIc web frontend | Next.js App Router PWA/BFF | Implemented for this remediation objective | Uses public capability contracts; no provider or database bypass |
@@ -72,9 +70,11 @@ session path without exposing its bearer, and publishes content-free worker
 backlog/liveness states through `capabilities.get` and System. Apple personal
 sources remain first-party and Graph remains off by default.
 
-Current-state correction: the native host can construct its inert production
-composition and place content-free dry-run receipts into the protected spool
-without observing TCC or reading a source. GoodNotes reconciliation is bound to
+Current-state correction: the native host can construct its production
+composition, place content-free dry-run receipts into the protected spool, and
+has a separate expiring-grant path for one checkpointed page per selected Apple
+bucket into immutable admission envelopes. No TCC grant was requested and no
+live source read was executed. GoodNotes reconciliation is bound to
 exact registry versions and Principal enrollment before OCR, then enters
 ordinary canonical Review/search. Managed documents and the MossAIc frontend
 are implemented under the current objective-specific reprioritization; neither
@@ -331,8 +331,10 @@ read/write provider that allows accidental source mutation.
 - Retrieved source content is untrusted data and may contain prompt or indirect tool injection.
 - Model requests must be assembled from explicitly allowed fields after classification, purpose, and policy evaluation.
 - The bounded model gate has timeout, proposal-count, aggregate-byte, and field
-  ceilings. It refuses before provider invocation unless an existing canonical
-  Review router is supplied; GoodNotes currently supplies no model route.
+  ceilings. An enabled instance cannot be composed without both a local provider
+  and canonical Review router; provider and router work run under one killable
+  process deadline. The production readiness path reports the route disabled,
+  and GoodNotes supplies no model route.
 - The default is `cloud_eligible=false` for raw/private content.
 - Cloud processing requires a future operator decision specifying provider, account/container, purpose, field allowlist, retention/training terms, redaction, audit receipt, and revocation.
 - Model output is labeled `proposal` or `inference`, source-referenced where possible, and cannot silently become canonical fact or authorize an action.
@@ -346,7 +348,7 @@ read/write provider that allows accidental source mutation.
 - Partial extraction/search results identify exact bounded counts and unavailable/quarantined/unsupported evidence.
 - A changed source version during processing produces conflict/quarantine; mixed-version output is not accepted.
 - Missing audit persistence for an operator-only or security-relevant action is fail-closed.
-- Current repository tree SHA, local worktree status, live NAS behavior, physical database identity, and runtime state are unavailable and are not claimed by this package.
+- Candidate head/tree and clean-worktree evidence are recorded in the PR/final-state record. Live NAS behavior, live Apple behavior, production physical database identity, and production runtime state remain unavailable and are not claimed.
 
 
 ## 12. Architecture invariants
@@ -355,8 +357,8 @@ read/write provider that allows accidental source mutation.
 - `SC-INV-001`: One repository and one modular Python codebase until a measured split trigger exists.
 - `SC-INV-002`: Gateway, worker, and CLI share application/domain contracts and policy semantics.
 - `SC-INV-003`: Original sources are authoritative and read-only by default.
-- `SC-INV-004`: Managed writes are separate and excluded from the MCV.
-- `SC-INV-005`: PostgreSQL is planned structured authority; FTS/`pg_trgm` precede vector/graph infrastructure.
+- `SC-INV-004`: Managed writes are separate, confined to designated managed storage, and admitted only for this remediation objective.
+- `SC-INV-005`: PostgreSQL is the canonical structured authority; FTS/`pg_trgm` precede vector/graph infrastructure.
 - `SC-INV-006`: Progressive enrollment only; no automatic full-source discovery.
 - `SC-INV-007`: Public contracts remain provider-, transport-, ORM-, path-, host-, and database-neutral.
 - `SC-INV-008`: Obsidian and other projections are deterministic/rebuildable and noncanonical.

@@ -195,6 +195,7 @@ def test_readiness_limitations_track_the_manifest() -> None:
     assert "capabilities are unwired" in partial
     assert "capabilities are unwired" not in complete
     assert DECISION_GATED_MEDIA_TYPE in complete
+    assert "Model proposals and semantic retrieval are disabled" in complete
 
 
 def test_nothing_published_claims_the_audit_is_not_durable() -> None:

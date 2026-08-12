@@ -74,4 +74,20 @@ public struct PlatformAppleSourceComposition: @unchecked Sendable {
             }
         }
     }
+
+    /// Execute one already-admitted bounded page read. The caller owns operator
+    /// authorization, lifecycle state, checkpoint selection, and protected
+    /// handoff; this switch only routes to the four read-only adapters.
+    public func read(_ kind: NativeSourceKind, request: NativeReadRequest) throws -> NativeReadPage {
+        switch kind {
+        case .calendar:
+            try calendar.readCalendar(request)
+        case .contacts:
+            try contacts.readContacts(request)
+        case .tasks:
+            try tasks.readTasks(request)
+        case .mail:
+            try mail.readMail(request)
+        }
+    }
 }

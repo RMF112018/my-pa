@@ -16,7 +16,7 @@
 
 | Document | Status |
 |---|---|
-| [`system-context.md`](system-context.md) | Present — proposed for repository review |
+| [`system-context.md`](system-context.md) | Current repository architecture |
 | [`module-boundaries.md`](module-boundaries.md) | Present — proposed for repository review |
 | [`data-authority.md`](data-authority.md) | Present — proposed for repository review |
 | [`../security/threat-model.md`](../security/threat-model.md) | Present — proposed for repository review |
@@ -32,4 +32,12 @@ See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md) and the unres
 
 ## Implementation boundary
 
-This index records architecture direction only. Behavior now exists: the `my_pa` package, eleven Alembic revisions at head `1a4c9e77b2d5`, the migrated PostgreSQL corpus, a read-only fixture source provider, and PostgreSQL persistence for the source registry, enrollment, jobs, extraction, quarantine, coverage, lexical search, and — since WP-6 — the user-authored capture plane. Services now run too, which this sentence denied until WP-4B: `apps/gateway.py` serves the twelve capabilities over HTTP and MCP on loopback, `apps/gateway.py`'s CLI sibling invokes one, `apps/worker.py` claims and executes queued extraction work, and WP-4B3 composed the slice end to end from an operator registering a source to `knowledge.read`. These documents describe intended behavior and do not authorize implementation, database access, source access, deployment, or production activation.
+This index records architecture direction and current composition. The `my_pa`
+package exposes twenty-six shared application capabilities through the HTTP,
+MCP, and operator-CLI adapters; the gateway and worker composition roots use the
+same PostgreSQL-backed policy and application seams. Alembic owns thirty-four
+revisions at head `b4e8d2c7a613`. The current candidate also includes the
+MossAIc web BFF/PWA, managed documents, GoodNotes, the bounded model gate,
+Frontier MCP, and the Apple source host. These documents describe the resulting
+implementation; they do not authorize live source/database access, deployment,
+production activation, or risk acceptance.

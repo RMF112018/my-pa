@@ -50,8 +50,8 @@ capability, not merged wholesale:
 | 001 — durable Quick Capture | web Capture calls the authenticated BFF, which invokes `capture.create`; PostgreSQL commits source/version/submission/receipt/job before success; replay/conflict/restart and two-Principal behavior remain structural | capture transaction, remote transaction, recovery, cross-Principal, web gateway and route tests |
 | 002 — incoherent lineage | one selective candidate, one 34-revision history, DDL-free branch merge, head `b4e8d2c7a613`; retained lines classified above | Alembic heads, empty/head/round-trip/denotation tests, this record and PR ancestry |
 | 003 — synthetic/stub normal UI | normal Capture, Library, Review, Reveal, Pulse, Projects, Situations, Frames, Trace, commitments, decisions, tasks and relationship timeline call backend capabilities; synthetic data remains opt-in test/dev | web route/gateway/session tests, TypeScript/lint, optimized Next.js build |
-| 004 — Apple plane incomplete | source-built Swift core plus runnable fail-closed protected non-live handoff; EventKit Calendar and Tasks, bounded Contacts, and a read-only Apple Mail ScriptingBridge mechanism; frozen baseline, reconciliation, cursor watcher, overlap, rolling calendar horizon, pause and bounded failure semantics | Swift build/contract checks, a synthetic four-family executable handoff producing four content-free protected receipts, and platform architecture guards; no live store invocation, personal-data read, TCC request, signing, install, or activation claim |
-| 005 — knowledge/tool set | PKL lexical/evidence retrieval; GoodNotes invokes no model, and the general bounded model gate refuses before provider invocation without a durable canonical Review router; streaming GoodNotes reconciliation is exact-registry/enrollment-bound and capped at 100 pages, 100 MiB, 2,000 regions, 2 million characters, and 300 seconds without holding a DB connection during OCR; canonical Review/accepted knowledge search; managed-document lifecycle; stdio Frontier MCP | aggregate-limit/model tests, same-source/two-Principal canonical Review and ordinary knowledge-search PostgreSQL proof, hostile deterministic-ID collision refusal, managed-document, MCP, Principal-isolation, security and conformance tests |
+| 004 — Apple plane incomplete | source-built Swift core plus fail-closed protected dry-run and a separate expiring-grant single-pass checkpoint/read/admission-envelope handoff; EventKit Calendar and Tasks, bounded Contacts, and a read-only Apple Mail ScriptingBridge mechanism; frozen baseline, reconciliation, cursor watcher, overlap, rolling calendar horizon, pause and bounded failure semantics | Swift build/contract checks, a synthetic four-family dry-run producing four content-free protected receipts, and platform architecture guards for the active lifecycle; no live store invocation, personal-data read, TCC request, signing, install, or activation claim |
+| 005 — knowledge/tool set | PKL lexical/evidence retrieval; the local-only model proposal gate is composed into the production application readiness path as off and cannot be enabled without both provider and canonical Review composition; provider/router processes are reaped under one deadline; GoodNotes invokes no model and its exact-registry/enrollment-bound reconciliation shares one 300-second external-work deadline across plan/OCR plus before/after persistence checks under the separately bounded database statement timeout; canonical Review/accepted knowledge search; managed-document lifecycle; stdio Frontier MCP | aggregate-limit/model cancellation and locality tests, same-source/two-Principal canonical Review and ordinary knowledge-search PostgreSQL proof, hostile deterministic-ID collision refusal, managed-document, MCP, Principal-isolation, security and conformance tests |
 | 006 — offline/remote/operations | Principal-bound encrypted offline queue and replay controls, dedicated remote Capture credential plane and iOS Shortcut fixture, retry/dead-letter, worker heartbeat health, statement timeouts, backup/restore rehearsal and runbooks | web offline tests, remote socket/database tests, worker/recovery/health tests, restored database at exact Alembic head |
 
 ## Safety and external prerequisites
@@ -106,6 +106,15 @@ documentation. Those findings were accepted and corrected. The corrective
 database test then exposed and closed a same-source/two-Principal search leak.
 That audit is superseded by the final corrective commit and cannot serve as the
 required final exact-head review.
+
+A second independent audit of corrective head
+`de1cdb78bc1fa9aef70bd8f9d34f16b8cd1870ed` also returned BLOCK. It verified
+the spool, GoodNotes authority/isolation, input-descriptor, and Mail cursor fixes,
+then identified that the executable still lacked an authorized read lifecycle,
+Mail checked headers after materialization, the model timeout left work running,
+GoodNotes reset its clock, and current-state docs/CLI counts remained stale. The
+next corrective head implements those findings; this BLOCK remains historical
+evidence and cannot satisfy the final review gate.
 
 ## Independent review gate
 

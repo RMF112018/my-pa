@@ -12,9 +12,9 @@ which have to exist before an enrollment can, and until this command existed
 else here is new: the two writers are the ones `infrastructure.persistence` has
 had since WP-3.
 
-**It is configuration, not a grant, and it is not a capability.** The set is
-twelve since WP-6 (`domain/identity/operation.py`), and the reason source
-registration is not one of them is not the size of the set: `D-42` records that
+**It is configuration, not a grant, and it is not a capability.** The current
+set is twenty-six (`domain/identity/operation.py`), and the reason source
+registration is not one of them is not the size of that set: `D-42` records that
 it is named by no canonical capability, and `D-68` narrows that ruling's general
 premise for the capture family alone. Creating a source authorizes nobody to
 read anything: every read still requires an
@@ -26,8 +26,8 @@ list, fetch, search, read, or enroll even if somebody wanted it to.
 by reading this file rather than by trusting this paragraph.
 
 **It writes no audit event, and that is a decision rather than an omission.**
-`audit_events.capability` is constrained to the twenty `Capability` values, so
-recording a registration would mean a twenty-seventh member — which is exactly what
+`audit_events.capability` is constrained to the twenty-six `Capability` values,
+so recording a registration would mean a twenty-seventh member — exactly what
 makes an operator command look like the capability it is not. WP-6 widened that
 constraint by an explicit `ALTER` in its own revision rather than by re-deriving
 it from the enum (`D-69`), so the argument here is unchanged: adding a member is

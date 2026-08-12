@@ -36,7 +36,9 @@ class PageTranscriber(Protocol):
     @property
     def version(self) -> str: ...
 
-    def transcribe(self, page: SourcePage) -> tuple[TranscribedRegion, ...]: ...
+    def transcribe(
+        self, page: SourcePage, *, timeout_seconds: float
+    ) -> tuple[TranscribedRegion, ...]: ...
 
 
 class GoodNotesRepository(Protocol):
@@ -95,6 +97,7 @@ class ReconciliationPlan:
     page_count: int
     aggregate_bytes: int
     source_bindings: tuple[GoodNotesSourceBinding, ...]
+    started_at_monotonic: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +167,7 @@ class GoodNotesService:
             page_count=count,
             aggregate_bytes=aggregate_bytes,
             source_bindings=tuple(sorted(source_bindings)),
+            started_at_monotonic=started,
         )
 
     @staticmethod
@@ -177,6 +181,10 @@ class GoodNotesService:
         """
         repository.require_admitted_sources(plan.principal_id, plan.source_bindings)
 
+    def require_within_deadline(self, plan: ReconciliationPlan) -> None:
+        """Apply the one reconciliation deadline across plan, OCR, and persistence."""
+        self._check_elapsed(plan.started_at_monotonic)
+
     def prepare(
         self,
         *,
@@ -184,7 +192,7 @@ class GoodNotesService:
         source: ReadOnlyGoodNotesSource,
         transcriber: PageTranscriber,
     ) -> PreparedGoodNotesReconciliation:
-        started = self._monotonic()
+        started = plan.started_at_monotonic
         fingerprint = hashlib.sha256(f"{transcriber.name}\x1f{transcriber.version}".encode())
         pages: list[GoodNotesPage] = []
         versions: list[GoodNotesPageVersion] = []
@@ -226,7 +234,10 @@ class GoodNotesService:
                 content_sha256=digest,
                 observed_at=source_page.observed_at,
             )
-            transcribed = transcriber.transcribe(source_page)
+            remaining = self.limits.maximum_elapsed_seconds - (self._monotonic() - started)
+            if remaining <= 0:
+                raise TimeoutError("the GoodNotes reconciliation exceeded its elapsed-time bound")
+            transcribed = transcriber.transcribe(source_page, timeout_seconds=remaining)
             self._check_elapsed(started)
             if len(transcribed) > self.limits.maximum_regions_per_page:
                 raise ValueError("a GoodNotes page exceeds the region bound")
@@ -278,16 +289,19 @@ class GoodNotesService:
         prepared: PreparedGoodNotesReconciliation,
         repository: GoodNotesRepository,
     ) -> ReconciliationReceipt:
+        self.require_within_deadline(prepared.plan)
         self.admit(prepared.plan, repository)
         prior = repository.receipt(prepared.plan.principal_id, prepared.plan.idempotency_key)
         if prior is not None:
             return self._replay_or_conflict(prior, prepared.plan.request_fingerprint)
-        return repository.store_reconciliation(
+        receipt = repository.store_reconciliation(
             receipt=prepared.receipt,
             pages=prepared.pages,
             versions=prepared.versions,
             regions=prepared.regions,
         )
+        self.require_within_deadline(prepared.plan)
+        return receipt
 
     def reconcile(
         self,

@@ -219,6 +219,14 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "proxy": "${MY_PA_PROXY_IMAGE:?repository required}@"
         "${MY_PA_PROXY_IMAGE_DIGEST:?sha256 digest required}",
     }
+    expected_env_files = {
+        "postgres": None,
+        "gateway": ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"],
+        "worker-enrollment": ["${MY_PA_NAS_ENV_FILE:?}"],
+        "worker-capture": ["${MY_PA_NAS_ENV_FILE:?}"],
+        "web": None,
+        "proxy": None,
+    }
     for name in SERVICES:
         service = compose_services.get(name, {})
         if not isinstance(service, dict):
@@ -232,6 +240,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             errors.add("exact_image_digest")
         if service.get("profiles") != ["nas-01-contract-only"]:
             errors.add("contract_profile")
+        if service.get("env_file") != expected_env_files[name]:
+            errors.add("credential_authority")
         if "build" in service:
             errors.add("implicit_build")
         expected_ports = (
@@ -472,6 +482,13 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             '    expose: ["8765"]\n',
             '    expose: ["8765"]\n    ports : ["0.0.0.0:8765:8765"]\n',
             "host_publication",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            '    expose: ["3000"]\n',
+            '    expose: ["3000"]\n'
+            '    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]\n',
+            "credential_authority",
         ),
         (
             "ops/nas/compose.example.yml",

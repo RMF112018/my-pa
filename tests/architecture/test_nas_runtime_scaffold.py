@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -40,49 +42,24 @@ def _service_block(compose: str, service: str) -> str:
     return match.group(1) if match else ""
 
 
-def _compose_mounts(block: str) -> set[tuple[str, str, bool]]:
-    mounts: set[tuple[str, str, bool]] = set()
-    for match in re.finditer(
-        r"type:\s*bind,\s*source:\s*[\"']?([^,\"']+)[\"']?,\s*"
-        r"target:\s*([^,}\s]+)(?:,\s*read_only\s*:\s*(true|false))?",
-        block,
-        re.IGNORECASE,
-    ):
-        mounts.add((match.group(1), match.group(2), (match.group(3) or "false").lower() == "true"))
-    multiline_pattern = re.compile(
-        r"type:\s*bind\s*\n\s*source:\s*[\"']?([^\n\"']+)[\"']?\s*\n"
-        r"\s*target:\s*([^\s]+)(?:\s*\n\s*read_only\s*:\s*(true|false))?",
-        re.IGNORECASE,
+def _parse_compose(compose: str) -> dict[str, object] | None:
+    result = subprocess.run(
+        [
+            "/usr/bin/ruby",
+            "-rjson",
+            "-ryaml",
+            "-e",
+            "print JSON.generate(YAML.safe_load(STDIN.read, aliases: true))",
+        ],
+        input=compose,
+        text=True,
+        capture_output=True,
+        check=False,
     )
-    for multiline in multiline_pattern.finditer(block):
-        mounts.add(
-            (
-                multiline.group(1),
-                multiline.group(2),
-                (multiline.group(3) or "false").lower() == "true",
-            )
-        )
-    return mounts
-
-
-def _compose_networks(block: str) -> set[str]:
-    match = re.search(r"(?m)^    networks:\s*\[([^]]*)\]", block)
-    return {item.strip() for item in match.group(1).split(",")} if match else set()
-
-
-def _compose_volume_item_count(block: str) -> int:
-    section = re.search(r"(?ms)^    volumes:\n(.*?)(?=^    [a-z_]+:|\Z)", block)
-    return len(re.findall(r"(?m)^      -(?:[ \t]|$)", section.group(1))) if section else 0
-
-
-def _has_noncanonical_read_only(block: str) -> bool:
-    tokens = re.findall(r"read_only\s*:\s*([^,}\s]+)", block)
-    # Count the bare word independently so quoted/aliased/noncanonical key
-    # spellings cannot disappear from the strict token parser.
-    occurrences = len(re.findall(r"\bread_only\b", block))
-    return len(tokens) != occurrences or any(
-        token.lower() not in {"true", "false"} for token in tokens
-    )
+    if result.returncode:
+        return None
+    parsed = json.loads(result.stdout)
+    return parsed if isinstance(parsed, dict) else None
 
 
 def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
@@ -95,6 +72,9 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     nas_readme = files["ops/nas/README.md"]
     local_readme = files["ops/compose/README.md"]
     local_compose = files["ops/compose/postgres.yml"]
+    compose_model = _parse_compose(compose)
+    if compose_model is None:
+        return {"compose_parse"}
 
     try:
         contract = tomllib.loads(contract_text)
@@ -220,6 +200,9 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("named_postgres_volume")
 
     blocks = {service: _service_block(compose, service) for service in SERVICES}
+    compose_services = compose_model.get("services", {})
+    if not isinstance(compose_services, dict):
+        return {"compose_parse"}
     expected_compose_mounts = {
         "postgres": {
             (
@@ -246,16 +229,33 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "web": set(),
         "proxy": {("./proxy-allowlist.example.caddy", "/etc/caddy/Caddyfile", True)},
     }
-    if any(
-        _compose_mounts(blocks[name]) != mounts for name, mounts in expected_compose_mounts.items()
+    actual_compose_mounts: dict[str, set[tuple[str, str, bool]]] = {}
+    mount_model_valid = True
+    for name in SERVICES:
+        service = compose_services.get(name, {})
+        volumes = service.get("volumes", []) if isinstance(service, dict) else None
+        normalized: set[tuple[str, str, bool]] = set()
+        if not isinstance(volumes, list):
+            mount_model_valid = False
+            continue
+        for volume in volumes:
+            if (
+                not isinstance(volume, dict)
+                or volume.get("type") != "bind"
+                or not isinstance(volume.get("source"), str)
+                or not isinstance(volume.get("target"), str)
+                or not isinstance(volume.get("read_only", False), bool)
+            ):
+                mount_model_valid = False
+                continue
+            normalized.add((volume["source"], volume["target"], volume.get("read_only", False)))
+        if len(normalized) != len(volumes):
+            mount_model_valid = False
+        actual_compose_mounts[name] = normalized
+    if not mount_model_valid or any(
+        actual_compose_mounts.get(name) != mounts
+        for name, mounts in expected_compose_mounts.items()
     ):
-        errors.add("mount_ownership")
-    if any(
-        _compose_volume_item_count(blocks[name]) != len(_compose_mounts(blocks[name]))
-        for name in SERVICES
-    ):
-        errors.add("mount_ownership")
-    if any(_has_noncanonical_read_only(block) for block in blocks.values()):
         errors.add("mount_ownership")
     expected_compose_networks = {
         "postgres": {"data-plane"},
@@ -265,8 +265,14 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "web": {"edge-plane"},
         "proxy": {"edge-plane"},
     }
+    actual_compose_networks = {
+        name: set(compose_services.get(name, {}).get("networks", []))
+        for name in SERVICES
+        if isinstance(compose_services.get(name), dict)
+        and isinstance(compose_services.get(name, {}).get("networks"), list)
+    }
     if any(
-        _compose_networks(blocks[name]) != networks
+        actual_compose_networks.get(name) != networks
         for name, networks in expected_compose_networks.items()
     ):
         errors.add("network_planes")
@@ -336,6 +342,12 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
 
 def test_real_nas_scaffold_is_fail_closed() -> None:
     assert validate_nas_scaffold(_files()) == set()
+
+
+def test_yaml_comments_do_not_change_mount_semantics() -> None:
+    files = _files()
+    files["ops/nas/compose.example.yml"] += "\n# read_only behavior is model-validated\n"
+    assert validate_nas_scaffold(files) == set()
 
 
 def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, str]:
@@ -444,6 +456,22 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "      - type: bind\n"
             "        source: ./proxy-allowlist.example.caddy\n"
             "        target: /srv/my-pa/extra\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            "        &ro read_only: true\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            "        !!str read_only: true\n"
             "    networks: [data-plane]",
             "mount_ownership",
         ),

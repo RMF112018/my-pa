@@ -75,6 +75,11 @@ def _compose_volume_item_count(block: str) -> int:
     return len(re.findall(r"(?m)^      -(?:[ \t]|$)", section.group(1))) if section else 0
 
 
+def _has_noncanonical_read_only(block: str) -> bool:
+    tokens = re.findall(r"read_only:\s*([^,}\s]+)", block)
+    return any(token.lower() not in {"true", "false"} for token in tokens)
+
+
 def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     """Return stable violation codes for real files or deliberately mutated copies."""
 
@@ -244,6 +249,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         _compose_volume_item_count(blocks[name]) != len(_compose_mounts(blocks[name]))
         for name in SERVICES
     ):
+        errors.add("mount_ownership")
+    if any(_has_noncanonical_read_only(block) for block in blocks.values()):
         errors.add("mount_ownership")
     expected_compose_networks = {
         "postgres": {"data-plane"},
@@ -432,6 +439,22 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "      - type: bind\n"
             "        source: ./proxy-allowlist.example.caddy\n"
             "        target: /srv/my-pa/extra\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            "        read_only: yes\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            '        read_only: "true"\n'
             "    networks: [data-plane]",
             "mount_ownership",
         ),

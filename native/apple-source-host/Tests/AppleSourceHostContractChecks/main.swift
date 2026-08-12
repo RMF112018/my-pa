@@ -1016,6 +1016,64 @@ struct AppleSourceHostContractChecks {
             "Batch preflight did not retain every refused crash residue"
         )
 
+        let durableMoveDirectory = temporaryDirectory("crash-durable-move")
+        defer { try? FileManager.default.removeItem(at: durableMoveDirectory) }
+        let durableMoveSpool = try ProtectedSpool(
+            directory: durableMoveDirectory,
+            limits: try ProtectedSpoolLimits(
+                maximumItems: 1,
+                maximumBytes: 32_000,
+                maximumPayloadBytes: 4
+            )
+        )
+        let durableMove = try spoolItem("crash-durable", payload: [4])
+        try requireSpoolError(.injectedCrash) {
+            try durableMoveSpool.enqueue(durableMove, fault: .afterTemporarySync)
+        }
+        try requireSpoolError(.injectedCrash) {
+            try durableMoveSpool.recoverResidues(fault: .afterRecoveryDestinationSync)
+        }
+        try require(
+            try durableMoveSpool.inventory().items.contains(where: {
+                $0.envelopeID == durableMove.envelopeID && $0.state == .quarantine
+            }),
+            "Destination-synced interruption did not retain recovered evidence"
+        )
+
+        let durableEnqueueDirectory = temporaryDirectory("enqueue-durable-move")
+        defer { try? FileManager.default.removeItem(at: durableEnqueueDirectory) }
+        let durableEnqueueSpool = try ProtectedSpool(
+            directory: durableEnqueueDirectory,
+            limits: try ProtectedSpoolLimits(
+                maximumItems: 1,
+                maximumBytes: 32_000,
+                maximumPayloadBytes: 4
+            )
+        )
+        let durableEnqueue = try spoolItem("enqueue-durable", payload: [1])
+        try requireSpoolError(.injectedCrash) {
+            try durableEnqueueSpool.enqueue(
+                durableEnqueue,
+                fault: .afterEnqueueDestinationSync
+            )
+        }
+        try require(
+            try durableEnqueueSpool.item(durableEnqueue.envelopeID) == durableEnqueue,
+            "Destination-synced enqueue interruption did not retain pending evidence"
+        )
+        try requireSpoolError(.injectedCrash) {
+            try durableEnqueueSpool.quarantine(
+                durableEnqueue.envelopeID,
+                fault: .afterQuarantineDestinationSync
+            )
+        }
+        try require(
+            try durableEnqueueSpool.inventory().items.contains(where: {
+                $0.envelopeID == durableEnqueue.envelopeID && $0.state == .quarantine
+            }),
+            "Destination-synced quarantine interruption did not retain evidence"
+        )
+
         let fullQuarantineBytesDirectory = temporaryDirectory("crash-quarantine-bytes")
         defer { try? FileManager.default.removeItem(at: fullQuarantineBytesDirectory) }
         let byteRetained = try spoolItem("crash-bytes-a", payload: [1])

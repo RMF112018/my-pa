@@ -114,6 +114,9 @@ public enum ProtectedSpoolEnqueueResult: Equatable, Sendable {
 public enum ProtectedSpoolFault: Sendable {
     case none
     case afterTemporarySync
+    case afterEnqueueDestinationSync
+    case afterQuarantineDestinationSync
+    case afterRecoveryDestinationSync
     case whileExclusivelyLocked(@Sendable () throws -> Void)
 }
 
@@ -314,6 +317,7 @@ public final class ProtectedSpool: @unchecked Sendable {
                 if case .afterTemporarySync = fault {
                     throw ProtectedSpoolError.injectedCrash
                 }
+                try syncDirectory(rootDescriptor)
                 guard renameatx_np(
                     rootDescriptor,
                     temporaryName,
@@ -323,8 +327,11 @@ public final class ProtectedSpool: @unchecked Sendable {
                 ) == 0 else {
                     throw ProtectedSpoolError.filesystemFailure(errno)
                 }
-                try syncDirectory(rootDescriptor)
                 try syncDirectory(pendingDescriptor)
+                if case .afterEnqueueDestinationSync = fault {
+                    throw ProtectedSpoolError.injectedCrash
+                }
+                try syncDirectory(rootDescriptor)
                 return .enqueued
             } catch {
                 if !closed { _ = Darwin.close(descriptor) }
@@ -363,7 +370,10 @@ public final class ProtectedSpool: @unchecked Sendable {
         }
     }
 
-    public func quarantine(_ envelopeID: NativeSourceOpaqueID) throws {
+    public func quarantine(
+        _ envelopeID: NativeSourceOpaqueID,
+        fault: ProtectedSpoolFault = .none
+    ) throws {
         try locked {
             try validateNamespace()
             let source = envelopeID.rawValue + ".pending"
@@ -385,6 +395,7 @@ public final class ProtectedSpool: @unchecked Sendable {
             else {
                 throw ProtectedSpoolError.quarantineByteCapacityExceeded
             }
+            try syncDirectory(pendingDescriptor)
             guard renameatx_np(
                 pendingDescriptor,
                 source,
@@ -394,14 +405,19 @@ public final class ProtectedSpool: @unchecked Sendable {
             ) == 0 else {
                 throw ProtectedSpoolError.filesystemFailure(errno)
             }
-            try syncDirectory(pendingDescriptor)
             try syncDirectory(quarantineDescriptor)
+            if case .afterQuarantineDestinationSync = fault {
+                throw ProtectedSpoolError.injectedCrash
+            }
+            try syncDirectory(pendingDescriptor)
         }
     }
 
     /// Moves complete or partial synchronized temporary files into retained
     /// quarantine. Recovery never admits or removes a crash residue.
-    public func recoverResidues() throws -> ProtectedSpoolInventory {
+    public func recoverResidues(
+        fault: ProtectedSpoolFault = .none
+    ) throws -> ProtectedSpoolInventory {
         try locked {
             try validateNamespace()
             let names = try directoryNames(rootDescriptor)
@@ -433,6 +449,10 @@ public final class ProtectedSpool: @unchecked Sendable {
                 recovery.append((source: source, destination: destination))
             }
             for candidate in recovery {
+                // The injected-crash path fsyncs file bytes but deliberately
+                // does not sync this directory entry. Establish the recoverable
+                // source name before replacing it across directories.
+                try syncDirectory(rootDescriptor)
                 guard renameatx_np(
                     rootDescriptor,
                     candidate.source,
@@ -442,8 +462,15 @@ public final class ProtectedSpool: @unchecked Sendable {
                 ) == 0 else {
                     throw ProtectedSpoolError.filesystemFailure(errno)
                 }
-                try syncDirectory(rootDescriptor)
+                // Establish the evidence-bearing destination before committing
+                // removal of the already-durable source name. A crash or error
+                // between these syncs can duplicate a name, but cannot lose the
+                // only durable name.
                 try syncDirectory(quarantineDescriptor)
+                if case .afterRecoveryDestinationSync = fault {
+                    throw ProtectedSpoolError.injectedCrash
+                }
+                try syncDirectory(rootDescriptor)
             }
             return try inventoryUnlocked()
         }

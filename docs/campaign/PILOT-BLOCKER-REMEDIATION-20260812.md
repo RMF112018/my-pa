@@ -190,6 +190,21 @@ synchronizes both directories after every completed rename, and proves a
 cumulatively over-limit two-residue batch leaves every residue untouched. This
 BLOCK is historical and cannot satisfy the gate.
 
+A tenth independent audit of corrective head
+`70dfcb21870412d5366e0588c51b5846aa4f1f28` returned BLOCK after verifying
+batch preflight. It found that recovery synchronized source removal before the
+destination entry, while injected residues did not yet have a synchronized
+source-directory entry. The next corrective head synchronizes the source name
+before mutation, then after rename synchronizes the destination before source
+removal, and exercises an interruption after destination sync. This BLOCK is
+historical and cannot satisfy the gate.
+
+The same audit also identified the source-before-destination sync order in the
+enqueue and ordinary-quarantine moves. The corrective head applies the same
+source-pre-sync, destination-first post-rename ordering to all three
+cross-directory spool transitions and exercises destination-synced
+interruptions for each transition.
+
 ## Independent review gate
 
 No statement in this record means `READY_FOR_PILOT_VALIDATION`, independently

@@ -43,13 +43,30 @@ def _service_block(compose: str, service: str) -> str:
 
 
 def _parse_compose(compose: str) -> dict[str, object] | None:
-    result = subprocess.run(
+    ruby = """
+source = STDIN.read
+doc = Psych.parse_stream(source)
+walk = lambda do |node|
+  if node.is_a?(Psych::Nodes::Mapping)
+    keys = node.children.each_slice(2).map do |key, _value|
+      raise 'non-scalar mapping key' unless key.is_a?(Psych::Nodes::Scalar)
+      key.value
+    end
+    raise 'duplicate mapping key' unless keys.uniq.length == keys.length
+  end
+  children = node.respond_to?(:children) ? node.children : nil
+  children.each { |child| walk.call(child) } if children
+end
+walk.call(doc)
+print JSON.generate(YAML.safe_load(source, aliases: true))
+"""
+    result = subprocess.run(  # noqa: S603 - fixed executable and program
         [
             "/usr/bin/ruby",
             "-rjson",
             "-ryaml",
             "-e",
-            "print JSON.generate(YAML.safe_load(STDIN.read, aliases: true))",
+            ruby,
         ],
         input=compose,
         text=True,
@@ -76,6 +93,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     if compose_model is None:
         return {"compose_parse"}
     if set(compose_model) != {"name", "services", "networks"}:
+        errors.add("top_level_contract")
+    if compose_model.get("name") != "my-pa-nas-contract":
         errors.add("top_level_contract")
 
     try:
@@ -607,7 +626,7 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             '    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]\n',
             "    environment:\n      MY_PA_GATEWAY_BIND_HOST: 127.0.0.1\n"
             '    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]\n',
-            "environment_contract",
+            "compose_parse",
         ),
         (
             "ops/nas/compose.example.yml",
@@ -637,25 +656,37 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "      MYPA_GATEWAY_AUTH_MODE: local_operator\n"
             '      MYPA_SESSION_SECRET: "${MYPA_SESSION_SECRET:?session secret required}"\n'
             '    expose: ["3000"]\n',
-            "environment_contract",
+            "compose_parse",
         ),
         (
             "ops/nas/compose.example.yml",
             "edge-plane:\n    internal: false",
             "edge-plane:\n    internal: false\n  edge-plane:\n    internal: true",
-            "network_planes",
+            "compose_parse",
         ),
         (
             "ops/nas/compose.example.yml",
             "data-plane:\n    internal: true",
             "data-plane:\n    internal: true\n  data-plane:\n    internal: false",
-            "network_planes",
+            "compose_parse",
         ),
         (
             "ops/nas/compose.example.yml",
             "\nnetworks:\n",
             "\nvolumes: {unexpected: {}}\nnetworks:\n",
             "top_level_contract",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "name: my-pa-nas-contract",
+            "name: wrong-stack",
+            "top_level_contract",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            '    expose: ["8765"]\n',
+            '    expose: ["8765"]\n    expose: ["9999"]\n',
+            "compose_parse",
         ),
         (
             "ops/nas/compose.example.yml",
@@ -817,7 +848,7 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             '      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/managed-documents", '
             "target: /srv/my-pa/managed-documents}\n"
             "    networks: [data-plane]\n\n  worker-capture:",
-            "mount_ownership",
+            "compose_parse",
         ),
         (
             "ops/nas/compose.example.yml",

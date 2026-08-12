@@ -223,6 +223,13 @@ one-item slot. The next corrective head reconciles the fallback inside Swift
 acknowledgement and proves the production-shaped pending/admit/ack sequence
 admits a fresh handoff. This BLOCK is historical and cannot satisfy the gate.
 
+Hosted exact-head validation of that corrective candidate caught a stale
+architecture guard that still permitted exactly one unlink. The implementation
+now has the acknowledged-item unlink plus one byte-identical crash-fallback
+reconciliation unlink. The guard is corrected to require that exact pair and
+the reconciliation helper while it continues to prohibit eviction, purge,
+trim, generic file removal, and drop paths.
+
 ## Independent review gate
 
 No statement in this record means `READY_FOR_PILOT_VALIDATION`, independently

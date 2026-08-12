@@ -444,11 +444,13 @@ def test_the_spool_bounds_exist_and_refuse_rather_than_evict() -> None:
             f"the spool no longer refuses at {bound} by throwing {error}; a bound "
             "that is reached without an error is a bound that drops data"
         )
-    # `acknowledge` is the only unlink, and it names one item the application has
-    # already durably admitted. Nothing evicts, purges, or truncates.
-    assert spool.count("unlinkat(") == 1, (
-        f"the spool now unlinks in {spool.count('unlinkat(')} places; the single "
-        "permitted removal is acknowledgement of an item the application admitted"
+    # The ordinary unlink acknowledges an item already durably admitted. The
+    # second is confined to byte-identical crash-fallback reconciliation after
+    # the destination was synchronized; it cannot make capacity by discarding
+    # unique evidence. Nothing evicts, purges, or truncates.
+    assert spool.count("unlinkat(") == 2 and "reconcileDuplicate(" in spool, (
+        f"the spool now unlinks in {spool.count('unlinkat(')} places without the "
+        "expected acknowledgement plus byte-identical fallback reconciliation"
     )
     for eviction in ("func purge", "func evict", "func trim", "removeItem", "func drop"):
         assert eviction not in spool

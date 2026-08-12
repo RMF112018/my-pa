@@ -118,6 +118,12 @@ matching protected-spool item with `O_NOFOLLOW` and returns it to
 Merely setting `activationRequested` is refused, and the host derives no
 replacement authority identity.
 
+The process adapter uses one explicitly configured owner-only persistent spool,
+not request-temporary storage. A pending item survives failed preflight or
+database admission. Only after `NativeSourceController` completes durable
+admission does it invoke `spool --acknowledge`, which routes through
+`ProtectedSpool.acknowledge`; retry remains safe if acknowledgement itself fails.
+
 No repository validation inspects a live account. TCC grants, live execution,
 signing,
 installation, service/watcher activation, application admission, persistence,

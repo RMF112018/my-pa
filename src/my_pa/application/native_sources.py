@@ -201,6 +201,9 @@ class NativeSourceHost(Protocol):
         at: datetime,
     ) -> Mapping[str, Any]: ...
 
+    def acknowledge(self, envelope_id: str) -> None:
+        """Remove one protected item only after durable application admission."""
+
 
 class NativeSourceStore(Protocol):
     """Statements required by current C use cases, with no worker/checkpoint methods."""
@@ -820,6 +823,7 @@ class NativeSourceController:
             checkpoint_job_id=checkpoint_job_id,
             checkpoint_run_id=checkpoint_run_id,
         )
+        self._host.acknowledge(authority.envelope_id)
         return NativeReadPageReceipt(
             admission=admission,
             authority_id=authority.authority_id,

@@ -40,7 +40,7 @@ capability, not merged wholesale:
 | missing host, Tasks/To Do, watcher, and operations deltas | REIMPLEMENT | fail-closed executable host admission, Tasks adapter, bounded watcher/cursor/backoff/calendar horizon, retry/dead-letter and worker-liveness semantics added on the candidate |
 | WP-23 and WP-27 | PORT | PKL/coverage and managed-document planes retained with Principal and read/write-root separation |
 | WP-28 | PORT | stdio Frontier MCP thin adapter, kill switch, conformance and filesystem-race controls retained |
-| GoodNotes and bounded model gate | REIMPLEMENT | read-only manifest-indexed streaming source, aggregate-bounded no-shell OCR, stable provenance, local-operator composition, canonical Review and knowledge search integration, model-off default, and proposal-only model gate added |
+| GoodNotes and bounded model gate | REIMPLEMENT | read-only manifest-indexed streaming source, aggregate-bounded no-shell OCR, stable provenance, local-operator composition, canonical Review and knowledge search integration, and an explicitly disabled non-executable model gate |
 | `bf/extractions-quarantined-debt`, `bf/mcv-neutral-remainder`, Dependabot | PRESERVE_ONLY / SUPERSEDED | no unique blocker-closing behavior remains outside this candidate; no wholesale merge performed |
 
 ## Blocker closure matrix
@@ -127,6 +127,17 @@ stale. The next corrective head preserves application-issued identities through
 the grant and spool, adds the bounded process adapter and synthetic authority-
 chain proof, removes executable model routing, and reconciles current-state
 documentation. This BLOCK is historical and cannot satisfy the final gate.
+
+A fourth independent audit of corrective head
+`420c2928c8c475b21c29969fafed857bf24145ae` returned BLOCK after verifying the
+exact authority chain and honest non-executable model gate. It found that the
+Python adapter placed the protected spool inside request-temporary storage and
+therefore deleted it before durable admission, never invoking the spool's
+acknowledgement lifecycle; it also identified three residual current-state doc
+contradictions. The next corrective head uses an explicit owner-only persistent
+spool, acknowledges through the Swift `ProtectedSpool` only after durable
+application admission, proves pending-item survival before acknowledgement, and
+corrects those documents. This BLOCK is historical and cannot satisfy the gate.
 
 ## Independent review gate
 

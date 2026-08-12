@@ -133,7 +133,7 @@ flowchart LR
     CM[Cloud Model Provider\nprohibited by default]
     MD[Managed Document Store\nseparate product-owned write boundary]
     OB[Future Obsidian Projection\nrebuildable]
-    PC[Apple Personal Data Providers\nnon-live handoff only]
+    PC[Apple Personal Data Providers\nauthenticated single-page path; live execution gated]
     WEB[MossAIc Web PWA/BFF]
     GN[GoodNotes Manifest + OCR\nregistry/enrollment bound]
 
@@ -152,12 +152,12 @@ flowchart LR
     GW -. separately approved disclosure only .-> CM
     GW --> MD
     DB -. projection feed .-> OB
-    WK -. future observations .-> PC
+    WK -. operator-gated read .-> PC
     GN --> WK
 
 
     classDef excluded stroke-dasharray: 5 5;
-    class CM,OB,PC,NAS,LM excluded;
+    class CM,OB,NAS,LM excluded;
 ```
 
 

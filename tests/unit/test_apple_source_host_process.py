@@ -23,8 +23,16 @@ def test_process_adapter_preserves_exact_authority_identity(
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     executable.chmod(0o700)
     observed_grant: dict[str, object] = {}
+    acknowledged: list[str] = []
 
     def run(arguments: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[bytes]:
+        if arguments[1:3] == ("spool", "--acknowledge"):
+            envelope_id = arguments[arguments.index("--envelope-id") + 1]
+            pending = spool_root / "pending" / f"{envelope_id}.pending"
+            assert pending.exists()
+            pending.unlink()
+            acknowledged.append(envelope_id)
+            return subprocess.CompletedProcess(arguments, 0, b'{"state":"acknowledged"}', b"")
         if arguments[1:3] == ("probe", "--preflight"):
             bridge = arguments[arguments.index("--bridge-id") + 1]
             request = arguments[arguments.index("--request-id") + 1]
@@ -74,8 +82,11 @@ def test_process_adapter_preserves_exact_authority_identity(
         return subprocess.CompletedProcess(arguments, 0, b"{}", b"")
 
     monkeypatch.setattr("my_pa.infrastructure.apple_source_host.subprocess.run", run)
+    spool_root = tmp_path / "spool"
+    spool_root.mkdir(mode=0o700)
     process = AppleSourceHostProcess(
         executable=executable,
+        spool_directory=spool_root,
         contacts_identity_epoch="contacts-epoch",
         mail_generation="mail-generation",
     )
@@ -108,3 +119,8 @@ def test_process_adapter_preserves_exact_authority_identity(
     assert envelope.metadata.envelope_id == "envelope-issued"
     assert observed_grant["accountID"] == "private-account"
     assert observed_grant["bucketID"] == "private-bucket"
+    pending = spool_root / "pending" / "envelope-issued.pending"
+    assert pending.exists(), "read must preserve the item until durable admission"
+    process.acknowledge("envelope-issued")
+    assert acknowledged == ["envelope-issued"]
+    assert not pending.exists()

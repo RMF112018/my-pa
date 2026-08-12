@@ -118,6 +118,7 @@ class Host:
         self.response_request_id: str | None = None
         self.on_preflight: Callable[[], None] | None = None
         self.read_calls: list[dict[str, object]] = []
+        self.acknowledged: list[str] = []
 
     def negotiate(self, supported_versions: tuple[str, ...]) -> str:
         assert supported_versions == (NATIVE_SOURCE_PROTOCOL_V1,)
@@ -201,6 +202,9 @@ class Host:
 
     def adapter_identity(self, kind: NativeSourceKind) -> str:
         return f"synthetic-{kind.value}-v1"
+
+    def acknowledge(self, envelope_id: str) -> None:
+        self.acknowledged.append(envelope_id)
 
     def read(
         self,
@@ -839,6 +843,7 @@ def test_wp12e_controller_reads_one_bounded_exact_page_before_durable_admission(
     assert (page.admission.admitted_count, page.next_cursor) == (1, "page-2")
     assert host.read_calls == [{"time_range": window, "cursor": None, "limit": 100}]
     assert page.authority_id in store.consumed
+    assert len(host.acknowledged) == 1
     with pytest.raises(ValueError, match="outside the frozen bound"):
         controller.read_and_admit_page(
             control,
@@ -849,6 +854,35 @@ def test_wp12e_controller_reads_one_bounded_exact_page_before_durable_admission(
             cursor=None,
             limit=101,
         )
+
+
+def test_wp12e_controller_does_not_acknowledge_when_admission_fails() -> None:
+    controller, store, host, _, _ = _controller()
+    store.append_configuration(_configuration(), expected_prior_revision=0)
+    control = _context(
+        purpose=Purpose.CONTENT_EXTRACTION,
+        sources=frozenset({SOURCE_A, SOURCE_B}),
+        request_id="baseline.failed-admission",
+    )
+    unauthenticated_adapter = _context(
+        purpose=Purpose.CONTENT_EXTRACTION,
+        sources=frozenset(),
+        kind=PrincipalKind.OPERATOR,
+        request_id="baseline.failed-admission",
+    )
+
+    with pytest.raises(AdmissionDeniedError, match="authenticated adapter"):
+        controller.read_and_admit_page(
+            control,
+            unauthenticated_adapter,
+            configuration_id=CONFIGURATION,
+            bucket_id=BUCKET_A,
+            time_range=None,
+            cursor=None,
+        )
+
+    assert len(host.read_calls) == 1
+    assert host.acknowledged == []
 
 
 def test_contract_rejects_unknown_fields_scope_drift_and_content_in_progress() -> None:
@@ -1176,6 +1210,9 @@ def test_merged_swift_synthetic_host_drives_discovery_preflight_and_admission() 
         def negotiate(self, supported_versions: tuple[str, ...]) -> str:
             assert supported_versions == (NATIVE_SOURCE_PROTOCOL_V1,)
             return str(exported["agreement"]["selectedVersion"])
+
+        def acknowledge(self, envelope_id: str) -> None:
+            del envelope_id
 
         def discover(
             self,

@@ -96,6 +96,54 @@ private func runProbe(_ arguments: [String]) throws -> Bool {
     return true
 }
 
+private func runSpoolCommand(_ arguments: [String]) throws -> Bool {
+    guard arguments.count >= 7, arguments[1] == "spool",
+          arguments[2] == "--acknowledge"
+    else { return false }
+    var spoolPath: String?
+    var envelopeID: NativeSourceOpaqueID?
+    var maximumSpoolItems: Int?
+    var maximumSpoolBytes: Int64?
+    var maximumPayloadBytes: Int?
+    var offset = 3
+    while offset < arguments.count {
+        guard offset + 1 < arguments.count else { throw HostError.usage }
+        switch arguments[offset] {
+        case "--spool-directory" where spoolPath == nil:
+            spoolPath = arguments[offset + 1]
+        case "--envelope-id" where envelopeID == nil:
+            envelopeID = NativeSourceOpaqueID(rawValue: arguments[offset + 1])
+        case "--maximum-spool-items" where maximumSpoolItems == nil:
+            maximumSpoolItems = Int(arguments[offset + 1])
+        case "--maximum-spool-bytes" where maximumSpoolBytes == nil:
+            maximumSpoolBytes = Int64(arguments[offset + 1])
+        case "--maximum-payload-bytes" where maximumPayloadBytes == nil:
+            maximumPayloadBytes = Int(arguments[offset + 1])
+        default: throw HostError.usage
+        }
+        offset += 2
+    }
+    guard let spoolPath, spoolPath.hasPrefix("/"), let envelopeID,
+          let maximumSpoolItems,
+          1...maximumConfiguredSpoolItems ~= maximumSpoolItems,
+          let maximumSpoolBytes,
+          1...maximumConfiguredSpoolBytes ~= maximumSpoolBytes,
+          let maximumPayloadBytes,
+          1...maximumConfiguredPayloadBytes ~= maximumPayloadBytes
+    else { throw HostError.inputNotBounded }
+    let spool = try ProtectedSpool(
+        directory: URL(fileURLWithPath: spoolPath, isDirectory: true),
+        limits: try ProtectedSpoolLimits(
+            maximumItems: maximumSpoolItems,
+            maximumBytes: maximumSpoolBytes,
+            maximumPayloadBytes: maximumPayloadBytes
+        )
+    )
+    try spool.acknowledge(envelopeID)
+    FileHandle.standardOutput.write(Data("{\"state\":\"acknowledged\"}\n".utf8))
+    return true
+}
+
 private func readBounded<T: Decodable>(
     _ path: String,
     as type: T.Type,
@@ -165,6 +213,7 @@ private func readBounded<T: Decodable>(
 
 private func run(_ arguments: [String]) throws {
     if try runProbe(arguments) { return }
+    if try runSpoolCommand(arguments) { return }
     guard arguments.count >= 13,
           arguments[1] == "handoff",
           arguments[2] == "--dry-run" || arguments[2] == "--authorized-single-pass"

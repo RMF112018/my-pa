@@ -38,6 +38,7 @@ class AppleSourceHostProcess:
         self,
         *,
         executable: Path,
+        spool_directory: Path,
         contacts_identity_epoch: str,
         mail_generation: str,
         timeout_seconds: float = 60.0,
@@ -50,6 +51,12 @@ class AppleSourceHostProcess:
         if not 1 <= timeout_seconds <= 120:
             raise ValueError("the Apple host timeout is outside its bound")
         self._executable = resolved
+        spool = spool_directory.resolve(strict=True)
+        if not spool.is_dir() or not spool.is_absolute() or spool.is_symlink():
+            raise ValueError("the Apple spool must be an absolute existing directory")
+        if spool.stat().st_mode & 0o077:
+            raise ValueError("the Apple spool must be owner-only")
+        self._spool = spool
         self._contacts_identity_epoch = contacts_identity_epoch
         self._mail_generation = mail_generation
         self._timeout_seconds = timeout_seconds
@@ -139,7 +146,6 @@ class AppleSourceHostProcess:
         configuration_id = envelope_id
         with tempfile.TemporaryDirectory(prefix="my-pa-apple-read-") as temporary:
             root = Path(temporary)
-            spool = root / "spool"
             configuration = root / "configuration.json"
             grant = root / "grant.json"
             checkpoint = root / "checkpoint.json"
@@ -175,7 +181,7 @@ class AppleSourceHostProcess:
                 "--configuration",
                 str(configuration),
                 "--spool-directory",
-                str(spool),
+                str(self._spool),
                 "--maximum-spool-items",
                 "1",
                 "--maximum-spool-bytes",
@@ -197,7 +203,7 @@ class AppleSourceHostProcess:
                 )
                 arguments.extend(("--checkpoint", str(checkpoint)))
             self._invoke_json(*arguments)
-            pending = spool / "pending" / f"{envelope_id}.pending"
+            pending = self._spool / "pending" / f"{envelope_id}.pending"
             outer = self._read_json_no_follow(pending)
             if (
                 outer.get("envelopeID") != envelope_id
@@ -217,6 +223,23 @@ class AppleSourceHostProcess:
             if not isinstance(envelope, dict):
                 raise AppleSourceHostError("the Apple admission envelope is invalid")
             return envelope
+
+    def acknowledge(self, envelope_id: str) -> None:
+        """Ask the Swift spool implementation to durably acknowledge one item."""
+        self._invoke_json(
+            "spool",
+            "--acknowledge",
+            "--spool-directory",
+            str(self._spool),
+            "--envelope-id",
+            envelope_id,
+            "--maximum-spool-items",
+            "1",
+            "--maximum-spool-bytes",
+            str(67_108_864),
+            "--maximum-payload-bytes",
+            str(_MAXIMUM_OUTPUT_BYTES),
+        )
 
     def _configuration(
         self,

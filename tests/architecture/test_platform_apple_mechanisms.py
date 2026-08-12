@@ -155,6 +155,8 @@ def test_platform_executable_preserves_application_issued_authority_identity() -
         'arguments[2] == "--dry-run"',
         'arguments[2] == "--authorized-single-pass"',
         'case "--authorization-grant"',
+        'arguments[1] == "spool"',
+        "spool.acknowledge(envelopeID)",
     ):
         assert required in main
     assert "spool.enqueue" in admission
@@ -191,6 +193,7 @@ def test_platform_executable_preserves_application_issued_authority_identity() -
     assert "bridge_id=authority.bridge_id" in controller
     assert "envelope_id=authority.envelope_id" in controller
     assert "request_id=control_context.request_id" in controller
+    assert "self._host.acknowledge(authority.envelope_id)" in controller
 
 
 def test_current_docs_name_the_inert_handoff_and_deferred_goodnotes_model_route() -> None:

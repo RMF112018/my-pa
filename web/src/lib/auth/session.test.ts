@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { encodeSession, verifySession } from "@/lib/auth/session";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { encodeSession, MissingSessionSecretError, verifySession } from "@/lib/auth/session";
 import type { PrincipalSession } from "@/contracts/identity";
 
 const PRINCIPAL: PrincipalSession = {
@@ -40,5 +40,49 @@ describe("session encode/verify", () => {
     expect(await verifySession("")).toBeNull();
     expect(await verifySession(undefined)).toBeNull();
     expect(await verifySession("a.b.c")).toBeNull();
+  });
+});
+
+/**
+ * The session envelope carries `principalId` and is trusted by `middleware.ts`
+ * and every `requirePrincipal` route. Until WP-04 an unset `MYPA_SESSION_SECRET`
+ * silently selected a hardcoded key, so a deployment that forgot one
+ * environment variable accepted sessions minted by anyone — failing open, with
+ * no signal at all. There is now no default, and these assert that.
+ */
+describe("session secret configuration", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("refuses to sign when no secret is configured", async () => {
+    vi.stubEnv("MYPA_SESSION_SECRET", "");
+    await expect(encodeSession(PRINCIPAL)).rejects.toBeInstanceOf(MissingSessionSecretError);
+  });
+
+  it("refuses to verify when no secret is configured, rather than answering", async () => {
+    // The refusal has to reach the caller. Returning `null` here would be
+    // indistinguishable from "not signed in" and would hide the
+    // misconfiguration behind a login screen.
+    const token = await encodeSession(PRINCIPAL);
+    vi.stubEnv("MYPA_SESSION_SECRET", "");
+    await expect(verifySession(token)).rejects.toBeInstanceOf(MissingSessionSecretError);
+  });
+
+  it("refuses a secret too short to be one", async () => {
+    vi.stubEnv("MYPA_SESSION_SECRET", "short");
+    await expect(encodeSession(PRINCIPAL)).rejects.toBeInstanceOf(MissingSessionSecretError);
+  });
+
+  it("signs with the configured secret and not with any other", async () => {
+    // The control: two different configured secrets must not verify each
+    // other's tokens. Without it, "a secret is required" could be satisfied by
+    // an implementation that required the variable and then ignored it.
+    vi.stubEnv("MYPA_SESSION_SECRET", "first-synthetic-signing-key-000000000000");
+    const token = await encodeSession(PRINCIPAL);
+    expect(await verifySession(token)).not.toBeNull();
+
+    vi.stubEnv("MYPA_SESSION_SECRET", "second-synthetic-signing-key-00000000000");
+    expect(await verifySession(token)).toBeNull();
   });
 });

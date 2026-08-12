@@ -20,10 +20,14 @@ where statements are built, and it refuses rather than defaults:
   `domain.identity.binding` — and a context that carries no capture-plane
   identifier fails a text-partitioned query closed rather than matching
   nothing or everything.
-* `principal_bound_values` stamps INSERT values with the context's
-  `principal_id` and raises `CallerSuppliedPrincipalError` if the values
-  already carry one — a write path must never accept identity from payload
-  (MU-AC-02), including from its own composition bugs.
+* `principal_bound_values` stamps INSERT/UPDATE values with the context's
+  identity in the partition column the *table* declares, and raises
+  `CallerSuppliedPrincipalError` if the values already carry one — a write path
+  must never accept identity from payload (MU-AC-02), including from its own
+  composition bugs. It takes the table for the same reason
+  `partition_criterion` does: the column name and the vocabulary are the
+  table's to state, and a write path that named either itself would be the
+  hand-written drift this module exists to remove.
 
 The context object is deliberately tiny. It is constructed by the identity
 service after claim validation and carried per request; nothing else is
@@ -35,7 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Select, Table
+from sqlalchemy import Column, ColumnElement, Select, Table
 from sqlalchemy import Uuid as SqlUuid
 
 from my_pa.domain.identity.binding import durable_principal_uuid
@@ -108,17 +112,17 @@ def require_principal_context(context: PrincipalContext | None) -> PrincipalCont
     return context
 
 
-def partition_criterion(table: Table, context: PrincipalContext | None) -> ColumnElement[bool]:
-    """The one predicate that constrains `table` to the context's partition.
+def _partition_binding(
+    table: Table, context: PrincipalContext | None
+) -> tuple[Column[str] | Column[UUID], UUID | str]:
+    """The table's partition column and the value this context occupies it with.
 
-    Public because a statement builder that composes its own WHERE list
-    (`persistence.capture_search`) needs the predicate itself rather than a
-    wrapped SELECT — and a second, hand-written owner comparison there would be
-    the drift `principal_scoped` exists to prevent. Fails closed three times
-    over: no context is refused, a table carrying neither partition column
-    cannot be queried through this path at all, and a text-partitioned table
-    under a context that carries no capture-plane identifier is refused rather
-    than compared against nothing.
+    One resolver, used by every helper below, so the two partition vocabularies
+    are recognised in exactly one place. Fails closed three times over: no
+    context is refused, a table carrying neither partition column cannot be
+    reached through this path at all, and a text-partitioned table under a
+    context that carries no capture-plane identifier is refused rather than
+    compared against — or stamped with — nothing.
     """
     resolved = require_principal_context(context)
     for name in ("principal_id", "owner_principal_id"):
@@ -126,11 +130,26 @@ def partition_criterion(table: Table, context: PrincipalContext | None) -> Colum
             continue
         column = table.c[name]
         if isinstance(column.type, SqlUuid):
-            return column == resolved.principal_id
+            return column, resolved.principal_id
         if resolved.capture_principal_id is None:
             raise MissingPrincipalContextError()
-        return column == resolved.capture_principal_id
+        return column, resolved.capture_principal_id
     raise UnpartitionedTableError(str(table.fullname))
+
+
+def partition_criterion(table: Table, context: PrincipalContext | None) -> ColumnElement[bool]:
+    """The one predicate that constrains `table` to the context's partition.
+
+    Public because a statement builder that composes its own WHERE list
+    (`persistence.capture_search`, `persistence.relationships`) needs the
+    predicate itself rather than a wrapped SELECT — and a second, hand-written
+    owner comparison there would be the drift `principal_scoped` exists to
+    prevent. An UPDATE or DELETE reaches the partition through this function
+    too, because neither is a `Select` and both are exactly as capable of
+    rewriting another Principal's rows as a SELECT is of reading them.
+    """
+    column, value = _partition_binding(table, context)
+    return column == value
 
 
 def principal_scoped[SelectT: Select[tuple]](  # type: ignore[type-arg]
@@ -144,14 +163,23 @@ def principal_scoped[SelectT: Select[tuple]](  # type: ignore[type-arg]
 
 def principal_bound_values(
     values: dict[str, object],
+    table: Table,
     context: PrincipalContext | None,
 ) -> dict[str, object]:
-    """Stamp INSERT/UPDATE values with the context's `principal_id`.
+    """Stamp INSERT values with the context's identity in `table`'s partition column.
 
-    Raises when the values already carry a `principal_id`: a write path that
-    lets its payload name a partition is exactly the defect MU-AC-02 excludes.
+    Raises when the values already name the partition column: a write path that
+    lets its payload name a partition is exactly the defect MU-AC-02 excludes,
+    and "the caller passed it" and "this module composed it twice" are the same
+    defect from the row's point of view.
+
+    The table is a parameter rather than an assumption because the two partition
+    vocabularies name their column differently (`principal_id` on the identity
+    and relationship planes, `owner_principal_id` on the capture plane) and
+    carry different types. Resolving both here is what stops a caller from
+    writing the resolution out a second time.
     """
-    resolved = require_principal_context(context)
-    if "principal_id" in values:
-        raise CallerSuppliedPrincipalError("principal_id")
-    return {**values, "principal_id": resolved.principal_id}
+    column, value = _partition_binding(table, context)
+    if column.name in values:
+        raise CallerSuppliedPrincipalError(column.name)
+    return {**values, column.name: value}

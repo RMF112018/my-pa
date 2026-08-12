@@ -318,6 +318,9 @@ def _work(runtime: GatewayRuntime, *, iterations: int = 1) -> tuple[int, int]:
     """Drive the real worker loop. `iterations` because two grants queue two jobs."""
     run = run_worker(
         runtime.work_engine,
+        # The Principal this runtime acts as — the same one whose enrollments
+        # queued the work. A worker claims its own Principal's queue (WP-04).
+        principal_id=runtime.principal.principal_id,
         owner=issue_worker_owner(),
         handler=extract_enrollment,
         stop=threading.Event(),

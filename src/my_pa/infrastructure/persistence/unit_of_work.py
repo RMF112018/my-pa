@@ -229,9 +229,9 @@ class _Operations(OperationQueue):
     def enqueue(self, enrollment_id: str) -> str:
         return _read(lambda: enqueue_job(self._connection, enrollment_id))
 
-    def operation(self, operation_id: str) -> Operation | None:
+    def operation(self, operation_id: str, *, principal_id: str) -> Operation | None:
         def statement() -> Operation | None:
-            found = job_for(self._connection, operation_id)
+            found = job_for(self._connection, operation_id, principal_id=principal_id)
             if found is None:
                 return None
             return Operation(

@@ -500,6 +500,15 @@ jobs = Table(
     Column("last_error_code", Text),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # The queue's own partition (WP-04, revision `4f1a8b6d92e3`). Ownership was
+    # transitive through `enrollment_id -> enrollments.principal_id` until then,
+    # which made the dequeue a global FIFO: `claim_job` ordered by
+    # `(created_at, operation_id)` across every Principal's work at once, so one
+    # Principal's backlog decided when another's work ran, and a count of
+    # outstanding work was a count of everybody's. A predicate cannot be written
+    # against a column that does not exist, so the column comes first.
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("state", JobState),
     CheckConstraint(
         "last_error_code IS NULL OR last_error_code IN ("
@@ -521,6 +530,9 @@ jobs = Table(
         name="attempts_are_bounded",
     ),
     Index("jobs_by_state", "state", "created_at"),
+    # Principal first, then the claim's own ordering, so the dequeue reads one
+    # Principal's queue rather than filtering the whole table.
+    Index("jobs_by_principal_claim_order", "principal_id", "state", "created_at"),
 )
 
 #: One row per object that reached an extraction outcome, under one enrollment.
@@ -1062,7 +1074,12 @@ capture_jobs = Table(
     Column("last_error_code", Text),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # The capture queue's partition, for the reason `jobs.principal_id` carries
+    # one. Ownership here was transitive through
+    # `version_id -> capture_versions.owner_principal_id`.
+    Column("principal_id", Text, nullable=False),
     _is_identifier("operation_id", IdKind.OPERATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("state", JobState, name="capture_job_state_is_known"),
     CheckConstraint(
         "last_error_code IS NULL OR last_error_code IN ("
@@ -1084,6 +1101,7 @@ capture_jobs = Table(
         name="capture_job_attempts_are_bounded",
     ),
     Index("capture_jobs_by_state", "state", "created_at"),
+    Index("capture_jobs_by_principal_claim_order", "principal_id", "state", "created_at"),
 )
 
 #: `P-02`'s output: the conservative processing text and the mapping that takes

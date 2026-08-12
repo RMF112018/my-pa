@@ -11,11 +11,48 @@ import type { PrincipalSession } from "@/contracts/identity";
 export const SESSION_COOKIE_NAME = "mypa_session";
 export const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60; // 8 hours
 
-/** Development fallback. Overridden by MYPA_SESSION_SECRET in real envs. */
-const DEV_FALLBACK_SECRET = "mypa-dev-session-secret-not-for-production";
+/**
+ * Raised when no session secret is configured. Distinct from a verification
+ * failure: a bad token means "this caller is not signed in", while this means
+ * "this deployment cannot decide who anyone is" — and the two must not be
+ * answered the same way, because the second is a misconfiguration that has to
+ * reach an operator rather than a visitor.
+ */
+export class MissingSessionSecretError extends Error {
+  constructor() {
+    super(
+      "MYPA_SESSION_SECRET is not set. The session cookie carries principalId and " +
+        "is trusted by the middleware and every requirePrincipal route, so a signing " +
+        "key must be configured explicitly. There is no default.",
+    );
+    this.name = "MissingSessionSecretError";
+  }
+}
+
+/**
+ * The HMAC key, or a refusal.
+ *
+ * This used to fall back to a hardcoded literal when `MYPA_SESSION_SECRET` was
+ * unset, which failed **open** and silently: the session envelope carries
+ * `principalId`, `src/middleware.ts` and every `requirePrincipal` route trust
+ * whatever verifies against this key, and the fallback was a constant in a
+ * public repository. Anyone could therefore mint a session for an arbitrary
+ * principal against any deployment that had forgotten one environment
+ * variable — and nothing anywhere would have said so, because a signature that
+ * verifies looks exactly like a signature that should.
+ *
+ * A minimum length is enforced for the same reason the default is gone: a
+ * one-character secret is a configured secret, and accepting it would move the
+ * failure from "unset" to "set to something useless", which is harder to see.
+ */
+const MINIMUM_SECRET_LENGTH = 32;
 
 function sessionSecret(): string {
-  return process.env.MYPA_SESSION_SECRET ?? DEV_FALLBACK_SECRET;
+  const configured = process.env.MYPA_SESSION_SECRET;
+  if (!configured || configured.trim().length < MINIMUM_SECRET_LENGTH) {
+    throw new MissingSessionSecretError();
+  }
+  return configured;
 }
 
 interface SessionPayload {

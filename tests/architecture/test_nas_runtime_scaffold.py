@@ -75,6 +75,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     compose_model = _parse_compose(compose)
     if compose_model is None:
         return {"compose_parse"}
+    if set(compose_model) != {"name", "services", "networks"}:
+        errors.add("top_level_contract")
 
     try:
         contract = tomllib.loads(contract_text)
@@ -227,11 +229,88 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "web": None,
         "proxy": None,
     }
+    expected_environments = {
+        "postgres": {
+            "POSTGRES_DB": "my_pa",
+            "POSTGRES_USER": "my_pa",
+            "POSTGRES_PASSWORD": "${MY_PA_DB_PASSWORD:?database password required}",
+        },
+        "gateway": {"MY_PA_GATEWAY_BIND_HOST": "0.0.0.0"},  # noqa: S104
+        "worker-enrollment": None,
+        "worker-capture": None,
+        "web": {
+            "NODE_ENV": "production",
+            "MYPA_GATEWAY_URL": "http://gateway:8765",
+            "MYPA_GATEWAY_AUTH_MODE": "entra",
+            "MYPA_SESSION_SECRET": "${MYPA_SESSION_SECRET:?session secret required}",
+        },
+        "proxy": None,
+    }
+    expected_service_keys = {
+        "postgres": {
+            "profiles",
+            "image",
+            "platform",
+            "restart",
+            "environment",
+            "volumes",
+            "networks",
+        },
+        "gateway": {
+            "profiles",
+            "image",
+            "platform",
+            "user",
+            "restart",
+            "command",
+            "environment",
+            "env_file",
+            "expose",
+            "volumes",
+            "networks",
+        },
+        "worker-enrollment": {
+            "profiles",
+            "image",
+            "platform",
+            "user",
+            "restart",
+            "command",
+            "env_file",
+            "volumes",
+            "networks",
+        },
+        "worker-capture": {
+            "profiles",
+            "image",
+            "platform",
+            "user",
+            "restart",
+            "command",
+            "env_file",
+            "volumes",
+            "networks",
+        },
+        "web": {
+            "profiles",
+            "image",
+            "platform",
+            "user",
+            "restart",
+            "command",
+            "environment",
+            "expose",
+            "networks",
+        },
+        "proxy": {"profiles", "image", "platform", "restart", "ports", "volumes", "networks"},
+    }
     for name in SERVICES:
         service = compose_services.get(name, {})
         if not isinstance(service, dict):
             errors.add("service_contract")
             continue
+        if set(service) != expected_service_keys[name]:
+            errors.add("service_contract")
         if service.get("platform") != "linux/amd64":
             errors.add("missing_platform")
         if service.get("restart") != "no":
@@ -242,6 +321,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             errors.add("contract_profile")
         if service.get("env_file") != expected_env_files[name]:
             errors.add("credential_authority")
+        if service.get("environment") != expected_environments[name]:
+            errors.add("environment_contract")
         if "build" in service:
             errors.add("implicit_build")
         expected_ports = (
@@ -485,10 +566,34 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/compose.example.yml",
+            '    expose: ["8765"]\n',
+            '    expose: ["8765"]\n    privileged: true\n',
+            "service_contract",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            '    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]\n',
+            "    environment:\n      MY_PA_GATEWAY_BIND_HOST: 127.0.0.1\n"
+            '    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]\n',
+            "environment_contract",
+        ),
+        (
+            "ops/nas/compose.example.yml",
             '    expose: ["3000"]\n',
             '    expose: ["3000"]\n'
             '    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]\n',
             "credential_authority",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            '    expose: ["3000"]\n',
+            "    environment:\n"
+            "      NODE_ENV: production\n"
+            "      MYPA_GATEWAY_URL: http://wrong:9999\n"
+            "      MYPA_GATEWAY_AUTH_MODE: local_operator\n"
+            '      MYPA_SESSION_SECRET: "${MYPA_SESSION_SECRET:?session secret required}"\n'
+            '    expose: ["3000"]\n',
+            "environment_contract",
         ),
         (
             "ops/nas/compose.example.yml",
@@ -501,6 +606,12 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "data-plane:\n    internal: true",
             "data-plane:\n    internal: true\n  data-plane:\n    internal: false",
             "network_planes",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "\nnetworks:\n",
+            "\nvolumes: {unexpected: {}}\nnetworks:\n",
+            "top_level_contract",
         ),
         (
             "ops/nas/compose.example.yml",

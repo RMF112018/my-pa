@@ -214,9 +214,16 @@ def test_the_widened_vocabulary_is_a_strict_superset_of_the_frozen_one() -> None
         member.value for member in NativeSourceCapability
     }
     assert declared > CAPABILITIES_BEFORE
-    assert declared - CAPABILITIES_BEFORE == CAPABILITIES_ADDED
+    # A superset and not an equality any more, and the change is the point rather
+    # than a loosening: `2d9f4a7c1e58` widened the vocabulary again, so what the
+    # *domain* declares is no longer what *this* revision admits. The frozen half
+    # is what this file is about and it stays an exact set; what this revision
+    # itself adds stays an exact set; and the live vocabulary is only required to
+    # contain them, because a later revision widening it further is exactly what
+    # `D-69` expects to happen.
+    assert declared - CAPABILITIES_BEFORE >= CAPABILITIES_ADDED
     assert len(CAPABILITIES_BEFORE) == 27
-    assert len(declared) == 30
+    assert len(CAPABILITIES_BEFORE | CAPABILITIES_ADDED) == 30
 
 
 @pytest.mark.database
@@ -254,7 +261,6 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabulary(
             member.value for member in NativeSourceCapability
         }
         assert _admitted(engine, "audit_events", "capability_is_known") == declared
-        assert len(declared) == 30
 
         command.downgrade(_config(), PREVIOUS_REVISION)
         assert _admitted(engine, "audit_events", "capability_is_known") == CAPABILITIES_BEFORE

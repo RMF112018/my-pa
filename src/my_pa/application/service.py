@@ -121,6 +121,7 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCorpusCoverage,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
@@ -139,9 +140,11 @@ from my_pa.application.commands import (
 )
 from my_pa.application.disclosure import (
     Limitation,
+    corpus_disclosure,
     disclosure_for,
     unavailable_disclosure,
     unenrolled_disclosure,
+    with_corpus_caveat,
 )
 from my_pa.application.errors import (
     AmbiguousRequestError,
@@ -222,6 +225,7 @@ from my_pa.domain.source.enrollment import (
     EnrollmentScope,
 )
 from my_pa.domain.source.provider import (
+    ENUMERABLE_KINDS,
     ObjectKind,
     ProviderError,
     SourceObject,
@@ -953,6 +957,25 @@ class ApplicationService:
         to render itself, every message these constructors raise names the rule
         rather than the value, and the public error carries a code and a field
         name and nothing else.
+
+        **A search over partial coverage says so, and that is the one thing added
+        to the envelope here.** A Principal holding another enrollment, or objects
+        of a held source that no enrollment enumerates, gets an answer that is
+        correct for the enrollment it named and is *not* an answer about
+        everything they hold. Without a token there is nothing in the reply that
+        distinguishes those two, which is `docs/specs` section 23's named failure:
+        a search that silently omits unindexed scope and returns a confident
+        answer. `with_corpus_caveat` adds one closed token and sets
+        `partial_result`; it changes no count, no state and no scope, because
+        nothing here measured a wider scope.
+
+        **It is not a widening of this capability's authorization.** The extra
+        read answers about the enrollment set the acting Principal already holds
+        and returns a boolean; no row outside `command.enrollment_id` reaches the
+        page, the coverage, or the disclosure. The search itself is untouched: the
+        envelope below is still the one the search produced, because rebuilding
+        the coverage from a second read would replace a consistent answer with a
+        plausible one.
         """
         self._required_enrollment(authorization, command.enrollment_id)
         request = self._search_request(command)
@@ -973,6 +996,12 @@ class ApplicationService:
         if outcome is None:
             raise InternalError()
 
+        with _translated():
+            beyond = unit_of_work.knowledge.scope_beyond_enrollment(
+                authorization.principal.principal_id, enrollment_id=command.enrollment_id
+            )
+        disclosure = with_corpus_caveat(outcome.disclosure) if beyond else outcome.disclosure
+
         return _Result(
             payload={
                 "matches": [
@@ -988,7 +1017,72 @@ class ApplicationService:
                     for match in outcome.matches
                 ]
             },
-            disclosure=outcome.disclosure,
+            disclosure=disclosure,
+        )
+
+    def _knowledge_coverage(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetCorpusCoverage,
+    ) -> _Result:
+        """How much of everything this Principal holds has been covered.
+
+        **The answer this build could not previously give.** Coverage is stated
+        per enrollment and never inferred globally, which is right and is also why
+        a Principal holding three enrollments and objects outside all of them
+        could search, receive a clean disclosure, and never learn that most of
+        what they hold was outside the question. This composes the stated
+        coverages instead of replacing them: the payload carries each enrollment's
+        own counts and state unmerged, and the totals beside them are sums that
+        say they are sums.
+
+        **The unknown territory is the point, and it is counts only.** Objects
+        inside the held sources that no enrollment enumerates, and enumerated
+        objects that have reached no outcome. Neither is ever named — no
+        identifier, no locator, no media type — which is `AggregateLimitation`'s
+        rule applied to a wider scope, and the reason the payload has no list
+        anywhere in it.
+
+        The Principal is `authorization.principal.principal_id`, the one the
+        gateway established from its own authenticated context, and never anything
+        the request carried. There is nothing else the request could carry:
+        `GetCorpusCoverage` has no fields.
+        """
+        with _translated():
+            corpus = unit_of_work.knowledge.corpus(
+                authorization.principal.principal_id, observed_at=authorization.at
+            )
+        return _Result(
+            payload={
+                "state": corpus.state().value,
+                "enrollment_count": corpus.enrollment_count,
+                "held_sources": corpus.held_sources,
+                "stated_totals": {
+                    "eligible": corpus.stated_eligible,
+                    "processed": corpus.stated_processed,
+                    "quarantined": corpus.stated_quarantined,
+                    "unsupported": corpus.stated_unsupported,
+                    "are_per_enrollment_sums": corpus.totals_are_per_enrollment_sums,
+                },
+                "enrollments": [
+                    {
+                        "enrollment_id": counts.enrollment_id,
+                        "state": counts.state().value,
+                        "eligible": counts.eligible,
+                        "processed": counts.processed,
+                        "quarantined": counts.quarantined,
+                        "unsupported": counts.unsupported,
+                    }
+                    for counts in corpus.enrollments
+                ],
+                "unknown_territory": {
+                    "objects_in_held_sources": corpus.objects_in_held_sources,
+                    "objects_outside_every_enrollment": corpus.objects_outside_every_enrollment,
+                    "objects_awaiting_an_outcome": corpus.objects_awaiting_an_outcome,
+                },
+            },
+            disclosure=corpus_disclosure(corpus),
         )
 
     def _knowledge_read(
@@ -1752,7 +1846,13 @@ class ApplicationService:
                 with _translated():
                     children = tuple(provider.list_children(parent))
                 for child in children:
-                    if child.kind is ObjectKind.CONTAINER:
+                    # `ENUMERABLE_KINDS` rather than a literal comparison, and
+                    # the reason is a second caller rather than style: the corpus
+                    # coverage read subtracts exactly these kinds when it counts
+                    # what lies outside every enrollment, and two places deciding
+                    # what an enrollment can hold is the divergence this package
+                    # keeps being blocked for.
+                    if child.kind not in ENUMERABLE_KINDS:
                         descend.append(child.source_object_id)
                         continue
                     found.append(child.source_object_id)
@@ -1972,6 +2072,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.SOURCES_ENROLL: ApplicationService._sources_enroll,
         Capability.KNOWLEDGE_SEARCH: ApplicationService._knowledge_search,
         Capability.KNOWLEDGE_READ: ApplicationService._knowledge_read,
+        Capability.KNOWLEDGE_COVERAGE: ApplicationService._knowledge_coverage,
         Capability.KNOWLEDGE_REVEAL: ApplicationService._knowledge_reveal,
         Capability.CAPTURE_CREATE: ApplicationService._capture_create,
         Capability.CAPTURE_REVISE: ApplicationService._capture_revise,

@@ -110,6 +110,7 @@ from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.identity.operation import Capability
@@ -472,6 +473,85 @@ class _Knowledge(KnowledgeRepository):
             quarantined=quarantined,
             unsupported=unsupported,
             limitations=self._world.limitations.get(enrollment_id, ()),
+        )
+
+    def corpus(self, principal_id: str, *, observed_at: datetime) -> CorpusCoverage:
+        """Compose this Principal's stated coverages, and count what none of them reach.
+
+        The members come from `self.coverage`, not from a second walk of the
+        world, for the reason the SQL repository composes `coverage_for`: a fake
+        that computed a corpus its own way could let a test pass against
+        arithmetic the store would not reproduce.
+
+        Two honest differences from the store, stated rather than glossed. The
+        world's `objects` carry no kind, so `ENUMERABLE_KINDS` has nothing to
+        filter here — a container is not a thing this fake can hold. And
+        `objects_awaiting_an_outcome` counts distinct object identifiers across
+        every held enrollment, which is exactly what the `count(distinct …)` in
+        `corpus_coverage` counts.
+        """
+        self._world.fail("corpus")
+        held = tuple(
+            sorted(
+                enrollment.enrollment_id
+                for enrollment in self._world.enrollments
+                if enrollment.principal_id == principal_id
+            )
+        )
+        if not held:
+            return CorpusCoverage(observed_at=observed_at, principal_id=principal_id)
+        sources = {
+            enrollment.source_id
+            for enrollment in self._world.enrollments
+            if enrollment.principal_id == principal_id
+        }
+        in_sources = {
+            object_id
+            for object_id, source_id in self._world.objects.items()
+            if source_id in sources
+        }
+        enumerated = {
+            object_id for enrollment in held for object_id in self._world.scopes.get(enrollment, ())
+        }
+        awaiting = {
+            object_id
+            for enrollment in held
+            for object_id in self._world.scopes.get(enrollment, ())
+            if self._world.outcomes.get(enrollment, {}).get(object_id) is None
+        }
+        return CorpusCoverage(
+            observed_at=observed_at,
+            principal_id=principal_id,
+            enrollments=tuple(
+                self.coverage(enrollment, observed_at=observed_at) for enrollment in held
+            ),
+            held_sources=len(sources),
+            objects_in_held_sources=len(in_sources),
+            objects_outside_every_enrollment=len(in_sources - enumerated),
+            objects_awaiting_an_outcome=len(awaiting),
+        )
+
+    def scope_beyond_enrollment(self, principal_id: str, *, enrollment_id: str) -> bool:
+        """Whether this Principal holds scope the named enrollment does not cover.
+
+        The store's two conditions, reproduced rather than approximated: another
+        enrollment of the same Principal, or an object of a held source that no
+        enrollment of theirs enumerates.
+        """
+        self._world.fail("scope_beyond_enrollment")
+        mine = [e for e in self._world.enrollments if e.principal_id == principal_id]
+        if any(e.enrollment_id != enrollment_id for e in mine):
+            return True
+        enumerated = {
+            object_id
+            for enrollment in mine
+            for object_id in self._world.scopes.get(enrollment.enrollment_id, ())
+        }
+        sources = {e.source_id for e in mine}
+        return any(
+            object_id not in enumerated
+            for object_id, source_id in self._world.objects.items()
+            if source_id in sources
         )
 
     def limitations(self, enrollment_id: str) -> tuple[AggregateLimitation, ...]:

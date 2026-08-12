@@ -22,11 +22,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Final
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 
 __all__ = [
+    "ENUMERABLE_KINDS",
     "ObjectKind",
     "ProviderError",
     "SourceObject",
@@ -45,6 +47,20 @@ class ObjectKind(StrEnum):
     MAIL_MESSAGE = "mail_message"
     CALENDAR_EVENT = "calendar_event"
     CONTACT = "contact"
+
+
+#: The kinds an enrollment's enumeration records as authorized objects.
+#:
+#: **One definition with two callers, rather than a rule written twice.**
+#: `ApplicationService._enumerate` descends into a container and records
+#: everything else; the corpus coverage read has to subtract exactly the same
+#: kinds when it counts what lies *outside* every enrollment, because a container
+#: is structure no enumeration was ever going to enroll and reporting one as
+#: uncovered territory would be a permanent gap nothing could close. Written as
+#: the complement so that a new kind is enumerable — and therefore countable —
+#: unless something decides otherwise, which is the direction that fails towards
+#: disclosing more rather than less.
+ENUMERABLE_KINDS: Final[frozenset[ObjectKind]] = frozenset(ObjectKind) - {ObjectKind.CONTAINER}
 
 
 class ProviderError(Exception):

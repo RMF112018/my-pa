@@ -72,6 +72,7 @@ from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.domain.audit.events import AuditOutcome
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.identity.operation import Capability
@@ -173,6 +174,12 @@ class _FailingKnowledge(KnowledgeRepository):
         return self._inner.coverage(
             enrollment_id, observed_at=observed_at, eligible=eligible, queued=queued
         )
+
+    def corpus(self, principal_id: str, *, observed_at: datetime) -> CorpusCoverage:
+        return self._inner.corpus(principal_id, observed_at=observed_at)
+
+    def scope_beyond_enrollment(self, principal_id: str, *, enrollment_id: str) -> bool:
+        return self._inner.scope_beyond_enrollment(principal_id, enrollment_id=enrollment_id)
 
     def limitations(self, enrollment_id: str) -> tuple[AggregateLimitation, ...]:
         raise EvidenceUnavailableError("the limitation read was made to fail by this test")

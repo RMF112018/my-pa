@@ -56,6 +56,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import CursorResult, make_url
+from sqlalchemy.exc import IntegrityError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import UnknownScopeError
@@ -2524,41 +2525,60 @@ def test_a_retry_reads_back_the_version_it_offered_and_not_another_of_its_own(
 
 
 @pytest.mark.database
-def test_a_row_filed_in_extractions_as_quarantined_is_not_counted_as_processed(
+def test_the_schema_refuses_a_quarantined_outcome_filed_as_an_extraction(
     engine: Engine,
 ) -> None:
-    """The `status` filter on the processed count, which nothing could reach.
+    """A quarantine filed in the wrong table is refused, not merely uncounted.
 
-    `extractions.status` may lawfully hold `quarantined`: `extraction_status_is
-    _known` admits all three values and the text constraint only requires such a
-    row to carry none. `record_outcome` never writes one — it routes quarantines
-    to the other table — so only a row written by hand reaches this state, which
-    is the same class of row the rest of the read-side boundary tests plant.
+    This replaces `test_a_row_filed_in_extractions_as_quarantined_is_not_counted
+    _as_processed`, and the replacement is the point rather than a consequence.
+    That test planted a `quarantined` row in `extractions` by hand — the state
+    `record_outcome` routes away from and no production path can produce — and
+    then asserted the read side counted it nowhere. It was a *demonstration that
+    a mis-filed row is not counted*. `9d4e7a3b1c62` narrowed
+    `extraction_status_is_known` to the two statuses a writer can file, so the
+    row can no longer be arranged at all, and the property is now an
+    *impossibility* instead. The premise the old test needed is exactly what the
+    schema now denies, which is why it could not be kept alongside.
 
-    Such a row is in neither precedence subquery: `quarantined_objects` reads
-    `quarantine_records` and `unsupported_objects` matches a different status. So
-    without the status filter it is counted as *processed* — an object whose
-    processing stopped, reported as covered, which is the direction `INV-PKL-007`
-    forbids. With it the object is counted nowhere at all, which is the honest
-    answer: a quarantine filed in the wrong table is not coverage of anything.
+    Planted with raw SQL for the same reason `plant_an_extraction` exists: the
+    supported writer refuses this outcome before it reaches SQL, so only a
+    hand-written statement reaches the server, which is where the claim is
+    about. `record_outcome` is not the subject here and would prove nothing —
+    it never emits this insert.
+
+    The narrowing did not weaken the read side and this does not stop covering
+    it. The `status` condition in `extracted_text_in_scope` is retained and now
+    redundant; `extraction.py` says why, and the precedence exclusions that
+    always did the real work are exercised by the sibling tests that plant
+    `unsupported` rows and quarantine records.
     """
     scoped = enrol(
         engine,
-        key="status-filter",
+        key="status-refused",
         documents={name: CORPUS[name] for name in ("ledger", "minutes")},
         extract=frozenset({"ledger"}),
     )
-    plant_an_extraction(
-        engine,
-        enrollment_id=scoped.enrollment_id,
-        source_object_id=scoped.object_ids["minutes"],
-        version_id=scoped.version_ids["minutes"],
-        status="quarantined",
-    )
 
+    with pytest.raises(IntegrityError) as refusal:
+        plant_an_extraction(
+            engine,
+            enrollment_id=scoped.enrollment_id,
+            source_object_id=scoped.object_ids["minutes"],
+            version_id=scoped.version_ids["minutes"],
+            status="quarantined",
+        )
+
+    # Named, so a row refused by some *other* constraint cannot pass as this
+    # claim — which is how a refusal test quietly stops testing what it says.
+    assert "extraction_status_is_known" in str(refusal.value)
+
+    # And the refusal left nothing behind: the coverage beside it is the one an
+    # enrollment with a single extracted object should report, with no trace of
+    # the object whose row the server rejected.
     coverage = search(scoped, "revenue").disclosure.coverage
 
-    assert coverage.processed == 1, "a row filed as quarantined was counted as processed"
+    assert coverage.processed == 1
     assert coverage.quarantined == 0
     assert coverage.unsupported == 0
     assert coverage.eligible == 2

@@ -225,7 +225,17 @@ WP-03 is **migration-chain only**. Every commit below either touches
 ### WP-03 acceptance conditions carried forward
 
 1. **Principal partitioning.** WP-12E's baseline tables (`355a0f8b`, `6348b246`) were authored on WP-12C, *before* the WP-00…WP-06 principal-partitioning revisions existed. They carry **no `principal_id`**. Its revision must be re-chained onto head `d2e3f4a5b6c7`, and **the baseline tables must be principal-partitioned before admission.** This is an acceptance condition, not a note.
-2. **Chain divergence.** The extractions branch holds 16 revisions and has none of the target's `20260804_8c4d1e7a2b90`, `20260805_9d5e2f7b4c61`, or the WP-00…WP-06 principal revisions. Every deferred revision needs re-chaining, not replaying.
+
+   > **Correction, WP-03 (2026-08-09) — the premise of the sentence above was measured false. The original claim is left standing rather than rewritten; this note supersedes it.**
+   >
+   > There are no "WP-12E baseline tables". Revision `a7c3e8d1f642` contains **zero** `CREATE TABLE` and zero `op.create_table`; it alters four tables that already exist. Those four — `knowledge.native_sync_runs`, `knowledge.native_sync_jobs`, `knowledge.native_checkpoints`, `knowledge.native_admission_authorities` — are created unpartitioned by `20260804_8c4d1e7a2b90` and `20260805_9d5e2f7b4c61`, both already on the operating lineage's chain, so they were never WP-12E's to scope. All **22** `native_*` / `source_*` tables in `knowledge` are unpartitioned and carry no `principal_id`; partitioning the four would leave partitioned children joined to unpartitioned parents.
+   >
+   > The condition is **moot in any case**, because the revision was **not admitted**: re-chaining it is DDL-coherent but application-incompatible, measured at 8 failed + 4 errors in `tests/schema`. Native-plane principal scoping is deferred to **WP-04** as **`D-09`**.
+   >
+   > See [`WP-03-MIGRATION-CHAIN-RECORD.md`](WP-03-MIGRATION-CHAIN-RECORD.md) for the measurements, for what WP-03 did verify against the acceptance clause as written ("principal constraints/indexes **preserved**" — 30 CHECKs / 39 `by_principal` indexes / 1 capture key, identical by name set across `d2e3f4a5b6c7`, the new head, and the round trip), and for the deferral's owner.
+2. **Chain divergence.** The extractions branch holds ~~16~~ **15** revisions and has none of the target's `20260804_8c4d1e7a2b90`, `20260805_9d5e2f7b4c61`, or the WP-00…WP-06 principal revisions. Every deferred revision needs re-chaining, not replaying.
+
+   > **Correction, WP-03 (2026-08-09).** The figure was 16 because it counted **entries** under `migrations/versions/`, and one of them is `README.md`. Re-derived at `origin/bf/extractions-quarantined-debt` (`688cc504…`): 16 entries, **15 `*.py` revision files**. The conclusion the condition draws is unaffected and stands. Note that the same off-by-one is embedded in the dropped-hunk rationale under carried change 4 above, which describes `test_no_revision_derives_a_closed_set_from_an_enum.py` as "keyed to the extractions branch's 16-revision chain"; read 15 there too. The reason for dropping it — that the measurement would be false on this lineage — is unaffected.
 3. **Re-measure, never transcribe.** Four of the six declined commits are declined solely because they transcribe tier figures, revision counts, or D-numbers measured against a foreign head. If the cluster lands, re-derive those figures at the resulting head.
 
 ---

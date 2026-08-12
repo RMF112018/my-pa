@@ -201,7 +201,7 @@ divergence."""
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Final
 
@@ -217,9 +217,11 @@ from sqlalchemy import (
     bindparam,
     cast,
     func,
+    literal,
     literal_column,
     select,
     tuple_,
+    union_all,
 )
 from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.exc import (
@@ -260,6 +262,8 @@ from my_pa.domain.search.query import (
     rank_category,
 )
 from my_pa.infrastructure.persistence.extraction import (
+    authorized_media_type,
+    authorized_object,
     coverage_for,
     extracted_text_in_scope,
 )
@@ -267,6 +271,11 @@ from my_pa.infrastructure.persistence.tables import (
     coverage_limitations,
     enrollments,
     extractions,
+    goodnotes_page_versions,
+    goodnotes_pages,
+    goodnotes_region_proposals,
+    goodnotes_review_decisions,
+    quarantine_records,
     source_objects,
     sources,
 )
@@ -280,6 +289,7 @@ __all__ = [
     "SearchUnavailableError",
     "UnknownEnrollmentError",
     "context_statement",
+    "goodnotes_match_statement",
     "match_statement",
     "search_extractions",
 ]
@@ -737,10 +747,125 @@ def match_statement(request: SearchRequest, position: SearchCursor | None) -> Se
     return statement
 
 
+def _accepted_goodnotes_text() -> ColumnElement[Any]:
+    return func.coalesce(
+        goodnotes_review_decisions.c.corrected_text,
+        goodnotes_region_proposals.c.transcription,
+    )
+
+
+def _goodnotes_scope(enrollment_id: str) -> tuple[ColumnElement[bool], ...]:
+    return (
+        goodnotes_review_decisions.c.disposition.in_(("accept", "correct_and_accept")),
+        goodnotes_review_decisions.c.knowledge_id.is_not(None),
+        authorized_object(
+            goodnotes_pages.c.source_object_id,
+            enrollment_id=enrollment_id,
+        ),
+        authorized_media_type(literal("text/plain", Text), enrollment_id=enrollment_id),
+        goodnotes_pages.c.source_object_id.not_in(
+            select(quarantine_records.c.source_object_id).where(
+                quarantine_records.c.enrollment_id == enrollment_id
+            )
+        ),
+        goodnotes_pages.c.source_object_id.not_in(
+            select(extractions.c.source_object_id).where(
+                extractions.c.enrollment_id == enrollment_id,
+                extractions.c.status == "unsupported",
+            )
+        ),
+    )
+
+
+def goodnotes_match_statement(request: SearchRequest, position: SearchCursor | None) -> Select[Any]:
+    """Accepted OCR regions in the exact enrollment searched by knowledge.search."""
+    query = _tsquery(request)
+    accepted_text = _accepted_goodnotes_text()
+    document = func.to_tsvector(_CONFIG, accepted_text)
+    rank = cast(func.ts_rank_cd(document, query, RANK_NORMALIZATION), Float)
+    headline = func.ts_headline(
+        _CONFIG,
+        accepted_text,
+        query,
+        bindparam(
+            "goodnotes_headline_options",
+            value=_HEADLINE_TEMPLATE.format(
+                words=request.snippet_words, minimum=min(request.snippet_words - 1, 5)
+            ),
+            type_=Text,
+        ),
+    )
+    statement = (
+        select(
+            goodnotes_review_decisions.c.knowledge_id.label("extraction_id"),
+            source_objects.c.source_id,
+            goodnotes_pages.c.source_object_id,
+            goodnotes_page_versions.c.source_version_id.label("version_id"),
+            literal("text/plain", Text).label("media_type"),
+            headline.label("snippet"),
+            rank.label("rank"),
+        )
+        .select_from(
+            goodnotes_review_decisions.join(
+                goodnotes_region_proposals,
+                tuple_(
+                    goodnotes_region_proposals.c.principal_id,
+                    goodnotes_region_proposals.c.region_id,
+                )
+                == tuple_(
+                    goodnotes_review_decisions.c.principal_id,
+                    goodnotes_review_decisions.c.region_id,
+                ),
+            )
+            .join(
+                goodnotes_page_versions,
+                tuple_(
+                    goodnotes_page_versions.c.principal_id,
+                    goodnotes_page_versions.c.page_version_id,
+                )
+                == tuple_(
+                    goodnotes_region_proposals.c.principal_id,
+                    goodnotes_region_proposals.c.page_version_id,
+                ),
+            )
+            .join(
+                goodnotes_pages,
+                tuple_(goodnotes_pages.c.principal_id, goodnotes_pages.c.page_id)
+                == tuple_(
+                    goodnotes_page_versions.c.principal_id,
+                    goodnotes_page_versions.c.page_id,
+                ),
+            )
+            .join(
+                source_objects,
+                source_objects.c.source_object_id == goodnotes_pages.c.source_object_id,
+            )
+        )
+        .where(*_goodnotes_scope(request.enrollment_id), document.bool_op("@@")(query))
+        .order_by(rank.desc(), goodnotes_review_decisions.c.knowledge_id.desc())
+        .limit(request.page_size + 1)
+    )
+    if position is not None:
+        statement = statement.where(
+            tuple_(rank, goodnotes_review_decisions.c.knowledge_id)
+            < tuple_(
+                bindparam("cursor_rank", value=position.rank, type_=Float),
+                bindparam("cursor_knowledge_id", value=position.knowledge_id, type_=Text),
+            )
+        )
+    return statement
+
+
 def _matches(
     connection: Connection, request: SearchRequest, position: SearchCursor | None
 ) -> list[Row[Any]]:
-    return list(_execute(connection, match_statement(request, position), _every_row))
+    ordinary = _execute(connection, match_statement(request, position), _every_row)
+    goodnotes = _execute(connection, goodnotes_match_statement(request, position), _every_row)
+    return sorted(
+        (*ordinary, *goodnotes),
+        key=lambda row: (float(row.rank), str(row.extraction_id)),
+        reverse=True,
+    )[: request.page_size + 1]
 
 
 def _coverage(connection: Connection, enrollment_id: str, *, moment: datetime) -> CoverageCounts:
@@ -803,7 +928,50 @@ def _coverage(connection: Connection, enrollment_id: str, *, moment: datetime) -
     """
     unavailable = False
     try:
-        return coverage_for(connection, enrollment_id, observed_at=moment)
+        counts = coverage_for(connection, enrollment_id, observed_at=moment)
+        processed_objects = union_all(
+            select(extractions.c.source_object_id).where(*extracted_text_in_scope(enrollment_id)),
+            select(goodnotes_pages.c.source_object_id)
+            .select_from(
+                goodnotes_review_decisions.join(
+                    goodnotes_region_proposals,
+                    tuple_(
+                        goodnotes_region_proposals.c.principal_id,
+                        goodnotes_region_proposals.c.region_id,
+                    )
+                    == tuple_(
+                        goodnotes_review_decisions.c.principal_id,
+                        goodnotes_review_decisions.c.region_id,
+                    ),
+                )
+                .join(
+                    goodnotes_page_versions,
+                    tuple_(
+                        goodnotes_page_versions.c.principal_id,
+                        goodnotes_page_versions.c.page_version_id,
+                    )
+                    == tuple_(
+                        goodnotes_region_proposals.c.principal_id,
+                        goodnotes_region_proposals.c.page_version_id,
+                    ),
+                )
+                .join(
+                    goodnotes_pages,
+                    tuple_(goodnotes_pages.c.principal_id, goodnotes_pages.c.page_id)
+                    == tuple_(
+                        goodnotes_page_versions.c.principal_id,
+                        goodnotes_page_versions.c.page_id,
+                    ),
+                )
+            )
+            .where(*_goodnotes_scope(enrollment_id)),
+        ).subquery()
+        processed = int(
+            connection.execute(
+                select(func.count(func.distinct(processed_objects.c.source_object_id)))
+            ).scalar_one()
+        )
+        return replace(counts, processed=processed)
     except (OperationalError, InterfaceError, DisconnectionError, PoolTimeoutError, OSError):
         unavailable = True
     except Exception:

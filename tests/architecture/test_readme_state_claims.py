@@ -29,9 +29,11 @@ from my_pa.application.capabilities import build_capability_manifest, build_read
 from my_pa.application.service import _HANDLERS
 from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
 from my_pa.contracts.v1.capabilities import Availability, ReadinessState
+from my_pa.domain.identity.operation import Capability
 
 ROOT = Path(__file__).resolve().parents[2]
 README = ROOT / "README.md"
+WEB_README = ROOT / "web" / "README.md"
 RELATIONSHIP_PACKAGE = ROOT / "src" / "my_pa" / "domain" / "relationship"
 SOURCE_INDEX = ROOT / "docs" / "00_REPOSITORY_SOURCE_INDEX.md"
 SPECS_INDEX = ROOT / "docs" / "specs" / "README.md"
@@ -331,6 +333,70 @@ def test_readme_declares_apple_first_personal_data_ingestion() -> None:
         "The README's frontend paragraph no longer attributes ingestion to the "
         "native Apple architecture."
     )
+
+
+def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
+    """Keep the web current-state map tied to the route source, not campaign history."""
+    text = WEB_README.read_text(encoding="utf-8")
+    lowered = text.lower()
+    for route in (
+        "/api/capture",
+        "/api/library",
+        "/api/projects",
+        "/api/pulse",
+        "/api/relationships/:personId/timeline",
+        "/api/reveal",
+        "/api/review",
+        "/api/situations",
+        "/api/system",
+        "/api/session",
+        "/auth/sign-in",
+        "/auth/callback",
+    ):
+        assert route in text, f"web README lost current route {route}"
+
+    capability_values = {capability.value for capability in Capability}
+    routed = set()
+    for path in (ROOT / "web" / "src" / "app" / "api").rglob("route.ts"):
+        routed.update(re.findall(r'["\']([a-z]+(?:\.[a-z]+)+)["\']', path.read_text()))
+    routed &= capability_values
+    assert routed, "the API route scan found no capability names"
+    documented = set(re.findall(r"`([a-z]+(?:\.[a-z]+)+)`", text))
+    assert routed <= documented, (
+        f"web README omits routed capabilities {sorted(routed - documented)}"
+    )
+    assert "twenty-six capability names" in lowered
+    assert "worker_planes" in text and "capture" in text and "enrollment" in text
+    assert "managed-document lifecycle" in lowered
+
+
+def test_web_readme_does_not_restore_superseded_frontend_claims() -> None:
+    text = WEB_README.read_text(encoding="utf-8").lower()
+    for stale in (
+        "operating lineage",
+        "relationship timeline | `/api/relationships/:id/timeline` | **not wired**",
+        "this tier holds none",
+        "implements no real sign-in",
+        "dispatches fifteen",
+        "none exists",
+    ):
+        assert stale not in text, f"web README restored stale claim: {stale}"
+    for current in (
+        "authorization-code",
+        "pkce s256",
+        "process-local",
+        "server-held bearer",
+        "explicitly release it for retry or delete the local copy",
+    ):
+        assert current in text, f"web README lost current claim: {current}"
+
+
+def test_root_readme_distinguishes_credentialless_local_mode_from_entra() -> None:
+    text = README.read_text(encoding="utf-8")
+    assert "no credential is issued, read, or required" not in text
+    assert "`local_operator` mode" in text
+    assert "`entra` mode it requires and validates a bearer token" in text
+    assert "credential creation/disclosure/rotation" in text
 
 
 def test_readme_declares_graph_off_by_default_and_entra_separate_from_activation() -> None:

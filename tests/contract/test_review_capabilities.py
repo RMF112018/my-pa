@@ -39,6 +39,7 @@ def test_review_list_returns_case_metadata_without_capture_content(scene: Scene)
         {
             "review_case_id": case.review_case_id,
             "proposal_id": case.proposal_id,
+            "subject_kind": "capture_proposal",
             "capture_id": case.capture_id,
             "version_id": case.version_id,
             "proposal_type": "commitment",

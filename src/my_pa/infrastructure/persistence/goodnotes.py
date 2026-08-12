@@ -2,30 +2,36 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import hashlib
 
 from sqlalchemy import (
     ColumnElement,
     Table,
-    and_,
     func,
     insert,
-    literal_column,
-    or_,
     select,
-    tuple_,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
+from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.domain.capture.proposal import ProposalState, RiskClass
+from my_pa.domain.capture.review import (
+    Disposition,
+    ReviewConflictError,
+    ReviewDecision,
+    ReviewNotFoundError,
+    ReviewUnsupportedError,
+)
+from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.goodnotes.models import (
     GoodNotesPage,
     GoodNotesPageVersion,
     GoodNotesRegionProposal,
-    GoodNotesSearchHit,
+    GoodNotesReviewCase,
     ReconciliationReceipt,
-    issue_stable_id,
 )
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -46,6 +52,11 @@ def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
 
 def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[str, object]:
     return principal_bound_values(values, table, capture_context(principal_id))
+
+
+def _stable_canonical_id(kind: IdKind, region_id: str) -> str:
+    suffix = hashlib.sha256(f"goodnotes\x1f{kind.value}\x1f{region_id}".encode()).hexdigest()[:24]
+    return make_identifier(kind, suffix)
 
 
 class PostgresGoodNotesRepository:
@@ -108,6 +119,7 @@ class PostgresGoodNotesRepository:
                 )
                 .on_conflict_do_nothing()
             )
+        observed_by_version = {version.page_version_id: version.observed_at for version in versions}
         for region in regions:
             self.connection.execute(
                 pg_insert(goodnotes_region_proposals)
@@ -117,6 +129,10 @@ class PostgresGoodNotesRepository:
                         receipt.principal_id,
                         {
                             "region_id": region.region_id,
+                            "proposal_id": _stable_canonical_id(IdKind.PROPOSAL, region.region_id),
+                            "review_case_id": _stable_canonical_id(
+                                IdKind.REVIEW_CASE, region.region_id
+                            ),
                             "page_version_id": region.page_version_id,
                             "ordinal": region.ordinal,
                             "box": {
@@ -129,6 +145,7 @@ class PostgresGoodNotesRepository:
                             "confidence": region.confidence,
                             "extractor": region.extractor,
                             "extractor_version": region.extractor_version,
+                            "opened_at": observed_by_version[region.page_version_id],
                         },
                     )
                 )
@@ -156,125 +173,6 @@ class PostgresGoodNotesRepository:
             raise ValueError("the idempotency key is bound to another reconciliation")
         return stored
 
-    def decide_region(
-        self,
-        *,
-        principal_id: str,
-        region_id: str,
-        disposition: str,
-        corrected_text: str | None,
-        decided_at: datetime,
-    ) -> None:
-        decision_id = issue_stable_id(
-            "gnrec", principal_id, region_id, disposition, decided_at.isoformat()
-        )
-        decision = self.connection.execute(
-            insert(goodnotes_review_decisions)
-            .values(
-                _bound(
-                    goodnotes_review_decisions,
-                    principal_id,
-                    {
-                        "decision_id": decision_id,
-                        "region_id": region_id,
-                        "disposition": disposition,
-                        "corrected_text": corrected_text,
-                        "decided_at": decided_at,
-                    },
-                )
-            )
-            .returning(goodnotes_review_decisions.c.decision_id)
-        ).scalar_one()
-        if decision != decision_id:
-            raise RuntimeError("the stored review decision identity changed")
-
-    def search(
-        self, principal_id: str, query: str, *, limit: int
-    ) -> tuple[GoodNotesSearchHit, ...]:
-        if not query.strip() or not 1 <= limit <= 200:
-            raise ValueError("a non-empty bounded lexical query is required")
-        accepted_text = func.coalesce(
-            goodnotes_review_decisions.c.corrected_text,
-            goodnotes_region_proposals.c.transcription,
-        )
-        text_query = func.websearch_to_tsquery(literal_column("'simple'::regconfig"), query)
-        lexical_match = or_(
-            and_(
-                goodnotes_review_decisions.c.corrected_text.is_(None),
-                func.to_tsvector(
-                    literal_column("'simple'::regconfig"),
-                    goodnotes_region_proposals.c.transcription,
-                ).op("@@")(text_query),
-            ),
-            and_(
-                goodnotes_review_decisions.c.corrected_text.is_not(None),
-                func.to_tsvector(
-                    literal_column("'simple'::regconfig"),
-                    goodnotes_review_decisions.c.corrected_text,
-                ).op("@@")(text_query),
-            ),
-        )
-        statement = (
-            select(
-                goodnotes_region_proposals.c.region_id,
-                goodnotes_page_versions.c.page_version_id,
-                goodnotes_page_versions.c.source_version_id,
-                goodnotes_pages.c.page_number,
-                accepted_text.label("accepted_text"),
-                (goodnotes_review_decisions.c.corrected_text.is_not(None)).label("corrected"),
-            )
-            .select_from(
-                goodnotes_review_decisions.join(
-                    goodnotes_region_proposals,
-                    tuple_(
-                        goodnotes_region_proposals.c.principal_id,
-                        goodnotes_region_proposals.c.region_id,
-                    )
-                    == tuple_(
-                        goodnotes_review_decisions.c.principal_id,
-                        goodnotes_review_decisions.c.region_id,
-                    ),
-                )
-                .join(
-                    goodnotes_page_versions,
-                    tuple_(
-                        goodnotes_page_versions.c.principal_id,
-                        goodnotes_page_versions.c.page_version_id,
-                    )
-                    == tuple_(
-                        goodnotes_region_proposals.c.principal_id,
-                        goodnotes_region_proposals.c.page_version_id,
-                    ),
-                )
-                .join(
-                    goodnotes_pages,
-                    tuple_(goodnotes_pages.c.principal_id, goodnotes_pages.c.page_id)
-                    == tuple_(
-                        goodnotes_page_versions.c.principal_id,
-                        goodnotes_page_versions.c.page_id,
-                    ),
-                )
-            )
-            .where(
-                _mine(goodnotes_review_decisions, principal_id),
-                goodnotes_review_decisions.c.disposition.in_(("accepted", "corrected_accepted")),
-                lexical_match,
-            )
-            .order_by(goodnotes_review_decisions.c.decided_at.desc())
-            .limit(limit)
-        )
-        return tuple(
-            GoodNotesSearchHit(
-                region_id=row["region_id"],
-                page_version_id=row["page_version_id"],
-                source_version_id=row["source_version_id"],
-                page_number=row["page_number"],
-                accepted_text=row["accepted_text"],
-                corrected=row["corrected"],
-            )
-            for row in self.connection.execute(statement).mappings()
-        )
-
 
 def _receipt(row: object) -> ReconciliationReceipt:
     values = row  # mapping-like SQLAlchemy row
@@ -286,3 +184,166 @@ def _receipt(row: object) -> ReconciliationReceipt:
         page_version_ids=tuple(values["page_version_ids"]),  # type: ignore[index]
         created_regions=values["created_regions"],  # type: ignore[index]
     )
+
+
+def goodnotes_review_cases(
+    connection: Connection, *, principal_id: str, limit: int
+) -> tuple[GoodNotesReviewCase, ...]:
+    if limit < 1:
+        raise ValueError("a review page contains at least one case")
+    latest_sequence = (
+        select(func.max(goodnotes_review_decisions.c.sequence))
+        .where(
+            goodnotes_review_decisions.c.review_case_id
+            == goodnotes_region_proposals.c.review_case_id
+        )
+        .correlate(goodnotes_region_proposals)
+        .scalar_subquery()
+    )
+    latest_disposition = (
+        select(goodnotes_review_decisions.c.disposition)
+        .where(
+            goodnotes_review_decisions.c.review_case_id
+            == goodnotes_region_proposals.c.review_case_id
+        )
+        .order_by(goodnotes_review_decisions.c.sequence.desc())
+        .limit(1)
+        .correlate(goodnotes_region_proposals)
+        .scalar_subquery()
+    )
+    rows = connection.execute(
+        select(
+            goodnotes_region_proposals.c.review_case_id,
+            goodnotes_region_proposals.c.proposal_id,
+            goodnotes_region_proposals.c.region_id,
+            goodnotes_region_proposals.c.page_version_id,
+            goodnotes_region_proposals.c.principal_id,
+            goodnotes_region_proposals.c.confidence,
+            goodnotes_region_proposals.c.opened_at,
+            func.coalesce(latest_sequence, 0).label("review_version"),
+            latest_disposition.label("latest_disposition"),
+        )
+        .where(_mine(goodnotes_region_proposals, principal_id))
+        .order_by(
+            goodnotes_region_proposals.c.opened_at,
+            goodnotes_region_proposals.c.review_case_id,
+        )
+        .limit(limit)
+    ).mappings()
+    cases: list[GoodNotesReviewCase] = []
+    for row in rows:
+        disposition = (
+            None if row["latest_disposition"] is None else Disposition(row["latest_disposition"])
+        )
+        cases.append(
+            GoodNotesReviewCase(
+                review_case_id=row["review_case_id"],
+                proposal_id=row["proposal_id"],
+                region_id=row["region_id"],
+                page_version_id=row["page_version_id"],
+                principal_id=row["principal_id"],
+                confidence=float(row["confidence"]),
+                opened_at=row["opened_at"],
+                proposal_state=_goodnotes_state(disposition),
+                risk_class=RiskClass.MODERATE,
+                review_version=int(row["review_version"]),
+                latest_disposition=disposition,
+            )
+        )
+    return tuple(cases)
+
+
+def is_goodnotes_review_case(
+    connection: Connection, *, review_case_id: str, principal_id: str
+) -> bool:
+    return (
+        connection.execute(
+            select(goodnotes_region_proposals.c.review_case_id).where(
+                goodnotes_region_proposals.c.review_case_id == review_case_id,
+                _mine(goodnotes_region_proposals, principal_id),
+            )
+        ).scalar_one_or_none()
+        is not None
+    )
+
+
+def decide_goodnotes_review(
+    connection: Connection, request: ReviewDecisionRequest
+) -> ReviewDecision:
+    case = connection.execute(
+        select(
+            goodnotes_region_proposals.c.region_id,
+            goodnotes_region_proposals.c.review_case_id,
+        )
+        .where(
+            goodnotes_region_proposals.c.review_case_id == request.review_case_id,
+            _mine(goodnotes_region_proposals, request.principal_id),
+        )
+        .with_for_update(of=goodnotes_region_proposals)
+    ).one_or_none()
+    if case is None:
+        raise ReviewNotFoundError("the request names no stored review case")
+    decisions = connection.execute(
+        select(goodnotes_review_decisions.c.sequence, goodnotes_review_decisions.c.disposition)
+        .where(goodnotes_review_decisions.c.review_case_id == request.review_case_id)
+        .order_by(goodnotes_review_decisions.c.sequence)
+    ).all()
+    if any(
+        Disposition(row.disposition) in {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}
+        for row in decisions
+    ):
+        raise ReviewConflictError("an accepted review case is terminal")
+    current = len(decisions)
+    if current != request.expected_review_version:
+        raise ReviewConflictError("the expected review version is stale")
+    if request.disposition in {Disposition.REPROCESS, Disposition.ESCALATE}:
+        raise ReviewUnsupportedError("the requested disposition has no eligible route")
+    sequence = current + 1
+    decision_id = issue_identifier(IdKind.REVIEW_DECISION)
+    accepted = request.disposition in {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}
+    knowledge_id = issue_identifier(IdKind.KNOWLEDGE) if accepted else None
+    connection.execute(
+        insert(goodnotes_review_decisions).values(
+            _bound(
+                goodnotes_review_decisions,
+                request.principal_id,
+                {
+                    "decision_id": decision_id,
+                    "region_id": str(case.region_id),
+                    "review_case_id": request.review_case_id,
+                    "sequence": sequence,
+                    "disposition": request.disposition.value,
+                    "corrected_text": request.corrected_value,
+                    "knowledge_id": knowledge_id,
+                    "correlation_id": request.correlation_id,
+                    "audit_id": request.audit_id,
+                    "decided_at": request.decided_at,
+                },
+            )
+        )
+    )
+    state = _goodnotes_state(request.disposition)
+    return ReviewDecision(
+        decision_id=decision_id,
+        review_case_id=request.review_case_id,
+        sequence=sequence,
+        disposition=request.disposition,
+        principal_id=request.principal_id,
+        correlation_id=request.correlation_id,
+        audit_id=request.audit_id,
+        decided_at=request.decided_at,
+        proposal_state=state,
+        normalized_value=request.corrected_value,
+    )
+
+
+def _goodnotes_state(disposition: Disposition | None) -> ProposalState:
+    if disposition is None:
+        return ProposalState.NEEDS_REVIEW
+    return {
+        Disposition.ACCEPT: ProposalState.ACCEPTED,
+        Disposition.CORRECT_AND_ACCEPT: ProposalState.CORRECTED_ACCEPTED,
+        Disposition.REJECT: ProposalState.REJECTED,
+        Disposition.DEFER: ProposalState.DEFERRED,
+        Disposition.MARK_UNRESOLVED: ProposalState.UNRESOLVED,
+    }[disposition]

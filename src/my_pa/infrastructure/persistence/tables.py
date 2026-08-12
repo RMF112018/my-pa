@@ -3904,6 +3904,8 @@ goodnotes_region_proposals = Table(
     METADATA,
     Column("principal_id", String(72), primary_key=True),
     Column("region_id", String(30), primary_key=True),
+    Column("proposal_id", Text, nullable=False, unique=True),
+    Column("review_case_id", Text, nullable=False, unique=True),
     Column("page_version_id", String(30), nullable=False),
     Column("ordinal", Integer, nullable=False),
     Column("box", JSON, nullable=False),
@@ -3911,6 +3913,9 @@ goodnotes_region_proposals = Table(
     Column("confidence", Float, nullable=False),
     Column("extractor", String(100), nullable=False),
     Column("extractor_version", String(100), nullable=False),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("proposal_id", IdKind.PROPOSAL),
+    _is_identifier("review_case_id", IdKind.REVIEW_CASE),
     CheckConstraint("ordinal >= 0", name="goodnotes_region_ordinal_is_nonnegative"),
     CheckConstraint(
         "confidence >= 0 AND confidence <= 1",
@@ -3932,19 +3937,34 @@ goodnotes_review_decisions = Table(
     "goodnotes_review_decisions",
     METADATA,
     Column("principal_id", String(72), primary_key=True),
-    Column("decision_id", String(30), primary_key=True),
+    Column("decision_id", Text, primary_key=True),
     Column("region_id", String(30), nullable=False),
+    Column("review_case_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
     Column("disposition", String(32), nullable=False),
     Column("corrected_text", Text),
+    Column("knowledge_id", Text, unique=True),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
     Column("decided_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("decision_id", IdKind.REVIEW_DECISION),
+    _is_identifier("review_case_id", IdKind.REVIEW_CASE),
+    _is_identifier("knowledge_id", IdKind.KNOWLEDGE),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    CheckConstraint("sequence >= 1", name="goodnotes_review_sequence_is_positive"),
     CheckConstraint(
-        "disposition IN ('accepted', 'corrected_accepted')",
+        "disposition IN ('accept', 'correct_and_accept', 'reject', 'defer', 'mark_unresolved')",
         name="goodnotes_disposition_is_known",
     ),
     CheckConstraint(
-        "(disposition = 'accepted' AND corrected_text IS NULL) OR "
-        "(disposition = 'corrected_accepted' AND length(corrected_text) > 0)",
+        "(disposition = 'correct_and_accept' AND length(corrected_text) > 0) OR "
+        "(disposition <> 'correct_and_accept' AND corrected_text IS NULL)",
         name="goodnotes_correction_matches_disposition",
+    ),
+    CheckConstraint(
+        "(disposition IN ('accept', 'correct_and_accept')) = (knowledge_id IS NOT NULL)",
+        name="accepted_goodnotes_region_has_knowledge_identity",
     ),
     ForeignKeyConstraint(
         ["principal_id", "region_id"],
@@ -3953,7 +3973,12 @@ goodnotes_review_decisions = Table(
             f"{SCHEMA}.goodnotes_region_proposals.region_id",
         ],
     ),
-    UniqueConstraint("principal_id", "region_id", name="one_goodnotes_region_disposition"),
+    ForeignKeyConstraint(
+        ["review_case_id"], [f"{SCHEMA}.goodnotes_region_proposals.review_case_id"]
+    ),
+    UniqueConstraint(
+        "review_case_id", "sequence", name="one_goodnotes_decision_per_review_sequence"
+    ),
 )
 
 goodnotes_reconciliation_receipts = Table(

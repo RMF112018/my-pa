@@ -6,23 +6,27 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from typing import ClassVar
 
 import pytest
 
 from my_pa.application.goodnotes import (
-    GoodNotesSearchHit,
+    GoodNotesModelProposalBoundary,
+    GoodNotesReconciliationLimits,
     GoodNotesService,
     ReconciliationConflictError,
     ReconciliationReceipt,
     SourcePage,
     TranscribedRegion,
 )
+from my_pa.application.model_gate import BoundedModelGate
 from my_pa.bootstrap.goodnotes import compose_local_goodnotes_runtime
 from my_pa.domain.goodnotes.models import (
     GoodNotesPage,
     GoodNotesPageVersion,
     GoodNotesRegionProposal,
 )
+from my_pa.domain.modeling.gate import ContextManifest, ModelProposal, ModelRoutePolicy
 from my_pa.infrastructure.goodnotes.fixture import FixtureGoodNotesSource, FixturePageTranscriber
 from my_pa.infrastructure.goodnotes.local import (
     BoundedLocalOCRTranscriber,
@@ -42,7 +46,6 @@ class MemoryRepository:
         self.pages: dict[tuple[str, str], GoodNotesPage] = {}
         self.versions: dict[tuple[str, str], GoodNotesPageVersion] = {}
         self.regions: dict[tuple[str, str], GoodNotesRegionProposal] = {}
-        self.decisions: dict[tuple[str, str], tuple[str, str | None]] = {}
 
     def receipt(self, principal_id: str, idempotency_key: str) -> ReconciliationReceipt | None:
         return self.receipts.get((principal_id, idempotency_key))
@@ -64,44 +67,6 @@ class MemoryRepository:
             {(receipt.principal_id, region.region_id): region for region in regions}
         )
         return receipt
-
-    def decide_region(
-        self,
-        *,
-        principal_id: str,
-        region_id: str,
-        disposition: str,
-        corrected_text: str | None,
-        decided_at: datetime,
-    ) -> None:
-        if (principal_id, region_id) not in self.regions:
-            raise ValueError("unknown region")
-        self.decisions[(principal_id, region_id)] = (disposition, corrected_text)
-
-    def search(
-        self, principal_id: str, query: str, *, limit: int
-    ) -> tuple[GoodNotesSearchHit, ...]:
-        hits = []
-        for (owner, region_id), (disposition, correction) in self.decisions.items():
-            if owner != principal_id or disposition not in {"accepted", "corrected_accepted"}:
-                continue
-            region = self.regions[(owner, region_id)]
-            text = correction or region.transcription
-            if query.casefold() not in text.casefold():
-                continue
-            version = self.versions[(owner, region.page_version_id)]
-            page = self.pages[(owner, version.page_id)]
-            hits.append(
-                GoodNotesSearchHit(
-                    region_id=region_id,
-                    page_version_id=version.page_version_id,
-                    source_version_id=version.source_version_id,
-                    page_number=page.page_number,
-                    accepted_text=text,
-                    corrected=correction is not None,
-                )
-            )
-        return tuple(hits[:limit])
 
 
 def source() -> FixtureGoodNotesSource:
@@ -201,38 +166,6 @@ def test_transcriber_failure_leaves_no_deterministic_record() -> None:
     assert repository.receipts == {}
 
 
-def test_review_correction_becomes_searchable_only_for_owning_principal() -> None:
-    repository = MemoryRepository()
-    service = GoodNotesService()
-    service.reconcile(
-        principal_id=A,
-        idempotency_key="sync-1",
-        source=source(),
-        transcriber=FixturePageTranscriber(),
-        repository=repository,
-    )
-    region_id = next(region for owner, region in repository.regions if owner == A)
-    with pytest.raises(ValueError, match="unknown region"):
-        service.accept_region(
-            principal_id=B,
-            region_id=region_id,
-            corrected_text="foreign correction",
-            decided_at=WHEN,
-            repository=repository,
-        )
-    service.accept_region(
-        principal_id=A,
-        region_id=region_id,
-        corrected_text="Reviewed alpha commitment",
-        decided_at=WHEN,
-        repository=repository,
-    )
-    hits = repository.search(A, "reviewed alpha", limit=10)
-    assert len(hits) == 1 and hits[0].corrected
-    assert hits[0].source_version_id == "ver_aaaaaaaaaaaaaaaaaaaaaaaa"
-    assert repository.search(B, "reviewed alpha", limit=10) == ()
-
-
 def _local_manifest(tmp_path: Path, *, digest: str | None = None) -> ManifestGoodNotesSource:
     root = tmp_path
     content = b"%PDF-1.7\nsynthetic rasterized GoodNotes page\n%%EOF\n"
@@ -271,7 +204,7 @@ def _ocr_command(tmp_path: Path) -> tuple[str, ...]:
     return (sys.executable, str(script))
 
 
-def test_manifest_source_and_bounded_local_ocr_reach_reconciliation_review_and_search(
+def test_manifest_source_and_bounded_local_ocr_reach_reconciliation(
     tmp_path: Path,
 ) -> None:
     source = _local_manifest(tmp_path)
@@ -299,16 +232,6 @@ def test_manifest_source_and_bounded_local_ocr_reach_reconciliation_review_and_s
     proposal = repository.regions[(A, region_id)]
     assert receipt.page_version_ids == (proposal.page_version_id,)
     assert proposal.extractor == "local_ocr_test_engine"
-    service.accept_region(
-        principal_id=A,
-        region_id=region_id,
-        corrected_text="Reviewed local alpha commitment",
-        decided_at=WHEN,
-        repository=repository,
-    )
-    [hit] = repository.search(A, "reviewed local", limit=10)
-    assert hit.page_number == 1
-    assert hit.source_version_id == "ver_aaaaaaaaaaaaaaaaaaaaaaaa"
 
 
 def test_local_source_refuses_digest_drift_and_path_escape(tmp_path: Path) -> None:
@@ -365,3 +288,178 @@ def test_production_goodnotes_composition_is_inert_until_called(tmp_path: Path) 
     )
     assert runtime.source.root == tmp_path.resolve()
     assert runtime.transcriber.command[0] == sys.executable
+
+
+def test_aggregate_bytes_regions_and_elapsed_time_are_fail_closed() -> None:
+    two_pages = FixtureGoodNotesSource(
+        pages=(
+            replace(source().pages[0], content=b"123456"),
+            replace(
+                source().pages[0],
+                source_object_id="obj_cccccccccccccccccccccccc",
+                source_version_id="ver_cccccccccccccccccccccccc",
+                page_number=2,
+                content=b"abcdef",
+            ),
+        )
+    )
+    service = GoodNotesService(
+        limits=GoodNotesReconciliationLimits(
+            maximum_pages=2,
+            maximum_page_bytes=10,
+            maximum_aggregate_bytes=10,
+        )
+    )
+    with pytest.raises(ValueError, match="aggregate byte"):
+        service.plan(
+            principal_id=A,
+            idempotency_key="bounded",
+            source=two_pages,
+            transcriber=FixturePageTranscriber(),
+        )
+
+    times = iter((0.0, 2.0))
+    timed = GoodNotesService(
+        limits=GoodNotesReconciliationLimits(maximum_elapsed_seconds=1),
+        monotonic=lambda: next(times),
+    )
+    with pytest.raises(TimeoutError, match="elapsed-time"):
+        timed.plan(
+            principal_id=A,
+            idempotency_key="timed",
+            source=source(),
+            transcriber=FixturePageTranscriber(),
+        )
+
+
+def test_model_gate_runs_at_each_region_proposal_boundary() -> None:
+    class Provider:
+        provider_id = "local_goodnotes_test"
+        model_id = "proposal-test"
+        is_external = False
+
+        def __init__(self) -> None:
+            self.manifests: list[ContextManifest] = []
+
+        def propose(self, manifest: ContextManifest) -> tuple[ModelProposal, ...]:
+            self.manifests.append(manifest)
+            return (
+                ModelProposal(
+                    proposal_type="tag",
+                    normalized_value="synthetic",
+                    evidence_reference_ids=(manifest.evidence[0].reference_id,),
+                    confidence=0.8,
+                ),
+            )
+
+    provider = Provider()
+    boundary = GoodNotesModelProposalBoundary(
+        gate=BoundedModelGate(route=ModelRoutePolicy.LOCAL_PROPOSALS_ONLY),
+        provider=provider,
+        provider_id=provider.provider_id,
+        model_id=provider.model_id,
+    )
+    service = GoodNotesService()
+    plan = service.plan(
+        principal_id=A,
+        idempotency_key="model-boundary",
+        source=source(),
+        transcriber=FixturePageTranscriber(),
+    )
+    prepared = service.prepare(
+        plan=plan,
+        source=source(),
+        transcriber=FixturePageTranscriber(),
+        model_boundary=boundary,
+    )
+    assert prepared.model_gate_states == ("proposed",)
+    assert len(provider.manifests) == 1
+    assert provider.manifests[0].external_disclosure_allowed is False
+
+
+def test_production_runtime_holds_no_database_connection_during_ocr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import my_pa.bootstrap.goodnotes as bootstrap
+
+    class State:
+        connected = False
+        events: ClassVar[list[str]] = []
+
+    state = State()
+
+    class Context:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def __enter__(self) -> object:
+            assert not state.connected
+            state.connected = True
+            state.events.append(f"{self.label}-open")
+            return object()
+
+        def __exit__(self, *args: object) -> None:
+            state.connected = False
+            state.events.append(f"{self.label}-closed")
+
+    class Engine:
+        def connect(self) -> Context:
+            return Context("receipt")
+
+        def begin(self) -> Context:
+            return Context("write")
+
+    class Repository(MemoryRepository):
+        def __init__(self, connection: object) -> None:
+            super().__init__()
+
+        def store_reconciliation(self, **kwargs: object) -> ReconciliationReceipt:
+            assert state.connected
+            return kwargs["receipt"]  # type: ignore[return-value]
+
+    class Transcriber(FixturePageTranscriber):
+        def transcribe(self, page: SourcePage) -> tuple[TranscribedRegion, ...]:
+            assert not state.connected
+            state.events.append("ocr")
+            return super().transcribe(page)
+
+    class Disabled:
+        provider_id = "disabled"
+        model_id = "none"
+        is_external = False
+
+        def propose(self, manifest: ContextManifest) -> tuple[ModelProposal, ...]:
+            return ()
+
+    monkeypatch.setattr(bootstrap, "PostgresGoodNotesRepository", Repository)
+    composed = bootstrap.LocalGoodNotesRuntime(
+        source=source(),
+        transcriber=Transcriber(),
+        model_boundary=GoodNotesModelProposalBoundary(
+            gate=BoundedModelGate(),
+            provider=Disabled(),
+            provider_id="disabled",
+            model_id="none",
+        ),
+    )
+    receipt = composed.reconcile(
+        engine=Engine(), principal_id=A, idempotency_key="no-db-during-ocr"
+    )
+    assert receipt.created_regions == 1
+    assert state.events == ["receipt-open", "receipt-closed", "ocr", "write-open", "write-closed"]
+
+
+def test_goodnotes_operator_cli_never_accepts_a_principal_argument() -> None:
+    from apps.cli.goodnotes import build_parser
+
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "reconcile",
+                "--idempotency-key",
+                "x",
+                "--principal",
+                A,
+            ]
+        )

@@ -659,6 +659,7 @@ def test_no_swift_in_the_native_tree_constructs_an_event_store() -> None:
         "native/apple-source-host/Compatibility/AppleCalendarEventKitProbe/CalendarEventKitShape.swift",
         "native/apple-source-host/Compatibility/AppleFrameworkCompatibilityProbe/FrameworkCompatibility.swift",
         "native/apple-source-host/Sources/AppleSourceHostPlatform/EventKitCalendarMechanism.swift",
+        "native/apple-source-host/Sources/AppleSourceHostPlatform/EventKitTasksMechanism.swift",
         "native/apple-source-host/Sources/AppleSourceHostPlatform/PlatformAppleSourceComposition.swift",
     ], f"the Swift files naming an event store are now {sorted(naming)}"
 

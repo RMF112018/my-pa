@@ -55,6 +55,8 @@ def upgrade() -> None:
         "goodnotes_region_proposals",
         sa.Column("principal_id", sa.String(72), nullable=False),
         sa.Column("region_id", sa.String(30), nullable=False),
+        sa.Column("proposal_id", sa.Text(), nullable=False, unique=True),
+        sa.Column("review_case_id", sa.Text(), nullable=False, unique=True),
         sa.Column("page_version_id", sa.String(30), nullable=False),
         sa.Column("ordinal", sa.Integer(), nullable=False),
         sa.Column("box", sa.JSON(), nullable=False),
@@ -62,6 +64,14 @@ def upgrade() -> None:
         sa.Column("confidence", sa.Float(), nullable=False),
         sa.Column("extractor", sa.String(100), nullable=False),
         sa.Column("extractor_version", sa.String(100), nullable=False),
+        sa.Column("opened_at", sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint(
+            "proposal_id ~ '^prop_[A-Za-z0-9]{8,64}$'", name="proposal_id_is_opaque"
+        ),
+        sa.CheckConstraint(
+            "review_case_id ~ '^rvw_[A-Za-z0-9]{8,64}$'",
+            name="review_case_id_is_opaque",
+        ),
         sa.CheckConstraint("ordinal >= 0", name="goodnotes_region_ordinal_is_nonnegative"),
         sa.CheckConstraint(
             "confidence >= 0 AND confidence <= 1", name="goodnotes_region_confidence_is_bounded"
@@ -82,19 +92,45 @@ def upgrade() -> None:
     op.create_table(
         "goodnotes_review_decisions",
         sa.Column("principal_id", sa.String(72), nullable=False),
-        sa.Column("decision_id", sa.String(30), nullable=False),
+        sa.Column("decision_id", sa.Text(), nullable=False),
         sa.Column("region_id", sa.String(30), nullable=False),
+        sa.Column("review_case_id", sa.Text(), nullable=False),
+        sa.Column("sequence", sa.Integer(), nullable=False),
         sa.Column("disposition", sa.String(32), nullable=False),
         sa.Column("corrected_text", sa.Text()),
+        sa.Column("knowledge_id", sa.Text()),
+        sa.Column("correlation_id", sa.Text(), nullable=False),
+        sa.Column("audit_id", sa.Text(), nullable=False),
         sa.Column("decided_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
-            "disposition IN ('accepted', 'corrected_accepted')",
+            "decision_id ~ '^rdec_[A-Za-z0-9]{8,64}$'", name="decision_id_is_opaque"
+        ),
+        sa.CheckConstraint(
+            "review_case_id ~ '^rvw_[A-Za-z0-9]{8,64}$'",
+            name="review_case_id_is_opaque",
+        ),
+        sa.CheckConstraint(
+            "knowledge_id IS NULL OR knowledge_id ~ '^kn_[A-Za-z0-9]{8,64}$'",
+            name="knowledge_id_is_opaque_or_null",
+        ),
+        sa.CheckConstraint(
+            "correlation_id ~ '^corr_[A-Za-z0-9]{8,64}$'",
+            name="correlation_id_is_opaque",
+        ),
+        sa.CheckConstraint("audit_id ~ '^audit_[A-Za-z0-9]{8,64}$'", name="audit_id_is_opaque"),
+        sa.CheckConstraint("sequence >= 1", name="goodnotes_review_sequence_is_positive"),
+        sa.CheckConstraint(
+            "disposition IN ('accept', 'correct_and_accept', 'reject', 'defer', 'mark_unresolved')",
             name="goodnotes_disposition_is_known",
         ),
         sa.CheckConstraint(
-            "(disposition = 'accepted' AND corrected_text IS NULL) OR "
-            "(disposition = 'corrected_accepted' AND length(corrected_text) > 0)",
+            "(disposition = 'correct_and_accept' AND length(corrected_text) > 0) OR "
+            "(disposition <> 'correct_and_accept' AND corrected_text IS NULL)",
             name="goodnotes_correction_matches_disposition",
+        ),
+        sa.CheckConstraint(
+            "(disposition IN ('accept', 'correct_and_accept')) = (knowledge_id IS NOT NULL)",
+            name="accepted_goodnotes_region_has_knowledge_identity",
         ),
         sa.ForeignKeyConstraint(
             ["principal_id", "region_id"],
@@ -103,8 +139,14 @@ def upgrade() -> None:
                 "knowledge.goodnotes_region_proposals.region_id",
             ],
         ),
+        sa.ForeignKeyConstraint(
+            ["review_case_id"], ["knowledge.goodnotes_region_proposals.review_case_id"]
+        ),
         sa.PrimaryKeyConstraint("principal_id", "decision_id"),
-        sa.UniqueConstraint("principal_id", "region_id", name="one_goodnotes_region_disposition"),
+        sa.UniqueConstraint("knowledge_id"),
+        sa.UniqueConstraint(
+            "review_case_id", "sequence", name="one_goodnotes_decision_per_review_sequence"
+        ),
         schema="knowledge",
     )
     op.create_table(

@@ -11,18 +11,32 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, select, text
+from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.sql import Executable
 
-from my_pa.application.goodnotes import GoodNotesService, SourcePage
+from my_pa.application.goodnotes import GoodNotesService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.domain.capture.review import Disposition, ReviewNotFoundError
+from my_pa.domain.common.classification import Classification
+from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.goodnotes.models import SourcePage
+from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.search.query import SearchQuery, SearchRequest
+from my_pa.domain.source.enrollment import EnrollmentRequest, EnrollmentScope
+from my_pa.domain.source.provider import ObjectKind
+from my_pa.domain.source.registry import SourceProviderKind, issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.goodnotes.fixture import FixtureGoodNotesSource, FixturePageTranscriber
+from my_pa.infrastructure.persistence.enrollment import accept_enrollment, record_scope
 from my_pa.infrastructure.persistence.goodnotes import (
     PostgresGoodNotesRepository,
-    goodnotes_region_proposals,
+    decide_goodnotes_review,
+    goodnotes_review_cases,
 )
+from my_pa.infrastructure.persistence.registry import observe_object, register_source
+from my_pa.infrastructure.persistence.search import search_extractions
 
 pytestmark = pytest.mark.database
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,10 +46,10 @@ A = "prn_aaaaaaaaaaaaaaaaaaaaaaaa"
 B = "prn_bbbbbbbbbbbbbbbbbbbbbbbb"
 
 
-def administer(engine: Engine, *statements: object) -> None:
+def administer(engine: Engine, *statements: Executable) -> None:
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
         for statement in statements:
-            connection.execute(statement)  # type: ignore[arg-type]
+            connection.execute(statement)
 
 
 @pytest.fixture(scope="module")
@@ -64,26 +78,19 @@ def engine() -> Iterator[Engine]:
         maintenance.dispose()
 
 
-def fixture_source() -> FixtureGoodNotesSource:
+def fixture_source(
+    *, principal_id: str, source_id: str, object_id: str, version_id: str
+) -> FixtureGoodNotesSource:
     return FixtureGoodNotesSource(
         pages=(
             SourcePage(
-                principal_id=A,
-                source_id="src_aaaaaaaaaaaaaaaaaaaaaaaa",
-                source_object_id="obj_aaaaaaaaaaaaaaaaaaaaaaaa",
-                source_version_id="ver_aaaaaaaaaaaaaaaaaaaaaaaa",
+                principal_id=principal_id,
+                source_id=source_id,
+                source_object_id=object_id,
+                source_version_id=version_id,
                 page_number=1,
                 observed_at=WHEN,
                 content=b"Synthetic handwritten alpha follow-up",
-            ),
-            SourcePage(
-                principal_id=B,
-                source_id="src_bbbbbbbbbbbbbbbbbbbbbbbb",
-                source_object_id="obj_bbbbbbbbbbbbbbbbbbbbbbbb",
-                source_version_id="ver_bbbbbbbbbbbbbbbbbbbbbbbb",
-                page_number=1,
-                observed_at=WHEN,
-                content=b"Synthetic handwritten beta decision",
             ),
         )
     )
@@ -93,57 +100,102 @@ def test_two_principals_reconcile_review_correct_and_search_without_an_oracle(
     engine: Engine,
 ) -> None:
     service = GoodNotesService()
-    source = fixture_source()
-    receipts = {}
-    for principal in (A, B):
-        with engine.begin() as connection:
-            receipts[principal] = service.reconcile(
+    scopes: dict[str, tuple[FixtureGoodNotesSource, str]] = {}
+    with engine.begin() as connection:
+        for principal in (A, B):
+            source = register_source(
+                connection,
+                provider_kind=SourceProviderKind.FIXTURE,
+                label="Synthetic GoodNotes",
+                classification=Classification.SYNTHETIC_TEST,
+                native_root=f"/synthetic/goodnotes/{principal}",
+            )
+            observed = observe_object(
+                connection,
+                source_id=source.source_id,
+                native_locator=f"/synthetic/goodnotes/{principal}/page.pdf",
+                kind=ObjectKind.FILE,
+                fingerprint=f"fingerprint-{principal}",
+                modified_at=WHEN,
+                media_type="application/pdf",
+                size_bytes=32,
+            )
+            enrollment = accept_enrollment(
+                connection,
+                EnrollmentRequest(
+                    source_id=source.source_id,
+                    principal_id=principal,
+                    purpose=Purpose.BOUNDED_ENROLLMENT,
+                    scope=EnrollmentScope(object_ids=(observed.source_object_id,)),
+                    media_types=("text/plain",),
+                    policy_version="policy-v1",
+                    idempotency_key=f"goodnotes-{principal}",
+                    max_items=1,
+                    max_bytes=1_000_000,
+                ),
+            ).enrollment
+            record_scope(connection, enrollment.enrollment_id, [observed.source_object_id])
+            pages = fixture_source(
+                principal_id=principal,
+                source_id=source.source_id,
+                object_id=observed.source_object_id,
+                version_id=observed.version_id,
+            )
+            service.reconcile(
                 principal_id=principal,
                 idempotency_key="initial-sync",
-                source=source,
+                source=pages,
                 transcriber=FixturePageTranscriber(),
                 repository=PostgresGoodNotesRepository(connection),
             )
-    assert receipts[A].page_version_ids != receipts[B].page_version_ids
+            scopes[principal] = (pages, enrollment.enrollment_id)
 
     with engine.begin() as connection:
-        replay = service.reconcile(
-            principal_id=A,
-            idempotency_key="initial-sync",
-            source=source,
-            transcriber=FixturePageTranscriber(),
-            repository=PostgresGoodNotesRepository(connection),
+        [case_a] = goodnotes_review_cases(connection, principal_id=A, limit=10)
+        assert goodnotes_review_cases(connection, principal_id=B, limit=10)[0].review_case_id != (
+            case_a.review_case_id
         )
-        region_a = connection.execute(
-            select(goodnotes_region_proposals.c.region_id).where(
-                goodnotes_region_proposals.c.principal_id == A
+        with pytest.raises(ReviewNotFoundError):
+            decide_goodnotes_review(
+                connection,
+                ReviewDecisionRequest(
+                    review_case_id=case_a.review_case_id,
+                    expected_review_version=0,
+                    disposition=Disposition.ACCEPT,
+                    principal_id=B,
+                    correlation_id=issue_identifier(IdKind.CORRELATION),
+                    audit_id=issue_identifier(IdKind.AUDIT),
+                    policy_version="policy-v1",
+                    decided_at=WHEN,
+                ),
             )
-        ).scalar_one()
-    assert replay.replayed
-
-    # A foreign region and a nonexistent region have the same database-level
-    # refusal: neither composite foreign key resolves inside B's partition.
-    with pytest.raises(IntegrityError), engine.begin() as connection:
-        service.accept_region(
-            principal_id=B,
-            region_id=region_a,
-            corrected_text="must not cross the boundary",
-            decided_at=WHEN,
-            repository=PostgresGoodNotesRepository(connection),
-        )
 
     with engine.begin() as connection:
-        repository = PostgresGoodNotesRepository(connection)
-        service.accept_region(
-            principal_id=A,
-            region_id=region_a,
-            corrected_text="Reviewed alpha follow-up",
-            decided_at=WHEN,
-            repository=repository,
+        decision = decide_goodnotes_review(
+            connection,
+            ReviewDecisionRequest(
+                review_case_id=case_a.review_case_id,
+                expected_review_version=0,
+                disposition=Disposition.CORRECT_AND_ACCEPT,
+                principal_id=A,
+                correlation_id=issue_identifier(IdKind.CORRELATION),
+                audit_id=issue_identifier(IdKind.AUDIT),
+                policy_version="policy-v1",
+                decided_at=WHEN,
+                corrected_value="Reviewed alpha follow-up",
+            ),
         )
-        own = repository.search(A, '"reviewed alpha"', limit=10)
-        foreign = repository.search(B, '"reviewed alpha"', limit=10)
-    assert len(own) == 1
-    assert own[0].corrected
-    assert own[0].source_version_id == "ver_aaaaaaaaaaaaaaaaaaaaaaaa"
-    assert foreign == ()
+        assert decision.review_case_id == case_a.review_case_id
+        own = search_extractions(
+            connection,
+            SearchRequest(enrollment_id=scopes[A][1], query=SearchQuery('"reviewed alpha"')),
+            now=WHEN,
+        )
+        foreign = search_extractions(
+            connection,
+            SearchRequest(enrollment_id=scopes[B][1], query=SearchQuery('"reviewed alpha"')),
+            now=WHEN,
+        )
+    assert len(own.matches) == 1
+    assert own.matches[0].version_id.startswith("ver_")
+    assert foreign.matches == ()

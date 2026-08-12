@@ -72,6 +72,8 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
     /// composition that would not fit, a membership list over the ceiling, or a
     /// key set that is not the frozen minimum.
     case contactsBoundRefused = "contacts_bound_refused"
+    /// A Reminders read exceeded its hard materialization or wall-clock bound.
+    case tasksBoundRefused = "tasks_bound_refused"
     case unclassified = "unclassified"
 
     /// Classify without quoting. `filesystemFailure` carries an `errno`, and even
@@ -106,7 +108,7 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
             case .mailGenerationUnavailable, .mailDateBoundNotSourceSide:
                 self = .mailMechanismUnsupported
             case .mailIdentityTooLong, .mailHeaderTooLarge, .mailBodyTooLarge,
-                 .mailAttachmentLimitExceeded:
+                 .mailAttachmentLimitExceeded, .mailAutomationTraversalExceeded:
                 self = .mailBoundRefused
             case .calendarOriginalStartUnavailable, .calendarUnboundedEnumeration:
                 self = .calendarMechanismUnsupported
@@ -115,8 +117,11 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
             case .contactsIdentityEpochUnavailable, .contactsMembershipUnavailable,
                  .contactsUnboundedEnumeration:
                 self = .contactsMechanismUnsupported
-            case .contactsIdentityTooLong, .contactsGroupLimitExceeded, .contactsKeySetWidened:
+            case .contactsIdentityTooLong, .contactsGroupLimitExceeded, .contactsKeySetWidened,
+                 .contactsTraversalExceeded:
                 self = .contactsBoundRefused
+            case .tasksTraversalExceeded:
+                self = .tasksBoundRefused
             case .inconsistentDiscovery, .inconsistentEnvelope, .invalidTimeRange,
                  .mismatchedSourceKind, .unknownBucket, .missingSyntheticPage,
                  .duplicateSyntheticPage, .invalidRecurrence, .recurrenceLimitExceeded,

@@ -72,6 +72,7 @@ from my_pa.domain.documents.managed import (
 from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
+from my_pa.domain.goodnotes.models import GoodNotesReviewCase
 from my_pa.domain.policy.decision import validate_policy_version
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.relationship.identity import (
@@ -662,7 +663,9 @@ class ReviewRepository(ABC):
     """Review cases and the only port capable of canonical promotion."""
 
     @abstractmethod
-    def cases(self, *, limit: int, principal_id: str) -> tuple[ReviewCase, ...]:
+    def cases(
+        self, *, limit: int, principal_id: str
+    ) -> tuple[ReviewCase | GoodNotesReviewCase, ...]:
         """One bounded page for this Principal, oldest case first.
 
         `principal_id` is the authenticated caller's identifier: the page is

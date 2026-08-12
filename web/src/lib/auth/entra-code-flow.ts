@@ -23,6 +23,7 @@ import { apiScope, SIGN_IN_SCOPES } from "@/lib/auth/msal.config";
 
 export const ENTRA_FLOW_COOKIE_NAME = "mypa_entra_flow";
 export const ENTRA_FLOW_MAX_AGE_SECONDS = 10 * 60;
+export const ENTRA_FLOW_MAX_PENDING = 128;
 
 interface PendingAuthorization {
   readonly nonce: string;
@@ -44,6 +45,12 @@ function registry(): FlowRegistry {
   const created = { pending: new Map<string, PendingAuthorization>() };
   holder[FLOW_REGISTRY_KEY] = created;
   return created;
+}
+
+function pruneExpiredPendingAuthorizations(now: number): void {
+  for (const [state, pending] of registry().pending) {
+    if (pending.expiresAt <= now) registry().pending.delete(state);
+  }
 }
 
 function base64url(bytes: Uint8Array): string {
@@ -118,6 +125,10 @@ export async function beginEntraAuthorization(
   now = Math.floor(Date.now() / 1000),
 ): Promise<AuthorizationStart> {
   const config = entraServerConfig();
+  pruneExpiredPendingAuthorizations(now);
+  if (registry().pending.size >= ENTRA_FLOW_MAX_PENDING) {
+    throw new Error("too many Entra authorization requests are pending; restart sign-in later");
+  }
   const state = randomOpaque(32);
   const nonce = randomOpaque(32);
   const verifier = randomOpaque(64);

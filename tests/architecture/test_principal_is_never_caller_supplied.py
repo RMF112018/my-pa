@@ -179,9 +179,19 @@ DERIVED_CHAINS: Final = ("principal.principal_id", "account.principal_id")
 VERIFIED_CALLER_STATEMENTS: Final = {
     "application/goodnotes.py": (
         ("page", "principal_id"),
+        ("page", "principal_id"),
+        ("plan", "principal_id"),
+        ("plan", "principal_id"),
+        ("plan", "principal_id"),
+        ("plan", "principal_id"),
+        ("plan", "principal_id"),
+        ("plan", "principal_id"),
+        ("plan", "principal_id"),
         ("prior", "principal_id"),
-        ("source_page", "principal_id"),
     ),
+    # The runtime receives the authenticated local operator Principal from the
+    # CLI and compares a stored retry receipt to that same admitted plan.
+    "bootstrap/goodnotes.py": (("prior", "principal_id"),),
     "domain/modeling/gate.py": (("item", "principal_id"),),
     "infrastructure/goodnotes/fixture.py": (("page", "principal_id"),),
     # The admitted manifest's owner is untrusted source metadata. The source
@@ -198,8 +208,15 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("receipt", "principal_id"),
         ("receipt", "principal_id"),
         ("receipt", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("row", "principal_id"),
         ("values", "principal_id"),
     ),
+    # The request Principal is produced by the authenticated Review capability;
+    # both the dispatch probe and the selected repository reapply the partition.
+    "infrastructure/persistence/unit_of_work.py": (("request", "principal_id"),),
     "application/situation_service.py": (
         ("cmd", "principal_id"),
         ("cmd", "principal_id"),

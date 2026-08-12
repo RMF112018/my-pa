@@ -17,12 +17,24 @@ let package = Package(
         // Contacts and is inert until an operator-owned process supplies stores
         // and invokes it.  The core protocol target remains framework-free.
         .library(name: "AppleSourceHostPlatform", targets: ["AppleSourceHostPlatform"]),
+        .executable(
+            name: "apple-source-host",
+            targets: ["AppleSourceHostPlatformHost"]
+        ),
     ],
     targets: [
         .target(name: "AppleSourceHost"),
         .target(
             name: "AppleSourceHostPlatform",
-            dependencies: ["AppleSourceHost"]
+            dependencies: ["AppleSourceHost"],
+            linkerSettings: [.linkedFramework("ScriptingBridge")]
+        ),
+        // A runnable, deliberately non-activating host boundary.  It admits and
+        // validates operator configuration/checkpoints, but does not construct
+        // framework stores, request TCC, register observers, or enumerate data.
+        .executableTarget(
+            name: "AppleSourceHostPlatformHost",
+            dependencies: ["AppleSourceHost", "AppleSourceHostPlatform"]
         ),
         // OD-COMP-009 compile-only compatibility probe. Deliberately NOT a
         // dependency of `AppleSourceHost`: the shipping module must keep linking

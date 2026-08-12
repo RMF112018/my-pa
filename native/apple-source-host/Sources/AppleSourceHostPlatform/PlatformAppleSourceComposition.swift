@@ -3,12 +3,11 @@ import Contacts
 import EventKit
 import Foundation
 
-/// Apple Mail has no public read store API on macOS. MailKit is an extension
-/// surface and ScriptingBridge cannot structurally enforce read-only access.
-/// The platform composition therefore carries the limitation as a value rather
-/// than silently substituting Graph, automation, or a fixture.
+/// Apple Mail has no public read store API on macOS. The admitted fallback is a
+/// closed ScriptingBridge client that names only read property/element codes.
+/// The OS grant is broader, so the mechanism stays separately operator-gated.
 public enum PlatformMailReadAvailability: String, Codable, Sendable {
-    case unavailableNoPublicReadAPI = "unavailable_no_public_read_api"
+    case availableOperatorGatedAutomation = "available_operator_gated_automation"
 }
 
 /// Notification names a separately activated watcher may observe. Merely
@@ -29,13 +28,16 @@ public struct PlatformSourceChangeSignals: Sendable {
 public struct PlatformAppleSourceComposition: @unchecked Sendable {
     public let calendar: BoundedCalendarReadAdapter
     public let contacts: BoundedContactsReadAdapter
-    public let mail: PlatformMailReadAvailability
+    public let tasks: BoundedTasksReadAdapter
+    public let mail: BoundedMailReadAdapter
+    public let mailAvailability: PlatformMailReadAvailability
     public let changeSignals: PlatformSourceChangeSignals
 
     public init(
         eventStore: EKEventStore,
         contactStore: CNContactStore,
-        contactsIdentityEpoch: String
+        contactsIdentityEpoch: String,
+        mailGeneration: String
     ) throws {
         self.calendar = BoundedCalendarReadAdapter(
             mechanism: EventKitCalendarMechanism(store: eventStore)
@@ -46,7 +48,13 @@ public struct PlatformAppleSourceComposition: @unchecked Sendable {
                 identityEpoch: contactsIdentityEpoch
             )
         )
-        self.mail = .unavailableNoPublicReadAPI
+        self.tasks = BoundedTasksReadAdapter(
+            mechanism: try EventKitTasksMechanism(store: eventStore)
+        )
+        self.mail = BoundedMailReadAdapter(
+            mechanism: try AppleMailAutomationMechanism(generation: mailGeneration)
+        )
+        self.mailAvailability = .availableOperatorGatedAutomation
         self.changeSignals = PlatformSourceChangeSignals()
     }
 }

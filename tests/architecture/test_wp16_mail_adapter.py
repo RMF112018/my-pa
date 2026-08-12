@@ -39,6 +39,9 @@ HOST: Final = ROOT / "native" / "apple-source-host"
 SHIPPING: Final = HOST / "Sources" / "AppleSourceHost"
 MANIFEST: Final = HOST / "Package.swift"
 AUTOMATION_PROBE: Final = HOST / "Compatibility" / "AppleMailAutomationShapeProbe"
+PLATFORM_MAIL: Final = (
+    HOST / "Sources" / "AppleSourceHostPlatform" / "AppleMailAutomationMechanism.swift"
+)
 
 MECHANISM: Final = SHIPPING / "MailMechanism.swift"
 ADAPTER: Final = SHIPPING / "BoundedMailReadAdapter.swift"
@@ -84,8 +87,8 @@ def _swift_files(root: Path) -> tuple[Path, ...]:
     return tuple(sorted(path for path in root.rglob("*.swift") if ".build" not in path.parts))
 
 
-def _swift_outside_the_automation_probe() -> tuple[Path, ...]:
-    """Every Swift file under `native/` except the Mail automation shape probe.
+def _swift_outside_the_automation_mechanisms() -> tuple[Path, ...]:
+    """Every Swift file except the compile probe and admitted production reader.
 
     Wider than the shipping directory on purpose, and for the reason WP-15's
     correction established: the directory an automation import would actually
@@ -94,7 +97,11 @@ def _swift_outside_the_automation_probe() -> tuple[Path, ...]:
     excused; `test_the_mail_automation_probe_sends_no_event_and_is_never_linked`
     holds it to metatypes, a data table, and no event.
     """
-    return tuple(path for path in _swift_files(HOST) if AUTOMATION_PROBE not in path.parents)
+    return tuple(
+        path
+        for path in _swift_files(HOST)
+        if AUTOMATION_PROBE not in path.parents and path != PLATFORM_MAIL
+    )
 
 
 def _source(path: Path) -> str:
@@ -106,20 +113,20 @@ def _source(path: Path) -> str:
 
 def test_the_mail_scan_is_reading_the_adapter_at_all() -> None:
     """Every assertion below is worthless if the scan reads nothing."""
-    for path in (MECHANISM, ADAPTER, FIXTURE, PROTOCOL):
+    for path in (MECHANISM, ADAPTER, FIXTURE, PROTOCOL, PLATFORM_MAIL):
         assert path.is_file(), f"{path} is missing; the WP-16 scan reads nothing"
     assert "public protocol MailMechanism" in _source(MECHANISM)
     assert "public struct BoundedMailReadAdapter" in _source(ADAPTER)
     assert len(_swift_files(AUTOMATION_PROBE)) == 1
 
-    scanned = set(_swift_outside_the_automation_probe())
+    scanned = set(_swift_outside_the_automation_mechanisms())
     assert set(_swift_files(SHIPPING)) < scanned, (
         "the Apple-event scan is no wider than Sources/AppleSourceHost"
     )
     assert scanned.isdisjoint(_swift_files(AUTOMATION_PROBE))
-    assert scanned | set(_swift_files(AUTOMATION_PROBE)) == set(_swift_files(HOST)), (
-        "a Swift file under native/ is in neither the Apple-event scan nor the probe"
-    )
+    assert scanned | set(_swift_files(AUTOMATION_PROBE)) | {PLATFORM_MAIL} == set(
+        _swift_files(HOST)
+    ), "a Swift file under native/ is in neither the Apple-event scan nor the probe"
 
 
 # --- control 6: the seam is a read surface and nothing else -------------------
@@ -216,20 +223,26 @@ def test_the_mail_seam_cannot_ask_for_a_permission_it_does_not_have() -> None:
     host may cause. The seam is therefore shaped so the adapter can learn that
     consent is absent and stop, and has no way at all to ask for it.
     """
-    for path in _swift_outside_the_automation_probe():
+    for path in _swift_outside_the_automation_mechanisms():
         source = _without_comments(path.read_text(encoding="utf-8"))
         for asking in (
             "requestConsent",
             "requestAuthorization",
             "requestAccess",
-            "AEDeterminePermissionToAutomateTarget",
-            "kAEDontExecute",
         ):
             assert asking not in source, (
                 f"{path.relative_to(ROOT)} names {asking}. Consent is the "
                 "operator's to give (EXT-04); this host may observe that it is "
                 "absent and refuse, and may not raise the dialogue that asks"
             )
+    platform = _source(PLATFORM_MAIL)
+    assert "AEDeterminePermissionToAutomateTarget(" in platform
+    assert re.search(r"AEDeterminePermissionToAutomateTarget\([\s\S]*?false\s*\)", platform), (
+        "the production Mail consent check must pass askUserIfNeeded: false"
+    )
+    assert not any(
+        asking in platform for asking in ("requestConsent", "requestAuthorization", "requestAccess")
+    )
 
 
 # --- control 6 and control 1: no Apple event leaves the shipping host ---------
@@ -264,9 +277,9 @@ APPLE_EVENT_SURFACE: Final = (
 )
 
 
-def test_no_swift_outside_the_automation_probe_can_send_an_apple_event() -> None:
+def test_only_the_bounded_platform_mail_reader_can_send_read_apple_events() -> None:
     offenders: dict[str, list[str]] = {}
-    for path in _swift_outside_the_automation_probe():
+    for path in _swift_outside_the_automation_mechanisms():
         source = _without_comments(path.read_text(encoding="utf-8"))
         named = sorted(symbol for symbol in APPLE_EVENT_SURFACE if symbol in source)
         if named:
@@ -278,6 +291,22 @@ def test_no_swift_outside_the_automation_probe_can_send_an_apple_event() -> None
         "rather than per command — so a target that can send an event to Mail is "
         "a target that can empty a mailbox, whether or not it does today"
     )
+    platform = _source(PLATFORM_MAIL)
+    assert "import ScriptingBridge" in platform and "SBApplication(" in platform
+    assert "dateReceived >= %@ AND dateReceived <= %@" in platform
+    assert "maximumMatchingMessages" in platform and "maximumMailboxes" in platform
+    for mutation in (
+        "sendEvent(",
+        ".setTo(",
+        ".delete()",
+        ".move(",
+        ".duplicate(",
+        ".send(",
+        "executeAndReturnError",
+    ):
+        assert mutation not in platform, (
+            f"the production Mail reader names mutating automation surface {mutation}"
+        )
 
 
 def test_the_mail_automation_probe_sends_no_event_and_is_never_linked() -> None:

@@ -22,6 +22,7 @@ import os
 import stat
 import subprocess
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -85,6 +86,11 @@ class ManifestGoodNotesSource:
             os.close(descriptor)
 
     def inventory(self, principal_id: str) -> tuple[SourcePage, ...]:
+        """Compatibility materialization for callers that explicitly need it."""
+        return tuple(self.stream_inventory(principal_id))
+
+    def stream_inventory(self, principal_id: str) -> Iterator[SourcePage]:
+        """Yield one digest-checked page at a time in canonical order."""
         raw_manifest = self._read(self.manifest_relative_path, _MAX_MANIFEST_BYTES)
         try:
             document = json.loads(raw_manifest)
@@ -96,21 +102,23 @@ class ManifestGoodNotesSource:
         if not isinstance(entries, list) or len(entries) > _MAX_PAGES:
             raise GoodNotesLocalSourceError("the GoodNotes manifest page count is invalid")
 
-        pages: list[SourcePage] = []
-        identities: set[tuple[str, int]] = set()
-        for entry in entries:
-            if not isinstance(entry, dict) or entry.get("principal_id") != principal_id:
-                continue
-            page = self._page(entry)
-            identity = (page.source_object_id, page.page_number)
-            if identity in identities:
-                raise GoodNotesLocalSourceError("the GoodNotes manifest repeats a page identity")
-            identities.add(identity)
-            pages.append(page)
-        pages.sort(
-            key=lambda page: (page.source_object_id, page.page_number, page.source_version_id)
-        )
-        return tuple(pages)
+        selected = [
+            entry
+            for entry in entries
+            if isinstance(entry, dict) and entry.get("principal_id") == principal_id
+        ]
+        try:
+            selected.sort(
+                key=lambda entry: (
+                    str(entry["source_object_id"]),
+                    int(str(entry["page_number"])),
+                    str(entry["source_version_id"]),
+                )
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise GoodNotesLocalSourceError("the GoodNotes manifest page is invalid") from error
+        for entry in selected:
+            yield self._page(entry)
 
     def _page(self, entry: dict[str, object]) -> SourcePage:
         try:

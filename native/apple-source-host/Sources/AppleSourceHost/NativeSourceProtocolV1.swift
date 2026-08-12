@@ -400,6 +400,7 @@ public enum NativeSourceContractError: Error, Equatable, Sendable {
     case mailBodyTooLarge
     case mailAttachmentLimitExceeded
     case mailContentInconsistent
+    case mailAutomationTraversalExceeded
     case calendarIdentityTooLong
     case calendarInvalidIdentityComponent
     case calendarHorizonExceeded
@@ -421,6 +422,8 @@ public enum NativeSourceContractError: Error, Equatable, Sendable {
     case contactsGroupLimitExceeded
     case contactsTruncationUndeclared
     case contactsUnboundedEnumeration
+    case contactsTraversalExceeded
     case tasksIdentityInconsistent
     case tasksTruncationUndeclared
+    case tasksTraversalExceeded
 }

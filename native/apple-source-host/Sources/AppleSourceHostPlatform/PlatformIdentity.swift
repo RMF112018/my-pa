@@ -5,6 +5,18 @@ import Foundation
 /// Stable, content-free provider-key encoding for the core identity alphabets.
 /// The digest avoids storing an account/contact locator in the handoff identity.
 enum PlatformIdentity {
+    static func opaque(_ namespace: String, _ providerKey: String) throws
+        -> NativeSourceOpaqueID {
+        guard let value = NativeSourceOpaqueID(rawValue: digest(namespace, providerKey)) else {
+            throw NativeSourceContractError.tasksIdentityInconsistent
+        }
+        return value
+    }
+
+    static func revision(_ namespace: String, _ values: String...) -> String {
+        digest(namespace, values.joined(separator: "\u{1e}"))
+    }
+
     static func calendar(_ namespace: String, _ providerKey: String) throws
         -> CalendarIdentityComponent {
         guard let value = CalendarIdentityComponent(rawValue: digest(namespace, providerKey)) else {

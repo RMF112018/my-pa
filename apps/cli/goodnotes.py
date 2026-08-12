@@ -1,0 +1,94 @@
+"""Operator-only trigger for bounded GoodNotes reconciliation."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path, PurePosixPath
+
+from sqlalchemy.engine import Engine
+
+from my_pa.bootstrap.gateway import local_principal
+from my_pa.bootstrap.goodnotes import LocalGoodNotesRuntime, compose_local_goodnotes_runtime
+from my_pa.bootstrap.settings import ENV_PREFIX, AuthMode, load_settings
+from my_pa.infrastructure.database.engine import create_database_engine
+
+EXIT_OK = 0
+EXIT_REFUSED = 1
+
+
+def _runtime() -> LocalGoodNotesRuntime:
+    root = os.environ.get(f"{ENV_PREFIX}GOODNOTES_ROOT", "")
+    executable = os.environ.get(f"{ENV_PREFIX}GOODNOTES_OCR_EXECUTABLE", "")
+    arguments = os.environ.get(f"{ENV_PREFIX}GOODNOTES_OCR_ARGUMENTS_JSON", "[]")
+    if not root or not executable:
+        raise ValueError("GoodNotes root and OCR executable require explicit operator settings")
+    decoded = json.loads(arguments)
+    if not isinstance(decoded, list) or not all(isinstance(value, str) for value in decoded):
+        raise ValueError("GoodNotes OCR arguments must be a JSON string list")
+    return compose_local_goodnotes_runtime(
+        admitted_root=Path(root),
+        manifest_relative_path=PurePosixPath(
+            os.environ.get(f"{ENV_PREFIX}GOODNOTES_MANIFEST", "goodnotes-manifest.json")
+        ),
+        ocr_command=(executable, *decoded),
+        ocr_name=os.environ.get(f"{ENV_PREFIX}GOODNOTES_OCR_NAME", "operator_local_ocr"),
+        ocr_version=os.environ.get(f"{ENV_PREFIX}GOODNOTES_OCR_VERSION", "1"),
+    )
+
+
+def _engine() -> Engine:
+    return create_database_engine(
+        load_settings().parsed_database_url(), statement_timeout_ms=30_000
+    )
+
+
+def _operator_principal_id() -> str:
+    settings = load_settings()
+    if settings.auth_mode is not AuthMode.LOCAL_OPERATOR:
+        raise ValueError("GoodNotes operator commands require local_operator authentication")
+    principal = local_principal()
+    if not principal.is_operator:
+        raise ValueError("GoodNotes operator authentication is unavailable")
+    return principal.principal_id
+
+
+def _reconcile(args: argparse.Namespace) -> int:
+    engine = _engine()
+    try:
+        receipt = _runtime().reconcile(
+            engine=engine,
+            principal_id=_operator_principal_id(),
+            idempotency_key=args.idempotency_key,
+        )
+    finally:
+        engine.dispose()
+    print(f"receipt {receipt.receipt_id}")
+    print(f"pages {len(receipt.page_version_ids)}")
+    print(f"regions {receipt.created_regions}")
+    print(f"replayed {str(receipt.replayed).lower()}")
+    return EXIT_OK
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="goodnotes")
+    commands = parser.add_subparsers(dest="command", required=True)
+    reconcile = commands.add_parser("reconcile")
+    reconcile.add_argument("--idempotency-key", required=True)
+    reconcile.set_defaults(handler=_reconcile)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        args = build_parser().parse_args(argv)
+        return int(args.handler(args))
+    except (OSError, ValueError, TimeoutError, json.JSONDecodeError) as error:
+        print(str(error), file=sys.stderr)
+        return EXIT_REFUSED
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

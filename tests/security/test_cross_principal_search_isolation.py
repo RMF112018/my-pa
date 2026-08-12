@@ -238,22 +238,17 @@ def test_the_isolation_holds_in_both_directions(engine: Engine) -> None:
     assert scope == ("src_0000000000000001",)
 
 
-def test_the_extraction_plane_names_no_principal_which_is_why_this_module_exists(
+def test_extraction_and_goodnotes_search_keep_their_distinct_isolation_controls(
     engine: Engine,
 ) -> None:
-    """The premise, measured rather than assumed.
-
-    If `persistence/search.py` ever gains its own partition predicate, the
-    single-point dependency this module guards stops being the only thing
-    holding the extraction plane — and that is a change worth noticing here,
-    beside the tests that stand in for the missing predicate.
-    """
+    """Extraction stays enrollment-authorized; GoodNotes joins every Principal key."""
     source = (ROOT / "src" / "my_pa" / "infrastructure" / "persistence" / "search.py").read_text(
         encoding="utf-8"
     )
-    assert "principal_id" not in source, (
-        "`persistence/search.py` now references a principal. The extraction "
-        "plane's isolation is no longer held solely by "
-        "`application.authorization._scope_of_enrollment`; update this module to "
-        "assert what now holds it"
-    )
+    extraction, goodnotes = source.split("def _accepted_goodnotes_text", maxsplit=1)
+    assert "principal_id" not in extraction
+    assert "goodnotes_region_proposals.c.principal_id" in goodnotes
+    assert "goodnotes_review_decisions.c.principal_id" in goodnotes
+    assert "goodnotes_page_versions.c.principal_id" in goodnotes
+    assert "goodnotes_pages.c.principal_id" in goodnotes
+    assert "authorized_object(" in goodnotes

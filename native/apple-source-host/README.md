@@ -107,7 +107,7 @@ swift build -c release --package-path native/apple-source-host
 
 The installed Swift 6.2 toolchain does not include `XCTest` or the Swift
 `Testing` module, so the contract checks are a dependency-free executable test
-target. A failure throws and exits nonzero. Twenty-two checks cover version mismatch,
+target. A failure throws and exits nonzero. Thirty-seven checks cover version mismatch,
 multi-account label collisions, exact preflight identity, deterministic
 handoff, recurrence exceptions/cancellation/bounds, atomic spool lifecycle,
 owner-only modes, idempotency, item/byte/payload backpressure, injected crash
@@ -121,7 +121,10 @@ change proving the negative, source-side date bounding with a lying mechanism
 caught, body and attachment bounds on the wire as well as in Swift, an
 attachment descriptor whose oversize label is required off the wire and not
 only on its initialiser, and cursor
-ordering. Repository
+ordering; Calendar authorization, identity, recurrence, timezone, horizon and
+wire bounds; the frozen minimum Contacts key set, epoch-bearing identity,
+container/group membership, revocation, pagination and wire bounds; and the
+bounded read-only Tasks adapter. Repository
 architecture tests independently scan dependencies, imports, configuration and
 public surfaces.
 

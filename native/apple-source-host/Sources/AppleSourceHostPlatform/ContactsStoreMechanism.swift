@@ -21,14 +21,26 @@ public final class ContactsStoreMechanism: ContactsMechanism, @unchecked Sendabl
     private let store: CNContactStore
     private let identityEpoch: ContactsIdentityComponent
     private let accountKey: ContactsIdentityComponent
+    private let maximumContactsScanned: Int
+    private let maximumMembershipsScanned: Int
 
-    public init(store: CNContactStore, identityEpoch: String) throws {
+    public init(
+        store: CNContactStore,
+        identityEpoch: String,
+        maximumContactsScanned: Int = 5_000,
+        maximumMembershipsScanned: Int = 10_000
+    ) throws {
         guard !identityEpoch.isEmpty, identityEpoch.utf8.count <= 200 else {
             throw NativeSourceContractError.contactsIdentityEpochUnavailable
         }
+        guard 1...10_000 ~= maximumContactsScanned,
+              1...50_000 ~= maximumMembershipsScanned
+        else { throw NativeSourceContractError.contactsTraversalExceeded }
         self.store = store
         self.identityEpoch = try PlatformIdentity.contacts("contacts-epoch", identityEpoch)
         self.accountKey = try PlatformIdentity.contacts("contacts-account", "platform-default")
+        self.maximumContactsScanned = maximumContactsScanned
+        self.maximumMembershipsScanned = maximumMembershipsScanned
     }
 
     public func authorizationState() throws -> ContactsAuthorizationState {
@@ -79,33 +91,33 @@ public final class ContactsStoreMechanism: ContactsMechanism, @unchecked Sendabl
         guard candidates.count == 1, let container = candidates.first else {
             throw NativeSourceContractError.unknownBucket
         }
-        let groupValues = try store.groups(
-            matching: CNGroup.predicateForGroupsInContainer(withIdentifier: container.identifier)
+        let request = CNContactFetchRequest(keysToFetch: [
+            CNContactIdentifierKey as CNKeyDescriptor,
+            CNContactTypeKey as CNKeyDescriptor,
+        ])
+        request.predicate = CNContact.predicateForContactsInContainer(
+            withIdentifier: container.identifier
         )
-        var memberships: [String: [ContactsIdentityComponent]] = [:]
-        for group in groupValues {
-            let groupKey = try PlatformIdentity.contacts("contacts-group", group.identifier)
-            for contact in try store.unifiedContacts(
-                matching: CNContact.predicateForContactsInGroup(withIdentifier: group.identifier),
-                keysToFetch: [CNContactIdentifierKey as CNKeyDescriptor]
-            ) {
-                memberships[contact.identifier, default: []].append(groupKey)
-            }
+        request.unifyResults = true
+        request.mutableObjects = false
+        request.sortOrder = .none
+        let contacts = ContactEnumerationState(maximum: maximumContactsScanned)
+        try store.enumerateContacts(with: request) { contact, stop in
+            contacts.append(contact, stop: stop)
         }
-        let values = try store.unifiedContacts(
-            matching: CNContact.predicateForContactsInContainer(withIdentifier: container.identifier),
-            keysToFetch: [
-                CNContactIdentifierKey as CNKeyDescriptor,
-                CNContactTypeKey as CNKeyDescriptor,
-            ]
-        ).map { contact in
+        let rawContacts = try contacts.result()
+        let memberships = try groupMemberships(
+            containerIdentifier: container.identifier,
+            targetContactIdentifiers: Set(rawContacts.map(\.identifier))
+        )
+        let values = try rawContacts.map { contact in
             try ContactObservation(
                 identity: ContactIdentity(
                     container: query.container,
                     identityEpoch: identityEpoch,
                     contactKey: try PlatformIdentity.contacts("contacts-contact", contact.identifier)
                 ),
-                structuralType: contact.contactType == .organization ? .organization : .person,
+                structuralType: contact.structuralType == .organization ? .organization : .person,
                 identityAssurance: .stableWithinEpoch,
                 groupKeys: (memberships[contact.identifier] ?? []).sorted {
                     $0.rawValue < $1.rawValue
@@ -120,6 +132,35 @@ public final class ContactsStoreMechanism: ContactsMechanism, @unchecked Sendabl
             moreAvailable: values.count > query.limit,
             enumeratedEveryContainer: false
         )
+    }
+
+    private func groupMemberships(
+        containerIdentifier: String,
+        targetContactIdentifiers: Set<String>
+    ) throws -> [String: [ContactsIdentityComponent]] {
+        let state = ContactMembershipState(
+            maximum: maximumMembershipsScanned,
+            targets: targetContactIdentifiers
+        )
+        for group in try store.groups(
+            matching: CNGroup.predicateForGroupsInContainer(withIdentifier: containerIdentifier)
+        ) {
+            let groupKey = try PlatformIdentity.contacts("contacts-group", group.identifier)
+            let request = CNContactFetchRequest(
+                keysToFetch: [CNContactIdentifierKey as CNKeyDescriptor]
+            )
+            request.predicate = CNContact.predicateForContactsInGroup(
+                withIdentifier: group.identifier
+            )
+            request.unifyResults = true
+            request.mutableObjects = false
+            request.sortOrder = .none
+            try store.enumerateContacts(with: request) { contact, stop in
+                state.observe(contact.identifier, groupKey: groupKey, stop: stop)
+            }
+            if state.exceeded { throw NativeSourceContractError.contactsTraversalExceeded }
+        }
+        return try state.result()
     }
 
     private func containerIdentity(_ providerKey: String) throws -> ContactsContainerIdentity {
@@ -137,5 +178,84 @@ public final class ContactsStoreMechanism: ContactsMechanism, @unchecked Sendabl
         case .unassigned: return .unassigned
         @unknown default: return .unassigned
         }
+    }
+}
+
+private struct RawContactObservation: Sendable {
+    let identifier: String
+    let structuralType: CNContactType
+}
+
+private final class ContactEnumerationState: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maximum: Int
+    private var values: [RawContactObservation] = []
+    private var overflowed = false
+
+    init(maximum: Int) { self.maximum = maximum }
+
+    func append(_ contact: CNContact, stop: UnsafeMutablePointer<ObjCBool>) {
+        lock.lock()
+        defer { lock.unlock() }
+        if values.count >= maximum {
+            overflowed = true
+            stop.pointee = true
+            return
+        }
+        values.append(
+            RawContactObservation(
+                identifier: contact.identifier,
+                structuralType: contact.contactType
+            )
+        )
+    }
+
+    func result() throws -> [RawContactObservation] {
+        lock.lock()
+        defer { lock.unlock() }
+        if overflowed { throw NativeSourceContractError.contactsTraversalExceeded }
+        return values
+    }
+}
+
+private final class ContactMembershipState: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maximum: Int
+    private let targets: Set<String>
+    private var scanned = 0
+    private var values: [String: [ContactsIdentityComponent]] = [:]
+    private(set) var exceeded = false
+
+    init(maximum: Int, targets: Set<String>) {
+        self.maximum = maximum
+        self.targets = targets
+    }
+
+    func observe(
+        _ identifier: String,
+        groupKey: ContactsIdentityComponent,
+        stop: UnsafeMutablePointer<ObjCBool>
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        scanned += 1
+        if scanned > maximum {
+            exceeded = true
+            stop.pointee = true
+            return
+        }
+        if targets.contains(identifier) {
+            values[identifier, default: []].append(groupKey)
+        }
+    }
+
+    func result() throws -> [String: [ContactsIdentityComponent]] {
+        lock.lock()
+        defer { lock.unlock() }
+        if exceeded { throw NativeSourceContractError.contactsTraversalExceeded }
+        for keys in values.values where keys.count > NativeSourceProtocolV1.maximumContactGroupMemberships {
+            throw NativeSourceContractError.contactsGroupLimitExceeded
+        }
+        return values
     }
 }

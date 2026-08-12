@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -66,12 +67,72 @@ def test_contacts_platform_mechanism_uses_minimum_keys_and_no_save_surface() -> 
         assert forbidden not in source
 
 
-def test_platform_composition_is_injected_inert_and_mail_limitation_is_explicit() -> None:
+def test_platform_composition_is_injected_inert_and_mail_is_operator_gated() -> None:
     source = _source("PlatformAppleSourceComposition.swift")
     assert "eventStore: EKEventStore" in source
     assert "contactStore: CNContactStore" in source
-    assert "unavailableNoPublicReadAPI" in source
+    assert "AppleMailAutomationMechanism" in source
+    assert "mailGeneration: String" in source
+    assert "availableOperatorGatedAutomation" in source
     assert "EKEventStoreChangedNotification" in source
     assert "CNContactStoreDidChangeNotification" in source
     assert "addObserver" not in source
     assert "import ScriptingBridge" not in source
+
+
+def test_tasks_platform_mechanism_is_real_bounded_and_never_requests_access() -> None:
+    source = _source("EventKitTasksMechanism.swift")
+    for required in (
+        "EventKitTasksMechanism: TasksMechanism",
+        "authorizationStatus(for: .reminder)",
+        "predicateForReminders",
+        "fetchReminders",
+        "cancelFetchRequest",
+        "maximumMaterialized",
+    ):
+        assert required in source
+    for forbidden in ("requestFullAccess", "requestAccess", "saveReminder", "removeReminder"):
+        assert forbidden not in source
+
+
+def test_mail_platform_mechanism_has_a_closed_read_shape_and_no_prompt_or_mutation() -> None:
+    source = _source("AppleMailAutomationMechanism.swift")
+    assert "AppleMailAutomationMechanism: MailMechanism" in source
+    assert "AEDeterminePermissionToAutomateTarget" in source and "false" in source
+    assert "dateReceived >= %@ AND dateReceived <= %@" in source
+    assert "maximumMatchingMessages" in source
+    for forbidden in (
+        "saveMessage",
+        "removeMessage",
+        "deleteMessage",
+        "moveMessage",
+        "sendEvent(",
+        "requestConsent",
+    ):
+        assert forbidden not in source
+
+
+def test_current_swift_check_count_and_contacts_implementation_are_documented() -> None:
+    main = (HOST / "Tests" / "AppleSourceHostContractChecks" / "main.swift").read_text(
+        encoding="utf-8"
+    )
+    check_count = len(re.findall(r"^\s*try check[A-Za-z0-9_]+\(\)\s*$", main, re.MULTILINE))
+    assert check_count == 37, "update the documented-number vocabulary for a new check count"
+    assert f"PASS ({check_count} checks)" in main
+
+    readme = (HOST / "README.md").read_text(encoding="utf-8")
+    assert "Thirty-seven checks" in readme
+    assert "production-shaped, read-only Calendar and Contacts mechanisms" in readme
+    assert "ContactsStoreMechanism.swift" in {path.name for path in PLATFORM.iterdir()}
+
+    record = (ROOT / "docs" / "campaign" / "WP-18-CONTACTS-ADAPTER-RECORD.md").read_text(
+        encoding="utf-8"
+    )
+    correction = record.split("Branch:", 1)[0]
+    assert "Current-head correction" in correction
+    assert "minimum-key Contacts mechanism" in correction
+    assert f"PASS ({check_count} checks)" in correction
+    assert "PASS (36 checks)" in correction and "historical" in correction
+    assert "* **No live mechanism.**" not in record
+    assert "platformContactStore` is declared and never" not in record
+    assert "ContactsStoreMechanism" in record

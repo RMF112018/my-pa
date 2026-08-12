@@ -207,6 +207,7 @@ from my_pa.domain.capture.errors import (
 )
 from my_pa.domain.capture.reveal import EvidenceState
 from my_pa.domain.capture.review import (
+    ReviewCase,
     ReviewConflictError,
     ReviewNotFoundError,
     ReviewUnsupportedError,
@@ -229,6 +230,7 @@ from my_pa.domain.documents.managed import (
 )
 from my_pa.domain.extraction.coverage import CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus, extract_text
+from my_pa.domain.goodnotes.models import GoodNotesReviewCase
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.policy.decision import POLICY_VERSION
@@ -276,6 +278,35 @@ class _Result:
 
     payload: dict[str, Any]
     disclosure: Disclosure
+
+
+def _review_case_payload(case: ReviewCase | GoodNotesReviewCase) -> dict[str, Any]:
+    common = {
+        "review_case_id": case.review_case_id,
+        "proposal_id": case.proposal_id,
+        "proposal_state": case.proposal_state.value,
+        "risk_class": case.risk_class.value,
+        "opened_at": format_rfc3339(case.opened_at),
+        "review_version": case.review_version,
+        "latest_disposition": (
+            None if case.latest_disposition is None else case.latest_disposition.value
+        ),
+    }
+    if isinstance(case, GoodNotesReviewCase):
+        return {
+            **common,
+            "subject_kind": "goodnotes_region",
+            "region_id": case.region_id,
+            "page_version_id": case.page_version_id,
+            "confidence": case.confidence,
+        }
+    return {
+        **common,
+        "subject_kind": "capture_proposal",
+        "capture_id": case.capture_id,
+        "version_id": case.version_id,
+        "proposal_type": case.proposal_type.value,
+    }
 
 
 def _effective_limits(configured: EffectiveLimits) -> EffectiveLimits:
@@ -1612,27 +1643,7 @@ class ApplicationService:
             )
         truncated = len(found) > page_size
         return _Result(
-            payload={
-                "review_cases": [
-                    {
-                        "review_case_id": case.review_case_id,
-                        "proposal_id": case.proposal_id,
-                        "capture_id": case.capture_id,
-                        "version_id": case.version_id,
-                        "proposal_type": case.proposal_type.value,
-                        "proposal_state": case.proposal_state.value,
-                        "risk_class": case.risk_class.value,
-                        "opened_at": format_rfc3339(case.opened_at),
-                        "review_version": case.review_version,
-                        "latest_disposition": (
-                            None
-                            if case.latest_disposition is None
-                            else case.latest_disposition.value
-                        ),
-                    }
-                    for case in found[:page_size]
-                ]
-            },
+            payload={"review_cases": [_review_case_payload(case) for case in found[:page_size]]},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=("review_policy",),

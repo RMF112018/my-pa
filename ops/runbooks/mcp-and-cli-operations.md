@@ -282,6 +282,23 @@ completed and its audit row was still written.
 
 # The operator CLI
 
+## GoodNotes operator plane
+
+The production-reachable GoodNotes command is `apps/cli/goodnotes.py`. It is
+local-only: set `MY_PA_AUTH_MODE=local_operator`, `MY_PA_GOODNOTES_ROOT` to the
+exact already-admitted source root, and `MY_PA_GOODNOTES_OCR_EXECUTABLE` to an
+absolute local executable. Optional OCR arguments are a JSON string list in
+`MY_PA_GOODNOTES_OCR_ARGUMENTS_JSON`; no shell is used. The command derives the
+durable local Principal and accepts no caller-selected Principal.
+
+Run `reconcile --idempotency-key KEY`. Then use the ordinary authenticated
+`review.list`, `review.decide`, and `knowledge.search` capabilities through
+`apps/cli/invoke.py`; GoodNotes has no parallel review or search command. Reconcile
+first fingerprints the manifest and closes its receipt check, then streams pages
+through the aggregate-bounded OCR/model stage, then opens the durable transaction.
+Never point it at an unverified root or a live personal source outside the
+separately authorized pilot activation.
+
 ## Running it
 
 ```bash

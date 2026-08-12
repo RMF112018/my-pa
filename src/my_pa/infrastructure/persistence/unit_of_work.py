@@ -92,6 +92,7 @@ from my_pa.domain.capture.version import CaptureVersion
 from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
+from my_pa.domain.goodnotes.models import GoodNotesReviewCase
 from my_pa.domain.search.query import SearchRequest
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.registry import ConfiguredSource
@@ -109,6 +110,11 @@ from my_pa.infrastructure.persistence.enrollment import (
     record_scope,
 )
 from my_pa.infrastructure.persistence.extraction import coverage_for
+from my_pa.infrastructure.persistence.goodnotes import (
+    decide_goodnotes_review,
+    goodnotes_review_cases,
+    is_goodnotes_review_case,
+)
 from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
 from my_pa.infrastructure.persistence.knowledge import (
     corpus_coverage,
@@ -410,15 +416,35 @@ class _Reviews(ReviewRepository):
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
-    def cases(self, *, limit: int, principal_id: str) -> tuple[ReviewCase, ...]:
-        return _read(
-            lambda: review_cases(
+    def cases(
+        self, *, limit: int, principal_id: str
+    ) -> tuple[ReviewCase | GoodNotesReviewCase, ...]:
+        def statement() -> tuple[ReviewCase | GoodNotesReviewCase, ...]:
+            capture = review_cases(
                 self._connection, limit=limit, context=capture_context(principal_id)
             )
-        )
+            goodnotes = goodnotes_review_cases(
+                self._connection, principal_id=principal_id, limit=limit
+            )
+            combined: list[ReviewCase | GoodNotesReviewCase] = sorted(
+                [*capture, *goodnotes],
+                key=lambda case: (case.opened_at, case.review_case_id),
+            )
+            return tuple(combined[:limit])
+
+        return _read(statement)
 
     def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
-        return _read(lambda: decide_review(self._connection, request))
+        def statement() -> ReviewDecision | None:
+            if is_goodnotes_review_case(
+                self._connection,
+                review_case_id=request.review_case_id,
+                principal_id=request.principal_id,
+            ):
+                return decide_goodnotes_review(self._connection, request)
+            return decide_review(self._connection, request)
+
+        return _read(statement)
 
 
 class _Knowledge(KnowledgeRepository):

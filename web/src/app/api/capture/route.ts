@@ -36,7 +36,7 @@
  * **What this route cannot report, and does not pretend to.** The receipt says
  * the note is durable. It says nothing about whether the asynchronous pipeline
  * later enriched it, because no capability this tier can call exposes the job's
- * state — `POST /v1/{capability}` dispatches fifteen and none of them answers
+ * state — the twenty-six-name capability contract has no job-status read and none answers
  * "how did processing go". So the answer distinguishes *durable* from *refused*
  * and stops there; a third state invented here would be a claim with nothing
  * behind it.

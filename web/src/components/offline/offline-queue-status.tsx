@@ -14,7 +14,7 @@
  *
  * **A quarantined count is shown rather than hidden.** Notes queued by a
  * different principal are not replayed and not deleted; they are held and
- * counted, so nobody has to guess whether they still exist. They are also not
+ * counted, so nobody has to guess whether they still exist. They can be
  * released or deleted only through the owning Principal's explicit controls.
  *
  * The component renders nothing at all when the queue is empty, which is the

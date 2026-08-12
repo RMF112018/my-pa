@@ -5,6 +5,8 @@ import { establishValidatedEntraSession } from "@/lib/auth/entra-session";
 import {
   beginEntraAuthorization,
   completeEntraAuthorization,
+  ENTRA_FLOW_MAX_AGE_SECONDS,
+  ENTRA_FLOW_MAX_PENDING,
   resetEntraFlowRegistry,
   type AuthorizationCodeClient,
 } from "@/lib/auth/entra-code-flow";
@@ -37,10 +39,12 @@ function configureFlow(): void {
 
 class FakeCodeClient implements AuthorizationCodeClient {
   start?: AuthorizationUrlRequest;
+  readonly starts = new Map<string, AuthorizationUrlRequest>();
   completion?: AuthorizationCodeRequest;
 
   async getAuthCodeUrl(request: AuthorizationUrlRequest): Promise<string> {
     this.start = request;
+    this.starts.set(request.state ?? "", request);
     return `https://login.example.test/authorize?state=${encodeURIComponent(request.state ?? "")}`;
   }
 
@@ -48,7 +52,7 @@ class FakeCodeClient implements AuthorizationCodeClient {
     this.completion = request;
     return {
       accessToken: "validated-access-token-never-in-cookie",
-      idTokenClaims: { ...CLAIMS, nonce: this.start?.nonce },
+      idTokenClaims: { ...CLAIMS, nonce: this.starts.get(request.state ?? "")?.nonce },
     } as unknown as AuthenticationResult;
   }
 }
@@ -163,5 +167,63 @@ describe("authorization-code callback", () => {
       ),
     ).rejects.toThrow(/expired/);
     expect(client.completion).toBeUndefined();
+  });
+
+  it("prunes abandoned requests at the exact expiry boundary before admitting another", async () => {
+    configureFlow();
+    const client = new FakeCodeClient();
+    const abandoned = await beginEntraAuthorization(client, 100);
+
+    const replacement = await beginEntraAuthorization(
+      client,
+      100 + ENTRA_FLOW_MAX_AGE_SECONDS,
+    );
+    expect(replacement.state).not.toBe(abandoned.state);
+    await expect(
+      completeEntraAuthorization(
+        { code: "late-code", state: abandoned.state, stateCookie: abandoned.state },
+        client,
+        100 + ENTRA_FLOW_MAX_AGE_SECONDS,
+      ),
+    ).rejects.toThrow(/absent, expired, or already consumed/);
+    expect(client.completion).toBeUndefined();
+  });
+
+  it("fails closed at registry capacity without evicting a live request", async () => {
+    configureFlow();
+    const client = new FakeCodeClient();
+    const live = await Promise.all(
+      Array.from({ length: ENTRA_FLOW_MAX_PENDING }, () => beginEntraAuthorization(client, 100)),
+    );
+
+    await expect(beginEntraAuthorization(client, 101)).rejects.toThrow(
+      /too many Entra authorization requests are pending/,
+    );
+    expect(client.starts.size).toBe(ENTRA_FLOW_MAX_PENDING);
+
+    const first = live[0];
+    const established = await completeEntraAuthorization(
+      { code: "first-live-code", state: first.state, stateCookie: first.state },
+      client,
+      101,
+    );
+    expect(gatewayBearerForPrincipal(established.principal.principalId)).toBe(
+      "validated-access-token-never-in-cookie",
+    );
+  });
+
+  it("removes a failed authorization-url reservation so it cannot consume capacity", async () => {
+    configureFlow();
+    const failing = new FakeCodeClient();
+    failing.getAuthCodeUrl = async () => {
+      throw new Error("planted authorization-url failure");
+    };
+    await expect(beginEntraAuthorization(failing, 100)).rejects.toThrow(/planted/);
+
+    const client = new FakeCodeClient();
+    await Promise.all(
+      Array.from({ length: ENTRA_FLOW_MAX_PENDING }, () => beginEntraAuthorization(client, 100)),
+    );
+    expect(client.starts.size).toBe(ENTRA_FLOW_MAX_PENDING);
   });
 });

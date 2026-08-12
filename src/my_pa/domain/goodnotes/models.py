@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from my_pa.domain.capture.proposal import ProposalState, RiskClass
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 
@@ -149,3 +151,44 @@ class GoodNotesSearchHit:
     page_number: int
     accepted_text: str = field(repr=False)
     corrected: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesReviewItem:
+    region_id: str
+    page_version_id: str
+    source_version_id: str
+    page_number: int
+    transcription: str = field(repr=False)
+    confidence: float
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesReviewCase:
+    """One OCR region exposed through the ordinary canonical Review surface."""
+
+    review_case_id: str
+    proposal_id: str
+    region_id: str
+    page_version_id: str
+    principal_id: str
+    confidence: float
+    opened_at: datetime
+    proposal_state: ProposalState = ProposalState.NEEDS_REVIEW
+    risk_class: RiskClass = RiskClass.MODERATE
+    review_version: int = 0
+    latest_disposition: Disposition | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
+        validate_identifier(self.proposal_id, IdKind.PROPOSAL)
+        _goodnotes_id(self.region_id, "gnreg")
+        _goodnotes_id(self.page_version_id, "gnver")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        ensure_utc(self.opened_at)
+        if not 0 <= self.confidence <= 1:
+            raise ValueError("confidence must be between zero and one")
+        if self.review_version < 0:
+            raise ValueError("a review version is not negative")
+        if (self.review_version == 0) is not (self.latest_disposition is None):
+            raise ValueError("an undecided case has version zero and no disposition")

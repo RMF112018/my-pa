@@ -8,7 +8,9 @@
 > requests no TCC grant, names no save surface, and repository validation reads
 > no live contact. The identity epoch remains application-supplied because the
 > framework publishes none. Current scope and external gates are recorded in
-> `PILOT-BLOCKER-REMEDIATION-20260812.md`.
+> `PILOT-BLOCKER-REMEDIATION-20260812.md`. The current contract executable prints
+> `PASS (37 checks)`; every `PASS (36 checks)` below is retained as historical
+> evidence for the original WP-18 head, not as a current-head count.
 
 Branch: `bf/wp-18-apple-contacts-adapter`. Base: `06282a3d29e978ef8ec4ddd1fa79d2eedef67c0a`.
 
@@ -60,7 +62,7 @@ level in a later restatement.
 | 4 | **Permission denial and revocation safe** | **Proven, both halves.** Denial fails closed exhaustively with no `default`; a grant withdrawn **between two calls** makes the second refuse, and the fixture's own counter proves the source was never touched again | **Swift runtime, in-process** for the refusals, the zero-read measurement and the revocation; **Python-structural** for the exhaustive `switch`, the two-call-sites assertion and the no-stored-state assertion | `::checkContactsAuthorizationFailsClosedAndRevocationIsNotAStalePage`; `test_contacts_authorization_fails_closed_and_cannot_degrade_to_an_empty_page`, `test_a_revoked_contacts_grant_cannot_be_served_from_a_cache` |
 | 5 | **Read-only API surface** | **Proven at Swift link time, unchanged from WP-15**, plus a closed seam and a closed store-member set. `CNSaveRequest` is named nowhere in this repository, in any spelling | **Swift link-time** (the shipping target links no Apple framework — `otool -L` in §B), plus **Swift compile-time** for the probe, plus static guards over **every** Swift file under `native/` | `test_no_swift_in_the_native_tree_names_a_contacts_mutation_symbol`, `test_no_swift_in_the_native_tree_constructs_a_contact_store`, `test_the_contacts_mechanism_seam_declares_only_read_operations`, `test_the_four_probes_are_compile_only_and_never_linked_into_the_host` |
 | 6 | **Observations, not truth (§22)** | **Proven for what a guard can prove**: no scoring, sentiment, trait or aggregation vocabulary exists in this package, ambiguity is carried in a non-optional `unknown` assurance, and nothing is wired to the relationship plane | **Swift compile-time** for "there is no field for a judgement"; **Python-structural** for the vocabulary scan and the ambiguity field | `test_the_contacts_adapter_judges_nobody_and_reaches_no_relationship_plane` |
-| — | **A live read of real contacts** | **NOT PROVED, and nothing in this package attempts it.** No contact store is constructed anywhere in this repository, no authorization is requested, and no address book was enumerated. Every behavioural claim above is over a seeded in-process fixture | **Nowhere.** Needs an operator TCC grant on real hardware — see §F | — |
+| — | **A live read of real contacts** | **NOT PROVED, and nothing in this package attempts it.** At the WP-18 head no contact store was constructed, no authorization was requested, and no address book was enumerated. Every behavioural claim above is over a seeded in-process fixture. The current platform mechanism remains inert until a caller injects an already-created store; repository validation still performs no live read | **Nowhere.** Needs an operator TCC grant on real hardware — see §F | — |
 | — | **Performance** | **NOT PROVED.** The fixture's timings are the fixture's, not a contact store's, and they are not reported here for that reason | **Nowhere** | — |
 
 ---
@@ -296,7 +298,7 @@ of the source, and it is stated rather than papered over.
 | **EXT-03** | Apple signing identity, notarization profile, and an `Info.plist` carrying `NSContactsUsageDescription` | Any of the above at all, since an unsigned helper cannot hold a durable TCC grant |
 | **EXT-05** | An eligible pilot Mac and `SMAppService` registration | Lifecycle evidence for the helper that would host the mechanism |
 | **EXT-06** | An approved non-personal Apple test account with seeded synthetic contacts | The only honest way to measure performance and container-scale behaviour. **No live personal address book may be used for this, and none was** |
-| — | A decision, not a grant: whether a live mechanism is written at all | The seam has one implementation, `FixtureContactsMechanism`, and nothing else in this repository. Writing a live one means linking Contacts somewhere, and *where* is an architectural decision this package deliberately does not take |
+| — | Historical WP-18 decision, now closed: whether a platform mechanism is written at all | At the WP-18 head the seam had only `FixtureContactsMechanism`. The current `AppleSourceHostPlatform` target now contains `ContactsStoreMechanism`, constructed only from an injected store and still subject to the TCC, signing, host-admission, and live-data gates above |
 
 **There is no read-only contacts grant on this platform.** macOS 14 split calendar
 consent into `fullAccess` and `writeOnly`; contacts consent has no equivalent
@@ -391,11 +393,12 @@ SHA-256**. **No plant remains in the tree**: `git status --porcelain
 
 ## H. What WP-18 deliberately did not do, and what it leaves standing
 
-* **No live mechanism.** The seam has one implementation,
-  `FixtureContactsMechanism`, and it is seeded by hand with `account-alpha`,
-  `container-alpha`, `group-alpha`, `person-alpha`. Writing a live one requires the
-  consent this package refuses to obtain and a decision about which target may
-  link the framework.
+* **Historical mechanism boundary, superseded at current head.** At the WP-18
+  head the seam had only `FixtureContactsMechanism`, seeded by hand with
+  `account-alpha`, `container-alpha`, `group-alpha`, and `person-alpha`. The
+  current, separately bounded `AppleSourceHostPlatform` target contains
+  `ContactsStoreMechanism`; it accepts an injected store, requests no consent,
+  creates no store, and retains the external gates in §F.
 * **No contact content.** There is no name, email address, telephone number,
   postal address, birthday, photograph or note field anywhere in the contacts
   types. A future package that needs one owns bounding it, in WP-16's shape, and
@@ -408,8 +411,9 @@ SHA-256**. **No plant remains in the tree**: `git status --porcelain
   single Alembic head remains `8f2b6c4d1a37` over 26 revisions and the capability
   set remains nineteen.
   `git diff 06282a3..HEAD -- src/ apps/ scripts/ migrations/ ops/ web/` is empty.
-* **The native plane stays quarantined.** Nothing here is reachable from a
-  transport and no production module references any of it.
+* **At the WP-18 head, the native plane was quarantined.** Nothing in that work
+  package was reachable from a transport. Current host/admission reachability is
+  governed by the pilot-remediation record rather than this historical record.
 * **Two exemption sets were widened by one directory each**, so the Contacts shape
   probe may import Contacts:
   `test_wp15_native_host_admission.py::_swift_outside_the_probe` and
@@ -420,11 +424,12 @@ SHA-256**. **No plant remains in the tree**: `git status --porcelain
   no-content-key scan and resolution floors. Both widenings are measured: the
   exemption sets are asserted at **four** in two modules, so a fifth is a decision
   somebody has to make there (plant P13).
-* **`ContactsMechanismKind.platformContactStore` is declared and never
-  constructed.** It names the mechanism a live implementation would declare, in the
-  shape `MailMechanismKind.appleMailAutomation` and
-  `CalendarMechanismKind.eventKitStore` already established. If the next owner
-  judges that dead under §2, it is one line.
+* **Historical declaration state, superseded at current head.** WP-18 declared
+  `ContactsMechanismKind.platformContactStore` without constructing a conformer.
+  `ContactsStoreMechanism` now publishes that descriptor and
+  `PlatformAppleSourceComposition` builds its bounded adapter from the caller's
+  injected `CNContactStore`; the composition itself creates no store and performs
+  no read.
 * **`ContactsContainerKind` is carried and nothing branches on it.** It is
   provenance for control 2 — a local container's keys survive a re-sync because
   there is no server to re-sync from, and a server-backed one's may not — and a
@@ -489,7 +494,7 @@ them would be a composed figure presented as a measured one.
 
 ## J. The privacy boundary, stated as a fact rather than an intention
 
-* **No contact store was constructed, anywhere, at any point.** The string
+* **No contact store was constructed during the WP-18 evidence run.** The string
   `CNContactStore` appears in exactly **two** Swift files — this package's probe
   and WP-15's multi-framework probe — and
   `test_no_swift_in_the_native_tree_constructs_a_contact_store` asserts that list

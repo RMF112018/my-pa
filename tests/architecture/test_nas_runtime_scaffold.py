@@ -203,6 +203,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     compose_services = compose_model.get("services", {})
     if not isinstance(compose_services, dict):
         return {"compose_parse"}
+    if set(compose_services) != set(SERVICES):
+        errors.add("service_set")
     expected_compose_mounts = {
         "postgres": {
             (
@@ -417,6 +419,17 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "edge-plane:\n    internal: false",
             "edge-plane:\n    internal: true",
             "network_planes",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "\nnetworks:\n",
+            "\n  sidecar:\n"
+            "    image: example.invalid/sidecar@sha256:deadbeef\n"
+            "    platform: linux/amd64\n"
+            '    ports: ["0.0.0.0:9999:9999"]\n'
+            "    networks: [edge-plane]\n"
+            "\nnetworks:\n",
+            "service_set",
         ),
         (
             "ops/nas/compose.example.yml",

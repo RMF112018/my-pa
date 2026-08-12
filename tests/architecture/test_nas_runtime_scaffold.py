@@ -46,6 +46,7 @@ def _parse_compose(compose: str) -> dict[str, object] | None:
     ruby = """
 source = STDIN.read
 doc = Psych.parse_stream(source)
+raise 'multiple YAML documents' unless doc.children.length == 1
 walk = lambda do |node|
   if node.is_a?(Psych::Nodes::Mapping)
     keys = node.children.each_slice(2).map do |key, _value|
@@ -419,12 +420,16 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             mount_model_valid = False
             continue
         for volume in volumes:
+            expected_keys = {"type", "source", "target"}
+            if isinstance(volume, dict) and "read_only" in volume:
+                expected_keys.add("read_only")
             if (
                 not isinstance(volume, dict)
                 or volume.get("type") != "bind"
                 or not isinstance(volume.get("source"), str)
                 or not isinstance(volume.get("target"), str)
                 or not isinstance(volume.get("read_only", False), bool)
+                or set(volume) != expected_keys
             ):
                 mount_model_valid = False
                 continue
@@ -681,6 +686,20 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "name: my-pa-nas-contract",
             "name: wrong-stack",
             "top_level_contract",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "name: my-pa-nas-contract",
+            "name: my-pa-nas-contract\n---\nname: other",
+            "compose_parse",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "        target: /var/lib/postgresql/data\n    networks: [data-plane]",
+            "        target: /var/lib/postgresql/data\n"
+            "        bind: {propagation: rshared}\n"
+            "    networks: [data-plane]",
+            "mount_ownership",
         ),
         (
             "ops/nas/compose.example.yml",

@@ -76,8 +76,8 @@ describe("an account switch quarantines rather than replaying or deleting", () =
     const quarantined = await screen.findByTestId("offline-queue-quarantined");
     expect(quarantined).toHaveTextContent("quarantined");
     expect(quarantined).toHaveTextContent("queued by a different account");
-    // Never replayed.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // Session introspection may run, but plaintext is never sent to Capture.
+    expect(fetchSpy.mock.calls.map(([url]) => String(url))).not.toContain("/api/capture");
     // Never deleted, never rebound.
     expect(await payloadPresent(theirs.entryId)).toBe(true);
     const db = await openOfflineDatabase();

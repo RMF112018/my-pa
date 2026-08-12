@@ -30,7 +30,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { POST as signInRoute } from "@/app/api/session/route";
+import { GET as sessionIntrospection, POST as signInRoute } from "@/app/api/session/route";
 import { GET as system } from "@/app/api/system/route";
 import { GET as library } from "@/app/api/library/route";
 import { GET as reviewList } from "@/app/api/review/route";
@@ -426,6 +426,7 @@ describe("the capture receipt is the backend's own", () => {
     const cookie = await signIn();
     stubGateway({
       receipt_id: "rcpt_aaaaaaaa11111111",
+      principal_id: "prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       capture_id: "cap_aaaaaaaa11111111",
       version_id: "capver_aaaaaaaa11111111",
       version_number: 1,
@@ -442,6 +443,7 @@ describe("the capture receipt is the backend's own", () => {
     expect(body.status).toBe("persisted");
     expect(body.receipt.receiptId).toBe("rcpt_aaaaaaaa11111111");
     expect(body.receipt.captureId).toBe("cap_aaaaaaaa11111111");
+    expect(body.receipt.principalId).toBe("syn-aaaa0001");
     expect(body.created).toBe(true);
     // The note itself is never echoed back.
     expect(raw).not.toContain("a note");
@@ -453,10 +455,73 @@ describe("the capture receipt is the backend's own", () => {
     });
   });
 
+  it("refuses a durable receipt without a valid gateway Principal binding", async () => {
+    const cookie = await signIn();
+    stubGateway({
+      receipt_id: "rcpt_aaaaaaaa11111111",
+      principal_id: "",
+      capture_id: "cap_aaaaaaaa11111111",
+      version_id: "capver_aaaaaaaa11111111",
+      version_number: 1,
+      idempotency_key: "k1",
+      content_sha256: "0".repeat(64),
+      issued_at: "2026-08-09T12:00:00Z",
+      created: true,
+    });
+
+    const response = await capture(post(cookie, "/api/capture", { text: "a note", idempotencyKey: "k1" }));
+
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.code).toBe("receipt_principal_missing");
+  });
+
+  it("refuses a replay when the authenticating cookie changes after session introspection", async () => {
+    vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "entra");
+    const cookieA = await signIn("synthetic-a");
+    const authority = await (await sessionIntrospection(get(cookieA, "/api/session"))).json();
+    expect(authority).toMatchObject({ principalId: "syn-aaaa0001" });
+
+    const cookieB = await signIn("synthetic-b");
+    stubGateway({});
+    const replayRequest = post(cookieB, "/api/capture", {
+      text: "synthetic held note",
+      idempotencyKey: "held-a-1",
+    });
+    replayRequest.headers.set("x-my-pa-replay-binding", authority.replayBinding);
+    const response = await capture(replayRequest);
+
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe("replay_session_changed");
+    expect(sent).toEqual([]);
+  });
+
+  it("checks a changed replay session before parsing queued plaintext", async () => {
+    vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "entra");
+    const cookieA = await signIn("synthetic-a");
+    const authority = await (await sessionIntrospection(get(cookieA, "/api/session"))).json();
+    const cookieB = await signIn("synthetic-b");
+    const request = new NextRequest(`${ORIGIN}/api/capture`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-my-pa-replay-binding": authority.replayBinding,
+      },
+      body: "synthetic plaintext that is deliberately not parsed as JSON",
+    });
+    request.cookies.set(SESSION_COOKIE_NAME, cookieB);
+
+    const response = await capture(request);
+
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe("replay_session_changed");
+    expect(sent).toEqual([]);
+  });
+
   it("carries an explicitly selected conversation log through to the gateway", async () => {
     const cookie = await signIn();
     stubGateway({
       receipt_id: "rcpt_aaaaaaaa11111111",
+      principal_id: "prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       capture_id: "cap_aaaaaaaa11111111",
       version_id: "capver_aaaaaaaa11111111",
       version_number: 1,

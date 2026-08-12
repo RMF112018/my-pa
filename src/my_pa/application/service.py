@@ -2286,6 +2286,7 @@ class ApplicationService:
         return _Result(
             payload=CaptureReceiptView(
                 receipt_id=receipt.receipt_id,
+                principal_id=authorization.principal.principal_id,
                 capture_id=receipt.capture_id,
                 version_id=receipt.version_id,
                 version_number=receipt.version_number,

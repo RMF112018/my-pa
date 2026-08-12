@@ -7,14 +7,13 @@
  * guarantee is claimed**: a note queued in a tab that is then closed stays
  * queued until the app is opened again.
  *
- * **The Principal check is first, and nothing precedes it.** An entry queued by
- * a different principal is quarantined without being decrypted and without being
- * sent. It is not rebound to the caller, not deleted, and not retried. That
- * ordering is the isolation property of this package: the payload is not even
- * read into memory under the wrong identity.
+ * **The authenticated Principal check precedes plaintext access.** Replay asks
+ * the server which Principal the current HttpOnly session authenticates, then
+ * compares that answer with the immutable queue owner before calling the only
+ * function that decrypts. A stale rendered Principal therefore has no authority.
  *
  * **A local payload is deleted only for a receipt that has been checked, not for
- * an HTTP 200.** `verifyReceipt` requires all four of:
+ * an HTTP 200.** `verifyReceipt` requires all five of:
  *
  * 1. `shape === "backend"` — the synthetic provider's answer is a different
  *    shape and must never earn a deletion;
@@ -25,6 +24,8 @@
  *    not this entry's receipt;
  * 4. `receipt.contentSha256` equal to a SHA-256 this tier computes locally over
  *    the exact bytes the backend hashes.
+ * 5. `receipt.principalId` equal to the queue owner and the Principal established
+ *    by replay-time session introspection.
  *
  * The fourth is checkable here because the backend's digest is reproducible from
  * the web tier: `my_pa.domain.capture.version.digest_of` is
@@ -65,7 +66,15 @@ export type ReplayTransport = (request: {
   readonly text: string;
   readonly captureKind: string;
   readonly idempotencyKey: string;
+  readonly replayBinding: string;
 }) => Promise<ReplayResponse>;
+
+export interface AuthenticatedReplaySession {
+  readonly principalId: string;
+  readonly replayBinding: string;
+}
+
+export type ReplaySessionResolver = () => Promise<AuthenticatedReplaySession | null>;
 
 /** Why a receipt was not accepted. Each value names one failed check. */
 export type ReceiptRejection =
@@ -74,7 +83,8 @@ export type ReceiptRejection =
   | "not_persisted"
   | "missing_receipt_id"
   | "idempotency_key_mismatch"
-  | "digest_mismatch";
+  | "digest_mismatch"
+  | "principal_mismatch";
 
 export type ReceiptVerdict =
   | { readonly ok: true; readonly receiptId: string; readonly created: boolean }
@@ -100,14 +110,23 @@ export async function contentSha256(text: string): Promise<string> {
  */
 export function verifyReceipt(
   body: unknown,
-  expected: { readonly idempotencyKey: string; readonly contentSha256: string },
+  expected: {
+    readonly idempotencyKey: string;
+    readonly contentSha256: string;
+    readonly principalId: string;
+  },
 ): ReceiptVerdict {
   if (typeof body !== "object" || body === null) return { ok: false, reason: "not_an_object" };
   const envelope = body as {
     shape?: unknown;
     status?: unknown;
     created?: unknown;
-    receipt?: { receiptId?: unknown; idempotencyKey?: unknown; contentSha256?: unknown };
+    receipt?: {
+      receiptId?: unknown;
+      idempotencyKey?: unknown;
+      contentSha256?: unknown;
+      principalId?: unknown;
+    };
   };
   if (envelope.shape !== "backend") return { ok: false, reason: "not_backend_shape" };
   if (envelope.status !== "persisted") return { ok: false, reason: "not_persisted" };
@@ -124,6 +143,9 @@ export function verifyReceipt(
   }
   if (receipt.contentSha256 !== expected.contentSha256) {
     return { ok: false, reason: "digest_mismatch" };
+  }
+  if (receipt.principalId !== expected.principalId) {
+    return { ok: false, reason: "principal_mismatch" };
   }
   return { ok: true, receiptId, created: envelope.created !== false };
 }
@@ -144,28 +166,31 @@ function isStaleSession(response: ReplayResponse): boolean {
 }
 
 /**
- * Replay everything queued under `currentPrincipalId`.
+ * Replay everything queued under `currentPrincipalId` after independently
+ * resolving the current authenticated session.
  *
  * `key` is that principal's content key. It is only ever used on entries whose
  * stored `principalId` equals `currentPrincipalId`, so it is never asked to
  * decrypt bytes it did not seal.
  *
- * **`currentPrincipalId` is the Principal this surface was rendered for, not the
- * Principal that will authenticate the request.** The caller passes a prop from a
- * server render; `httpCaptureTransport` posts with `credentials: "same-origin"`
- * and therefore carries whatever cookie the browser holds when it fires. The two
- * normally agree, and nothing here can tell when they do not — so this function
- * refuses on a *rendered* identity mismatch and must not be described as refusing
- * on a session mismatch. Closing that gap means comparing against the
- * authenticating session, and it becomes necessary the moment two identities can
- * hold sessions while the backend serves durable writes.
+ * `currentPrincipalId` remains the rendered identity used to select the local
+ * key. It is not authentication authority. `resolveSession` obtains that
+ * authority immediately before the pass, and its opaque binding is carried to
+ * the write so the BFF can reject a cookie change between check and admission.
  */
 export async function replayQueuedCaptures(
   db: IDBDatabase,
   currentPrincipalId: string,
   key: CryptoKey,
   transport: ReplayTransport,
+  resolveSession: ReplaySessionResolver,
 ): Promise<ReplaySummary> {
+  let authenticated: AuthenticatedReplaySession | null = null;
+  try {
+    authenticated = await resolveSession();
+  } catch {
+    authenticated = null;
+  }
   const entries = await queueSnapshot(db);
   let attempted = 0;
   let replayed = 0;
@@ -194,8 +219,17 @@ export async function replayQueuedCaptures(
     if (!replayable(entry)) continue;
     if (stoppedForReauth) break;
 
+    // This is the authoritative replay-time identity check. It occurs before
+    // `replayOne`, which is the only function that reads/decrypts payload bytes.
+    if (authenticated === null || entry.principalId !== authenticated.principalId) {
+      await markNeedsReauth(db, entry.entryId, "current authenticated principal does not own entry");
+      needsReauth += 1;
+      stoppedForReauth = true;
+      break;
+    }
+
     attempted += 1;
-    const outcome = await replayOne(db, key, entry, transport);
+    const outcome = await replayOne(db, key, entry, transport, authenticated);
     if (outcome === "replayed") replayed += 1;
     else if (outcome === "needs_reauth") {
       needsReauth += 1;
@@ -213,6 +247,7 @@ async function replayOne(
   key: CryptoKey,
   entry: OfflineEntry,
   transport: ReplayTransport,
+  authenticated: AuthenticatedReplaySession,
 ): Promise<"replayed" | "needs_reauth" | "failed"> {
   let text: string | null;
   try {
@@ -234,6 +269,7 @@ async function replayOne(
       text,
       captureKind: entry.captureKind,
       idempotencyKey: entry.idempotencyKey,
+      replayBinding: authenticated.replayBinding,
     });
   } catch {
     await markReplayFailed(db, entry.entryId, "transport_failed");
@@ -252,6 +288,7 @@ async function replayOne(
   const verdict = verifyReceipt(response.body, {
     idempotencyKey: entry.idempotencyKey,
     contentSha256: await contentSha256(text),
+    principalId: authenticated.principalId,
   });
   if (!verdict.ok) {
     await markReplayFailed(db, entry.entryId, verdict.reason);

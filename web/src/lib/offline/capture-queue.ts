@@ -29,6 +29,15 @@ import {
 } from "@/lib/offline/queue";
 import { replayQueuedCaptures, type ReplaySummary, type ReplayTransport } from "@/lib/offline/replay";
 
+async function authenticatedReplaySession() {
+  const response = await fetch("/api/session", { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) return null;
+  const body = (await response.json()) as { principalId?: unknown; replayBinding?: unknown };
+  return typeof body.principalId === "string" && typeof body.replayBinding === "string"
+    ? { principalId: body.principalId, replayBinding: body.replayBinding }
+    : null;
+}
+
 /** Open the database and the signed-in principal's key, or throw. */
 async function open(principalId: string) {
   const db = await openOfflineDatabase();
@@ -73,7 +82,10 @@ export async function queueCaptureOffline(input: {
 export const httpCaptureTransport: ReplayTransport = async (request) => {
   const response = await fetch("/api/capture", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "x-my-pa-replay-binding": request.replayBinding,
+    },
     body: JSON.stringify({
       text: request.text,
       captureKind: request.captureKind,
@@ -109,6 +121,6 @@ export async function drainCaptureQueue(
 ): Promise<DrainResult> {
   const { db, key } = await open(principalId);
   await quarantineForeignEntries(db, principalId);
-  const summary = await replayQueuedCaptures(db, principalId, key, transport);
+  const summary = await replayQueuedCaptures(db, principalId, key, transport, authenticatedReplaySession);
   return { summary, counts: countStates(await queueSnapshot(db)) };
 }

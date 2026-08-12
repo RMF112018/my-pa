@@ -47,6 +47,7 @@ import { captureAdmissions } from "@/lib/capture/idempotency";
 import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
+import { SESSION_COOKIE_NAME, sessionReplayBinding } from "@/lib/auth/session";
 
 const SCOPE = "capture";
 
@@ -57,6 +58,7 @@ const DEFAULT_CAPTURE_KIND: CaptureKind = "quick_note";
 
 interface PythonReceipt {
   readonly receipt_id: string;
+  readonly principal_id: string;
   readonly capture_id: string;
   readonly version_id: string;
   readonly version_number: number;
@@ -69,6 +71,31 @@ interface PythonReceipt {
 export async function POST(request: NextRequest) {
   const guard = await requirePrincipal(request);
   if (!guard.ok) return guard.response;
+
+  // Checked before `readCleanBody`: a cookie transition must be refused before
+  // the BFF parses queued plaintext, not merely before the gateway write.
+  const replayBinding = request.headers.get("x-my-pa-replay-binding");
+  if (replayBinding !== null) {
+    if (replayBinding.length !== 64) {
+      return NextResponse.json(
+        { error: { errorClass: "validation", code: "invalid_replay_binding", message: "replay binding is invalid" } },
+        { status: 400 },
+      );
+    }
+    const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+    if (!token || replayBinding !== (await sessionReplayBinding(token))) {
+      return NextResponse.json(
+        {
+          error: {
+            errorClass: "authentication",
+            code: "replay_session_changed",
+            message: "the authenticated session changed before replay admission",
+          },
+        },
+        { status: 409 },
+      );
+    }
+  }
 
   const parsed = await readCleanBody(request);
   if (!parsed.ok) return parsed.response;
@@ -150,6 +177,21 @@ export async function POST(request: NextRequest) {
     capture_kind: captureKind,
   });
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
+  if (
+    typeof outcome.result.principal_id !== "string" ||
+    !/^prn_[A-Za-z0-9]{8,64}$/.test(outcome.result.principal_id)
+  ) {
+    return NextResponse.json(
+      {
+        error: {
+          errorClass: "authentication",
+          code: "receipt_principal_missing",
+          message: "the durable receipt has no valid gateway Principal binding",
+        },
+      },
+      { status: 502 },
+    );
+  }
 
   return NextResponse.json({
     shape: "backend",
@@ -162,6 +204,12 @@ export async function POST(request: NextRequest) {
       versionNumber: outcome.result.version_number,
       idempotencyKey: outcome.result.idempotency_key,
       contentSha256: outcome.result.content_sha256,
+      // The Python and web tiers use distinct opaque Principal namespaces. The
+      // gateway receipt proves which authenticated gateway Principal admitted
+      // the write; this BFF attests that result to the browser Principal already
+      // verified for this same request. Never compare or expose the unrelated
+      // opaque identifiers as though equality between namespaces were meaningful.
+      principalId: guard.principal.principalId,
       issuedAt: outcome.result.issued_at,
     },
     created: outcome.result.created,

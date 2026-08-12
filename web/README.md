@@ -131,11 +131,14 @@ unavailable. The queue fails closed at 50 retained entries or 1,000,000 bytes
 and never evicts an older note to admit a new one. Replay is foreground-only: it
 runs while the application is open, not as a background-sync guarantee.
 
-An entry is deleted automatically only after a backend `persisted` receipt
-matches its idempotency key and content digest. A note owned by another signed-in
-Principal is quarantined before decryption or transport. The owning Principal can
-explicitly release it for retry or delete the local copy; those controls do not
-permit one Principal to act on another's entry.
+Replay resolves the current authenticated session immediately before plaintext
+access. The write carries an opaque binding to that exact session, so the BFF
+refuses a cookie transition between the check and Capture admission. An entry is
+deleted automatically only after a backend `persisted` receipt matches its
+idempotency key, content digest, and server-derived Principal. A note owned by
+another signed-in Principal is retained without decryption or transport.
+The owning Principal can explicitly release it for retry or delete the local copy;
+those controls never authorize one Principal to act on another's entry.
 
 ## Validation
 

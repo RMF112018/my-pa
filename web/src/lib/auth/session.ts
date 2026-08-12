@@ -206,6 +206,23 @@ export async function verifySession(
   return (await verifySessionEnvelope(token))?.principal ?? null;
 }
 
+/**
+ * Opaque binding for one exact session cookie, used to close replay check/send races.
+ *
+ * This is not an authentication token and never replaces cookie verification. The
+ * browser receives only this one-way digest; a replay POST presents it back and
+ * the BFF recomputes it from the HttpOnly cookie that authenticates that request.
+ * A cookie transition between introspection and POST therefore changes the
+ * binding and is refused before the Capture gateway is called.
+ */
+export async function sessionReplayBinding(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`my-pa:offline-replay:v1:${token}`) as BufferSource,
+  );
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 /** Cookie attributes shared by set/clear paths. */
 export const SESSION_COOKIE_OPTIONS = {
   httpOnly: true,

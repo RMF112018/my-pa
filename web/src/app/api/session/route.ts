@@ -38,11 +38,13 @@ import { authMode, homeTenantId } from "@/lib/auth/mode";
 import {
   encodeSession,
   newSessionId,
+  sessionReplayBinding,
   verifySessionEnvelope,
   SESSION_COOKIE_NAME,
   SESSION_COOKIE_OPTIONS,
   SESSION_MAX_AGE_SECONDS,
 } from "@/lib/auth/session";
+import { requirePrincipal } from "@/lib/api/guard";
 import { registerSession, revokeSession } from "@/lib/auth/session-registry";
 import { isSameOrigin } from "@/lib/http/origin";
 import type { PrincipalSession } from "@/contracts/identity";
@@ -56,6 +58,18 @@ function crossSite(request: NextRequest): NextResponse | null {
   return isSameOrigin(request)
     ? null
     : refuse("cross_site_request", "this endpoint refuses cross-site requests", 403);
+}
+
+/** Current authenticated replay authority, derived from this request's cookie. */
+export async function GET(request: NextRequest) {
+  const guard = await requirePrincipal(request);
+  if (!guard.ok) return guard.response;
+  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (!token) return refuse("unauthenticated", "no valid session", 401);
+  return NextResponse.json({
+    principalId: guard.principal.principalId,
+    replayBinding: await sessionReplayBinding(token),
+  });
 }
 
 /**

@@ -53,6 +53,7 @@ class CaptureReceiptView(StrictModel):
     """Safe evidence that one capture version was accepted and stored."""
 
     receipt_id: str
+    principal_id: str
     capture_id: str
     version_id: str
     version_number: int = Field(ge=1)
@@ -68,6 +69,7 @@ class CaptureReceiptView(StrictModel):
     @model_validator(mode="after")
     def _check(self) -> CaptureReceiptView:
         validate_identifier(self.receipt_id, IdKind.RECEIPT)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         validate_identifier(self.version_id, IdKind.CAPTURE_VERSION)
         return self

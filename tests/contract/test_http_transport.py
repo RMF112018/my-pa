@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the nineteen capabilities is addressable over HTTP
+**Reachability.** Every one of the twenty capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a twentieth capability added to the domain arrives as a failing row instead
+here, so a twenty-first capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -60,6 +60,7 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCorpusCoverage,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
@@ -171,6 +172,9 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONTINUITY_PULSE: {},
         Capability.CONTINUITY_SITUATIONS: {},
         Capability.CONTINUITY_PROJECTS: {},
+        # The corpus answer takes no payload: its subject is the acting
+        # Principal, which no request may state.
+        Capability.KNOWLEDGE_COVERAGE: {},
         Capability.REVIEW_DECIDE: {
             "review_case_id": review_case.review_case_id,
             "expected_review_version": 0,
@@ -236,6 +240,7 @@ def commands_for(
         Capability.CONTINUITY_PULSE: GetPulse(),
         Capability.CONTINUITY_SITUATIONS: ListSituations(),
         Capability.CONTINUITY_PROJECTS: ListProjects(),
+        Capability.KNOWLEDGE_COVERAGE: GetCorpusCoverage(),
         Capability.REVIEW_DECIDE: DecideReviewCase(
             review_case_id=staged_review_case(scene).review_case_id,
             expected_review_version=0,

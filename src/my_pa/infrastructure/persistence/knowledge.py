@@ -50,27 +50,73 @@ What stops a re-run duplicating one is that this function never offers an object
 that already holds a row in either table for this enrollment. It is stated here
 rather than implied, because it is the one idempotency in this package that is a
 predicate instead of a constraint, and a test plants against exactly it.
+
+**`corpus_coverage` is the only read here that is not scoped to one enrollment,
+and it is scoped to one Principal at the statement instead.** Every statement it
+builds over `enrollments` reaches the partition through
+`principal_scope.partition_criterion` rather than through a comparison written at
+the call site — the drift
+`tests/architecture/test_principal_partition_is_reached_through_the_guard.py`
+exists to refuse — and the counts that do not name `enrollments` directly are
+restricted to identifiers a statement that did produced. Nothing here takes a
+source, an enrollment, or a set of either from a caller; the caller states
+*whose* corpus and the store decides what that contains.
+`tests/database/test_corpus_coverage.py` builds two Principals over disjoint
+sources and asserts that each answer counts its own rows and none of the other's,
+and that guard's `test_every_corpus_coverage_statement_reaches_the_partition`
+checks the statements one at a time rather than the module as a whole.
+
+**It composes; it does not recompute.** Each member of the answer is
+`coverage_for`'s own value for that enrollment — the identical read
+`sources.status` and `knowledge.search` report — so there is one definition of
+"processed" in this package and this is not a second one. What it adds is the
+territory no per-enrollment read can see: objects inside the Principal's held
+sources that no enrollment of theirs enumerates, and enumerated objects that have
+reached no outcome. Both are counts with no identifier attached, on
+`AggregateLimitation`'s precedent, and `domain.extraction.corpus` is where the
+discipline is written down.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import Connection, Row, func, literal, select
+from datetime import datetime
+
+from sqlalchemy import ColumnElement, Connection, Row, Select, func, literal, select
 
 from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import Provenance, TrustLevel
+from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, LimitationReason
 from my_pa.domain.extraction.text import ExtractionStatus
-from my_pa.infrastructure.persistence.extraction import authorized_object, extracted_text_in_scope
+from my_pa.domain.source.provider import ENUMERABLE_KINDS
+from my_pa.infrastructure.persistence.extraction import (
+    authorized_object,
+    coverage_for,
+    extracted_text_in_scope,
+)
+from my_pa.infrastructure.persistence.principal_scope import (
+    PrincipalContext,
+    capture_context,
+    partition_criterion,
+)
 from my_pa.infrastructure.persistence.tables import (
     coverage_limitations,
     enrollment_objects,
+    enrollments,
     extractions,
     quarantine_records,
     source_objects,
 )
 
-__all__ = ["latest_limitations", "outcome_for_object", "pending_objects", "read_extraction"]
+__all__ = [
+    "corpus_coverage",
+    "latest_limitations",
+    "outcome_for_object",
+    "pending_objects",
+    "read_extraction",
+    "scope_beyond_enrollment",
+]
 
 _RECORD_COLUMNS = (
     extractions.c.extraction_id,
@@ -165,6 +211,44 @@ def outcome_for_object(
     return None
 
 
+def awaits_an_outcome() -> tuple[ColumnElement[bool], ...]:
+    """Whether a row of `enrollment_objects` has reached no outcome at all.
+
+    **One definition, two callers, and the second is why it is a function.**
+    `pending_objects` asks it of one enrollment and `corpus_coverage` asks it of
+    every enrollment a Principal holds at once; writing the condition twice is
+    how a work list and a coverage report come to disagree about what is
+    outstanding, which is the divergence class this package exists to close.
+
+    Both exclusions are needed and neither implies the other: an unsupported
+    outcome and a successful extraction are both rows in `extractions`, and a
+    quarantine is a row in neither.
+
+    Correlated `NOT EXISTS` against the enclosing `enrollment_objects` row rather
+    than `NOT IN` over a per-enrollment subquery, because a corpus-wide caller has
+    no single enrollment to bind such a subquery to. The two are equivalent for
+    one enrollment — every column compared is `NOT NULL`, so neither can go
+    three-valued — and `correlate_except` states which side is the subquery's own
+    rather than leaving it to inference.
+    """
+    return (
+        ~select(literal(1))
+        .where(
+            extractions.c.enrollment_id == enrollment_objects.c.enrollment_id,
+            extractions.c.source_object_id == enrollment_objects.c.source_object_id,
+        )
+        .correlate_except(extractions)
+        .exists(),
+        ~select(literal(1))
+        .where(
+            quarantine_records.c.enrollment_id == enrollment_objects.c.enrollment_id,
+            quarantine_records.c.source_object_id == enrollment_objects.c.source_object_id,
+        )
+        .correlate_except(quarantine_records)
+        .exists(),
+    )
+
+
 def pending_objects(connection: Connection, enrollment_id: str) -> tuple[str, ...]:
     """The objects `enrollment_id` holds that have reached no outcome yet.
 
@@ -192,22 +276,210 @@ def pending_objects(connection: Connection, enrollment_id: str) -> tuple[str, ..
     reason this module's docstring gives about `read_extraction`.
     """
     validate_identifier(enrollment_id, IdKind.ENROLLMENT)
-    extracted = select(extractions.c.source_object_id).where(
-        extractions.c.enrollment_id == enrollment_id
-    )
-    quarantined = select(quarantine_records.c.source_object_id).where(
-        quarantine_records.c.enrollment_id == enrollment_id
-    )
     rows = connection.execute(
         select(enrollment_objects.c.source_object_id)
         .where(
             enrollment_objects.c.enrollment_id == enrollment_id,
-            enrollment_objects.c.source_object_id.not_in(extracted),
-            enrollment_objects.c.source_object_id.not_in(quarantined),
+            *awaits_an_outcome(),
         )
         .order_by(enrollment_objects.c.source_object_id)
     ).scalars()
     return tuple(str(value) for value in rows)
+
+
+def _held_sources(context: PrincipalContext) -> Select[tuple[str]]:
+    """The sources this Principal holds an enrollment over, as a subquery.
+
+    The corpus is exactly this and nothing wider. `knowledge.sources` carries no
+    `principal_id`: a Principal holds a source by enrolling it, so a count of
+    *configured* sources it has not enrolled would be a fact about the operator's
+    registry and, where more than one Principal exists, about another Principal's
+    enrollments. `domain.extraction.corpus` records why that count is refused and
+    what is published instead.
+    """
+    return select(enrollments.c.source_id).where(partition_criterion(enrollments, context))
+
+
+def _enumerated_objects(context: PrincipalContext) -> Select[tuple[str]]:
+    """Every object any enrollment of this Principal enumerates, as a subquery."""
+    return (
+        select(enrollment_objects.c.source_object_id)
+        .select_from(
+            enrollment_objects.join(
+                enrollments, enrollments.c.enrollment_id == enrollment_objects.c.enrollment_id
+            )
+        )
+        .where(partition_criterion(enrollments, context))
+    )
+
+
+def _enumerable(context: PrincipalContext) -> tuple[ColumnElement[bool], ...]:
+    """Which rows of `source_objects` an enrollment of this Principal could hold.
+
+    Restricted to `ENUMERABLE_KINDS`, which is the domain's own statement of what
+    `ApplicationService._enumerate` records rather than descends into. A container
+    counted here would be territory no enrollment was ever going to cover, so the
+    corpus could never report `processed` for a source that has a folder in it.
+    """
+    return (
+        source_objects.c.source_id.in_(_held_sources(context)),
+        source_objects.c.kind.in_(sorted(kind.value for kind in ENUMERABLE_KINDS)),
+    )
+
+
+def _outside_every_enrollment(context: PrincipalContext) -> tuple[ColumnElement[bool], ...]:
+    """Which objects of the held sources no enrollment of this Principal enumerates.
+
+    One definition with two callers: `corpus_coverage` counts these rows and
+    `scope_beyond_enrollment` asks whether any exists. Written once so the count a
+    caller is shown and the token a search carries cannot disagree about what
+    "outside" means.
+    """
+    return (
+        *_enumerable(context),
+        source_objects.c.source_object_id.not_in(_enumerated_objects(context)),
+    )
+
+
+def _unenrolled_object(context: PrincipalContext) -> ColumnElement[bool]:
+    """Whether any object of a held source lies outside every one of the enrollments."""
+    return select(literal(1)).where(*_outside_every_enrollment(context)).exists()
+
+
+def scope_beyond_enrollment(
+    connection: Connection, principal_id: str, *, enrollment_id: str
+) -> bool:
+    """Whether this Principal holds scope the named enrollment does not cover.
+
+    **A boolean, deliberately, and it is the narrowest true answer.** A search is
+    answered inside the one enrollment it names, and this is what lets the
+    envelope say that the answer is not an answer about the corpus. It says
+    *that* there is scope outside the question and never how much or which, so it
+    cannot become a channel for the size of a scope the request did not name —
+    which a count would be, since the request never authorized that scope.
+
+    Two conditions, and between them they cover the three ways scope escapes one
+    enrollment. Another enrollment of this Principal is the first. An object of a
+    held source that no enrollment enumerates is the second. The third — work
+    still awaiting an outcome — needs nothing here: pending work *inside* the
+    named enrollment already leaves its own coverage state `partially_processed`,
+    and pending work in another enrollment is that other enrollment, which the
+    first condition already found.
+
+    Both conditions reach `enrollments` through `partition_criterion`, so a
+    Principal cannot learn from this that *another* Principal holds something.
+    """
+    validate_identifier(principal_id, IdKind.PRINCIPAL)
+    validate_identifier(enrollment_id, IdKind.ENROLLMENT)
+    context = capture_context(principal_id)
+    another = (
+        select(literal(1))
+        .where(
+            partition_criterion(enrollments, context),
+            enrollments.c.enrollment_id != enrollment_id,
+        )
+        .exists()
+    )
+    found = connection.execute(
+        select(another.self_group() | _unenrolled_object(context).self_group())
+    ).scalar_one()
+    return bool(found)
+
+
+def corpus_coverage(
+    connection: Connection, principal_id: str, *, observed_at: datetime
+) -> CorpusCoverage:
+    """What one Principal holds, what was covered, and what was never in scope.
+
+    **Principal-scoped at the query, not after it.** Every statement below either
+    carries `enrollments.principal_id = :principal_id` itself or is restricted to
+    identifiers a statement that did produced. Nothing takes a source or an
+    enrollment from a caller, so there is no argument here that could widen the
+    answer past the Principal it names.
+
+    **The per-enrollment coverages are `coverage_for`'s, unchanged.** They are
+    read one at a time, deliberately: a corpus-wide aggregate query over the
+    outcome tables would be a *second* definition of processed, quarantined and
+    unsupported, and the two would drift exactly as the count and the page in
+    `persistence.search` once did. The cost is one round trip per enrollment,
+    which is the price of the answer being a composition of the same facts every
+    other surface reports.
+
+    **The two unknown-territory counts are the part no per-enrollment read can
+    see.** `objects_outside_every_enrollment` is the observed objects of the held
+    sources that no enrollment of this Principal enumerates, restricted to
+    `ENUMERABLE_KINDS` — a container is structure an enumeration descends into and
+    never records, so counting one as uncovered would report a gap nothing could
+    ever close. `objects_awaiting_an_outcome` is distinct objects, not
+    (enrollment, object) pairs: two enrollments each still owing an outcome for
+    one object are two units of work and one object, and the field says objects.
+    That understates the outstanding work and cannot understate the *state*, since
+    any positive count already forces `partially_processed`.
+
+    Read across separate statements under READ COMMITTED, so a concurrent
+    enrollment or extraction can land between them, exactly as
+    `persistence.search`'s page and coverage reads can. The direction of that
+    window is safe here: the counts are composed by a type that refuses to report
+    a complete corpus while any of them is positive, so a race can make the answer
+    more partial than the instant it names and never less.
+    """
+    validate_identifier(principal_id, IdKind.PRINCIPAL)
+    context = capture_context(principal_id)
+
+    held = tuple(
+        str(value)
+        for value in connection.execute(
+            select(enrollments.c.enrollment_id)
+            .where(partition_criterion(enrollments, context))
+            .order_by(enrollments.c.enrollment_id)
+        ).scalars()
+    )
+    if not held:
+        # No enrollment is not "an empty corpus". `CorpusCoverage` reports
+        # `not_enrolled` for it and refuses to carry a measurement beside it,
+        # because every count below is a count inside the held sources and there
+        # are none.
+        return CorpusCoverage(observed_at=observed_at, principal_id=principal_id)
+
+    members = tuple(
+        coverage_for(connection, enrollment_id, observed_at=observed_at) for enrollment_id in held
+    )
+
+    sources_held = connection.execute(
+        select(func.count(func.distinct(enrollments.c.source_id))).where(
+            partition_criterion(enrollments, context)
+        )
+    ).scalar_one()
+
+    observed = connection.execute(
+        select(func.count(func.distinct(source_objects.c.source_object_id))).where(
+            *_enumerable(context)
+        )
+    ).scalar_one()
+    outside = connection.execute(
+        select(func.count(func.distinct(source_objects.c.source_object_id))).where(
+            *_outside_every_enrollment(context)
+        )
+    ).scalar_one()
+    awaiting = connection.execute(
+        select(func.count(func.distinct(enrollment_objects.c.source_object_id)))
+        .select_from(
+            enrollment_objects.join(
+                enrollments, enrollments.c.enrollment_id == enrollment_objects.c.enrollment_id
+            )
+        )
+        .where(partition_criterion(enrollments, context), *awaits_an_outcome())
+    ).scalar_one()
+
+    return CorpusCoverage(
+        observed_at=observed_at,
+        principal_id=principal_id,
+        enrollments=members,
+        held_sources=int(sources_held),
+        objects_in_held_sources=int(observed),
+        objects_outside_every_enrollment=int(outside),
+        objects_awaiting_an_outcome=int(awaiting),
+    )
 
 
 def _to_record(row: Row[tuple[object, ...]]) -> KnowledgeRecord:

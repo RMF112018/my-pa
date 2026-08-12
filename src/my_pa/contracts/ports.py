@@ -1,4 +1,4 @@
-"""The ports the nineteen capability use cases call, and nothing else.
+"""The ports the twenty capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -60,6 +60,7 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.policy.decision import validate_policy_version
@@ -776,6 +777,41 @@ class KnowledgeRepository(ABC):
         rather than stated by a caller that would have had to measure it
         somewhere else. `queued` stays the caller's, because work in flight is a
         fact about the job plane and not about the scope.
+        """
+
+    @abstractmethod
+    def corpus(self, principal_id: str, *, observed_at: datetime) -> CorpusCoverage:
+        """Coverage of everything `principal_id` holds, composed from stated facts.
+
+        **A Principal and not a scope, and that is the whole shape of it.** Every
+        other method here takes an enrollment, because coverage "is for a stated
+        enrollment/snapshot and never inferred globally". This one takes the
+        Principal whose enrollments those are, and returns each enrollment's own
+        stated coverage unmerged beside the territory none of them reaches. No
+        source and no enrollment crosses this boundary, so there is no argument a
+        caller could widen: the implementation partitions on
+        `enrollments.principal_id` at the query.
+
+        Not a second coverage definition. The per-enrollment members are the
+        values `coverage` above returns, so a corpus answer and a status answer
+        cannot disagree about one enrollment.
+        """
+
+    @abstractmethod
+    def scope_beyond_enrollment(self, principal_id: str, *, enrollment_id: str) -> bool:
+        """Whether `principal_id` holds scope that `enrollment_id` does not cover.
+
+        **A boolean and not a count, and that is the contract rather than a
+        simplification.** Its one caller is `knowledge.search`, which is
+        authorized for the enrollment it names and for nothing else; a number
+        here would tell that caller the size of a scope its request never
+        authorized, which is the side channel the aggregate-limitation rule
+        permits only for the scope actually in question. "There is scope outside
+        this answer" is what a caller can act on, and it is all of it.
+
+        This does not widen what a search may read. It is asked *beside* the
+        search, answers about the enrollment set the acting Principal already
+        holds, and reaches no row of any enrollment the search does not name.
         """
 
     @abstractmethod

@@ -55,6 +55,7 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCorpusCoverage,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
@@ -178,6 +179,12 @@ def _requested_scope(
             | GetPulse()
             | ListSituations()
             | ListProjects()
+            # A corpus answer names a Principal and no source. The scope it
+            # reports is read from `enrollments.principal_id` inside the
+            # repository, so there is nothing here for a caller to state and
+            # nothing for this function to resolve; `_SCOPELESS` is where that
+            # empty set is read as a measurement rather than as a failed lookup.
+            | GetCorpusCoverage()
         ):
             return frozenset()
         case CreateCapture():

@@ -166,6 +166,14 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        # `knowledge.coverage` names a Principal, not a source. Its whole subject
+        # is "everything you hold", which the store derives from
+        # `enrollments.principal_id`; a request that named a scope would be asking
+        # a corpus-wide question about one source, and answering it would be
+        # answering a different question from the one authorized. The scope it
+        # reads is therefore not caller-stated at all, which is what puts it here
+        # rather than under the held-scope rule below.
+        Capability.KNOWLEDGE_COVERAGE,
     }
 )
 

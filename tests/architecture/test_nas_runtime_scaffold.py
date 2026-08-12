@@ -105,6 +105,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
 
     if contract.get("status") != "contract_only_not_deployable":
         errors.add("contract_status")
+    if contract.get("schema") != "my-pa.nas-runtime-contract.v1":
+        errors.add("contract_schema")
     if set(contract) != {
         "schema",
         "status",
@@ -1035,6 +1037,12 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             'pilot_web = "entra"',
             'pilot_web = "synthetic"',
             "pilot_auth",
+        ),
+        (
+            "ops/nas/runtime-contract.toml",
+            'schema = "my-pa.nas-runtime-contract.v1"',
+            'schema = "wrong.v9"',
+            "contract_schema",
         ),
         (
             "ops/nas/runtime-contract.toml",

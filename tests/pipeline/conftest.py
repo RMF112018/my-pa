@@ -188,6 +188,9 @@ def drain(
     """
     return run_worker(
         engine,
+        # The capture plane's queue is partitioned by Principal (WP-04); this is
+        # the Principal every capture in this package is admitted under.
+        principal_id=PRINCIPAL_ID,
         owner=issue_worker_owner(),
         handler=handler,
         stop=threading.Event(),

@@ -767,7 +767,9 @@ class ApplicationService:
             subject, state = "enrollment", _state_of_coverage(counts.state())
         elif command.operation_id is not None:
             with _translated():
-                operation = unit_of_work.operations.operation(command.operation_id)
+                operation = unit_of_work.operations.operation(
+                    command.operation_id, principal_id=authorization.principal.principal_id
+                )
             if operation is None:
                 raise NotFoundError(SafeDetail.OPERATION_ID)
             enrollment = self._required_enrollment(authorization, operation.enrollment_id)

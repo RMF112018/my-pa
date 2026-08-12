@@ -86,11 +86,18 @@ from sqlalchemy.sql.elements import ColumnElement
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.principal_scope import (
+    capture_context,
+    partition_criterion,
+    principal_bound_values,
+)
 from my_pa.infrastructure.persistence.tables import (
     DEFAULT_MAX_ATTEMPTS,
     MAX_LEASE_SECONDS,
     JobState,
     capture_jobs,
+    capture_versions,
+    enrollments,
     jobs,
 )
 
@@ -100,11 +107,13 @@ __all__ = [
     "JobPlane",
     "JobRecord",
     "LeasedJob",
+    "UnownedJobSubjectError",
     "claim_job",
     "complete_job",
     "enqueue_job",
     "hold_lease",
     "job_for",
+    "job_principal",
     "job_state",
     "reap_abandoned_jobs",
     "release_job",
@@ -120,22 +129,59 @@ class JobPlane:
     keeps an identifier of the wrong kind out of the wrong plane: enqueuing a
     `capver_…` against `jobs` is refused here rather than by a foreign key whose
     message would name the table.
+
+    `owner_table`/`owner_key`/`owner_column` say where the *Principal* of one
+    unit of work is read from, and they are a plane's property rather than a
+    caller's argument for the reason `principal_scope` exists: identity a caller
+    could name is identity a caller could choose. `enqueue_job` resolves the
+    Principal from the subject's own stored row and refuses when there is no such
+    row, so a queue item cannot land in a partition its subject does not belong
+    to, and cannot land in none at all.
     """
 
     table: Table
     subject: str
     subject_kind: IdKind
+    owner_table: Table
+    owner_key: str
+    owner_column: str
 
 
 #: Work an accepted enrollment authorizes. The default everywhere, because it is
 #: the plane that has a worker.
-ENROLLMENT_JOBS: Final = JobPlane(jobs, "enrollment_id", IdKind.ENROLLMENT)
+ENROLLMENT_JOBS: Final = JobPlane(
+    jobs,
+    "enrollment_id",
+    IdKind.ENROLLMENT,
+    owner_table=enrollments,
+    owner_key="enrollment_id",
+    owner_column="principal_id",
+)
 
 #: Work a stored capture version implies. Written by the capture transaction and
 #: read by nothing until WP-7 — which is what durable-first means: the work is
 #: recorded at the moment it is authorized, so a crash between accepting a
 #: capture and processing it loses no work.
-CAPTURE_JOBS: Final = JobPlane(capture_jobs, "version_id", IdKind.CAPTURE_VERSION)
+CAPTURE_JOBS: Final = JobPlane(
+    capture_jobs,
+    "version_id",
+    IdKind.CAPTURE_VERSION,
+    owner_table=capture_versions,
+    owner_key="version_id",
+    owner_column="owner_principal_id",
+)
+
+
+class UnownedJobSubjectError(Exception):
+    """A unit of work was queued about a subject with no stored owner. Denied.
+
+    Fails closed and names no identifier: "there is no such subject" and "that
+    subject belongs to somebody else" are the same answer here, because a caller
+    learning which would be learning something about a row it cannot read.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("job subject has no stored principal: queueing is denied")
 
 
 def _abandoned(plane: JobPlane) -> ColumnElement[bool]:
@@ -193,6 +239,25 @@ def _validate_owner(owner: str) -> str:
     return owner
 
 
+def job_principal(connection: Connection, subject_id: str, *, plane: JobPlane) -> str:
+    """The Principal one unit of work belongs to, read from the subject's own row.
+
+    Not a parameter, and that is the whole of it: the Principal of a queued job
+    is a fact about the enrollment or the capture version the job is about, and a
+    caller that could state it could queue work into another Principal's
+    partition. This lookup is by the owner table's primary key and carries no
+    partition predicate of its own, because it *is* the derivation the partition
+    comes from. Raises `UnownedJobSubjectError` when the subject has no row.
+    """
+    owner = plane.owner_table
+    found = connection.execute(
+        select(owner.c[plane.owner_column]).where(owner.c[plane.owner_key] == subject_id)
+    ).scalar_one_or_none()
+    if found is None:
+        raise UnownedJobSubjectError()
+    return str(found)
+
+
 def enqueue_job(
     connection: Connection,
     subject_id: str,
@@ -213,21 +278,33 @@ def enqueue_job(
     if not 1 <= max_attempts <= DEFAULT_MAX_ATTEMPTS * 10:
         raise ValueError(f"max_attempts must be between 1 and {DEFAULT_MAX_ATTEMPTS * 10}")
     operation_id = issue_identifier(IdKind.OPERATION)
+    # The partition is stamped by `principal_scope` from a context built on the
+    # subject's *stored* owner, so the queue row lands in the same partition as
+    # the thing it is about and in no other. `principal_bound_values` refuses
+    # values that already name the column, which is what stops this function from
+    # ever growing a caller-supplied one.
+    owner = capture_context(job_principal(connection, subject_id, plane=plane))
     connection.execute(
         plane.table.insert().values(
-            {
-                "operation_id": operation_id,
-                plane.subject: subject_id,
-                "state": JobState.QUEUED.value,
-                "attempt_count": 0,
-                "max_attempts": max_attempts,
-            }
+            principal_bound_values(
+                {
+                    "operation_id": operation_id,
+                    plane.subject: subject_id,
+                    "state": JobState.QUEUED.value,
+                    "attempt_count": 0,
+                    "max_attempts": max_attempts,
+                },
+                plane.table,
+                owner,
+            )
         )
     )
     return operation_id
 
 
-def reap_abandoned_jobs(connection: Connection, *, plane: JobPlane = ENROLLMENT_JOBS) -> int:
+def reap_abandoned_jobs(
+    connection: Connection, *, principal_id: str, plane: JobPlane = ENROLLMENT_JOBS
+) -> int:
     """Fail every job whose worker abandoned its final attempt. Returns the count.
 
     A job is abandoned when its lease has expired and its attempts are spent:
@@ -239,9 +316,13 @@ def reap_abandoned_jobs(connection: Connection, *, plane: JobPlane = ENROLLMENT_
     worker stopped being available before it reported anything. Claiming to know
     more than that would be a guess written into the record.
     """
+    validate_identifier(principal_id, IdKind.PRINCIPAL)
     statement = (
         plane.table.update()
-        .where(_abandoned(plane))
+        .where(
+            partition_criterion(plane.table, capture_context(principal_id)),
+            _abandoned(plane),
+        )
         .values(
             state=JobState.FAILED.value,
             lease_owner=None,
@@ -258,6 +339,7 @@ def claim_job(
     *,
     owner: str,
     lease_seconds: int,
+    principal_id: str,
     plane: JobPlane = ENROLLMENT_JOBS,
 ) -> LeasedJob | None:
     """Claim the oldest claimable job for `owner`, or return `None`.
@@ -273,15 +355,24 @@ def claim_job(
     the convergence has to happen.
     """
     _validate_owner(owner)
+    validate_identifier(principal_id, IdKind.PRINCIPAL)
     if not 1 <= lease_seconds <= MAX_LEASE_SECONDS:
         raise ValueError(f"lease_seconds must be between 1 and {MAX_LEASE_SECONDS}")
 
-    reap_abandoned_jobs(connection, plane=plane)
+    reap_abandoned_jobs(connection, principal_id=principal_id, plane=plane)
 
     table = plane.table
+    # Both halves carry the partition. The subquery so the row this worker locks
+    # is one of its own Principal's rather than the table's oldest — a claim that
+    # selected globally and filtered on update would take no other Principal's
+    # row, but would queue behind one, which is the same starvation the global
+    # FIFO caused. The UPDATE so nothing can be leased outside the partition even
+    # if the subquery is later changed.
+    mine = partition_criterion(table, capture_context(principal_id))
     claimable = (
         select(table.c.operation_id)
         .where(
+            mine,
             or_(
                 table.c.state == JobState.QUEUED.value,
                 and_(
@@ -298,7 +389,7 @@ def claim_job(
     )
     statement = (
         table.update()
-        .where(table.c.operation_id == claimable)
+        .where(mine, table.c.operation_id == claimable)
         .values(
             state=JobState.RUNNING.value,
             lease_owner=owner,
@@ -448,9 +539,13 @@ def release_job(
 
 
 def job_for(
-    connection: Connection, operation_id: str, *, plane: JobPlane = ENROLLMENT_JOBS
+    connection: Connection,
+    operation_id: str,
+    *,
+    principal_id: str,
+    plane: JobPlane = ENROLLMENT_JOBS,
 ) -> JobRecord | None:
-    """Return what a job is about and the state it is in, or `None`.
+    """Return what one of `principal_id`'s jobs is about and its state, or `None`.
 
     Reports an abandoned final attempt as `failed` from the moment its lease
     expires, rather than from the moment some later claim happens to write that
@@ -463,12 +558,30 @@ def job_for(
     has to be able to authorize the question it is asking, and the scope it runs
     in is the subject's. Two reads could return a state and a subject from two
     different statement snapshots; one cannot.
+
+    `principal_id` is required and has **no default**, for the reason
+    `claim_job` and `reap_abandoned_jobs` take it the same way: a default would
+    silently restore the global read this argument exists to remove, and would
+    do it for every call site that had not been visited. It is a keyword, so no
+    caller can supply it by position and mean something else.
+
+    The partition is a predicate here rather than a check afterwards, so a job
+    in another Principal's partition and a job that does not exist produce the
+    same `None` from the same statement. `application.authorization._status_scope`
+    already refuses to resolve a foreign operation into a scope, which makes this
+    defence in depth rather than the only thing standing there — and defence in
+    depth is worth having exactly where the layer below stops being able to
+    assume the layer above was consulted.
     """
     validate_identifier(operation_id, IdKind.OPERATION)
+    validate_identifier(principal_id, IdKind.PRINCIPAL)
     table = plane.table
     reported = case((_abandoned(plane), JobState.FAILED.value), else_=table.c.state)
     row: Row[tuple[str, str]] | None = connection.execute(
-        select(table.c[plane.subject], reported).where(table.c.operation_id == operation_id)
+        select(table.c[plane.subject], reported).where(
+            partition_criterion(table, capture_context(principal_id)),
+            table.c.operation_id == operation_id,
+        )
     ).one_or_none()
     if row is None:
         return None
@@ -476,12 +589,18 @@ def job_for(
 
 
 def job_state(
-    connection: Connection, operation_id: str, *, plane: JobPlane = ENROLLMENT_JOBS
+    connection: Connection,
+    operation_id: str,
+    *,
+    principal_id: str,
+    plane: JobPlane = ENROLLMENT_JOBS,
 ) -> JobState | None:
-    """Return the state of `operation_id`, or `None` when there is no such job.
+    """Return the state of one of `principal_id`'s jobs, or `None` when there is none.
 
     Derived from `job_for` rather than from a second statement, so the two
-    cannot answer differently about the same row.
+    cannot answer differently about the same row — and so the partition is
+    stated once. `principal_id` is required for the same reason it is required
+    there.
     """
-    found = job_for(connection, operation_id, plane=plane)
+    found = job_for(connection, operation_id, principal_id=principal_id, plane=plane)
     return None if found is None else found.state

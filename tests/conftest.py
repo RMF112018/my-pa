@@ -314,12 +314,21 @@ class _Operations(OperationQueue):
         self._world.jobs[operation_id] = (enrollment_id, SourceStatusState.QUEUED)
         return operation_id
 
-    def operation(self, operation_id: str) -> Operation | None:
+    def operation(self, operation_id: str, *, principal_id: str) -> Operation | None:
         self._world.fail("operation")
         found = self._world.jobs.get(operation_id)
         if found is None:
             return None
         enrollment_id, state = found
+        # The queue is partitioned by Principal (WP-04), and the fake derives
+        # that partition the way the schema does — transitively, through the
+        # enrollment the job is about — rather than storing a second copy of it.
+        # A job belonging to another Principal is `None` here for the same
+        # reason the real statement's partition predicate matches no row, and it
+        # is the same `None` an unknown operation gives.
+        owner = next((e for e in self._world.enrollments if e.enrollment_id == enrollment_id), None)
+        if owner is None or owner.principal_id != principal_id:
+            return None
         return Operation(operation_id=operation_id, enrollment_id=enrollment_id, state=state)
 
 

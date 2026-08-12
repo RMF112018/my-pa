@@ -686,8 +686,19 @@ class OperationQueue(ABC):
         """Queue the work an accepted enrollment implies and return its `op_…`."""
 
     @abstractmethod
-    def operation(self, operation_id: str) -> Operation | None:
-        """One operation, or `None` when there is no such job."""
+    def operation(self, operation_id: str, *, principal_id: str) -> Operation | None:
+        """One of `principal_id`'s operations, or `None` when there is no such job.
+
+        The Principal is a parameter rather than something the operation is
+        trusted to carry, so a job queued under one Principal cannot be read
+        through another — the same shape `KnowledgeRepository.read` takes for the
+        grant. It is required and has no default: a default would make an
+        unvisited call site read the whole plane again.
+
+        `None` covers both "no such job" and "not yours", deliberately. Telling
+        them apart would let a caller confirm an operation identifier it has no
+        authority over.
+        """
 
 
 class KnowledgeRepository(ABC):

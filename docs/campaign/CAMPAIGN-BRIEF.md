@@ -11,8 +11,9 @@ operating_lineage: recovery/pre-20260805-utc-rollback-c9fb513
 operating_lineage_head: 81589cc851905f9d63f5faf0690322682d1e8b85
 operating_lineage_tree: 7eb87fa18f7a9f6718c6c9441dbecdf98453d543
 reauthentication_date: "2026-08-09"
-active_work_package: WP-04
-active_work_package_name: next package per MYPA-CANONICAL-APPLICATION-COMPLETION-PLAN-20260809-001
+active_work_package: WP-05
+active_work_package_name: Live Entra Authentication Readiness (Inactive Until Operator Activation)
+wp_04_status: complete, reviewed, PR #57 open against the lineage, not merged
 supersedes: WP-N01
 completed_work_packages: [WP-01, WP-02, WP-S01, WP-03]
 milestone_ms0: WP-01 -> WP-02 -> WP-S01 -> WP-03
@@ -222,3 +223,27 @@ Neither blocks the merge of WP-03, and neither is WP-04 scope by default — bot
 6. **The `render_as_string(hide_password=False)` sites across the test tree — deferred a second time, and it now needs an owner.** WP-02 raised this as a redaction note *for WP-03*; WP-03 closed the one site it had authored that did not need to exist (review finding F1) and was not authorized to sweep the rest. Measured at WP-03's head: **72 sites across 36 test files**, all under `tests/`, none in production code. **35** are the maintenance-engine shape and are avoidable by the same one-line change F1 made — `create_database_engine` takes a `URL`, so the render is pure loss. **36** write a rendered DSN into `MY_PA_DATABASE_URL` because `migrations/env.py` reads the URL from the environment at import time; those are structural and cannot be closed without changing how Alembic is handed a connection here. **1** renders a deliberately closed port for a negative probe. Nothing logs any of them, but a rendered traceback over the local could disclose a database password. Schedule the two families together, so the structural one is not taken as the excuse for the avoidable one.
 
 7. **The `NativeRunState.RUNNING` widening hazard — must be resolved when WP-12E is rescheduled.** `tables.py` derives **two** database CHECKs from the one `NativeRunState` enum: `native_run_state_is_known` on `knowledge.native_sync_runs` and `native_bucket_run_state_is_known` on `knowledge.native_bucket_runs`. Revision `a7c3e8d1f642` widens only the first; it does not alter `native_bucket_runs` at all. So adding `RUNNING` to the enum desyncs the second site, and **no test catches it** — the parity guard compares constraint *names* (`pg_constraint.conname`), not `pg_get_constraintdef` text, so a constraint that keeps its name and changes its vocabulary is invisible to it. Whoever reschedules WP-12E owns both the second `ALTER` and a guard that compares definitions rather than names.
+
+### D-11 — WP-04 proved isolation on the planes that gate the rest, and named the rest as residual
+
+- **Decision:** WP-04 closed Principal isolation on **identity derivation, durable persistence (relationship plane), jobs/queues, review and capture**, and proved foreign-vs-absent indistinguishability on those planes by result *and* error class. **Search is proved only at the authorization gate**; the **native-source plane is not isolated** and is quarantined; the **web BFF** has a proved fail-closed session secret but no two-Principal test, because it holds no durable state and reaches no backend at this head.
+- **Rationale:** the eight in-scope planes exceeded one package. Identity derivation and durable persistence gate everything else, so they were proved properly rather than all eight proved thinly. Coverage is stated as achieved, never implied.
+- **Evidence:** head `a565c2b`, PR #57. Full suite including the PostgreSQL 17.10 tier: 4117 passed, 0 errors. Architecture suite 1822 passed. Single Alembic head `4f1a8b6d92e3`.
+- **Invalidation:** any change to identity derivation, authorization, or user-scoped persistence invalidates the isolation review (canonical WP-04 invalidation rule).
+
+### D-12 — the inherited "WP-12E baseline tables carry no `principal_id`" claim is refuted as worded
+
+- **Decision:** record the correction rather than restate the inherited framing. Revision `a7c3e8d1f642` is **not on this chain** and there are **no WP-12E baseline tables at this head**, so the claim carried out of WP-02 as acceptance condition 4 is false as written.
+- **Rationale:** the real analogue is larger, not absent. Revision `1e6c0a94f3b7` creates a **484-table** migration target across seven schemas carrying **zero** principal scoping — no `principal_id`, no owner column. No application module reads those schemas, so isolation there is **vacuous today**, but it is the destination for real user data and has no column to scope on.
+- **Evidence:** measured at head — `grep -c "CREATE TABLE"` on the target SQL = 484; `principal_id` = 0. A guard asserts no module names those seven schemas.
+- **Invalidation:** any application read path into `core`, `procore`, `financial`, `schedule`, `email`, `construction` or `calendar` makes this immediately release-blocking under brief §18.
+
+## NOTEs carried out of WP-04 (§15A — recorded, not blocking)
+
+1. **Native-source plane is unpartitioned.** 22 tables plus the Swift spool have no principal column at either layer, and `native_sources.py` uses a **global** advisory-lock namespace, so one Principal's operation can block another's. Quarantined in an exact registry that fails the build if it changes. Needs its own package — it is the one unpartitioned plane that *is* wired to the application.
+2. **`persistence/search.py` holds no principal predicate.** Scoped only by `_scope_of_enrollment` resolving enrollment ids within the caller's own enrollments. A test now asserts that single point; the query itself has no defence if a future caller bypasses the gate.
+3. **`relationship_identity_observations` unique constraint is table-wide.** Two Principals recording the same source version collide with `IntegrityError` where an absent row succeeds — an existence-disclosure channel. Predates WP-04, unreachable today (no transport wiring). **Becomes a blocker the moment the relationship plane is wired.**
+4. **Neither transport authenticates a real Entra token.** The Python gateway uses one fixed process principal; the web BFF uses two hardcoded synthetic principals. `PrincipalIdentityService` — the only code turning validated claims into a Principal — has zero production call sites. No test exercises two Principals *through a transport*, because no transport can carry two. This is WP-05's subject and was deliberately out of WP-04 scope.
+5. **Guard limits, recorded in the guards' own comments.** `except ... as` and `match ... case` captures are unchecked binding routes; an accessor bound to a local alias splits a read across two statements neither detector joins; annotation-grounded trust is defeatable by `Any` or a module-local alias of a trusted type name. None is exercised in this tree. The guards state what they measure, not an impossibility.
+6. **`test_every_python_root_is_type_checked_or_named` fails whenever `web/node_modules` is installed.** It excludes only root `.gitignore` patterns while `node_modules` is listed in `web/.gitignore`, so one vendored `.py` file makes `web` look like an unchecked Python root. Pre-existing, CI-invisible (no workflow installs web dependencies). Fix by reading nested `.gitignore` files or excluding `node_modules` by name.
+7. **Queue partitioning is enqueue/claim/reap/status; `principal_bound_values` gained a `table` parameter.** `claim_job`, `reap_abandoned_jobs` and `run_worker` now take a **required** `principal_id` with no default, and `web` refuses to serve without `MYPA_SESSION_SECRET`. These are intentional fail-closed breaks, not regressions.

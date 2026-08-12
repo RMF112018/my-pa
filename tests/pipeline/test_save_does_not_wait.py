@@ -149,7 +149,9 @@ def test_the_save_transaction_commits_no_downstream_output(engine: Engine) -> No
 
         # The one processing artefact the save may commit: a statement that work
         # is owed. `queued` and not `running`, so nothing has claimed it.
-        record = job_for(connection, saved.operation_id, plane=CAPTURE_JOBS)
+        record = job_for(
+            connection, saved.operation_id, principal_id=PRINCIPAL_ID, plane=CAPTURE_JOBS
+        )
         assert record is not None, "the save queued no processing job at all"
         assert record.state is JobState.QUEUED
         assert record.subject_id == saved.version_id
@@ -217,7 +219,9 @@ def test_explicit_conversation_and_context_commit_atomically_without_enrichment(
         assert tuple(conversation) == (saved.capture_id, saved.version_id, "skeletal", "unknown")
         for table in DOWNSTREAM_OUTPUTS:
             assert _rows(connection, table) == 0, table.name
-        record = job_for(connection, saved.operation_id, plane=CAPTURE_JOBS)
+        record = job_for(
+            connection, saved.operation_id, principal_id=PRINCIPAL_ID, plane=CAPTURE_JOBS
+        )
         assert record is not None and record.state is JobState.QUEUED
         assert _rows(connection, capture_stage_results) == 0
 
@@ -247,7 +251,12 @@ def test_explicit_conversation_and_context_commit_atomically_without_enrichment(
                 ).scalar_one()
                 == 0
             ), table.name
-        assert job_for(connection, rolled_back.operation_id, plane=CAPTURE_JOBS) is None
+        assert (
+            job_for(
+                connection, rolled_back.operation_id, principal_id=PRINCIPAL_ID, plane=CAPTURE_JOBS
+            )
+            is None
+        )
 
 
 def test_the_saved_capture_is_searchable_before_any_worker_runs(engine: Engine) -> None:
@@ -266,7 +275,9 @@ def test_the_saved_capture_is_searchable_before_any_worker_runs(engine: Engine) 
         saved = save(connection, RICH_NOTE)
 
     with engine.connect() as connection:
-        record = job_for(connection, saved.operation_id, plane=CAPTURE_JOBS)
+        record = job_for(
+            connection, saved.operation_id, principal_id=PRINCIPAL_ID, plane=CAPTURE_JOBS
+        )
         assert record is not None and record.state is JobState.QUEUED, (
             "a worker had already run, so `before any worker runs` is not what this test measured"
         )

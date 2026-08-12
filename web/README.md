@@ -85,12 +85,32 @@ superseded Graph-primary sequencing as a live commitment; it is not one.
 ```bash
 cd web
 npm install
+export MYPA_SESSION_SECRET="$(openssl rand -hex 32)"   # required to serve; see below
 npm run dev        # development server
 npm run lint       # eslint
 npm run typecheck  # tsc --noEmit
 npm test           # vitest (unit + component)
 npm run build      # production build
 ```
+
+### `MYPA_SESSION_SECRET` is required, and there is no default
+
+The session cookie carries `principalId` and is trusted by `src/middleware.ts`
+and by every `requirePrincipal` route, so the key that signs it decides who the
+shell believes anyone is.
+
+Until WP-04, `sessionSecret()` fell back to a hardcoded literal when the
+variable was unset. That failed **open** and silently: a deployment missing one
+environment variable accepted any session anyone chose to mint, for any
+principal, and a forged signature verified exactly like a real one. The
+fallback is gone. `MYPA_SESSION_SECRET` must be set to at least 32 characters,
+or `encodeSession` and `verifySession` raise `MissingSessionSecretError` and the
+request fails rather than resolving to a principal.
+
+`npm run build` does not need it — nothing evaluates the key at build time —
+but `npm run dev` and `npm start` do, from the first request onward. The tests
+supply their own key explicitly in `vitest.setup.ts`; do not reintroduce an
+implicit default to make anything green.
 
 ## Boundary rules
 

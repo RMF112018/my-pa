@@ -150,6 +150,17 @@ any new handoff, proves recovery after post-commit acknowledgement failure, and
 corrects the residual sentence. This BLOCK is historical and cannot satisfy the
 gate.
 
+A sixth independent audit of corrective head
+`5533e6df36ee3ef31d4151ac313cb4d693a6713b` returned BLOCK after verifying
+immediate same-request replay. It found that delayed watcher/cross-worker retry
+could use a new request or exceed the grant lifetime, leaving the retained item
+as pending backpressure, and noted stale PR validation totals. The next
+corrective head inventories the exact retained selection before new authority
+issuance, loads its durable grant by envelope, retries valid admission, and
+quarantines a stale unconsumed item through Swift before a subsequent fresh
+read. Tests cover delayed expiry, quarantine, fresh retry, and exact spool
+recovery. This BLOCK is historical and cannot satisfy the gate.
+
 ## Independent review gate
 
 No statement in this record means `READY_FOR_PILOT_VALIDATION`, independently

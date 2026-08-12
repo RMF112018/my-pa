@@ -1517,6 +1517,31 @@ class SqlNativeSourceControlStore:
             )
         )
 
+    def authority_for_envelope(self, envelope_id: str) -> NativeAdmissionAuthority | None:
+        """Load exact durable authority for one retained protected-spool envelope."""
+        with self._engine.connect() as connection:
+            row = connection.execute(
+                select(native_admission_authorities).where(
+                    native_admission_authorities.c.envelope_id == envelope_id
+                )
+            ).one_or_none()
+        if row is None:
+            return None
+        value = row._mapping
+        return NativeAdmissionAuthority(
+            authority_id=str(value["authority_id"]),
+            configuration_id=str(value["configuration_id"]),
+            configuration_revision=int(value["configuration_revision"]),
+            bridge_id=str(value["bridge_id"]),
+            bucket_id=str(value["bucket_id"]),
+            source_id=str(value["source_id"]),
+            audit_id=str(value["audit_id"]),
+            envelope_id=str(value["envelope_id"]),
+            request_id=str(value["request_id"]),
+            issued_at=value["issued_at"],
+            expires_at=value["expires_at"],
+        )
+
     def progress(self, configuration_id: str) -> tuple[NativeBucketProgress, ...]:
         snapshot = self.latest_configuration(configuration_id)
         if snapshot is None:
@@ -1687,6 +1712,7 @@ class SqlNativeSourceControlStore:
         if grant is None or selected is None:
             raise NativeAdmissionAuthorityError("native admission authority was not found")
         durable = grant._mapping
+        prior_digest = durable["admission_sha256"]
         exact = (
             str(durable["audit_id"]) == authority.audit_id
             and str(durable["configuration_id"]) == authority.configuration_id
@@ -1713,7 +1739,6 @@ class SqlNativeSourceControlStore:
             and envelope.request_id == authority.request_id
             and authority.issued_at <= recorded_at <= authority.expires_at
         )
-        prior_digest = durable["admission_sha256"]
         if not exact or (prior_digest is not None and str(prior_digest) != admission_digest):
             raise NativeAdmissionAuthorityError("native admission authority did not match")
         return ContractNativeSourceKind(str(selected.source_kind)), admission_digest

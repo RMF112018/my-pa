@@ -120,6 +120,8 @@ class Host:
         self.read_calls: list[dict[str, object]] = []
         self.acknowledged: list[str] = []
         self.ack_failures_remaining = 0
+        self.quarantined: list[str] = []
+        self.pending_wire: dict[str, Any] | None = None
 
     def negotiate(self, supported_versions: tuple[str, ...]) -> str:
         assert supported_versions == (NATIVE_SOURCE_PROTOCOL_V1,)
@@ -209,6 +211,14 @@ class Host:
             self.ack_failures_remaining -= 1
             raise RuntimeError("synthetic acknowledgement failure")
         self.acknowledged.append(envelope_id)
+
+    def pending(self, selection: NativeBucketSelection) -> dict[str, Any] | None:
+        del selection
+        return self.pending_wire
+
+    def quarantine(self, envelope_id: str) -> None:
+        self.quarantined.append(envelope_id)
+        self.pending_wire = None
 
     def read(
         self,
@@ -399,6 +409,9 @@ class Store:
         self.authorities[authority.authority_id] = authority
         return authority
 
+    def authority_for_envelope(self, envelope_id: str) -> NativeSyncAuthority | None:
+        return self.authorities.get(envelope_id)
+
     def prevalidate_authority(
         self,
         envelope: NativeAdmissionEnvelope,
@@ -450,6 +463,7 @@ class Store:
         del checkpoint_job_id, checkpoint_run_id
         stored = self.authorities.get(authority.authority_id)
         current = self.latest_configuration(authority.configuration_id)
+        prior = self.consumed.get(authority.authority_id)
         if (
             stored != authority
             or current is None
@@ -460,7 +474,6 @@ class Store:
             or envelope.request_id != authority.request_id
         ):
             raise NativeAdmissionAuthorityError("synthetic authority mismatch")
-        prior = self.consumed.get(authority.authority_id)
         if prior is not None and prior != envelope:
             raise NativeAdmissionAuthorityError("synthetic authority replay mismatch")
         self.record_preflight(
@@ -943,6 +956,58 @@ def test_wp12e_controller_replays_same_authority_after_post_commit_ack_failure()
     assert host.acknowledged == [next(iter(store.authorities))]
 
 
+def test_wp12e_controller_quarantines_expired_item_then_retries_without_blockage() -> None:
+    controller, store, host, _, _ = _controller()
+    store.append_configuration(_configuration(), expected_prior_revision=0)
+    control = _context(
+        purpose=Purpose.CONTENT_EXTRACTION,
+        sources=frozenset({SOURCE_A, SOURCE_B}),
+        request_id="baseline.original",
+    )
+    adapter = _context(
+        purpose=Purpose.CONTENT_EXTRACTION,
+        sources=frozenset(),
+        kind=PrincipalKind.SOURCE_PROVIDER_ADAPTER,
+        request_id="baseline.original",
+    )
+    host.ack_failures_remaining = 1
+    with pytest.raises(RuntimeError, match="acknowledgement failure"):
+        controller.read_and_admit_page(
+            control,
+            adapter,
+            configuration_id=CONFIGURATION,
+            bucket_id=BUCKET_A,
+            time_range=None,
+            cursor=None,
+        )
+    authority_id, retained = next(iter(store.consumed.items()))
+    host.pending_wire = retained.model_dump(mode="json", by_alias=True)
+    later = WHEN + timedelta(minutes=10)
+    with pytest.raises(AdmissionDeniedError, match="stale or unauthenticated"):
+        controller.read_and_admit_page(
+            replace(control, request_id="baseline.later", at=later),
+            replace(adapter, request_id="baseline.later", at=later),
+            configuration_id=CONFIGURATION,
+            bucket_id=BUCKET_A,
+            time_range=None,
+            cursor=None,
+        )
+    assert host.quarantined == [authority_id]
+    recovered = controller.read_and_admit_page(
+        replace(control, request_id="baseline.next", at=later),
+        replace(adapter, request_id="baseline.next", at=later),
+        configuration_id=CONFIGURATION,
+        bucket_id=BUCKET_A,
+        time_range=None,
+        cursor=None,
+    )
+
+    assert recovered.authority_id != authority_id
+    assert recovered.admission.duplicate_count == 1
+    assert host.acknowledged == [recovered.authority_id]
+    assert len(host.read_calls) == 2
+
+
 def test_contract_rejects_unknown_fields_scope_drift_and_content_in_progress() -> None:
     wire: dict[str, Any] = {
         "metadata": _metadata(),
@@ -1270,6 +1335,13 @@ def test_merged_swift_synthetic_host_drives_discovery_preflight_and_admission() 
             return str(exported["agreement"]["selectedVersion"])
 
         def acknowledge(self, envelope_id: str) -> None:
+            del envelope_id
+
+        def pending(self, selection: NativeBucketSelection) -> dict[str, Any] | None:
+            del selection
+            return None
+
+        def quarantine(self, envelope_id: str) -> None:
             del envelope_id
 
         def discover(

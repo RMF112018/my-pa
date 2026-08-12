@@ -51,8 +51,10 @@ class AppleSourceHostProcess:
         if not 1 <= timeout_seconds <= 120:
             raise ValueError("the Apple host timeout is outside its bound")
         self._executable = resolved
+        if not spool_directory.is_absolute() or spool_directory.is_symlink():
+            raise ValueError("the Apple spool must be an absolute existing directory")
         spool = spool_directory.resolve(strict=True)
-        if not spool.is_dir() or not spool.is_absolute() or spool.is_symlink():
+        if not spool.is_dir():
             raise ValueError("the Apple spool must be an absolute existing directory")
         if spool.stat().st_mode & 0o077:
             raise ValueError("the Apple spool must be owner-only")
@@ -239,6 +241,36 @@ class AppleSourceHostProcess:
         self._invoke_json(
             "spool",
             "--acknowledge",
+            "--spool-directory",
+            str(self._spool),
+            "--envelope-id",
+            envelope_id,
+            "--maximum-spool-items",
+            "1",
+            "--maximum-spool-bytes",
+            str(67_108_864),
+            "--maximum-payload-bytes",
+            str(_MAXIMUM_OUTPUT_BYTES),
+        )
+
+    def pending(self, selection: NativeBucketSelection) -> Mapping[str, Any] | None:
+        """Recover the sole retained item when it belongs to the exact selection."""
+        directory = self._spool / "pending"
+        if not directory.exists():
+            return None
+        entries = tuple(directory.iterdir())
+        if not entries:
+            return None
+        if len(entries) != 1 or entries[0].suffix != ".pending":
+            raise AppleSourceHostError("the Apple spool inventory is invalid")
+        envelope_id = entries[0].name.removesuffix(".pending")
+        return self._decode_pending(entries[0], selection, envelope_id)
+
+    def quarantine(self, envelope_id: str) -> None:
+        """Preserve a stale retained item outside the pending capacity."""
+        self._invoke_json(
+            "spool",
+            "--quarantine",
             "--spool-directory",
             str(self._spool),
             "--envelope-id",

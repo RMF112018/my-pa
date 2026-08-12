@@ -251,6 +251,13 @@ class _PagedSyntheticHost:
     def acknowledge(self, envelope_id: str) -> None:
         del envelope_id
 
+    def pending(self, selection: NativeBucketSelection) -> dict[str, Any] | None:
+        del selection
+        return None
+
+    def quarantine(self, envelope_id: str) -> None:
+        del envelope_id
+
     def negotiate(self, supported_versions: tuple[str, ...]) -> str:
         assert supported_versions == (NATIVE_SOURCE_PROTOCOL_V1,)
         return NATIVE_SOURCE_PROTOCOL_V1

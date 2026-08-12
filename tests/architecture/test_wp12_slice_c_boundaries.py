@@ -33,7 +33,9 @@ def test_host_boundary_is_read_only_and_holds_no_database_or_activation_surface(
         "adapter_identity",
         "discover",
         "negotiate",
+        "pending",
         "preflight",
+        "quarantine",
         "read",
     }
     forbidden = {

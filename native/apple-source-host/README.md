@@ -122,7 +122,11 @@ The process adapter uses one explicitly configured owner-only persistent spool,
 not request-temporary storage. A pending item survives failed preflight or
 database admission. Only after `NativeSourceController` completes durable
 admission does it invoke `spool --acknowledge`, which routes through
-`ProtectedSpool.acknowledge`; retry remains safe if acknowledgement itself fails.
+`ProtectedSpool.acknowledge`. An immediate retry replays the exact durable
+authority and pending envelope. A delayed retry first attempts exact retained
+admission; if its unconsumed authority is stale, the item is preserved through
+`ProtectedSpool.quarantine`, freeing pending capacity for a fresh authorized
+read. No stale item is silently deleted.
 
 No repository validation inspects a live account. TCC grants, live execution,
 signing,

@@ -34,6 +34,13 @@ def test_process_adapter_preserves_exact_authority_identity(
             pending.unlink()
             acknowledged.append(envelope_id)
             return subprocess.CompletedProcess(arguments, 0, b'{"state":"acknowledged"}', b"")
+        if arguments[1:3] == ("spool", "--quarantine"):
+            envelope_id = arguments[arguments.index("--envelope-id") + 1]
+            pending = spool_root / "pending" / f"{envelope_id}.pending"
+            quarantine = spool_root / "quarantine"
+            quarantine.mkdir(exist_ok=True)
+            pending.rename(quarantine / f"{envelope_id}.quarantine")
+            return subprocess.CompletedProcess(arguments, 0, b'{"state":"quarantined"}', b"")
         if arguments[1:3] == ("probe", "--preflight"):
             bridge = arguments[arguments.index("--bridge-id") + 1]
             request = arguments[arguments.index("--request-id") + 1]

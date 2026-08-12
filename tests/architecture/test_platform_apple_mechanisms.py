@@ -192,10 +192,13 @@ def test_platform_executable_preserves_application_issued_authority_identity() -
     assert "os.O_NOFOLLOW" in process_adapter
     assert "if pending.exists():" in process_adapter
     assert "return self._decode_pending" in process_adapter
+    assert "def pending(" in process_adapter
+    assert '"--quarantine"' in process_adapter
     assert "bridge_id=authority.bridge_id" in controller
     assert "envelope_id=authority.envelope_id" in controller
     assert "request_id=control_context.request_id" in controller
     assert "self._host.acknowledge(authority.envelope_id)" in controller
+    assert "self._host.quarantine(authority.envelope_id)" in controller
 
 
 def test_current_docs_name_the_inert_handoff_and_deferred_goodnotes_model_route() -> None:

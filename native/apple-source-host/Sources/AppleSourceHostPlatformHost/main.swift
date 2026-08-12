@@ -98,8 +98,9 @@ private func runProbe(_ arguments: [String]) throws -> Bool {
 
 private func runSpoolCommand(_ arguments: [String]) throws -> Bool {
     guard arguments.count >= 7, arguments[1] == "spool",
-          arguments[2] == "--acknowledge"
+          arguments[2] == "--acknowledge" || arguments[2] == "--quarantine"
     else { return false }
+    let quarantine = arguments[2] == "--quarantine"
     var spoolPath: String?
     var envelopeID: NativeSourceOpaqueID?
     var maximumSpoolItems: Int?
@@ -139,8 +140,13 @@ private func runSpoolCommand(_ arguments: [String]) throws -> Bool {
             maximumPayloadBytes: maximumPayloadBytes
         )
     )
-    try spool.acknowledge(envelopeID)
-    FileHandle.standardOutput.write(Data("{\"state\":\"acknowledged\"}\n".utf8))
+    if quarantine {
+        try spool.quarantine(envelopeID)
+        FileHandle.standardOutput.write(Data("{\"state\":\"quarantined\"}\n".utf8))
+    } else {
+        try spool.acknowledge(envelopeID)
+        FileHandle.standardOutput.write(Data("{\"state\":\"acknowledged\"}\n".utf8))
+    }
     return true
 }
 

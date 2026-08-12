@@ -442,7 +442,7 @@ Microservices, generic plugins, generalized agent frameworks, Redis/Celery, grap
 
 - `MB-AC-001`: Every responsibility has one clear owner and dependency direction.
 - `MB-AC-002`: Domain/application are isolated from transport, ORM, provider, parser, host, and database details.
-- `MB-AC-003`: Source providers cannot mutate; managed writes remain a separate excluded boundary.
+- `MB-AC-003`: Source providers cannot mutate; objective-authorized managed writes remain a separate product-owned boundary.
 - `MB-AC-004`: Jobs, policy, audit, provenance, and transactions are constrained without unsupported infrastructure.
 - `MB-AC-005`: Testing seams and architecture rules are enforceable in Phases 01–05.
 - `MB-AC-006`: Future areas are identified without becoming current implementations/frameworks.

@@ -1370,20 +1370,6 @@ class SqlNativeSourceControlStore:
         issued_at: datetime,
         expires_at: datetime,
     ) -> NativeAdmissionAuthority:
-        authority_id = issue_identifier(IdKind.NATIVE_AUTHORITY)
-        authority = NativeAdmissionAuthority(
-            authority_id=authority_id,
-            configuration_id=configuration.configuration_id,
-            configuration_revision=configuration.revision,
-            bridge_id=configuration.bridge_id,
-            bucket_id=binding.bucket_id,
-            source_id=binding.source_id,
-            audit_id=audit_id,
-            envelope_id=authority_id,
-            request_id=request_id,
-            issued_at=issued_at,
-            expires_at=expires_at,
-        )
         with self._engine.begin() as connection:
             self._lock_configuration(connection, configuration.configuration_id)
             latest = connection.execute(
@@ -1426,6 +1412,48 @@ class SqlNativeSourceControlStore:
                 or str(selected.bridge_id) != configuration.bridge_id
             ):
                 raise NativeAdmissionAuthorityError("native authority issuance scope is stale")
+            existing = connection.execute(
+                select(native_admission_authorities)
+                .where(
+                    native_admission_authorities.c.configuration_id
+                    == configuration.configuration_id,
+                    native_admission_authorities.c.configuration_revision == configuration.revision,
+                    native_admission_authorities.c.bucket_id == binding.bucket_id,
+                    native_admission_authorities.c.request_id == request_id,
+                    native_admission_authorities.c.expires_at >= ensure_utc(issued_at),
+                )
+                .order_by(native_admission_authorities.c.issued_at.desc())
+                .limit(1)
+            ).one_or_none()
+            if existing is not None:
+                row = existing._mapping
+                return NativeAdmissionAuthority(
+                    authority_id=str(row["authority_id"]),
+                    configuration_id=str(row["configuration_id"]),
+                    configuration_revision=int(row["configuration_revision"]),
+                    bridge_id=str(row["bridge_id"]),
+                    bucket_id=str(row["bucket_id"]),
+                    source_id=str(row["source_id"]),
+                    audit_id=str(row["audit_id"]),
+                    envelope_id=str(row["envelope_id"]),
+                    request_id=str(row["request_id"]),
+                    issued_at=row["issued_at"],
+                    expires_at=row["expires_at"],
+                )
+            authority_id = issue_identifier(IdKind.NATIVE_AUTHORITY)
+            authority = NativeAdmissionAuthority(
+                authority_id=authority_id,
+                configuration_id=configuration.configuration_id,
+                configuration_revision=configuration.revision,
+                bridge_id=configuration.bridge_id,
+                bucket_id=binding.bucket_id,
+                source_id=binding.source_id,
+                audit_id=audit_id,
+                envelope_id=authority_id,
+                request_id=request_id,
+                issued_at=issued_at,
+                expires_at=expires_at,
+            )
             connection.execute(
                 insert(native_admission_authorities).values(
                     authority_id=authority.authority_id,

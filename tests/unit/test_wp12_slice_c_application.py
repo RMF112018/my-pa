@@ -119,6 +119,7 @@ class Host:
         self.on_preflight: Callable[[], None] | None = None
         self.read_calls: list[dict[str, object]] = []
         self.acknowledged: list[str] = []
+        self.ack_failures_remaining = 0
 
     def negotiate(self, supported_versions: tuple[str, ...]) -> str:
         assert supported_versions == (NATIVE_SOURCE_PROTOCOL_V1,)
@@ -204,6 +205,9 @@ class Host:
         return f"synthetic-{kind.value}-v1"
 
     def acknowledge(self, envelope_id: str) -> None:
+        if self.ack_failures_remaining:
+            self.ack_failures_remaining -= 1
+            raise RuntimeError("synthetic acknowledgement failure")
         self.acknowledged.append(envelope_id)
 
     def read(
@@ -363,6 +367,20 @@ class Store:
         issued_at: datetime,
         expires_at: datetime,
     ) -> NativeSyncAuthority:
+        existing = next(
+            (
+                item
+                for item in self.authorities.values()
+                if item.configuration_id == configuration.configuration_id
+                and item.configuration_revision == configuration.revision
+                and item.bucket_id == binding.bucket_id
+                and item.request_id == request_id
+                and item.expires_at >= issued_at
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
         self.authority_count += 1
         authority_id = f"nauth_{self.authority_count:016d}"
         authority = NativeSyncAuthority(
@@ -883,6 +901,46 @@ def test_wp12e_controller_does_not_acknowledge_when_admission_fails() -> None:
 
     assert len(host.read_calls) == 1
     assert host.acknowledged == []
+
+
+def test_wp12e_controller_replays_same_authority_after_post_commit_ack_failure() -> None:
+    controller, store, host, _, _ = _controller()
+    store.append_configuration(_configuration(), expected_prior_revision=0)
+    control = _context(
+        purpose=Purpose.CONTENT_EXTRACTION,
+        sources=frozenset({SOURCE_A, SOURCE_B}),
+        request_id="baseline.ack-retry",
+    )
+    adapter = _context(
+        purpose=Purpose.CONTENT_EXTRACTION,
+        sources=frozenset(),
+        kind=PrincipalKind.SOURCE_PROVIDER_ADAPTER,
+        request_id="baseline.ack-retry",
+    )
+    host.ack_failures_remaining = 1
+
+    with pytest.raises(RuntimeError, match="acknowledgement failure"):
+        controller.read_and_admit_page(
+            control,
+            adapter,
+            configuration_id=CONFIGURATION,
+            bucket_id=BUCKET_A,
+            time_range=None,
+            cursor=None,
+        )
+    replay = controller.read_and_admit_page(
+        control,
+        adapter,
+        configuration_id=CONFIGURATION,
+        bucket_id=BUCKET_A,
+        time_range=None,
+        cursor=None,
+    )
+
+    assert store.authority_count == 1
+    assert replay.admission.admitted_count == 0
+    assert replay.admission.duplicate_count == 1
+    assert host.acknowledged == [next(iter(store.authorities))]
 
 
 def test_contract_rejects_unknown_fields_scope_drift_and_content_in_progress() -> None:

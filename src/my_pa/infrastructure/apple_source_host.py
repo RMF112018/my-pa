@@ -149,6 +149,9 @@ class AppleSourceHostProcess:
             configuration = root / "configuration.json"
             grant = root / "grant.json"
             checkpoint = root / "checkpoint.json"
+            pending = self._spool / "pending" / f"{envelope_id}.pending"
+            if pending.exists():
+                return self._decode_pending(pending, selection, envelope_id)
             self._write_json(
                 configuration,
                 self._configuration((selection,), active=True, identifier=configuration_id),
@@ -203,26 +206,33 @@ class AppleSourceHostProcess:
                 )
                 arguments.extend(("--checkpoint", str(checkpoint)))
             self._invoke_json(*arguments)
-            pending = self._spool / "pending" / f"{envelope_id}.pending"
-            outer = self._read_json_no_follow(pending)
-            if (
-                outer.get("envelopeID") != envelope_id
-                or outer.get("kind") != selection.kind.value
-                or outer.get("accountID") != selection.account_id
-                or outer.get("bucketID") != selection.bucket_id
-            ):
-                raise AppleSourceHostError("the Apple spool identity did not match")
-            payload = outer.get("payload")
-            if not isinstance(payload, list) or len(payload) > _MAXIMUM_OUTPUT_BYTES:
-                raise AppleSourceHostError("the Apple spool payload is invalid")
-            try:
-                decoded = bytes(payload)
-                envelope = json.loads(decoded)
-            except (TypeError, ValueError, json.JSONDecodeError) as error:
-                raise AppleSourceHostError("the Apple admission envelope is invalid") from error
-            if not isinstance(envelope, dict):
-                raise AppleSourceHostError("the Apple admission envelope is invalid")
-            return envelope
+            return self._decode_pending(pending, selection, envelope_id)
+
+    def _decode_pending(
+        self,
+        pending: Path,
+        selection: NativeBucketSelection,
+        envelope_id: str,
+    ) -> dict[str, Any]:
+        outer = self._read_json_no_follow(pending)
+        if (
+            outer.get("envelopeID") != envelope_id
+            or outer.get("kind") != selection.kind.value
+            or outer.get("accountID") != selection.account_id
+            or outer.get("bucketID") != selection.bucket_id
+        ):
+            raise AppleSourceHostError("the Apple spool identity did not match")
+        payload = outer.get("payload")
+        if not isinstance(payload, list) or len(payload) > _MAXIMUM_OUTPUT_BYTES:
+            raise AppleSourceHostError("the Apple spool payload is invalid")
+        try:
+            decoded = bytes(payload)
+            envelope = json.loads(decoded)
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise AppleSourceHostError("the Apple admission envelope is invalid") from error
+        if not isinstance(envelope, dict):
+            raise AppleSourceHostError("the Apple admission envelope is invalid")
+        return envelope
 
     def acknowledge(self, envelope_id: str) -> None:
         """Ask the Swift spool implementation to durably acknowledge one item."""

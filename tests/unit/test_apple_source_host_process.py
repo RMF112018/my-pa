@@ -24,6 +24,7 @@ def test_process_adapter_preserves_exact_authority_identity(
     executable.chmod(0o700)
     observed_grant: dict[str, object] = {}
     acknowledged: list[str] = []
+    handoffs: list[str] = []
 
     def run(arguments: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[bytes]:
         if arguments[1:3] == ("spool", "--acknowledge"):
@@ -53,6 +54,7 @@ def test_process_adapter_preserves_exact_authority_identity(
 
         grant_path = Path(arguments[arguments.index("--authorization-grant") + 1])
         observed_grant.update(json.loads(grant_path.read_text()))
+        handoffs.append(str(observed_grant["envelopeID"]))
         spool = Path(arguments[arguments.index("--spool-directory") + 1]) / "pending"
         spool.mkdir(parents=True)
         envelope = {
@@ -121,6 +123,18 @@ def test_process_adapter_preserves_exact_authority_identity(
     assert observed_grant["bucketID"] == "private-bucket"
     pending = spool_root / "pending" / "envelope-issued.pending"
     assert pending.exists(), "read must preserve the item until durable admission"
+    replay = process.read(
+        selection,
+        time_range=None,
+        cursor=None,
+        limit=1,
+        bridge_id="bridge-issued",
+        request_id="request-issued",
+        envelope_id="envelope-issued",
+        at=at,
+    )
+    assert replay == wire
+    assert handoffs == ["envelope-issued"], "retry must consume pending before a new handoff"
     process.acknowledge("envelope-issued")
     assert acknowledged == ["envelope-issued"]
     assert not pending.exists()

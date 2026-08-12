@@ -190,6 +190,8 @@ def test_platform_executable_preserves_application_issued_authority_identity() -
     assert '"envelopeID": envelope_id' in process_adapter
     assert 'f"{envelope_id}.pending"' in process_adapter
     assert "os.O_NOFOLLOW" in process_adapter
+    assert "if pending.exists():" in process_adapter
+    assert "return self._decode_pending" in process_adapter
     assert "bridge_id=authority.bridge_id" in controller
     assert "envelope_id=authority.envelope_id" in controller
     assert "request_id=control_context.request_id" in controller

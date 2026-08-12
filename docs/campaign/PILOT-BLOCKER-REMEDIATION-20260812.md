@@ -139,6 +139,17 @@ spool, acknowledges through the Swift `ProtectedSpool` only after durable
 application admission, proves pending-item survival before acknowledgement, and
 corrects those documents. This BLOCK is historical and cannot satisfy the gate.
 
+A fifth independent audit of corrective head
+`9c667113b9b8bfdf099d9a1aacb3f3b1c16e5342` returned BLOCK after verifying
+persistent storage and post-admission acknowledgement. It found that a retry
+still issued a fresh envelope and attempted a new handoff while the prior item
+occupied the bounded spool, and it found one missed managed-write sentence.
+The next corrective head makes authority issuance idempotent for the exact
+configuration/bucket/request, consumes an already-pending exact envelope before
+any new handoff, proves recovery after post-commit acknowledgement failure, and
+corrects the residual sentence. This BLOCK is historical and cannot satisfy the
+gate.
+
 ## Independent review gate
 
 No statement in this record means `READY_FOR_PILOT_VALIDATION`, independently

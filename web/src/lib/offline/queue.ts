@@ -23,13 +23,10 @@
  * same rule applied eagerly at a sign-in boundary so the state a person sees is
  * right before anything tries to replay.
  *
- * **The only deletion is the one a verified receipt earns, and there is no
- * discard.** No user-initiated discard control exists in this package, so the
- * receipt-verified deletion below is the sole removal path. `deleteReplayed`
- * removes the ciphertext and appends a `payload_deleted` event naming the
- * receipt. `replay.ts` decides whether a receipt has been earned and this module
- * does not: keeping the decision and the deletion in different files means the
- * verification cannot be quietly widened by editing the store.
+ * **Deletion has two explicit authorities.** `deleteReplayed` requires a
+ * verified server receipt. `deleteHeldByUser` requires the owning Principal and
+ * records a distinct `user_deleted` event. Neither path can delete another
+ * Principal's payload, and an automatic retry can invoke only the first.
  *
  * **The bound refuses; it never evicts.** At `MAX_QUEUED_ENTRIES` or
  * `MAX_QUEUED_BYTES` a new enqueue raises `OfflineQueueFullError` and the
@@ -37,13 +34,9 @@
  * room would delete a note the person believes is held, which is the one outcome
  * a queue must never produce.
  *
- * **Quarantine is terminal for automatic replay, and that is a limitation
- * rather than a design goal.** A quarantined entry keeps its bytes and stays
- * visible as a count and a state, but nothing in this package releases it — not
- * even signing back in as the principal that queued it. Releasing one needs a
- * user-initiated control this package does not provide, so a quarantined entry
- * occupies its share of the bound indefinitely. Stated here rather than left to
- * be discovered.
+ * **Quarantine is terminal for automatic replay.** It can be released only by
+ * an explicit action while the original Principal is authenticated; release
+ * appends an event and never rewrites the binding.
  */
 import {
   EVENT_STORE,
@@ -75,7 +68,8 @@ export type OfflineEntryState =
   | "stalled"
   | "quarantined"
   | "needs_reauth"
-  | "replayed";
+  | "replayed"
+  | "deleted";
 
 export interface OfflineEntry {
   readonly entryId: string;
@@ -105,7 +99,9 @@ type OfflineEventRecord =
   | { seq?: number; entryId: string; type: "quarantined"; at: number; reason: string }
   | { seq?: number; entryId: string; type: "needs_reauth"; at: number; reason: string }
   | { seq?: number; entryId: string; type: "replay_failed"; at: number; reason: string }
-  | { seq?: number; entryId: string; type: "payload_deleted"; at: number; receiptId: string };
+  | { seq?: number; entryId: string; type: "released"; at: number; principalId: string }
+  | { seq?: number; entryId: string; type: "payload_deleted"; at: number; receiptId: string }
+  | { seq?: number; entryId: string; type: "user_deleted"; at: number; principalId: string };
 
 interface PayloadRecord {
   readonly entryId: string;
@@ -168,7 +164,7 @@ export function foldEntries(events: readonly OfflineEventRecord[]): readonly Off
     if (!current) continue;
     // `replayed` is terminal: the bytes are gone, so nothing appended
     // afterwards can describe an entry that still exists.
-    if (current.state === "replayed") continue;
+    if (current.state === "replayed" || current.state === "deleted") continue;
     switch (event.type) {
       case "quarantined":
         byId.set(event.entryId, {
@@ -195,6 +191,16 @@ export function foldEntries(events: readonly OfflineEventRecord[]): readonly Off
       case "payload_deleted":
         byId.set(event.entryId, { ...current, state: "replayed", lastReason: null });
         break;
+      case "released":
+        if (current.state === "quarantined" && event.principalId === current.principalId) {
+          byId.set(event.entryId, { ...current, state: "pending", lastReason: null });
+        }
+        break;
+      case "user_deleted":
+        if (event.principalId === current.principalId) {
+          byId.set(event.entryId, { ...current, state: "deleted", lastReason: null });
+        }
+        break;
     }
   }
   return [...byId.values()].sort(
@@ -204,7 +210,7 @@ export function foldEntries(events: readonly OfflineEventRecord[]): readonly Off
 
 /** Whether an entry still holds bytes on this device. */
 export function retains(entry: OfflineEntry): boolean {
-  return entry.state !== "replayed";
+  return entry.state !== "replayed" && entry.state !== "deleted";
 }
 
 /** Whether automatic replay may attempt this entry. */
@@ -340,6 +346,44 @@ export async function deleteReplayed(
     type: "payload_deleted",
     at: Date.now(),
     receiptId,
+  } satisfies OfflineEventRecord);
+  await transactionDone(tx);
+}
+
+/** Release a quarantined entry only after its original Principal signs in. */
+export async function releaseQuarantined(
+  db: IDBDatabase,
+  entryId: string,
+  principalId: string,
+): Promise<void> {
+  const entry = (await queueSnapshot(db)).find((candidate) => candidate.entryId === entryId);
+  if (!entry || entry.state !== "quarantined" || entry.principalId !== principalId) {
+    throw new Error("only the owning principal may release this quarantined note");
+  }
+  await append(db, { entryId, type: "released", at: Date.now(), principalId });
+}
+
+/**
+ * Delete a locally held payload at the owning user's explicit request.
+ * This is deliberately distinct from receipt-earned deletion and records the
+ * owning Principal that requested it. It cannot delete another account's note.
+ */
+export async function deleteHeldByUser(
+  db: IDBDatabase,
+  entryId: string,
+  principalId: string,
+): Promise<void> {
+  const entry = (await queueSnapshot(db)).find((candidate) => candidate.entryId === entryId);
+  if (!entry || !retains(entry) || entry.principalId !== principalId) {
+    throw new Error("only the owning principal may delete this held note");
+  }
+  const tx = db.transaction([EVENT_STORE, PAYLOAD_STORE], "readwrite");
+  tx.objectStore(PAYLOAD_STORE).delete(entryId);
+  tx.objectStore(EVENT_STORE).add({
+    entryId,
+    type: "user_deleted",
+    at: Date.now(),
+    principalId,
   } satisfies OfflineEventRecord);
   await transactionDone(tx);
 }

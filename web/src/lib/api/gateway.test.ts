@@ -33,6 +33,7 @@ import {
   syntheticDataEnabled,
 } from "@/lib/api/gateway-config";
 import type { PrincipalSession } from "@/contracts/identity";
+import { registerSession, resetSessionRegistry } from "@/lib/auth/session-registry";
 
 const PRINCIPAL: PrincipalSession = {
   principalId: "syn-aaaa0001",
@@ -75,6 +76,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetSessionRegistry();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -210,6 +212,27 @@ describe("credentials", () => {
       expect(outcome.error.code).toBe("no_forwardable_credential");
       expect(outcome.error.errorClass).toBe("unavailable");
     }
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("forwards only the server-held bearer for the current Entra session", async () => {
+    vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "entra");
+    registerSession(PRINCIPAL.principalId, "sid-entra-forwarding", undefined, "validated-token");
+    const { calls } = stubGateway({ result: {}, disclosure: DISCLOSURE });
+    const outcome = await callGateway(PRINCIPAL, "capabilities.get");
+    expect(outcome.ok).toBe(true);
+    expect((calls[0].init.headers as Record<string, string>).authorization).toBe(
+      "Bearer validated-token",
+    );
+  });
+
+  it("does not forward principal A's bearer while rendering principal B", async () => {
+    vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "entra");
+    registerSession(PRINCIPAL.principalId, "sid-entra-principal-a", undefined, "token-for-a-only");
+    const { fetchStub } = stubGateway({ result: {}, disclosure: DISCLOSURE });
+    const outcome = await callGateway({ ...OTHER, principalId: "entra-b" }, "capabilities.get");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.code).toBe("no_forwardable_credential");
     expect(fetchStub).not.toHaveBeenCalled();
   });
 

@@ -210,6 +210,16 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "managed_document_lifecycle_events",
         }
     ),
+    "91d7b3e5a204": frozenset(
+        {
+            "goodnotes_pages",
+            "goodnotes_page_versions",
+            "goodnotes_region_proposals",
+            "goodnotes_review_decisions",
+            "goodnotes_reconciliation_receipts",
+        }
+    ),
+    "b4e8d2c7a613": frozenset({"worker_heartbeats"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare
@@ -303,26 +313,34 @@ def _config(output_buffer: io.StringIO | None = None) -> Config:
     return Config(str(ROOT / "alembic.ini"), output_buffer=output_buffer)
 
 
-def _tables_created_by(revision: str, down_revision: str | None) -> set[tuple[str, str]]:
+def _tables_created_by(
+    revision: str, down_revision: str | tuple[str, ...] | None
+) -> set[tuple[str, str]]:
     """Every `(schema, table)` one revision emits a `CREATE TABLE` for.
 
     Offline, so it needs no server and stays in the fast tier, and it reads the
     SQL the revision actually produces rather than the list it was written from.
     """
+    if isinstance(down_revision, tuple):
+        # A merge revision joins already-applied parents. Alembic's offline
+        # range syntax cannot express that state and would replay one parent
+        # branch, falsely attributing all of its tables to the merge. This
+        # repository's merge is deliberately DDL-free; its source is guarded by
+        # the migration-specific merge tests.
+        return set()
     buffer = io.StringIO()
     start = down_revision or "base"
     command.upgrade(_config(output_buffer=buffer), f"{start}:{revision}", sql=True)
     return set(_CREATE_TABLE.findall(buffer.getvalue()))
 
 
-def _revisions() -> list[tuple[str, str | None]]:
+def _revisions() -> list[tuple[str, str | tuple[str, ...] | None]]:
     """Every revision in the chain, paired with the one it follows."""
     script = ScriptDirectory.from_config(_config())
-    chain: list[tuple[str, str | None]] = []
+    chain: list[tuple[str, str | tuple[str, ...] | None]] = []
     for revision in script.walk_revisions():
         down = revision.down_revision
-        parent = down if down is None or isinstance(down, str) else down[0]
-        chain.append((revision.revision, parent))
+        chain.append((revision.revision, down))
     return chain
 
 

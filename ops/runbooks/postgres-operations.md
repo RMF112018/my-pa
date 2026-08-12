@@ -1,5 +1,12 @@
 # Runbook — PostgreSQL operations for `my_pa`
 
+> **2026-08-12 local-candidate correction.** The repository migration chain now
+> contains 34 revisions at head `b4e8d2c7a613`. Historical transcripts below
+> remain evidence of their named 2026-08-01/03 runs and must not be read as the
+> current candidate state. The remediation candidate executed empty-to-head and
+> a disposable `pg_dump`/`pg_restore` rehearsal; the restored database reported
+> `b4e8d2c7a613` and 89 `knowledge` tables. See the current remediation record.
+
 Day-to-day operation of the canonical `my_pa` database: start, stop, health
 check, connect, back up, restore.
 

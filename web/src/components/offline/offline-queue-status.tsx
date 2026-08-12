@@ -15,24 +15,31 @@
  * **A quarantined count is shown rather than hidden.** Notes queued by a
  * different principal are not replayed and not deleted; they are held and
  * counted, so nobody has to guess whether they still exist. They are also not
- * released by this component — see the limitation in `lib/offline/queue.ts`.
+ * released or deleted only through the owning Principal's explicit controls.
  *
  * The component renders nothing at all when the queue is empty, which is the
  * ordinary case; a persistent zero-state badge would be chrome for a condition
  * that does not exist.
  */
 import { useCallback, useEffect, useState } from "react";
-import { drainCaptureQueue } from "@/lib/offline/capture-queue";
-import type { QueueCounts } from "@/lib/offline/queue";
+import {
+  deleteHeldCapture,
+  drainCaptureQueue,
+  heldCaptures,
+  releaseHeldCapture,
+} from "@/lib/offline/capture-queue";
+import type { OfflineEntry, QueueCounts } from "@/lib/offline/queue";
 
 export function OfflineQueueStatus({ principalId }: { principalId: string }) {
   const [counts, setCounts] = useState<QueueCounts | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [entries, setEntries] = useState<readonly OfflineEntry[]>([]);
 
   const drain = useCallback(async () => {
     try {
       const result = await drainCaptureQueue(principalId);
       setCounts(result.counts);
+      setEntries(await heldCaptures(principalId));
       setFailure(null);
     } catch (error) {
       // A queue that cannot be opened is reported, not hidden: the counts on
@@ -40,6 +47,30 @@ export function OfflineQueueStatus({ principalId }: { principalId: string }) {
       setFailure(error instanceof Error ? error.message : "the held notes could not be read");
     }
   }, [principalId]);
+
+  const release = useCallback(
+    async (entryId: string) => {
+      try {
+        await releaseHeldCapture(principalId, entryId);
+        await drain();
+      } catch (error) {
+        setFailure(error instanceof Error ? error.message : "the note could not be released");
+      }
+    },
+    [drain, principalId],
+  );
+
+  const remove = useCallback(
+    async (entryId: string) => {
+      try {
+        await deleteHeldCapture(principalId, entryId);
+        await drain();
+      } catch (error) {
+        setFailure(error instanceof Error ? error.message : "the note could not be deleted");
+      }
+    },
+    [drain, principalId],
+  );
 
   useEffect(() => {
     void drain();
@@ -87,6 +118,19 @@ export function OfflineQueueStatus({ principalId }: { principalId: string }) {
           {counts.stalled} stopped retrying after repeated failures and are still held.
         </p>
       ) : null}
+      {entries.map((entry) => (
+        <div key={entry.entryId} data-testid={`offline-entry-${entry.entryId}`}>
+          <span>{entry.captureKind} queued {new Date(entry.queuedAt).toLocaleString()}</span>
+          {entry.state === "quarantined" ? (
+            <button type="button" onClick={() => void release(entry.entryId)}>
+              Release and retry
+            </button>
+          ) : null}
+          <button type="button" onClick={() => void remove(entry.entryId)}>
+            Delete local copy
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

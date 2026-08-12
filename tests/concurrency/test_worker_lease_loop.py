@@ -657,6 +657,7 @@ def test_a_signal_between_the_claim_and_the_work_still_finishes_the_claimed_job(
         lease_seconds: int,
         principal_id: str,
         plane: JobPlane = ENROLLMENT_JOBS,
+        respect_retry_schedule: bool = False,
     ) -> LeasedJob | None:
         # `plane` and `principal_id` are both accepted and passed through rather
         # than dropped: WP-7 gave the loop a second job plane and WP-04 gave the
@@ -669,6 +670,7 @@ def test_a_signal_between_the_claim_and_the_work_still_finishes_the_claimed_job(
             lease_seconds=lease_seconds,
             principal_id=principal_id,
             plane=plane,
+            respect_retry_schedule=respect_retry_schedule,
         )
         if job is not None:
             # As if SIGTERM arrived in the instant after the claim committed.

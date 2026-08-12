@@ -16,12 +16,14 @@ import {
   OfflineQueueFullError,
   countStates,
   deleteReplayed,
+  deleteHeldByUser,
   enqueueCapture,
   foldEntries,
   markNeedsReauth,
   markReplayFailed,
   quarantineEntry,
   quarantineForeignEntries,
+  releaseQuarantined,
   queueSnapshot,
   readPayloadText,
 } from "@/lib/offline/queue";
@@ -277,5 +279,47 @@ describe("an account switch quarantines rather than replays, deletes, or rebinds
     });
     expect(await quarantineForeignEntries(db, PRINCIPAL_A)).toBe(1);
     expect(await quarantineForeignEntries(db, PRINCIPAL_A)).toBe(0);
+  });
+
+  it("lets only the owning principal explicitly release the retained note", async () => {
+    const { db } = await fresh();
+    const keyB = await principalContentKey(db, PRINCIPAL_B);
+    const entry = await enqueueCapture(db, keyB, {
+      principalId: PRINCIPAL_B,
+      text: "synthetic note released by b",
+      captureKind: "quick_note",
+      idempotencyKey: "cap-synthetic-b3",
+    });
+    await quarantineForeignEntries(db, PRINCIPAL_A);
+    await expect(releaseQuarantined(db, entry.entryId, PRINCIPAL_A)).rejects.toThrow(
+      /owning principal/,
+    );
+    await releaseQuarantined(db, entry.entryId, PRINCIPAL_B);
+    expect((await queueSnapshot(db))[0]).toMatchObject({
+      principalId: PRINCIPAL_B,
+      state: "pending",
+    });
+    expect(await rawPayload(db, entry.entryId)).toBeDefined();
+  });
+
+  it("lets only the owning principal explicitly delete the local ciphertext", async () => {
+    const { db, key } = await fresh();
+    const entry = await enqueueCapture(db, key, {
+      principalId: PRINCIPAL_A,
+      text: "synthetic note deleted by a",
+      captureKind: "quick_note",
+      idempotencyKey: "cap-synthetic-a-delete",
+    });
+    await expect(deleteHeldByUser(db, entry.entryId, PRINCIPAL_B)).rejects.toThrow(
+      /owning principal/,
+    );
+    expect(await rawPayload(db, entry.entryId)).toBeDefined();
+    await deleteHeldByUser(db, entry.entryId, PRINCIPAL_A);
+    expect(await rawPayload(db, entry.entryId)).toBeUndefined();
+    expect((await queueSnapshot(db))[0].state).toBe("deleted");
+    expect((await rawEvents(db)).at(-1)).toMatchObject({
+      type: "user_deleted",
+      principalId: PRINCIPAL_A,
+    });
   });
 });

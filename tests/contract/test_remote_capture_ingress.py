@@ -30,7 +30,9 @@ an in-memory world, and a socket the kernel chose.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Mapping
+from pathlib import Path
 from typing import Any, Final
 
 import pytest
@@ -57,6 +59,9 @@ CREDENTIAL: Final = f"ClientCredential {CLIENT_ID}:{CLIENT_SECRET}"
 BEARER: Final = "Bearer synthetic-not-a-token"
 
 WHEN_WIRE: Final = "2026-08-03T12:00:00Z"
+IOS_SHORTCUT_FIXTURE: Final = (
+    Path(__file__).resolve().parents[2] / "fixtures/remote-capture/ios-shortcut-request.json"
+)
 
 
 @pytest.fixture
@@ -102,6 +107,15 @@ def submission(**payload: object) -> dict[str, Any]:
         "requested_at": WHEN_WIRE,
         "payload": {"text": "a synthetic note", "idempotency_key": "remote-1", **payload},
     }
+
+
+def test_ios_shortcut_fixture_is_the_same_bounded_principal_free_contract() -> None:
+    document = json.loads(IOS_SHORTCUT_FIXTURE.read_text())
+    assert set(document) == {"request_id", "purpose", "requested_at", "payload"}
+    assert set(document["payload"]) == {"text", "idempotency_key"}
+    assert document["purpose"] == Purpose.CAPTURE_AUTHORING.value
+    assert "principal_id" not in IOS_SHORTCUT_FIXTURE.read_text()
+    assert "credential" not in IOS_SHORTCUT_FIXTURE.read_text().lower()
 
 
 @pytest.fixture

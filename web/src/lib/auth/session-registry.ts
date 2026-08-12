@@ -57,6 +57,8 @@ export const IDLE_TIMEOUT_SECONDS = 30 * 60;
 
 interface LiveSession {
   readonly principalId: string;
+  /** Server-held gateway token. Never serialized into the session cookie. */
+  readonly gatewayBearer?: string;
   lastSeenAt: number;
 }
 
@@ -99,12 +101,34 @@ function seconds(now: number | undefined): number {
  * valid before the sign-in is not valid after it, so an identifier planted or
  * observed earlier cannot be carried across the boundary.
  */
-export function registerSession(principalId: string, sid: string, now?: number): void {
+export function registerSession(
+  principalId: string,
+  sid: string,
+  now?: number,
+  gatewayBearer?: string,
+): void {
   const { live, current } = registry();
   const previous = current.get(principalId);
   if (previous !== undefined && previous !== sid) live.delete(previous);
-  live.set(sid, { principalId, lastSeenAt: seconds(now) });
+  live.set(sid, { principalId, lastSeenAt: seconds(now), ...(gatewayBearer ? { gatewayBearer } : {}) });
   current.set(principalId, sid);
+}
+
+/**
+ * Return the bearer held for the principal's current live session.
+ *
+ * The cookie carries no credential and callers cannot supply one. A real Entra
+ * callback registers the already-validated access token beside the fresh sid;
+ * the BFF then retrieves it only on the server. Missing, rotated, or revoked
+ * sessions return no token and therefore fail closed at the gateway boundary.
+ */
+export function gatewayBearerForPrincipal(principalId: string): string | null {
+  const { current, live } = registry();
+  const sid = current.get(principalId);
+  if (sid === undefined) return null;
+  const session = live.get(sid);
+  if (session?.principalId !== principalId) return null;
+  return session.gatewayBearer ?? null;
 }
 
 /**

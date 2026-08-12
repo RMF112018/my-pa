@@ -47,6 +47,7 @@ class ObjectKind(StrEnum):
     MAIL_MESSAGE = "mail_message"
     CALENDAR_EVENT = "calendar_event"
     CONTACT = "contact"
+    TASK = "task"
 
 
 #: The kinds an enrollment's enumeration records as authorized objects.

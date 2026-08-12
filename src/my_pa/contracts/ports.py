@@ -116,6 +116,7 @@ __all__ = [
     "CaptureSearchOutcome",
     "CaptureSearchRequest",
     "CaptureSummary",
+    "ContinuityReadRepository",
     "ContinuityRepository",
     "EnrollmentRepository",
     "EvidenceUnavailableError",
@@ -991,6 +992,17 @@ class UnitOfWork(ABC):
         """
 
     @property
+    def continuity_read(self) -> ContinuityReadRepository:
+        """Complete accepted continuity read model, inside this transaction.
+
+        Older test doubles intentionally implement only the narrower WP-11 ports;
+        the canonical PostgreSQL composition overrides this property. A caller
+        must treat the absence as an unavailable optional projection, never as
+        an empty authoritative result.
+        """
+        raise NotImplementedError
+
+    @property
     @abstractmethod
     def managed_documents(self) -> ManagedDocumentRepository:
         """The managed-document rows, inside this transaction (WP-28).
@@ -1265,6 +1277,37 @@ class PulseRepository(ABC):
         on every one of those selects, alongside the `principal_id` predicate, so
         a proposal is excluded by the query rather than by the caller.
         """
+
+
+# --- Read model for the complete continuity workspace -----------------------
+
+
+class ContinuityReadRepository(ABC):
+    """Principal-scoped accepted read model used by canonical continuity surfaces."""
+
+    @abstractmethod
+    def frames(self, principal_id: str) -> tuple[Frame, ...]:
+        """All frames owned by the Principal, newest first."""
+
+    @abstractmethod
+    def traces(self, principal_id: str) -> tuple[Trace, ...]:
+        """All source-linked traces owned by the Principal, newest first."""
+
+    @abstractmethod
+    def commitments(self, principal_id: str) -> tuple[Commitment, ...]:
+        """Accepted commitments owned by the Principal."""
+
+    @abstractmethod
+    def decisions(self, principal_id: str) -> tuple[Decision, ...]:
+        """Accepted decisions owned by the Principal."""
+
+    @abstractmethod
+    def tasks(self, principal_id: str) -> tuple[Task, ...]:
+        """Accepted tasks owned by the Principal."""
+
+    @abstractmethod
+    def relationship_events(self, principal_id: str) -> tuple[RelationshipEvent, ...]:
+        """Accepted relationship events owned by the Principal."""
 
 
 # --- WP-11: the continuity objects, their lifecycle, and their associations ---

@@ -1,0 +1,9 @@
+{
+  "request_id": "req-ios-shortcut-synthetic-1",
+  "purpose": "capture_authoring",
+  "requested_at": "2026-08-12T14:00:00Z",
+  "payload": {
+    "text": "Synthetic note from the iOS Shortcut contract fixture.",
+    "idempotency_key": "ios-shortcut-synthetic-1"
+  }
+}

@@ -1,5 +1,12 @@
 # End-to-end operations
 
+> **2026-08-12 local-candidate correction.** The exact remediation candidate is
+> at Alembic head `b4e8d2c7a613` (34 revisions). The older step transcripts
+> below remain historical evidence at their explicitly named heads; do not use
+> their head values as current-state claims. Current blocker closure and
+> validation are recorded in
+> [`../../docs/campaign/PILOT-BLOCKER-REMEDIATION-20260812.md`](../../docs/campaign/PILOT-BLOCKER-REMEDIATION-20260812.md).
+
 The ordered sequence for standing the local candidate up from an empty database,
 walking one enrollment from registration to `knowledge.read`, and stopping both
 processes cleanly.

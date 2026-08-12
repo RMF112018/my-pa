@@ -60,6 +60,42 @@ interface PythonProject {
   readonly closed_at: string | null;
 }
 
+interface PythonContinuityWorkspace {
+  readonly frames?: readonly { readonly frame_id: string; readonly label: string; readonly state: string }[];
+  readonly traces?: readonly { readonly trace_id: string; readonly object_type: string; readonly object_id: string }[];
+  readonly commitments?: readonly { readonly commitment_id: string; readonly summary: string; readonly state: string }[];
+  readonly decisions?: readonly { readonly decision_id: string; readonly question: string; readonly state: string }[];
+  readonly tasks?: readonly { readonly task_id: string; readonly title: string; readonly state: string }[];
+}
+
+function ContinuityWorkspace({ data }: { data: PythonContinuityWorkspace }) {
+  const groups = [
+    ["Frames", data.frames ?? [], (item: { label: string }) => item.label],
+    ["Trace", data.traces ?? [], (item: { object_type: string; object_id: string }) => `${item.object_type}: ${item.object_id}`],
+    ["Commitments", data.commitments ?? [], (item: { summary: string }) => item.summary],
+    ["Decisions", data.decisions ?? [], (item: { question: string }) => item.question],
+    ["Tasks", data.tasks ?? [], (item: { title: string }) => item.title],
+  ] as const;
+  return (
+    <section aria-label="Continuity workspace" className="mt-8 grid gap-4 sm:grid-cols-2">
+      {groups.map(([label, items, describe]) => (
+        <article key={label} className="rounded-xl border border-moss-slate/10 bg-white p-4">
+          <h2 className="font-semibold text-moss-slate">{label}</h2>
+          {items.length === 0 ? (
+            <p className="mt-2 text-sm text-muted">No accepted {label.toLowerCase()}.</p>
+          ) : (
+            <ul className="mt-2 space-y-2 text-sm">
+              {items.map((item) => (
+                <li key={Object.values(item)[0] as string}>{describe(item as never)}</li>
+              ))}
+            </ul>
+          )}
+        </article>
+      ))}
+    </section>
+  );
+}
+
 function toSituation(row: PythonSituation): BackendSituation {
   return {
     situationId: row.situation_id,
@@ -122,7 +158,10 @@ export default async function SituationsPage() {
   }
 
   const [situationsOutcome, projectsOutcome] = await Promise.all([
-    callGateway<{ situations?: readonly PythonSituation[] }>(principal, "continuity.situations"),
+    callGateway<{ situations?: readonly PythonSituation[] } & PythonContinuityWorkspace>(
+      principal,
+      "continuity.situations",
+    ),
     callGateway<{ projects?: readonly PythonProject[] }>(principal, "continuity.projects"),
   ]);
 
@@ -219,6 +258,9 @@ export default async function SituationsPage() {
           situationsPartial={situationsAnswer.kind === "degraded"}
           projectsPartial={projectsAnswer.kind === "degraded"}
         />
+      )}
+      {situationsAnswer.kind === "empty" ? null : (
+        <ContinuityWorkspace data={situationsAnswer.result} />
       )}
     </section>
   );

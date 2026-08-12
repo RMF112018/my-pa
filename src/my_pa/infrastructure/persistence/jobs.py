@@ -80,7 +80,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Final, NamedTuple
 
-from sqlalchemy import Connection, Row, Table, and_, case, func, or_, select
+from sqlalchemy import Connection, Row, Table, and_, case, func, or_, select, true
 from sqlalchemy.sql.elements import ColumnElement
 
 from my_pa.contracts.v1.errors import ErrorCode
@@ -328,6 +328,7 @@ def reap_abandoned_jobs(
             lease_owner=None,
             lease_expires_at=None,
             last_error_code=ErrorCode.UNAVAILABLE.value,
+            dead_lettered_at=func.now(),
             updated_at=func.now(),
         )
     )
@@ -341,6 +342,7 @@ def claim_job(
     lease_seconds: int,
     principal_id: str,
     plane: JobPlane = ENROLLMENT_JOBS,
+    respect_retry_schedule: bool = False,
 ) -> LeasedJob | None:
     """Claim the oldest claimable job for `owner`, or return `None`.
 
@@ -362,6 +364,7 @@ def claim_job(
     reap_abandoned_jobs(connection, principal_id=principal_id, plane=plane)
 
     table = plane.table
+    retry_due = table.c.next_attempt_at <= func.now() if respect_retry_schedule else true()
     # Both halves carry the partition. The subquery so the row this worker locks
     # is one of its own Principal's rather than the table's oldest — a claim that
     # selected globally and filtered on update would take no other Principal's
@@ -374,7 +377,10 @@ def claim_job(
         .where(
             mine,
             or_(
-                table.c.state == JobState.QUEUED.value,
+                and_(
+                    table.c.state == JobState.QUEUED.value,
+                    retry_due,
+                ),
                 and_(
                     table.c.state == JobState.RUNNING.value,
                     table.c.lease_expires_at <= func.now(),
@@ -382,7 +388,7 @@ def claim_job(
             ),
             table.c.attempt_count < table.c.max_attempts,
         )
-        .order_by(table.c.created_at, table.c.operation_id)
+        .order_by(table.c.next_attempt_at, table.c.created_at, table.c.operation_id)
         .limit(1)
         .with_for_update(skip_locked=True)
         .scalar_subquery()
@@ -489,6 +495,7 @@ def complete_job(
             lease_owner=None,
             lease_expires_at=None,
             last_error_code=None,
+            dead_lettered_at=None,
             updated_at=func.now(),
         )
     )
@@ -515,6 +522,7 @@ def release_job(
     _validate_owner(owner)
     table = plane.table
     exhausted = table.c.attempt_count >= table.c.max_attempts
+    retry_seconds = func.least(300, func.power(2, table.c.attempt_count - 1))
     statement = (
         table.update()
         .where(
@@ -530,6 +538,11 @@ def release_job(
             lease_owner=None,
             lease_expires_at=None,
             last_error_code=error_code.value,
+            next_attempt_at=case(
+                (exhausted, func.now()),
+                else_=func.now() + func.make_interval(0, 0, 0, 0, 0, 0, retry_seconds),
+            ),
+            dead_lettered_at=case((exhausted, func.now()), else_=None),
             updated_at=func.now(),
         )
         .returning(table.c.state)

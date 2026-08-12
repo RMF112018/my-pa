@@ -126,7 +126,7 @@ _INTERPRETER: Final = re.compile(r"^python(3(\.\d+)?)?$")
 #: argue that any of the three *should* be unchecked. Its job is that a **new**
 #: Python root cannot appear without someone deciding which side it is on, which
 #: is the half of `D-64` that a bare-invocation rule alone does not cover.
-UNCHECKED_ROOTS: Final = frozenset({"tests", "docs", "scripts"})
+UNCHECKED_ROOTS: Final = frozenset({"tests", "docs", "scripts", "web"})
 
 
 def _indent(line: str) -> int:

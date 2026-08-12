@@ -63,6 +63,7 @@ CALENDAR_PROBE: Final = HOST / "Compatibility" / "AppleCalendarEventKitProbe"
 #: control 1's assertion: every Swift file under `native/` outside the
 #: compile-only probes still may name none of `MUTATING_APPLE_SURFACE`.
 CONTACTS_PROBE: Final = HOST / "Compatibility" / "AppleContactsShapeProbe"
+TASKS_PROBE: Final = HOST / "Compatibility" / "AppleTasksEventKitProbe"
 MANIFEST: Final = HOST / "Package.swift"
 
 #: Every tree that runs in production. A wiring of the quarantined native plane
@@ -134,7 +135,7 @@ def _swift_outside_the_probe() -> tuple[Path, ...]:
     `test_wp18_contacts_adapter.py::test_the_contacts_probe_reaches_no_store_in_any_spelling`
     does `CONTACTS_PROBE`.
     """
-    exempt = (PROBE, CALENDAR_PROBE, CONTACTS_PROBE)
+    exempt = (PROBE, CALENDAR_PROBE, CONTACTS_PROBE, TASKS_PROBE)
     return tuple(
         path
         for path in _swift_files(HOST)
@@ -182,9 +183,11 @@ def test_the_scan_is_reading_the_host_at_all() -> None:
         set(_swift_files(PROBE))
         | set(_swift_files(CALENDAR_PROBE))
         | set(_swift_files(CONTACTS_PROBE))
+        | set(_swift_files(TASKS_PROBE))
     )
     assert len(_swift_files(CALENDAR_PROBE)) == 1
     assert len(_swift_files(CONTACTS_PROBE)) == 1
+    assert len(_swift_files(TASKS_PROBE)) == 1
     scanned = set(_swift_outside_the_probe())
     assert set(shipping) < scanned, "control 1's scan is no wider than Sources/AppleSourceHost"
     assert scanned.isdisjoint(exempt)
@@ -587,6 +590,8 @@ def test_the_native_source_plane_is_reachable_from_no_transport() -> None:
     """
     owning = {
         PACKAGE / "application" / "native_sources.py",
+        PACKAGE / "application" / "native_baseline.py",
+        PACKAGE / "application" / "native_watchers.py",
         PACKAGE / "infrastructure" / "persistence" / "native_sources.py",
     }
     reaching = sorted(

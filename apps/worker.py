@@ -81,6 +81,7 @@ from my_pa.infrastructure.jobs.worker import (
     run_worker,
 )
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, ENROLLMENT_JOBS, JobPlane
+from my_pa.infrastructure.persistence.worker_health import record_worker_heartbeat
 
 #: The two planes this process can serve, and the handler each one's work needs.
 #: A mapping rather than an `if`, so that a third plane arrives as a row here and
@@ -128,12 +129,25 @@ def _report(owner: str, plane: str, run: WorkerRun) -> None:
 
 def _run(args: argparse.Namespace) -> int:
     settings = load_settings()
-    engine = create_database_engine(settings.parsed_database_url())
+    engine = create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
     plane, handler = _PLANES[args.plane]
     owner = issue_worker_owner()
     stop = threading.Event()
     _install_stop_handlers(stop)
+    principal_id = local_principal().principal_id
+
+    def heartbeat(*, stopped: bool = False) -> None:
+        with engine.begin() as connection:
+            record_worker_heartbeat(
+                connection,
+                owner=owner,
+                principal_id=principal_id,
+                plane=args.plane,
+                stopped=stopped,
+            )
+
     try:
+        heartbeat()
         run = run_worker(
             engine,
             owner=owner,
@@ -145,13 +159,15 @@ def _run(args: argparse.Namespace) -> int:
             # claims its own Principal's work and no one else's (WP-04); there
             # is no flag for this, because a flag would be a caller naming a
             # partition.
-            principal_id=local_principal().principal_id,
+            principal_id=principal_id,
             plane=plane,
             max_iterations=1 if args.once else args.max_iterations,
             lease_seconds=args.lease_seconds,
             poll_seconds=args.poll_seconds,
+            heartbeat=heartbeat,
         )
     finally:
+        heartbeat(stopped=True)
         engine.dispose()
     _report(owner, args.plane, run)
     return 0

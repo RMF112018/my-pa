@@ -722,21 +722,14 @@ def test_the_migration_chain_still_has_exactly_one_head() -> None:
     Derived from the revision files rather than from a stored number, so it says
     what the chain is today and cannot go stale.
     """
-    versions = ROOT / "migrations" / "versions"
-    identifier = re.compile(r'^revision: str = "(?P<id>\w+)"', re.MULTILINE)
-    parent = re.compile(r'^down_revision: str \| None = "(?P<id>\w+)"', re.MULTILINE)
-    revisions: dict[str, str | None] = {}
-    for path in sorted(versions.glob("*.py")):
-        source = path.read_text(encoding="utf-8")
-        found = identifier.search(source)
-        assert found is not None, f"{_relative(path)} declares no revision identifier"
-        below = parent.search(source)
-        revisions[found["id"]] = below["id"] if below else None
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
 
-    heads = set(revisions) - {value for value in revisions.values() if value is not None}
-    assert len(heads) == 1, f"the chain has {len(heads)} heads: {sorted(heads)}"
-    assert "4c7b2e91d8a5" in revisions, "this package's revision is not in the chain"
-    assert revisions["4c7b2e91d8a5"] == "2d9f4a7c1e58"
+    script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
+    assert len(script.get_heads()) == 1, f"the chain has heads: {script.get_heads()}"
+    revision = script.get_revision("4c7b2e91d8a5")
+    assert revision is not None, "this package's revision is not in the chain"
+    assert revision.down_revision == "2d9f4a7c1e58"
 
 
 # --- rule 6: the managed root is never a source root ------------------------

@@ -20,6 +20,8 @@ import { principalContentKey } from "@/lib/offline/key";
 import {
   countStates,
   enqueueCapture,
+  deleteHeldByUser,
+  releaseQuarantined,
   quarantineForeignEntries,
   queueSnapshot,
   type OfflineEntry,
@@ -31,6 +33,23 @@ import { replayQueuedCaptures, type ReplaySummary, type ReplayTransport } from "
 async function open(principalId: string) {
   const db = await openOfflineDatabase();
   return { db, key: await principalContentKey(db, principalId) };
+}
+
+export async function heldCaptures(principalId: string): Promise<readonly OfflineEntry[]> {
+  const { db } = await open(principalId);
+  return (await queueSnapshot(db)).filter(
+    (entry) => entry.principalId === principalId && entry.state !== "replayed" && entry.state !== "deleted",
+  );
+}
+
+export async function releaseHeldCapture(principalId: string, entryId: string): Promise<void> {
+  const { db } = await open(principalId);
+  await releaseQuarantined(db, entryId, principalId);
+}
+
+export async function deleteHeldCapture(principalId: string, entryId: string): Promise<void> {
+  const { db } = await open(principalId);
+  await deleteHeldByUser(db, entryId, principalId);
 }
 
 /**

@@ -278,18 +278,10 @@ def alembic_head() -> str:
     here is: the head moves whenever a revision is added, and a written head is
     a claim with a shelf life.
     """
-    revisions: dict[str, str | None] = {}
-    identifier = re.compile(r"^revision: str = \"(?P<id>[0-9a-f]+)\"", re.MULTILINE)
-    parent = re.compile(r"^down_revision: str \| None = \"(?P<id>[0-9a-f]+)\"", re.MULTILINE)
-    for path in revision_files():
-        text = path.read_text(encoding="utf-8")
-        found = identifier.search(text)
-        if found is None:
-            continue
-        below = parent.search(text)
-        revisions[found["id"]] = below["id"] if below else None
-    parents = {below for below in revisions.values() if below is not None}
-    heads = sorted(set(revisions) - parents)
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    heads = list(ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini"))).get_heads())
     assert len(heads) == 1, f"expected a single Alembic head, found {heads}"
     return heads[0]
 

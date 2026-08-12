@@ -106,7 +106,9 @@ NO_REVISION = "none"
 
 
 def _engine() -> Engine:
-    return create_database_engine(load_settings().parsed_database_url())
+    return create_database_engine(
+        load_settings().parsed_database_url(), statement_timeout_ms=30_000
+    )
 
 
 def migration_heads() -> tuple[str, ...]:

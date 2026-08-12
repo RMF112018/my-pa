@@ -73,7 +73,8 @@ struct AppleSourceHostContractChecks {
         try checkContactsAuthorizationFailsClosedAndRevocationIsNotAStalePage()
         try checkContactsPageBoundsAndHonestTruncation()
         try checkContactsValueBoundsHoldOffTheWire()
-        print("AppleSourceHostContractChecks: PASS (36 checks)")
+        try checkTasksReadIsBoundedReadOnlyAndConsentGated()
+        print("AppleSourceHostContractChecks: PASS (37 checks)")
     }
 
     private static func require(_ condition: Bool, _ message: String) throws {
@@ -4080,6 +4081,75 @@ struct AppleSourceHostContractChecks {
                     .utf8
             )
         )
+    }
+
+    /// Reminders/Tasks is an observed source plane, not a mutation plane.
+    /// Completion survives as source evidence, pagination is deterministic, and
+    /// denial is a refusal rather than an empty successful list.
+    private static func checkTasksReadIsBoundedReadOnlyAndConsentGated() throws {
+        let account = try opaque("tasks-account")
+        let list = try opaque("tasks-list")
+        let first = try TaskObservation(
+            id: opaque("task-0001"), listID: list, sourceRevision: "revision-1",
+            sourceModifiedUnixMilliseconds: 1, title: "Synthetic open task"
+        )
+        let second = try TaskObservation(
+            id: opaque("task-0002"), listID: list, sourceRevision: "revision-2",
+            sourceModifiedUnixMilliseconds: 2, title: "Synthetic completed task",
+            completedUnixMilliseconds: 2
+        )
+        let mechanism = FixtureTasksMechanism(
+            authorization: .authorized,
+            accounts: [
+                NativeSourceAccount(id: account, kind: .tasks, displayLabel: "Synthetic")
+            ],
+            lists: [
+                TaskListDescriptor(id: list, accountID: account, displayLabel: "Synthetic")
+            ],
+            tasks: [second, first]
+        )
+        let adapter = BoundedTasksReadAdapter(mechanism: mechanism)
+        try require(
+            try adapter.discoverTaskLists().kind == .tasks,
+            "Tasks discovery changed source kind"
+        )
+        let page = try adapter.readTasks(try NativeReadRequest(bucketID: list, limit: 1))
+        try require(
+            page.records.map(\.id.rawValue) == ["task-0001"],
+            "Tasks page was not canonical"
+        )
+        let resumed = try adapter.readTasks(
+            try NativeReadRequest(bucketID: list, cursor: page.nextCursor, limit: 1)
+        )
+        let observed = try JSONDecoder().decode(
+            TaskObservation.self, from: Data(resumed.records[0].payload)
+        )
+        try require(
+            observed.completedUnixMilliseconds == 2,
+            "Task completion was filtered instead of preserved as evidence"
+        )
+
+        let denied = BoundedTasksReadAdapter(
+            mechanism: FixtureTasksMechanism(
+                authorization: .denied, accounts: [], lists: [], tasks: []
+            )
+        )
+        do {
+            _ = try denied.discoverTaskLists()
+            throw ContractCheckError.failed("Denied Tasks access returned an empty success")
+        } catch NativeProviderFailure.permissionDenied {
+            // Expected: authorization is distinct from an empty source.
+        }
+
+        let unstable = BoundedTasksReadAdapter(
+            mechanism: FixtureTasksMechanism(
+                authorization: .authorized, accounts: [], lists: [], tasks: [],
+                publishesStableIdentifiers: false
+            )
+        )
+        try requireError(.tasksIdentityInconsistent) {
+            try unstable.discoverTaskLists()
+        }
     }
 
 }

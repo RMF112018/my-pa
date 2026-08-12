@@ -177,6 +177,21 @@ DERIVED_CHAINS: Final = ("principal.principal_id", "account.principal_id")
 #: The registry is exact. A sixth module reading a request's stated principal is
 #: a decision that has to be written here, with what verifies it.
 VERIFIED_CALLER_STATEMENTS: Final = {
+    "application/goodnotes.py": (
+        ("page", "principal_id"),
+        ("prior", "principal_id"),
+        ("source_page", "principal_id"),
+    ),
+    "domain/modeling/gate.py": (("item", "principal_id"),),
+    "infrastructure/goodnotes/fixture.py": (("page", "principal_id"),),
+    "infrastructure/persistence/goodnotes.py": (
+        ("page", "principal_id"),
+        ("receipt", "principal_id"),
+        ("receipt", "principal_id"),
+        ("receipt", "principal_id"),
+        ("receipt", "principal_id"),
+        ("values", "principal_id"),
+    ),
     "application/situation_service.py": (
         ("cmd", "principal_id"),
         ("cmd", "principal_id"),

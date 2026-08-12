@@ -227,6 +227,7 @@ def test_provider_and_object_vocabularies_are_explicitly_extended() -> None:
         "apple_mail",
         "apple_calendar",
         "apple_contacts",
+        "apple_tasks",
     }
     assert {kind.value for kind in ObjectKind} == {
         "file",
@@ -234,6 +235,7 @@ def test_provider_and_object_vocabularies_are_explicitly_extended() -> None:
         "mail_message",
         "calendar_event",
         "contact",
+        "task",
     }
 
 

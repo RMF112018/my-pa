@@ -250,10 +250,9 @@ def test_every_revision_returns_the_database_to_what_the_one_below_it_denotes(
 ) -> None:
     """The claim, one revision at a time, against a server.
 
-    The chain is walked once. At each revision the database is already sitting at
-    that revision's parent, so the snapshot taken there *is* the freshly-built
-    state — no second database and no second migration run is needed, which is
-    what keeps a whole-chain claim down to a few seconds.
+        The chain is enumerated once. A contiguous parent is reused; when the walk
+        crosses a branch, the database is rebuilt from base to that revision's actual
+        parent so one branch cannot be compared against the other's downgrade.
 
     Three controls, because a comparison of two identical nothings passes
     perfectly. The walk must cover every revision file; the snapshot must grow from
@@ -278,9 +277,20 @@ def test_every_revision_returns_the_database_to_what_the_one_below_it_denotes(
         assert "schema public" in created, created
         assert "extension plpgsql" in created, created
 
+        current = "base"
         for revision in revisions:
             parent = revision.down_revision or "base"
-            assert isinstance(parent, str)
+            if not isinstance(parent, str):
+                # A DDL-free merge has two parents and denotes their combined
+                # state, which cannot be represented by this test's one-parent
+                # round trip. Its no-DDL shape and ancestry are covered by the
+                # merge-specific migration tests.
+                continue
+
+            if parent != current:
+                command.downgrade(_config(), "base")
+                command.upgrade(_config(), parent)
+                current = parent
 
             fresh = _schema_facts(engine)
             command.upgrade(_config(), revision.revision)
@@ -296,6 +306,10 @@ def test_every_revision_returns_the_database_to_what_the_one_below_it_denotes(
             )
 
             command.upgrade(_config(), revision.revision)
+            current = revision.revision
+
+        command.downgrade(_config(), "base")
+        command.upgrade(_config(), "head")
 
         at_head = _schema_facts(engine)
         assert set(at_head) > set(created), (

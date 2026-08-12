@@ -16,3 +16,10 @@ public protocol ContactsReadAdapter: Sendable {
     func discoverContactCollections() throws -> NativeDiscoverySnapshot
     func readContacts(_ request: NativeReadRequest) throws -> NativeReadPage
 }
+
+/// Read-only Reminders/Tasks boundary. Completion is observed; this protocol
+/// deliberately exposes no save, complete, delete, or consent-request method.
+public protocol TasksReadAdapter: Sendable {
+    func discoverTaskLists() throws -> NativeDiscoverySnapshot
+    func readTasks(_ request: NativeReadRequest) throws -> NativeReadPage
+}

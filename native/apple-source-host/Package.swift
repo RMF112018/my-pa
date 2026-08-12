@@ -59,6 +59,12 @@ let package = Package(
             name: "AppleContactsShapeProbe",
             path: "Compatibility/AppleContactsShapeProbe"
         ),
+        // Compile-only EventKit Reminders probe. The shipping library remains
+        // framework-free and cannot request TCC or mutate a reminder store.
+        .target(
+            name: "AppleTasksEventKitProbe",
+            path: "Compatibility/AppleTasksEventKitProbe"
+        ),
         .executableTarget(
             name: "AppleSourceHostContractChecks",
             dependencies: ["AppleSourceHost"],

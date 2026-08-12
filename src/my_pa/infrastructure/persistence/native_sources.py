@@ -990,7 +990,10 @@ class SqlNativeBaselineStore:
             ).all()
             for bucket in selected:
                 kind = ContractNativeSourceKind(str(bucket.source_kind))
-                current_inventory = kind is ContractNativeSourceKind.CONTACTS
+                current_inventory = kind in {
+                    ContractNativeSourceKind.CONTACTS,
+                    ContractNativeSourceKind.TASKS,
+                }
                 range_end = (
                     cutoff
                     if kind is not ContractNativeSourceKind.CALENDAR
@@ -1834,11 +1837,13 @@ class SqlNativeSourceControlStore:
                 ContractNativeSourceKind.MAIL: ObjectKind.MAIL_MESSAGE,
                 ContractNativeSourceKind.CALENDAR: ObjectKind.CALENDAR_EVENT,
                 ContractNativeSourceKind.CONTACTS: ObjectKind.CONTACT,
+                ContractNativeSourceKind.TASKS: ObjectKind.TASK,
             }[source_kind]
             media_type = {
                 ObjectKind.MAIL_MESSAGE: "message/rfc822",
                 ObjectKind.CALENDAR_EVENT: "application/calendar+json",
                 ObjectKind.CONTACT: "application/contact+json",
+                ObjectKind.TASK: "application/task+json",
             }[object_kind]
             repository = SqlNativeSourceRepository(connection)
             for record in envelope.records:

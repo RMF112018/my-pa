@@ -132,7 +132,7 @@ NATIVE_PLANE: Final = frozenset(
 GLOBAL_ADVISORY_LOCK_MODULE: Final = (
     PACKAGE / "infrastructure" / "persistence" / "native_sources.py"
 )
-GLOBAL_ADVISORY_LOCK_CALLS: Final = 2
+GLOBAL_ADVISORY_LOCK_CALLS: Final = 3
 
 #: Revision `1e6c0a94f3b7` creates 484 tables across seven schemas that the live
 #: declaration does not describe and no application module reads. Recorded so the

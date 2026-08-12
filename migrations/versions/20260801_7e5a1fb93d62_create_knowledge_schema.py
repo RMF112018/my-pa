@@ -112,11 +112,30 @@ def _freeze_out_wp04_queue_principal(copy: Table) -> None:
     copy._columns.remove(copy.c.principal_id)
 
 
+def _freeze_out_remediation_retry_state(copy: Table) -> None:
+    """Keep the 2026-08-12 retry columns in their own forward revision."""
+    if copy.name != "jobs":
+        return
+    for index in [
+        candidate for candidate in copy.indexes if candidate.name == "jobs_by_principal_claim_order"
+    ]:
+        copy.indexes.discard(index)
+    for constraint in [
+        candidate
+        for candidate in copy.constraints
+        if candidate.name == "a_failed_job_is_dead_lettered"
+    ]:
+        copy.constraints.discard(constraint)
+    copy._columns.remove(copy.c.next_attempt_at)
+    copy._columns.remove(copy.c.dead_lettered_at)
+
+
 def _historical_knowledge_tables() -> list[Table]:
     """Return the five declarations with their original closed sets frozen."""
     frozen = MetaData(schema=SCHEMA)
     copies = [table.to_metadata(frozen) for table in _TABLES]
     for copy in copies:
+        _freeze_out_remediation_retry_state(copy)
         _freeze_out_wp04_queue_principal(copy)
         replacements = _FROZEN.get(copy.name, {})
         for constraint in [

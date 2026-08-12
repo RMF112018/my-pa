@@ -1712,6 +1712,81 @@ class ApplicationService:
         page_size = self._page_size(command.page_size)
         with _translated():
             found = unit_of_work.situations.list_situations(authorization.principal.principal_id)
+            try:
+                continuity = unit_of_work.continuity_read
+            except NotImplementedError:
+                workspace: dict[str, object] = {}
+            else:
+                principal_id = authorization.principal.principal_id
+                workspace = {
+                    "frames": [
+                        {
+                            "frame_id": frame.frame_id,
+                            "situation_id": frame.situation_id,
+                            "label": frame.label,
+                            "state": frame.state.value,
+                            "evidence_refs": list(frame.evidence_refs),
+                            "alternatives": list(frame.alternatives),
+                            "obligations": list(frame.obligations),
+                            "uncertainty": frame.uncertainty,
+                            "next_authority": frame.next_authority,
+                        }
+                        for frame in continuity.frames(principal_id)
+                    ],
+                    "traces": [
+                        {
+                            "trace_id": trace.trace_id,
+                            "object_id": trace.object_id,
+                            "object_type": trace.object_type,
+                            "source_events": list(trace.source_events),
+                            "gaps": list(trace.gaps),
+                        }
+                        for trace in continuity.traces(principal_id)
+                    ],
+                    "commitments": [
+                        {
+                            "commitment_id": item.commitment_id,
+                            "counterparty_person_id": item.counterparty_person_id,
+                            "summary": item.summary,
+                            "direction": item.direction.value,
+                            "state": item.state.value,
+                            "due_at": None if item.due_at is None else format_rfc3339(item.due_at),
+                            "origin_evidence_ref": item.origin_evidence_ref,
+                        }
+                        for item in continuity.commitments(principal_id)
+                    ],
+                    "decisions": [
+                        {
+                            "decision_id": item.decision_id,
+                            "question": item.question,
+                            "state": item.state.value,
+                            "awaiting_authority_ref": item.awaiting_authority_ref,
+                            "origin_evidence_ref": item.origin_evidence_ref,
+                        }
+                        for item in continuity.decisions(principal_id)
+                    ],
+                    "tasks": [
+                        {
+                            "task_id": item.task_id,
+                            "title": item.title,
+                            "state": item.state.value,
+                            "due_at": None if item.due_at is None else format_rfc3339(item.due_at),
+                            "origin_evidence_ref": item.origin_evidence_ref,
+                        }
+                        for item in continuity.tasks(principal_id)
+                    ],
+                    "relationship_events": [
+                        {
+                            "event_id": event.event_id,
+                            "person_id": event.person_id,
+                            "event_type": event.event_type.value,
+                            "occurred_at": format_rfc3339(event.occurred_at),
+                            "context": event.context,
+                            "source_ref": event.source_ref,
+                        }
+                        for event in continuity.relationship_events(principal_id)
+                    ],
+                }
         truncated = len(found) > page_size
         return _Result(
             payload={
@@ -1731,7 +1806,8 @@ class ApplicationService:
                         "outcome": situation.outcome,
                     }
                     for situation in found[:page_size]
-                ]
+                ],
+                **workspace,
             },
             disclosure=unenrolled_disclosure(
                 authorization.at,

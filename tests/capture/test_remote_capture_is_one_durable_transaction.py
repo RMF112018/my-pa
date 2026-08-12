@@ -75,6 +75,7 @@ _INCIDENTAL: Final = frozenset(
         "created_at",
         "idempotency_key",
         "issued_at",
+        "next_attempt_at",
         "operation_id",
         "payload_sha256",
         "receipt_id",

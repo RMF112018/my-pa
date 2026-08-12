@@ -101,6 +101,8 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # reason `jobs.job_principal` is: it *derives* the Principal.
         "infrastructure/persistence/capture_clients.py",
         "infrastructure/persistence/capture_search.py",
+        "infrastructure/persistence/continuity_read.py",
+        "infrastructure/persistence/goodnotes.py",
         # Both job queues gained `principal_id` at revision `4f1a8b6d92e3`; the
         # dequeue and the reap carry the partition and the enqueue stamps it
         # from the subject's stored owner. It also names `enrollments` and
@@ -118,6 +120,7 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # partition; the exception is the orphan sweep's identifier read, which
         # is registered with its reason in `_UNPARTITIONED_MANAGED_STATEMENTS`.
         "infrastructure/persistence/managed_documents.py",
+        "infrastructure/persistence/worker_health.py",
         "infrastructure/persistence/relationships.py",
         # The evidence traversal. Every one of its six statements is rooted at a
         # partitioned table — `captures`, `capture_versions`, `capture_assertions`
@@ -217,6 +220,18 @@ STATEMENT_LEVEL: Final = frozenset(
 #: modules is reached only through an application path that has already resolved
 #: the Principal, which is the same argument the `QUARANTINED` entries make.
 PER_MODULE_ONLY: Final = {
+    "infrastructure/persistence/goodnotes.py": (
+        "all reads use the shared partition criterion and all writes use "
+        "principal_bound_values; helper-built joins consume those predicates."
+    ),
+    "infrastructure/persistence/continuity_read.py": (
+        "one helper applies partition_criterion to every read-model table; the "
+        "remaining expressions only map the already-scoped rows."
+    ),
+    "infrastructure/persistence/worker_health.py": (
+        "job and heartbeat reads use partition_criterion and inserts use "
+        "principal_bound_values; aggregate fragments consume those predicates."
+    ),
     "infrastructure/jobs/capture_pipeline.py": (
         "derives a `PrincipalContext` from the stored owner of the version it is "
         "processing and hands it to the modules that query. Its own two "

@@ -48,7 +48,8 @@ DOMAIN_SCHEMAS = (
 
 
 def _engine() -> Engine:
-    return create_database_engine(load_settings().parsed_database_url())
+    # statement-timeout-exempt: operator migration phases carry their own bounds.
+    return create_database_engine(load_settings().parsed_database_url(), statement_timeout_ms=None)
 
 
 def _init_run(args: argparse.Namespace) -> int:

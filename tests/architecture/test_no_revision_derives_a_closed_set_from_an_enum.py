@@ -620,8 +620,8 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 29
-    assert len({revision for revision, _ in revisions}) == 29
+    assert len(revisions) == 34
+    assert len({revision for revision, _ in revisions}) == 34
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",
@@ -646,7 +646,7 @@ def test_the_live_closed_sets_are_discovered() -> None:
     live = _live_closed_sets()
     assert len(live) > 40
     assert (
-        live[frozenset({"calendar_event", "contact", "container", "file", "mail_message"})]
+        live[frozenset({"calendar_event", "contact", "container", "file", "mail_message", "task"})]
         == "my_pa.domain.source.provider.ObjectKind"
     )
     assert (

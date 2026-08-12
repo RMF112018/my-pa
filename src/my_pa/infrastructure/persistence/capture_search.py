@@ -664,9 +664,9 @@ def search_captures(
     is not a truncated one, and a count-then-page would answer from two
     snapshots.
     """
-    rows = list(_execute(connection, match_statement(request, context=context)).all())
+    rows = list(_execute(connection, match_statement(request, context=context), _every_row))
     truncated = len(rows) > request.limit
-    totals = _execute(connection, totals_statement(context=context)).one()
+    totals = _execute(connection, totals_statement(context=context), _exactly_one)
     return CaptureSearchOutcome(
         matches=tuple(
             CaptureSearchMatch(

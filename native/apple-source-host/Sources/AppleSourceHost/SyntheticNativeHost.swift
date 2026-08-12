@@ -16,13 +16,14 @@ public struct SyntheticPreflightFixture: Hashable, Sendable {
 }
 
 /// Deterministic, synthetic-only implementation of the future application-facing
-/// host boundary. It composes the three protocol-v1 fixture adapters and performs
+/// host boundary. It composes the protocol-v1 fixture adapters and performs
 /// no I/O other than a separately invoked protected spool.
 public struct SyntheticNativeHost: NativeHostApplicationBoundary, Sendable {
     public let hostInstanceID: NativeSourceOpaqueID
     private let mail: SyntheticMailReadAdapter
     private let calendar: SyntheticCalendarReadAdapter
     private let contacts: SyntheticContactsReadAdapter
+    private let tasks: SyntheticTasksReadAdapter?
     private let preflightFixtures: [NativeBucketSelection: SyntheticPreflightFixture]
 
     public init(
@@ -30,17 +31,19 @@ public struct SyntheticNativeHost: NativeHostApplicationBoundary, Sendable {
         mail: SyntheticMailReadAdapter,
         calendar: SyntheticCalendarReadAdapter,
         contacts: SyntheticContactsReadAdapter,
-        preflightFixtures: [SyntheticPreflightFixture]
+        preflightFixtures: [SyntheticPreflightFixture],
+        tasks: SyntheticTasksReadAdapter? = nil
     ) throws {
         let selections = preflightFixtures.map(\.selection)
         guard Set(selections).count == selections.count else {
             throw NativeSourceContractError.duplicateIdentity
         }
-        let snapshots = [
+        var snapshots = [
             try mail.discoverMail(),
             try calendar.discoverCalendars(),
             try contacts.discoverContactCollections(),
         ]
+        if let tasks { snapshots.append(try tasks.discoverTaskLists()) }
         guard selections.allSatisfy({ selection in
             snapshots.contains(where: { snapshot in
                 snapshot.kind == selection.kind
@@ -55,6 +58,7 @@ public struct SyntheticNativeHost: NativeHostApplicationBoundary, Sendable {
         self.mail = mail
         self.calendar = calendar
         self.contacts = contacts
+        self.tasks = tasks
         self.preflightFixtures = Dictionary(uniqueKeysWithValues: preflightFixtures.map {
             ($0.selection, $0)
         })
@@ -77,6 +81,9 @@ public struct SyntheticNativeHost: NativeHostApplicationBoundary, Sendable {
             observed = try calendar.discoverCalendars()
         case .contacts:
             observed = try contacts.discoverContactCollections()
+        case .tasks:
+            guard let tasks else { throw NativeSourceContractError.unknownBucket }
+            observed = try tasks.discoverTaskLists()
         }
         let canonical = try NativeDiscoverySnapshot(
             kind: kind,
@@ -125,6 +132,10 @@ public struct SyntheticNativeHost: NativeHostApplicationBoundary, Sendable {
         case .contacts:
             snapshot = try contacts.discoverContactCollections()
             page = try contacts.readContacts(request.request)
+        case .tasks:
+            guard let tasks else { throw NativeSourceContractError.unknownBucket }
+            snapshot = try tasks.discoverTaskLists()
+            page = try tasks.readTasks(request.request)
         }
         guard snapshot.buckets.contains(where: {
             $0.id == request.request.bucketID && $0.accountID == request.accountID

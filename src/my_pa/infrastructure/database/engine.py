@@ -29,6 +29,7 @@ _POOL_TIMEOUT_SECONDS: Final = 30
 #: The container can be restarted between batches. One round trip per checkout
 #: is far cheaper than losing a batch to a stale connection.
 _POOL_PRE_PING: Final = True
+_STATEMENT_TIMEOUT_MS: Final = 30_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +40,9 @@ class DatabaseHealth:
     extensions: tuple[str, ...]
 
 
-def create_database_engine(url: str | URL) -> Engine:
+def create_database_engine(
+    url: str | URL, *, statement_timeout_ms: int | None = _STATEMENT_TIMEOUT_MS
+) -> Engine:
     """Build the engine for `url`.
 
     Accepts an already-parsed `URL` as well as a string, and a caller that has
@@ -51,12 +54,20 @@ def create_database_engine(url: str | URL) -> Engine:
 
     Callers own the engine's lifetime and should `dispose()` it when finished.
     """
+    if statement_timeout_ms is not None and statement_timeout_ms <= 0:
+        raise ValueError("statement_timeout_ms must be positive or None")
+    connect_args = (
+        {}
+        if statement_timeout_ms is None
+        else {"options": f"-c statement_timeout={statement_timeout_ms}"}
+    )
     return create_engine(
         url,
         pool_size=_POOL_SIZE,
         max_overflow=0,
         pool_timeout=_POOL_TIMEOUT_SECONDS,
         pool_pre_ping=_POOL_PRE_PING,
+        connect_args=connect_args,
     )
 
 

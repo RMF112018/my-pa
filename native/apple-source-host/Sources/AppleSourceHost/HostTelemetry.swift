@@ -127,7 +127,8 @@ public enum NativeHostErrorClass: String, Codable, CaseIterable, Sendable {
                  .calendarLifecycleInconsistent, .calendarHorizonViolated,
                  .contactsInvalidIdentityComponent, .contactsIdentityEpochMismatch,
                  .contactsMembershipInconsistent, .contactsUnknownGroup,
-                 .contactsTruncationUndeclared:
+                 .contactsTruncationUndeclared, .tasksIdentityInconsistent,
+                 .tasksTruncationUndeclared:
                 self = .malformedEnvelope
             }
         case let provider as NativeProviderFailure:

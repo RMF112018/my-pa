@@ -189,6 +189,7 @@ class LeaseLostError(Exception):
 #: raising anything else is an unclassified failure and is recorded as
 #: `internal_error`.
 type JobHandler = Callable[[Engine, LeasedJob, str], None]
+type Heartbeat = Callable[[], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +285,7 @@ def run_worker(
     max_iterations: int | None = None,
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
     poll_seconds: float = DEFAULT_POLL_SECONDS,
+    heartbeat: Heartbeat | None = None,
 ) -> WorkerRun:
     """Claim and execute jobs until `stop` is set or `max_iterations` is reached.
 
@@ -324,6 +326,8 @@ def run_worker(
         if max_iterations is not None and iterations >= max_iterations:
             break
         iterations += 1
+        if heartbeat is not None:
+            heartbeat()
 
         with engine.begin() as connection:
             # Committed on leaving this block, so the lease is visible to every
@@ -334,6 +338,10 @@ def run_worker(
                 lease_seconds=lease_seconds,
                 principal_id=principal_id,
                 plane=plane,
+                # A bounded invocation is an explicit drain/recovery operation,
+                # so it may consume the persisted retry schedule immediately.
+                # The unbounded service loop always respects wall-clock backoff.
+                respect_retry_schedule=not bounded,
             )
 
         if job is None:
@@ -356,6 +364,8 @@ def run_worker(
                 released += 1
             case _:
                 lost += 1
+        if heartbeat is not None:
+            heartbeat()
 
     return WorkerRun(
         iterations=iterations,

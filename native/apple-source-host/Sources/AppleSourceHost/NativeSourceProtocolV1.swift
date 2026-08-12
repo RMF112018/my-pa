@@ -96,6 +96,7 @@ public enum NativeSourceKind: String, Codable, CaseIterable, Sendable {
     case mail
     case calendar
     case contacts
+    case tasks
 }
 
 /// An identifier whose provider locator remains outside the public protocol.
@@ -420,4 +421,6 @@ public enum NativeSourceContractError: Error, Equatable, Sendable {
     case contactsGroupLimitExceeded
     case contactsTruncationUndeclared
     case contactsUnboundedEnumeration
+    case tasksIdentityInconsistent
+    case tasksTruncationUndeclared
 }

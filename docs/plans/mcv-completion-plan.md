@@ -39,7 +39,7 @@ Drive mirrors are review surfaces rather than a competing ledger.
 | Database container | `my-pa-postgres`, `postgres:17.10`, healthy | `docker ps` |
 | Database binding | `127.0.0.1:5433 -> 5432`, loopback only | `docker ps` port map |
 | Logical database | `my_pa` | `select current_database()` |
-| Alembic head | `a7c3e8d1f642` in the repository, seventeen revisions; the canonical database remains at `6c4d3ea82f10` because every revision above it builds the `knowledge` schema, which runs only against disposable databases | `migrations/versions/*.py`, `select * from alembic_version` |
+| Alembic head | `b4e8d2c7a613` in the repository, thirty-four revisions; local validation targets disposable databases only | `migrations/versions/*.py`, `alembic heads` |
 | Extensions | `pg_trgm`, `unaccent`, `plpgsql` | `select extname from pg_extension` |
 
 ## 2. Verified corpus claim
@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-One hundred and twenty-six Python modules under `src/my_pa` and one hundred and thirteen test modules —
+One hundred and sixty-six Python modules under `src/my_pa` and one hundred and eighty-six test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -89,11 +89,11 @@ section disagrees with the tree.
 | `domain/source`, `domain/extraction`, `domain/search` — registry, bounded enrollment, provider port, extraction outcomes, quarantine, coverage, search query | Implemented and tested |
 | `infrastructure/persistence` — registry, enrollment, jobs, extraction, quarantine, coverage, lexical search | Implemented; covered by the database tier |
 | `infrastructure/providers/fixture.py` — read-only fixture source provider | Implemented and tested |
-| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, the enrolled object set, relationship identity and profiles, native-source control plane | Implemented, seventeen revisions, head `a7c3e8d1f642` |
+| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes and operations | Implemented, thirty-four revisions, head `b4e8d2c7a613` |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
-All fifteen capability names, their operator-only flags, and their permitted
-purposes exist in `domain/identity/operation.py`, alongside ten purposes. The v1 request,
+All twenty-six capability names, their operator-only flags, and their permitted
+purposes exist in `domain/identity/operation.py`, alongside twelve purposes. The v1 request,
 response, disclosure, and error shapes already exist and are contract-tested.
 
 ## 4. What is not implemented
@@ -399,7 +399,7 @@ rediscovered.
   honoured — the four cases are pinned in `tests/unit/test_settings.py`
   (`test_the_statement_timeout_cannot_be_configured_away`,
   `test_a_misspelled_statement_timeout_is_not_silently_ignored`) and the
-  both-engines property in `tests/unit/test_gateway_composition.py:175`. Closed
+  both-engines property in `tests/unit/test_gateway_composition.py:160`. Closed
   by #52 at `6e491c2`, which is the change that also wrote this correction's
   subject into existence. The superseded wording is kept and negated rather than
   deleted, per the `D-78`/`D-81` shape. No new `D-` identifier is minted — see
@@ -1743,6 +1743,22 @@ questions while revising no decisions artifact — the gap this plan carries as
 Native Apple Reminders: the package that created the questions tracks them.
 
 ## 15. Reconciliation against the ratified canonical product definition
+
+### 2026-08-12 remediation authority note
+
+The operator has reprioritized the current remediation objective to include the
+frontend and managed-document implementation necessary to close the six
+pilot-readiness blockers. That objective-specific instruction is implementation
+authority for this remediation only; it does not amend repository policy and it
+does not make `PLAN_APPROVED` an authorization to amend `AGENTS.md`.
+
+The resulting inconsistency with the older policy statements that defer
+frontend and managed-document work is deliberately recorded in this plan, the
+remediation pull request, and the final-state report. `AGENTS.md` remains
+unchanged for later operator correction unless the operator separately and
+explicitly authorizes amendment of that policy. All other policy boundaries,
+including live-data, deployment, destructive-action, credential, and
+independent-review gates, continue to apply.
 
 On 2026-08-02 the operator ratified `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`.
 Section 14 item 3 anticipated that this could invalidate section 12's shapes. It

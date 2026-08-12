@@ -73,7 +73,9 @@ EXIT_INCONSISTENT = 2
 
 
 def _engine() -> Engine:
-    return create_database_engine(load_settings().parsed_database_url())
+    return create_database_engine(
+        load_settings().parsed_database_url(), statement_timeout_ms=30_000
+    )
 
 
 def _managed_root() -> Path:

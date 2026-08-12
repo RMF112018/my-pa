@@ -63,6 +63,7 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
     CaptureSummary,
+    ContinuityReadRepository,
     EnrollmentRepository,
     EvidenceUnavailableError,
     KnowledgeRecord,
@@ -99,6 +100,7 @@ from my_pa.infrastructure.persistence.capture import (
     capture_version,
 )
 from my_pa.infrastructure.persistence.capture_search import search_captures
+from my_pa.infrastructure.persistence.continuity_read import SqlContinuityReadRepository
 from my_pa.infrastructure.persistence.enrollment import (
     accept_enrollment,
     enrollments_for_principal,
@@ -629,6 +631,10 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def pulse(self) -> PulseRepository:
         return SqlPulseRepository(self._open)
+
+    @property
+    def continuity_read(self) -> ContinuityReadRepository:
+        return SqlContinuityReadRepository(self._open)
 
     @property
     def managed_documents(self) -> ManagedDocumentRepository:

@@ -65,6 +65,7 @@ class NativeSourceKind(StrEnum):
     MAIL = "mail"
     CALENDAR = "calendar"
     CONTACTS = "contacts"
+    TASKS = "tasks"
 
 
 class NativeProviderFailure(StrEnum):

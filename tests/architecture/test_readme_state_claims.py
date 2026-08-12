@@ -194,19 +194,13 @@ def test_the_readme_names_the_readiness_state_the_build_reports() -> None:
 
 
 def _alembic_identity() -> tuple[int, str]:
-    revisions: dict[str, str | None] = {}
-    identifier = re.compile(r'^revision: str = "(?P<id>[0-9a-f]+)"', re.MULTILINE)
-    parent = re.compile(r'^down_revision: str \| None = "(?P<id>[0-9a-f]+)"', re.MULTILINE)
-    for path in sorted((ROOT / "migrations" / "versions").glob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        found = identifier.search(text)
-        if found is None:
-            continue
-        below = parent.search(text)
-        revisions[found["id"]] = below["id"] if below else None
-    heads = set(revisions) - {value for value in revisions.values() if value is not None}
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
+    heads = script.get_heads()
     assert len(heads) == 1
-    return len(revisions), heads.pop()
+    return len(list(script.walk_revisions())), heads[0]
 
 
 def test_readme_derives_the_current_alembic_count_and_head() -> None:
@@ -230,6 +224,10 @@ def test_readme_derives_the_current_alembic_count_and_head() -> None:
         28: "Twenty-eight",
         29: "Twenty-nine",
         30: "Thirty",
+        31: "Thirty-one",
+        32: "Thirty-two",
+        33: "Thirty-three",
+        34: "Thirty-four",
     }
     count, head = _alembic_identity()
     assert count in words, "extend the readable README count vocabulary"

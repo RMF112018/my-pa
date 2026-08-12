@@ -291,6 +291,8 @@ def _kind_for_provider(kind: NativeSourceKind) -> str:
             return "apple_calendar"
         case NativeSourceKind.CONTACTS:
             return "apple_contacts"
+        case NativeSourceKind.TASKS:
+            return "apple_tasks"
     assert_never(kind)
 
 

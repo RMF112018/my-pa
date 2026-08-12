@@ -50,16 +50,18 @@ EVENT_KIT_PROBE: Final = HOST / "Compatibility" / "AppleCalendarEventKitProbe"
 #: the probe *set* is what this module's exemption and count guards are about,
 #: and a probe missing from the set is a directory nothing holds to anything.
 CONTACTS_PROBE: Final = HOST / "Compatibility" / "AppleContactsShapeProbe"
+TASKS_PROBE: Final = HOST / "Compatibility" / "AppleTasksEventKitProbe"
 
 #: The four compile-only probe targets. Each is declared in `Package.swift` on
 #: the same footing, each is a dependency of nothing, and each is the only place
 #: its framework may be named.
-PROBES: Final = (FRAMEWORK_PROBE, MAIL_PROBE, EVENT_KIT_PROBE, CONTACTS_PROBE)
+PROBES: Final = (FRAMEWORK_PROBE, MAIL_PROBE, EVENT_KIT_PROBE, CONTACTS_PROBE, TASKS_PROBE)
 PROBE_TARGETS: Final = (
     "AppleFrameworkCompatibilityProbe",
     "AppleMailAutomationShapeProbe",
     "AppleCalendarEventKitProbe",
     "AppleContactsShapeProbe",
+    "AppleTasksEventKitProbe",
 )
 
 MECHANISM: Final = SHIPPING / "CalendarMechanism.swift"
@@ -230,9 +232,9 @@ def test_the_wp17_scan_is_reading_the_calendar_adapter_at_all() -> None:
     # a decision somebody makes here, not a side effect of adding a target. It was
     # three until WP-18 added the Contacts shape probe, and the widening is
     # recorded in that package's record rather than absorbed silently.
-    assert len(_probe_files()) == 4, (
+    assert len(_probe_files()) == 5, (
         f"the compile-only probe set holds {len(_probe_files())} files. Each probe "
-        "is one file and there are four of them; a fifth is a fifth place an "
+        "is one file and there are five of them; another is another place an "
         "Apple framework is permitted, and that is a decision rather than a diff"
     )
 
@@ -748,7 +750,7 @@ def test_the_three_probes_are_compile_only_and_never_linked_into_the_host() -> N
     assert "let package = Package(" in manifest and manifest.count('"AppleSourceHost"') >= 3, (
         "the manifest scan is not reading Package.swift"
     )
-    assert len(PROBE_TARGETS) == 4, "the probe target set stopped naming all four probes"
+    assert len(PROBE_TARGETS) == 5, "the probe target set stopped naming all five probes"
 
     for probe_target in PROBE_TARGETS:
         occurrences = manifest.count(f'"{probe_target}"')

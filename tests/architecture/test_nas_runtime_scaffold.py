@@ -246,6 +246,32 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         },
         "proxy": None,
     }
+    expected_commands = {
+        "postgres": None,
+        "gateway": ["python", "apps/gateway.py", "run"],
+        "worker-enrollment": ["python", "apps/worker.py", "run", "--plane", "enrollment"],
+        "worker-capture": ["python", "apps/worker.py", "run", "--plane", "capture"],
+        "web": ["npm", "run", "start"],
+        "proxy": None,
+    }
+    service_user = "${MY_PA_UID:?}:${MY_PA_GID:?}"
+    expected_users = {
+        "postgres": None,
+        "gateway": "${MY_PA_UID:?dedicated service uid required}:"
+        "${MY_PA_GID:?dedicated service gid required}",
+        "worker-enrollment": service_user,
+        "worker-capture": service_user,
+        "web": service_user,
+        "proxy": None,
+    }
+    expected_expose = {
+        "postgres": None,
+        "gateway": ["8765"],
+        "worker-enrollment": None,
+        "worker-capture": None,
+        "web": ["3000"],
+        "proxy": None,
+    }
     expected_service_keys = {
         "postgres": {
             "profiles",
@@ -323,6 +349,12 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             errors.add("credential_authority")
         if service.get("environment") != expected_environments[name]:
             errors.add("environment_contract")
+        if service.get("command") != expected_commands[name]:
+            errors.add("process_placement")
+        if service.get("user") != expected_users[name]:
+            errors.add("service_identity")
+        if service.get("expose") != expected_expose[name]:
+            errors.add("internal_port_contract")
         if "build" in service:
             errors.add("implicit_build")
         expected_ports = (
@@ -576,6 +608,18 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "    environment:\n      MY_PA_GATEWAY_BIND_HOST: 127.0.0.1\n"
             '    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]\n',
             "environment_contract",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "command: [python, apps/gateway.py, run]",
+            "command: [python, apps/worker.py, run, --plane, capture]",
+            "process_placement",
+        ),
+        (
+            "ops/nas/compose.example.yml",
+            "command: [python, apps/worker.py, run, --plane, enrollment]",
+            "command: [python, apps/worker.py, run, --plane, capture]",
+            "process_placement",
         ),
         (
             "ops/nas/compose.example.yml",

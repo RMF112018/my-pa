@@ -1,0 +1,4 @@
+serving     http://127.0.0.1:9099/v1/<capability>
+remote      /remote/v1/capture.create is refused; set MY_PA_REMOTE_INGRESS_ENABLED to serve it
+notice      sources.list, sources.metadata and sources.fetch answer 'unavailable' for every source no operator has registered; registration names the source's root by exact path, and this process configures none
+[Errno 48] error while attempting to bind on address ('127.0.0.1', 9099): [errno 48] address already in use

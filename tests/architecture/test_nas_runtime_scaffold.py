@@ -786,6 +786,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     }
     @remote_capture_wrong_method path /remote/v1/capture.create
     handle @remote_capture_wrong_method {
+        header X-My-PA-Route "gateway-only"
         respond "method not allowed" 405
     }
     @internal_capabilities path /v1/*

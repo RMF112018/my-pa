@@ -29,6 +29,7 @@
     # The path exists for one method only; it never falls through to Next.js.
     @remote_capture_wrong_method path /remote/v1/capture.create
     handle @remote_capture_wrong_method {
+        header X-My-PA-Route "gateway-only"
         respond "method not allowed" 405
     }
 

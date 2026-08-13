@@ -1,0 +1,15 @@
+# Restart-only pilot overlay. lifecycle_gate.py refuses this overlay unless the
+# exact repository head has both a NAS-10 PASS receipt and an operator activation.
+services:
+  postgres:
+    restart: unless-stopped
+  gateway:
+    restart: unless-stopped
+  worker-enrollment:
+    restart: unless-stopped
+  worker-capture:
+    restart: unless-stopped
+  web:
+    restart: unless-stopped
+  proxy:
+    restart: unless-stopped

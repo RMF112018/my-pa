@@ -8,9 +8,30 @@ fi
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 python3 "$script_dir/image_gate.py" "$1" --archive-dir "$2" --live
+MY_PA_IMAGE_MANIFEST=$1
+export MY_PA_IMAGE_MANIFEST
+. "$script_dir/lifecycle-common.sh"
+nas_compose config --quiet
+if ! nas_compose up --detach --no-build --pull never; then
+  echo "Compose start failed; stopping any partial stack" >&2
+  "$script_dir/cleanup-partial-start.sh" || true
+  exit 1
+fi
+if ! running_output=$(nas_compose ps --status running -q); then
+  echo "could not verify services after start; stopping the partial stack" >&2
+  "$script_dir/cleanup-partial-start.sh" || true
+  exit 1
+fi
+running=$(printf '%s\n' "$running_output" | sed '/^$/d' | wc -l | tr -d ' ')
+if [ "$running" -ne 6 ]; then
+  echo "expected six running runtime services; stopping the partial stack" >&2
+  "$script_dir/cleanup-partial-start.sh" || true
+  exit 1
+fi
+if ! verify_running_identity; then
+  echo "running service identity mismatch; stopping the partial stack" >&2
+  "$script_dir/cleanup-partial-start.sh" || true
+  exit 1
+fi
 
-echo "NAS-02 image evidence passed, but start remains disabled until NAS-04 implements the gateway container bind." >&2
-exit 1
-
-# NAS-04+ may replace the refusal only after image_gate.py passes, then invoke:
-# docker compose --file ops/nas/compose.yml up --detach --no-build --pull never
+echo "NAS runtime started in $MY_PA_LIFECYCLE_MODE mode; run health.sh and permission gates"

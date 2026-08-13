@@ -28,3 +28,4 @@ process.env.MYPA_SESSION_SECRET ??= "synthetic-test-signing-key-0000000000000000
  * the unset and production cases still refuse.
  */
 process.env.MYPA_AUTH_MODE ??= "synthetic";
+process.env.MYPA_CANONICAL_ORIGIN ??= "http://localhost:3000";

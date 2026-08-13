@@ -200,7 +200,10 @@ describe("mode gating", () => {
   it("refuses the synthetic provider in a production build", async () => {
     vi.stubEnv("MYPA_AUTH_MODE", "synthetic");
     vi.stubEnv("NODE_ENV", "production");
-    const response = await POST(signInRequest("synthetic-a"));
+    vi.stubEnv("MYPA_CANONICAL_ORIGIN", "https://app.example.test");
+    const response = await POST(
+      signInRequest("synthetic-a", { origin: "https://app.example.test" }),
+    );
     expect(response.status).toBe(500);
     expect((await response.json()).error.message).toContain("NODE_ENV");
   });

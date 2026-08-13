@@ -13,8 +13,10 @@ require_exact_loaded_identity = true
 [network]
 data_network = "data-plane"
 data_network_internal = true
-edge_network = "edge-plane"
-edge_network_egress = "firewall_allowlisted_entra_only"
+ingress_network = "ingress-plane"
+ingress_network_internal = true
+egress_network = "entra-egress"
+egress_network_policy = "firewall_allowlisted_entra_only"
 egress_services = ["gateway", "web"]
 only_host_published_service = "proxy"
 postgres_published = false
@@ -50,7 +52,7 @@ networks = ["data-plane"]
 host = "nas"
 database_credential = true
 mounts = ["config_ro", "managed_documents_rw", "sources_ro"]
-networks = ["data-plane", "edge-plane"]
+networks = ["data-plane", "ingress-plane", "entra-egress"]
 container_bind = "0.0.0.0:8765"
 bind_implementation_owned_by = "NAS-04"
 bind_mode = "validated_container_only"
@@ -71,13 +73,13 @@ networks = ["data-plane"]
 host = "nas"
 database_credential = false
 mounts = []
-networks = ["edge-plane"]
+networks = ["ingress-plane", "entra-egress"]
 
 [services.proxy]
 host = "nas"
 database_credential = false
 mounts = ["proxy_config_ro"]
-networks = ["edge-plane"]
+networks = ["ingress-plane"]
 
 [services.apple_source_host]
 host = "mac"

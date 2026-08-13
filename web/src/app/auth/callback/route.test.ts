@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const { complete } = vi.hoisted(() => ({ complete: vi.fn() }));
@@ -13,6 +13,8 @@ import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 
 const ORIGIN = "https://app.example.test";
 
+beforeEach(() => vi.stubEnv("MYPA_CANONICAL_ORIGIN", ORIGIN));
+
 function callback(query: string, stateCookie?: string): NextRequest {
   const request = new NextRequest(`${ORIGIN}/auth/callback?${query}`);
   if (stateCookie) request.cookies.set("mypa_entra_flow", stateCookie);
@@ -21,6 +23,7 @@ function callback(query: string, stateCookie?: string): NextRequest {
 
 afterEach(() => {
   complete.mockReset();
+  vi.unstubAllEnvs();
 });
 
 describe("Entra callback route", () => {

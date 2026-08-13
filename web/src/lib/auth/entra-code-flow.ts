@@ -20,6 +20,7 @@ import {
 
 import { establishValidatedEntraSession } from "@/lib/auth/entra-session";
 import { apiScope, SIGN_IN_SCOPES } from "@/lib/auth/msal.config";
+import { canonicalOrigin } from "@/lib/http/canonical-origin";
 
 export const ENTRA_FLOW_COOKIE_NAME = "mypa_entra_flow";
 export const ENTRA_FLOW_MAX_AGE_SECONDS = 10 * 60;
@@ -90,12 +91,16 @@ export function entraServerConfig(): EntraServerConfig {
   if (!ownScope) {
     throw new Error("MYPA_ENTRA_API_SCOPE must name this application's gateway scope");
   }
+  const redirectUri = required("MYPA_ENTRA_REDIRECT_URI");
+  if (redirectUri !== `${canonicalOrigin()}/auth/callback`) {
+    throw new Error("MYPA_ENTRA_REDIRECT_URI must equal the canonical origin callback");
+  }
   return {
     clientId: required("MYPA_ENTRA_CLIENT_ID"),
     clientSecret: required("MYPA_ENTRA_CLIENT_SECRET"),
     tenantId,
     authority: `https://login.microsoftonline.com/${tenantId}`,
-    redirectUri: required("MYPA_ENTRA_REDIRECT_URI"),
+    redirectUri,
     scopes: [...SIGN_IN_SCOPES, ownScope],
   };
 }

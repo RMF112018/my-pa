@@ -44,13 +44,15 @@ services:
     environment:
       MY_PA_GATEWAY_BIND_MODE: container
       MY_PA_MANAGED_DOCUMENT_ROOT: /srv/my-pa/managed-documents
+      MY_PA_AUTH_MODE: entra
+      MY_PA_REMOTE_INGRESS_ENABLED: "true"
     env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]
     expose: ["8765"]
     volumes:
       - {type: bind, source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, read_only: true}
       - {type: bind, source: "${MY_PA_NAS_ROOT:?}/managed-documents", target: /srv/my-pa/managed-documents}
       - {type: bind, source: "${MY_PA_NAS_ROOT:?}/sources", target: /srv/my-pa/sources, read_only: true}
-    networks: [data-plane, edge-plane]
+    networks: [data-plane, ingress-plane, entra-egress]
 
   worker-enrollment:
     profiles: [nas-01-contract-only]
@@ -91,29 +93,43 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     command: [node, server.js]
+    env_file: ["${MY_PA_WEB_ENV_FILE:?owner-only web env file required}"]
     environment:
       NODE_ENV: production
+      MYPA_AUTH_MODE: entra
       MYPA_GATEWAY_URL: http://gateway:8765
       MYPA_GATEWAY_AUTH_MODE: entra
-      MYPA_SESSION_SECRET: "${MYPA_SESSION_SECRET:?session secret required}"
+      MYPA_CANONICAL_ORIGIN: "${MYPA_CANONICAL_ORIGIN:?exact private HTTPS origin required}"
+      MYPA_ENTRA_REDIRECT_URI: "${MYPA_ENTRA_REDIRECT_URI:?exact callback required}"
     expose: ["3000"]
-    networks: [edge-plane]
+    networks: [ingress-plane, entra-egress]
 
   proxy:
     profiles: [nas-01-contract-only]
     image: "${MY_PA_PROXY_IMAGE:?repository required}@${MY_PA_PROXY_IMAGE_DIGEST:?sha256 digest required}"
     platform: linux/amd64
+    user: "${MY_PA_PROXY_UID:?verified proxy uid required}:${MY_PA_PROXY_GID:?verified proxy gid required}"
     restart: "no"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      MY_PA_TAILNET_HOST: "${MY_PA_TAILNET_HOST:?exact verified tailnet hostname required}"
     ports:
       - "127.0.0.1:${MY_PA_PROXY_PORT:?explicit smoke port required}:8080"
     volumes:
       - {type: bind, source: "./proxy-allowlist.example.caddy", target: /etc/caddy/Caddyfile, read_only: true}
-    networks: [edge-plane]
+    tmpfs:
+      - /config
+      - /data
+    networks: [ingress-plane]
 
 networks:
   data-plane:
     internal: true
-  # Gateway and web require outbound Entra/OIDC access. NAS-06 must install
-  # and verify the host/DNS egress allowlist before pilot activation.
-  edge-plane:
+  ingress-plane:
+    internal: true
+  # Only gateway and web join this plane. Live activation additionally requires
+  # a verified host/DNS firewall allowlist for the measured Entra endpoints.
+  entra-egress:
     internal: false

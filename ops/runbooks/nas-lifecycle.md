@@ -13,8 +13,31 @@ only as this temporary bootstrap sequence. It uses the canonical
 `ops/nas/compose.example.yml`; `postgresql_default`, `ops/compose/postgres.yml`,
 ad-hoc containers, and direct `docker compose up postgres` are prohibited.
 
-Set `MY_PA_NAS_DOCKER=/usr/local/bin/docker` on Synology and set
-`MY_PA_NAS_PYTHON` to a Python 3.12-or-newer executable. The invoking identity
+Set `MY_PA_NAS_DOCKER=/usr/local/bin/docker` on Synology. When the host does not
+provide Python 3.12, bootstrap the separately checksummed operator archive from
+the clean reviewed build before loading the application candidates:
+
+```sh
+export MY_PA_NAS_DOCKER=/usr/local/bin/docker
+ops/nas/bootstrap-operator-runtime.sh \
+  ARTIFACT_DIRECTORY/operator-runtime.candidate.toml \
+  ARTIFACT_DIRECTORY/operator.tar \
+  ARTIFACT_DIRECTORY/operator.metadata.json \
+  /etc/my-pa/operator-runtime.toml
+export MY_PA_NAS_OPERATOR_ADMISSION=/etc/my-pa/operator-runtime.toml
+export MY_PA_NAS_PYTHON="$PWD/ops/nas/container-python.sh"
+```
+
+The operator container is removed after every invocation, has no network, uses
+a read-only root filesystem, drops all capabilities, and is not part of the
+persistent Compose topology. Its narrowly mounted Docker socket and exact host
+Docker CLI give the gate the same bounded engine authority as the invoking root
+operator; no application service receives either mount. The admission binds
+the exact archive/config/platform, source commit/tree, Python/Git/OpenSSL
+runtime, and live NAS engine. Do not use an unadmitted image or a host Python
+older than 3.12.
+
+The invoking identity
 must already have bounded Docker authority; tooling never prompts for or
 changes that authority. Before rendering admission, the owner-only application
 and web environment files must contain operator-provisioned non-placeholder

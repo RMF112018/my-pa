@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+from archive_image import inspect_archive
+
 POSTGRES_REFERENCE = (
     "postgres@sha256:dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b"
 )
@@ -38,6 +40,8 @@ def main() -> int:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         digest = metadata["containerimage.digest"]
         image_id = metadata["containerimage.config.digest"]
+        if inspect_archive(archive_path).config_digest != image_id:
+            raise ValueError(f"{name} metadata config identity does not match its archive")
         load_reference = image_id
         if name == "postgres":
             reference = POSTGRES_REFERENCE

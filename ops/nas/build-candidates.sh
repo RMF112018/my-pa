@@ -61,6 +61,7 @@ build_candidate() {
 
 build_candidate app ops/docker/app.Dockerfile
 build_candidate web ops/docker/web.Dockerfile
+build_candidate operator ops/docker/operator.Dockerfile
 
 postgres_reference="postgres@sha256:dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b"
 docker buildx imagetools inspect postgres:17.10 --raw > "$output_dir/postgres.index.json"
@@ -68,13 +69,15 @@ python3 "$build_context/ops/nas/verify-postgres-index.py" "$output_dir/postgres.
 docker pull --platform linux/amd64 "$postgres_reference"
 docker save --output "$output_dir/postgres.tar" "$postgres_reference"
 python3 "$build_context/ops/nas/write-image-metadata.py" \
-  "$postgres_reference" "$output_dir/postgres.metadata.json"
+  "$postgres_reference" "$output_dir/postgres.tar" "$output_dir/postgres.metadata.json"
 
 docker pull --platform linux/amd64 "$proxy_reference"
 docker save --output "$output_dir/proxy.tar" "$proxy_reference"
 python3 "$build_context/ops/nas/write-image-metadata.py" \
-  "$proxy_reference" "$output_dir/proxy.metadata.json"
+  "$proxy_reference" "$output_dir/proxy.tar" "$output_dir/proxy.metadata.json"
 
 python3 "$build_context/ops/nas/write-candidate-manifest.py" \
   "$output_dir" "$commit" "$tree" "$built_at" "$lock_sha" "$proxy_reference"
+python3 "$build_context/ops/nas/write-operator-candidate.py" \
+  "$output_dir" "$commit" "$tree" "$built_at"
 echo "candidate archives and manifest created; they remain non-deployable until the live NAS gate passes"

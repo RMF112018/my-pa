@@ -117,6 +117,14 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
         "writes only Docker image identity metadata into the operator-selected "
         "candidate artifact directory; it never reads or writes personal or managed bytes."
     ),
+    "ops/nas/write-operator-candidate.py": (
+        "writes only non-admitted operator-image identity evidence into the explicit "
+        "candidate artifact directory; it never reads or writes personal or managed bytes."
+    ),
+    "ops/nas/admit-operator-runtime.py": (
+        "writes only a new root-controlled operator-runtime admission to an explicit "
+        "operator path; it contains tool, image, repository, and engine identities only."
+    ),
     "ops/nas/generate-postgres-resources.py": (
         "writes only engine-bound PostgreSQL admission evidence to an explicit, new "
         "owner-only operator path; it never reads or writes personal or managed bytes."

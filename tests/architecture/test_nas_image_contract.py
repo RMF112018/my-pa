@@ -47,6 +47,9 @@ def test_candidate_build_and_load_are_exact_platform_and_admitted() -> None:
     assert "--platform linux/amd64" in build
     assert "--metadata-file" in build
     assert "type=docker,dest=$archive" in build
+    assert "operator.Dockerfile" in build
+    assert '"$output_dir/postgres.tar"' in build
+    assert '"$output_dir/proxy.tar"' in build
     assert 'nas_docker load --input "$archive_dir/$name.tar"' in load
     assert "admit-image-manifest.py" in load
     assert "image_gate.py" in load

@@ -35,9 +35,11 @@ Files:
   verifies its archive before loading, binds it to the live NAS engine, and
   writes a root-owned mode-0400 admission. [`container-python.sh`](container-python.sh)
   then runs existing Python gates with no network, a read-only root, dropped
-  capabilities, the exact host Docker CLI, and a short-lived Docker-socket
-  mount. It is not a Compose service and grants no persistent container Docker
-  authority.
+  capabilities, attached standard input, an explicit Compose-environment
+  allowlist, the exact host Docker CLI and Compose plugin, and a short-lived
+  Docker-socket mount. It is not a Compose service and grants no persistent
+  container Docker authority. Emergency shutdown remains a host-shell path and
+  does not depend on this image or its admission.
 - [`start.sh`](start.sh) is an intentional refusal until the exact live NAS
   reports `linux/amd64`, loaded digest resolution is proven, and NAS-04 adds the
   gateway container bind. A later activation may use only Compose `--no-build

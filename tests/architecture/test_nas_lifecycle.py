@@ -873,15 +873,52 @@ def test_emergency_stop_ignores_broken_control_evidence(tmp_path: Path) -> None:
     compose = tmp_path / "compose.yml"
     compose.write_text(COMPOSE.read_text(encoding="utf-8"), encoding="utf-8")
     compose.chmod(0o400)
-    calls: list[list[str]] = []
-
-    def runner(command: list[str]) -> str:
-        calls.append(command)
-        return ""
-
-    assert _module("emergency_stop").stop(compose, owner_uid=os.getuid(), runner=runner) == []
-    assert any(command[-3:] == ["stop", "--timeout", "10"] for command in calls)
-    assert all("pilot-evidence" not in " ".join(command) for command in calls)
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    calls = tmp_path / "calls"
+    fake_stat = tools / "stat"
+    fake_stat.write_text("#!/bin/sh\nprintf '0:400:1\\n'\n", encoding="utf-8")
+    fake_docker = tools / "docker"
+    fake_docker.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> "{calls}"\n'
+        'case " $* " in\n'
+        "  *' config --no-interpolate --services '*) "
+        "printf 'worker-enrollment\\nweb\\npostgres\\nproxy\\ngateway\\nworker-capture\\n';;\n"
+        "  *' stop --timeout 10 '*) exit 0;;\n"
+        "  *' ps --status running -q '*) exit 0;;\n"
+        "  *) exit 1;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_stat.chmod(0o700)
+    fake_docker.chmod(0o700)
+    script = tmp_path / "emergency-shutdown.sh"
+    script.write_text(
+        (ROOT / "ops/nas/emergency-shutdown.sh")
+        .read_text(encoding="utf-8")
+        .replace("/etc/my-pa/compose.yml", str(compose)),
+        encoding="utf-8",
+    )
+    script.chmod(0o700)
+    result = subprocess.run(  # noqa: S603 - checked-in shell with synthetic Docker
+        [str(script)],
+        env={
+            "PATH": f"{tools}:/usr/bin:/bin",
+            "MY_PA_NAS_DOCKER": str(fake_docker),
+            "MY_PA_NAS_OPERATOR_ADMISSION": str(tmp_path / "absent-admission"),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    invoked = calls.read_text(encoding="utf-8")
+    assert "config --no-interpolate --services" in invoked
+    assert "stop --timeout 10" in invoked
+    assert "ps --status running -q" in invoked
+    assert "pilot-evidence" not in invoked
+    assert "operator-runtime" not in invoked
 
 
 def test_health_is_readiness_and_diagnostics_cover_operational_signals() -> None:

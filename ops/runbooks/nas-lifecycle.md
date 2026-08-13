@@ -30,12 +30,21 @@ export MY_PA_NAS_PYTHON="$PWD/ops/nas/container-python.sh"
 
 The operator container is removed after every invocation, has no network, uses
 a read-only root filesystem, drops all capabilities, and is not part of the
-persistent Compose topology. Its narrowly mounted Docker socket and exact host
-Docker CLI give the gate the same bounded engine authority as the invoking root
-operator; no application service receives either mount. The admission binds
+persistent Compose topology. Its attached standard input preserves checked-in
+heredoc validations. Its narrowly mounted Docker socket and exact host Docker
+CLI plus Compose plugin give the gate the same bounded engine authority as the
+invoking root operator; only the closed canonical Compose interpolation and
+synthetic-acceptance environment names are forwarded, without putting their
+values in the command line. No application service receives these mounts. The admission binds
 the exact archive/config/platform, source commit/tree, Python/Git/OpenSSL
 runtime, and live NAS engine. Do not use an unadmitted image or a host Python
 older than 3.12.
+
+`emergency-shutdown.sh` deliberately remains a POSIX host-shell path. It checks
+the canonical root-owned mode-0400 Compose file, exact project, and exact six
+services through `docker compose config --no-interpolate`, then stops and
+verifies the stack. It does not require Python, the operator admission, or the
+operator image, so loss of auxiliary control evidence cannot prevent shutdown.
 
 The invoking identity
 must already have bounded Docker authority; tooling never prompts for or

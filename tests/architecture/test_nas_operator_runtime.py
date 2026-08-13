@@ -6,6 +6,8 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
+import subprocess
 import tarfile
 from pathlib import Path
 from types import ModuleType
@@ -80,6 +82,8 @@ def test_operator_runtime_is_separate_hardened_and_nonpersistent() -> None:
         assert "no-new-privileges" in script
         assert "/var/run/docker.sock:/var/run/docker.sock" in script
     assert "operator admission must be root-owned mode 0400 with one link" in wrapper
+    assert "--rm -i" in wrapper
+    assert "DOCKER_CLI_PLUGIN_EXTRA_DIRS=/usr/local/bin" in wrapper
     assert "python3.12" not in (ROOT / "ops/nas/tooling-common.sh").read_text(encoding="utf-8")
 
 
@@ -88,3 +92,61 @@ def test_operator_admission_is_exclusive_and_engine_bound() -> None:
     assert "os.O_EXCL" in source and "0o400" in source
     assert 'engine.get("Architecture") != "x86_64"' in source
     assert 'labels.get("io.my-pa.operator-runtime") != "python-3.12"' in source
+
+
+def test_container_python_preserves_stdin_compose_plugin_and_closed_environment(
+    tmp_path: Path,
+) -> None:
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    calls = tmp_path / "docker-argv"
+    stdin = tmp_path / "docker-stdin"
+    image_id = "sha256:" + "a" * 64
+    admission = tmp_path / "operator-runtime.toml"
+    admission.write_text(f'operator_image_id = "{image_id}"\n', encoding="utf-8")
+    admission.chmod(0o400)
+    fake_stat = tools / "stat"
+    fake_stat.write_text("#!/bin/sh\nprintf '0:400:1\\n'\n", encoding="utf-8")
+    fake_compose = tools / "docker-compose"
+    fake_compose.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_docker = tools / "docker"
+    fake_docker.write_text(
+        "#!/bin/sh\n"
+        f'image_id="{image_id}"\n'
+        'if [ "$1 $2" = "image inspect" ]; then '
+        'printf "%s|linux|amd64\\n" "$image_id"; exit 0; fi\n'
+        f': > "{calls}"\n'
+        f'for value in "$@"; do printf "%s\\n" "$value" >> "{calls}"; done\n'
+        f'cat > "{stdin}"\n',
+        encoding="utf-8",
+    )
+    for path in (fake_stat, fake_compose, fake_docker):
+        path.chmod(0o700)
+
+    result = subprocess.run(  # noqa: S603 - checked-in wrapper with synthetic tools
+        [str(ROOT / "ops/nas/container-python.sh"), "-", "argument"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{tools}:/usr/bin:/bin",
+            "MY_PA_NAS_DOCKER": str(fake_docker),
+            "MY_PA_NAS_COMPOSE_PLUGIN": str(fake_compose),
+            "MY_PA_NAS_OPERATOR_ADMISSION": str(admission),
+            "MY_PA_DB_PASSWORD": "synthetic-not-a-secret",
+            "UNAPPROVED_OPERATOR_VALUE": "must-not-pass",
+        },
+        input="stdin-sentinel",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    arguments = calls.read_text(encoding="utf-8").splitlines()
+    assert "-i" in arguments
+    assert f"{fake_compose}:/usr/local/bin/docker-compose:ro" in arguments
+    assert "DOCKER_CLI_PLUGIN_EXTRA_DIRS=/usr/local/bin" in arguments
+    assert "MY_PA_DB_PASSWORD" in arguments
+    assert "UNAPPROVED_OPERATOR_VALUE" not in arguments
+    assert "synthetic-not-a-secret" not in arguments
+    assert arguments[-3:] == [image_id, "-", "argument"]
+    assert stdin.read_text(encoding="utf-8") == "stdin-sentinel"

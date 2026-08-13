@@ -2,6 +2,7 @@
 set -eu
 
 : "${MY_PA_NAS_DOCKER:=/usr/local/bin/docker}"
+: "${MY_PA_NAS_COMPOSE_PLUGIN:=/usr/local/bin/docker-compose}"
 : "${MY_PA_NAS_OPERATOR_ADMISSION:=/etc/my-pa/operator-runtime.toml}"
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(git -C "$script_dir" rev-parse --show-toplevel)
@@ -29,9 +30,66 @@ if [ -L "$docker_host_binary" ]; then
     *) docker_host_binary=$(dirname "$docker_host_binary")/$link ;;
   esac
 fi
+[ -x "$docker_host_binary" ] || { echo "resolved Docker binary is unavailable" >&2; exit 1; }
 
-set -- "$@"
-"$docker_bin" run --rm \
+compose_host_binary=$MY_PA_NAS_COMPOSE_PLUGIN
+case "$compose_host_binary" in
+  /*) ;;
+  *) compose_host_binary=$(command -v "$compose_host_binary") ;;
+esac
+if [ -L "$compose_host_binary" ]; then
+  link=$(readlink "$compose_host_binary")
+  case "$link" in
+    /*) compose_host_binary=$link ;;
+    *) compose_host_binary=$(dirname "$compose_host_binary")/$link ;;
+  esac
+fi
+[ -x "$compose_host_binary" ] || { echo "resolved Docker Compose plugin is unavailable" >&2; exit 1; }
+
+python_arguments=$#
+[ "$python_arguments" -gt 0 ] || { echo "Python arguments are required" >&2; exit 64; }
+python_args=""
+for value in "$@"; do
+  case "$value" in
+    *'
+'*) echo "newline-containing Python arguments are prohibited" >&2; exit 64 ;;
+  esac
+  python_args="${python_args}${python_args:+
+}${value}"
+done
+
+# Preserve only the closed Compose interpolation and synthetic-acceptance
+# environment. `--env NAME` asks Docker to copy the value without placing it in
+# this process's command line or output.
+env_args=""
+for name in \
+  MY_PA_POSTGRES_IMAGE_ID MY_PA_APP_IMAGE_ID MY_PA_WEB_IMAGE_ID \
+  MY_PA_PROXY_IMAGE MY_PA_PROXY_IMAGE_DIGEST MY_PA_DB_PASSWORD \
+  MY_PA_NAS_ROOT MY_PA_UID MY_PA_GID MY_PA_NAS_ENV_FILE MY_PA_WEB_ENV_FILE \
+  MY_PA_PROXY_UID MY_PA_PROXY_GID MY_PA_PROXY_PORT MY_PA_TAILNET_HOST \
+  MYPA_CANONICAL_ORIGIN MYPA_ENTRA_REDIRECT_URI \
+  MY_PA_NAS10_SYNTHETIC_DATABASE_URL MY_PA_NAS10_DISPOSABLE_DATABASE_ACK
+do
+  eval "present=\${$name+x}"
+  if [ "$present" = x ]; then
+    env_args="${env_args}${env_args:+
+}--env
+${name}"
+  fi
+done
+
+# Reconstruct allowlisted environment options, the image, then the original
+# Python argv. Repository gate arguments are ordinary newline-free paths/flags.
+old_ifs=$IFS
+IFS='
+'
+set --
+for value in $env_args; do set -- "$@" "$value"; done
+set -- "$@" "$image_id"
+for value in $python_args; do set -- "$@" "$value"; done
+IFS=$old_ifs
+
+"$docker_bin" run --rm -i \
   --network none \
   --read-only \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
@@ -40,10 +98,12 @@ set -- "$@"
   --user 0:0 \
   --volume /var/run/docker.sock:/var/run/docker.sock \
   --volume "$docker_host_binary:/usr/local/bin/docker:ro" \
+  --volume "$compose_host_binary:/usr/local/bin/docker-compose:ro" \
   --volume /volume1/my-pa:/volume1/my-pa \
   --volume /etc/my-pa:/etc/my-pa \
   --volume "$repo_root:$repo_root:ro" \
   --env MY_PA_NAS_DOCKER=/usr/local/bin/docker \
+  --env DOCKER_CLI_PLUGIN_EXTRA_DIRS=/usr/local/bin \
   --workdir "$repo_root" \
   --entrypoint python \
-  "$image_id" "$@"
+  "$@"

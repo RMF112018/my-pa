@@ -58,16 +58,20 @@ def _complete_manifest(tmp_path: Path) -> tuple[Path, dict[str, str]]:
         "app": "1" * 64,
         "web": "2" * 64,
         "postgres": "dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b",
+        "proxy": "3" * 64,
     }
     path = tmp_path / "complete-image-manifest.toml"
     sections = []
-    for name in ("app", "web", "postgres"):
+    for name in ("app", "web", "postgres", "proxy"):
         digest = "sha256:" + digests[name]
-        reference = (
-            "postgres@sha256:dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b"
-            if name == "postgres"
-            else f"my-pa-{name}@{digest}"
-        )
+        if name == "postgres":
+            reference = (
+                "postgres@sha256:dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b"
+            )
+        elif name == "proxy":
+            reference = f"caddy@{digest}"
+        else:
+            reference = f"my-pa-{name}@{digest}"
         sections.append(
             f'[images.{name}]\nreference = "{reference}"\nload_reference = "{ids[name]}"\n'
             f'oci_manifest_digest = "{digest}"\ndocker_image_id = "{ids[name]}"\n'
@@ -340,6 +344,7 @@ def test_lifecycle_shell_preserves_refusal_and_stops_before_runtime(
     fake_python.write_text(
         "#!/bin/sh\n"
         f"printf '%s\\n' \"$*\" >> {calls}\n"
+        '[ "$1" = -c ] && exit 0\n'
         'case "$1" in\n'
         "  *lifecycle_gate.py) echo 'NAS lifecycle gate refused: planted refusal' >&2; exit 1 ;;\n"
         "  *) echo 'unexpected continuation' >&2; exit 99 ;;\n"
@@ -371,7 +376,7 @@ def test_lifecycle_shell_preserves_refusal_and_stops_before_runtime(
     assert result.stdout == ""
     assert result.stderr == "NAS lifecycle gate refused: planted refusal\n"
     recorded = calls.read_text(encoding="utf-8").splitlines()
-    assert len(recorded) == 1 and "lifecycle_gate.py" in recorded[0]
+    assert len(recorded) == 2 and "lifecycle_gate.py" in recorded[1]
 
 
 def test_origin_parser_and_evidence_chronology_fail_closed(tmp_path: Path) -> None:

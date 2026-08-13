@@ -120,20 +120,24 @@ def _fixture(tmp_path: Path) -> dict[str, Path]:
     )
     image = tmp_path / "image-manifest.toml"
     image_sections = []
-    image_ids = {"app": "a", "web": "b", "postgres": "c"}
+    image_ids = {"app": "a", "web": "b", "postgres": "c", "proxy": "d"}
     manifest_digests = {
         "app": "1" * 64,
         "web": "2" * 64,
         "postgres": "dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b",
+        "proxy": "3" * 64,
     }
-    for role in ("app", "web", "postgres"):
+    for role in ("app", "web", "postgres", "proxy"):
         digest = "sha256:" + manifest_digests[role]
         image_id = "sha256:" + image_ids[role] * 64
-        reference = (
-            "postgres@sha256:dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b"
-            if role == "postgres"
-            else f"my-pa-{role}@{digest}"
-        )
+        if role == "postgres":
+            reference = (
+                "postgres@sha256:dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b"
+            )
+        elif role == "proxy":
+            reference = f"caddy@{digest}"
+        else:
+            reference = f"my-pa-{role}@{digest}"
         image_sections.append(
             f'[images.{role}]\nreference = "{reference}"\n'
             f'load_reference = "{image_id}"\noci_manifest_digest = "{digest}"\n'

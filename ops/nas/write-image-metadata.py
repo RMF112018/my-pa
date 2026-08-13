@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from nas_tools import docker
+
 
 def main() -> int:
     if len(sys.argv) != 3:
@@ -15,7 +17,7 @@ def main() -> int:
         return 64
     reference, output = sys.argv[1], Path(sys.argv[2])
     result = subprocess.run(  # noqa: S603 - operator-supplied exact reference
-        ["/usr/bin/env", "docker", "image", "inspect", reference],
+        [docker(), "image", "inspect", reference],
         check=True,
         capture_output=True,
         text=True,

@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
+from nas_tools import docker
+
 SERVICES = ("postgres", "gateway", "worker-enrollment", "worker-capture", "web", "proxy")
 NETWORKS = {
     "postgres": {"data-plane"},
@@ -299,7 +301,7 @@ def verify(
     ):
         return ["web_env_file"]
     try:
-        engine = _json_object(runner(["docker", "info", "--format", "{{json .}}"]))
+        engine = _json_object(runner([docker(), "info", "--format", "{{json .}}"]))
         version = _json_object(runner(["tailscale", "version", "--json"]))
         policy_raw = runner(["nft", "--json", "list", "table", "inet", "my_pa_egress"])
         policy = _json_object(policy_raw)
@@ -307,7 +309,7 @@ def verify(
         compose_model = _json_object(
             runner(
                 [
-                    "docker",
+                    docker(),
                     "compose",
                     "--project-name",
                     data["compose_project"],
@@ -395,7 +397,7 @@ def verify(
         try:
             compose_id = runner(
                 [
-                    "docker",
+                    docker(),
                     "compose",
                     "--project-name",
                     data["compose_project"],
@@ -408,7 +410,7 @@ def verify(
                     name,
                 ]
             ).strip()
-            inspected = json.loads(runner(["docker", "inspect", identity["container_id"]]))
+            inspected = json.loads(runner([docker(), "inspect", identity["container_id"]]))
             if (
                 not isinstance(inspected, list)
                 or len(inspected) != 1
@@ -537,7 +539,7 @@ def verify(
     try:
         internal = {
             name: _json_single_object(
-                runner(["docker", "network", "inspect", f"{data['compose_project']}_{name}"])
+                runner([docker(), "network", "inspect", f"{data['compose_project']}_{name}"])
             )
             for name in ("data-plane", "ingress-plane", "entra-egress")
         }

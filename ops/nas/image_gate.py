@@ -13,7 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-SERVICES = {"app", "web", "postgres"}
+from nas_tools import docker
+
+SERVICES = {"app", "web", "postgres", "proxy"}
 POSTGRES_REFERENCE = (
     "postgres@sha256:dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b"
 )
@@ -125,6 +127,8 @@ def _shape_errors(data: dict[str, Any]) -> list[str]:
             errors.append(f"{name}_identity_conflation")
         if name == "postgres" and reference != POSTGRES_REFERENCE:
             errors.append("postgres_official_child_reference")
+        if name == "proxy" and "@sha256:" not in reference:
+            errors.append("proxy_reference_digest")
     identities = [
         str(value.get("docker_image_id", ""))
         for value in images.values()
@@ -153,7 +157,7 @@ def verify(path: Path, archive_dir: Path | None = None, *, live: bool = False) -
         errors.append("archive_dir_required")
 
     try:
-        info = _run_json(["docker", "info", "--format", "{{json .}}"])
+        info = _run_json([docker(), "info", "--format", "{{json .}}"])
         if not isinstance(info, dict):
             raise TypeError
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
@@ -181,7 +185,7 @@ def verify(path: Path, archive_dir: Path | None = None, *, live: bool = False) -
             continue
         image_id = str(value.get("docker_image_id", ""))
         try:
-            inspected = _run_json(["docker", "image", "inspect", image_id])
+            inspected = _run_json([docker(), "image", "inspect", image_id])
             if not isinstance(inspected, list) or not inspected:
                 raise TypeError
             image = inspected[0]
@@ -195,7 +199,7 @@ def verify(path: Path, archive_dir: Path | None = None, *, live: bool = False) -
         if image.get("Id") != value.get("docker_image_id"):
             errors.append(f"{name}_loaded_image_id")
         labels = (image.get("Config") or {}).get("Labels") or {}
-        if name != "postgres" and any(
+        if name not in {"postgres", "proxy"} and any(
             labels.get(key) != expected for key, expected in expected_labels.items()
         ):
             errors.append(f"{name}_provenance_labels")

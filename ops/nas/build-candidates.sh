@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 1 ]; then
-  echo "usage: $0 OUTPUT_DIRECTORY" >&2
+if [ "$#" -ne 2 ]; then
+  echo "usage: $0 OUTPUT_DIRECTORY EXACT_PROXY_REFERENCE" >&2
   exit 64
 fi
 
@@ -13,12 +13,24 @@ if [ -n "$(git -C "$repo_root" status --porcelain --untracked-files=all)" ]; the
 fi
 
 output_dir=$1
+proxy_reference=$2
+printf '%s\n' "$proxy_reference" | grep -Eq '^.+@sha256:[0-9a-f]{64}$' || {
+  echo "proxy reference must carry an exact sha256 digest" >&2
+  exit 1
+}
 mkdir -p "$output_dir"
 output_dir=$(CDPATH= cd -- "$output_dir" && pwd)
 commit=$(git -C "$repo_root" rev-parse HEAD)
 tree=$(git -C "$repo_root" rev-parse HEAD^{tree})
 built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-lock_sha=$(shasum -a 256 "$repo_root/ops/docker/python-runtime.lock" | awk '{print $1}')
+if command -v sha256sum >/dev/null 2>&1; then
+  lock_sha=$(sha256sum "$repo_root/ops/docker/python-runtime.lock" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  lock_sha=$(shasum -a 256 "$repo_root/ops/docker/python-runtime.lock" | awk '{print $1}')
+else
+  echo "candidate build requires sha256sum or shasum" >&2
+  exit 1
+fi
 build_context=$(mktemp -d "${TMPDIR:-/tmp}/my-pa-nas-build.XXXXXX")
 trap 'rm -rf "$build_context"' EXIT HUP INT TERM
 git -C "$repo_root" archive "$commit" | tar -x -C "$build_context"
@@ -58,6 +70,11 @@ docker save --output "$output_dir/postgres.tar" "$postgres_reference"
 python3 "$build_context/ops/nas/write-image-metadata.py" \
   "$postgres_reference" "$output_dir/postgres.metadata.json"
 
+docker pull --platform linux/amd64 "$proxy_reference"
+docker save --output "$output_dir/proxy.tar" "$proxy_reference"
+python3 "$build_context/ops/nas/write-image-metadata.py" \
+  "$proxy_reference" "$output_dir/proxy.metadata.json"
+
 python3 "$build_context/ops/nas/write-candidate-manifest.py" \
-  "$output_dir" "$commit" "$tree" "$built_at" "$lock_sha"
+  "$output_dir" "$commit" "$tree" "$built_at" "$lock_sha" "$proxy_reference"
 echo "candidate archives and manifest created; they remain non-deployable until the live NAS gate passes"

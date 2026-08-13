@@ -52,6 +52,9 @@ services:
       - {type: bind, source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, read_only: true}
       - {type: bind, source: "${MY_PA_NAS_ROOT:?}/managed-documents", target: /srv/my-pa/managed-documents}
       - {type: bind, source: "${MY_PA_NAS_ROOT:?}/sources", target: /srv/my-pa/sources, read_only: true}
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks: [data-plane, ingress-plane, entra-egress]
 
   worker-enrollment:
@@ -67,6 +70,9 @@ services:
     volumes:
       - {type: bind, source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, read_only: true}
       - {type: bind, source: "${MY_PA_NAS_ROOT:?}/sources", target: /srv/my-pa/sources, read_only: true}
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks: [data-plane]
 
   worker-capture:
@@ -81,6 +87,9 @@ services:
     env_file: ["${MY_PA_NAS_ENV_FILE:?}"]
     volumes:
       - {type: bind, source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, read_only: true}
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks: [data-plane]
 
   web:
@@ -125,6 +134,7 @@ services:
 
 networks:
   data-plane:
+    name: my-pa-nas-contract_data-plane
     internal: true
   ingress-plane:
     internal: true

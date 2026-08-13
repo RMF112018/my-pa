@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
-import json
 import stat
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+
+from lifecycle_gate import _yaml
+from nas_tools import docker
 
 CANONICAL_COMPOSE = Path("/etc/my-pa/compose.yml")
 PROJECT = "my-pa-nas-contract"
@@ -20,21 +21,6 @@ SERVICES = {
     "web",
     "proxy",
 }
-
-
-def _yaml(path: Path) -> dict[str, Any] | None:
-    program = "print JSON.generate(YAML.safe_load(STDIN.read, aliases: false))"
-    result = subprocess.run(  # noqa: S603 - fixed system executable/program
-        ["/usr/bin/ruby", "-rjson", "-ryaml", "-e", program],
-        input=path.read_text(encoding="utf-8"),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode:
-        return None
-    value = json.loads(result.stdout)
-    return value if isinstance(value, dict) else None
 
 
 def _run(command: list[str]) -> str:
@@ -61,18 +47,26 @@ def stop(
         ):
             return ["canonical_compose_metadata"]
         compose = _yaml(compose_path)
-    except (OSError, ValueError, json.JSONDecodeError):
+        compose_name = next(
+            (
+                line.partition(":")[2].strip()
+                for line in compose_path.read_text(encoding="utf-8").splitlines()
+                if line.startswith("name:")
+            ),
+            None,
+        )
+    except (OSError, ValueError):
         return ["canonical_compose_unreadable"]
     services = None if compose is None else compose.get("services")
     if (
         compose is None
-        or compose.get("name") != PROJECT
+        or compose_name != PROJECT
         or not isinstance(services, dict)
         or set(services) != SERVICES
     ):
         return ["canonical_compose_identity"]
     command = [
-        "docker",
+        docker(),
         "compose",
         "--project-name",
         PROJECT,

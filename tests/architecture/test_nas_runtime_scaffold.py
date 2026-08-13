@@ -516,6 +516,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "environment",
             "expose",
             "volumes",
+            "depends_on",
             "networks",
         },
         "worker-enrollment": {
@@ -529,6 +530,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "command",
             "env_file",
             "volumes",
+            "depends_on",
             "networks",
         },
         "worker-capture": {
@@ -542,6 +544,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "command",
             "env_file",
             "volumes",
+            "depends_on",
             "networks",
         },
         "web": {
@@ -604,6 +607,13 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             errors.add("service_identity")
         if service.get("expose") != expected_expose[name]:
             errors.add("internal_port_contract")
+        expected_dependency = (
+            {"postgres": {"condition": "service_healthy"}}
+            if name in {"gateway", "worker-enrollment", "worker-capture"}
+            else None
+        )
+        if service.get("depends_on") != expected_dependency:
+            errors.add("service_contract")
         if "build" in service:
             errors.add("implicit_build")
         expected_ports = (
@@ -690,7 +700,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     ):
         errors.add("network_planes")
     if compose_model.get("networks") != {
-        "data-plane": {"internal": True},
+        "data-plane": {"name": "my-pa-nas-contract_data-plane", "internal": True},
         "ingress-plane": {"internal": True},
         "entra-egress": {"internal": False},
     }:
@@ -722,7 +732,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         or "networks: [data-plane, ingress-plane, entra-egress]" not in blocks["gateway"]
         or "networks: [ingress-plane, entra-egress]" not in blocks["web"]
         or "networks: [data-plane]" not in blocks["postgres"]
-        or "data-plane:\n    internal: true" not in compose
+        or "data-plane:\n    name: my-pa-nas-contract_data-plane\n    internal: true" not in compose
         or "ingress-plane:\n    internal: true" not in compose
         or "entra-egress:\n    internal: false" not in compose
     ):
@@ -990,8 +1000,9 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/compose.example.yml",
-            "data-plane:\n    internal: true",
-            "data-plane:\n    internal: true\n  data-plane:\n    internal: false",
+            "data-plane:\n    name: my-pa-nas-contract_data-plane\n    internal: true",
+            "data-plane:\n    name: my-pa-nas-contract_data-plane\n    internal: true\n"
+            "  data-plane:\n    internal: false",
             "compose_parse",
         ),
         (
@@ -1191,10 +1202,12 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         (
             "ops/nas/compose.example.yml",
             'source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, '
-            "read_only: true}\n    networks: [data-plane]\n\n  web:",
+            "read_only: true}\n    depends_on:\n      postgres:\n"
+            "        condition: service_healthy\n    networks: [data-plane]\n\n  web:",
             'source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, read_only: true}\n'
             '      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/sources", '
-            "target: /srv/my-pa/sources, read_only: true}\n"
+            "target: /srv/my-pa/sources, read_only: true}\n    depends_on:\n"
+            "      postgres:\n        condition: service_healthy\n"
             "    networks: [data-plane]\n\n  web:",
             "mount_ownership",
         ),

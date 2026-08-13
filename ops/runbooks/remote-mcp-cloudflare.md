@@ -85,6 +85,13 @@ docker compose --env-file /volume1/my-pa/config/remote-compose.env \
   -f ops/nas/remote/compose.yml --profile remote-edge config --quiet
 ```
 
+`MY_PA_DATA_NETWORK` must be exactly
+`my-pa-nas-contract_data-plane`. Never use `postgresql_default`, the local-only
+`ops/compose/postgres.yml`, or an independently created PostgreSQL container.
+The network must already be internal and owned by Compose project
+`my-pa-nas-contract`; its admitted `postgres` service must be running healthy
+on the exact image recorded by the verified PostgreSQL resource artifact.
+
 Inspect the rendered model: it must contain no `ports`, no database service,
 no Docker socket, and only `/mcp`, `/healthz`, and OAuth protected-resource
 metadata, followed by the 404 catch-all. `/readyz` is intentionally not an
@@ -113,7 +120,8 @@ python ops/nas/remote/live-gate.py \
   --edge-container my-pa-remote-mcp-cloudflared-1 \
   --app-image "$MY_PA_APP_IMAGE_ID" \
   --edge-image "$MY_PA_CLOUDFLARED_IMAGE" \
-  --data-network "$MY_PA_DATA_NETWORK"
+  --data-network "$MY_PA_DATA_NETWORK" \
+  --postgres-resources /etc/my-pa/postgres-resources.toml
 docker compose --env-file /volume1/my-pa/config/remote-compose.env \
   -f ops/nas/remote/compose.yml exec my-pa-mcp-remote \
   python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').status)"

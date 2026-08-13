@@ -35,3 +35,11 @@ oci_manifest_digest = "sha256:REQUIRED"
 docker_image_id = "sha256:REQUIRED_DISTINCT_CONFIG_ID"
 archive_sha256 = "REQUIRED_64_HEX"
 build_metadata_sha256 = "REQUIRED_64_HEX"
+
+[images.proxy]
+reference = "caddy@sha256:REQUIRED"
+load_reference = "sha256:REQUIRED"
+oci_manifest_digest = "sha256:REQUIRED"
+docker_image_id = "sha256:REQUIRED"
+archive_sha256 = "REQUIRED_64_HEX"
+build_metadata_sha256 = "REQUIRED_64_HEX"

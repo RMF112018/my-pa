@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
+import tomllib
 from collections.abc import Mapping
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 APP_COMMAND = [
@@ -28,6 +30,19 @@ EDGE_COMMAND = [
     "run",
 ]
 PROJECT = "my-pa-remote-mcp"
+CANONICAL_DATA_NETWORK = "my-pa-nas-contract_data-plane"
+
+
+def docker() -> str:
+    configured = os.environ.get("MY_PA_NAS_DOCKER", "docker")
+    if configured.startswith("/"):
+        if os.access(configured, os.X_OK):
+            return configured
+        raise RuntimeError("configured Docker executable is unavailable")
+    resolved = shutil.which(configured)
+    if resolved is None:
+        raise RuntimeError("Docker executable is unavailable")
+    return configured
 
 
 def violations(
@@ -38,6 +53,8 @@ def violations(
     edge_image: str,
     data_network: str,
     networks: Mapping[str, Mapping[str, Any]],
+    postgres_resources: Mapping[str, Any],
+    postgres: Mapping[str, Any],
 ) -> list[str]:
     errors: list[str] = []
     for name, state, expected in (("app", app, app_image), ("edge", edge, edge_image)):
@@ -142,15 +159,37 @@ def violations(
             errors.append("missing_network_identity")
         elif internal is not None and network_state.get("Internal") is not internal:
             errors.append(f"network_internalness:{network}")
+    if data_network != CANONICAL_DATA_NETWORK:
+        errors.append("noncanonical_data_network")
+    data_state = networks.get(data_network, {})
+    data_labels = data_state.get("Labels") or {}
+    if (
+        data_state.get("Name") != CANONICAL_DATA_NETWORK
+        or data_state.get("Internal") is not True
+        or data_labels.get("com.docker.compose.project") != "my-pa-nas-contract"
+        or data_labels.get("com.docker.compose.network") != "data-plane"
+        or postgres.get("Id") not in (data_state.get("Containers") or {})
+    ):
+        errors.append("canonical_data_network_identity")
+    postgres_labels = (postgres.get("Config") or {}).get("Labels") or {}
+    if (
+        postgres_resources.get("status") != "verified"
+        or postgres_resources.get("data_network") != CANONICAL_DATA_NETWORK
+        or postgres.get("Id") != postgres_resources.get("postgres_container_id")
+        or postgres.get("Image") != postgres_resources.get("postgres_image_id")
+        or postgres.get("State", {}).get("Status") != "running"
+        or postgres.get("State", {}).get("Health", {}).get("Status") != "healthy"
+        or postgres_labels.get("com.docker.compose.project") != "my-pa-nas-contract"
+        or postgres_labels.get("com.docker.compose.service") != "postgres"
+        or set(postgres.get("NetworkSettings", {}).get("Networks", {})) != {CANONICAL_DATA_NETWORK}
+    ):
+        errors.append("canonical_postgres_identity")
     return errors
 
 
 def _inspect(name: str) -> Mapping[str, Any]:
-    docker = shutil.which("docker")
-    if docker is None:
-        raise RuntimeError("docker executable not found")
     result = subprocess.run(  # noqa: S603 - fixed Docker executable and argument vector
-        [docker, "inspect", name],
+        [docker(), "inspect", name],
         check=True,
         capture_output=True,
         text=True,
@@ -172,6 +211,7 @@ def main() -> int:
     parser.add_argument("--app-image", required=True)
     parser.add_argument("--edge-image", required=True)
     parser.add_argument("--data-network", required=True)
+    parser.add_argument("--postgres-resources", required=True)
     args = parser.parse_args()
     network_names = (
         args.data_network,
@@ -179,6 +219,12 @@ def main() -> int:
         f"{PROJECT}_identity-egress",
         f"{PROJECT}_cloudflare-egress",
     )
+    try:
+        resources = tomllib.loads(Path(args.postgres_resources).read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        print("remote live gate refused: postgres_resources_unreadable")
+        return 1
+    postgres_id = str(resources.get("postgres_container_id", ""))
     errors = violations(
         _inspect(args.app_container),
         _inspect(args.edge_container),
@@ -186,6 +232,8 @@ def main() -> int:
         edge_image=args.edge_image,
         data_network=args.data_network,
         networks={name: _inspect_network(name) for name in network_names},
+        postgres_resources=resources,
+        postgres=_inspect(postgres_id),
     )
     if errors:
         print("remote live gate refused: " + ", ".join(sorted(set(errors))))

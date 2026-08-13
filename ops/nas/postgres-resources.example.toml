@@ -2,12 +2,14 @@ schema = "my-pa.nas-postgres-resources.v1"
 status = "unmeasured_not_deployable"
 docker_engine_id = "REQUIRED_LIVE_NAS_DOCKER_ENGINE_ID"
 postgres_container_id = "REQUIRED_LIVE_POSTGRES_CONTAINER_ID"
+postgres_image_id = "sha256:REQUIRED"
+data_network = "my-pa-nas-contract_data-plane"
 measured_at = "REQUIRED_RFC3339_UTC"
 logical_cpus = 0
 memory_bytes = 0
-available_storage_bytes = 0
+minimum_available_storage_bytes = 0
 filesystem_type = "REQUIRED_LOCAL_FILESYSTEM_TYPE"
 postgres_data_path = "REQUIRED_CANONICAL_NAS_PATH"
 
 [tuning]
-status = "awaiting_live_measurement"
+status = "no_numeric_tuning"

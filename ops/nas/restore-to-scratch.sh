@@ -1,15 +1,15 @@
 #!/bin/sh
 set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$script_dir/tooling-common.sh"
 [ "$#" -eq 2 ] && [ -f "$1" ] && [ ! -L "$1" ] || { echo "usage: $0 REGULAR_CUSTOM_DUMP my_pa_scratch_NAME" >&2; exit 64; }
 dump=$1
 scratch=$2
-: "${MY_PA_EXPECTED_ALEMBIC_HEAD:?expected Alembic head required}"
 : "${MY_PA_SCRATCH_DATABASE_URL:?secret scratch database URL required for application health}"
 printf '%s\n' "$scratch" | grep -Eq '^my_pa_scratch_[A-Za-z0-9_]+$' || {
   echo "refusing non-scratch name" >&2; exit 1;
 }
-python3 - "$MY_PA_SCRATCH_DATABASE_URL" "$scratch" <<'PY'
+"$NAS_PYTHON_BIN" - "$MY_PA_SCRATCH_DATABASE_URL" "$scratch" <<'PY'
 import sys
 from urllib.parse import urlsplit
 url = urlsplit(sys.argv[1])
@@ -19,9 +19,8 @@ PY
 . "$script_dir/postgres-common.sh"
 nas_compose run --rm --no-deps -e MY_PA_DATABASE_URL="$MY_PA_SCRATCH_DATABASE_URL" \
   gateway python -c 'from my_pa.bootstrap.settings import load_settings; load_settings()'
-printf '%s\n' "$MY_PA_EXPECTED_ALEMBIC_HEAD" | grep -Eq '^[0-9a-f]{12}$' || { echo "invalid expected Alembic head" >&2; exit 1; }
 heads=$(nas_compose run --rm --no-deps gateway python -m alembic heads | awk '{print $1}')
-[ "$heads" = "$MY_PA_EXPECTED_ALEMBIC_HEAD" ] || { echo "repository Alembic head mismatch" >&2; exit 1; }
+printf '%s\n' "$heads" | grep -Eq '^[0-9a-f]{12}$' || { echo "repository Alembic head mismatch" >&2; exit 1; }
 dump_dir=$(CDPATH= cd -- "$(dirname -- "$dump")" && pwd)
 dump="$dump_dir/$(basename "$dump")"
 umask 077
@@ -31,8 +30,8 @@ cleanup_stage() { rm -f "$staged"; rmdir "$staged_dir"; }
 trap cleanup_stage EXIT HUP INT TERM
 cp -p "$dump" "$staged"
 chmod 0600 "$staged"
-source_sha=$(shasum -a 256 "$dump" | awk '{print $1}')
-staged_sha=$(shasum -a 256 "$staged" | awk '{print $1}')
+source_sha=$(sha256_file "$dump")
+staged_sha=$(sha256_file "$staged")
 [ "$source_sha" = "$staged_sha" ] || { echo "dump changed while staging" >&2; exit 1; }
 pg_exec pg_restore --list < "$staged" >/dev/null
 if pg_exec psql -U my_pa -d postgres -tAc \
@@ -47,7 +46,7 @@ if ! pg_exec pg_restore -U my_pa -d "$scratch" \
 fi
 revision=$(pg_exec psql -U my_pa -d "$scratch" -tAc \
   'SELECT version_num FROM alembic_version')
-[ "$revision" = "$MY_PA_EXPECTED_ALEMBIC_HEAD" ] || { echo "scratch revision mismatch" >&2; exit 1; }
+[ "$revision" = "$heads" ] || { echo "scratch revision mismatch" >&2; exit 1; }
 extensions=$(pg_exec psql -U my_pa -d "$scratch" -tAc \
   "SELECT string_agg(extname, ',' ORDER BY extname) FROM pg_extension WHERE extname IN ('pg_trgm','plpgsql','unaccent')")
 [ "$extensions" = "pg_trgm,plpgsql,unaccent" ] || { echo "scratch extensions mismatch" >&2; exit 1; }

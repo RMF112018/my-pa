@@ -15,6 +15,8 @@ from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 
+from nas_tools import docker
+
 SERVICES = {
     "postgres",
     "gateway",
@@ -141,12 +143,13 @@ def verify(
             "worker-enrollment": manifest_images.get("app", {}).get("docker_image_id"),
             "worker-capture": manifest_images.get("app", {}).get("docker_image_id"),
             "web": manifest_images.get("web", {}).get("docker_image_id"),
+            "proxy": manifest_images.get("proxy", {}).get("docker_image_id"),
         }
         if any(admitted_ids.get(name) != value for name, value in expected.items()):
             errors.append("runtime_manifest_role_binding")
     try:
         base = [
-            "docker",
+            docker(),
             "compose",
             "--file",
             str(compose_path),
@@ -158,7 +161,7 @@ def verify(
         rendered = json.loads(rendered_text)
         configured_images = runner([*base, "config", "--images"]).splitlines()
         hash_lines = runner([*base, "config", "--hash", "*"]).splitlines()
-        docker_info = json.loads(runner(["docker", "info", "--format", "{{json .}}"]))
+        docker_info = json.loads(runner([docker(), "info", "--format", "{{json .}}"]))
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
         return [*errors, "runtime_render_unreadable"]
     canonical_render = json.dumps(rendered, sort_keys=True, separators=(",", ":")).encode()
@@ -197,7 +200,7 @@ def verify(
     for name in sorted(SERVICES):
         try:
             container_id = runner([*base, "ps", "-q", name]).strip()
-            inspected = json.loads(runner(["docker", "inspect", container_id]))[0]
+            inspected = json.loads(runner([docker(), "inspect", container_id]))[0]
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError, IndexError, TypeError):
             errors.append(f"{name}_running_identity")
             continue

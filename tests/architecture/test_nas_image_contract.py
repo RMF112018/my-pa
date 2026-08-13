@@ -34,12 +34,12 @@ def test_dockerfiles_are_platform_inputs_without_implicit_start_builds() -> None
     assert "USER 10001:10001" in app
     assert "USER 10001:10001" in web
     assert "--no-build --pull never" in start
-    assert 'python3 "$script_dir/image_gate.py"' in start
+    assert '"$NAS_PYTHON_BIN" "$script_dir/image_gate.py"' in start
     assert '. "$script_dir/lifecycle-common.sh"' in start
     assert "docker build" not in start and "buildx" not in start
 
 
-def test_candidate_build_is_exact_platform_and_load_remains_disabled() -> None:
+def test_candidate_build_and_load_are_exact_platform_and_admitted() -> None:
     build = (ROOT / "ops/nas/build-candidates.sh").read_text()
     load = (ROOT / "ops/nas/load-candidates.sh").read_text()
     assert "status --porcelain --untracked-files=all" in build
@@ -47,8 +47,9 @@ def test_candidate_build_is_exact_platform_and_load_remains_disabled() -> None:
     assert "--platform linux/amd64" in build
     assert "--metadata-file" in build
     assert "type=docker,dest=$archive" in build
-    assert "exit 1" in load
-    assert "docker load" not in load
+    assert 'nas_docker load --input "$archive_dir/$name.tar"' in load
+    assert "admit-image-manifest.py" in load
+    assert "image_gate.py" in load
 
 
 def test_candidate_manifest_is_not_deployable() -> None:
@@ -83,7 +84,7 @@ def test_synthetic_manifest_can_never_pass_without_live_evidence(tmp_path: Path)
         f'python_runtime_lock_sha256 = "{"c" * 64}"\n'
         'postgres_source_tag = "postgres:17.10"\n'
         f'postgres_index_digest = "{gate.POSTGRES_INDEX_DIGEST}"\n'
-        + "".join(f"\n[images.{name}]\n{image}" for name in ("app", "web", "postgres"))
+        + "".join(f"\n[images.{name}]\n{image}" for name in ("app", "web", "postgres", "proxy"))
     )
     assert "live_verification_required" in gate.verify(manifest)
 
@@ -109,9 +110,9 @@ def test_digest_identity_conflation_is_rejected(tmp_path: Path) -> None:
         f'python_runtime_lock_sha256 = "{"c" * 64}"\n'
         'postgres_source_tag = "postgres:17.10"\n'
         f'postgres_index_digest = "{gate.POSTGRES_INDEX_DIGEST}"\n'
-        + "".join(f"\n[images.{name}]\n{image}" for name in ("app", "web", "postgres"))
+        + "".join(f"\n[images.{name}]\n{image}" for name in ("app", "web", "postgres", "proxy"))
     )
-    assert {f"{name}_identity_conflation" for name in ("app", "web", "postgres")} <= set(
+    assert {f"{name}_identity_conflation" for name in ("app", "web", "postgres", "proxy")} <= set(
         gate.verify(manifest)
     )
 
@@ -131,7 +132,7 @@ def test_live_gate_checks_engine_archives_metadata_and_loaded_images(
     }
     sections: list[str] = []
     inspected: dict[str, dict[str, object]] = {}
-    for index, name in enumerate(("app", "web", "postgres"), start=1):
+    for index, name in enumerate(("app", "web", "postgres", "proxy"), start=1):
         digest = (
             gate.POSTGRES_REFERENCE.rpartition("@")[2]
             if name == "postgres"

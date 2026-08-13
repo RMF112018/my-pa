@@ -22,23 +22,29 @@ def _sha256(path: Path) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) != 6:
+    if len(sys.argv) != 7:
         print(
-            "usage: write-candidate-manifest.py DIRECTORY COMMIT TREE BUILT_AT LOCK_SHA",
+            "usage: write-candidate-manifest.py DIRECTORY COMMIT TREE BUILT_AT "
+            "LOCK_SHA PROXY_REFERENCE",
             file=sys.stderr,
         )
         return 64
     directory = Path(sys.argv[1])
-    commit, tree, built_at, lock_sha = sys.argv[2:]
+    commit, tree, built_at, lock_sha, proxy_reference = sys.argv[2:]
     sections: list[str] = []
-    for name in ("app", "web", "postgres"):
+    for name in ("app", "web", "postgres", "proxy"):
         metadata_path = directory / f"{name}.metadata.json"
         archive_path = directory / f"{name}.tar"
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         digest = metadata["containerimage.digest"]
         image_id = metadata["containerimage.config.digest"]
         load_reference = image_id
-        reference = POSTGRES_REFERENCE if name == "postgres" else f"my-pa-{name}@{digest}"
+        if name == "postgres":
+            reference = POSTGRES_REFERENCE
+        elif name == "proxy":
+            reference = proxy_reference
+        else:
+            reference = f"my-pa-{name}@{digest}"
         sections.append(
             f"""
 [images.{name}]

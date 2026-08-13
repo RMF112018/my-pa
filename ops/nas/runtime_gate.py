@@ -11,6 +11,8 @@ import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
+from nas_tools import docker
+
 SERVICES = {"gateway", "worker_enrollment", "worker_capture", "web"}
 MOUNTS = {
     "gateway": {
@@ -161,7 +163,7 @@ def verify(
     if errors:
         return errors
     try:
-        engine = json.loads(runner(["docker", "info", "--format", "{{json .}}"]))
+        engine = json.loads(runner([docker(), "info", "--format", "{{json .}}"]))
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
         return [*errors, "docker_info"]
     if engine.get("ID") != engine_identity:
@@ -171,7 +173,7 @@ def verify(
         try:
             compose_id = runner(
                 [
-                    "docker",
+                    docker(),
                     "compose",
                     "--file",
                     str(compose_file),
@@ -184,7 +186,7 @@ def verify(
             ).strip()
             if compose_id != expected["container_id"]:
                 errors.append(f"{name}_compose_identity")
-            inspected = json.loads(runner(["docker", "inspect", expected["container_id"]]))[0]
+            inspected = json.loads(runner([docker(), "inspect", expected["container_id"]]))[0]
         except (KeyError, IndexError, TypeError, json.JSONDecodeError, subprocess.SubprocessError):
             errors.append(f"{name}_inspect")
             continue
@@ -254,7 +256,7 @@ def verify(
             try:
                 rebound_id = runner(
                     [
-                        "docker",
+                        docker(),
                         "compose",
                         "--file",
                         str(compose_file),
@@ -272,7 +274,7 @@ def verify(
                 errors.append(f"{service_name}_permission_identity")
                 return False
             try:
-                output = runner(["docker", "exec", "-i", pinned_id, "sh", "-eu", "-c", script])
+                output = runner([docker(), "exec", "-i", pinned_id, "sh", "-eu", "-c", script])
             except (OSError, subprocess.SubprocessError):
                 errors.append(f"{service_name}_permission_probe")
                 return False

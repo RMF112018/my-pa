@@ -85,7 +85,7 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
         image="app@sha256:exact",
         networks=(
             "my-pa-remote-mcp_mcp-origin",
-            "private-data",
+            "my-pa-nas-contract_data-plane",
             "my-pa-remote-mcp_identity-egress",
         ),
         mounts=[
@@ -118,7 +118,15 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
         ],
     )
     network_states = {
-        "private-data": {"Internal": False},
+        "my-pa-nas-contract_data-plane": {
+            "Name": "my-pa-nas-contract_data-plane",
+            "Internal": True,
+            "Labels": {
+                "com.docker.compose.project": "my-pa-nas-contract",
+                "com.docker.compose.network": "data-plane",
+            },
+            "Containers": {"postgres-id": {}},
+        },
         "my-pa-remote-mcp_mcp-origin": {"Internal": True},
         "my-pa-remote-mcp_identity-egress": {"Internal": False},
         "my-pa-remote-mcp_cloudflare-egress": {"Internal": False},
@@ -129,11 +137,79 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
             edge,
             app_image="app@sha256:exact",
             edge_image="edge@sha256:exact",
-            data_network="private-data",
+            data_network="my-pa-nas-contract_data-plane",
             networks=network_states,
+            postgres_resources={
+                "status": "verified",
+                "data_network": "my-pa-nas-contract_data-plane",
+                "postgres_container_id": "postgres-id",
+                "postgres_image_id": "sha256:postgres",
+            },
+            postgres={
+                "Id": "postgres-id",
+                "Image": "sha256:postgres",
+                "Config": {
+                    "Labels": {
+                        "com.docker.compose.project": "my-pa-nas-contract",
+                        "com.docker.compose.service": "postgres",
+                    }
+                },
+                "State": {"Status": "running", "Health": {"Status": "healthy"}},
+                "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
+            },
         )
         == []
     )
+    assert "noncanonical_data_network" in gate.violations(
+        app,
+        edge,
+        app_image="app@sha256:exact",
+        edge_image="edge@sha256:exact",
+        data_network="postgresql_default",
+        networks=network_states,
+        postgres_resources={},
+        postgres={},
+    )
+    network_states["my-pa-nas-contract_data-plane"]["Internal"] = False
+    assert "canonical_data_network_identity" in gate.violations(
+        app,
+        edge,
+        app_image="app@sha256:exact",
+        edge_image="edge@sha256:exact",
+        data_network="my-pa-nas-contract_data-plane",
+        networks=network_states,
+        postgres_resources={},
+        postgres={},
+    )
+    network_states["my-pa-nas-contract_data-plane"]["Internal"] = True
+    network_states["my-pa-nas-contract_data-plane"]["Containers"] = {}
+    assert "canonical_data_network_identity" in gate.violations(
+        app,
+        edge,
+        app_image="app@sha256:exact",
+        edge_image="edge@sha256:exact",
+        data_network="my-pa-nas-contract_data-plane",
+        networks=network_states,
+        postgres_resources={
+            "status": "verified",
+            "data_network": "my-pa-nas-contract_data-plane",
+            "postgres_container_id": "postgres-id",
+            "postgres_image_id": "sha256:postgres",
+        },
+        postgres={
+            "Id": "postgres-id",
+            "Image": "sha256:postgres",
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "my-pa-nas-contract",
+                    "com.docker.compose.service": "postgres",
+                }
+            },
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
+        },
+    )
+    network_states["my-pa-nas-contract_data-plane"]["Containers"] = {"postgres-id": {}}
     app["HostConfig"]["PortBindings"] = {
         "8766/tcp": [{"HostIp": "0.0.0.0"}]  # noqa: S104 - deliberately invalid fixture
     }
@@ -144,7 +220,25 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
             edge,
             app_image="app@sha256:exact",
             edge_image="edge@sha256:exact",
-            data_network="private-data",
+            data_network="my-pa-nas-contract_data-plane",
             networks=network_states,
+            postgres_resources={
+                "status": "verified",
+                "data_network": "my-pa-nas-contract_data-plane",
+                "postgres_container_id": "postgres-id",
+                "postgres_image_id": "sha256:postgres",
+            },
+            postgres={
+                "Id": "postgres-id",
+                "Image": "sha256:postgres",
+                "Config": {
+                    "Labels": {
+                        "com.docker.compose.project": "my-pa-nas-contract",
+                        "com.docker.compose.service": "postgres",
+                    }
+                },
+                "State": {"Status": "running", "Health": {"Status": "healthy"}},
+                "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
+            },
         )
     ) == {"origin_host_port", "source_mount_not_read_only"}

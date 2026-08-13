@@ -53,6 +53,15 @@ requires a recent backup receipt. Backups are custom-format, integrity-listed,
 owner-only artifacts outside the repository. Restore accepts only a new
 `my_pa_scratch_*` database and retains a failed scratch target for diagnosis.
 
+NAS-04/05 add the validated `container` gateway bind mode and the
+[`runtime-services.example.toml`](runtime-services.example.toml) identity
+contract. [`runtime_gate.py`](runtime_gate.py) binds each app container to its
+exact Compose service, loaded image, dedicated non-root UID/GID, networks,
+mounts, and absence of host publication or privilege. Its live permission pass
+requires reads through allowed roots, refuses writes to config/source roots,
+and performs a create/sync/rename/delete probe only in the gateway's managed
+root. The checked-in example refuses until live NAS IDs and ACLs are provisioned.
+
 Later packages own executable behavior:
 
 - NAS-02 images supply app/web Dockerfiles and the

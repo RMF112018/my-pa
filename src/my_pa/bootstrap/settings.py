@@ -69,6 +69,7 @@ __all__ = [
     "MAX_FETCH_BYTES_CEILING",
     "AuthMode",
     "Environment",
+    "GatewayBindMode",
     "LogLevel",
     "Settings",
     "SettingsError",
@@ -128,6 +129,13 @@ class AuthMode(StrEnum):
 
     LOCAL_OPERATOR = "local_operator"
     ENTRA = "entra"
+
+
+class GatewayBindMode(StrEnum):
+    """Where the gateway listens: local host or explicitly inside a container."""
+
+    LOOPBACK = "loopback"
+    CONTAINER = "container"
 
 
 class LogLevel(StrEnum):
@@ -303,6 +311,7 @@ class Settings(StrictModel):
     #: where an operator reads it. Authenticating an external MCP client requires
     #: an ingress that does not exist (EXT-07/EXT-08).
     mcp_client_id: str = ""
+    gateway_bind_mode: GatewayBindMode = GatewayBindMode.LOOPBACK
     remote_ingress_enabled: bool = False
     redaction_enabled: bool = True
     contract_strict_mode: bool = True
@@ -329,6 +338,14 @@ class Settings(StrictModel):
     #: `load_settings`, which raises outside its `except` block; see the module
     #: docstring and the tests.
     database_url: str = Field(repr=False)
+
+    def gateway_bind_host(self) -> str:
+        """Return the only address admitted for the selected deployment boundary."""
+        return (
+            "0.0.0.0"  # noqa: S104 - container namespace only; no host publication
+            if self.gateway_bind_mode is GatewayBindMode.CONTAINER
+            else "127.0.0.1"
+        )
 
     #: The single parse of `database_url`, produced by validation and handed on
     #: unchanged. Private because it is not configuration an operator supplies

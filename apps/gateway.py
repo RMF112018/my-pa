@@ -17,9 +17,11 @@ serves HTTP on a loopback socket; `mcp` serves the Model Context Protocol on
 standard input and output (`D-26`) and opens nothing. A third file would have
 been a third place for the composition to drift.
 
-**Loopback, and nothing else** (`D-30`). The host is a constant rather than a
-flag. There is no option to bind elsewhere, because a flag that can be set wrong
-is the mechanism by which a service reaches a network nobody authorized.
+**Loopback by default; container namespace by explicit deployment mode**
+(`D-30`, `D-NAS-01`). There is still no host CLI flag. The validated setting
+defaults to loopback and admits only one alternative: `container`, which binds
+inside the container so the web and proxy services can reach the gateway.
+The NAS Compose publishes no gateway port and uses no host networking.
 
 That sentence used to continue "no credential is issued, read, or required, and
 there is no TLS or ingress path to configure", and two thirds of that stopped
@@ -27,8 +29,8 @@ being true and are corrected here rather than left standing. WP-05 made a bearer
 token required in `entra` mode; WP-10 adds an authenticated remote capture
 ingress, off by default. **The part that has not changed is the part that
 matters**: the host is still a constant, so both credentials are read on a socket
-bound to `127.0.0.1` and this process still reaches no network. There is still no
-TLS option and no bind option, and there will not be one here — terminating TLS
+bound inside the selected namespace. There is still no TLS option or arbitrary
+address option — terminating TLS
 and publishing the ingress is a deployment act, reserved to the operator under
 `AGENTS.md` section 8.2, and a flag in this file would be this file performing
 it. Turning `MY_PA_REMOTE_INGRESS_ENABLED` on makes the ingress answer on
@@ -80,7 +82,8 @@ from my_pa.adapters.mcp.server import SERVER_NAME
 from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.settings import load_settings
 
-#: The only address this process binds. See the module docstring; `D-30`.
+#: The safe default address. Container binding is a validated deployment mode,
+#: not a CLI host argument, and Compose publishes no gateway host port.
 HOST: Final = "127.0.0.1"
 
 #: An unassigned high port, changeable with `--port`. Nothing depends on the
@@ -125,6 +128,7 @@ _SOURCE_PROVIDER_NOTICE = (
 
 def _run(args: argparse.Namespace) -> int:
     settings = load_settings()
+    host = settings.gateway_bind_host()
     runtime = build_gateway_runtime(settings)
     application = (
         create_http_app(
@@ -138,7 +142,7 @@ def _run(args: argparse.Namespace) -> int:
     server = uvicorn.Server(
         uvicorn.Config(
             application,
-            host=HOST,
+            host=host,
             port=args.port,
             # No logging configuration, no access log: see the module docstring.
             log_config=None,
@@ -149,7 +153,7 @@ def _run(args: argparse.Namespace) -> int:
             timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
         )
     )
-    print(f"serving     http://{HOST}:{args.port}/v1/<capability>")
+    print(f"serving     http://{host}:{args.port}/v1/<capability>")
     print(
         f"remote      {REMOTE_CAPTURE_PATH} "
         + (

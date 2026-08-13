@@ -189,6 +189,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "networks": ["data-plane", "edge-plane"],
             "container_bind": "0.0.0.0:8765",
             "bind_implementation_owned_by": "NAS-04",
+            "bind_mode": "validated_container_only",
         },
         "worker_enrollment": {
             "host": "nas",
@@ -426,7 +427,10 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "POSTGRES_PASSWORD": "${MY_PA_DB_PASSWORD:?database password required}",
             "POSTGRES_INITDB_ARGS": "--data-checksums --locale=C.UTF-8 --encoding=UTF8",
         },
-        "gateway": {"MY_PA_GATEWAY_BIND_HOST": "0.0.0.0"},  # noqa: S104
+        "gateway": {
+            "MY_PA_GATEWAY_BIND_MODE": "container",
+            "MY_PA_MANAGED_DOCUMENT_ROOT": "/srv/my-pa/managed-documents",
+        },
         "worker-enrollment": None,
         "worker-capture": None,
         "web": {
@@ -481,6 +485,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "platform",
             "user",
             "restart",
+            "cap_drop",
+            "security_opt",
             "command",
             "environment",
             "env_file",
@@ -494,6 +500,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "platform",
             "user",
             "restart",
+            "cap_drop",
+            "security_opt",
             "command",
             "env_file",
             "volumes",
@@ -505,6 +513,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "platform",
             "user",
             "restart",
+            "cap_drop",
+            "security_opt",
             "command",
             "env_file",
             "volumes",
@@ -516,6 +526,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "platform",
             "user",
             "restart",
+            "cap_drop",
+            "security_opt",
             "command",
             "environment",
             "expose",
@@ -534,6 +546,11 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             errors.add("missing_platform")
         if service.get("restart") != "no":
             errors.add("restart_policy")
+        if name in {"gateway", "worker-enrollment", "worker-capture", "web"} and (
+            service.get("cap_drop") != ["ALL"]
+            or service.get("security_opt") != ["no-new-privileges:true"]
+        ):
+            errors.add("service_privilege")
         if service.get("image") != expected_images[name]:
             errors.add("exact_image_digest")
         if service.get("profiles") != ["nas-01-contract-only"]:
@@ -662,7 +679,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     if "MYPA_GATEWAY_URL: http://gateway:8765" not in blocks["web"]:
         errors.add("web_gateway_contract")
     if (
-        "MY_PA_GATEWAY_BIND_HOST: 0.0.0.0" not in blocks["gateway"]
+        "MY_PA_GATEWAY_BIND_MODE: container" not in blocks["gateway"]
         or "networks: [data-plane, edge-plane]" not in blocks["gateway"]
         or "networks: [edge-plane]" not in blocks["web"]
         or "networks: [data-plane]" not in blocks["postgres"]
@@ -843,7 +860,7 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         (
             "ops/nas/compose.example.yml",
             '    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]\n',
-            "    environment:\n      MY_PA_GATEWAY_BIND_HOST: 127.0.0.1\n"
+            "    environment:\n      MY_PA_GATEWAY_BIND_MODE: loopback\n"
             '    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]\n',
             "compose_parse",
         ),

@@ -1,0 +1,30 @@
+schema = "my-pa.nas-runtime-services.v1"
+status = "unverified_not_deployable"
+docker_engine_id = "REQUIRED_LIVE_NAS_DOCKER_ENGINE_ID"
+uid = 0
+gid = 0
+
+[paths]
+config = "REQUIRED_CANONICAL_NAS_CONFIG_PATH"
+sources = "REQUIRED_CANONICAL_NAS_SOURCES_PATH"
+goodnotes = "REQUIRED_CANONICAL_NAS_GOODNOTES_PATH"
+managed_documents = "REQUIRED_CANONICAL_NAS_MANAGED_PATH"
+
+[filesystem_types]
+config = "REQUIRED_MEASURED_LOCAL_FILESYSTEM"
+sources = "REQUIRED_MEASURED_LOCAL_FILESYSTEM"
+goodnotes = "REQUIRED_MEASURED_LOCAL_FILESYSTEM"
+managed_documents = "REQUIRED_MEASURED_LOCAL_FILESYSTEM"
+
+[services.gateway]
+container_id = "REQUIRED"
+image_id = "sha256:REQUIRED"
+[services.worker_enrollment]
+container_id = "REQUIRED"
+image_id = "sha256:REQUIRED"
+[services.worker_capture]
+container_id = "REQUIRED"
+image_id = "sha256:REQUIRED"
+[services.web]
+container_id = "REQUIRED"
+image_id = "sha256:REQUIRED"

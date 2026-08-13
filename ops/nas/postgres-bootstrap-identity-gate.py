@@ -133,7 +133,9 @@ def verify(
         "docker_engine_name": engine.get("Name"),
         "image_manifest_sha256": _sha256(manifest_bytes),
         "compose_sha256": _file_sha256(compose),
-        "resolved_postgres_sha256": _sha256(generator.canonical_render(rendered)),
+        "resolved_postgres_sha256": _sha256(
+            generator.canonical_render(generator.binding_render(rendered))
+        ),
         "postgres_image_id": postgres_image_id,
         "database_operator_image_id": app_image_id,
         "project_name": generator.PROJECT,

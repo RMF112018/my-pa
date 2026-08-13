@@ -23,11 +23,13 @@ container_id=$(nas_postgres_compose ps -a -q postgres)
 "$NAS_PYTHON_BIN" "$script_dir/postgres_gate.py" "$3" --live --container-id "$container_id"
 
 cleanup() {
-  nas_postgres_compose stop --timeout 60 postgres >/dev/null 2>&1 || true
+  if [ "${cleanup_needed:-false}" = true ]; then
+    nas_postgres_compose stop --timeout 60 postgres >/dev/null 2>&1 || true
+  fi
 }
-trap cleanup HUP INT TERM
+cleanup_needed=true
+trap cleanup EXIT HUP INT TERM
 if ! nas_postgres_compose start postgres; then
-  cleanup
   echo "canonical PostgreSQL start failed" >&2
   exit 1
 fi
@@ -35,13 +37,14 @@ attempt=0
 while [ "$attempt" -lt 30 ]; do
   health=$(nas_docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container_id")
   [ "$health" = healthy ] && break
-  [ "$health" = unhealthy ] && { cleanup; echo "PostgreSQL became unhealthy" >&2; exit 1; }
+  [ "$health" = unhealthy ] && { echo "PostgreSQL became unhealthy" >&2; exit 1; }
   attempt=$((attempt + 1))
   sleep 2
 done
-[ "${health:-missing}" = healthy ] || { cleanup; echo "PostgreSQL health timeout" >&2; exit 1; }
+[ "${health:-missing}" = healthy ] || { echo "PostgreSQL health timeout" >&2; exit 1; }
 "$NAS_PYTHON_BIN" "$script_dir/postgres_gate.py" "$3" --live --container-id "$container_id"
 nas_docker exec -i "$container_id" sh -eu -c \
   'pg_isready -U my_pa -d my_pa >/dev/null && postgres --version | grep -Eq "PostgreSQL[)]? 17[.]10([[:space:]]|$)"'
-trap - HUP INT TERM
+cleanup_needed=false
+trap - EXIT HUP INT TERM
 echo "canonical PostgreSQL bootstrap running temporarily; migration remains explicit"

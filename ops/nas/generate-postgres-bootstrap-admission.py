@@ -10,7 +10,7 @@ import os
 import subprocess
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from nas_tools import docker
 
@@ -42,6 +42,7 @@ SENTINEL_MARKERS = {
     "https://invalid.example",
     "https://invalid.example/callback",
 }
+SECRET_MARKER = "<redacted-runtime-secret>"  # noqa: S105 - deliberately non-secret
 
 
 def _sha256(value: bytes) -> str:
@@ -95,6 +96,20 @@ def render_postgres(compose: Path) -> dict[str, Any]:
 
 def canonical_render(rendered: dict[str, Any]) -> bytes:
     return json.dumps(rendered, sort_keys=True, separators=(",", ":")).encode()
+
+
+def binding_render(rendered: dict[str, Any]) -> dict[str, Any]:
+    """Return the structural render used for admission without a secret verifier."""
+    redacted = json.loads(json.dumps(rendered))
+    try:
+        environment = redacted["services"][SERVICE]["environment"]
+        password = environment["POSTGRES_PASSWORD"]
+    except (KeyError, TypeError):
+        raise ValueError("postgres_password_missing") from None
+    if not isinstance(password, str) or not password:
+        raise ValueError("postgres_password_missing")
+    environment["POSTGRES_PASSWORD"] = SECRET_MARKER
+    return cast(dict[str, Any], redacted)
 
 
 def render_errors(rendered: dict[str, Any], *, image_id: str, root: str) -> list[str]:
@@ -207,7 +222,7 @@ def generate(compose: Path, manifest_path: Path, output: Path) -> list[str]:
         "docker_engine_name": engine.get("Name"),
         "image_manifest_sha256": _sha256(manifest_bytes),
         "compose_sha256": _file_sha256(compose),
-        "resolved_postgres_sha256": _sha256(canonical_render(rendered)),
+        "resolved_postgres_sha256": _sha256(canonical_render(binding_render(rendered))),
         "postgres_image_id": postgres_image_id,
         "database_operator_image_id": app_image_id,
         "project_name": PROJECT,

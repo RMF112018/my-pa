@@ -28,23 +28,56 @@ def _tools(tmp_path: Path) -> tuple[Path, Path]:
     log = tmp_path / "calls"
     python = tools / "python3"
     python.write_text(
-        f"#!/bin/sh\nprintf 'python %s\\n' \"$*\" >> {log}\nexit 0\n",
+        "#!/bin/sh\n"
+        f"printf 'python %s\\n' \"$*\" >> {log}\n"
+        f"gate_count={tmp_path / 'gate-count'}\n"
+        'case "$*" in\n'
+        "  *postgres_gate.py*)\n"
+        '    count=$(cat "$gate_count" 2>/dev/null || echo 0)\n'
+        "    count=$((count + 1))\n"
+        '    echo "$count" > "$gate_count"\n'
+        '    [ "${MY_TEST_MODE:-}" = fail_second_gate ] && '
+        '[ "$count" -eq 2 ] && exit 1;;\n'
+        "  *generate-postgres-resources.py*)\n"
+        '    [ "${MY_TEST_MODE:-}" = fail_resources ] && exit 1;;\n'
+        "esac\n"
+        "exit 0\n",
         encoding="utf-8",
     )
+    container_id = "a" * 64
     docker = tools / "docker"
     docker.write_text(
         "#!/bin/sh\n"
         f"printf 'docker %s\\n' \"$*\" >> {log}\n"
         'case " $* " in\n'
         "  *' compose '*' ps -a -q postgres '*) "
-        f"[ -f {tmp_path / 'created'} ] && echo postgres-id; exit 0;;\n"
+        f"[ -f {tmp_path / 'created'} ] && echo {container_id}; exit 0;;\n"
         "  *' compose '*' create postgres '*) "
         f"touch {tmp_path / 'created'}; exit 0;;\n"
+        "  *' compose '*' rm --force --stop postgres '*) "
+        f"rm -f {tmp_path / 'created'}; exit 0;;\n"
         "  *' compose '*' config '*) exit 0;;\n"
         "  *' compose '*' start postgres '*) exit 0;;\n"
-        "  *' inspect --format {{.State.Running}} postgres-id '*) echo false; exit 0;;\n"
-        "  *' inspect --format '*'State.Health'*' postgres-id '*) echo healthy; exit 0;;\n"
-        "  *' exec -i postgres-id sh -eu -c '*) exit 0;;\n"
+        "  *' compose '*' stop --timeout 60 postgres '*) exit 0;;\n"
+        f"  *' inspect --format {{{{.State.Running}}}} {container_id} '*) echo false; exit 0;;\n"
+        f"  *' inspect --format '*'State.Health'*' {container_id} '*) echo healthy; exit 0;;\n"
+        f"  *' inspect --format '*'com.docker.compose.project'*' {container_id} '*) "
+        "echo my-pa-nas-contract; exit 0;;\n"
+        f"  *' inspect --format '*'com.docker.compose.service'*' {container_id} '*) "
+        "echo postgres; exit 0;;\n"
+        f"  *' inspect --format {{{{.Image}}}} {container_id} '*) "
+        f"echo sha256:{'1' * 64}; exit 0;;\n"
+        "  *' network inspect --format '*'com.docker.compose.project'*' "
+        "my-pa-nas-contract_data-plane '*) echo my-pa-nas-contract; exit 0;;\n"
+        "  *' network inspect --format '*'com.docker.compose.network'*' "
+        "my-pa-nas-contract_data-plane '*) echo data-plane; exit 0;;\n"
+        "  *' network inspect --format {{.Internal}} "
+        "my-pa-nas-contract_data-plane '*) echo true; exit 0;;\n"
+        "  *' network inspect --format {{len .Containers}} "
+        "my-pa-nas-contract_data-plane '*) echo 0; exit 0;;\n"
+        "  *' network rm my-pa-nas-contract_data-plane '*) exit 0;;\n"
+        f"  *' exec -i {container_id} sh -eu -c '*) "
+        '[ "${MY_TEST_MODE:-}" = fail_version ] && exit 1; exit 0;;\n'
         "esac\n"
         "exit 0\n",
         encoding="utf-8",
@@ -89,7 +122,7 @@ def test_prepare_creates_and_captures_without_starting(tmp_path: Path) -> None:
     calls = log.read_text(encoding="utf-8")
     assert "create postgres" in calls
     assert "ps -a -q postgres" in calls
-    assert "generate-postgres-resources.py --container-id postgres-id" in calls
+    assert f"generate-postgres-resources.py --container-id {'a' * 64}" in calls
     assert "start postgres" not in calls and "up postgres" not in calls
 
 
@@ -116,6 +149,76 @@ def test_start_revalidates_before_start_and_checks_health(tmp_path: Path) -> Non
     health = calls.index("State.Health")
     assert first_gate < start < health
     assert "alembic upgrade" not in calls
+
+
+def test_start_stops_postgres_when_post_health_gate_fails(tmp_path: Path) -> None:
+    tools, log = _tools(tmp_path)
+    (tmp_path / "created").touch()
+    environment = _environment(tmp_path, tools)
+    environment["MY_TEST_MODE"] = "fail_second_gate"
+    result = subprocess.run(  # noqa: S603 - checked-in wrapper with synthetic tools
+        [
+            str(ROOT / "ops/nas/postgres-bootstrap-start.sh"),
+            str(tmp_path / "manifest"),
+            str(tmp_path),
+            str(tmp_path / "resources.toml"),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "stop --timeout 60 postgres" in log.read_text(encoding="utf-8")
+
+
+def test_start_stops_postgres_when_version_check_fails(tmp_path: Path) -> None:
+    tools, log = _tools(tmp_path)
+    (tmp_path / "created").touch()
+    environment = _environment(tmp_path, tools)
+    environment["MY_TEST_MODE"] = "fail_version"
+    result = subprocess.run(  # noqa: S603 - checked-in wrapper with synthetic tools
+        [
+            str(ROOT / "ops/nas/postgres-bootstrap-start.sh"),
+            str(tmp_path / "manifest"),
+            str(tmp_path),
+            str(tmp_path / "resources.toml"),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "stop --timeout 60 postgres" in log.read_text(encoding="utf-8")
+
+
+def test_prepare_cleans_exact_partial_identity_on_resource_failure(tmp_path: Path) -> None:
+    tools, log = _tools(tmp_path)
+    (tmp_path / "nas/postgres/data").mkdir(parents=True)
+    environment = _environment(tmp_path, tools)
+    environment["MY_TEST_MODE"] = "fail_resources"
+    result = subprocess.run(  # noqa: S603 - checked-in wrapper with synthetic tools
+        [
+            str(ROOT / "ops/nas/postgres-bootstrap-prepare.sh"),
+            str(tmp_path / "manifest"),
+            str(tmp_path),
+            str(tmp_path / "resources.toml"),
+            "1",
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    calls = log.read_text(encoding="utf-8")
+    assert "rm --force --stop postgres" in calls
+    assert "network rm my-pa-nas-contract_data-plane" in calls
+    assert not (tmp_path / "created").exists()
 
 
 def test_bootstrap_contract_prohibits_ad_hoc_targets_and_orders_services() -> None:
@@ -262,6 +365,17 @@ def test_bootstrap_admission_contains_no_database_password(
     assert "synthetic-db-secret" not in output.read_text(encoding="utf-8")
     assert output.stat().st_mode & 0o777 == 0o400
 
+    first_binding = tomllib.loads(output.read_text(encoding="utf-8"))["resolved_postgres_sha256"]
+    monkeypatch.setenv("MY_PA_DB_PASSWORD", "different-synthetic-secret")
+    alternate_secret = os.environ["MY_PA_DB_PASSWORD"]
+    rendered["services"]["postgres"]["environment"]["POSTGRES_PASSWORD"] = alternate_secret
+    second_output = tmp_path / "second-bootstrap-admission.toml"
+    assert generator.generate(ROOT / "ops/nas/compose.example.yml", manifest, second_output) == []
+    second_binding = tomllib.loads(second_output.read_text(encoding="utf-8"))[
+        "resolved_postgres_sha256"
+    ]
+    assert first_binding == second_binding
+
 
 def test_database_operations_use_hardened_exact_image_operator() -> None:
     common = (ROOT / "ops/nas/postgres-common.sh").read_text(encoding="utf-8")
@@ -302,6 +416,7 @@ def test_bootstrap_identity_gate_recomputes_every_binding(
         render_postgres=lambda _compose: rendered,
         render_errors=lambda _rendered, **_kwargs: [],
         canonical_render=lambda value: json.dumps(value, sort_keys=True).encode(),
+        binding_render=lambda value: value,
     )
     monkeypatch.setattr(gate, "_generator", lambda: fake_generator)
 

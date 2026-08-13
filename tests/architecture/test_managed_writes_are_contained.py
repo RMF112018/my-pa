@@ -133,6 +133,10 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
         "writes only engine-bound runtime identity evidence to an explicit, new "
         "owner-only operator path; it never reads or writes personal or managed bytes."
     ),
+    "ops/nas/generate-postgres-bootstrap-admission.py": (
+        "writes only engine-bound PostgreSQL bootstrap identity evidence to an explicit, new "
+        "root-controlled operator path; it contains no database password or personal bytes."
+    ),
     "ops/nas/run_synthetic_acceptance.py": (
         "writes only synthetic pytest receipt digests into an explicit fresh evidence "
         "directory; it neither reads nor records personal or managed-document bytes."

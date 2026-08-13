@@ -52,13 +52,17 @@ zero running containers. The stop phase does not reparse or interpolate Compose.
 It does not require the deployment environment, Python, the operator admission,
 or the operator image, so loss of auxiliary state cannot prevent shutdown.
 
-The invoking identity
-must already have bounded Docker authority; tooling never prompts for or
-changes that authority. Before rendering admission, the owner-only application
-and web environment files must contain operator-provisioned non-placeholder
-values, and the ordinary Compose variables (service IDs, exact paths, private
-origin, proxy identity/port, and image references) must be exported. Do not
-enter secrets at a command prompt or place them in the repository.
+The invoking identity must already have bounded Docker authority; tooling never
+prompts for or changes that authority. PostgreSQL bootstrap has a distinct
+root-owned mode-0400 admission because database provisioning must not require
+external Entra or web credentials. It selects only the canonical `postgres`
+service from the canonical six-service Compose file and proves that fixed
+parser-only sentinel values cannot reach that service or its internal network.
+Those sentinels never authorize or start another service. Before rendering the
+ordinary six-service runtime admission, the owner-only application and web
+environment files must contain operator-provisioned non-placeholder values,
+and every ordinary Compose variable must be exported. Do not enter secrets at
+a command prompt or place them in the repository.
 
 Execute the following phases in order from a clean checkout of the exact image
 manifest commit. Paths shown below are the canonical production paths; artifact
@@ -77,23 +81,23 @@ mkdir -p /volume1/my-pa/postgres/data
 chmod 0700 /volume1/my-pa/postgres/data
 ```
 
-2. Load and admit the four exact linux/amd64 images, then generate the
-   root-owned runtime admission. This phase requires all Compose interpolation
-   values, including `MY_PA_POSTGRES_IMAGE_ID`, `MY_PA_APP_IMAGE_ID`,
-   `MY_PA_WEB_IMAGE_ID`, and the digest-pinned proxy reference, to agree with
-   the deployable image manifest:
+2. Load and admit the four exact linux/amd64 images. Generate the separate
+   root-owned PostgreSQL bootstrap admission with only the real PostgreSQL
+   image ID, database password, and canonical NAS root in the environment:
 
 ```sh
 ops/nas/load-candidates.sh CANDIDATE_MANIFEST ARCHIVE_DIRECTORY DEPLOYABLE_MANIFEST
-"$MY_PA_NAS_PYTHON" ops/nas/generate-runtime-admission.py \
-  ops/nas/compose.example.yml ops/nas/compose.pilot.example.yml \
-  DEPLOYABLE_MANIFEST /etc/my-pa/runtime-admission.toml
+"$MY_PA_NAS_PYTHON" ops/nas/generate-postgres-bootstrap-admission.py \
+  ops/nas/compose.example.yml DEPLOYABLE_MANIFEST \
+  /etc/my-pa/postgres-bootstrap-admission.toml
 ```
 
 `load-candidates.sh` verifies all four archives before loading app, web,
 PostgreSQL, and proxy, then binds exact loaded config IDs to the live engine.
-Runtime admission binds both canonical Compose renders and all six service
-image identities.
+The bootstrap admission binds the canonical source file, selected PostgreSQL
+render, internal network, exact loaded image, repository, and live engine. It
+contains no database password. Application/web env files and external identity
+values are neither read nor required.
 
 3. Select and record a positive operator-reviewed byte floor below current
    available btrfs space. Prepare creates only the canonical PostgreSQL
@@ -134,14 +138,18 @@ ops/nas/migrate.sh
 Migration derives the repository's single Alembic head at execution time; no
 revision is copied into deployment state.
 
-6. Take a post-migration backup, restore it into a new scratch database, and
-   only then enter the ordinary six-service lifecycle:
+6. Take a post-migration backup and restore it into a new scratch database.
+   Before entering the ordinary six-service lifecycle, provision every real
+   application/web value and generate the ordinary runtime admission:
 
 ```sh
 post_receipt=$(ops/nas/backup.sh EXISTING_OWNER_ONLY_BACKUP_DIRECTORY)
 ops/nas/verify-backup-receipt.sh "$post_receipt"
 export MY_PA_SCRATCH_DATABASE_URL=postgresql+psycopg://my_pa@postgres:5432/my_pa_scratch_BOOTSTRAP
 ops/nas/restore-to-scratch.sh "${post_receipt%.sha256}" my_pa_scratch_BOOTSTRAP
+"$MY_PA_NAS_PYTHON" ops/nas/generate-runtime-admission.py \
+  ops/nas/compose.example.yml ops/nas/compose.pilot.example.yml \
+  DEPLOYABLE_MANIFEST /etc/my-pa/runtime-admission.toml
 ops/nas/start.sh DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY
 ops/nas/health.sh
 ```

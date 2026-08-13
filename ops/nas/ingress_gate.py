@@ -116,18 +116,12 @@ def _dns_answer(raw: str, host: str, record_type: str) -> tuple[set[str], list[s
 
 
 def _dns_evidence_matches(
-    answers: list[
-        tuple[tuple[set[str], list[str]], tuple[set[str], list[str]]]
-    ],
+    answers: list[tuple[tuple[set[str], list[str]], tuple[set[str], list[str]]]],
     evidence: dict[str, Any],
 ) -> tuple[bool, set[str]]:
     ipv4 = set().union(*(answer[0][0] for answer in answers))
     ipv6 = set().union(*(answer[1][0] for answer in answers))
-    chains = {
-        tuple(result[1])
-        for answer in answers
-        for result in answer
-    }
+    chains = {tuple(result[1]) for answer in answers for result in answer}
     matches = (
         chains == {tuple(evidence["cname_chain"])}
         and sorted(ipv4) == sorted(evidence["ipv4"])

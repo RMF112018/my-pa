@@ -251,9 +251,7 @@ def test_gate_uses_real_serve_shape_and_binds_all_compose_services(tmp_path: Pat
         if command[0] == "dig":
             cname = "login.microsoftonline.com. 300 IN CNAME login.example.edge.\n"
             return (
-                cname + "login.example.edge. 300 IN A 20.190.128.1\n"
-                if "A" in command
-                else cname
+                cname + "login.example.edge. 300 IN A 20.190.128.1\n" if "A" in command else cname
             )
         if command[0:3] == ["docker", "network", "inspect"]:
             return json.dumps(

@@ -62,6 +62,14 @@ requires reads through allowed roots, refuses writes to config/source roots,
 and performs a create/sync/rename/delete probe only in the gateway's managed
 root. The checked-in example refuses until live NAS IDs and ACLs are provisioned.
 
+NAS-06 separates the internal `ingress-plane` from the gateway/web-only
+`entra-egress` plane, hardens the exact Caddy route allowlist, and requires a
+server-only canonical HTTPS origin. [`ingress_gate.py`](ingress_gate.py) is
+read-only: it binds verified proxy, loopback publication, config hash, private
+Tailscale Serve mapping, disabled Funnel, and installed Entra egress evidence.
+The checked-in ingress manifest refuses. Enabling Serve or changing a firewall
+remains an explicit operator action and has no script in this package.
+
 Later packages own executable behavior:
 
 - NAS-02 images supply app/web Dockerfiles and the

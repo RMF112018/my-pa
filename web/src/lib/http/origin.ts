@@ -13,7 +13,8 @@
  *   between the initiator and the target. `same-origin` and `none` (a user
  *   typing the URL, or a bookmark) are accepted; `same-site` and `cross-site`
  *   are not — `same-site` covers a sibling subdomain, which is not this origin.
- * * `Origin` is compared to the request's own origin when the browser sent one.
+ * * `Origin` is compared to the configured canonical origin. Host and forwarding
+ *   headers, and therefore `request.url`, never establish this trust boundary.
  *
  * A request carrying neither is refused. That is the fail-closed direction and
  * it costs nothing real: every browser that can run this application sends
@@ -23,6 +24,8 @@
  */
 
 /** `true` when this request is safe to treat as same-origin. */
+import { canonicalOrigin } from "@/lib/http/canonical-origin";
+
 export function isSameOrigin(request: Request): boolean {
   const fetchSite = request.headers.get("sec-fetch-site");
   if (fetchSite !== null && fetchSite !== "same-origin" && fetchSite !== "none") return false;
@@ -30,7 +33,9 @@ export function isSameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (origin !== null) {
     try {
-      return new URL(origin).origin === new URL(request.url).origin;
+      const trustedOrigin =
+        process.env.NODE_ENV === "production" ? canonicalOrigin() : new URL(request.url).origin;
+      return new URL(origin).origin === trustedOrigin;
     } catch {
       return false;
     }

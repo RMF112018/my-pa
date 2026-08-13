@@ -152,8 +152,10 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     if (
         network.get("data_network") != "data-plane"
         or network.get("data_network_internal") is not True
-        or network.get("edge_network") != "edge-plane"
-        or network.get("edge_network_egress") != "firewall_allowlisted_entra_only"
+        or network.get("ingress_network") != "ingress-plane"
+        or network.get("ingress_network_internal") is not True
+        or network.get("egress_network") != "entra-egress"
+        or network.get("egress_network_policy") != "firewall_allowlisted_entra_only"
         or network.get("egress_services") != ["gateway", "web"]
     ):
         errors.add("network_planes")
@@ -186,7 +188,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "host": "nas",
             "database_credential": True,
             "mounts": ["config_ro", "managed_documents_rw", "sources_ro"],
-            "networks": ["data-plane", "edge-plane"],
+            "networks": ["data-plane", "ingress-plane", "entra-egress"],
             "container_bind": "0.0.0.0:8765",
             "bind_implementation_owned_by": "NAS-04",
             "bind_mode": "validated_container_only",
@@ -207,13 +209,13 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "host": "nas",
             "database_credential": False,
             "mounts": [],
-            "networks": ["edge-plane"],
+            "networks": ["ingress-plane", "entra-egress"],
         },
         "proxy": {
             "host": "nas",
             "database_credential": False,
             "mounts": ["proxy_config_ro"],
-            "networks": ["edge-plane"],
+            "networks": ["ingress-plane"],
         },
         "apple_source_host": {
             "host": "mac",
@@ -237,8 +239,10 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "network": {
             "data_network": "data-plane",
             "data_network_internal": True,
-            "edge_network": "edge-plane",
-            "edge_network_egress": "firewall_allowlisted_entra_only",
+            "ingress_network": "ingress-plane",
+            "ingress_network_internal": True,
+            "egress_network": "entra-egress",
+            "egress_network_policy": "firewall_allowlisted_entra_only",
             "egress_services": ["gateway", "web"],
             "only_host_published_service": "proxy",
             "postgres_published": False,
@@ -313,11 +317,11 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("mount_ownership")
     expected_networks = {
         "postgres": ["data-plane"],
-        "gateway": ["data-plane", "edge-plane"],
+        "gateway": ["data-plane", "ingress-plane", "entra-egress"],
         "worker_enrollment": ["data-plane"],
         "worker_capture": ["data-plane"],
-        "web": ["edge-plane"],
-        "proxy": ["edge-plane"],
+        "web": ["ingress-plane", "entra-egress"],
+        "proxy": ["ingress-plane"],
     }
     if any(
         services.get(name, {}).get("networks") != networks
@@ -417,7 +421,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "gateway": ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"],
         "worker-enrollment": ["${MY_PA_NAS_ENV_FILE:?}"],
         "worker-capture": ["${MY_PA_NAS_ENV_FILE:?}"],
-        "web": None,
+        "web": ["${MY_PA_WEB_ENV_FILE:?owner-only web env file required}"],
         "proxy": None,
     }
     expected_environments = {
@@ -430,16 +434,26 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "gateway": {
             "MY_PA_GATEWAY_BIND_MODE": "container",
             "MY_PA_MANAGED_DOCUMENT_ROOT": "/srv/my-pa/managed-documents",
+            "MY_PA_AUTH_MODE": "entra",
+            "MY_PA_REMOTE_INGRESS_ENABLED": "true",
         },
         "worker-enrollment": None,
         "worker-capture": None,
         "web": {
             "NODE_ENV": "production",
+            "MYPA_AUTH_MODE": "entra",
             "MYPA_GATEWAY_URL": "http://gateway:8765",
             "MYPA_GATEWAY_AUTH_MODE": "entra",
-            "MYPA_SESSION_SECRET": "${MYPA_SESSION_SECRET:?session secret required}",
+            "MYPA_CANONICAL_ORIGIN": (
+                "${MYPA_CANONICAL_ORIGIN:?exact private HTTPS origin required}"
+            ),
+            "MYPA_ENTRA_REDIRECT_URI": "${MYPA_ENTRA_REDIRECT_URI:?exact callback required}",
         },
-        "proxy": None,
+        "proxy": {
+            "MY_PA_TAILNET_HOST": (
+                "${MY_PA_TAILNET_HOST:?exact verified tailnet hostname required}"
+            )
+        },
     }
     expected_commands = {
         "postgres": None,
@@ -457,7 +471,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "worker-enrollment": service_user,
         "worker-capture": service_user,
         "web": service_user,
-        "proxy": None,
+        "proxy": "${MY_PA_PROXY_UID:?verified proxy uid required}:"
+        "${MY_PA_PROXY_GID:?verified proxy gid required}",
     }
     expected_expose = {
         "postgres": None,
@@ -488,8 +503,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "cap_drop",
             "security_opt",
             "command",
-            "environment",
             "env_file",
+            "environment",
             "expose",
             "volumes",
             "networks",
@@ -529,11 +544,26 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "cap_drop",
             "security_opt",
             "command",
+            "env_file",
             "environment",
             "expose",
             "networks",
         },
-        "proxy": {"profiles", "image", "platform", "restart", "ports", "volumes", "networks"},
+        "proxy": {
+            "profiles",
+            "image",
+            "platform",
+            "user",
+            "restart",
+            "cap_drop",
+            "security_opt",
+            "read_only",
+            "environment",
+            "ports",
+            "volumes",
+            "tmpfs",
+            "networks",
+        },
     }
     for name in SERVICES:
         service = compose_services.get(name, {})
@@ -634,11 +664,11 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("mount_ownership")
     expected_compose_networks = {
         "postgres": {"data-plane"},
-        "gateway": {"data-plane", "edge-plane"},
+        "gateway": {"data-plane", "ingress-plane", "entra-egress"},
         "worker-enrollment": {"data-plane"},
         "worker-capture": {"data-plane"},
-        "web": {"edge-plane"},
-        "proxy": {"edge-plane"},
+        "web": {"ingress-plane", "entra-egress"},
+        "proxy": {"ingress-plane"},
     }
     actual_compose_networks = {
         name: set(compose_services.get(name, {}).get("networks", []))
@@ -653,7 +683,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("network_planes")
     if compose_model.get("networks") != {
         "data-plane": {"internal": True},
-        "edge-plane": {"internal": False},
+        "ingress-plane": {"internal": True},
+        "entra-egress": {"internal": False},
     }:
         errors.add("network_planes")
     if any(not block or "    platform: linux/amd64" not in block for block in blocks.values()):
@@ -680,11 +711,12 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("web_gateway_contract")
     if (
         "MY_PA_GATEWAY_BIND_MODE: container" not in blocks["gateway"]
-        or "networks: [data-plane, edge-plane]" not in blocks["gateway"]
-        or "networks: [edge-plane]" not in blocks["web"]
+        or "networks: [data-plane, ingress-plane, entra-egress]" not in blocks["gateway"]
+        or "networks: [ingress-plane, entra-egress]" not in blocks["web"]
         or "networks: [data-plane]" not in blocks["postgres"]
         or "data-plane:\n    internal: true" not in compose
-        or "edge-plane:\n    internal: false" not in compose
+        or "ingress-plane:\n    internal: true" not in compose
+        or "entra-egress:\n    internal: false" not in compose
     ):
         errors.add("network_planes")
     if "managed-documents" in compose.replace(blocks["gateway"], ""):
@@ -722,12 +754,27 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("browser_route")
     allowed_proxy = """
 :8080 {
+    @hostile_host not host {$MY_PA_TAILNET_HOST}
+    handle @hostile_host {
+        respond "not found" 404
+    }
     @remote_capture {
         method POST
         path /remote/v1/capture.create
     }
     handle @remote_capture {
-        reverse_proxy gateway:8765
+        reverse_proxy gateway:8765 {
+            header_up -Cookie
+            header_up -Forwarded
+            header_up -X-Forwarded-For
+            header_up -X-Forwarded-Host
+            header_up -X-Forwarded-Proto
+            header_up -X-Forwarded-*
+            header_up -Tailscale-User-Login
+            header_up -Tailscale-User-Name
+            header_up -Tailscale-User-Profile-Pic
+            header_up -Tailscale-App-Capabilities
+        }
     }
     @remote_capture_wrong_method path /remote/v1/capture.create
     handle @remote_capture_wrong_method {
@@ -746,7 +793,18 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         respond "not found" 404
     }
     handle {
-        reverse_proxy web:3000
+        reverse_proxy web:3000 {
+            header_up -Authorization
+            header_up -Forwarded
+            header_up -X-Forwarded-For
+            header_up -X-Forwarded-Host
+            header_up -X-Forwarded-Proto
+            header_up -X-Forwarded-*
+            header_up -Tailscale-User-Login
+            header_up -Tailscale-User-Name
+            header_up -Tailscale-User-Profile-Pic
+            header_up -Tailscale-App-Capabilities
+        }
     }
 }
 """.strip()
@@ -818,20 +876,20 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/compose.example.yml",
-            "networks: [data-plane, edge-plane]",
+            "networks: [data-plane, ingress-plane, entra-egress]",
             "networks: [data-plane]",
             "network_planes",
         ),
         (
             "ops/nas/compose.example.yml",
             "    networks: [data-plane]\n\n  web:",
-            "    networks: [data-plane, edge-plane]\n\n  web:",
+            "    networks: [data-plane, ingress-plane, entra-egress]\n\n  web:",
             "network_planes",
         ),
         (
             "ops/nas/compose.example.yml",
-            "edge-plane:\n    internal: false",
-            "edge-plane:\n    internal: true",
+            "entra-egress:\n    internal: false",
+            "entra-egress:\n    internal: true",
             "network_planes",
         ),
         (
@@ -841,7 +899,7 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
             "    image: example.invalid/sidecar@sha256:deadbeef\n"
             "    platform: linux/amd64\n"
             '    ports: ["0.0.0.0:9999:9999"]\n'
-            "    networks: [edge-plane]\n"
+            "    networks: [ingress-plane]\n"
             "\nnetworks:\n",
             "service_set",
         ),
@@ -878,9 +936,8 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/compose.example.yml",
-            '    expose: ["3000"]\n',
-            '    expose: ["3000"]\n'
-            '    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]\n',
+            '    env_file: ["${MY_PA_WEB_ENV_FILE:?owner-only web env file required}"]\n',
+            '    env_file: ["${MY_PA_NAS_ENV_FILE:?wrong env authority}"]\n',
             "credential_authority",
         ),
         (
@@ -896,8 +953,8 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/compose.example.yml",
-            "edge-plane:\n    internal: false",
-            "edge-plane:\n    internal: false\n  edge-plane:\n    internal: true",
+            "entra-egress:\n    internal: false",
+            "entra-egress:\n    internal: false\n  entra-egress:\n    internal: true",
             "compose_parse",
         ),
         (

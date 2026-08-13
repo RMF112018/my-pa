@@ -28,6 +28,7 @@ afterEach(() => {
 });
 
 function configureFlow(): void {
+  vi.stubEnv("MYPA_CANONICAL_ORIGIN", "https://app.example.test");
   vi.stubEnv("MYPA_AUTH_MODE", "entra");
   vi.stubEnv("MYPA_ENTRA_HOME_TENANT_ID", TENANT);
   vi.stubEnv("MYPA_ENTRA_CLIENT_ID", "client-id");

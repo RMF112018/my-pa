@@ -1,13 +1,29 @@
 # NAS-01 contract example. Smoke only: Compose publishes this proxy on loopback.
 # Tailscale Serve activation and the final private origin belong to NAS-06.
 :8080 {
+    @hostile_host not host {$MY_PA_TAILNET_HOST}
+    handle @hostile_host {
+        respond "not found" 404
+    }
+
     # Remote Capture keeps the WP-10 gateway transport exactly.
     @remote_capture {
         method POST
         path /remote/v1/capture.create
     }
     handle @remote_capture {
-        reverse_proxy gateway:8765
+        reverse_proxy gateway:8765 {
+            header_up -Cookie
+            header_up -Forwarded
+            header_up -X-Forwarded-For
+            header_up -X-Forwarded-Host
+            header_up -X-Forwarded-Proto
+            header_up -X-Forwarded-*
+            header_up -Tailscale-User-Login
+            header_up -Tailscale-User-Name
+            header_up -Tailscale-User-Profile-Pic
+            header_up -Tailscale-App-Capabilities
+        }
     }
 
     # The path exists for one method only; it never falls through to Next.js.
@@ -38,6 +54,17 @@
 
     # Browser routes are the only remaining ingress class.
     handle {
-        reverse_proxy web:3000
+        reverse_proxy web:3000 {
+            header_up -Authorization
+            header_up -Forwarded
+            header_up -X-Forwarded-For
+            header_up -X-Forwarded-Host
+            header_up -X-Forwarded-Proto
+            header_up -X-Forwarded-*
+            header_up -Tailscale-User-Login
+            header_up -Tailscale-User-Name
+            header_up -Tailscale-User-Profile-Pic
+            header_up -Tailscale-App-Capabilities
+        }
     }
 }

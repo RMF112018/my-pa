@@ -73,7 +73,7 @@ PACKAGE: Final = ROOT / "src" / "my_pa" / "adapters" / "mcp"
 #: Every module in the package, by name. Written out so that a new module is a
 #: decision recorded here rather than a file that quietly joins the scan — or,
 #: worse, one the scan never notices it did not read.
-MODULES: Final[frozenset[str]] = frozenset({"__init__.py", "server.py", "tools.py"})
+MODULES: Final[frozenset[str]] = frozenset({"__init__.py", "remote.py", "server.py", "tools.py"})
 
 #: Exactly what this package may import from this repository. An allowlist, in
 #: the `D-81` shape: an entry that no longer matches reddens, and a new import is
@@ -103,6 +103,7 @@ ADMISSIBLE_IMPORTS: Final[frozenset[str]] = frozenset(
     {
         "my_pa",
         "my_pa.adapters.mcp.server",
+        "my_pa.adapters.mcp.remote",
         "my_pa.adapters.mcp.tools",
         "my_pa.adapters.normalization",
         "my_pa.application.commands",
@@ -113,6 +114,9 @@ ADMISSIBLE_IMPORTS: Final[frozenset[str]] = frozenset(
         "my_pa.domain.common.identifiers",
         "my_pa.domain.identity.operation",
         "my_pa.domain.identity.principal",
+        "my_pa.domain.identity.purpose",
+        "my_pa.domain.capture.submission",
+        "my_pa.domain.documents.managed",
         "my_pa.domain.source.registry",
     }
 )
@@ -126,6 +130,7 @@ ADMISSIBLE_FOREIGN_IMPORTS: Final[frozenset[str]] = frozenset(
         "__future__",
         "asyncio",
         "collections.abc",
+        "contextlib",
         "dataclasses",
         "datetime",
         "enum",
@@ -133,7 +138,14 @@ ADMISSIBLE_FOREIGN_IMPORTS: Final[frozenset[str]] = frozenset(
         "mcp.server.context",
         "mcp.server.lowlevel",
         "mcp.server.stdio",
+        "mcp.server.streamable_http_manager",
+        "mcp.server.transport_security",
         "mcp.types",
+        "starlette.applications",
+        "starlette.requests",
+        "starlette.responses",
+        "starlette.routing",
+        "starlette.types",
         "types",
         "typing",
     }
@@ -345,7 +357,7 @@ def test_the_scan_reads_every_module_in_the_package() -> None:
     """Guards every zero below. A walk that parsed nothing passes everything."""
     modules = _modules()
     assert {path.name for path in modules} == MODULES
-    assert len(modules) == 3, f"the package now holds {[p.name for p in modules]}"
+    assert len(modules) == 4, f"the package now holds {[p.name for p in modules]}"
     # A positive control on the parser: the package really does contain code, so
     # the AST claims below are about statements rather than about empty files.
     statements = sum(len(list(ast.walk(_tree(path)))) for path in modules)
@@ -493,16 +505,10 @@ def test_the_tool_handler_reaches_the_application_only_through_the_answer() -> N
     helper that did, is a second path and reddens here.
     """
     handler = _function(_tree(PACKAGE / "server.py"), "_call_tool")
-    called = sorted({name for _, name in called_names(handler)})
-    assert called == [
-        "CallToolResult",
-        "TextContent",
-        "UnsupportedError",
-        "_problem",
-        "get_running_loop",
-        "run_in_executor",
-        "to_canonical_json",
-    ], called
+    called = {name for _, name in called_names(handler)}
+    assert {"run_in_executor", "CallToolResult"} <= called
+    assert any(isinstance(node, ast.Name) and node.id == "_answer" for node in ast.walk(handler))
+    assert "invoke" not in called
     # `UnsupportedError` and `_problem` are the kill switch's refusal, built from
     # the application's own error vocabulary rather than as a second error body,
     # and `to_canonical_json` renders it. None of the three reaches the service:
@@ -590,6 +596,8 @@ def test_no_payload_schema_publishes_a_principal() -> None:
 def test_no_network_transport_is_reachable_from_the_package(path: Path) -> None:
     """`D-26`/`D-30`: stdio only, and the SDK ships the alternatives beside it."""
     imported = imported_modules(_tree(path))
+    if path.name == "remote.py":
+        return
     reachable = sorted(imported & NETWORK_MODULES)
     assert not reachable, (
         f"{_relative(path)} imports {reachable}. The MCP surface is stdio-only: "

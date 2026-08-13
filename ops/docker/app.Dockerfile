@@ -38,4 +38,4 @@ LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
       io.my-pa.target-platform="linux/amd64" \
       io.my-pa.python-runtime-lock-sha256="${PYTHON_RUNTIME_LOCK_SHA256}"
 USER 10001:10001
-CMD ["apps/gateway.py", "--help"]
+CMD ["python", "apps/gateway.py", "--help"]

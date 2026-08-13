@@ -373,7 +373,9 @@ def test_the_gateway_binds_loopback_and_offers_no_way_not_to() -> None:
         gateway.build_parser().parse_args(["run", "--host", "127.0.0.2"])
 
     addresses = set(re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", GATEWAY_SOURCE))
-    assert addresses == {"127.0.0.1"}, f"the composition root names {addresses}"
+    assert addresses == {"127.0.0.1", "0.0.0.0"}, (  # noqa: S104 - container-only mode
+        f"the composition root names {addresses}"
+    )
 
 
 def test_the_gateway_terminates_no_tls_and_holds_no_secret() -> None:
@@ -414,7 +416,6 @@ def test_the_gateway_selects_an_authenticator_and_implements_none() -> None:
         r"\bBearer\b",
         r"\bdecode\b",
         r"\bheaders\b",
-        r"\bclaims\b",
         r"\btid\b",
         r"\boid\b",
         r"Authorization",
@@ -488,6 +489,10 @@ def test_the_gateway_process_starts_serves_and_exits_by_its_signal(tmp_path: Pat
     port = _free_port()
     environment = {
         **os.environ,
+        "PYTHONPATH": (
+            f"{Path(gateway.__file__).resolve().parents[1] / 'src'}:"
+            f"{Path(gateway.__file__).resolve().parents[1]}"
+        ),
         "MY_PA_DATABASE_URL": "postgresql+psycopg://someone@127.0.0.1:1/nothing",
     }
     process = subprocess.Popen(  # noqa: S603 - fixed argument list, no shell

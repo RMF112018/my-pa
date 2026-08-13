@@ -292,6 +292,15 @@ class Settings(StrictModel):
     #: `MY_PA_MCP_SURFACE_DISABLED=maybe` is a process that does not run rather
     #: than a switch silently read as `False`.
     mcp_surface_disabled: bool = False
+    remote_mcp_enabled: bool = False
+    remote_writes_enabled: bool = False
+    remote_mcp_public_host: str = ""
+    oauth_issuer: str = Field(default="", repr=False)
+    oauth_audience: str = Field(default="", repr=False)
+    oauth_jwks_uri: str = Field(default="", repr=False)
+    oauth_tenant_id: str = Field(default="", repr=False)
+    oauth_authorization_server: str = Field(default="", repr=False)
+    oauth_scopes: str = ""
     #: Which registered capture client this MCP process serves as, or empty for
     #: none (WP-28).
     #:
@@ -357,6 +366,21 @@ class Settings(StrictModel):
     def _check(self) -> Settings:
         self._parsed_database_url = _parse_database_url(self.database_url)
         self._check_auth_mode()
+        if self.remote_mcp_enabled and not all(
+            (
+                self.oauth_issuer.strip(),
+                self.oauth_audience.strip(),
+                self.oauth_jwks_uri.strip(),
+                self.oauth_tenant_id.strip(),
+                self.oauth_authorization_server.strip(),
+                self.oauth_scopes.strip(),
+                self.remote_mcp_public_host.strip(),
+            )
+        ):
+            raise SettingsError(
+                "remote MCP requires OAuth issuer, audience, JWKS URI, tenant ID, "
+                "authorization server, scopes, and public host"
+            )
         if not self.redaction_enabled:
             raise SettingsError(
                 "redaction cannot be disabled; debug mode does not bypass redaction"

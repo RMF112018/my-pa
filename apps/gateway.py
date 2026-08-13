@@ -77,10 +77,12 @@ from typing import Final
 import uvicorn
 
 from my_pa.adapters.http import REMOTE_CAPTURE_PATH, create_http_app
-from my_pa.adapters.mcp import serve_stdio
+from my_pa.adapters.mcp import RemoteAccessContext, create_remote_mcp_app, serve_stdio
 from my_pa.adapters.mcp.server import SERVER_NAME
 from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.settings import load_settings
+from my_pa.infrastructure.security import RemoteAuthenticationError, RemoteAuthenticator
+from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
 
 #: The safe default address. Container binding is a validated deployment mode,
 #: not a CLI host argument, and Compose publishes no gateway host port.
@@ -89,6 +91,7 @@ HOST: Final = "127.0.0.1"
 #: An unassigned high port, changeable with `--port`. Nothing depends on the
 #: number; it is here so that starting the process needs no arguments.
 DEFAULT_PORT: Final = 8765
+DEFAULT_REMOTE_MCP_PORT: Final = 8766
 
 #: How long shutdown waits for the requests already in flight.
 #:
@@ -221,6 +224,85 @@ def _mcp(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mcp_remote(args: argparse.Namespace) -> int:
+    """Serve authenticated Streamable HTTP MCP; fail closed if auth is incomplete."""
+    settings = load_settings()
+    if not settings.remote_mcp_enabled:
+        print("refusing    remote MCP is disabled", file=sys.stderr)
+        return 2
+    runtime = build_gateway_runtime(settings)
+    verifier = EntraTokenVerifier(
+        audience=settings.oauth_audience,
+        issuer=settings.oauth_issuer,
+        signing_key=jwks_signing_key_source(settings.oauth_jwks_uri),
+    )
+    authenticator = RemoteAuthenticator(
+        token_claims=verifier.claims,
+        connections=runtime.work_engine.begin,
+        tenant_id=settings.oauth_tenant_id,
+        required_resource=settings.oauth_audience,
+    )
+
+    def resolve(header: str | None) -> RemoteAccessContext | None:
+        try:
+            authenticated = authenticator.authenticate(header)
+        except RemoteAuthenticationError:
+            return None
+        capabilities = frozenset(capability.value for capability in authenticated.capabilities)
+        if not authenticated.write_allowed:
+            # The transport's canonical read-only profile performs the final
+            # deterministic intersection, so no write name is recreated here.
+            capabilities &= remote_tool_names(runtime.service, writes_enabled=False)
+        return RemoteAccessContext(
+            authenticated.principal,
+            capabilities,
+            authenticated.capability_purposes,
+        )
+
+    from my_pa.adapters.mcp.remote import remote_tool_names
+
+    def readiness() -> bool:
+        with runtime.work_engine.connect() as connection:
+            return bool(
+                connection.exec_driver_sql(
+                    "SELECT remote_enabled FROM identity.remote_security_controls "
+                    "WHERE singleton IS TRUE"
+                ).scalar_one()
+            )
+
+    app = create_remote_mcp_app(
+        runtime.service,
+        resolve_access=resolve,
+        allowed_hosts=(
+            args.host,
+            f"{args.host}:{args.port}",
+            settings.remote_mcp_public_host,
+        ),
+        global_enabled=not settings.mcp_surface_disabled,
+        remote_enabled=settings.remote_mcp_enabled,
+        # Production starts read-only. A later, validated setting can activate
+        # the already-tested independent write input without changing tools.
+        writes_enabled=settings.remote_writes_enabled,
+        readiness=readiness,
+        resource=settings.oauth_audience,
+        authorization_servers=(settings.oauth_authorization_server,),
+        scopes=frozenset(settings.oauth_scopes.split()),
+    )
+    print(f"serving     remote mcp on {args.host}:{args.port}/mcp", file=sys.stderr, flush=True)
+    try:
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            log_config=None,
+            access_log=False,
+            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
+        )
+    finally:
+        runtime.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the my-pa gateway on loopback HTTP or on MCP over stdio."
@@ -231,6 +313,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--port", type=int, default=DEFAULT_PORT)
 
     subcommands.add_parser("mcp", help="serve the twenty-six capabilities over MCP on stdio")
+    remote = subcommands.add_parser("mcp-remote", help="serve authenticated MCP over HTTP")
+    remote.add_argument(
+        "--host",
+        choices=("127.0.0.1", "0.0.0.0"),  # noqa: S104
+        default=HOST,
+    )
+    remote.add_argument("--port", type=int, default=DEFAULT_REMOTE_MCP_PORT)
     return parser
 
 
@@ -247,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run(args)
         case "mcp":
             return _mcp(args)
+        case "mcp-remote":
+            return _mcp_remote(args)
         case unknown:  # pragma: no cover - argparse rejects an unknown command first
             raise SystemExit(f"unhandled command {unknown!r}")
 

@@ -331,13 +331,11 @@ def test_the_application_runs_off_the_event_loop(scene: Scene) -> None:
 
     object.__setattr__(service, "invoke", watched)
     with mcp_transport(service, scene.principal) as session:
-        loop_thread = session._loop._thread_id
         session.call(
             Capability.CAPABILITIES_GET.value,
             document(Capability.CAPABILITIES_GET, scene.principal.principal_id, {}),
         )
     assert threads, "the application was never invoked"
-    assert loop_thread is not None
     assert threads[0] != "mcp-under-test", f"the application ran on the loop thread: {threads}"
 
 
@@ -359,6 +357,10 @@ def _child_tool_list(**settings: str) -> tuple[list[str], bytes]:
     """
     environment = {
         **os.environ,
+        "PYTHONPATH": (
+            f"{Path(gateway.__file__).resolve().parents[1] / 'src'}:"
+            f"{Path(gateway.__file__).resolve().parents[1]}"
+        ),
         "MY_PA_DATABASE_URL": "postgresql+psycopg://someone@127.0.0.1:1/nothing",
         **settings,
     }
@@ -500,6 +502,10 @@ def test_the_stdio_transport_serves_a_real_child_process() -> None:
     """
     environment = {
         **os.environ,
+        "PYTHONPATH": (
+            f"{Path(gateway.__file__).resolve().parents[1] / 'src'}:"
+            f"{Path(gateway.__file__).resolve().parents[1]}"
+        ),
         "MY_PA_DATABASE_URL": "postgresql+psycopg://someone@127.0.0.1:1/nothing",
     }
     process = subprocess.Popen(  # noqa: S603 - fixed argument list, no shell

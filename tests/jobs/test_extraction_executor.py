@@ -861,7 +861,11 @@ def test_a_worker_process_killed_mid_extraction_leaves_its_lease_and_loses_nothi
             "--lease-seconds",
             "1",
         ],
-        env={**os.environ, f"{ENV_PREFIX}DATABASE_URL": disposable_database},
+        env={
+            **os.environ,
+            "PYTHONPATH": str(ROOT / "src"),
+            f"{ENV_PREFIX}DATABASE_URL": disposable_database,
+        },
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         cwd=str(ROOT),

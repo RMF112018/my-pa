@@ -48,13 +48,13 @@ from typing import Any, Protocol
 from mcp.client.session import ClientSession
 from mcp.shared.memory import create_client_server_memory_streams
 from mcp.types import CallToolResult, InitializeResult, ListToolsResult
-from tests.wire import serve
 
 from my_pa.adapters.cli import EXIT_OK, run
 from my_pa.adapters.http import create_http_app
 from my_pa.adapters.mcp import create_mcp_server
 from my_pa.application.service import ApplicationService
 from my_pa.domain.identity.principal import Principal
+from tests.wire import serve
 
 #: How long one request may take, and how long the MCP session has to start.
 #: Generous for an in-memory exchange, finite so a hang fails a test rather than

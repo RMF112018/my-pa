@@ -76,7 +76,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from mcp.server.context import ServerRequestContext
@@ -103,15 +104,28 @@ from my_pa.application.errors import (
 )
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.errors import ProblemDetail
+from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
+from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.source.registry import issue_identifier
 
-__all__ = ["SERVER_NAME", "create_mcp_server", "published_tools", "serve_stdio"]
+__all__ = ["SERVER_NAME", "McpAccess", "create_mcp_server", "published_tools", "serve_stdio"]
 
 #: What this server calls itself in `initialize`. Neutral, as `AGENTS.md`
 #: section 4 requires of every external and MCP name.
 SERVER_NAME = "my-pa"
+
+
+@dataclass(frozen=True)
+class McpAccess:
+    """Server-established identity and tool ceiling for one MCP request."""
+
+    principal: Principal
+    allowed_tools: frozenset[str] | None = None
+    allowed_capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None
+    transport: CaptureTransport = CaptureTransport.LOCAL
 
 
 def _document(arguments: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -163,6 +177,8 @@ def _answer(
     principal: Principal,
     name: str,
     arguments: Mapping[str, Any] | None,
+    transport: CaptureTransport = CaptureTransport.LOCAL,
+    allowed_capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None,
 ) -> tuple[str, bool]:
     """One tool call, executed synchronously: the text to return and whether it failed.
 
@@ -177,14 +193,24 @@ def _answer(
     configured to do, which `AGENTS.md` section 5 forbids and no response-body
     assertion would ever see.
     """
+    request_arguments = arguments
+    if transport is CaptureTransport.REMOTE_CLIENT:
+        if arguments is not None and "principal_id" in arguments:
+            return _problem(InvalidRequestError()).to_canonical_json(), True
+        request_arguments = {**(arguments or {}), "principal_id": principal.principal_id}
     try:
-        metadata, command = normalize(name, _document(arguments))
+        metadata, command = normalize(name, _document(request_arguments))
     except ApplicationError as refusal:
         return _problem(refusal).to_canonical_json(), True
     except Exception:
         return _problem(InternalError()).to_canonical_json(), True
+    if allowed_capability_purposes is not None and not (
+        (metadata.capability, None) in allowed_capability_purposes
+        or (metadata.capability, metadata.purpose) in allowed_capability_purposes
+    ):
+        return _problem(UnsupportedError()).to_canonical_json(), True
     try:
-        envelope = service.invoke(metadata, command, principal=principal)
+        envelope = service.invoke(metadata, command, principal=principal, transport=transport)
     except Exception:
         return _problem(InternalError()).to_canonical_json(), True
     return envelope.to_canonical_json(), envelope.error is not None
@@ -210,8 +236,25 @@ def published_tools(service: ApplicationService) -> tuple[Tool, ...]:
     return tuple(tool for tool in TOOLS if tool.name in available)
 
 
+def _remote_tool(tool: Tool) -> Tool:
+    """A canonical schema view with server-owned Principal metadata removed."""
+    schema = dict(tool.input_schema)
+    properties = dict(schema.get("properties", {}))
+    properties.pop("principal_id", None)
+    schema["properties"] = properties
+    schema["required"] = [name for name in schema.get("required", []) if name != "principal_id"]
+    return tool.model_copy(update={"inputSchema": schema, "input_schema": schema})
+
+
 def create_mcp_server(
-    service: ApplicationService, *, principal: Principal, enabled: bool = True
+    service: ApplicationService,
+    *,
+    principal: Principal | None = None,
+    enabled: bool = True,
+    access_for_request: Callable[[ServerRequestContext[object]], McpAccess | None] | None = None,
+    max_concurrent_calls: int | None = None,
+    call_timeout_seconds: float | None = None,
+    max_result_bytes: int | None = None,
 ) -> Server[object]:
     """The MCP server serving `service` as the one local `principal`.
 
@@ -231,17 +274,53 @@ def create_mcp_server(
     usable. This module holds a boolean and no configuration.
     """
 
+    if principal is None and access_for_request is None:
+        raise ValueError("principal or access_for_request is required")
+    if max_concurrent_calls is not None and max_concurrent_calls <= 0:
+        raise ValueError("max_concurrent_calls must be positive")
+    if call_timeout_seconds is not None and call_timeout_seconds <= 0:
+        raise ValueError("call_timeout_seconds must be positive")
+    if max_result_bytes is not None and max_result_bytes <= 0:
+        raise ValueError("max_result_bytes must be positive")
+    call_slots = asyncio.Semaphore(max_concurrent_calls or 1)
+
+    def _access(context: ServerRequestContext[object]) -> McpAccess | None:
+        if access_for_request is not None:
+            try:
+                return access_for_request(context)
+            except Exception:
+                return None
+        return McpAccess(principal) if principal is not None else None
+
     async def _list_tools(
         context: ServerRequestContext[object], params: ListToolsParams | None
     ) -> ListToolsResult:
         """`tools/list`. Derived; see `adapters/mcp/tools.py`."""
-        return ListToolsResult(tools=[] if not enabled else list(published_tools(service)))
+        access = _access(context)
+        if not enabled or access is None:
+            return ListToolsResult(tools=[])
+        tools = published_tools(service)
+        if access.allowed_tools is not None:
+            tools = tuple(tool for tool in tools if tool.name in access.allowed_tools)
+        if access.transport is CaptureTransport.REMOTE_CLIENT:
+            tools = tuple(_remote_tool(tool) for tool in tools)
+        return ListToolsResult(tools=list(tools))
 
     async def _call_tool(
         context: ServerRequestContext[object], params: CallToolRequestParams
     ) -> CallToolResult:
         """`tools/call`. The one `await` in this package."""
-        if not enabled:
+        access = _access(context)
+        published = {tool.name for tool in published_tools(service)}
+        remote_refusal = access_for_request is not None and (
+            params.name not in published
+            or (
+                access is not None
+                and access.allowed_tools is not None
+                and params.name not in access.allowed_tools
+            )
+        )
+        if not enabled or access is None or remote_refusal:
             # No thread, no service, no envelope. There is no request identity to
             # build one from and nothing to correlate a disabled surface against
             # beyond the refusal itself.
@@ -252,9 +331,59 @@ def create_mcp_server(
                 is_error=True,
             )
         loop = asyncio.get_running_loop()
-        text, failed = await loop.run_in_executor(
-            None, _answer, service, principal, params.name, params.arguments
+        awaitable = call_slots.acquire()
+        if call_timeout_seconds is None:
+            await awaitable
+        else:
+            try:
+                await asyncio.wait_for(awaitable, timeout=call_timeout_seconds)
+            except TimeoutError:
+                return CallToolResult(
+                    content=[
+                        TextContent(type="text", text=_problem(InternalError()).to_canonical_json())
+                    ],
+                    is_error=True,
+                )
+        future = loop.run_in_executor(
+            None,
+            _answer,
+            service,
+            access.principal,
+            params.name,
+            params.arguments,
+            access.transport,
+            access.allowed_capability_purposes,
         )
+        release_here = True
+        try:
+            if call_timeout_seconds is None:
+                text, failed = await future
+            else:
+                try:
+                    text, failed = await asyncio.wait_for(
+                        asyncio.shield(future), timeout=call_timeout_seconds
+                    )
+                except TimeoutError:
+                    # A Python worker thread cannot be cancelled safely. Keep its
+                    # slot occupied until it really exits, while refusing the
+                    # caller at the configured deadline.
+                    release_here = False
+                    future.add_done_callback(
+                        lambda _done: loop.call_soon_threadsafe(call_slots.release)
+                    )
+                    return CallToolResult(
+                        content=[
+                            TextContent(
+                                type="text", text=_problem(InternalError()).to_canonical_json()
+                            )
+                        ],
+                        is_error=True,
+                    )
+        finally:
+            if release_here:
+                call_slots.release()
+        if max_result_bytes is not None and len(text.encode("utf-8")) > max_result_bytes:
+            text, failed = _problem(InternalError()).to_canonical_json(), True
         return CallToolResult(content=[TextContent(type="text", text=text)], is_error=failed)
 
     return Server(

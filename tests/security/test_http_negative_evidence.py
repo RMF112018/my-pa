@@ -187,6 +187,17 @@ def wire_for(service: ApplicationService, principal: Principal) -> Iterator[Wire
         yield client
 
 
+@contextmanager
+def capture_uvicorn(caplog: pytest.LogCaptureFixture) -> Iterator[None]:
+    """Attach pytest's listener despite uvicorn-version logger propagation defaults."""
+    logger = logging.getLogger("uvicorn.error")
+    logger.addHandler(caplog.handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(caplog.handler)
+
+
 @pytest.fixture
 def wire(marked: Scene) -> Iterator[Wire]:
     with wire_for(build_service(marked.world, marked.providers), marked.principal) as client:
@@ -784,6 +795,7 @@ def test_a_running_gateway_writes_nothing_sensitive_to_a_log(
     marked.world.searches[marked.enrollment.enrollment_id] = staged_search(marked)
     with (
         caplog.at_level(logging.DEBUG),
+        capture_uvicorn(caplog),
         wire_for(build_service(marked.world, marked.providers), marked.principal) as client,
     ):
         for capability, payload in payloads_for(marked, record).items():
@@ -826,6 +838,7 @@ def test_the_log_capture_would_have_seen_a_record(
     """
     with (
         caplog.at_level(logging.DEBUG),
+        capture_uvicorn(caplog),
         wire_for(build_service(marked.world, marked.providers), marked.principal) as client,
     ):
         client.send(

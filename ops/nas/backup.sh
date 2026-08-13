@@ -17,6 +17,7 @@ pg_exec pg_dump --username my_pa --dbname my_pa \
   --format custom --compress=zstd:9 --no-owner --no-privileges > "$partial"
 pg_exec pg_restore --list < "$partial" >/dev/null
 mv "$partial" "$final"
-(CDPATH= cd -- "$destination" && shasum -a 256 "$(basename "$final")" > "$(basename "$receipt")")
+digest=$(sha256_file "$final")
+printf '%s  %s\n' "$digest" "$(basename "$final")" > "$receipt"
 trap - EXIT HUP INT TERM
 echo "$receipt"

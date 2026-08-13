@@ -1,32 +1,27 @@
 #!/usr/bin/env python3
-"""Write BuildKit-compatible identity metadata for an exact pulled image."""
+"""Write BuildKit-compatible metadata from an exact Docker archive."""
 
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
+from archive_image import inspect_archive
+
 
 def main() -> int:
-    if len(sys.argv) != 3:
-        print("usage: write-image-metadata.py IMAGE_REFERENCE OUTPUT", file=sys.stderr)
+    if len(sys.argv) != 4:
+        print("usage: write-image-metadata.py IMAGE_REFERENCE ARCHIVE OUTPUT", file=sys.stderr)
         return 64
-    reference, output = sys.argv[1], Path(sys.argv[2])
-    result = subprocess.run(  # noqa: S603 - operator-supplied exact reference
-        ["/usr/bin/env", "docker", "image", "inspect", reference],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    inspected = json.loads(result.stdout)[0]
+    reference, archive, output = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
     manifest_digest = reference.rpartition("@")[2]
+    image = inspect_archive(archive)
     output.write_text(
         json.dumps(
             {
                 "containerimage.digest": manifest_digest,
-                "containerimage.config.digest": inspected["Id"],
+                "containerimage.config.digest": image.config_digest,
             },
             sort_keys=True,
         )

@@ -37,10 +37,12 @@ def test_resource_example_and_network_filesystem_refuse(tmp_path: Path) -> None:
     manifest.write_text(
         'schema = "my-pa.nas-postgres-resources.v1"\nstatus = "verified"\n'
         'docker_engine_id = "nas"\npostgres_container_id = "pg"\n'
+        'postgres_image_id = "sha256:image"\n'
+        'data_network = "my-pa-nas-contract_data-plane"\n'
         'measured_at = "2026-08-12T12:00:00Z"\n'
-        "logical_cpus = 4\nmemory_bytes = 1024\navailable_storage_bytes = 1\n"
+        "logical_cpus = 4\nmemory_bytes = 1024\nminimum_available_storage_bytes = 1\n"
         'filesystem_type = "nfs"\npostgres_data_path = "/srv/my-pa/postgres/data"\n'
-        '[tuning]\nstatus = "verified_from_measurement"\n',
+        '[tuning]\nstatus = "no_numeric_tuning"\n',
         encoding="utf-8",
     )
     assert "network_filesystem" in gate.verify(manifest)
@@ -52,19 +54,36 @@ def test_live_gate_binds_engine_resources_and_canonical_path(tmp_path: Path) -> 
     manifest.write_text(
         'schema = "my-pa.nas-postgres-resources.v1"\nstatus = "verified"\n'
         'docker_engine_id = "nas"\npostgres_container_id = "pg"\n'
+        'postgres_image_id = "sha256:image"\n'
+        'data_network = "my-pa-nas-contract_data-plane"\n'
         'measured_at = "2026-08-12T12:00:00Z"\n'
-        "logical_cpus = 4\nmemory_bytes = 1024\navailable_storage_bytes = 1\n"
-        f'filesystem_type = "ext4"\npostgres_data_path = "{tmp_path}"\n'
-        '[tuning]\nstatus = "verified_from_measurement"\n',
+        "logical_cpus = 4\nmemory_bytes = 1024\nminimum_available_storage_bytes = 1\n"
+        f'filesystem_type = "btrfs"\npostgres_data_path = "{tmp_path}"\n'
+        '[tuning]\nstatus = "no_numeric_tuning"\n',
         encoding="utf-8",
     )
 
     def runner(command: list[str]) -> str:
-        if command[0] == "stat":
-            return "ext4\n"
+        if command[0] == "df":
+            return (
+                "Filesystem Type 1024-blocks Used Available Capacity Mounted on\n"
+                "/dev/x btrfs 1 0 1 0% /\n"
+            )
+        if command[1] == "network":
+            return (
+                '[{"Name":"my-pa-nas-contract_data-plane","Internal":true,'
+                '"Labels":{"com.docker.compose.project":"my-pa-nas-contract",'
+                '"com.docker.compose.network":"data-plane"},'
+                '"Containers":{"pg":{}}}]'
+            )
         if command[1] == "inspect":
             return (
-                '[{"Mounts":[{"Type":"bind","Source":"'
+                '[{"Image":"sha256:image","Config":{"Labels":{'
+                '"com.docker.compose.project":"my-pa-nas-contract",'
+                '"com.docker.compose.service":"postgres"}},'
+                '"HostConfig":{"PortBindings":{}},'
+                '"NetworkSettings":{"Networks":{"my-pa-nas-contract_data-plane":{}}},'
+                '"Mounts":[{"Type":"bind","Source":"'
                 + str(tmp_path)
                 + '","Destination":"/var/lib/postgresql/data","RW":true}]}]'
             )
@@ -72,9 +91,26 @@ def test_live_gate_binds_engine_resources_and_canonical_path(tmp_path: Path) -> 
 
     assert gate.verify(manifest, live=True, container_id="pg", runner=runner) == []
 
+    insufficient = tmp_path / "insufficient.toml"
+    insufficient.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "minimum_available_storage_bytes = 1",
+            "minimum_available_storage_bytes = 999999999999999999999999",
+        ),
+        encoding="utf-8",
+    )
+    assert "insufficient_free_storage" in gate.verify(
+        insufficient, live=True, container_id="pg", runner=runner
+    )
+
     def wrong(command: list[str]) -> str:
-        if command[0] == "stat":
-            return "nfs\n"
+        if command[0] == "df":
+            return (
+                "Filesystem Type 1024-blocks Used Available Capacity Mounted on\n"
+                "/dev/x nfs 1 0 1 0% /\n"
+            )
+        if command[1] == "network":
+            return "[]"
         if command[1] == "inspect":
             return "[]"
         return '{"ID":"other","NCPU":8,"MemTotal":2048}'
@@ -85,7 +121,10 @@ def test_live_gate_binds_engine_resources_and_canonical_path(tmp_path: Path) -> 
         "resource_drift",
         "live_filesystem_type",
         "postgres_bind_mount",
-        "compose_postgres_identity",
+        "postgres_compose_identity",
+        "postgres_image_identity",
+        "postgres_network_identity",
+        "data_network_identity",
     } <= set(errors)
 
 

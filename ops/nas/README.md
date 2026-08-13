@@ -26,6 +26,20 @@ Files:
   registry `RepoDigest`. PostgreSQL candidate creation separately verifies the
   exported child against the pinned `postgres:17.10` parent index. The OCI
   child digest, loaded config ID, and archive checksum remain distinct.
+- Upstream PostgreSQL and proxy config identities are derived from the exported
+  Docker archive config bytes, not from Docker Desktop's engine-specific `.Id`
+  presentation. Candidate generation rechecks every archive against its build
+  metadata and refuses any mismatch.
+- [`operator.Dockerfile`](../docker/operator.Dockerfile) supplies a separate,
+  short-lived Python 3.12 operator image. [`bootstrap-operator-runtime.sh`](bootstrap-operator-runtime.sh)
+  verifies its archive before loading, binds it to the live NAS engine, and
+  writes a root-owned mode-0400 admission. [`container-python.sh`](container-python.sh)
+  then runs existing Python gates with no network, a read-only root, dropped
+  capabilities, attached standard input, an explicit Compose-environment
+  allowlist, the exact host Docker CLI and Compose plugin, and a short-lived
+  Docker-socket mount. It is not a Compose service and grants no persistent
+  container Docker authority. Emergency shutdown remains a host-shell path and
+  does not depend on this image or its admission.
 - [`start.sh`](start.sh) is an intentional refusal until the exact live NAS
   reports `linux/amd64`, loaded digest resolution is proven, and NAS-04 adds the
   gateway container bind. A later activation may use only Compose `--no-build
@@ -52,6 +66,13 @@ Migration is never an application startup side effect; canonical migration also
 requires a recent backup receipt. Backups are custom-format, integrity-listed,
 owner-only artifacts outside the repository. Restore accepts only a new
 `my_pa_scratch_*` database and retains a failed scratch target for diagnosis.
+The gated two-phase bootstrap creates the canonical stopped Compose container
+and internal `my-pa-nas-contract_data-plane` network before issuing the
+container-bound resource artifact, then separately revalidates and starts only
+PostgreSQL. That state is temporary; it exists solely to back up, migrate, and
+restore-verify before the six-service runtime starts. `postgresql_default`, the
+local-development Compose file, ad-hoc PostgreSQL, and direct production
+`docker compose up postgres` are not bootstrap paths.
 
 NAS-04/05 add the validated `container` gateway bind mode and the
 [`runtime-services.example.toml`](runtime-services.example.toml) identity

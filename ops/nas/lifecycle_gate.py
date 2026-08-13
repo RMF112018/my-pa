@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from nas_tools import docker
+
 RUNTIME_SERVICES = {
     "postgres",
     "gateway",
@@ -40,18 +42,38 @@ TRUSTED_FILES = {
 
 
 def _yaml(path: Path) -> dict[str, Any] | None:
-    program = "print JSON.generate(YAML.safe_load(STDIN.read, aliases: false))"
-    result = subprocess.run(  # noqa: S603 - fixed system executable/program
-        ["/usr/bin/ruby", "-rjson", "-ryaml", "-e", program],
-        input=path.read_text(encoding="utf-8"),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode:
+    """Parse the closed service/restart shape without a host YAML runtime."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
         return None
-    parsed = json.loads(result.stdout)
-    return parsed if isinstance(parsed, dict) else None
+    top_level = {
+        line[:-1]
+        for line in lines
+        if line and not line.startswith((" ", "#")) and line.endswith(":")
+    }
+    services: dict[str, dict[str, Any]] = {}
+    in_services = False
+    current = ""
+    for line in lines:
+        if line == "services:":
+            in_services = True
+            continue
+        if in_services and line and not line.startswith(" "):
+            in_services = False
+        if not in_services:
+            continue
+        service = re.fullmatch(r"  ([a-z0-9-]+):", line)
+        if service:
+            current = service.group(1)
+            services[current] = {}
+            continue
+        restart = re.fullmatch(r'    restart: (?:"([^"]+)"|([^ ]+))', line)
+        if restart and current:
+            services[current]["restart"] = restart.group(1) or restart.group(2)
+    if "services" not in top_level:
+        return None
+    return {"services": services, "_top_level": top_level}
 
 
 def _git(command: list[str]) -> str:
@@ -201,7 +223,7 @@ def verify(
         errors.append("pilot_service_set")
     elif any(service != {"restart": "unless-stopped"} for service in pilot_services.values()):
         errors.append("pilot_overlay_scope")
-    if set(overlay) != {"services"}:
+    if overlay.get("_top_level") != {"services"}:
         errors.append("pilot_overlay_scope")
     repository = Path(__file__).resolve().parents[2]
     if (
@@ -231,7 +253,7 @@ def verify(
         head = runner(["git", "-C", str(repository), "rev-parse", "HEAD"])
         tree = runner(["git", "-C", str(repository), "rev-parse", "HEAD^{tree}"])
         dirty = runner(["git", "-C", str(repository), "status", "--porcelain"])
-        docker_info = json.loads(runner(["docker", "info", "--format", "{{json .}}"]))
+        docker_info = json.loads(runner([docker(), "info", "--format", "{{json .}}"]))
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
         return [*errors, "live_identity_unreadable"]
     if head != manifest_commit or tree != manifest_tree:

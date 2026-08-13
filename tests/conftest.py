@@ -33,6 +33,7 @@ Everything is synthetic: no real path, no real person, no live source.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -162,6 +163,12 @@ from my_pa.domain.source.provider import (
 )
 from my_pa.domain.source.registry import ConfiguredSource, SourceProviderKind, issue_identifier
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
+
+# Operational scripts execute with this directory on sys.path. Architecture
+# tests import them by file path and reproduce that same import environment.
+OPS_NAS = str(Path(__file__).resolve().parents[1] / "ops/nas")
+if OPS_NAS not in sys.path:
+    sys.path.insert(0, OPS_NAS)
 
 #: One fixed instant, so every disclosure in a test is comparable.
 WHEN = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)

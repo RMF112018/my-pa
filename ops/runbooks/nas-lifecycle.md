@@ -5,6 +5,152 @@ NAS. Every command requires `MY_PA_NAS_COMPOSE_FILE` naming the exact Compose
 file. The default `MY_PA_LIFECYCLE_MODE=smoke` preserves `restart: "no"` for all
 six long-lived services.
 
+## Canonical PostgreSQL bootstrap
+
+A new NAS has no database container or data-plane network, so it cannot enter
+the six-service lifecycle in one step. PostgreSQL-only operation is admitted
+only as this temporary bootstrap sequence. It uses the canonical
+`ops/nas/compose.example.yml`; `postgresql_default`, `ops/compose/postgres.yml`,
+ad-hoc containers, and direct `docker compose up postgres` are prohibited.
+
+Set `MY_PA_NAS_DOCKER=/usr/local/bin/docker` on Synology. When the host does not
+provide Python 3.12, bootstrap the separately checksummed operator archive from
+the clean reviewed build before loading the application candidates:
+
+```sh
+export MY_PA_NAS_DOCKER=/usr/local/bin/docker
+ops/nas/bootstrap-operator-runtime.sh \
+  ARTIFACT_DIRECTORY/operator-runtime.candidate.toml \
+  ARTIFACT_DIRECTORY/operator.tar \
+  ARTIFACT_DIRECTORY/operator.metadata.json \
+  /etc/my-pa/operator-runtime.toml
+export MY_PA_NAS_OPERATOR_ADMISSION=/etc/my-pa/operator-runtime.toml
+export MY_PA_NAS_PYTHON="$PWD/ops/nas/container-python.sh"
+```
+
+The operator container is removed after every invocation, has no network, uses
+a read-only root filesystem, drops all capabilities, and is not part of the
+persistent Compose topology. Its attached standard input preserves checked-in
+heredoc validations. Its narrowly mounted Docker socket and exact host Docker
+CLI plus Compose plugin give the gate the same bounded engine authority as the
+invoking root operator; only the closed canonical Compose interpolation and
+synthetic-acceptance environment names are forwarded, without putting their
+values in the command line. No application service receives these mounts. The admission binds
+the exact archive/config/platform, source commit/tree, Python/Git/OpenSSL
+runtime, and live NAS engine. Do not use an unadmitted image or a host Python
+older than 3.12.
+
+`emergency-shutdown.sh` deliberately remains a POSIX host-shell path. It checks
+the canonical root-owned mode-0400 Compose file, exact project, and exact six
+services through `docker compose config --no-interpolate`. It then discovers
+only running containers carrying the exact Compose project label, accepts any
+incident-time subset of canonical non-oneoff service labels, stops those exact
+container IDs directly, and repeats bounded discovery to contain concurrent
+replacements. It refuses unknown/oneoff/duplicate identities and reports stop
+errors without claiming success. A final fresh project-label query must return
+zero running containers. The stop phase does not reparse or interpolate Compose.
+It does not require the deployment environment, Python, the operator admission,
+or the operator image, so loss of auxiliary state cannot prevent shutdown.
+
+The invoking identity
+must already have bounded Docker authority; tooling never prompts for or
+changes that authority. Before rendering admission, the owner-only application
+and web environment files must contain operator-provisioned non-placeholder
+values, and the ordinary Compose variables (service IDs, exact paths, private
+origin, proxy identity/port, and image references) must be exported. Do not
+enter secrets at a command prompt or place them in the repository.
+
+Execute the following phases in order from a clean checkout of the exact image
+manifest commit. Paths shown below are the canonical production paths; artifact
+filenames under `/etc/my-pa` must not already exist.
+
+1. Set the proven host/tool identity and create the still-empty canonical data
+   directory owner-only:
+
+```sh
+export MY_PA_NAS_DOCKER=/usr/local/bin/docker
+export MY_PA_NAS_PYTHON=/absolute/path/to/python3.12
+export MY_PA_NAS_COMPOSE_FILE="$PWD/ops/nas/compose.example.yml"
+export MY_PA_NAS_ROOT=/volume1/my-pa
+export MY_PA_LIFECYCLE_MODE=smoke
+mkdir -p /volume1/my-pa/postgres/data
+chmod 0700 /volume1/my-pa/postgres/data
+```
+
+2. Load and admit the four exact linux/amd64 images, then generate the
+   root-owned runtime admission. This phase requires all Compose interpolation
+   values, including `MY_PA_POSTGRES_IMAGE_ID`, `MY_PA_APP_IMAGE_ID`,
+   `MY_PA_WEB_IMAGE_ID`, and the digest-pinned proxy reference, to agree with
+   the deployable image manifest:
+
+```sh
+ops/nas/load-candidates.sh CANDIDATE_MANIFEST ARCHIVE_DIRECTORY DEPLOYABLE_MANIFEST
+"$MY_PA_NAS_PYTHON" ops/nas/generate-runtime-admission.py \
+  ops/nas/compose.example.yml ops/nas/compose.pilot.example.yml \
+  DEPLOYABLE_MANIFEST /etc/my-pa/runtime-admission.toml
+```
+
+`load-candidates.sh` verifies all four archives before loading app, web,
+PostgreSQL, and proxy, then binds exact loaded config IDs to the live engine.
+Runtime admission binds both canonical Compose renders and all six service
+image identities.
+
+3. Select and record a positive operator-reviewed byte floor below current
+   available btrfs space. Prepare creates only the canonical PostgreSQL
+   container and internal
+`my-pa-nas-contract_data-plane` network. It does not start PostgreSQL:
+
+```sh
+ops/nas/postgres-bootstrap-prepare.sh \
+  DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY \
+  /etc/my-pa/postgres-resources.toml MINIMUM_AVAILABLE_STORAGE_BYTES
+```
+
+The generated resource artifact records the real stopped container ID, exact
+PostgreSQL image ID, canonical btrfs path, engine identity, CPU/RAM measurement,
+canonical internal network, and an operator-reviewed free-space floor. It
+records `no_numeric_tuning`; measured resources do not invent tuning values.
+
+4. Start revalidates the same identities before and after starting only that
+container, waits for Docker health, and proves PostgreSQL 17.10 readiness:
+
+```sh
+ops/nas/postgres-bootstrap-start.sh \
+  DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY /etc/my-pa/postgres-resources.toml
+```
+
+5. Export the admitted resource artifact, validate it against the running
+   container, take the required initial backup, and invoke migration explicitly:
+
+```sh
+export MY_PA_POSTGRES_RESOURCES=/etc/my-pa/postgres-resources.toml
+ops/nas/validate-storage.sh
+initial_receipt=$(ops/nas/backup.sh EXISTING_OWNER_ONLY_BACKUP_DIRECTORY)
+ops/nas/verify-backup-receipt.sh "$initial_receipt"
+export MY_PA_VERIFIED_BACKUP_RECEIPT="$initial_receipt"
+ops/nas/migrate.sh
+```
+
+Migration derives the repository's single Alembic head at execution time; no
+revision is copied into deployment state.
+
+6. Take a post-migration backup, restore it into a new scratch database, and
+   only then enter the ordinary six-service lifecycle:
+
+```sh
+post_receipt=$(ops/nas/backup.sh EXISTING_OWNER_ONLY_BACKUP_DIRECTORY)
+ops/nas/verify-backup-receipt.sh "$post_receipt"
+export MY_PA_SCRATCH_DATABASE_URL=postgresql+psycopg://my_pa@postgres:5432/my_pa_scratch_BOOTSTRAP
+ops/nas/restore-to-scratch.sh "${post_receipt%.sha256}" my_pa_scratch_BOOTSTRAP
+ops/nas/start.sh DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY
+ops/nas/health.sh
+```
+
+The scratch URL is non-secret and must name only the verified Compose database;
+authentication remains in the protected service environment. Gateway and both
+workers wait for healthy PostgreSQL. The temporary PostgreSQL-only state is not
+a terminal runtime.
+
 Run `preflight.sh IMAGE_MANIFEST ARCHIVE_DIRECTORY` before `start.sh` with the
 same arguments. Both reverify exact loaded images and parse Compose. Start uses
 only `up --detach --no-build --pull never`.

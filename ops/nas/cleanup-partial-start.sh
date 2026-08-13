@@ -1,15 +1,16 @@
 #!/bin/sh
 set -u
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$script_dir/tooling-common.sh"
 : "${MY_PA_NAS_COMPOSE_FILE:?exact NAS compose file required}"
 : "${MY_PA_LIFECYCLE_MODE:=smoke}"
 nas_compose() {
   if [ "$MY_PA_LIFECYCLE_MODE" = pilot ]; then
-    docker compose --file "$MY_PA_NAS_COMPOSE_FILE" \
+    nas_docker compose --file "$MY_PA_NAS_COMPOSE_FILE" \
       --file "$script_dir/compose.pilot.example.yml" \
       --profile nas-01-contract-only "$@"
   else
-    docker compose --file "$MY_PA_NAS_COMPOSE_FILE" \
+    nas_docker compose --file "$MY_PA_NAS_COMPOSE_FILE" \
       --profile nas-01-contract-only "$@"
   fi
 }

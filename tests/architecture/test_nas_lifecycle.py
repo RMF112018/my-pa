@@ -58,16 +58,20 @@ def _complete_manifest(tmp_path: Path) -> tuple[Path, dict[str, str]]:
         "app": "1" * 64,
         "web": "2" * 64,
         "postgres": "dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b",
+        "proxy": "3" * 64,
     }
     path = tmp_path / "complete-image-manifest.toml"
     sections = []
-    for name in ("app", "web", "postgres"):
+    for name in ("app", "web", "postgres", "proxy"):
         digest = "sha256:" + digests[name]
-        reference = (
-            "postgres@sha256:dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b"
-            if name == "postgres"
-            else f"my-pa-{name}@{digest}"
-        )
+        if name == "postgres":
+            reference = (
+                "postgres@sha256:dbbeb22a65db2503050cdbbe5e78f017478f10a1002a226463f049dbb017e99b"
+            )
+        elif name == "proxy":
+            reference = f"caddy@{digest}"
+        else:
+            reference = f"my-pa-{name}@{digest}"
         sections.append(
             f'[images.{name}]\nreference = "{reference}"\nload_reference = "{ids[name]}"\n'
             f'oci_manifest_digest = "{digest}"\ndocker_image_id = "{ids[name]}"\n'
@@ -340,6 +344,7 @@ def test_lifecycle_shell_preserves_refusal_and_stops_before_runtime(
     fake_python.write_text(
         "#!/bin/sh\n"
         f"printf '%s\\n' \"$*\" >> {calls}\n"
+        '[ "$1" = -c ] && exit 0\n'
         'case "$1" in\n'
         "  *lifecycle_gate.py) echo 'NAS lifecycle gate refused: planted refusal' >&2; exit 1 ;;\n"
         "  *) echo 'unexpected continuation' >&2; exit 99 ;;\n"
@@ -371,7 +376,7 @@ def test_lifecycle_shell_preserves_refusal_and_stops_before_runtime(
     assert result.stdout == ""
     assert result.stderr == "NAS lifecycle gate refused: planted refusal\n"
     recorded = calls.read_text(encoding="utf-8").splitlines()
-    assert len(recorded) == 1 and "lifecycle_gate.py" in recorded[0]
+    assert len(recorded) == 2 and "lifecycle_gate.py" in recorded[1]
 
 
 def test_origin_parser_and_evidence_chronology_fail_closed(tmp_path: Path) -> None:
@@ -864,19 +869,155 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
     assert " ps --status running -q" in calls
 
 
-def test_emergency_stop_ignores_broken_control_evidence(tmp_path: Path) -> None:
+def _run_emergency_shell(
+    tmp_path: Path, mode: str
+) -> tuple[subprocess.CompletedProcess[str], str, str]:
     compose = tmp_path / "compose.yml"
     compose.write_text(COMPOSE.read_text(encoding="utf-8"), encoding="utf-8")
     compose.chmod(0o400)
-    calls: list[list[str]] = []
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    calls = tmp_path / "calls"
+    state = tmp_path / "running"
+    initial = {
+        "complete": "c1\nc2\nc3\nc4\nc5\nc6\n",
+        "partial": "c1\nc2\n",
+        "replacement": "c1\n",
+        "unknown": "c1\nu1\n",
+        "oneoff": "c1\no1\n",
+        "duplicate": "c1\nd1\n",
+        "stop-failure": "c1\n",
+    }[mode]
+    state.write_text(initial, encoding="utf-8")
+    replacement_created = tmp_path / "replacement-created"
+    fake_stat = tools / "stat"
+    fake_stat.write_text("#!/bin/sh\nprintf '0:400:1\\n'\n", encoding="utf-8")
+    fake_docker = tools / "docker"
+    fake_docker.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$*" >> "{calls}"\n'
+        'case " $* " in\n'
+        "  *' config --no-interpolate --services '*) "
+        "printf 'worker-enrollment\\nweb\\npostgres\\nproxy\\ngateway\\nworker-capture\\n';;\n"
+        "  *' ps --filter label=com.docker.compose.project=my-pa-nas-contract "
+        f'--filter status=running --format {{{{.ID}}}} \'*) cat "{state}";;\n'
+        "  *' inspect --format '*'.Config.Labels'*' c1 '*) "
+        "printf '%064d|my-pa-nas-contract|gateway|False\\n' 1;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c2 '*) "
+        "printf '%064d|my-pa-nas-contract|postgres|False\\n' 2;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c3 '*) "
+        "printf '%064d|my-pa-nas-contract|proxy|False\\n' 3;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c4 '*) "
+        "printf '%064d|my-pa-nas-contract|web|False\\n' 4;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c5 '*) "
+        "printf '%064d|my-pa-nas-contract|worker-capture|False\\n' 5;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c6 '*) "
+        "printf '%064d|my-pa-nas-contract|worker-enrollment|False\\n' 6;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c7 '*) "
+        "printf '%064d|my-pa-nas-contract|gateway|False\\n' 7;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' u1 '*) "
+        "printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "|my-pa-nas-contract|rogue|False\\n';;\n"
+        "  *' inspect --format '*'.Config.Labels'*' o1 '*) "
+        "printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "|my-pa-nas-contract|gateway|True\\n';;\n"
+        "  *' inspect --format '*'.Config.Labels'*' d1 '*) "
+        "printf 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        "|my-pa-nas-contract|gateway|False\\n';;\n"
+        "  *' stop --time 10 '*)\n"
+        "    for id do :; done\n"
+        '    case "$id" in\n'
+        "      0000000000000000000000000000000000000000000000000000000000000001) short=c1;;\n"
+        "      0000000000000000000000000000000000000000000000000000000000000002) short=c2;;\n"
+        "      0000000000000000000000000000000000000000000000000000000000000003) short=c3;;\n"
+        "      0000000000000000000000000000000000000000000000000000000000000004) short=c4;;\n"
+        "      0000000000000000000000000000000000000000000000000000000000000005) short=c5;;\n"
+        "      0000000000000000000000000000000000000000000000000000000000000006) short=c6;;\n"
+        "      0000000000000000000000000000000000000000000000000000000000000007) short=c7;;\n"
+        "      cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc) short=d1;;\n"
+        "      *) exit 1;;\n"
+        "    esac\n"
+        f'    [ "{mode}" != stop-failure ] || exit 1\n'
+        f'    grep -Fvx "$short" "{state}" > "{state}.next" || true\n'
+        f'    mv "{state}.next" "{state}"\n'
+        f'    if [ "{mode}" = replacement ] && [ "$short" = c1 ] && '
+        f'[ ! -e "{replacement_created}" ]; then echo c7 >> "{state}"; '
+        f': > "{replacement_created}"; fi\n'
+        "    exit 0;;\n"
+        "  *) exit 1;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_stat.chmod(0o700)
+    fake_docker.chmod(0o700)
+    script = tmp_path / "emergency-shutdown.sh"
+    script.write_text(
+        (ROOT / "ops/nas/emergency-shutdown.sh")
+        .read_text(encoding="utf-8")
+        .replace("/etc/my-pa/compose.yml", str(compose)),
+        encoding="utf-8",
+    )
+    script.chmod(0o700)
+    result = subprocess.run(  # noqa: S603 - checked-in shell with synthetic Docker
+        [str(script)],
+        env={
+            "PATH": f"{tools}:/usr/bin:/bin",
+            "MY_PA_NAS_DOCKER": str(fake_docker),
+            "MY_PA_NAS_OPERATOR_ADMISSION": str(tmp_path / "absent-admission"),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result, calls.read_text(encoding="utf-8"), state.read_text(encoding="utf-8")
 
-    def runner(command: list[str]) -> str:
-        calls.append(command)
-        return ""
 
-    assert _module("emergency_stop").stop(compose, owner_uid=os.getuid(), runner=runner) == []
-    assert any(command[-3:] == ["stop", "--timeout", "10"] for command in calls)
-    assert all("pilot-evidence" not in " ".join(command) for command in calls)
+def test_emergency_stop_ignores_broken_control_evidence(tmp_path: Path) -> None:
+    result, invoked, state = _run_emergency_shell(tmp_path, "complete")
+    assert result.returncode == 0, result.stderr
+    assert "config --no-interpolate --services" in invoked
+    assert "ps --filter label=com.docker.compose.project=my-pa-nas-contract" in invoked
+    assert invoked.count("stop --time 10") == 6
+    assert "compose --project-name my-pa-nas-contract" in invoked
+    assert "compose --project-name my-pa-nas-contract --file" in invoked
+    assert "compose --project-name my-pa-nas-contract" not in "\n".join(
+        line for line in invoked.splitlines() if " stop " in line or " ps " in line
+    )
+    assert "pilot-evidence" not in invoked
+    assert "operator-runtime" not in invoked
+    assert state == ""
+
+
+@pytest.mark.parametrize("mode", ["partial", "replacement"])
+def test_emergency_stop_contains_partial_and_concurrently_replaced_stacks(
+    tmp_path: Path, mode: str
+) -> None:
+    result, invoked, state = _run_emergency_shell(tmp_path, mode)
+    assert result.returncode == 0, result.stderr
+    assert state == ""
+    expected_stops = 2
+    assert invoked.count("stop --time 10") == expected_stops
+    assert invoked.count("--filter status=running") >= 2
+
+
+@pytest.mark.parametrize("mode", ["unknown", "oneoff", "stop-failure"])
+def test_emergency_stop_never_claims_success_with_uncontained_project_runtime(
+    tmp_path: Path, mode: str
+) -> None:
+    result, invoked, state = _run_emergency_shell(tmp_path, mode)
+    assert result.returncode == 1
+    assert "NAS runtime stopped" not in result.stdout
+    assert state
+    assert "--filter status=running" in invoked
+
+
+def test_emergency_stop_contains_duplicates_but_reports_identity_anomaly(tmp_path: Path) -> None:
+    result, invoked, state = _run_emergency_shell(tmp_path, "duplicate")
+    assert result.returncode == 1
+    assert "unexpected project identity" in result.stderr
+    assert "NAS runtime stopped" not in result.stdout
+    assert invoked.count("stop --time 10") == 2
+    assert state == ""
 
 
 def test_health_is_readiness_and_diagnostics_cover_operational_signals() -> None:

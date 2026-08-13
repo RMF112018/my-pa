@@ -5,7 +5,8 @@ if [ "$#" -ne 2 ]; then
   exit 64
 fi
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-python3 "$script_dir/image_gate.py" "$1" --archive-dir "$2" --live
+. "$script_dir/tooling-common.sh"
+"$NAS_PYTHON_BIN" "$script_dir/image_gate.py" "$1" --archive-dir "$2" --live
 MY_PA_IMAGE_MANIFEST=$1
 export MY_PA_IMAGE_MANIFEST
 . "$script_dir/lifecycle-common.sh"

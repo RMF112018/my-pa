@@ -223,6 +223,10 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "general_nas_filesystem_credential": False,
             "grant_issuer": "nas_application",
             "transport": "outbound_poll",
+            "entrypoint": "apps/apple_agent.py",
+            "inbound_listener": False,
+            "durable_grant_journal": True,
+            "ack_after_exact_receipt_digest": True,
         },
     }
     if services != expected_contract_services:
@@ -296,6 +300,11 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "apple_machine": {
                 "exposure": "exact_dedicated_paths_only",
                 "paths_frozen_by": "NAS-07",
+                "method": "POST",
+                "paths": ["/apple/v1/grant.poll", "/apple/v1/envelope.admit"],
+                "auth": "AppleBridgeCredential",
+                "principal_source": "credential",
+                "enabled_by_default": False,
             },
             "browser": {"upstream": "web", "auth": "entra"},
         },
@@ -787,6 +796,28 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     @unmatched_remote path /remote/*
     handle @unmatched_remote {
         respond "not found" 404
+    }
+    @apple_machine {
+        method POST
+        path /apple/v1/grant.poll /apple/v1/envelope.admit
+    }
+    handle @apple_machine {
+        reverse_proxy gateway:8765 {
+            header_up -Cookie
+            header_up -Forwarded
+            header_up -X-Forwarded-For
+            header_up -X-Forwarded-Host
+            header_up -X-Forwarded-Proto
+            header_up -X-Forwarded-*
+            header_up -Tailscale-User-Login
+            header_up -Tailscale-User-Name
+            header_up -Tailscale-User-Profile-Pic
+            header_up -Tailscale-App-Capabilities
+        }
+    }
+    @apple_wrong_method path /apple/v1/grant.poll /apple/v1/envelope.admit
+    handle @apple_wrong_method {
+        respond "method not allowed" 405
     }
     @reserved_apple path /apple/*
     handle @reserved_apple {

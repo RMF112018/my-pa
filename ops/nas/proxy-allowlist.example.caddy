@@ -46,7 +46,33 @@
         respond "not found" 404
     }
 
-    # NAS-07 will insert exact Apple poll/admit matchers before this deny.
+    # Apple machine ingress is limited to the two NAS-07 paths. The dedicated
+    # AppleBridgeCredential header is preserved; browser cookies and spoofable
+    # transport identity are stripped.
+    @apple_machine {
+        method POST
+        path /apple/v1/grant.poll /apple/v1/envelope.admit
+    }
+    handle @apple_machine {
+        reverse_proxy gateway:8765 {
+            header_up -Cookie
+            header_up -Forwarded
+            header_up -X-Forwarded-For
+            header_up -X-Forwarded-Host
+            header_up -X-Forwarded-Proto
+            header_up -X-Forwarded-*
+            header_up -Tailscale-User-Login
+            header_up -Tailscale-User-Name
+            header_up -Tailscale-User-Profile-Pic
+            header_up -Tailscale-App-Capabilities
+        }
+    }
+
+    @apple_wrong_method path /apple/v1/grant.poll /apple/v1/envelope.admit
+    handle @apple_wrong_method {
+        respond "method not allowed" 405
+    }
+
     @reserved_apple path /apple/*
     handle @reserved_apple {
         respond "not found" 404

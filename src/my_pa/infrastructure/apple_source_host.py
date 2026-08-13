@@ -13,12 +13,13 @@ import os
 import subprocess
 import tempfile
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from my_pa.contracts.v1.native_sources import (
     NATIVE_SOURCE_PROTOCOL_V1,
+    AppleReadGrant,
     NativeBucketSelection,
     NativeSourceKind,
 )
@@ -132,24 +133,16 @@ class AppleSourceHostProcess:
         self,
         selection: NativeBucketSelection,
         *,
-        time_range: tuple[datetime, datetime] | None,
-        cursor: str | None,
-        limit: int,
-        bridge_id: str,
-        envelope_id: str,
-        request_id: str,
-        at: datetime,
+        grant: AppleReadGrant,
     ) -> Mapping[str, Any]:
-        observed = ensure_utc(at)
-        start, end = time_range or (
-            observed - timedelta(days=1),
-            observed + timedelta(days=1),
-        )
-        configuration_id = envelope_id
+        if grant.selection != selection:
+            raise AppleSourceHostError("the Apple grant selection did not match")
+        configuration_id = grant.configuration_id
+        envelope_id = grant.envelope_id
         with tempfile.TemporaryDirectory(prefix="my-pa-apple-read-") as temporary:
             root = Path(temporary)
             configuration = root / "configuration.json"
-            grant = root / "grant.json"
+            grant_path = root / "grant.json"
             checkpoint = root / "checkpoint.json"
             pending = self._spool / "pending" / f"{envelope_id}.pending"
             if pending.exists():
@@ -158,28 +151,26 @@ class AppleSourceHostProcess:
                 configuration,
                 self._configuration((selection,), active=True, identifier=configuration_id),
             )
-            self._write_json(
-                grant,
+            wire_grant = grant.model_dump(by_alias=True, mode="json")
+            # Swift protocol-v1 predates the remote wrapper fields. Translate the
+            # NAS-issued contract; never synthesize authority identity here.
+            wire_grant.update(
                 {
-                    "schema": "my-pa.apple-source-read-grant.v1",
-                    "configurationID": configuration_id,
-                    "bridgeID": bridge_id,
-                    "requestID": request_id,
-                    "envelopeID": envelope_id,
                     "kind": selection.kind.value,
                     "accountID": selection.account_id,
                     "bucketID": selection.bucket_id,
-                    "authorization": "AUTHORIZED_LIVE_PERSONAL_DATA_READ",
-                    "expiresAtUnixMilliseconds": self._milliseconds(
-                        observed + timedelta(minutes=5)
-                    ),
-                    "pageLimit": limit,
                     "timeRange": {
-                        "startUnixMilliseconds": self._milliseconds(start),
-                        "endUnixMilliseconds": self._milliseconds(end),
+                        "startUnixMilliseconds": wire_grant.pop("timeRangeStartUnixMilliseconds"),
+                        "endUnixMilliseconds": wire_grant.pop("timeRangeEndUnixMilliseconds"),
                     },
-                },
+                }
             )
+            wire_grant.pop("selection")
+            wire_grant.pop("authorityID")
+            wire_grant.pop("principalID")
+            wire_grant.pop("configurationRevision")
+            cursor = wire_grant.pop("cursor")
+            self._write_json(grant_path, wire_grant)
             arguments = [
                 "handoff",
                 "--authorized-single-pass",
@@ -194,7 +185,7 @@ class AppleSourceHostProcess:
                 "--maximum-payload-bytes",
                 str(_MAXIMUM_OUTPUT_BYTES),
                 "--authorization-grant",
-                str(grant),
+                str(grant_path),
             ]
             if cursor is not None:
                 self._write_json(

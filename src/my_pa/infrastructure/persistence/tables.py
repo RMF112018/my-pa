@@ -2830,6 +2830,47 @@ native_bridges = Table(
     _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
+native_apple_bridge_credentials = Table(
+    "native_apple_bridge_credentials",
+    METADATA,
+    Column("credential_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("bridge_id", Text, nullable=False),
+    Column("secret_sha256", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("revoked_at", DateTime(timezone=True)),
+    ForeignKeyConstraint(
+        ["principal_id", "bridge_id"],
+        [f"{SCHEMA}.native_bridges.principal_id", f"{SCHEMA}.native_bridges.bridge_id"],
+        name="apple_bridge_credential_stays_in_principal",
+    ),
+    _matches(
+        "secret_sha256",
+        DIGEST_PATTERN.pattern,
+        name="apple_bridge_secret_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        "state IN ('active', 'revoked')",
+        name="apple_bridge_credential_state_is_known",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "credential_id",
+        name="an_apple_credential_identity_is_principal_bound",
+    ),
+    CheckConstraint(
+        "(state = 'revoked') = (revoked_at IS NOT NULL)",
+        name="an_apple_bridge_credential_records_revocation",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("bridge_id", IdKind.NATIVE_BRIDGE),
+    CheckConstraint(
+        "credential_id ~ '^abcred_[A-Za-z0-9]{8,64}$'",
+        name="apple_credential_id_is_an_opaque_identifier",
+    ),
+)
+
 native_bridge_observations = Table(
     "native_bridge_observations",
     METADATA,
@@ -3193,6 +3234,63 @@ native_admission_authorities = Table(
     ),
     UniqueConstraint("envelope_id", name="native_authority_envelope_is_issued_once"),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
+)
+
+native_apple_read_grants = Table(
+    "native_apple_read_grants",
+    METADATA,
+    Column("authority_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("bridge_id", Text, nullable=False),
+    Column("page_limit", Integer, nullable=False),
+    Column("range_start_unix_milliseconds", BigInteger, nullable=False),
+    Column("range_end_unix_milliseconds", BigInteger, nullable=False),
+    Column("cursor_private", Text),
+    Column("staged_at", DateTime(timezone=True), nullable=False),
+    Column("delivered_at", DateTime(timezone=True)),
+    Column("delivery_lease_expires_at", DateTime(timezone=True)),
+    Column("delivered_to_credential_id", Text),
+    ForeignKeyConstraint(
+        ["principal_id", "authority_id"],
+        [
+            f"{SCHEMA}.native_admission_authorities.principal_id",
+            f"{SCHEMA}.native_admission_authorities.authority_id",
+        ],
+        name="apple_read_grant_authority_stays_in_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "delivered_to_credential_id"],
+        [
+            f"{SCHEMA}.native_apple_bridge_credentials.principal_id",
+            f"{SCHEMA}.native_apple_bridge_credentials.credential_id",
+        ],
+        name="apple_grant_delivery_credential_stays_in_principal",
+    ),
+    CheckConstraint(
+        "(delivered_at IS NULL) = (delivery_lease_expires_at IS NULL) AND "
+        "(delivered_at IS NULL) = (delivered_to_credential_id IS NULL)",
+        name="apple_grant_delivery_lease_is_complete",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "bridge_id"],
+        [f"{SCHEMA}.native_bridges.principal_id", f"{SCHEMA}.native_bridges.bridge_id"],
+        name="apple_read_grant_bridge_stays_in_principal",
+    ),
+    CheckConstraint(
+        f"page_limit BETWEEN 1 AND {NATIVE_SOURCE_MAX_PAGE_SIZE}",
+        name="apple_read_grant_page_limit_is_bounded",
+    ),
+    CheckConstraint(
+        "range_start_unix_milliseconds <= range_end_unix_milliseconds",
+        name="apple_read_grant_range_is_ordered",
+    ),
+    CheckConstraint(
+        "cursor_private IS NULL OR octet_length(cursor_private) <= 512",
+        name="apple_read_grant_cursor_is_bounded",
+    ),
+    _is_identifier("authority_id", IdKind.NATIVE_AUTHORITY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("bridge_id", IdKind.NATIVE_BRIDGE),
 )
 
 native_source_review_routes = Table(

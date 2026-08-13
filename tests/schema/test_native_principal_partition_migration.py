@@ -10,6 +10,7 @@ from alembic.script import ScriptDirectory
 
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "d7a4c9e2f165"
+HEAD_REVISION = "a9e4c7b2d610"
 PRIOR = "b4e8d2c7a613"
 NATIVE_OWNED_TABLES: Final = frozenset(
     {
@@ -39,7 +40,7 @@ NATIVE_OWNED_TABLES: Final = frozenset(
 
 def test_partition_revision_is_the_single_forward_head() -> None:
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [HEAD_REVISION]
     assert script.get_revision(REVISION).down_revision == PRIOR
 
 

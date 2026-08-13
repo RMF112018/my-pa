@@ -36,6 +36,8 @@ def test_the_remote_ingress_is_off_when_nothing_says_otherwise() -> None:
     """The unconfigured default, which is the state of every process by default."""
     assert load_settings(_environment()).remote_ingress_enabled is False
     assert Settings(database_url=DSN).remote_ingress_enabled is False
+    assert load_settings(_environment()).apple_ingress_enabled is False
+    assert Settings(database_url=DSN).apple_ingress_enabled is False
 
 
 def test_a_misspelled_switch_refuses_to_start_rather_than_leaving_it_off() -> None:

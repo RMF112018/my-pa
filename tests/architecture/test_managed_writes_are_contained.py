@@ -76,6 +76,11 @@ MANAGED_STORE: Final = "src/my_pa/infrastructure/managed_document_stores/filesys
 #: and no source root can reach it. A module added here is a decision someone has
 #: to write down.
 REGISTERED_WRITERS: Final[dict[str, str]] = {
+    "src/my_pa/infrastructure/apple_transport_agent.py": (
+        "writes only NAS-issued grant metadata and its content digest receipt into an "
+        "absolute, existing, owner-only Mac journal; the constructor rejects symlinks "
+        "and group/other access, and the journal contains no Apple payload bytes."
+    ),
     "src/my_pa/infrastructure/apple_source_host.py": (
         "writes bounded configuration, grant, and checkpoint JSON only inside a "
         "fresh process-private temporary directory for one Apple host invocation; "

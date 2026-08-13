@@ -584,19 +584,12 @@ def test_the_error_class_vocabulary_is_closed_and_discards_its_error() -> None:
 # --- the quarantine: unreachable, and measured to be ------------------------
 
 
-def test_the_native_source_plane_is_reachable_from_no_transport() -> None:
-    """Why the WP-04 quarantine is safe to leave standing, stated as a measurement.
+def test_the_native_source_plane_has_only_the_nas_07_control_entrypoints() -> None:
+    """NAS-07 makes the Principal-partitioned plane reachable only as designed.
 
-    The twenty-two unpartitioned `native_*`/`source_*` tables carry no Principal
-    column. WP-15 does not change that, and the reason it is not a release
-    blocker is that no transport reaches the controller that writes them: the
-    controller has zero production call sites and every transport refuses a
-    `native_sources.*` capability name outright.
-
-    If either half of that stops being true, the quarantine entry in
-    `tests/architecture/test_user_owned_tables_are_partitioned.py` stops
-    describing a vacuous residual and becomes a live isolation failure. This test
-    is what turns that sentence into something that fails.
+    NAS-07A added the Principal partition before NAS-07B exposed its dedicated
+    grant and admission routes. Generic `native_sources.*` capability names
+    remain refused; the exact composition and operator staging roots are counted.
 
     Scanned over every production root rather than over `src/my_pa`. A wiring
     does not have to be inside the package to be a wiring — `apps/gateway.py`
@@ -614,11 +607,11 @@ def test_the_native_source_plane_is_reachable_from_no_transport() -> None:
         for path in _production_modules()
         if path not in owning and "NativeSourceController" in path.read_text(encoding="utf-8")
     )
-    assert reaching == [], (
-        f"{reaching} construct or reference NativeSourceController. The native "
-        "plane is unpartitioned and quarantined; a production call site makes "
-        "twenty-two unscoped tables reachable and is release-blocking under §18"
-    )
+    assert reaching == [
+        "apps/apple_grant.py",
+        "src/my_pa/bootstrap/apple_machine_control.py",
+        "src/my_pa/bootstrap/gateway.py",
+    ]
 
     normalization = (PACKAGE / "adapters" / "normalization.py").read_text(encoding="utf-8")
     assert "NativeSourceCapability(capability)" in normalization

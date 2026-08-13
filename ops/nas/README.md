@@ -70,6 +70,27 @@ Tailscale Serve mapping, disabled Funnel, and installed Entra egress evidence.
 The checked-in ingress manifest refuses. Enabling Serve or changing a firewall
 remains an explicit operator action and has no script in this package.
 
+NAS-07 adds an off-by-default Apple machine plane at exactly
+`POST /apple/v1/grant.poll` and `POST /apple/v1/envelope.admit`. The NAS stages
+short-lived, Principal-bound grants through [`../../apps/apple_grant.py`](../../apps/apple_grant.py);
+the Mac runs the outbound-only [`../../apps/apple_agent.py`](../../apps/apple_agent.py),
+durably journals grant metadata beside (but never inside) the protected content
+spool, and acknowledges content only after verifying the NAS receipt against
+the exact admitted bytes. [`../../apps/cli/apple_credentials.py`](../../apps/cli/apple_credentials.py)
+is the operator-only, show-once credential mint path. None of these commands
+enables ingress, invokes live TCC access by itself, or supplies the Mac with a
+database or general NAS filesystem credential.
+
+In pilot `entra` mode, both operator commands require the owning
+`--principal-id`; their database operations remain partitioned by that value and
+refuse a bridge, configuration, or bucket owned by any other Principal. In
+scratch `local_operator` mode the flag may be omitted and, if supplied, must
+match the fixed local operator. The Mac agent requires
+`MYPA_APPLE_CONTROL_ORIGIN`, `MYPA_APPLE_PRINCIPAL_ID`, `MYPA_APPLE_BRIDGE_ID`,
+`MYPA_APPLE_BRIDGE_CREDENTIAL`, `MYPA_APPLE_HOST_EXECUTABLE`,
+`MYPA_APPLE_SPOOL_DIRECTORY`, `MYPA_APPLE_GRANT_JOURNAL`,
+`MYPA_APPLE_CONTACTS_IDENTITY_EPOCH`, and `MYPA_APPLE_MAIL_GENERATION`.
+
 Later packages own executable behavior:
 
 - NAS-02 images supply app/web Dockerfiles and the
@@ -80,5 +101,5 @@ Later packages own executable behavior:
 - NAS-04/05 services and filesystem permissions;
 - NAS-06 private HTTPS ingress, Entra pilot origin, and a verified Microsoft
   OIDC/JWKS egress allowlist for gateway and web;
-- NAS-07 Apple grant/poll/admit/receipt protocol;
+- NAS-07 live Apple/TCC activation and real credential minting remain operator gates;
 - NAS-08 source placement; NAS-09 lifecycle; NAS-10 acceptance.

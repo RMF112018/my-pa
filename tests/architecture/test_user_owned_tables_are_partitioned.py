@@ -16,7 +16,7 @@ the registry cannot outlive what it describes.
 Two planes make up almost all of it, while NAS-07A now measures the former
 native residual as a positive partition contract:
 
-* **the native-source plane** — twenty native-owned control/evidence tables now
+* **the native-source plane** — twenty-two native-owned control/evidence tables now
   carry a required Principal partition. The shared `source_objects` and
   `source_object_versions` identities remain rooted in an operator-registered
   source and native paths may reach them only through partitioned evidence or
@@ -106,6 +106,8 @@ UNPARTITIONED_USER_OWNED: Final = {
 NATIVE_PARTITIONED: Final = frozenset(
     {
         "native_bridges",
+        "native_apple_bridge_credentials",
+        "native_apple_read_grants",
         "native_bridge_observations",
         "native_source_accounts",
         "native_source_buckets",
@@ -199,7 +201,7 @@ def test_every_registered_reason_says_something() -> None:
 
 def test_the_native_owned_plane_is_principal_partitioned() -> None:
     """NAS-07A closes the native plane without claiming shared source identity."""
-    assert len(NATIVE_PARTITIONED) == 20
+    assert len(NATIVE_PARTITIONED) == 22
     for name in NATIVE_PARTITIONED:
         table = METADATA.tables[f"knowledge.{name}"]
         assert table.c.principal_id.nullable is False

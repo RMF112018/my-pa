@@ -132,11 +132,19 @@ def _run(args: argparse.Namespace) -> int:
     runtime = build_gateway_runtime(settings)
     application = (
         create_http_app(
-            runtime.service, principal=runtime.principal, remote_client=runtime.remote_client
+            runtime.service,
+            principal=runtime.principal,
+            remote_client=runtime.remote_client,
+            apple_authenticate=runtime.apple_authenticate,
+            apple_control=runtime.apple_control,
         )
         if runtime.authenticate is None
         else create_http_app(
-            runtime.service, authenticate=runtime.authenticate, remote_client=runtime.remote_client
+            runtime.service,
+            authenticate=runtime.authenticate,
+            remote_client=runtime.remote_client,
+            apple_authenticate=runtime.apple_authenticate,
+            apple_control=runtime.apple_control,
         )
     )
     server = uvicorn.Server(

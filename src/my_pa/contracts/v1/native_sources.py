@@ -21,6 +21,8 @@ __all__ = [
     "NATIVE_SOURCE_MAX_CURSOR_BYTES",
     "NATIVE_SOURCE_MAX_PAGE_SIZE",
     "NATIVE_SOURCE_PROTOCOL_V1",
+    "AppleAdmissionReceipt",
+    "AppleReadGrant",
     "NativeAccountView",
     "NativeAdmissionEnvelope",
     "NativeBucketProgress",
@@ -168,6 +170,56 @@ class NativeBucketSelection(StrictModel):
     kind: NativeSourceKind
     account_id: OpaqueNativeID = Field(alias="accountID")
     bucket_id: OpaqueNativeID = Field(alias="bucketID")
+
+
+class AppleReadGrant(StrictModel):
+    """One NAS-issued, bounded instruction the Mac may execute but never mint."""
+
+    schema_name: str = Field(alias="schema")
+    authority_id: str = Field(alias="authorityID", min_length=1, max_length=72)
+    principal_id: str = Field(alias="principalID", min_length=1, max_length=72)
+    configuration_id: str = Field(alias="configurationID", min_length=1, max_length=72)
+    configuration_revision: int = Field(alias="configurationRevision", ge=1)
+    bridge_id: OpaqueNativeID = Field(alias="bridgeID")
+    request_id: OpaqueNativeID = Field(alias="requestID")
+    envelope_id: OpaqueNativeID = Field(alias="envelopeID")
+    selection: NativeBucketSelection
+    authorization: str
+    expires_at_unix_milliseconds: int = Field(alias="expiresAtUnixMilliseconds", gt=0)
+    page_limit: int = Field(alias="pageLimit", ge=1, le=NATIVE_SOURCE_MAX_PAGE_SIZE)
+    time_range_start_unix_milliseconds: int = Field(alias="timeRangeStartUnixMilliseconds")
+    time_range_end_unix_milliseconds: int = Field(alias="timeRangeEndUnixMilliseconds")
+    cursor: str | None = Field(default=None, max_length=NATIVE_SOURCE_MAX_CURSOR_BYTES)
+
+    @model_validator(mode="after")
+    def _frozen_contract(self) -> AppleReadGrant:
+        if self.schema_name != "my-pa.apple-source-read-grant.v1":
+            raise ValueError("the Apple read grant schema is unsupported")
+        if self.authorization != "AUTHORIZED_LIVE_PERSONAL_DATA_READ":
+            raise ValueError("the Apple read grant is not authorized")
+        if self.time_range_start_unix_milliseconds > self.time_range_end_unix_milliseconds:
+            raise ValueError("the Apple read grant range is not ordered")
+        if self.cursor is not None and len(self.cursor.encode()) > NATIVE_SOURCE_MAX_CURSOR_BYTES:
+            raise ValueError("the Apple read grant cursor is outside its byte bound")
+        return self
+
+
+class AppleAdmissionReceipt(StrictModel):
+    """Durable NAS answer which permits one exact local spool acknowledgement."""
+
+    schema_name: str = Field(alias="schema")
+    principal_id: str = Field(alias="principalID", min_length=1, max_length=72)
+    bridge_id: OpaqueNativeID = Field(alias="bridgeID")
+    authority_id: str = Field(alias="authorityID", min_length=1, max_length=72)
+    request_id: OpaqueNativeID = Field(alias="requestID")
+    envelope_id: OpaqueNativeID = Field(alias="envelopeID")
+    admission_digest: str = Field(alias="admissionDigest", pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _schema(self) -> AppleAdmissionReceipt:
+        if self.schema_name != "my-pa.apple-admission-receipt.v1":
+            raise ValueError("the Apple admission receipt schema is unsupported")
+        return self
 
 
 class NativePreflightResult(StrictModel):

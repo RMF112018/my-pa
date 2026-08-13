@@ -20,6 +20,8 @@ from my_pa.contracts.v1.base import canonical_json
 from my_pa.contracts.v1.native_sources import (
     NATIVE_SOURCE_MAX_PAGE_SIZE,
     NATIVE_SOURCE_PROTOCOL_V1,
+    AppleAdmissionReceipt,
+    AppleReadGrant,
     NativeAdmissionEnvelope,
     NativeBucketProgress,
     NativeBucketSelection,
@@ -192,13 +194,7 @@ class NativeSourceHost(Protocol):
         self,
         selection: NativeBucketSelection,
         *,
-        time_range: tuple[datetime, datetime] | None,
-        cursor: str | None,
-        limit: int,
-        bridge_id: str,
-        envelope_id: str,
-        request_id: str,
-        at: datetime,
+        grant: AppleReadGrant,
     ) -> Mapping[str, Any]: ...
 
     def acknowledge(self, envelope_id: str) -> None:
@@ -254,7 +250,26 @@ class NativeSourceStore(Protocol):
         expires_at: datetime,
     ) -> NativeSyncAuthority: ...
 
+    def issue_remote_sync_authority(
+        self,
+        configuration: NativeConfigurationRevision,
+        binding: NativeBucketBinding,
+        *,
+        audit_id: str,
+        request_id: str,
+        issued_at: datetime,
+        expires_at: datetime,
+    ) -> NativeSyncAuthority:
+        """Issue the NAS-side authority without calling the remote Mac host."""
+        ...
+
     def authority_for_envelope(self, envelope_id: str) -> NativeSyncAuthority | None: ...
+
+    def consumed_admission_digest(self, authority_id: str) -> str:
+        """Return the digest atomically stored with durable grant consumption."""
+        ...
+
+    def stage_apple_grant(self, grant: AppleReadGrant, *, staged_at: datetime) -> None: ...
 
     def prevalidate_authority(
         self, envelope: NativeAdmissionEnvelope, authority: NativeSyncAuthority, *, at: datetime
@@ -280,6 +295,7 @@ class NativeSourceStore(Protocol):
         at: datetime,
         checkpoint_job_id: str | None = None,
         checkpoint_run_id: str | None = None,
+        require_staged_apple_grant: bool = False,
     ) -> tuple[tuple[str, bool], ...]:
         """Atomically validate, record preflight, consume authority, and commit evidence."""
 
@@ -620,6 +636,68 @@ class NativeSourceController:
             audit_id=audit_id,
         )
 
+    def stage_remote_grant(
+        self,
+        context: NativeRequestContext,
+        *,
+        configuration_id: str,
+        bucket_id: str,
+        time_range: tuple[datetime, datetime],
+        cursor: str | None,
+        limit: int = NATIVE_SOURCE_MAX_PAGE_SIZE,
+    ) -> AppleReadGrant:
+        """Stage one NAS-authorized grant for outbound pickup by the bound Mac.
+
+        Unlike the co-located lifecycle path, this never calls the Mac host. The
+        The NAS still requires the exact active Principal/configuration/bucket,
+        an allowed audit decision, and a short expiry. The Mac performs the
+        bounded provider read only after receiving that authority.
+        """
+        if not 1 <= limit <= NATIVE_SOURCE_MAX_PAGE_SIZE:
+            raise ValueError("native-source page limit is outside the frozen bound")
+        start, end = (ensure_utc(value) for value in time_range)
+        if start > end:
+            raise ValueError("native-source page range is not ordered")
+        snapshot = self._store.latest_configuration(configuration_id)
+        if snapshot is None or not snapshot.active:
+            raise AdmissionDeniedError("native configuration is not active")
+        configuration = snapshot.configuration
+        binding = self._bindings((bucket_id,), configuration.bridge_id)[0]
+        audit_id = self._authorize(
+            context, NativeSourceCapability.SYNC, frozenset({binding.source_id})
+        )
+        try:
+            authority = self._store.issue_remote_sync_authority(
+                configuration,
+                binding,
+                audit_id=audit_id,
+                request_id=context.request_id,
+                issued_at=context.at,
+                expires_at=context.at + timedelta(minutes=5),
+            )
+        except NativeAdmissionAuthorityError as exc:
+            raise AdmissionDeniedError("remote native grant eligibility was not current") from exc
+        selection = self._host_selections((binding,))[0]
+        grant = AppleReadGrant(
+            schema="my-pa.apple-source-read-grant.v1",
+            authorityID=authority.authority_id,
+            principalID=context.principal.principal_id,
+            configurationID=authority.configuration_id,
+            configurationRevision=authority.configuration_revision,
+            bridgeID=authority.bridge_id,
+            requestID=authority.request_id,
+            envelopeID=authority.envelope_id,
+            selection=selection,
+            authorization="AUTHORIZED_LIVE_PERSONAL_DATA_READ",
+            expiresAtUnixMilliseconds=int(authority.expires_at.timestamp() * 1_000),
+            pageLimit=limit,
+            timeRangeStartUnixMilliseconds=int(start.timestamp() * 1_000),
+            timeRangeEndUnixMilliseconds=int(end.timestamp() * 1_000),
+            cursor=cursor,
+        )
+        self._store.stage_apple_grant(grant, staged_at=context.at)
+        return grant
+
     def disable(
         self,
         context: NativeRequestContext,
@@ -678,6 +756,62 @@ class NativeSourceController:
         checkpoint_job_id: str | None = None,
         checkpoint_run_id: str | None = None,
     ) -> NativeAdmissionReceipt:
+        return self._admit(
+            context,
+            authority=authority,
+            wire_envelope=wire_envelope,
+            checkpoint_job_id=checkpoint_job_id,
+            checkpoint_run_id=checkpoint_run_id,
+            require_host_preflight=True,
+        )
+
+    def admit_remote(
+        self,
+        context: NativeRequestContext,
+        *,
+        authority: NativeSyncAuthority,
+        wire_envelope: Mapping[str, Any],
+    ) -> AppleAdmissionReceipt:
+        """Admit an Apple upload using the durable NAS grant transaction.
+
+        There is intentionally no NAS-local host call: the caller is the exact
+        authenticated bridge and the locked store repeats authority, expiry,
+        Principal partition, selection, replay, and content validation.
+        """
+        self._admit(
+            context,
+            authority=authority,
+            wire_envelope=wire_envelope,
+            checkpoint_job_id=None,
+            checkpoint_run_id=None,
+            require_staged_apple_grant=True,
+            require_host_preflight=False,
+        )
+        try:
+            digest = self._store.consumed_admission_digest(authority.authority_id)
+        except NativeAdmissionAuthorityError as exc:
+            raise AdmissionDeniedError("remote native receipt was not durable") from exc
+        return AppleAdmissionReceipt(
+            schema="my-pa.apple-admission-receipt.v1",
+            principalID=context.principal.principal_id,
+            bridgeID=authority.bridge_id,
+            authorityID=authority.authority_id,
+            requestID=authority.request_id,
+            envelopeID=authority.envelope_id,
+            admissionDigest=digest,
+        )
+
+    def _admit(
+        self,
+        context: NativeRequestContext,
+        *,
+        authority: NativeSyncAuthority,
+        wire_envelope: Mapping[str, Any],
+        checkpoint_job_id: str | None,
+        checkpoint_run_id: str | None,
+        require_host_preflight: bool,
+        require_staged_apple_grant: bool = False,
+    ) -> NativeAdmissionReceipt:
         if (
             not context.principal.authenticated
             or context.principal.kind is not PrincipalKind.SOURCE_PROVIDER_ADAPTER
@@ -709,32 +843,36 @@ class NativeSourceController:
         # host call, so revocation can still occur while preflight is in flight.
         # The final durable operations therefore repeat every authority/current-
         # scope/replay check while holding the same configuration and grant locks.
-        verification = self._preflight_exact(
-            context, bridge_id=authority.bridge_id, bindings=(binding,)
-        )
-        if not verification.identity_verified:
-            raise PreflightDeniedError("native admission preflight identity did not match")
-        if not verification.reachable:
-            try:
-                self._store.record_admission_preflight_durably(
-                    envelope,
-                    authority,
-                    verification.bucket_results,
-                    observed_at=context.at,
-                )
-            except NativeAdmissionAuthorityError as exc:
-                raise AdmissionDeniedError(
-                    "native sync authority is stale or unauthenticated"
-                ) from exc
-            raise PreflightDeniedError("native admission preflight did not pass")
+        preflight: tuple[NativeBucketProgress, ...] = ()
+        if require_host_preflight:
+            verification = self._preflight_exact(
+                context, bridge_id=authority.bridge_id, bindings=(binding,)
+            )
+            if not verification.identity_verified:
+                raise PreflightDeniedError("native admission preflight identity did not match")
+            if not verification.reachable:
+                try:
+                    self._store.record_admission_preflight_durably(
+                        envelope,
+                        authority,
+                        verification.bucket_results,
+                        observed_at=context.at,
+                    )
+                except NativeAdmissionAuthorityError as exc:
+                    raise AdmissionDeniedError(
+                        "native sync authority is stale or unauthenticated"
+                    ) from exc
+                raise PreflightDeniedError("native admission preflight did not pass")
+            preflight = verification.bucket_results
         try:
             versions = self._store.admit_evidence_durably(
                 envelope,
                 authority,
-                verification.bucket_results,
+                preflight,
                 at=context.at,
                 checkpoint_job_id=checkpoint_job_id,
                 checkpoint_run_id=checkpoint_run_id,
+                require_staged_apple_grant=require_staged_apple_grant,
             )
         except NativeAdmissionAuthorityError as exc:
             raise AdmissionDeniedError("native sync authority is stale or unauthenticated") from exc
@@ -855,15 +993,30 @@ class NativeSourceController:
         if not isinstance(issued, NativeSyncAuthority):
             raise RuntimeError("native sync did not issue page authority")
         authority = issued
+        start, end = time_range or (
+            control_context.at - timedelta(days=1),
+            control_context.at + timedelta(days=1),
+        )
+        grant = AppleReadGrant(
+            schema="my-pa.apple-source-read-grant.v1",
+            authorityID=authority.authority_id,
+            principalID=control_context.principal.principal_id,
+            configurationID=authority.configuration_id,
+            configurationRevision=authority.configuration_revision,
+            bridgeID=authority.bridge_id,
+            requestID=authority.request_id,
+            envelopeID=authority.envelope_id,
+            selection=selection,
+            authorization="AUTHORIZED_LIVE_PERSONAL_DATA_READ",
+            expiresAtUnixMilliseconds=int(authority.expires_at.timestamp() * 1_000),
+            pageLimit=limit,
+            timeRangeStartUnixMilliseconds=int(start.timestamp() * 1_000),
+            timeRangeEndUnixMilliseconds=int(end.timestamp() * 1_000),
+            cursor=cursor,
+        )
         wire = self._host.read(
             selection,
-            time_range=time_range,
-            cursor=cursor,
-            limit=limit,
-            bridge_id=authority.bridge_id,
-            envelope_id=authority.envelope_id,
-            request_id=control_context.request_id,
-            at=control_context.at,
+            grant=grant,
         )
         envelope = NativeAdmissionEnvelope.model_validate(wire)
         admission = self.admit(

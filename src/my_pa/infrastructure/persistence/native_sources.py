@@ -26,6 +26,7 @@ from my_pa.contracts.native_baseline import (
 from my_pa.contracts.v1.base import canonical_json
 from my_pa.contracts.v1.native_sources import (
     NATIVE_SOURCE_MAX_PAGE_SIZE,
+    AppleReadGrant,
     NativeAdmissionEnvelope,
     NativeBucketProgress,
     NativeCoverageState,
@@ -72,6 +73,7 @@ from my_pa.infrastructure.persistence.tables import (
     capture_proposals,
     capture_versions,
     native_admission_authorities,
+    native_apple_read_grants,
     native_bridge_observations,
     native_bridges,
     native_bucket_runs,
@@ -1516,6 +1518,47 @@ class SqlNativeSourceControlStore:
         issued_at: datetime,
         expires_at: datetime,
     ) -> NativeAdmissionAuthority:
+        return self._issue_sync_authority(
+            configuration,
+            binding,
+            audit_id=audit_id,
+            request_id=request_id,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            require_reachable_preflight=False,
+        )
+
+    def issue_remote_sync_authority(
+        self,
+        configuration: NativeConfigurationRevision,
+        binding: NativeBucketBindingRecord,
+        *,
+        audit_id: str,
+        request_id: str,
+        issued_at: datetime,
+        expires_at: datetime,
+    ) -> NativeAdmissionAuthority:
+        return self._issue_sync_authority(
+            configuration,
+            binding,
+            audit_id=audit_id,
+            request_id=request_id,
+            issued_at=issued_at,
+            expires_at=expires_at,
+            require_reachable_preflight=False,
+        )
+
+    def _issue_sync_authority(
+        self,
+        configuration: NativeConfigurationRevision,
+        binding: NativeBucketBindingRecord,
+        *,
+        audit_id: str,
+        request_id: str,
+        issued_at: datetime,
+        expires_at: datetime,
+        require_reachable_preflight: bool,
+    ) -> NativeAdmissionAuthority:
         with self._engine.begin() as connection:
             self._lock_configuration(connection, configuration.configuration_id)
             latest = connection.execute(
@@ -1555,12 +1598,32 @@ class SqlNativeSourceControlStore:
                     self._mine(native_source_accounts),
                 )
             ).one_or_none()
+            latest_preflight = connection.execute(
+                select(native_preflight_observations.c.state)
+                .where(
+                    native_preflight_observations.c.configuration_id
+                    == configuration.configuration_id,
+                    native_preflight_observations.c.configuration_revision
+                    == configuration.revision,
+                    native_preflight_observations.c.bucket_id == binding.bucket_id,
+                    self._mine(native_preflight_observations),
+                )
+                .order_by(
+                    native_preflight_observations.c.observed_at.desc(),
+                    native_preflight_observations.c.observation_id.desc(),
+                )
+                .limit(1)
+            ).scalar_one_or_none()
             if (
                 latest != configuration.revision
                 or allowed_audit is None
                 or selected is None
                 or str(selected.source_id) != binding.source_id
                 or str(selected.bridge_id) != configuration.bridge_id
+                or (
+                    require_reachable_preflight
+                    and latest_preflight != NativePreflightState.REACHABLE.value
+                )
             ):
                 raise NativeAdmissionAuthorityError("native authority issuance scope is stale")
             existing = connection.execute(
@@ -1701,6 +1764,73 @@ class SqlNativeSourceControlStore:
             issued_at=value["issued_at"],
             expires_at=value["expires_at"],
         )
+
+    def consumed_admission_digest(self, authority_id: str) -> str:
+        """Read the receipt identity written in the evidence transaction."""
+        validate_identifier(authority_id, IdKind.NATIVE_AUTHORITY)
+        with self._engine.connect() as connection:
+            digest = connection.execute(
+                select(native_admission_authorities.c.admission_sha256).where(
+                    native_admission_authorities.c.authority_id == authority_id,
+                    native_admission_authorities.c.consumed_at.is_not(None),
+                    self._mine(native_admission_authorities),
+                )
+            ).scalar_one_or_none()
+        if digest is None:
+            raise NativeAdmissionAuthorityError("native admission receipt was not durable")
+        return str(digest)
+
+    def stage_apple_grant(self, grant: AppleReadGrant, *, staged_at: datetime) -> None:
+        """Persist remote-only bounds after durable authority issuance."""
+        if grant.principal_id != self._partition_identity:
+            raise NativeAdmissionAuthorityError("Apple grant Principal did not match")
+        with self._engine.begin() as connection:
+            authority = connection.execute(
+                select(native_admission_authorities.c.authority_id).where(
+                    native_admission_authorities.c.authority_id == grant.authority_id,
+                    native_admission_authorities.c.bridge_id == grant.bridge_id,
+                    native_admission_authorities.c.consumed_at.is_(None),
+                    self._mine(native_admission_authorities),
+                )
+            ).scalar_one_or_none()
+            if authority is None:
+                raise NativeAdmissionAuthorityError("Apple grant authority was not current")
+            inserted = connection.execute(
+                pg_insert(native_apple_read_grants)
+                .values(
+                    **self._bound(
+                        native_apple_read_grants,
+                        authority_id=grant.authority_id,
+                        bridge_id=grant.bridge_id,
+                        page_limit=grant.page_limit,
+                        range_start_unix_milliseconds=grant.time_range_start_unix_milliseconds,
+                        range_end_unix_milliseconds=grant.time_range_end_unix_milliseconds,
+                        cursor_private=grant.cursor,
+                        staged_at=ensure_utc(staged_at),
+                    )
+                )
+                .on_conflict_do_nothing(index_elements=[native_apple_read_grants.c.authority_id])
+                .returning(native_apple_read_grants.c.authority_id)
+            ).scalar_one_or_none()
+            if inserted is None:
+                existing = connection.execute(
+                    select(native_apple_read_grants).where(
+                        native_apple_read_grants.c.authority_id == grant.authority_id,
+                        self._mine(native_apple_read_grants),
+                    )
+                ).one()
+                value = existing._mapping
+                expected = {
+                    "bridge_id": grant.bridge_id,
+                    "page_limit": grant.page_limit,
+                    "range_start_unix_milliseconds": grant.time_range_start_unix_milliseconds,
+                    "range_end_unix_milliseconds": grant.time_range_end_unix_milliseconds,
+                    "cursor_private": grant.cursor,
+                }
+                if any(value[key] != item for key, item in expected.items()):
+                    raise NativeAdmissionAuthorityError(
+                        "Apple grant retry changed its durable bounds"
+                    )
 
     def progress(self, configuration_id: str) -> tuple[NativeBucketProgress, ...]:
         snapshot = self.latest_configuration(configuration_id)
@@ -1909,7 +2039,11 @@ class SqlNativeSourceControlStore:
             and envelope.metadata.host_instance_id == authority.bridge_id
             and envelope.metadata.envelope_id == authority.envelope_id
             and envelope.request_id == authority.request_id
-            and authority.issued_at <= recorded_at <= authority.expires_at
+            and authority.issued_at <= recorded_at
+            and (
+                recorded_at <= authority.expires_at
+                or (prior_digest is not None and str(prior_digest) == admission_digest)
+            )
         )
         if not exact or (prior_digest is not None and str(prior_digest) != admission_digest):
             raise NativeAdmissionAuthorityError("native admission authority did not match")
@@ -1954,6 +2088,7 @@ class SqlNativeSourceControlStore:
         at: datetime,
         checkpoint_job_id: str | None = None,
         checkpoint_run_id: str | None = None,
+        require_staged_apple_grant: bool = False,
     ) -> tuple[tuple[str, bool], ...]:
         recorded_at = ensure_utc(at)
         if (checkpoint_job_id is None) != (checkpoint_run_id is None):
@@ -1968,6 +2103,34 @@ class SqlNativeSourceControlStore:
             source_kind, admission_digest = self._validate_authority_locked(
                 connection, envelope, authority, at=recorded_at
             )
+            if require_staged_apple_grant:
+                staged = connection.execute(
+                    select(native_apple_read_grants)
+                    .where(
+                        native_apple_read_grants.c.authority_id == authority.authority_id,
+                        native_apple_read_grants.c.bridge_id == authority.bridge_id,
+                        self._mine(native_apple_read_grants),
+                    )
+                    .with_for_update(of=native_apple_read_grants)
+                ).one_or_none()
+                if staged is None:
+                    raise NativeAdmissionAuthorityError(
+                        "remote admission has no exact staged Apple grant"
+                    )
+                bounds = staged._mapping
+                modified = tuple(
+                    record.source_modified_unix_milliseconds
+                    for record in envelope.records
+                    if record.source_modified_unix_milliseconds is not None
+                )
+                if len(envelope.records) > int(bounds["page_limit"]) or any(
+                    value < int(bounds["range_start_unix_milliseconds"])
+                    or value > int(bounds["range_end_unix_milliseconds"])
+                    for value in modified
+                ):
+                    raise NativeAdmissionAuthorityError(
+                        "remote admission exceeded its staged Apple grant bounds"
+                    )
             self._record_preflight_rows(
                 connection,
                 authority.configuration_id,

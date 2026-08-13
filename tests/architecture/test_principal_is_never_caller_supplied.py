@@ -177,6 +177,27 @@ DERIVED_CHAINS: Final = ("principal.principal_id", "account.principal_id")
 #: The registry is exact. A sixth module reading a request's stated principal is
 #: a decision that has to be written here, with what verifies it.
 VERIFIED_CALLER_STATEMENTS: Final = {
+    # The binding is an operator-created credential record and the identity is
+    # the result of verifying that record, never a request body field.
+    "application/apple_machine.py": (("binding", "principal_id"),),
+    "bootstrap/apple_machine_control.py": (
+        ("identity", "principal_id"),
+        ("identity", "principal_id"),
+        ("identity", "principal_id"),
+    ),
+    # The grant is NAS-issued and durably journaled; the receipt is NAS-issued
+    # and compared back to that grant before any protected spool acknowledgement.
+    "infrastructure/apple_transport_agent.py": (
+        ("grant", "principal_id"),
+        ("grant", "principal_id"),
+        ("grant", "principal_id"),
+        ("grant", "principal_id"),
+        ("receipt", "principal_id"),
+        ("receipt", "principal_id"),
+    ),
+    # Remote grant staging compares the NAS-issued contract Principal with the
+    # store's authenticated Principal partition before persisting any bounds.
+    "infrastructure/persistence/native_sources.py": (("grant", "principal_id"),),
     "application/goodnotes.py": (
         ("page", "principal_id"),
         ("page", "principal_id"),

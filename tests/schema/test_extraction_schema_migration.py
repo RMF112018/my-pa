@@ -220,6 +220,7 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
         }
     ),
     "b4e8d2c7a613": frozenset({"worker_heartbeats"}),
+    "a9e4c7b2d610": frozenset({"native_apple_bridge_credentials", "native_apple_read_grants"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

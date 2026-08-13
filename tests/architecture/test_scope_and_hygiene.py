@@ -244,7 +244,7 @@ def _imports(path: Path) -> set[str]:
 #: See the module docstring: a transport library is not "in scope", it is in the
 #: transport.
 CONFINED_IMPORT_ROOTS = {
-    "starlette": "adapters/http",
+    "starlette": "adapters",
     "mcp": "adapters/mcp",
     # PyJWT. One module verifies bearer tokens; nothing else in the tree may
     # decode, inspect, or re-verify one, which is what keeps "the token was
@@ -500,6 +500,45 @@ def test_no_source_file_embeds_a_personal_path_or_credential() -> None:
     for path in _modules():
         text = path.read_text(encoding="utf-8")
         assert not forbidden.search(text), f"{path} embeds a private value"
+
+
+def test_repository_has_no_high_confidence_secret_signature() -> None:
+    """Scan every text artifact without ever printing a suspected value."""
+    signatures = {
+        "private_key": re.compile(
+            "-----BEGIN " + r"(?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----"
+        ),
+        "aws_access_key": re.compile("A" + r"(?:KI|SI)A[0-9A-Z]{16}"),
+        "github_token": re.compile("gh" + r"[pousr]_[A-Za-z0-9]{36,}"),
+        "github_fine_grained_token": re.compile("github_" + r"pat_[A-Za-z0-9_]{40,}"),
+        "slack_token": re.compile("xo" + r"x[baprs]-[A-Za-z0-9-]{20,}"),
+        "stripe_live_key": re.compile("sk_" + r"live_[A-Za-z0-9]{20,}"),
+        "openai_project_key": re.compile("sk-" + r"proj-[A-Za-z0-9_-]{20,}"),
+        "google_api_key": re.compile("AI" + r"za[0-9A-Za-z_-]{35}"),
+    }
+    roots = (
+        ROOT / ".github",
+        ROOT / "apps",
+        ROOT / "docs",
+        ROOT / "migrations",
+        ROOT / "ops",
+        SRC,
+        ROOT / "tests",
+        ROOT / "web",
+    )
+    candidates = [ROOT / ".env.example", ROOT / "pyproject.toml", ROOT / "README.md"]
+    candidates.extend(path for root in roots for path in root.rglob("*") if path.is_file())
+    for path in candidates:
+        if "node_modules" in path.parts or path.stat().st_size > 2_000_000:
+            continue
+        try:
+            document = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for name, signature in signatures.items():
+            assert signature.search(document) is None, (
+                f"{path.relative_to(ROOT)} matches high-confidence secret signature {name}"
+            )
 
 
 def test_every_package_directory_is_importable() -> None:

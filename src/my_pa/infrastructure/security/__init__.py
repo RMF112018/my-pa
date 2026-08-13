@@ -7,3 +7,19 @@ configured home tenant, and only then resolves or creates the durable
 smuggles a `principal_id` is rejected even when its token is valid, so the
 token is the only identity input that can ever reach persistence.
 """
+
+from my_pa.infrastructure.security.remote_oauth import (
+    RemoteAuthContext,
+    RemoteAuthenticationError,
+    RemoteAuthenticator,
+    protected_resource_metadata,
+    redact_security_value,
+)
+
+__all__ = [
+    "RemoteAuthContext",
+    "RemoteAuthenticationError",
+    "RemoteAuthenticator",
+    "protected_resource_metadata",
+    "redact_security_value",
+]

@@ -1,0 +1,26 @@
+# Render with render-cloudflared-config.py; cloudflared does not consume this template.
+tunnel: __TUNNEL_ID__
+credentials-file: /run/secrets/cloudflared/credentials.json
+protocol: quic
+no-autoupdate: true
+
+ingress:
+  - hostname: __MCP_HOSTNAME__
+    path: ^/mcp$
+    service: http://my-pa-mcp-remote:8766
+    originRequest:
+      connectTimeout: 10s
+      httpHostHeader: __MCP_HOSTNAME__
+  - hostname: __MCP_HOSTNAME__
+    path: ^/healthz$
+    service: http://my-pa-mcp-remote:8766
+    originRequest:
+      connectTimeout: 3s
+      httpHostHeader: __MCP_HOSTNAME__
+  - hostname: __MCP_HOSTNAME__
+    path: ^/.well-known/oauth-protected-resource$
+    service: http://my-pa-mcp-remote:8766
+    originRequest:
+      connectTimeout: 3s
+      httpHostHeader: __MCP_HOSTNAME__
+  - service: http_status:404

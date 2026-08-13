@@ -76,6 +76,10 @@ MANAGED_STORE: Final = "src/my_pa/infrastructure/managed_document_stores/filesys
 #: and no source root can reach it. A module added here is a decision someone has
 #: to write down.
 REGISTERED_WRITERS: Final[dict[str, str]] = {
+    "ops/nas/remote/render-cloudflared-config.py": (
+        "writes a non-secret tunnel configuration to an explicit operator output path and "
+        "refuses overwrite; it is deployment configuration, not user or managed content."
+    ),
     "src/my_pa/infrastructure/apple_transport_agent.py": (
         "writes only NAS-issued grant metadata and its content digest receipt into an "
         "absolute, existing, owner-only Mac journal; the constructor rejects symlinks "

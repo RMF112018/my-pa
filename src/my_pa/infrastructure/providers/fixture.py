@@ -235,7 +235,11 @@ def resolve_within(root: Path, candidate: Path, object_id: str) -> Path:
     """
     resolved: Path | None
     try:
-        resolved = candidate.resolve()
+        # `strict=True` is security-significant on Python 3.13: non-strict
+        # resolution may return a still-looping symlink path instead of raising,
+        # which can appear component-wise contained without identifying a real
+        # filesystem object.
+        resolved = candidate.resolve(strict=True)
     except (OSError, RuntimeError):
         # A resolution that fails is a containment that cannot be proved, which
         # is a denial. Recorded here and raised below, outside the handler, so

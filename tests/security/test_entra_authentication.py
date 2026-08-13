@@ -458,7 +458,7 @@ def test_an_alg_none_token_is_refused(verifier: EntraTokenVerifier) -> None:
             "oid": OID_A,
         },
         key="",
-        algorithm=None,
+        algorithm="none",
     )
     assert unsigned.split(".")[2] == "", "the fixture is not an unsigned token"
     with pytest.raises(TokenVerificationError):

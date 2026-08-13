@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""Fail closed unless the running remote MCP stack matches its admitted shape."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+from collections.abc import Mapping
+from pathlib import PurePosixPath
+from typing import Any, cast
+
+APP_COMMAND = [
+    "python",
+    "apps/gateway.py",
+    "mcp-remote",
+    "--host",
+    "0.0.0.0",  # noqa: S104 - exact in-container listener identity
+    "--port",
+    "8766",
+]
+EDGE_COMMAND = [
+    "tunnel",
+    "--config",
+    "/etc/cloudflared/config.yml",
+    "--no-autoupdate",
+    "run",
+]
+PROJECT = "my-pa-remote-mcp"
+
+
+def violations(
+    app: Mapping[str, Any],
+    edge: Mapping[str, Any],
+    *,
+    app_image: str,
+    edge_image: str,
+    data_network: str,
+    networks: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    errors: list[str] = []
+    for name, state, expected in (("app", app, app_image), ("edge", edge, edge_image)):
+        config = state.get("Config", {})
+        host = state.get("HostConfig", {})
+        running = state.get("State", {})
+        if running.get("Status") != "running":
+            errors.append(f"{name}_not_running")
+        if running.get("Health", {}).get("Status") != "healthy":
+            errors.append(f"{name}_not_healthy")
+        if config.get("Image") != expected:
+            errors.append(f"{name}_image_identity")
+        expected_command = APP_COMMAND if name == "app" else EDGE_COMMAND
+        if config.get("Cmd") != expected_command:
+            errors.append(f"{name}_command_identity")
+        user = str(config.get("User", ""))
+        if not user or user.startswith("0") or user == "root":
+            errors.append(f"{name}_root_user")
+        if host.get("ReadonlyRootfs") is not True:
+            errors.append(f"{name}_writable_root")
+        if host.get("Privileged") is not False:
+            errors.append(f"{name}_privileged")
+        if set(host.get("CapDrop") or ()) != {"ALL"}:
+            errors.append(f"{name}_capabilities")
+        if host.get("CapAdd"):
+            errors.append(f"{name}_added_capabilities")
+        if host.get("Devices"):
+            errors.append(f"{name}_devices")
+        if not {"no-new-privileges", "no-new-privileges:true"} & set(host.get("SecurityOpt") or ()):
+            errors.append(f"{name}_new_privileges")
+        if host.get("Init") is not True:
+            errors.append(f"{name}_missing_init")
+        if host.get("RestartPolicy", {}).get("Name") != "unless-stopped":
+            errors.append(f"{name}_restart_policy")
+        pid_limit = host.get("PidsLimit")
+        expected_pid_limit = 128 if name == "app" else 64
+        if not isinstance(pid_limit, int) or not 0 < pid_limit <= expected_pid_limit:
+            errors.append(f"{name}_pid_limit")
+        for field, suffix in (("NanoCpus", "cpu_limit"), ("Memory", "memory_limit")):
+            value = host.get(field)
+            if not isinstance(value, int) or value <= 0:
+                errors.append(f"{name}_{suffix}")
+        if any("docker.sock" in str(mount.get("Source", "")) for mount in state.get("Mounts", ())):
+            errors.append(f"{name}_docker_socket")
+
+    app_mounts = {mount.get("Destination"): mount for mount in app.get("Mounts", ())}
+    if app_mounts.get("/srv/my-pa/sources", {}).get("RW") is not False:
+        errors.append("source_mount_not_read_only")
+    if app_mounts.get("/srv/my-pa/config", {}).get("RW") is not False:
+        errors.append("config_mount_not_read_only")
+    if app_mounts.get("/srv/my-pa/managed-documents", {}).get("RW") is not True:
+        errors.append("managed_mount_not_writable")
+    sources = [
+        app_mounts.get(destination, {}).get("Source")
+        for destination in (
+            "/srv/my-pa/config",
+            "/srv/my-pa/sources",
+            "/srv/my-pa/managed-documents",
+        )
+    ]
+    if not all(
+        isinstance(source, str) and PurePosixPath(source).is_absolute() for source in sources
+    ):
+        errors.append("app_mount_source_identity")
+    else:
+        paths = [PurePosixPath(cast(str, source)) for source in sources]
+        if any(
+            left == right or left in right.parents or right in left.parents
+            for index, left in enumerate(paths)
+            for right in paths[index + 1 :]
+        ):
+            errors.append("app_mount_overlap")
+
+    edge_mounts = {mount.get("Destination"): mount for mount in edge.get("Mounts", ())}
+    if edge_mounts.get("/etc/cloudflared/config.yml", {}).get("RW") is not False:
+        errors.append("edge_config_mount_not_read_only")
+    if edge_mounts.get("/run/secrets/cloudflared", {}).get("RW") is not False:
+        errors.append("edge_credentials_mount_not_read_only")
+    if app.get("HostConfig", {}).get("PortBindings"):
+        errors.append("origin_host_port")
+    if edge.get("HostConfig", {}).get("PortBindings"):
+        errors.append("edge_host_port")
+
+    origin_network = f"{PROJECT}_mcp-origin"
+    identity_network = f"{PROJECT}_identity-egress"
+    cloudflare_network = f"{PROJECT}_cloudflare-egress"
+    app_networks = set(app.get("NetworkSettings", {}).get("Networks", {}))
+    edge_networks = set(edge.get("NetworkSettings", {}).get("Networks", {}))
+    if app_networks != {data_network, origin_network, identity_network}:
+        errors.append("app_network_identity")
+    if edge_networks != {origin_network, cloudflare_network}:
+        errors.append("edge_network_identity")
+    expected_internal = {
+        data_network: None,
+        origin_network: True,
+        identity_network: False,
+        cloudflare_network: False,
+    }
+    for network, internal in expected_internal.items():
+        network_state = networks.get(network)
+        if network_state is None:
+            errors.append("missing_network_identity")
+        elif internal is not None and network_state.get("Internal") is not internal:
+            errors.append(f"network_internalness:{network}")
+    return errors
+
+
+def _inspect(name: str) -> Mapping[str, Any]:
+    docker = shutil.which("docker")
+    if docker is None:
+        raise RuntimeError("docker executable not found")
+    result = subprocess.run(  # noqa: S603 - fixed Docker executable and argument vector
+        [docker, "inspect", name],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    document = json.loads(result.stdout)
+    if not isinstance(document, list) or len(document) != 1:
+        raise ValueError("docker inspect did not return exactly one container")
+    return cast(Mapping[str, Any], document[0])
+
+
+def _inspect_network(name: str) -> Mapping[str, Any]:
+    return _inspect(name)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--app-container", required=True)
+    parser.add_argument("--edge-container", required=True)
+    parser.add_argument("--app-image", required=True)
+    parser.add_argument("--edge-image", required=True)
+    parser.add_argument("--data-network", required=True)
+    args = parser.parse_args()
+    network_names = (
+        args.data_network,
+        f"{PROJECT}_mcp-origin",
+        f"{PROJECT}_identity-egress",
+        f"{PROJECT}_cloudflare-egress",
+    )
+    errors = violations(
+        _inspect(args.app_container),
+        _inspect(args.edge_container),
+        app_image=args.app_image,
+        edge_image=args.edge_image,
+        data_network=args.data_network,
+        networks={name: _inspect_network(name) for name in network_names},
+    )
+    if errors:
+        print("remote live gate refused: " + ", ".join(sorted(set(errors))))
+        return 1
+    print("remote live gate: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

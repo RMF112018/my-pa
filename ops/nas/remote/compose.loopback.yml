@@ -1,0 +1,6 @@
+# Measured fallback only. This publishes the MCP origin on NAS loopback so a
+# host-network cloudflared process can reach it. Never bind this port to 0.0.0.0.
+services:
+  my-pa-mcp-remote:
+    ports:
+      - "127.0.0.1:${MY_PA_REMOTE_LOOPBACK_PORT:?explicit loopback port required}:8766"

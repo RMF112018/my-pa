@@ -129,7 +129,13 @@ def test_the_identity_revision_round_trips_from_empty(disposable_database: str) 
                     )
                 ).scalars()
             )
-            assert tables == {"user_accounts", "principal_scope_grants"}
+            assert tables == {
+                "user_accounts",
+                "principal_scope_grants",
+                "remote_clients",
+                "remote_capability_grants",
+                "remote_security_controls",
+            }
         command.downgrade(_config(), "base")
         with engine.connect() as connection:
             schemas = set(connection.execute(text("SELECT nspname FROM pg_namespace")).scalars())

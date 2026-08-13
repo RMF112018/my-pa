@@ -89,21 +89,20 @@ def test_no_composition_root_is_asynchronous(path: Path) -> None:
     assert not found, f"{path.relative_to(ROOT)} contains {found}; async belongs to the adapter"
 
 
-def test_the_async_surface_is_exactly_two_handlers_and_one_await() -> None:
+def test_the_async_surface_remains_confined_and_bounded() -> None:
     """The size of the edge, not only its location.
 
-    Two coroutine functions — `tools/list` and `tools/call`, whose signatures
-    the SDK fixes — plus `_serve`, which is the connection itself. Three
-    `await`s: the offloaded application call, the stdio stream context, and the
-    server's own run. A fourth means something new became asynchronous, which is
-    a decision rather than an edit.
+    The official SDK handlers, stdio connection, Streamable HTTP lifespan and
+    bounded remote authentication/request edge account for this deliberately
+    frozen total. Another node means the asynchronous boundary changed and must
+    be reviewed as a decision rather than accepted as a mechanical edit.
     """
     found: list[str] = []
     for path in _modules(ASYNC_SUBTREE):
         found += _async_nodes(path)
-    assert found.count("AsyncFunctionDef") == 3, found
-    assert found.count("Await") == 2, found
-    assert found.count("AsyncWith") == 1, found
+    assert found.count("AsyncFunctionDef") == 8, found
+    assert found.count("Await") == 11, found
+    assert found.count("AsyncWith") == 3, found
     assert found.count("AsyncFor") == 0, found
 
 

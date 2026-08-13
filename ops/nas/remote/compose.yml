@@ -1,0 +1,98 @@
+name: my-pa-remote-mcp
+
+services:
+  my-pa-mcp-remote:
+    profiles: [remote-mcp, remote-edge]
+    image: "${MY_PA_APP_IMAGE_ID:?exact my-pa image id required}"
+    platform: linux/amd64
+    user: "${MY_PA_REMOTE_UID:?dedicated non-root uid required}:${MY_PA_REMOTE_GID:?dedicated non-root gid required}"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    command: [python, apps/gateway.py, mcp-remote, --host, 0.0.0.0, --port, "8766"]
+    env_file:
+      - "${MY_PA_REMOTE_ENV_FILE:?owner-only remote MCP env file required}"
+    environment:
+      MY_PA_GATEWAY_BIND_MODE: container
+      MY_PA_MANAGED_DOCUMENT_ROOT: /srv/my-pa/managed-documents
+    expose: ["8766"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /run:size=4m,mode=0755
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    cpus: "${MY_PA_REMOTE_CPUS:?remote MCP CPU limit required}"
+    mem_limit: "${MY_PA_REMOTE_MEMORY:?remote MCP memory limit required}"
+    volumes:
+      - type: bind
+        source: "${MY_PA_NAS_CONFIG_ROOT:?exact NAS config root required}"
+        target: /srv/my-pa/config
+        read_only: true
+      - type: bind
+        source: "${MY_PA_NAS_SOURCE_ROOT:?exact NAS source root required}"
+        target: /srv/my-pa/sources
+        read_only: true
+      - type: bind
+        source: "${MY_PA_NAS_MANAGED_ROOT:?exact NAS managed root required}"
+        target: /srv/my-pa/managed-documents
+    networks: [data-plane, mcp-origin, identity-egress]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/readyz', timeout=2).read()"
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+    labels:
+      io.my-pa.runtime-role: mcp-remote
+      io.my-pa.background-worker: "false"
+
+  cloudflared:
+    profiles: [remote-edge]
+    image: "${MY_PA_CLOUDFLARED_IMAGE:?digest-pinned cloudflared image required}"
+    user: "${MY_PA_CLOUDFLARED_UID:?verified cloudflared uid required}:${MY_PA_CLOUDFLARED_GID:?verified cloudflared gid required}"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    command: [tunnel, --config, /etc/cloudflared/config.yml, --no-autoupdate, run]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    cpus: "${MY_PA_CLOUDFLARED_CPUS:?cloudflared CPU limit required}"
+    mem_limit: "${MY_PA_CLOUDFLARED_MEMORY:?cloudflared memory limit required}"
+    volumes:
+      - type: bind
+        source: "${MY_PA_CLOUDFLARED_CONFIG:?rendered cloudflared config required}"
+        target: /etc/cloudflared/config.yml
+        read_only: true
+      - type: bind
+        source: "${MY_PA_CLOUDFLARED_CREDENTIALS_DIR:?owner-only tunnel credentials directory required}"
+        target: /run/secrets/cloudflared
+        read_only: true
+    networks: [mcp-origin, cloudflare-egress]
+    depends_on:
+      my-pa-mcp-remote:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, cloudflared, tunnel, --config, /etc/cloudflared/config.yml, ingress, validate]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      io.my-pa.runtime-role: cloudflare-tunnel
+
+networks:
+  data-plane:
+    external: true
+    name: "${MY_PA_DATA_NETWORK:?existing private PostgreSQL network required}"
+  mcp-origin:
+    internal: true
+  identity-egress: {}
+  cloudflare-egress: {}

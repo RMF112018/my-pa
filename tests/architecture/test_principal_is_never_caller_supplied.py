@@ -177,6 +177,10 @@ DERIVED_CHAINS: Final = ("principal.principal_id", "account.principal_id")
 #: The registry is exact. A sixth module reading a request's stated principal is
 #: a decision that has to be written here, with what verifies it.
 VERIFIED_CALLER_STATEMENTS: Final = {
+    # Remote publication removes this field from the generated schema. This is
+    # a schema-key deletion, not a read used to establish authority; remote call
+    # handling separately rejects the field and injects the authenticated Principal.
+    "adapters/mcp/server.py": (("properties", "principal_id"),),
     # The binding is an operator-created credential record and the identity is
     # the result of verifying that record, never a request body field.
     "application/apple_machine.py": (("binding", "principal_id"),),

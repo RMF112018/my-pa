@@ -143,6 +143,12 @@ Only complete synthetic evidence can produce an unsigned NAS-09-compatible PASS
 candidate; it performs no activation. See
 [`../runbooks/nas-acceptance.md`](../runbooks/nas-acceptance.md).
 
+The separately enabled remote MCP candidate is owned by [`remote/compose.yml`](remote/compose.yml).
+It does not modify the existing private web ingress: its Cloudflare origin network
+is internal, its tunnel is outbound-only, and the default publishes no NAS port.
+See [`../runbooks/remote-mcp-cloudflare.md`](../runbooks/remote-mcp-cloudflare.md)
+for exact configuration, deployment, rollback, client, and loopback-fallback procedures.
+
 Later packages own executable behavior:
 
 - NAS-02 images supply app/web Dockerfiles and the

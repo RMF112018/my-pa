@@ -113,6 +113,14 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
         "writes only Docker image identity metadata into the operator-selected "
         "candidate artifact directory; it never reads or writes personal or managed bytes."
     ),
+    "ops/nas/run_synthetic_acceptance.py": (
+        "writes only synthetic pytest receipt digests into an explicit fresh evidence "
+        "directory; it neither reads nor records personal or managed-document bytes."
+    ),
+    "ops/nas/nas10_acceptance_gate.py": (
+        "writes only an unsigned acceptance candidate to an explicit new output path; "
+        "the artifact contains repository/runtime digests and no personal or managed bytes."
+    ),
 }
 
 #: Attribute names that are a filesystem write whatever they are called on,

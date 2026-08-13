@@ -1,0 +1,3 @@
+schema = "my-pa.nas-10-review-trust.v1"
+status = "not_provisioned"
+reviewer_public_key_sha256 = "REQUIRED_64_HEX"

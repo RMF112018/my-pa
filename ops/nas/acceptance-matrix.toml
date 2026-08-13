@@ -1,0 +1,82 @@
+schema = "my-pa.nas-10-matrix.v1"
+status = "synthetic_only"
+
+[cases.architecture_boundaries]
+requirement = "bounded_synthetic"
+behaviors = ["dependency direction", "NAS service and ingress topology"]
+selectors = ["tests/architecture/test_dependency_direction.py", "tests/architecture/test_nas_runtime_scaffold.py"]
+
+[cases.platform_image_runtime]
+requirement = "bounded_synthetic"
+behaviors = ["linux/amd64 image identity", "wrong-architecture refusal", "resolved runtime identity"]
+selectors = ["tests/architecture/test_nas_image_contract.py::test_live_gate_checks_engine_archives_metadata_and_loaded_images", "tests/architecture/test_nas_lifecycle.py::test_resolved_and_running_images_close_caller_controlled_env"]
+
+[cases.storage_permissions]
+requirement = "bounded_synthetic"
+behaviors = ["NAS-local storage placement", "read-only sources", "managed-write containment"]
+selectors = ["tests/architecture/test_nas_source_placement.py", "tests/architecture/test_managed_writes_are_contained.py"]
+
+[cases.remote_capture_socket]
+requirement = "bounded_loopback_socket"
+behaviors = ["real loopback socket", "successful ClientCredential", "gateway capture admission"]
+selectors = ["tests/contract/test_remote_capture_ingress.py::test_an_enabled_ingress_admits_a_registered_client"]
+
+[cases.remote_capture_durable_transaction]
+requirement = "disposable_postgres"
+behaviors = ["real loopback socket", "registered ClientCredential", "same durable transaction as local capture"]
+selectors = ["tests/capture/test_remote_capture_is_one_durable_transaction.py::test_a_remote_submission_writes_the_same_rows_as_a_local_one", "tests/capture/test_remote_capture_is_one_durable_transaction.py::test_a_replayed_remote_submission_returns_the_same_receipt_and_stores_nothing_new"]
+
+[cases.cross_principal_database]
+requirement = "disposable_postgres"
+behaviors = ["two authenticated Principals", "real PostgreSQL rows", "foreign rows are illegible"]
+selectors = ["tests/security/test_cross_principal_isolation.py::test_principal_a_records_are_illegible_to_principal_b_and_vice_versa", "tests/security/test_cross_principal_capture_isolation.py::test_the_capture_is_bound_to_the_authenticated_principal_at_admission"]
+
+[cases.backup_restore_health]
+requirement = "external_device"
+behaviors = ["ops/nas/backup.sh pg_dump", "ops/nas/restore-to-scratch.sh fresh PostgreSQL", "apps/cli/health.py readiness", "exact admitted engine and images"]
+selectors = []
+
+[cases.gateway_workers_pwa]
+requirement = "bounded_synthetic"
+behaviors = ["gateway and worker composition", "PWA/BFF contract parity", "worker heartbeat health"]
+selectors = ["tests/architecture/test_nas_runtime_services.py", "tests/contract/test_bff_gateway_contract_parity.py", "tests/unit/test_worker_health_contract.py"]
+
+[cases.proxy_private_origin]
+requirement = "bounded_synthetic"
+behaviors = ["private HTTPS origin", "route allowlist", "credential-plane separation", "Remote Capture bypasses Next.js"]
+selectors = ["tests/architecture/test_nas_ingress_gate.py", "tests/architecture/test_remote_ingress_credential_planes_are_disjoint.py"]
+
+[cases.principal_isolation]
+requirement = "bounded_synthetic"
+behaviors = ["Principal guard reachability", "caller cannot supply Principal", "partition contract"]
+selectors = ["tests/architecture/test_user_owned_tables_are_partitioned.py", "tests/architecture/test_principal_is_never_caller_supplied.py"]
+
+[cases.apple_grant_adversarial]
+requirement = "bounded_loopback_socket"
+behaviors = ["NAS-issued Apple grants", "grant replay and tamper refusal", "machine-ingress credential separation"]
+selectors = ["tests/architecture/test_wp15_native_host_admission.py", "tests/architecture/test_platform_apple_mechanisms.py", "tests/contract/test_apple_machine_ingress.py", "tests/unit/test_apple_transport_agent.py"]
+
+[cases.goodnotes_ocr_read_only]
+requirement = "bounded_synthetic"
+behaviors = ["exact GoodNotes root", "manifest and OCR containment", "read-only NAS mount"]
+selectors = ["tests/architecture/test_nas_source_placement.py", "tests/unit/test_goodnotes.py"]
+
+[cases.frontier_mcp_stdio]
+requirement = "bounded_synthetic"
+behaviors = ["Frontier child process", "MCP stdio only", "no MCP network service"]
+selectors = ["tests/architecture/test_mcp_is_a_thin_adapter.py", "tests/architecture/test_nas_runtime_scaffold.py"]
+
+[cases.scratch_stack_restart_bytes]
+requirement = "external_device"
+behaviors = ["actual Docker Compose scratch stack", "admitted PostgreSQL and app images", "health passes", "restart preserves PostgreSQL and managed sentinel bytes", "wrong-architecture image execution refuses"]
+selectors = []
+
+[cases.lifecycle_restart_rollback_emergency]
+requirement = "bounded_synthetic_process"
+behaviors = ["smoke restart no", "pilot restart gate", "partial-start rollback", "emergency shutdown"]
+selectors = ["tests/architecture/test_nas_lifecycle.py", "tests/architecture/test_nas_postgres_scripts.py"]
+
+[cases.diagnostics_and_no_activation]
+requirement = "bounded_synthetic_process"
+behaviors = ["authenticated BFF diagnostics", "worker and backup signals", "no deployment or activation"]
+selectors = ["tests/architecture/test_nas_lifecycle.py", "tests/architecture/test_nas_ingress_gate.py"]

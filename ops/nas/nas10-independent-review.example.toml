@@ -1,0 +1,13 @@
+schema = "my-pa.nas-10-independent-review.v1"
+status = "not_run"
+independent = false
+reviewer_context = "REQUIRED_DISTINCT_REVIEW_CONTEXT"
+reviewed_head = "REQUIRED_EXACT_HEAD"
+reviewed_tree = "REQUIRED_EXACT_TREE"
+evidence_sha256 = "REQUIRED_64_HEX"
+matrix_sha256 = "REQUIRED_64_HEX"
+nas_engine_id = "REQUIRED_EXACT_DOCKER_ENGINE_ID"
+nas_engine_name = "REQUIRED_EXACT_NAS_ENGINE_NAME"
+image_manifest_sha256 = "REQUIRED_64_HEX"
+runtime_admission_sha256 = "REQUIRED_64_HEX"
+resolved_compose_sha256 = "REQUIRED_64_HEX"

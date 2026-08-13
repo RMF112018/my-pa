@@ -11,6 +11,7 @@ Operational procedures for running `my-pa` locally.
 | [`managed-document-operations.md`](managed-document-operations.md) | The managed-document write plane: configuring its root, checking that its rows and its bytes agree, the metadata/bytes failure window and what it can leave behind, and backing the plane up and restoring it. |
 | [`mcp-and-cli-operations.md`](mcp-and-cli-operations.md) | The other two transports: the MCP server on stdio and the operator CLI. What is identical to HTTP and why, the handshake and derived tool list, the CLI's options and exit status, and what a bad command line does. |
 | [`nas-lifecycle.md`](nas-lifecycle.md) | Fail-closed NAS lifecycle commands, smoke restart policy, and the exact NAS-10 plus operator gates for the restart-only pilot overlay. |
+| [`nas-acceptance.md`](nas-acceptance.md) | Inert NAS-10 synthetic matrix, independently signed exact-head review, and unsigned PASS-candidate gate. |
 
 Related, outside this directory:
 

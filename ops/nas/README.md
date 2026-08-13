@@ -137,6 +137,12 @@ gates but accepts only the canonical root-owned six-service Compose target.
 Checked-in evidence examples refuse. See
 [`../runbooks/nas-lifecycle.md`](../runbooks/nas-lifecycle.md).
 
+NAS-10 adds the closed synthetic [`acceptance-matrix.toml`](acceptance-matrix.toml),
+an inert evidence runner, and an exact-head independently signed review gate.
+Only complete synthetic evidence can produce an unsigned NAS-09-compatible PASS
+candidate; it performs no activation. See
+[`../runbooks/nas-acceptance.md`](../runbooks/nas-acceptance.md).
+
 Later packages own executable behavior:
 
 - NAS-02 images supply app/web Dockerfiles and the

@@ -313,6 +313,7 @@ class Settings(StrictModel):
     mcp_client_id: str = ""
     gateway_bind_mode: GatewayBindMode = GatewayBindMode.LOOPBACK
     remote_ingress_enabled: bool = False
+    apple_ingress_enabled: bool = False
     redaction_enabled: bool = True
     contract_strict_mode: bool = True
     max_page_size: int = Field(default=200, gt=0, le=1000)

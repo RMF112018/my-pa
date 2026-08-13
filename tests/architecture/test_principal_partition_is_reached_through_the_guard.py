@@ -106,6 +106,7 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # fourth is `authenticate_client`, which is registered below for the
         # reason `jobs.job_principal` is: it *derives* the Principal.
         "infrastructure/persistence/capture_clients.py",
+        "infrastructure/persistence/apple_bridge_credentials.py",
         "infrastructure/persistence/capture_search.py",
         "infrastructure/persistence/continuity_read.py",
         "infrastructure/persistence/goodnotes.py",
@@ -149,6 +150,11 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
 #: relationship plane and registered the rest; a module added to this dict is a
 #: decision someone has to write down.
 QUARANTINED: Final = {
+    "bootstrap/apple_machine_control.py": (
+        "every query is scoped through SqlNativeSourceControlStore._mine using the "
+        "Principal derived from the verified Apple bridge credential; poll locks and "
+        "atomically claims the exact Principal-bound staged grant row."
+    ),
     "infrastructure/jobs/extraction.py": (
         "reads `enrollments` to resolve the enrollment a job names. Ownership is "
         "the enrollment's `principal_id`, checked by `application.authorization` "
@@ -257,6 +263,12 @@ PER_MODULE_ONLY: Final = {
         "need the answer to ask the question. The same shape as "
         "`jobs.job_principal`, and it fails closed: an unknown client, a wrong "
         "secret and a revoked client are one `None`."
+    ),
+    "infrastructure/persistence/apple_bridge_credentials.py": (
+        "credential registration uses partition_criterion/principal_bound_values; "
+        "the one unscoped lookup derives the Principal and bridge from the exact "
+        "credential identifier and verifies its secret digest, matching the capture "
+        "client authentication shape."
     ),
     "infrastructure/persistence/capture_search.py": (
         "two statements of three build fragments over `capture_versions` that the "

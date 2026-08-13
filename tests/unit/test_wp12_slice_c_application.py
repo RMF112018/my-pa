@@ -30,6 +30,7 @@ from my_pa.contracts.v1.native_sources import (
     NATIVE_SOURCE_MAX_CURSOR_BYTES,
     NATIVE_SOURCE_MAX_PAGE_SIZE,
     NATIVE_SOURCE_PROTOCOL_V1,
+    AppleReadGrant,
     NativeAdmissionEnvelope,
     NativeBucketProgress,
     NativeBucketSelection,
@@ -224,19 +225,19 @@ class Host:
         self,
         selection: NativeBucketSelection,
         *,
-        time_range: tuple[datetime, datetime] | None,
-        cursor: str | None,
-        limit: int,
-        bridge_id: str,
-        envelope_id: str,
-        request_id: str,
-        at: datetime,
+        grant: AppleReadGrant,
     ) -> dict[str, Any]:
-        del bridge_id, at
-        self.read_calls.append({"time_range": time_range, "cursor": cursor, "limit": limit})
+        cursor = grant.cursor
+        time_range = (
+            datetime.fromtimestamp(grant.time_range_start_unix_milliseconds / 1_000, tz=UTC),
+            datetime.fromtimestamp(grant.time_range_end_unix_milliseconds / 1_000, tz=UTC),
+        )
+        self.read_calls.append(
+            {"time_range": time_range, "cursor": cursor, "limit": grant.page_limit}
+        )
         return {
-            "metadata": _metadata(envelope_id),
-            "requestID": request_id,
+            "metadata": _metadata(grant.envelope_id),
+            "requestID": grant.request_id,
             "kind": selection.kind.value,
             "accountID": selection.account_id,
             "bucketID": selection.bucket_id,
@@ -459,8 +460,9 @@ class Store:
         at: datetime,
         checkpoint_job_id: str | None = None,
         checkpoint_run_id: str | None = None,
+        require_staged_apple_grant: bool = False,
     ) -> tuple[tuple[str, bool], ...]:
-        del checkpoint_job_id, checkpoint_run_id
+        del checkpoint_job_id, checkpoint_run_id, require_staged_apple_grant
         stored = self.authorities.get(authority.authority_id)
         current = self.latest_configuration(authority.configuration_id)
         prior = self.consumed.get(authority.authority_id)

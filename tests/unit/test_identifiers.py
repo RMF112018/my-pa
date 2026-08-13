@@ -74,6 +74,7 @@ def test_contract_prefixes_are_stable() -> None:
         "sobs",
         "smem",
         "nbrg",
+        "abcred",
         "nacct",
         "nbkt",
         "ndisc",

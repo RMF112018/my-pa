@@ -168,7 +168,10 @@ from typing import Any
 from sqlalchemy import Engine
 
 from my_pa.adapters.normalization import PAYLOAD_KEY
+from my_pa.application.apple_machine import AppleBridgeIdentity, AppleMachineControl
+from my_pa.application.native_sources import NativeSourceController
 from my_pa.application.service import ApplicationService
+from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
 from my_pa.bootstrap.settings import AuthMode, Settings
 from my_pa.contracts.ports import ManagedByteStore, UnitOfWork
 from my_pa.domain.capture.client import admit_client_binding, parse_client_credential
@@ -179,6 +182,9 @@ from my_pa.domain.identity.user_account import TokenClaimsError
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.managed_document_stores.filesystem.store import (
     FilesystemManagedByteStore,
+)
+from my_pa.infrastructure.persistence.apple_bridge_credentials import (
+    authenticate_apple_bridge_credential,
 )
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.capture_clients import authenticate_client, clients_of
@@ -520,6 +526,8 @@ class GatewayRuntime:
     #: handler when this is `None`, so "disabled" is something a request meets
     #: rather than something a routing table hides.
     remote_client: RemoteClientAuthenticator | None
+    apple_authenticate: Callable[[str | None], AppleBridgeIdentity] | None
+    apple_control: AppleMachineControl | None
     #: Whether the MCP surface serves at all (WP-28). Decided once at
     #: composition by `mcp_surface_enabled`, which reads the kill switch and the
     #: bound client's state; `apps/gateway.py mcp` passes it straight through and
@@ -554,6 +562,26 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
 
     entra = settings.auth_mode is AuthMode.ENTRA
     principal = None if entra else local_principal()
+
+    class _NoRemoteHost:
+        def __getattr__(self, name: str) -> Any:  # noqa: ANN401 - refusing protocol sentinel
+            raise RuntimeError(f"remote Apple control cannot call a local host: {name}")
+
+    class _NoProposals:
+        def open_review_proposals(self, version_ids: tuple[str, ...]) -> tuple[str, ...]:
+            del version_ids
+            return ()
+
+    def apple_controller(store: Any) -> NativeSourceController:  # noqa: ANN401 - callback protocol
+        return NativeSourceController(
+            store=store, host=_NoRemoteHost(), audit=audit, proposals=_NoProposals()
+        )
+
+    apple_control = (
+        SqlAppleMachineControl(work_engine, apple_controller)
+        if settings.apple_ingress_enabled
+        else None
+    )
     return GatewayRuntime(
         service=ApplicationService(
             unit_of_work=unit_of_work,
@@ -571,6 +599,12 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             if settings.remote_ingress_enabled
             else None
         ),
+        apple_authenticate=(
+            (lambda header: authenticate_apple_bridge_credential(work_engine, header))
+            if settings.apple_ingress_enabled
+            else None
+        ),
+        apple_control=apple_control,
         mcp_enabled=mcp_surface_enabled(settings, work_engine, principal),
         work_engine=work_engine,
         audit_engine=audit_engine,

@@ -87,6 +87,10 @@ database_credential = false
 general_nas_filesystem_credential = false
 grant_issuer = "nas_application"
 transport = "outbound_poll"
+entrypoint = "apps/apple_agent.py"
+inbound_listener = false
+durable_grant_journal = true
+ack_after_exact_receipt_digest = true
 
 [mounts.config_ro]
 class = "config"
@@ -131,6 +135,11 @@ exposure = "internal_only"
 [ingress.apple_machine]
 exposure = "exact_dedicated_paths_only"
 paths_frozen_by = "NAS-07"
+method = "POST"
+paths = ["/apple/v1/grant.poll", "/apple/v1/envelope.admit"]
+auth = "AppleBridgeCredential"
+principal_source = "credential"
+enabled_by_default = false
 
 [ingress.browser]
 upstream = "web"

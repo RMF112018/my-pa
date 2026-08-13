@@ -147,6 +147,7 @@ def engine(disposable_database: str) -> Iterator[Engine]:
                 text(
                     "TRUNCATE knowledge.native_simulation_receipts, "
                     "knowledge.native_checkpoints, "
+                    "knowledge.native_apple_read_grants, "
                     "knowledge.native_admission_authorities, knowledge.audit_events"
                 )
             )

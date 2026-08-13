@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from my_pa.adapters.http.app import (
+    APPLE_ADMIT_PATH,
+    APPLE_POLL_PATH,
     PATH_TEMPLATE,
     REMOTE_CAPTURE_CAPABILITY,
     REMOTE_CAPTURE_PATH,
@@ -10,6 +12,8 @@ from my_pa.adapters.http.app import (
 )
 
 __all__ = [
+    "APPLE_ADMIT_PATH",
+    "APPLE_POLL_PATH",
     "PATH_TEMPLATE",
     "REMOTE_CAPTURE_CAPABILITY",
     "REMOTE_CAPTURE_PATH",

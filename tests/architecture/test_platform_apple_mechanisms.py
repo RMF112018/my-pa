@@ -185,9 +185,8 @@ def test_platform_executable_preserves_application_issued_authority_identity() -
     controller = (ROOT / "src" / "my_pa" / "application" / "native_sources.py").read_text(
         encoding="utf-8"
     )
-    assert '"bridgeID": bridge_id' in process_adapter
-    assert '"requestID": request_id' in process_adapter
-    assert '"envelopeID": envelope_id' in process_adapter
+    assert 'wire_grant = grant.model_dump(by_alias=True, mode="json")' in process_adapter
+    assert "never synthesize authority identity here" in process_adapter
     assert 'f"{envelope_id}.pending"' in process_adapter
     assert "os.O_NOFOLLOW" in process_adapter
     assert "if pending.exists():" in process_adapter
@@ -195,8 +194,8 @@ def test_platform_executable_preserves_application_issued_authority_identity() -
     assert "def pending(" in process_adapter
     assert '"--quarantine"' in process_adapter
     assert "bridge_id=authority.bridge_id" in controller
-    assert "envelope_id=authority.envelope_id" in controller
-    assert "request_id=control_context.request_id" in controller
+    assert "envelopeID=authority.envelope_id" in controller
+    assert "requestID=authority.request_id" in controller
     assert "self._host.acknowledge(authority.envelope_id)" in controller
     assert "self._host.quarantine(authority.envelope_id)" in controller
 

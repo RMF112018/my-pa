@@ -142,6 +142,11 @@ from starlette.responses import Response
 from starlette.routing import Route
 
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, PAYLOAD_KEY, normalize
+from my_pa.application.apple_machine import (
+    AppleBridgeIdentity,
+    AppleMachineControl,
+    AppleMachineCredentialError,
+)
 from my_pa.application.errors import (
     ApplicationError,
     DeniedError,
@@ -149,6 +154,7 @@ from my_pa.application.errors import (
     UnsupportedError,
     problem_detail,
 )
+from my_pa.application.native_sources import AdmissionDeniedError
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
@@ -159,6 +165,8 @@ from my_pa.domain.identity.user_account import TokenClaimsError
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
+    "APPLE_ADMIT_PATH",
+    "APPLE_POLL_PATH",
     "PATH_TEMPLATE",
     "REMOTE_CAPTURE_CAPABILITY",
     "REMOTE_CAPTURE_PATH",
@@ -189,6 +197,9 @@ REMOTE_CAPTURE_PATH: Final = "/remote/v1/capture.create"
 #: else and `normalize` takes the name a transport routed on — the same string an
 #: HTTP path segment or an MCP tool name supplies.
 REMOTE_CAPTURE_CAPABILITY: Final = "capture.create"
+
+APPLE_POLL_PATH: Final = "/apple/v1/grant.poll"
+APPLE_ADMIT_PATH: Final = "/apple/v1/envelope.admit"
 
 #: The one media type this transport reads and writes.
 _JSON: Final = "application/json"
@@ -232,6 +243,10 @@ _UNAUTHENTICATED: Final = 401
 #: is already in the socket buffer when the endpoint asks for it, and the largest
 #: one this transport accepts is under a mebibyte.
 BODY_TIMEOUT_SECONDS: Final = 5.0
+# The Swift host's bounded one-mebibyte payload is represented as JSON integer
+# arrays on this exact machine route. Five bytes per input byte covers `255,`
+# plus the bounded envelope fields without widening any public capability route.
+APPLE_MACHINE_MAX_REQUEST_BYTES: Final = 5 * 1_048_576
 
 #: The HTTP status each public error code is. Written out as a table rather than
 #: derived from a rule, because the eleven codes do not fall into HTTP's classes
@@ -390,7 +405,7 @@ def _envelope_response(envelope: ResponseEnvelope) -> Response:
     return Response(envelope.to_canonical_json(), status_code=status, media_type=_JSON)
 
 
-def _declared_length(request: Request) -> int:
+def _declared_length(request: Request, *, maximum: int = MAX_REQUEST_BYTES) -> int:
     """The body length the caller declared, or a refusal."""
     declared = request.headers.get("content-length")
     if declared is None:
@@ -400,7 +415,7 @@ def _declared_length(request: Request) -> int:
     except ValueError:
         pass
     else:
-        if 0 <= length <= MAX_REQUEST_BYTES:
+        if 0 <= length <= maximum:
             return length
     raise InvalidRequestError()
 
@@ -464,6 +479,8 @@ def create_http_app(
     principal: Principal | None = None,
     authenticate: Callable[[str | None, Mapping[str, Any]], Principal] | None = None,
     remote_client: Callable[[str | None], Principal] | None = None,
+    apple_authenticate: Callable[[str | None], AppleBridgeIdentity] | None = None,
+    apple_control: AppleMachineControl | None = None,
 ) -> Starlette:
     """The ASGI application serving `service`, in exactly one of two modes.
 
@@ -501,6 +518,8 @@ def create_http_app(
             "compose the transport with exactly one of `principal` (the fixed "
             "local-operator mode) or `authenticate` (the per-request mode)"
         )
+    if (apple_authenticate is None) != (apple_control is None):
+        raise ValueError("Apple machine authentication and control must be composed together")
     body = _Body()
 
     def fixed_principal() -> Principal:
@@ -509,7 +528,7 @@ def create_http_app(
             raise ValueError("this transport was composed without a fixed principal")
         return principal
 
-    def read_document(request: Request) -> Mapping[str, Any]:
+    def read_document(request: Request, *, maximum: int = MAX_REQUEST_BYTES) -> Mapping[str, Any]:
         """The request document, or a refusal, with every transport bound applied.
 
         Factored out because the ingress route below reads a body under exactly
@@ -518,7 +537,7 @@ def create_http_app(
         come to enforce two numbers.
         """
         _check_media_type(request)
-        declared = _declared_length(request)
+        declared = _declared_length(request, maximum=maximum)
         received = body.read(request)
         if len(received) > declared:
             # The framing disagreed with the declaration. Refused rather than
@@ -614,6 +633,42 @@ def create_http_app(
             )
         )
 
+    def apple_request(request: Request) -> Response:
+        """Serve only the two credentialed, off-by-default Apple machine paths."""
+        if apple_authenticate is None or apple_control is None:
+            return _problem_response(UnsupportedError())
+        if request.url.query:
+            return _problem_response(InvalidRequestError())
+        try:
+            identity = apple_authenticate(request.headers.get(_CREDENTIAL_HEADER))
+        except AppleMachineCredentialError:
+            return _unauthenticated_response("AppleBridgeCredential")
+        try:
+            document = read_document(request, maximum=APPLE_MACHINE_MAX_REQUEST_BYTES)
+        except (ClientDisconnect, TimeoutError):
+            return _problem_response(InvalidRequestError())
+        except ApplicationError as refusal:
+            return _problem_response(refusal)
+        if "principal_id" in document or "principalID" in document or "bridgeID" in document:
+            return _problem_response(InvalidRequestError())
+        try:
+            result = (
+                apple_control.poll(identity)
+                if request.url.path == APPLE_POLL_PATH
+                else apple_control.admit(identity, document)
+            )
+        except AppleMachineCredentialError:
+            return _unauthenticated_response("AppleBridgeCredential")
+        except (AdmissionDeniedError, ValueError, LookupError):
+            return _problem_response(DeniedError())
+        if result is None:
+            return Response(status_code=204)
+        return Response(
+            json.dumps(result, separators=(",", ":"), sort_keys=True),
+            status_code=200,
+            media_type=_JSON,
+        )
+
     def not_a_request(request: Request, exception: Exception) -> Response:
         """A URL that addresses no capability, answered in the same vocabulary.
 
@@ -637,6 +692,8 @@ def create_http_app(
             # address ahead of the templated one keeps that a property of the
             # list rather than of the two paths happening not to overlap.
             Route(REMOTE_CAPTURE_PATH, submit, methods=["POST"]),
+            Route(APPLE_POLL_PATH, apple_request, methods=["POST"]),
+            Route(APPLE_ADMIT_PATH, apple_request, methods=["POST"]),
             Route(PATH_TEMPLATE, invoke, methods=["POST"]),
         ],
         exception_handlers={HTTPException: not_a_request},

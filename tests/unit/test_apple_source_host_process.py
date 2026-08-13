@@ -9,6 +9,7 @@ from pytest import MonkeyPatch
 
 from my_pa.contracts.v1.native_sources import (
     NATIVE_SOURCE_PROTOCOL_V1,
+    AppleReadGrant,
     NativeAdmissionEnvelope,
     NativeBucketSelection,
     NativeSourceKind,
@@ -105,6 +106,22 @@ def test_process_adapter_preserves_exact_authority_identity(
         bucketID="private-bucket",
     )
     at = datetime(2026, 8, 12, tzinfo=UTC)
+    grant = AppleReadGrant(
+        schema="my-pa.apple-source-read-grant.v1",
+        authorityID="nauth_12345678",
+        principalID="prn_12345678",
+        configurationID="ncfg_12345678",
+        configurationRevision=1,
+        bridgeID="bridge-issued",
+        requestID="request-issued",
+        envelopeID="envelope-issued",
+        selection=selection,
+        authorization="AUTHORIZED_LIVE_PERSONAL_DATA_READ",
+        expiresAtUnixMilliseconds=1_786_510_800_000,
+        pageLimit=1,
+        timeRangeStartUnixMilliseconds=1_786_424_400_000,
+        timeRangeEndUnixMilliseconds=1_786_597_200_000,
+    )
 
     preflight = process.preflight(
         (selection,), bridge_id="bridge-issued", request_id="request-issued", at=at
@@ -114,13 +131,7 @@ def test_process_adapter_preserves_exact_authority_identity(
 
     wire = process.read(
         selection,
-        time_range=None,
-        cursor=None,
-        limit=1,
-        bridge_id="bridge-issued",
-        request_id="request-issued",
-        envelope_id="envelope-issued",
-        at=at,
+        grant=grant,
     )
     envelope = NativeAdmissionEnvelope.model_validate(wire)
     assert envelope.metadata.host_instance_id == "bridge-issued"
@@ -132,13 +143,7 @@ def test_process_adapter_preserves_exact_authority_identity(
     assert pending.exists(), "read must preserve the item until durable admission"
     replay = process.read(
         selection,
-        time_range=None,
-        cursor=None,
-        limit=1,
-        bridge_id="bridge-issued",
-        request_id="request-issued",
-        envelope_id="envelope-issued",
-        at=at,
+        grant=grant,
     )
     assert replay == wire
     assert handoffs == ["envelope-issued"], "retry must consume pending before a new handoff"

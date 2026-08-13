@@ -87,6 +87,7 @@ class IdKind(StrEnum):
     SOURCE_OBSERVATION = "sobs"
     SOURCE_MEMBERSHIP = "smem"
     NATIVE_BRIDGE = "nbrg"
+    APPLE_BRIDGE_CREDENTIAL = "abcred"
     NATIVE_ACCOUNT = "nacct"
     NATIVE_BUCKET = "nbkt"
     NATIVE_DISCOVERY = "ndisc"

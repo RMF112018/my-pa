@@ -20,6 +20,7 @@ from sqlalchemy import CheckConstraint, Engine, func, inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
+from my_pa.application.apple_machine import AppleBridgeIdentity
 from my_pa.application.native_baseline import (
     BaselineResumePoint,
     NativeBaselineExecutor,
@@ -31,9 +32,12 @@ from my_pa.application.native_sources import (
     NativeRequestContext,
     NativeSourceController,
 )
+from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.v1.base import canonical_json
 from my_pa.contracts.v1.native_sources import (
     NATIVE_SOURCE_PROTOCOL_V1,
+    AppleReadGrant,
     NativeAdmissionEnvelope,
     NativeBucketProgress,
     NativeBucketSelection,
@@ -305,6 +309,167 @@ def _envelope(
     return NativeAdmissionEnvelope.model_validate(wire)
 
 
+def _stage_remote_grant(
+    store: SqlNativeSourceControlStore,
+    authority: NativeAdmissionAuthority,
+    *,
+    start_ms: int = 0,
+    end_ms: int = 9_999_999_999_999,
+) -> AppleReadGrant:
+    grant = AppleReadGrant(
+        schema="my-pa.apple-source-read-grant.v1",
+        authorityID=authority.authority_id,
+        principalID=str(CONTEXT.capture_principal_id),
+        configurationID=authority.configuration_id,
+        configurationRevision=authority.configuration_revision,
+        bridgeID=authority.bridge_id,
+        requestID=authority.request_id,
+        envelopeID=authority.envelope_id,
+        selection=NativeBucketSelection(
+            kind="mail", accountID="account.synthetic", bucketID="bucket.synthetic"
+        ),
+        authorization="AUTHORIZED_LIVE_PERSONAL_DATA_READ",
+        expiresAtUnixMilliseconds=int(authority.expires_at.timestamp() * 1_000),
+        pageLimit=1,
+        timeRangeStartUnixMilliseconds=start_ms,
+        timeRangeEndUnixMilliseconds=end_ms,
+    )
+    store.stage_apple_grant(grant, staged_at=authority.issued_at)
+    return grant
+
+
+@pytest.mark.database
+def test_remote_admission_requires_exact_staged_bounds_and_replays_after_receipt_loss(
+    c_engine: Engine,
+) -> None:
+    _seed(c_engine)
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
+    unstaged = _authority(store)
+    with pytest.raises(NativeAdmissionAuthorityError, match="staged Apple grant"):
+        store.admit_evidence_durably(
+            _envelope(unstaged),
+            unstaged,
+            at=WHEN,
+            require_staged_apple_grant=True,
+        )
+
+    bounded = _authority(store)
+    _stage_remote_grant(store, bounded, start_ms=0, end_ms=1)
+    with pytest.raises(NativeAdmissionAuthorityError, match="grant bounds"):
+        store.admit_evidence_durably(
+            _envelope(bounded),
+            bounded,
+            at=WHEN,
+            require_staged_apple_grant=True,
+        )
+
+    admitted = _authority(store)
+    grant = _stage_remote_grant(store, admitted)
+    # A transport retry may stage the same immutable grant later. The first
+    # observation time is metadata, not an authorization bound.
+    store.stage_apple_grant(grant, staged_at=admitted.issued_at + timedelta(seconds=1))
+    envelope = _envelope(admitted)
+    first = store.admit_evidence_durably(
+        envelope, admitted, at=WHEN, require_staged_apple_grant=True
+    )
+    replay = store.admit_evidence_durably(
+        envelope,
+        admitted,
+        at=admitted.expires_at + timedelta(minutes=10),
+        require_staged_apple_grant=True,
+    )
+    assert replay == tuple((version_id, False) for version_id, _ in first)
+    assert (
+        store.consumed_admission_digest(admitted.authority_id)
+        == sha256(
+            canonical_json(envelope.model_dump(mode="json", by_alias=True)).encode()
+        ).hexdigest()
+    )
+
+
+@pytest.mark.database
+def test_concurrent_poll_claims_one_staged_grant_once(c_engine: Engine) -> None:
+    _seed(c_engine)
+    with c_engine.begin() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO knowledge.native_apple_bridge_credentials
+                   (credential_id, principal_id, bridge_id, secret_sha256, state, created_at)
+                   VALUES ('abcred_0000000000000001', :principal, :bridge, :digest,
+                           'active', :at)"""
+            ),
+            {
+                "principal": CONTEXT.capture_principal_id,
+                "bridge": BRIDGE,
+                "digest": "0" * 64,
+                "at": datetime.now(UTC),
+            },
+        )
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
+    snapshot = store.latest_configuration(CONFIGURATION)
+    assert snapshot is not None
+    now = datetime.now(UTC)
+    authority = store.issue_sync_authority(
+        snapshot.configuration,
+        _binding(),
+        audit_id=AUDIT,
+        request_id="read.concurrent.poll",
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+    )
+    _stage_remote_grant(store, authority)
+    identity = AppleBridgeIdentity(
+        "abcred_0000000000000001", str(CONTEXT.capture_principal_id), BRIDGE
+    )
+    control = SqlAppleMachineControl(c_engine, lambda _: None)
+    barrier = Barrier(2)
+
+    def poll() -> dict[str, Any] | None:
+        barrier.wait()
+        return control.poll(identity)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = tuple(
+            future.result(timeout=10) for future in (pool.submit(poll), pool.submit(poll))
+        )
+    assert sum(value is not None for value in outcomes) == 1
+    with c_engine.begin() as connection:
+        connection.execute(
+            text(
+                """UPDATE knowledge.native_apple_read_grants
+                   SET delivery_lease_expires_at = now() - interval '1 second'
+                   WHERE authority_id = :authority"""
+            ),
+            {"authority": authority.authority_id},
+        )
+    assert control.poll(identity) is not None
+
+
+@pytest.mark.database
+def test_poll_refuses_a_grant_after_its_configuration_is_superseded(c_engine: Engine) -> None:
+    _seed(c_engine)
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
+    authority = _authority(store, request_id="read.stale.before.poll")
+    _stage_remote_grant(store, authority)
+    store.append_configuration(
+        NativeConfigurationRevision(
+            CONFIGURATION,
+            2,
+            BRIDGE,
+            "America/New_York",
+            date(2026, 8, 1),
+            WHEN,
+            ExactBucketSelection((BUCKET_2,)),
+            datetime.now(UTC),
+        ),
+        expected_prior_revision=1,
+    )
+    identity = AppleBridgeIdentity(
+        "abcred_0000000000000001", str(CONTEXT.capture_principal_id), BRIDGE
+    )
+    assert SqlAppleMachineControl(c_engine, lambda _: None).poll(identity) is None
+
+
 @pytest.mark.database
 def test_authority_issuance_reuses_one_request_for_spool_recovery(c_engine: Engine) -> None:
     _seed(c_engine)
@@ -396,26 +561,20 @@ class _PagedSyntheticHost:
         self,
         selection: NativeBucketSelection,
         *,
-        time_range: tuple[datetime, datetime] | None,
-        cursor: str | None,
-        limit: int,
-        bridge_id: str,
-        envelope_id: str,
-        request_id: str,
-        at: datetime,
+        grant: AppleReadGrant,
     ) -> dict[str, Any]:
-        del time_range, at
-        assert limit == 100
+        cursor = grant.cursor
+        assert grant.page_limit == 100
         selected = selection.model_dump(mode="json", by_alias=True)
         ordinal = "1" if cursor is None else "2"
         return {
             "metadata": {
                 "protocolVersion": NATIVE_SOURCE_PROTOCOL_V1,
-                "envelopeID": envelope_id,
-                "hostInstanceID": bridge_id,
+                "envelopeID": grant.envelope_id,
+                "hostInstanceID": grant.bridge_id,
                 "emittedAtUnixMilliseconds": 1_775_563_200_000,
             },
-            "requestID": request_id,
+            "requestID": grant.request_id,
             "kind": selected["kind"],
             "accountID": selected["accountID"],
             "bucketID": selected["bucketID"],
@@ -447,26 +606,15 @@ class _CursorCycleHost(_PagedSyntheticHost):
         self,
         selection: NativeBucketSelection,
         *,
-        time_range: tuple[datetime, datetime] | None,
-        cursor: str | None,
-        limit: int,
-        bridge_id: str,
-        envelope_id: str,
-        request_id: str,
-        at: datetime,
+        grant: AppleReadGrant,
     ) -> dict[str, Any]:
+        cursor = grant.cursor
         if self._fail_cursor_once is not None and cursor == self._fail_cursor_once:
             self._fail_cursor_once = None
             raise RuntimeError("synthetic restart boundary")
         wire = super().read(
             selection,
-            time_range=time_range,
-            cursor=cursor,
-            limit=limit,
-            bridge_id=bridge_id,
-            envelope_id=envelope_id,
-            request_id=request_id,
-            at=at,
+            grant=grant,
         )
         wire["nextCursor"] = self._next_by_cursor[cursor]
         return wire

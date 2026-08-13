@@ -61,6 +61,7 @@ from my_pa.infrastructure.persistence.native_sources import (
     SqlNativeSourceControlStore,
     SqlNativeSourceRepository,
 )
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.tables import (
     audit_events,
     capture_review_cases,
@@ -86,6 +87,8 @@ BUCKET = "nbkt_0000000000000001"
 BUCKET_2 = "nbkt_0000000000000002"
 CONFIGURATION = "ncfg_0000000000000001"
 AUDIT = "audit_0000000000000001"
+CONTEXT = capture_context("prn_0000000000000001")
+OTHER_CONTEXT = capture_context("prn_0000000000000002")
 
 
 def _capability_constraint_values(expression: str) -> frozenset[str]:
@@ -124,22 +127,22 @@ def _seed(engine: Engine) -> None:
              (source_id, provider_kind, label, classification, native_root)
            VALUES (:source, 'apple_mail', 'Synthetic Mail', 'synthetic_test', 'root')""",
         """INSERT INTO knowledge.native_bridges
-             (bridge_id, protocol_version, label, created_at)
-           VALUES (:bridge, :protocol, 'Synthetic Bridge', :at)""",
+             (principal_id, bridge_id, protocol_version, label, created_at)
+           VALUES (:principal, :bridge, :protocol, 'Synthetic Bridge', :at)""",
         """INSERT INTO knowledge.native_source_accounts
-             (account_id, bridge_id, source_id, source_kind, label, private_locator,
+             (principal_id, account_id, bridge_id, source_id, source_kind, label, private_locator,
               first_observed_at)
-           VALUES (:account, :bridge, :source, 'mail', 'Synthetic Account',
+           VALUES (:principal, :account, :bridge, :source, 'mail', 'Synthetic Account',
                    'account.synthetic', :at)""",
         """INSERT INTO knowledge.native_source_buckets
-             (bucket_id, account_id, source_kind, label, private_locator, selectable,
+             (principal_id, bucket_id, account_id, source_kind, label, private_locator, selectable,
               first_observed_at)
-           VALUES (:bucket, :account, 'mail', 'Synthetic Inbox', 'bucket.synthetic',
+           VALUES (:principal, :bucket, :account, 'mail', 'Synthetic Inbox', 'bucket.synthetic',
                    true, :at)""",
         """INSERT INTO knowledge.native_source_buckets
-             (bucket_id, account_id, source_kind, label, private_locator, selectable,
+             (principal_id, bucket_id, account_id, source_kind, label, private_locator, selectable,
               first_observed_at)
-           VALUES (:bucket_2, :account, 'mail', 'Synthetic Archive', 'bucket.archive',
+           VALUES (:principal, :bucket_2, :account, 'mail', 'Synthetic Archive', 'bucket.archive',
                    true, :at)""",
         """INSERT INTO knowledge.audit_events
              (audit_id, correlation_id, principal_id, capability, purpose, outcome,
@@ -155,12 +158,13 @@ def _seed(engine: Engine) -> None:
         "bucket": BUCKET,
         "bucket_2": BUCKET_2,
         "audit": AUDIT,
+        "principal": CONTEXT.capture_principal_id,
         "at": WHEN,
     }
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement), values)
-    SqlNativeSourceControlStore(engine).append_configuration(
+    SqlNativeSourceControlStore(engine, CONTEXT).append_configuration(
         NativeConfigurationRevision(
             CONFIGURATION,
             1,
@@ -173,6 +177,70 @@ def _seed(engine: Engine) -> None:
         ),
         expected_prior_revision=0,
     )
+
+
+def _seed_legacy_wp12c(engine: Engine) -> None:
+    """Seed the pre-partition WP-12C schema for its own migration round-trip."""
+    configuration = NativeConfigurationRevision(
+        CONFIGURATION,
+        1,
+        BRIDGE,
+        "America/New_York",
+        date(2026, 8, 1),
+        WHEN,
+        ExactBucketSelection((BUCKET,)),
+        WHEN,
+    )
+    statements = (
+        """INSERT INTO knowledge.sources
+             (source_id, provider_kind, label, classification, native_root)
+           VALUES (:source, 'apple_mail', 'Synthetic Mail', 'synthetic_test', 'root')""",
+        """INSERT INTO knowledge.native_bridges
+             (bridge_id, protocol_version, label, created_at)
+           VALUES (:bridge, :protocol, 'Synthetic Bridge', :at)""",
+        """INSERT INTO knowledge.native_source_accounts
+             (account_id, bridge_id, source_id, source_kind, label, private_locator,
+              first_observed_at)
+           VALUES (:account, :bridge, :source, 'mail', 'Synthetic Account',
+                   'account.synthetic', :at)""",
+        """INSERT INTO knowledge.native_source_buckets
+             (bucket_id, account_id, source_kind, label, private_locator, selectable,
+              first_observed_at)
+           VALUES (:bucket, :account, 'mail', 'Synthetic Inbox', 'bucket.synthetic',
+                   true, :at)""",
+        """INSERT INTO knowledge.audit_events
+             (audit_id, correlation_id, principal_id, capability, purpose, outcome,
+              policy_version, scope_source_id_count, recorded_at)
+           VALUES (:audit, 'corr_0000000000000001', 'prn_0000000000000001',
+                   'native_sources.sync', 'content_extraction', 'allowed', 'policy-v1', 1, :at)""",
+        """INSERT INTO knowledge.native_configuration_revisions
+             (configuration_id, revision, bridge_id, timezone_name, start_date, start_at,
+              cutoff_at, calendar_horizon_at, selection_sha256, created_at)
+           VALUES (:configuration, 1, :bridge, :timezone_name, :start_date, :start_at,
+                   :cutoff_at, :calendar_horizon_at, :selection_sha256, :at)""",
+        """INSERT INTO knowledge.native_configuration_buckets
+             (configuration_id, revision, bucket_id)
+           VALUES (:configuration, 1, :bucket)""",
+    )
+    values = {
+        "source": SOURCE,
+        "bridge": BRIDGE,
+        "protocol": NATIVE_SOURCE_PROTOCOL_V1,
+        "account": ACCOUNT,
+        "bucket": BUCKET,
+        "audit": AUDIT,
+        "configuration": CONFIGURATION,
+        "timezone_name": configuration.timezone_name,
+        "start_date": configuration.start_date,
+        "start_at": configuration.start_at,
+        "cutoff_at": configuration.cutoff_at,
+        "calendar_horizon_at": configuration.calendar_horizon_at,
+        "selection_sha256": configuration.selection_sha256,
+        "at": WHEN,
+    }
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement), values)
 
 
 def _binding() -> NativeBucketBindingRecord:
@@ -240,11 +308,43 @@ def _envelope(
 @pytest.mark.database
 def test_authority_issuance_reuses_one_request_for_spool_recovery(c_engine: Engine) -> None:
     _seed(c_engine)
-    store = SqlNativeSourceControlStore(c_engine)
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
     first = _authority(store, request_id="read.recoverable")
     replay = _authority(store, request_id="read.recoverable")
 
     assert replay == first
+
+
+@pytest.mark.database
+def test_guessed_native_ids_do_not_cross_principal_or_mutate(c_engine: Engine) -> None:
+    _seed(c_engine)
+    mine = SqlNativeSourceControlStore(c_engine, CONTEXT)
+    authority = _authority(mine)
+    envelope = _envelope(authority)
+    ((version_id, created),) = mine.admit_evidence_durably(envelope, authority, at=WHEN)
+    assert created is True
+
+    other = SqlNativeSourceControlStore(c_engine, OTHER_CONTEXT)
+    assert other.bridge_protocol(BRIDGE) is None
+    assert other.bucket_bindings((BUCKET,)) == ()
+    assert other.latest_configuration(CONFIGURATION) is None
+    assert other.authority_for_envelope(authority.envelope_id) is None
+    with c_engine.connect() as connection:
+        repository = SqlNativeSourceRepository(connection, OTHER_CONTEXT)
+        with pytest.raises(LookupError):
+            repository.resolve_bucket_locator(BUCKET)
+    with pytest.raises(NativeAdmissionAuthorityError):
+        other.admit_evidence_durably(envelope, authority, at=WHEN)
+
+    with c_engine.connect() as connection:
+        assert (
+            connection.scalar(
+                select(func.count(source_version_evidence.c.evidence_id)).where(
+                    source_version_evidence.c.version_id == version_id
+                )
+            )
+            == 1
+        )
 
 
 class _PagedSyntheticHost:
@@ -465,7 +565,7 @@ def test_source_visibility_exact_binding_and_allowed_sync_audit_are_database_bac
     c_engine: Engine,
 ) -> None:
     _seed(c_engine)
-    store = SqlNativeSourceControlStore(c_engine)
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
     assert store.bridge_protocol(BRIDGE) == NATIVE_SOURCE_PROTOCOL_V1
     assert store.bucket_bindings((BUCKET,)) == (_binding(),)
     assert store.visible_locator_pairs(BRIDGE, frozenset({SOURCE})) == frozenset(
@@ -496,13 +596,13 @@ def test_source_visibility_exact_binding_and_allowed_sync_audit_are_database_bac
 @pytest.mark.database
 def test_concurrent_replay_creates_one_immutable_version_and_evidence(c_engine: Engine) -> None:
     _seed(c_engine)
-    store = SqlNativeSourceControlStore(c_engine)
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
     authority = _authority(store)
     barrier = Barrier(2)
 
     def admit() -> tuple[tuple[str, bool], ...]:
         barrier.wait()
-        return SqlNativeSourceControlStore(c_engine).admit_evidence_durably(
+        return SqlNativeSourceControlStore(c_engine, CONTEXT).admit_evidence_durably(
             _envelope(authority), authority, at=WHEN
         )
 
@@ -517,7 +617,7 @@ def test_concurrent_replay_creates_one_immutable_version_and_evidence(c_engine: 
         assert connection.scalar(select(func.count()).select_from(source_version_evidence)) == 1
         assert connection.scalar(select(func.count()).select_from(source_observations)) == 1
 
-    status = SqlNativeSourceControlStore(c_engine).progress(CONFIGURATION)
+    status = SqlNativeSourceControlStore(c_engine, CONTEXT).progress(CONFIGURATION)
     assert len(status) == 1
     assert status[0].coverage is NativeCoverageState.EVIDENCE_PRESENT
     assert status[0].admitted_count == 1
@@ -527,7 +627,7 @@ def test_concurrent_replay_creates_one_immutable_version_and_evidence(c_engine: 
 @pytest.mark.database
 def test_configuration_revision_sequence_is_first_one_and_serialized(c_engine: Engine) -> None:
     _seed(c_engine)
-    store = SqlNativeSourceControlStore(c_engine)
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
     first = store.latest_configuration(CONFIGURATION)
     assert first is not None
     with pytest.raises(NativePersistenceConflictError):
@@ -569,7 +669,7 @@ def test_scope_removal_serializes_before_admission_and_makes_grant_stale(
     c_engine: Engine,
 ) -> None:
     _seed(c_engine)
-    store = SqlNativeSourceControlStore(c_engine)
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
     authority = _authority(store)
     current = store.latest_configuration(CONFIGURATION)
     assert current is not None
@@ -589,7 +689,7 @@ def test_scope_removal_serializes_before_admission_and_makes_grant_stale(
             failed_count=0,
             pending_count=0,
         )
-        return SqlNativeSourceControlStore(c_engine).admit_evidence_durably(
+        return SqlNativeSourceControlStore(c_engine, CONTEXT).admit_evidence_durably(
             _envelope(authority),
             authority,
             (reachable,),
@@ -599,13 +699,19 @@ def test_scope_removal_serializes_before_admission_and_makes_grant_stale(
     with ThreadPoolExecutor(max_workers=1) as pool:
         with c_engine.begin() as connection:
             connection.execute(
-                text("SELECT pg_advisory_xact_lock(hashtextextended(:id, 0))"),
-                {"id": CONFIGURATION},
+                text(
+                    "SELECT pg_advisory_xact_lock("
+                    "hashtextextended(:principal_id || ':' || :configuration_id, 0))"
+                ),
+                {
+                    "principal_id": CONTEXT.capture_principal_id,
+                    "configuration_id": CONFIGURATION,
+                },
             )
             future = pool.submit(admit_after_lock)
             with pytest.raises(FutureTimeoutError):
                 future.result(timeout=0.1)
-            SqlNativeSourceRepository(connection).append_configuration(removed)
+            SqlNativeSourceRepository(connection, CONTEXT).append_configuration(removed)
         with pytest.raises(NativeAdmissionAuthorityError):
             future.result(timeout=5)
 
@@ -627,7 +733,7 @@ def test_scope_removal_serializes_before_admission_and_makes_grant_stale(
 @pytest.mark.database
 def test_authority_fabrication_expiry_and_non_exact_replay_fail_closed(c_engine: Engine) -> None:
     _seed(c_engine)
-    store = SqlNativeSourceControlStore(c_engine)
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
     authority = _authority(store)
     envelope = _envelope(authority)
     for rejected, at in (
@@ -663,7 +769,7 @@ def test_durable_status_distinguishes_permission_denial_and_unavailability(
     c_engine: Engine,
 ) -> None:
     _seed(c_engine)
-    store = SqlNativeSourceControlStore(c_engine)
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
     denied = NativeBucketProgress(
         bucket_id=BUCKET,
         state=NativePreflightState.PERMISSION_DENIED.value,
@@ -705,7 +811,7 @@ def test_operational_denial_is_recorded_only_while_authority_scope_is_current(
     c_engine: Engine,
 ) -> None:
     _seed(c_engine)
-    store = SqlNativeSourceControlStore(c_engine)
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
     authority = _authority(store)
     envelope = _envelope(authority)
     denied = NativeBucketProgress(
@@ -755,7 +861,7 @@ def test_native_enrichment_routes_exact_source_version_to_existing_governed_revi
     c_engine: Engine,
 ) -> None:
     _seed(c_engine)
-    store = SqlNativeSourceControlStore(c_engine)
+    store = SqlNativeSourceControlStore(c_engine, CONTEXT)
     authority = _authority(store)
     version_id = store.admit_evidence_durably(_envelope(authority), authority, at=WHEN)[0][0]
     ids = {
@@ -817,6 +923,7 @@ def test_native_enrichment_routes_exact_source_version_to_existing_governed_revi
     router = SqlNativeReviewProposalRouter(
         c_engine,
         lambda candidate_version: (ids["proposal"],) if candidate_version == version_id else (),
+        CONTEXT,
     )
     assert router.open_review_proposals((version_id,)) == (ids["proposal"],)
     assert router.open_review_proposals((version_id,)) == (ids["proposal"],)
@@ -833,7 +940,7 @@ def test_wp12e_cutoff_run_job_and_checkpoint_are_exact_durable_and_fail_closed(
     c_engine: Engine,
 ) -> None:
     _seed(c_engine)
-    baseline = SqlNativeBaselineStore(c_engine)
+    baseline = SqlNativeBaselineStore(c_engine, CONTEXT)
     cutoff = WHEN + timedelta(days=1)
     frozen = baseline.prepare(
         configuration_id=CONFIGURATION,
@@ -874,11 +981,11 @@ def test_wp12e_cutoff_run_job_and_checkpoint_are_exact_durable_and_fail_closed(
             connection.execute(
                 text(
                     """INSERT INTO knowledge.native_sync_jobs
-                         (job_id, configuration_id, configuration_revision, bucket_id,
+                         (principal_id, job_id, configuration_id, configuration_revision, bucket_id,
                           range_start, range_end, read_mode, state, idempotency_key,
                           created_at, updated_at)
-                       VALUES (:job_id, :configuration_id, 1, :bucket_id, :range_start,
-                               :range_end, 'bounded_time', 'queued', 'unbound-job',
+                       VALUES (:principal_id, :job_id, :configuration_id, 1, :bucket_id,
+                               :range_start, :range_end, 'bounded_time', 'queued', 'unbound-job',
                                :recorded_at, :recorded_at)"""
                 ),
                 {
@@ -888,6 +995,7 @@ def test_wp12e_cutoff_run_job_and_checkpoint_are_exact_durable_and_fail_closed(
                     "range_start": run.start_at,
                     "range_end": cutoff,
                     "recorded_at": WHEN,
+                    "principal_id": CONTEXT.capture_principal_id,
                 },
             )
         unbound_job.rollback()
@@ -896,9 +1004,9 @@ def test_wp12e_cutoff_run_job_and_checkpoint_are_exact_durable_and_fail_closed(
             connection.execute(
                 text(
                     """INSERT INTO knowledge.native_checkpoints
-                         (checkpoint_id, bucket_id, sequence, cursor_private,
+                         (principal_id, checkpoint_id, bucket_id, sequence, cursor_private,
                           cursor_digest, terminal, item_count, recorded_at)
-                       VALUES (:checkpoint_id, :bucket_id, 1, 'unbound-cursor',
+                       VALUES (:principal_id, :checkpoint_id, :bucket_id, 1, 'unbound-cursor',
                                :cursor_digest, false, 0, :recorded_at)"""
                 ),
                 {
@@ -906,13 +1014,14 @@ def test_wp12e_cutoff_run_job_and_checkpoint_are_exact_durable_and_fail_closed(
                     "bucket_id": BUCKET,
                     "cursor_digest": sha256(b"unbound-cursor").hexdigest(),
                     "recorded_at": WHEN,
+                    "principal_id": CONTEXT.capture_principal_id,
                 },
             )
         unbound_checkpoint.rollback()
 
     job = baseline.claim(frozen.run_id, owner="synthetic-worker", lease_for=timedelta(minutes=5))
     assert job is not None
-    control = SqlNativeSourceControlStore(c_engine)
+    control = SqlNativeSourceControlStore(c_engine, CONTEXT)
     authority = _authority(control)
     page = NativeReadPageReceipt(
         admission=NativeAdmissionReceipt(
@@ -994,10 +1103,10 @@ def test_wp12e_cutoff_run_job_and_checkpoint_are_exact_durable_and_fail_closed(
 
     checkpoint_insert = text(
         """INSERT INTO knowledge.native_checkpoints
-             (checkpoint_id, bucket_id, job_id, admission_authority_id, sequence,
+             (principal_id, checkpoint_id, bucket_id, job_id, admission_authority_id, sequence,
               previous_checkpoint_id, cursor_private, cursor_digest, terminal,
               item_count, recorded_at)
-           VALUES (:checkpoint_id, :bucket_id, :job_id, :authority_id, 1, NULL,
+           VALUES (:principal_id, :checkpoint_id, :bucket_id, :job_id, :authority_id, 1, NULL,
                    :cursor, :digest, :terminal, :item_count, :recorded_at)"""
     )
     plants = (
@@ -1033,6 +1142,7 @@ def test_wp12e_cutoff_run_job_and_checkpoint_are_exact_durable_and_fail_closed(
                         "terminal": terminal,
                         "item_count": count,
                         "recorded_at": WHEN,
+                        "principal_id": CONTEXT.capture_principal_id,
                     },
                 )
             savepoint.rollback()
@@ -1090,29 +1200,29 @@ def test_wp12e_database_rejects_wrong_insert_and_update_ranges_for_every_kind(
         connection.execute(
             text(
                 """INSERT INTO knowledge.native_source_accounts
-                     (account_id, bridge_id, source_id, source_kind, label, private_locator,
-                      first_observed_at)
-                   VALUES (:calendar_account, :bridge, :calendar_source, 'calendar',
+                     (principal_id, account_id, bridge_id, source_id, source_kind, label,
+                      private_locator, first_observed_at)
+                   VALUES (:principal, :calendar_account, :bridge, :calendar_source, 'calendar',
                            'Synthetic Calendar', 'calendar.account', :at),
-                          (:contacts_account, :bridge, :contacts_source, 'contacts',
+                          (:principal, :contacts_account, :bridge, :contacts_source, 'contacts',
                            'Synthetic Contacts', 'contacts.account', :at)"""
             ),
-            {**ids, "bridge": BRIDGE, "at": WHEN},
+            {**ids, "bridge": BRIDGE, "principal": CONTEXT.capture_principal_id, "at": WHEN},
         )
         connection.execute(
             text(
                 """INSERT INTO knowledge.native_source_buckets
-                     (bucket_id, account_id, source_kind, label, private_locator, selectable,
-                      first_observed_at)
-                   VALUES (:calendar_bucket, :calendar_account, 'calendar',
+                     (principal_id, bucket_id, account_id, source_kind, label, private_locator,
+                      selectable, first_observed_at)
+                   VALUES (:principal, :calendar_bucket, :calendar_account, 'calendar',
                            'Synthetic Calendar', 'calendar.bucket', true, :at),
-                          (:contacts_bucket, :contacts_account, 'contacts',
+                          (:principal, :contacts_bucket, :contacts_account, 'contacts',
                            'Synthetic Contacts', 'contacts.bucket', true, :at)"""
             ),
-            {**ids, "at": WHEN},
+            {**ids, "principal": CONTEXT.capture_principal_id, "at": WHEN},
         )
     configuration_id = "ncfg_0000000000000010"
-    SqlNativeSourceControlStore(c_engine).append_configuration(
+    SqlNativeSourceControlStore(c_engine, CONTEXT).append_configuration(
         NativeConfigurationRevision(
             configuration_id,
             1,
@@ -1125,7 +1235,7 @@ def test_wp12e_database_rejects_wrong_insert_and_update_ranges_for_every_kind(
         ),
         expected_prior_revision=0,
     )
-    frozen = SqlNativeBaselineStore(c_engine).prepare(
+    frozen = SqlNativeBaselineStore(c_engine, CONTEXT).prepare(
         configuration_id=configuration_id,
         idempotency_key="all-kind-range-guard",
         proposed_cutoff_at=WHEN + timedelta(days=1),
@@ -1139,10 +1249,10 @@ def test_wp12e_database_rejects_wrong_insert_and_update_ranges_for_every_kind(
 
     insert_job = text(
         """INSERT INTO knowledge.native_sync_jobs
-             (job_id, configuration_id, configuration_revision, bucket_id,
+             (principal_id, job_id, configuration_id, configuration_revision, bucket_id,
               range_start, range_end, state, lease_owner, lease_expires_at,
               idempotency_key, created_at, updated_at, run_id, read_mode)
-           VALUES (:job_id, :configuration_id, :configuration_revision, :bucket_id,
+           VALUES (:principal_id, :job_id, :configuration_id, :configuration_revision, :bucket_id,
                    :range_start, :range_end, 'queued', NULL, NULL,
                    :idempotency_key, :created_at, :updated_at, :run_id, :read_mode)"""
     )
@@ -1213,7 +1323,7 @@ def test_wp12e_page_and_record_budgets_fail_closed_before_another_checkpoint(
     c_engine: Engine,
 ) -> None:
     _seed(c_engine)
-    baseline = SqlNativeBaselineStore(c_engine)
+    baseline = SqlNativeBaselineStore(c_engine, CONTEXT)
     frozen = baseline.prepare(
         configuration_id=CONFIGURATION,
         idempotency_key="bounded-total-work",
@@ -1222,7 +1332,7 @@ def test_wp12e_page_and_record_budgets_fail_closed_before_another_checkpoint(
     )
     job = baseline.claim(frozen.run_id, owner="bounded-worker", lease_for=timedelta(minutes=5))
     assert job is not None
-    control = SqlNativeSourceControlStore(c_engine)
+    control = SqlNativeSourceControlStore(c_engine, CONTEXT)
 
     first_authority = _authority(control)
     first_outcomes = control.admit_evidence_durably(
@@ -1285,7 +1395,7 @@ def test_wp12e_earlier_start_queues_only_missing_delta_and_later_start_retains_e
     c_engine: Engine,
 ) -> None:
     _seed(c_engine)
-    control = SqlNativeSourceControlStore(c_engine)
+    control = SqlNativeSourceControlStore(c_engine, CONTEXT)
     authority = _authority(control)
     control.admit_evidence_durably(_envelope(authority), authority, at=WHEN)
     with c_engine.connect() as connection:
@@ -1310,11 +1420,12 @@ def test_wp12e_earlier_start_queues_only_missing_delta_and_later_start_retains_e
             connection.execute(
                 text(
                     """INSERT INTO knowledge.native_sync_runs
-                         (run_id, configuration_id, configuration_revision, run_kind, state,
+                         (principal_id, run_id, configuration_id, configuration_revision,
+                          run_kind, state,
                           start_at, cutoff_at, calendar_horizon_at, idempotency_key,
                           recorded_at, bridge_id, adapter_identity)
-                       VALUES ('nrun_0000000000000098', :configuration, 2, 'baseline',
-                               'running', :start, :cutoff, :horizon, 'raw-wrong-kind',
+                       VALUES (:principal_id, 'nrun_0000000000000098', :configuration, 2,
+                               'baseline', 'running', :start, :cutoff, :horizon, 'raw-wrong-kind',
                                :cutoff, :bridge, :adapter)"""
                 ),
                 {
@@ -1324,10 +1435,11 @@ def test_wp12e_earlier_start_queues_only_missing_delta_and_later_start_retains_e
                     "horizon": WHEN + timedelta(days=91),
                     "bridge": BRIDGE,
                     "adapter": "b" * 64,
+                    "principal_id": CONTEXT.capture_principal_id,
                 },
             )
         wrong_kind.rollback()
-    baseline = SqlNativeBaselineStore(c_engine)
+    baseline = SqlNativeBaselineStore(c_engine, CONTEXT)
     backfill = baseline.prepare(
         configuration_id=CONFIGURATION,
         idempotency_key="earlier-delta",
@@ -1393,22 +1505,23 @@ def test_wp12e_contacts_use_current_inventory_and_admission_records_membership(
         connection.execute(
             text(
                 "INSERT INTO knowledge.native_source_accounts "
-                "(account_id, bridge_id, source_id, source_kind, label, private_locator, "
-                "first_observed_at) VALUES (:account, :bridge, :source, 'contacts', "
+                "(principal_id, account_id, bridge_id, source_id, source_kind, label, "
+                "private_locator, first_observed_at) VALUES (:principal, :account, :bridge, "
+                ":source, 'contacts', "
                 "'Synthetic Contacts', 'contacts.account', :at)"
             ),
-            {**ids, "bridge": BRIDGE, "at": WHEN},
+            {**ids, "bridge": BRIDGE, "principal": CONTEXT.capture_principal_id, "at": WHEN},
         )
         connection.execute(
             text(
                 "INSERT INTO knowledge.native_source_buckets "
-                "(bucket_id, account_id, source_kind, label, private_locator, selectable, "
-                "first_observed_at) VALUES (:bucket, :account, 'contacts', "
+                "(principal_id, bucket_id, account_id, source_kind, label, private_locator, "
+                "selectable, first_observed_at) VALUES (:principal, :bucket, :account, 'contacts', "
                 "'Synthetic Group', 'contacts.group', true, :at)"
             ),
-            {**ids, "at": WHEN},
+            {**ids, "principal": CONTEXT.capture_principal_id, "at": WHEN},
         )
-    control = SqlNativeSourceControlStore(c_engine)
+    control = SqlNativeSourceControlStore(c_engine, CONTEXT)
     configuration = NativeConfigurationRevision(
         ids["configuration"],
         1,
@@ -1420,7 +1533,7 @@ def test_wp12e_contacts_use_current_inventory_and_admission_records_membership(
         WHEN,
     )
     control.append_configuration(configuration, expected_prior_revision=0)
-    baseline = SqlNativeBaselineStore(c_engine)
+    baseline = SqlNativeBaselineStore(c_engine, CONTEXT)
     frozen = baseline.prepare(
         configuration_id=ids["configuration"],
         idempotency_key="contacts-inventory",
@@ -1491,7 +1604,7 @@ def test_wp12e_contacts_use_current_inventory_and_admission_records_membership(
 @pytest.mark.database
 def test_wp12e_revision_upgrades_populated_prior_head_and_round_trips(c_engine: Engine) -> None:
     command.downgrade(_config(), "9d5e2f7b4c61")
-    _seed(c_engine)
+    _seed_legacy_wp12c(c_engine)
     with c_engine.begin() as connection:
         connection.execute(
             text(
@@ -1523,13 +1636,19 @@ def test_wp12e_revision_upgrades_populated_prior_head_and_round_trips(c_engine: 
                 "cutoff": WHEN,
             },
         )
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), "a7c3e8d1f642")
     with c_engine.connect() as connection:
         run = connection.execute(
-            select(native_sync_runs).where(native_sync_runs.c.run_id == "nrun_0000000000000099")
+            text(
+                "SELECT bridge_id, adapter_identity FROM knowledge.native_sync_runs "
+                "WHERE run_id = 'nrun_0000000000000099'"
+            )
         ).one()
         job = connection.execute(
-            select(native_sync_jobs).where(native_sync_jobs.c.job_id == "njob_0000000000000099")
+            text(
+                "SELECT run_id, read_mode FROM knowledge.native_sync_jobs "
+                "WHERE job_id = 'njob_0000000000000099'"
+            )
         ).one()
     assert (run.bridge_id, run.adapter_identity) == (BRIDGE, "legacy-protocol-v1")
     assert (job.run_id, job.read_mode) == (None, "bounded_time")
@@ -1550,7 +1669,7 @@ def test_wp12e_revision_upgrades_populated_prior_head_and_round_trips(c_engine: 
         for column in inspect(c_engine).get_columns("native_sync_runs", schema="knowledge")
     }
     assert {"bridge_id", "adapter_identity"}.isdisjoint(columns)
-    command.upgrade(_config(), "head")
+    command.upgrade(_config(), "a7c3e8d1f642")
 
 
 @pytest.mark.database
@@ -1561,12 +1680,12 @@ def test_wp12e_sql_executor_replays_after_admission_crash_and_resumes_all_pages(
 ) -> None:
     _seed(c_engine)
     controller = NativeSourceController(
-        store=SqlNativeSourceControlStore(c_engine),
+        store=SqlNativeSourceControlStore(c_engine, CONTEXT),
         host=_PagedSyntheticHost(),
         audit=SqlAlchemyAuditSink(c_engine),
         proposals=_NoProposals(),
     )
-    baseline = SqlNativeBaselineStore(c_engine)
+    baseline = SqlNativeBaselineStore(c_engine, CONTEXT)
 
     def contexts(
         request_id: str, at: datetime
@@ -1574,7 +1693,7 @@ def test_wp12e_sql_executor_replays_after_admission_crash_and_resumes_all_pages(
         return (
             NativeRequestContext(
                 principal=Principal(
-                    "prn_0000000000000100", PrincipalKind.OPERATOR, authenticated=True
+                    "prn_0000000000000001", PrincipalKind.OPERATOR, authenticated=True
                 ),
                 purpose=Purpose.CONTENT_EXTRACTION,
                 correlation_id="corr_0000000000000100",
@@ -1668,12 +1787,12 @@ def test_wp12e_durable_cursor_history_rejects_immediate_and_multinode_cycles_aft
     _seed(c_engine)
     host = _CursorCycleHost(next_by_cursor, fail_cursor_once=restart_cursor)
     controller = NativeSourceController(
-        store=SqlNativeSourceControlStore(c_engine),
+        store=SqlNativeSourceControlStore(c_engine, CONTEXT),
         host=host,
         audit=SqlAlchemyAuditSink(c_engine),
         proposals=_NoProposals(),
     )
-    baseline = SqlNativeBaselineStore(c_engine)
+    baseline = SqlNativeBaselineStore(c_engine, CONTEXT)
 
     def contexts(
         request_id: str, at: datetime
@@ -1681,7 +1800,7 @@ def test_wp12e_durable_cursor_history_rejects_immediate_and_multinode_cycles_aft
         return (
             NativeRequestContext(
                 principal=Principal(
-                    "prn_0000000000000200", PrincipalKind.OPERATOR, authenticated=True
+                    "prn_0000000000000001", PrincipalKind.OPERATOR, authenticated=True
                 ),
                 purpose=Purpose.CONTENT_EXTRACTION,
                 correlation_id="corr_0000000000000200",
@@ -1719,7 +1838,7 @@ def test_wp12e_durable_cursor_history_rejects_immediate_and_multinode_cycles_aft
     with pytest.raises(NativePersistenceConflictError, match="cursor repeated"):
         NativeBaselineExecutor(
             controller=controller,
-            store=SqlNativeBaselineStore(c_engine),
+            store=SqlNativeBaselineStore(c_engine, CONTEXT),
             contexts=contexts,
             clock=lambda: WHEN,
         ).execute(

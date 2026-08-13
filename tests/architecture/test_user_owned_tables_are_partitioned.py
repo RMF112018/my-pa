@@ -13,14 +13,14 @@ assertion is exact in both directions: a new unpartitioned table fails the build
 and a table that *gains* a partition without leaving this file fails it too, so
 the registry cannot outlive what it describes.
 
-Three planes make up almost all of it:
+Two planes make up almost all of it, while NAS-07A now measures the former
+native residual as a positive partition contract:
 
-* **the native-source plane** — twenty-two `native_*`/`source_*` tables, none
-  carrying a principal column, and its
-  advisory locks taken in a **global** namespace
-  (`pg_advisory_xact_lock(hashtextextended(...))` on a key that includes no
-  Principal), so two Principals contend on one lock. Partitioning it is
-  explicitly out of WP-04's scope;
+* **the native-source plane** — twenty native-owned control/evidence tables now
+  carry a required Principal partition. The shared `source_objects` and
+  `source_object_versions` identities remain rooted in an operator-registered
+  source and native paths may reach them only through partitioned evidence or
+  membership. Advisory-lock scoping is the separate NAS-07A2 runtime slice;
 * **the derived-capture plane** — the rows the pipeline derives *from* a capture
   version. The capture version itself is partitioned (`owner_principal_id`,
   revision `e7f3a9c2d514`); its derived text, spans, proposals, classifications
@@ -41,8 +41,16 @@ import re
 from pathlib import Path
 from typing import Final
 
+import pytest
 from sqlalchemy import Table
 
+from my_pa.infrastructure.persistence.native_sources import (
+    SqlNativeBaselineStore,
+    SqlNativeReviewProposalRouter,
+    SqlNativeSourceControlStore,
+    SqlNativeSourceRepository,
+)
+from my_pa.infrastructure.persistence.principal_scope import MissingPrincipalContextError
 from my_pa.infrastructure.persistence.tables import METADATA
 
 ROOT: Final = Path(__file__).resolve().parents[2]
@@ -93,42 +101,35 @@ UNPARTITIONED_USER_OWNED: Final = {
     "extractions": "extraction outcomes under one enrollment; same chain.",
     "quarantine_records": "quarantined objects under one enrollment; same chain.",
     "coverage_limitations": "coverage gaps under one enrollment; same chain.",
-    # --- the native-source plane (out of WP-04's scope) -------------------
-    "native_bridges": "native-source control plane; unpartitioned (see below).",
-    "native_bridge_observations": "native-source control plane; unpartitioned.",
-    "native_source_accounts": "native-source control plane; unpartitioned.",
-    "native_source_buckets": "native-source control plane; unpartitioned.",
-    "native_source_review_routes": "native-source control plane; unpartitioned.",
-    "native_discovery_snapshots": "native-source control plane; unpartitioned.",
-    "native_configuration_revisions": "native-source control plane; unpartitioned.",
-    "native_configuration_buckets": "native-source control plane; unpartitioned.",
-    "native_sync_runs": "native-source control plane; unpartitioned.",
-    "native_bucket_runs": "native-source control plane; unpartitioned.",
-    "native_sync_jobs": "native-source control plane; unpartitioned.",
-    "native_checkpoints": "native-source control plane; unpartitioned.",
-    "native_watcher_simulations": "native-source control plane; unpartitioned.",
-    "native_simulation_receipts": "native-source control plane; unpartitioned.",
-    "native_live_activation_gates": "native-source control plane; unpartitioned.",
-    "native_admission_authorities": "native-source control plane; unpartitioned.",
-    "native_preflight_observations": "native-source control plane; unpartitioned.",
-    "source_version_evidence": "native-source evidence plane; unpartitioned.",
-    "source_observations": "native-source evidence plane; unpartitioned.",
-    "source_memberships": "native-source evidence plane; unpartitioned.",
 }
 
-#: The native-source plane, named as a set so the count in this module's
-#: docstring is derived rather than spelled.
-NATIVE_PLANE: Final = frozenset(
-    name
-    for name in UNPARTITIONED_USER_OWNED
-    if name.startswith("native_") or name.startswith("source_")
+NATIVE_PARTITIONED: Final = frozenset(
+    {
+        "native_bridges",
+        "native_bridge_observations",
+        "native_source_accounts",
+        "native_source_buckets",
+        "native_source_review_routes",
+        "native_discovery_snapshots",
+        "native_configuration_revisions",
+        "native_configuration_buckets",
+        "native_sync_runs",
+        "native_bucket_runs",
+        "native_sync_jobs",
+        "native_checkpoints",
+        "native_watcher_simulations",
+        "native_simulation_receipts",
+        "native_live_activation_gates",
+        "native_admission_authorities",
+        "native_preflight_observations",
+        "source_version_evidence",
+        "source_observations",
+        "source_memberships",
+    }
 )
 
-#: `persistence/native_sources.py` takes its serialization locks in a namespace
-#: that contains no Principal, so two Principals contend on one lock and one can
-#: observe the other's contention. Registered rather than repaired: the plane it
-#: serializes is unpartitioned, and a per-Principal lock over shared rows would
-#: be a weaker guarantee wearing a stronger name.
+#: NAS-07A2 requires every native serialization lock to occupy the authenticated
+#: Principal's namespace as well as the resource-specific namespace.
 GLOBAL_ADVISORY_LOCK_MODULE: Final = (
     PACKAGE / "infrastructure" / "persistence" / "native_sources.py"
 )
@@ -196,31 +197,23 @@ def test_every_registered_reason_says_something() -> None:
     assert empty == [], f"{empty} are registered with no usable reason"
 
 
-def test_the_native_source_plane_is_the_bulk_of_the_residual_and_is_named() -> None:
-    """The plane WP-04 explicitly did not partition, counted rather than described."""
-    # Twenty-two rather than the twenty-three a prior audit reported: that count
-    # included `sources`, which `persistence/registry.py` owns and which is an
-    # operator registration rather than a user-owned row. Counted here from the
-    # registry itself so the figure and the set cannot disagree.
-    assert len(NATIVE_PLANE) == 22, (
-        f"the native-source plane now holds {len(NATIVE_PLANE)} unpartitioned "
-        "tables; this module's docstring says twenty-two"
-    )
-    assert set(UNPARTITIONED_USER_OWNED) >= NATIVE_PLANE
-    # None of them carries a partition column under any name, so "unpartitioned"
-    # is a property of the tables rather than of the detector's vocabulary.
-    for name in NATIVE_PLANE:
+def test_the_native_owned_plane_is_principal_partitioned() -> None:
+    """NAS-07A closes the native plane without claiming shared source identity."""
+    assert len(NATIVE_PARTITIONED) == 20
+    for name in NATIVE_PARTITIONED:
         table = METADATA.tables[f"knowledge.{name}"]
-        assert not any(column.name.endswith("principal_id") for column in table.c)
+        assert table.c.principal_id.nullable is False
+
+    # These identities remain global beneath operator-registered sources. Native
+    # reads reach them only through a partitioned evidence/membership row; adding
+    # nullable/default ownership here would merely disguise that relationship.
+    for name in ("source_objects", "source_object_versions"):
+        assert "principal_id" not in METADATA.tables[f"knowledge.{name}"].c
+    assert "operator-registered" in UNPARTITIONED_USER_OWNED["source_objects"]
+    assert "same" in UNPARTITIONED_USER_OWNED["source_object_versions"]
 
 
-def test_the_native_source_advisory_lock_namespace_is_still_global() -> None:
-    """Registered, not repaired — and the registration is checked against the source.
-
-    If someone scopes those locks per Principal, this test fails and the entry
-    above has to be removed, which is the point: the residual cannot be silently
-    fixed *or* silently widened.
-    """
+def test_the_native_source_advisory_lock_namespace_is_principal_scoped() -> None:
     source = GLOBAL_ADVISORY_LOCK_MODULE.read_text(encoding="utf-8")
     calls = re.findall(r"pg_advisory_xact_lock\(", source)
     assert len(calls) == GLOBAL_ADVISORY_LOCK_CALLS, (
@@ -228,13 +221,26 @@ def test_the_native_source_advisory_lock_namespace_is_still_global() -> None:
         f"locks, not {GLOBAL_ADVISORY_LOCK_CALLS}; the residual entry describes a "
         "shape that no longer exists"
     )
-    # The registered defect: no Principal appears in the lock key.
-    for match in re.finditer(r"pg_advisory_xact_lock\(hashtextextended\(([^)]*)\)", source):
-        assert "principal" not in match.group(1), (
-            "an advisory-lock namespace now names a Principal. That closes the "
-            "registered residual; remove the entry above rather than leaving a "
-            "registry that describes the old shape"
-        )
+    normalized = re.sub(r"\s+", "", source)
+    assert normalized.count(":principal_id||':'||:") == GLOBAL_ADVISORY_LOCK_CALLS
+    assert source.count('"principal_id": self._partition_identity') >= GLOBAL_ADVISORY_LOCK_CALLS
+
+
+def test_native_persistence_constructors_fail_closed_without_context() -> None:
+    sentinel = object()
+    constructors = (
+        lambda: SqlNativeSourceRepository(sentinel, None),  # type: ignore[arg-type]
+        lambda: SqlNativeBaselineStore(sentinel, None),  # type: ignore[arg-type]
+        lambda: SqlNativeSourceControlStore(sentinel, None),  # type: ignore[arg-type]
+        lambda: SqlNativeReviewProposalRouter(
+            sentinel,
+            lambda _version_id: (),
+            None,  # type: ignore[arg-type]
+        ),
+    )
+    for construct in constructors:
+        with pytest.raises(MissingPrincipalContextError):
+            construct()
 
 
 def test_the_484_table_migration_target_is_recorded_as_unmeasured() -> None:

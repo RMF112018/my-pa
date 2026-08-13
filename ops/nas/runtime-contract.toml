@@ -53,6 +53,7 @@ mounts = ["config_ro", "managed_documents_rw", "sources_ro"]
 networks = ["data-plane", "edge-plane"]
 container_bind = "0.0.0.0:8765"
 bind_implementation_owned_by = "NAS-04"
+bind_mode = "validated_container_only"
 
 [services.worker_enrollment]
 host = "nas"

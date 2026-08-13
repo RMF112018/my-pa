@@ -13,6 +13,7 @@ from my_pa.bootstrap.settings import (
     ENV_PREFIX,
     MAX_FETCH_BYTES_CEILING,
     Environment,
+    GatewayBindMode,
     LogLevel,
     Settings,
     SettingsError,
@@ -34,6 +35,15 @@ def test_defaults_are_safe() -> None:
     assert settings.log_level is LogLevel.INFO
     assert settings.redaction_enabled is True
     assert settings.contract_strict_mode is True
+    assert settings.gateway_bind_mode is GatewayBindMode.LOOPBACK
+    assert settings.gateway_bind_host() == "127.0.0.1"
+
+
+def test_container_gateway_bind_is_explicit_and_closed() -> None:
+    settings = load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}GATEWAY_BIND_MODE": "container"})
+    assert settings.gateway_bind_host() == "0.0.0.0"  # noqa: S104
+    with pytest.raises(SettingsError, match="GATEWAY_BIND_MODE"):
+        load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}GATEWAY_BIND_MODE": "lan"})
 
 
 def test_unrelated_environment_variables_are_ignored() -> None:

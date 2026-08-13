@@ -36,11 +36,14 @@ services:
     platform: linux/amd64
     user: "${MY_PA_UID:?dedicated service uid required}:${MY_PA_GID:?dedicated service gid required}"
     restart: "no"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     command: [python, apps/gateway.py, run]
     # NAS-04 must implement and verify this container-namespace bind setting.
     # It does not publish the gateway on the NAS host.
     environment:
-      MY_PA_GATEWAY_BIND_HOST: 0.0.0.0
+      MY_PA_GATEWAY_BIND_MODE: container
+      MY_PA_MANAGED_DOCUMENT_ROOT: /srv/my-pa/managed-documents
     env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]
     expose: ["8765"]
     volumes:
@@ -55,6 +58,8 @@ services:
     platform: linux/amd64
     user: "${MY_PA_UID:?}:${MY_PA_GID:?}"
     restart: "no"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     command: [python, apps/worker.py, run, --plane, enrollment]
     env_file: ["${MY_PA_NAS_ENV_FILE:?}"]
     volumes:
@@ -69,6 +74,8 @@ services:
     platform: linux/amd64
     user: "${MY_PA_UID:?}:${MY_PA_GID:?}"
     restart: "no"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     command: [python, apps/worker.py, run, --plane, capture]
     env_file: ["${MY_PA_NAS_ENV_FILE:?}"]
     volumes:
@@ -81,6 +88,8 @@ services:
     platform: linux/amd64
     user: "${MY_PA_UID:?}:${MY_PA_GID:?}"
     restart: "no"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     command: [node, server.js]
     environment:
       NODE_ENV: production

@@ -57,7 +57,8 @@ def _tools(tmp_path: Path) -> tuple[Path, Path]:
         '[ "${MY_TEST_MODE:-}" != fail_capture ] && '
         f"echo {container_id}; exit 0;;\n"
         "  *' compose '*' create postgres '*) "
-        f"touch {tmp_path / 'created'}; exit 0;;\n"
+        '[ "${MY_TEST_MODE:-}" = oneoff_collision ] && '
+        f"touch {tmp_path / 'oneoff'} || touch {tmp_path / 'created'}; exit 0;;\n"
         "  *' compose '*' config '*) exit 0;;\n"
         "  *' compose '*' start postgres '*) exit 0;;\n"
         f"  *' stop --time 60 {container_id} '*) "
@@ -75,6 +76,10 @@ def _tools(tmp_path: Path) -> tuple[Path, Path]:
         "echo my-pa-nas-contract; exit 0;;\n"
         f"  *' inspect --format '*'com.docker.compose.service'*' {container_id} '*) "
         "echo postgres; exit 0;;\n"
+        f"  *' inspect --format '*'com.docker.compose.oneoff'*' {container_id} '*) "
+        "echo False; exit 0;;\n"
+        f"  *' inspect --format '*'com.docker.compose.container-number'*' {container_id} '*) "
+        "echo 1; exit 0;;\n"
         f"  *' inspect --format {{{{.Image}}}} {container_id} '*) "
         f"echo sha256:{'1' * 64}; exit 0;;\n"
         "  *' network inspect --format {{.Id}} my-pa-nas-contract_data-plane '*) "
@@ -86,7 +91,8 @@ def _tools(tmp_path: Path) -> tuple[Path, Path]:
         "  *' network inspect --format {{.Internal}} "
         f"{network_id} '*) echo true; exit 0;;\n"
         "  *' network inspect --format {{len .Containers}} "
-        f"{network_id} '*) echo 0; exit 0;;\n"
+        f"{network_id} '*) "
+        f"[ -f {tmp_path / 'oneoff'} ] && echo 1 || echo 0; exit 0;;\n"
         f"  *' network rm {network_id} '*) "
         '[ "${MY_TEST_MODE:-}" = fail_network_rm ] && exit 1; exit 0;;\n'
         f"  *' exec -i {container_id} sh -eu -c '*) "
@@ -262,6 +268,32 @@ def test_prepare_recovers_when_post_create_capture_is_empty(tmp_path: Path) -> N
     assert "ps -a --no-trunc" in calls
     assert f"container rm {'a' * 64}" in calls
     assert not (tmp_path / "created").exists()
+
+
+def test_prepare_capture_gap_leaves_matching_oneoff_untouched(tmp_path: Path) -> None:
+    tools, log = _tools(tmp_path)
+    (tmp_path / "nas/postgres/data").mkdir(parents=True)
+    environment = _environment(tmp_path, tools)
+    environment["MY_TEST_MODE"] = "oneoff_collision"
+    result = subprocess.run(  # noqa: S603 - checked-in wrapper with synthetic tools
+        [
+            str(ROOT / "ops/nas/postgres-bootstrap-prepare.sh"),
+            str(tmp_path / "manifest"),
+            str(tmp_path),
+            str(tmp_path / "resources.toml"),
+            "1",
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    calls = log.read_text(encoding="utf-8")
+    assert "label=com.docker.compose.oneoff=False" in calls
+    assert "container rm" not in calls
+    assert (tmp_path / "oneoff").exists()
 
 
 def test_start_reports_exact_stop_failure_and_residual_running(tmp_path: Path) -> None:

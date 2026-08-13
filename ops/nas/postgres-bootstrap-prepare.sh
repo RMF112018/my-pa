@@ -33,18 +33,29 @@ cleanup_partial_prepare() {
   trap - EXIT HUP INT TERM
   candidate=${container_id:-}
   if [ -z "$candidate" ]; then
-    candidate=$(nas_docker ps -a --no-trunc \
+    discovered=$(nas_docker ps -a --no-trunc \
       --filter label=com.docker.compose.project=my-pa-nas-contract \
       --filter label=com.docker.compose.service=postgres \
+      --filter label=com.docker.compose.oneoff=False \
       --format '{{.ID}}' 2>/dev/null || true)
+    candidate=$discovered
   fi
-  case "$candidate" in *[!0-9a-f]*|'') candidate= ;; esac
+  case "$candidate" in
+    *[!0-9a-f]*)
+      echo "partial prepare cleanup found ambiguous PostgreSQL identities" >&2
+      result=1
+      candidate=
+      ;;
+  esac
   if [ -n "$candidate" ] && [ "${#candidate}" -eq 64 ]; then
     project=$(nas_docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$candidate" 2>/dev/null || true)
     service=$(nas_docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$candidate" 2>/dev/null || true)
+    oneoff=$(nas_docker inspect --format '{{index .Config.Labels "com.docker.compose.oneoff"}}' "$candidate" 2>/dev/null || true)
+    number=$(nas_docker inspect --format '{{index .Config.Labels "com.docker.compose.container-number"}}' "$candidate" 2>/dev/null || true)
     running_now=$(nas_docker inspect --format '{{.State.Running}}' "$candidate" 2>/dev/null || true)
     image=$(nas_docker inspect --format '{{.Image}}' "$candidate" 2>/dev/null || true)
     if [ "$project" = my-pa-nas-contract ] && [ "$service" = postgres ] && \
+      [ "$oneoff" = False ] && [ "$number" = 1 ] && \
       [ "$running_now" = false ] && [ "$image" = "$MY_PA_POSTGRES_IMAGE_ID" ]; then
       if ! nas_docker container rm "$candidate" >/dev/null; then
         echo "failed to remove exact partial PostgreSQL container" >&2

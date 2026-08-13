@@ -39,27 +39,37 @@ def _tools(tmp_path: Path) -> tuple[Path, Path]:
         '    [ "${MY_TEST_MODE:-}" = fail_second_gate ] && '
         '[ "$count" -eq 2 ] && exit 1;;\n'
         "  *generate-postgres-resources.py*)\n"
-        '    [ "${MY_TEST_MODE:-}" = fail_resources ] && exit 1;;\n'
+        '    case "${MY_TEST_MODE:-}" in fail_resources|fail_container_rm|'
+        "fail_network_rm) exit 1;; esac;;\n"
         "esac\n"
         "exit 0\n",
         encoding="utf-8",
     )
     container_id = "a" * 64
+    network_id = "b" * 64
     docker = tools / "docker"
     docker.write_text(
         "#!/bin/sh\n"
         f"printf 'docker %s\\n' \"$*\" >> {log}\n"
         'case " $* " in\n'
         "  *' compose '*' ps -a -q postgres '*) "
-        f"[ -f {tmp_path / 'created'} ] && echo {container_id}; exit 0;;\n"
+        f"[ -f {tmp_path / 'created'} ] && "
+        '[ "${MY_TEST_MODE:-}" != fail_capture ] && '
+        f"echo {container_id}; exit 0;;\n"
         "  *' compose '*' create postgres '*) "
         f"touch {tmp_path / 'created'}; exit 0;;\n"
-        "  *' compose '*' rm --force --stop postgres '*) "
-        f"rm -f {tmp_path / 'created'}; exit 0;;\n"
         "  *' compose '*' config '*) exit 0;;\n"
         "  *' compose '*' start postgres '*) exit 0;;\n"
-        "  *' compose '*' stop --timeout 60 postgres '*) exit 0;;\n"
-        f"  *' inspect --format {{{{.State.Running}}}} {container_id} '*) echo false; exit 0;;\n"
+        f"  *' stop --time 60 {container_id} '*) "
+        '[ "${MY_TEST_MODE:-}" = fail_stop ] && exit 1; exit 0;;\n'
+        f"  *' container rm {container_id} '*) "
+        '[ "${MY_TEST_MODE:-}" = fail_container_rm ] && exit 1; '
+        f"rm -f {tmp_path / 'created'}; exit 0;;\n"
+        "  *' ps -a --no-trunc '*'com.docker.compose.project=my-pa-nas-contract'*"
+        "'com.docker.compose.service=postgres'*' --format {{.ID}} '*) "
+        f"[ -f {tmp_path / 'created'} ] && echo {container_id}; exit 0;;\n"
+        f"  *' inspect --format {{{{.State.Running}}}} {container_id} '*) "
+        '[ "${MY_TEST_MODE:-}" = fail_stop ] && echo true || echo false; exit 0;;\n'
         f"  *' inspect --format '*'State.Health'*' {container_id} '*) echo healthy; exit 0;;\n"
         f"  *' inspect --format '*'com.docker.compose.project'*' {container_id} '*) "
         "echo my-pa-nas-contract; exit 0;;\n"
@@ -67,17 +77,20 @@ def _tools(tmp_path: Path) -> tuple[Path, Path]:
         "echo postgres; exit 0;;\n"
         f"  *' inspect --format {{{{.Image}}}} {container_id} '*) "
         f"echo sha256:{'1' * 64}; exit 0;;\n"
+        "  *' network inspect --format {{.Id}} my-pa-nas-contract_data-plane '*) "
+        f"echo {network_id}; exit 0;;\n"
         "  *' network inspect --format '*'com.docker.compose.project'*' "
-        "my-pa-nas-contract_data-plane '*) echo my-pa-nas-contract; exit 0;;\n"
+        f"{network_id} '*) echo my-pa-nas-contract; exit 0;;\n"
         "  *' network inspect --format '*'com.docker.compose.network'*' "
-        "my-pa-nas-contract_data-plane '*) echo data-plane; exit 0;;\n"
+        f"{network_id} '*) echo data-plane; exit 0;;\n"
         "  *' network inspect --format {{.Internal}} "
-        "my-pa-nas-contract_data-plane '*) echo true; exit 0;;\n"
+        f"{network_id} '*) echo true; exit 0;;\n"
         "  *' network inspect --format {{len .Containers}} "
-        "my-pa-nas-contract_data-plane '*) echo 0; exit 0;;\n"
-        "  *' network rm my-pa-nas-contract_data-plane '*) exit 0;;\n"
+        f"{network_id} '*) echo 0; exit 0;;\n"
+        f"  *' network rm {network_id} '*) "
+        '[ "${MY_TEST_MODE:-}" = fail_network_rm ] && exit 1; exit 0;;\n'
         f"  *' exec -i {container_id} sh -eu -c '*) "
-        '[ "${MY_TEST_MODE:-}" = fail_version ] && exit 1; exit 0;;\n'
+        'case "${MY_TEST_MODE:-}" in fail_version|fail_stop) exit 1;; esac; exit 0;;\n'
         "esac\n"
         "exit 0\n",
         encoding="utf-8",
@@ -170,7 +183,9 @@ def test_start_stops_postgres_when_post_health_gate_fails(tmp_path: Path) -> Non
         text=True,
     )
     assert result.returncode != 0
-    assert "stop --timeout 60 postgres" in log.read_text(encoding="utf-8")
+    calls = log.read_text(encoding="utf-8")
+    assert f"stop --time 60 {'a' * 64}" in calls
+    assert "compose" not in calls[calls.index("stop --time 60") :]
 
 
 def test_start_stops_postgres_when_version_check_fails(tmp_path: Path) -> None:
@@ -192,7 +207,7 @@ def test_start_stops_postgres_when_version_check_fails(tmp_path: Path) -> None:
         text=True,
     )
     assert result.returncode != 0
-    assert "stop --timeout 60 postgres" in log.read_text(encoding="utf-8")
+    assert f"stop --time 60 {'a' * 64}" in log.read_text(encoding="utf-8")
 
 
 def test_prepare_cleans_exact_partial_identity_on_resource_failure(tmp_path: Path) -> None:
@@ -216,9 +231,110 @@ def test_prepare_cleans_exact_partial_identity_on_resource_failure(tmp_path: Pat
     )
     assert result.returncode != 0
     calls = log.read_text(encoding="utf-8")
-    assert "rm --force --stop postgres" in calls
-    assert "network rm my-pa-nas-contract_data-plane" in calls
+    assert f"container rm {'a' * 64}" in calls
+    assert f"network rm {'b' * 64}" in calls
+    assert "rm --force --stop postgres" not in calls
+    assert "network rm my-pa-nas-contract_data-plane" not in calls
     assert not (tmp_path / "created").exists()
+
+
+def test_prepare_recovers_when_post_create_capture_is_empty(tmp_path: Path) -> None:
+    tools, log = _tools(tmp_path)
+    (tmp_path / "nas/postgres/data").mkdir(parents=True)
+    environment = _environment(tmp_path, tools)
+    environment["MY_TEST_MODE"] = "fail_capture"
+    result = subprocess.run(  # noqa: S603 - checked-in wrapper with synthetic tools
+        [
+            str(ROOT / "ops/nas/postgres-bootstrap-prepare.sh"),
+            str(tmp_path / "manifest"),
+            str(tmp_path),
+            str(tmp_path / "resources.toml"),
+            "1",
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    calls = log.read_text(encoding="utf-8")
+    assert "ps -a --no-trunc" in calls
+    assert f"container rm {'a' * 64}" in calls
+    assert not (tmp_path / "created").exists()
+
+
+def test_start_reports_exact_stop_failure_and_residual_running(tmp_path: Path) -> None:
+    tools, log = _tools(tmp_path)
+    (tmp_path / "created").touch()
+    environment = _environment(tmp_path, tools)
+    environment["MY_TEST_MODE"] = "fail_stop"
+    result = subprocess.run(  # noqa: S603 - checked-in wrapper with synthetic tools
+        [
+            str(ROOT / "ops/nas/postgres-bootstrap-start.sh"),
+            str(tmp_path / "manifest"),
+            str(tmp_path),
+            str(tmp_path / "resources.toml"),
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "failed to stop exact PostgreSQL container" in result.stderr
+    assert "remains running" in result.stderr
+    assert f"stop --time 60 {'a' * 64}" in log.read_text(encoding="utf-8")
+
+
+def test_prepare_reports_exact_container_removal_failure(tmp_path: Path) -> None:
+    tools, log = _tools(tmp_path)
+    (tmp_path / "nas/postgres/data").mkdir(parents=True)
+    environment = _environment(tmp_path, tools)
+    environment["MY_TEST_MODE"] = "fail_container_rm"
+    result = subprocess.run(  # noqa: S603 - checked-in wrapper with synthetic tools
+        [
+            str(ROOT / "ops/nas/postgres-bootstrap-prepare.sh"),
+            str(tmp_path / "manifest"),
+            str(tmp_path),
+            str(tmp_path / "resources.toml"),
+            "1",
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "failed to remove exact partial PostgreSQL container" in result.stderr
+    assert f"container rm {'a' * 64}" in log.read_text(encoding="utf-8")
+    assert (tmp_path / "created").exists()
+
+
+def test_prepare_reports_exact_network_removal_failure(tmp_path: Path) -> None:
+    tools, log = _tools(tmp_path)
+    (tmp_path / "nas/postgres/data").mkdir(parents=True)
+    environment = _environment(tmp_path, tools)
+    environment["MY_TEST_MODE"] = "fail_network_rm"
+    result = subprocess.run(  # noqa: S603 - checked-in wrapper with synthetic tools
+        [
+            str(ROOT / "ops/nas/postgres-bootstrap-prepare.sh"),
+            str(tmp_path / "manifest"),
+            str(tmp_path),
+            str(tmp_path / "resources.toml"),
+            "1",
+        ],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "failed to remove exact partial PostgreSQL network" in result.stderr
+    assert f"network rm {'b' * 64}" in log.read_text(encoding="utf-8")
 
 
 def test_bootstrap_contract_prohibits_ad_hoc_targets_and_orders_services() -> None:

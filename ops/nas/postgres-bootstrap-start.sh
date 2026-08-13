@@ -20,15 +20,31 @@ export MY_PA_IMAGE_MANIFEST MY_PA_POSTGRES_RESOURCES MY_PA_LIFECYCLE_MODE
 . "$script_dir/postgres-bootstrap-common.sh"
 container_id=$(nas_postgres_compose ps -a -q postgres)
 [ -n "$container_id" ] || { echo "prepared canonical PostgreSQL container is absent" >&2; exit 1; }
+case "$container_id" in
+  *[!0-9a-f]*|'') echo "prepared PostgreSQL container ID is not exact" >&2; exit 1 ;;
+esac
+[ "${#container_id}" -eq 64 ] || { echo "prepared PostgreSQL container ID is not full length" >&2; exit 1; }
 "$NAS_PYTHON_BIN" "$script_dir/postgres_gate.py" "$3" --live --container-id "$container_id"
 
 cleanup() {
+  result=$1
+  trap - EXIT HUP INT TERM
   if [ "${cleanup_needed:-false}" = true ]; then
-    nas_postgres_compose stop --timeout 60 postgres >/dev/null 2>&1 || true
+    if ! nas_docker stop --time 60 "$container_id" >/dev/null; then
+      echo "failed to stop exact PostgreSQL container during bootstrap cleanup" >&2
+      result=1
+    fi
+    running_now=$(nas_docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null || true)
+    if [ "$running_now" != false ]; then
+      echo "exact PostgreSQL container remains running after bootstrap cleanup" >&2
+      result=1
+    fi
   fi
+  exit "$result"
 }
 cleanup_needed=true
-trap cleanup EXIT HUP INT TERM
+trap 'cleanup $?' EXIT
+trap 'exit 1' HUP INT TERM
 if ! nas_postgres_compose start postgres; then
   echo "canonical PostgreSQL start failed" >&2
   exit 1

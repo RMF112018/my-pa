@@ -101,6 +101,22 @@ is scratch-only. Smoke services use `restart: "no"`. The separately activated
 pilot overlay may use `unless-stopped` only after NAS-10 passes and the operator
 activates the pilot.
 
+NAS-09 makes this machine-checkable: the base Compose file remains smoke-only,
+while a restart-only overlay names exactly the six long-lived services. Pilot
+lifecycle commands refuse unless a clean exact head matches both a NAS-10 PASS
+receipt (including independent exact-head review) and a separate operator
+activation artifact. One-shot GoodNotes and client-owned Frontier MCP remain
+outside the overlay.
+
+Those artifacts are not caller-authored assertions: they are root-published,
+owner/mode/link checked, detached-signature verified against a pinned operator
+public-key digest, and bind the exact NAS engine, repository/image identities,
+base Compose, runtime contract, and mode-specific resolved Compose identity.
+Smoke admission resolves the base file only; pilot admission resolves the exact
+ordered base-then-overlay file list. Emergency stop remains available when this
+control evidence is absent or rejected, but only against the canonical
+root-owned six-service Compose target.
+
 Images must be built for and verified against the live NAS platform. The
 planning expectation is `linux/amd64`, but NAS-02 must confirm Docker OS and
 architecture before any image is deployable, record exact digests and source

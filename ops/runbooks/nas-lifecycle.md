@@ -1,0 +1,71 @@
+# NAS lifecycle operations
+
+NAS-09 supplies bounded lifecycle commands; it does not activate or deploy a
+NAS. Every command requires `MY_PA_NAS_COMPOSE_FILE` naming the exact Compose
+file. The default `MY_PA_LIFECYCLE_MODE=smoke` preserves `restart: "no"` for all
+six long-lived services.
+
+Run `preflight.sh IMAGE_MANIFEST ARCHIVE_DIRECTORY` before `start.sh` with the
+same arguments. Both reverify exact loaded images and parse Compose. Start uses
+only `up --detach --no-build --pull never`.
+
+The root-published mode-0400 `/etc/my-pa/runtime-admission.toml` closes the
+remaining Compose interpolation boundary. It binds the complete deployable
+image manifest, exact NAS engine, distinct canonical smoke and pilot rendered
+Compose digests, and all six resolved service image IDs (app role for
+gateway/workers, web, PostgreSQL, and proxy). Smoke is always rendered from the
+base file alone; pilot is always rendered from the ordered base-then-overlay
+file list. Every lifecycle command validates its mode's rendered config; commands acting
+on an existing stack also inspect every running container's image and Compose
+project/service labels. An incomplete manifest, changed env image, old bundle,
+or container created from a different image refuses. Start catches every failed
+post-up check, stops the partial stack, and verifies zero running services.
+
+The remaining commands are `stop.sh`, `restart.sh`, `status.sh`, `health.sh`,
+`logs.sh SERVICE`, `diagnostics.sh`, and `emergency-shutdown.sh`. Restart refuses a missing
+PostgreSQL instance and verifies that its container identity did not change.
+Stop and emergency shutdown do not remove containers, volumes, bind mounts, or
+data. Emergency shutdown deliberately does not load pilot or lifecycle evidence:
+it accepts only root-owned mode-0400 `/etc/my-pa/compose.yml`, exact project
+`my-pa-nas-contract`, and the closed six-service set. Logs accept only those
+services and are bounded to 200 lines.
+
+`health.sh` proves process/database readiness only and says so. Full operational
+diagnostics additionally require fresh enrollment/capture worker heartbeats,
+web and proxy reads, a bounded authenticated `GET /api/system` through the
+browser/BFF to the gateway, and a proxy-classification probe proving
+`/remote/v1/capture.create` cannot fall through to Next.js. The authenticated
+probe requires an exact private `/api/system` URL and a current session token in
+a caller-owned, mode-0400, single-link file; its value is read only into the HTTP
+Cookie header and is never printed. The URL and host must exactly match the
+canonical origin returned by the same signature-validated pilot activation gate;
+caller agreement alone is insufficient. Redirects are never followed, and every
+3xx response fails, so the Cookie cannot be forwarded to a redirect target.
+Diagnostics also require runtime
+filesystem/permission probes, a configured disk floor, a recent verified backup
+receipt, and a configured maximum age for the last Apple admission. Missing
+configuration or a stale signal refuses.
+
+## Pilot restart policy
+
+[`../nas/compose.pilot.example.yml`](../nas/compose.pilot.example.yml) contains
+only `restart: unless-stopped` for PostgreSQL, gateway, both workers, web, and
+proxy. GoodNotes one-shot and Frontier child-process profiles remain
+`restart: "no"` and are not in the pilot overlay.
+
+Pilot evidence is read only from root-owned mode-0700
+`/etc/my-pa/pilot-evidence`; each expected file must be root-owned mode-0400,
+regular, single-link, and canonical. The acceptance and activation artifacts
+carry detached RSA-SHA256 signatures verified against the public key whose
+digest is pinned in `trust.toml`; only RSA public keys of at least 3072 bits are
+accepted. All three bind the exact NAS Docker engine;
+the signed artifacts additionally bind repository commit/tree, base Compose,
+runtime contract, deployable image manifest, runtime-admission and resolved
+Compose digests, reviewed head, and acceptance digest. NAS-10 completion must
+precede activation, both timestamps require explicit timezones, and the private
+origin is parsed as HTTPS on a true `.ts.net` hostname with no userinfo,
+unapproved port, path, query, or fragment. The live clean checkout and Docker identity must match. Arbitrary TOML
+or an older otherwise-valid image bundle refuses. Checked-in examples
+intentionally refuse. Provisioning the trusted directory/key or creating artifacts,
+supplying credentials, enabling Tailscale Serve, or running these commands on a
+NAS remains outside NAS-09.

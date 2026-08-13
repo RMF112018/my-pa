@@ -122,6 +122,21 @@ python ops/nas/source_gate.py \
   ops/nas/proxy-allowlist.example.caddy
 ```
 
+NAS-09 supplies fail-closed `preflight`, `start`, `stop`, `restart`, `status`,
+readiness, diagnostics, bounded logs, and emergency-shutdown wrappers. Smoke is the default and
+retains `restart: "no"`. The restart-only
+[`compose.pilot.example.yml`](compose.pilot.example.yml) is accepted only when
+[`lifecycle_gate.py`](lifecycle_gate.py) verifies a clean exact repository head
+against root-published, detached-signature-verified NAS-10 PASS and operator
+activation artifacts bound to the exact NAS engine, compose/runtime contract,
+image manifest, root-published runtime admission, resolved Compose digest,
+commit, and tree. Every lifecycle action checks resolved and running image
+identity; smoke binds the base-only render while pilot binds the ordered
+base-plus-pilot-overlay render, so caller-controlled image or mode drift refuses. Emergency shutdown bypasses those availability
+gates but accepts only the canonical root-owned six-service Compose target.
+Checked-in evidence examples refuse. See
+[`../runbooks/nas-lifecycle.md`](../runbooks/nas-lifecycle.md).
+
 Later packages own executable behavior:
 
 - NAS-02 images supply app/web Dockerfiles and the
@@ -133,4 +148,4 @@ Later packages own executable behavior:
 - NAS-06 private HTTPS ingress, Entra pilot origin, and a verified Microsoft
   OIDC/JWKS egress allowlist for gateway and web;
 - NAS-07 live Apple/TCC activation and real credential minting remain operator gates;
-- NAS-09 lifecycle; NAS-10 acceptance.
+- NAS-10 acceptance.

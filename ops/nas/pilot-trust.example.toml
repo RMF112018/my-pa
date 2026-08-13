@@ -1,0 +1,5 @@
+schema = "my-pa.nas-pilot-trust.v1"
+status = "not_provisioned"
+operator_public_key_sha256 = "REQUIRED_OPERATOR_PUBLIC_KEY_64_HEX"
+nas_engine_id = "REQUIRED_EXACT_DOCKER_ENGINE_ID"
+nas_engine_name = "REQUIRED_EXACT_NAS_ENGINE_NAME"

@@ -1,0 +1,25 @@
+schema = "my-pa.nas-runtime-admission.v1"
+status = "not_admitted"
+docker_engine_id = "REQUIRED_EXACT_DOCKER_ENGINE_ID"
+docker_engine_name = "REQUIRED_EXACT_NAS_ENGINE_NAME"
+image_manifest_sha256 = "REQUIRED_64_HEX"
+
+[resolved_compose_sha256]
+smoke = "REQUIRED_64_HEX"
+pilot = "REQUIRED_64_HEX"
+
+[service_images]
+postgres = "sha256:REQUIRED"
+gateway = "sha256:REQUIRED"
+worker-enrollment = "sha256:REQUIRED"
+worker-capture = "sha256:REQUIRED"
+web = "sha256:REQUIRED"
+proxy = "sha256:REQUIRED"
+
+[service_image_ids]
+postgres = "sha256:REQUIRED"
+gateway = "sha256:REQUIRED"
+worker-enrollment = "sha256:REQUIRED"
+worker-capture = "sha256:REQUIRED"
+web = "sha256:REQUIRED"
+proxy = "sha256:REQUIRED"

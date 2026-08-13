@@ -34,7 +34,8 @@ def test_dockerfiles_are_platform_inputs_without_implicit_start_builds() -> None
     assert "USER 10001:10001" in app
     assert "USER 10001:10001" in web
     assert "--no-build --pull never" in start
-    assert "exit 1" in start
+    assert 'python3 "$script_dir/image_gate.py"' in start
+    assert '. "$script_dir/lifecycle-common.sh"' in start
     assert "docker build" not in start and "buildx" not in start
 
 

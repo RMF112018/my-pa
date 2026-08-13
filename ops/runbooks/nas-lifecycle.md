@@ -43,9 +43,12 @@ older than 3.12.
 `emergency-shutdown.sh` deliberately remains a POSIX host-shell path. It checks
 the canonical root-owned mode-0400 Compose file, exact project, and exact six
 services through `docker compose config --no-interpolate`. It then discovers
-only containers carrying the exact Compose project label, requires exactly one
-of each canonical service label, stops those exact container IDs directly, and
-verifies each stopped. The stop phase does not reparse or interpolate Compose.
+only running containers carrying the exact Compose project label, accepts any
+incident-time subset of canonical non-oneoff service labels, stops those exact
+container IDs directly, and repeats bounded discovery to contain concurrent
+replacements. It refuses unknown/oneoff/duplicate identities and reports stop
+errors without claiming success. A final fresh project-label query must return
+zero running containers. The stop phase does not reparse or interpolate Compose.
 It does not require the deployment environment, Python, the operator admission,
 or the operator image, so loss of auxiliary state cannot prevent shutdown.
 

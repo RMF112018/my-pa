@@ -42,9 +42,12 @@ older than 3.12.
 
 `emergency-shutdown.sh` deliberately remains a POSIX host-shell path. It checks
 the canonical root-owned mode-0400 Compose file, exact project, and exact six
-services through `docker compose config --no-interpolate`, then stops and
-verifies the stack. It does not require Python, the operator admission, or the
-operator image, so loss of auxiliary control evidence cannot prevent shutdown.
+services through `docker compose config --no-interpolate`. It then discovers
+only containers carrying the exact Compose project label, requires exactly one
+of each canonical service label, stops those exact container IDs directly, and
+verifies each stopped. The stop phase does not reparse or interpolate Compose.
+It does not require the deployment environment, Python, the operator admission,
+or the operator image, so loss of auxiliary state cannot prevent shutdown.
 
 The invoking identity
 must already have bounded Docker authority; tooling never prompts for or

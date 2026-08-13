@@ -35,11 +35,11 @@ compose=$MY_PA_EMERGENCY_COMPOSE
   exit 1
 }
 
-nas_compose() {
+compose_services() {
   "$docker_bin" compose --project-name "$project" --file "$compose" \
-    --profile nas-01-contract-only "$@"
+    --profile nas-01-contract-only config --no-interpolate --services
 }
-actual_services=$(nas_compose config --no-interpolate --services | LC_ALL=C sort) || {
+actual_services=$(compose_services | LC_ALL=C sort) || {
   echo "NAS emergency stop refused: canonical_compose_unreadable" >&2
   exit 1
 }
@@ -48,16 +48,60 @@ actual_services=$(nas_compose config --no-interpolate --services | LC_ALL=C sort
   exit 1
 }
 
-nas_compose stop --timeout 10 || {
-  echo "NAS emergency stop refused: emergency_stop_command" >&2
+# After validating the root-controlled Compose contract, resolve the existing
+# stack only through Docker's immutable project/service labels. Do not invoke a
+# Compose action here: it would interpolate the variable-bearing file again and
+# make emergency shutdown depend on the lost deployment environment.
+container_ids=""
+running_services=""
+project_ids=$(
+  "$docker_bin" ps -a \
+    --filter "label=com.docker.compose.project=$project" \
+    --format '{{.ID}}'
+) || {
+  echo "NAS emergency stop refused: emergency_container_discovery" >&2
   exit 1
 }
-running=$(nas_compose ps --status running -q) || {
-  echo "NAS emergency stop refused: emergency_stop_command" >&2
+for short_id in $project_ids; do
+  identity=$(
+    "$docker_bin" inspect --format \
+      '{{.Id}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' \
+      "$short_id"
+  ) || {
+    echo "NAS emergency stop refused: emergency_container_identity" >&2
+    exit 1
+  }
+  full_id=${identity%%|*}
+  labels=${identity#*|}
+  actual_project=${labels%%|*}
+  service=${labels#*|}
+  case "$full_id" in
+    [0-9a-f][0-9a-f]*) ;;
+    *) echo "NAS emergency stop refused: emergency_container_identity" >&2; exit 1 ;;
+  esac
+  [ "${#full_id}" -eq 64 ] && [ "$actual_project" = "$project" ] || {
+    echo "NAS emergency stop refused: emergency_container_identity" >&2
+    exit 1
+  }
+  container_ids="${container_ids}${container_ids:+
+}${full_id}"
+  running_services="${running_services}${running_services:+
+}${service}"
+done
+[ "$(printf '%s\n' "$running_services" | LC_ALL=C sort)" = "$expected_services" ] || {
+  echo "NAS emergency stop refused: emergency_container_set" >&2
   exit 1
 }
-[ -z "$running" ] || {
-  echo "NAS emergency stop refused: emergency_stop_incomplete" >&2
-  exit 1
-}
+for container_id in $container_ids; do
+  "$docker_bin" stop --time 10 "$container_id" >/dev/null || {
+    echo "NAS emergency stop refused: emergency_stop_command" >&2
+    exit 1
+  }
+done
+for container_id in $container_ids; do
+  [ "$("$docker_bin" inspect --format '{{.State.Running}}' "$container_id")" = false ] || {
+    echo "NAS emergency stop refused: emergency_stop_incomplete" >&2
+    exit 1
+  }
+done
 echo "NAS runtime stopped; no container, bind mount, volume, or data was removed"

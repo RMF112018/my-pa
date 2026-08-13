@@ -885,8 +885,22 @@ def test_emergency_stop_ignores_broken_control_evidence(tmp_path: Path) -> None:
         'case " $* " in\n'
         "  *' config --no-interpolate --services '*) "
         "printf 'worker-enrollment\\nweb\\npostgres\\nproxy\\ngateway\\nworker-capture\\n';;\n"
-        "  *' stop --timeout 10 '*) exit 0;;\n"
-        "  *' ps --status running -q '*) exit 0;;\n"
+        "  *' ps -a --filter label=com.docker.compose.project=my-pa-nas-contract '*) "
+        "printf 'c1\\nc2\\nc3\\nc4\\nc5\\nc6\\n';;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c1 '*) "
+        "printf '%064d|my-pa-nas-contract|gateway\\n' 1;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c2 '*) "
+        "printf '%064d|my-pa-nas-contract|postgres\\n' 2;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c3 '*) "
+        "printf '%064d|my-pa-nas-contract|proxy\\n' 3;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c4 '*) "
+        "printf '%064d|my-pa-nas-contract|web\\n' 4;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c5 '*) "
+        "printf '%064d|my-pa-nas-contract|worker-capture\\n' 5;;\n"
+        "  *' inspect --format '*'.Config.Labels'*' c6 '*) "
+        "printf '%064d|my-pa-nas-contract|worker-enrollment\\n' 6;;\n"
+        "  *' stop --time 10 '*) exit 0;;\n"
+        "  *' inspect --format {{.State.Running}} '*) printf 'false\\n';;\n"
         "  *) exit 1;;\n"
         "esac\n",
         encoding="utf-8",
@@ -915,8 +929,13 @@ def test_emergency_stop_ignores_broken_control_evidence(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     invoked = calls.read_text(encoding="utf-8")
     assert "config --no-interpolate --services" in invoked
-    assert "stop --timeout 10" in invoked
-    assert "ps --status running -q" in invoked
+    assert "ps -a --filter label=com.docker.compose.project=my-pa-nas-contract" in invoked
+    assert invoked.count("stop --time 10") == 6
+    assert "compose --project-name my-pa-nas-contract" in invoked
+    assert "compose --project-name my-pa-nas-contract --file" in invoked
+    assert "compose --project-name my-pa-nas-contract" not in "\n".join(
+        line for line in invoked.splitlines() if " stop " in line or " ps " in line
+    )
     assert "pilot-evidence" not in invoked
     assert "operator-runtime" not in invoked
 

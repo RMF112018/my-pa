@@ -214,6 +214,7 @@ class BoundedLocalOCRTranscriber:
     command: tuple[str, ...]
     name: str
     version: str
+    executable_root: Path | None = None
     timeout_seconds: float = 30.0
     maximum_input_bytes: int = _MAX_PAGE_BYTES
     maximum_output_bytes: int = _MAX_OCR_OUTPUT_BYTES
@@ -222,6 +223,8 @@ class BoundedLocalOCRTranscriber:
     def __post_init__(self) -> None:
         if not self.command or not Path(self.command[0]).is_absolute():
             raise ValueError("the OCR executable must be an explicit absolute path")
+        if self.executable_root is not None and not self.executable_root.is_absolute():
+            raise ValueError("the OCR executable root must be an explicit absolute path")
         if not self.name or not self.version:
             raise ValueError("OCR provenance is required")
         if not 0 < self.timeout_seconds <= 60:
@@ -240,7 +243,7 @@ class BoundedLocalOCRTranscriber:
             raise GoodNotesTranscriptionError("the page representation is not OCR eligible")
         if len(page.content) > self.maximum_input_bytes:
             raise GoodNotesTranscriptionError("the page representation exceeds the OCR bound")
-        argv = (*self.command, "--media-type", page.representation_media_type)
+        argv = (*self._resolved_command(), "--media-type", page.representation_media_type)
         effective_timeout = min(self.timeout_seconds, timeout_seconds or self.timeout_seconds)
         returncode, output, overflowed = self._run_bounded(argv, page.content, effective_timeout)
         if returncode != 0 or overflowed:
@@ -255,6 +258,19 @@ class BoundedLocalOCRTranscriber:
             raise
         except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
             raise GoodNotesTranscriptionError("the local OCR result is invalid") from error
+
+    def _resolved_command(self) -> tuple[str, ...]:
+        """Resolve the executable inside its admitted root before every launch."""
+        if self.executable_root is None:
+            return self.command
+        try:
+            root = self.executable_root.resolve(strict=True)
+            executable = Path(self.command[0]).resolve(strict=True)
+        except OSError as error:
+            raise GoodNotesTranscriptionError("the local OCR executable is unavailable") from error
+        if not executable.is_file() or not executable.is_relative_to(root):
+            raise GoodNotesTranscriptionError("the local OCR executable escaped its admitted root")
+        return (str(executable), *self.command[1:])
 
     def _run_bounded(
         self, argv: tuple[str, ...], content: bytes, timeout_seconds: float

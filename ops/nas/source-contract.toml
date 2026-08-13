@@ -1,0 +1,26 @@
+schema = "my-pa.nas-source-placement.v1"
+status = "contract_only_not_activated"
+
+[goodnotes]
+service = "goodnotes-reconcile"
+profile = "nas-08-goodnotes-operator"
+command = ["python", "apps/cli/goodnotes.py", "reconcile"]
+root = "/srv/my-pa/goodnotes"
+manifest = "goodnotes-manifest.json"
+ocr_executable = "/srv/my-pa/goodnotes-ocr/ocr"
+root_mount = "goodnotes_ro"
+ocr_mount = "goodnotes_ocr_ro"
+source_writes = "forbidden"
+principal_partitioning = "explicit_entra_owner"
+
+[frontier_mcp]
+service = "frontier-mcp"
+profile = "nas-08-frontier-mcp-stdio"
+command = ["python", "apps/gateway.py", "mcp"]
+transport = "stdio_only"
+launch_model = "client_child_process"
+ports = "forbidden"
+proxy_route = "forbidden"
+oauth = "not_added"
+browser_path = "not_added"
+activation = "operator_gated"

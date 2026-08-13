@@ -82,6 +82,7 @@ def compose_local_goodnotes_runtime(
     ocr_command: tuple[str, ...],
     ocr_name: str,
     ocr_version: str,
+    ocr_root: Path,
 ) -> LocalGoodNotesRuntime:
     return LocalGoodNotesRuntime(
         source=ManifestGoodNotesSource(
@@ -92,5 +93,6 @@ def compose_local_goodnotes_runtime(
             command=ocr_command,
             name=ocr_name,
             version=ocr_version,
+            executable_root=ocr_root,
         ),
     )

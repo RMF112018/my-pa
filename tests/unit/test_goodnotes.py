@@ -287,11 +287,28 @@ def test_production_goodnotes_composition_is_inert_until_called(tmp_path: Path) 
         admitted_root=tmp_path,
         manifest_relative_path=PurePosixPath("goodnotes-manifest.json"),
         ocr_command=(sys.executable, "/operator-supplied/local-ocr.py"),
+        ocr_root=tmp_path,
         ocr_name="operator_local_ocr",
         ocr_version="1",
     )
     assert runtime.source.root == tmp_path.resolve()
     assert runtime.transcriber.command[0] == sys.executable
+
+
+def test_local_ocr_refuses_an_executable_symlink_escaping_its_root(tmp_path: Path) -> None:
+    source = _local_manifest(tmp_path)
+    ocr_root = tmp_path / "ocr-root"
+    ocr_root.mkdir()
+    escaped = ocr_root / "ocr"
+    escaped.symlink_to(Path(sys.executable))
+    transcriber = BoundedLocalOCRTranscriber(
+        command=(str(escaped),),
+        name="escaped_local_ocr",
+        version="1",
+        executable_root=ocr_root,
+    )
+    with pytest.raises(GoodNotesTranscriptionError, match="escaped its admitted root"):
+        transcriber.transcribe(source.inventory(A)[0])
 
 
 def test_aggregate_bytes_regions_and_elapsed_time_are_fail_closed() -> None:
@@ -416,17 +433,9 @@ def test_production_runtime_holds_no_database_connection_during_ocr(
     assert state.events == ["receipt-open", "receipt-closed", "ocr", "write-open", "write-closed"]
 
 
-def test_goodnotes_operator_cli_never_accepts_a_principal_argument() -> None:
+def test_goodnotes_operator_cli_accepts_only_the_partition_binding_argument() -> None:
     from apps.cli.goodnotes import build_parser
 
     parser = build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(
-            [
-                "reconcile",
-                "--idempotency-key",
-                "x",
-                "--principal",
-                A,
-            ]
-        )
+    arguments = parser.parse_args(["reconcile", "--idempotency-key", "x", "--principal-id", A])
+    assert arguments.principal_id == A

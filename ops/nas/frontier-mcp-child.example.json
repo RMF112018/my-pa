@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "my-pa": {
+      "command": "docker",
+      "args": [
+        "compose",
+        "--file",
+        "ops/nas/compose.example.yml",
+        "--file",
+        "ops/nas/compose.sources.example.yml",
+        "--profile",
+        "nas-08-frontier-mcp-stdio",
+        "run",
+        "--rm",
+        "--no-deps",
+        "-T",
+        "frontier-mcp"
+      ]
+    }
+  }
+}

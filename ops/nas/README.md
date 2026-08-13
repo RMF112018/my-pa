@@ -91,6 +91,37 @@ match the fixed local operator. The Mac agent requires
 `MYPA_APPLE_SPOOL_DIRECTORY`, `MYPA_APPLE_GRANT_JOURNAL`,
 `MYPA_APPLE_CONTACTS_IDENTITY_EPOCH`, and `MYPA_APPLE_MAIL_GENERATION`.
 
+NAS-08 adds opt-in placement, not activation. The
+[`compose.sources.example.yml`](compose.sources.example.yml) overlay gives the
+existing GoodNotes operator composition one one-shot service. Its root and
+manifest resolve below `/srv/my-pa/goodnotes`, its OCR executable resolves
+below the exclusive `/srv/my-pa/goodnotes-ocr` mount, and both mounts are
+read-only. No long-lived worker, gateway, web, proxy, or Frontier process
+receives either GoodNotes authority.
+[`source_gate.py`](source_gate.py) checks those identities against
+[`source-contract.toml`](source-contract.toml) and refuses writable or escaped
+placement.
+
+The same overlay records Frontier as an opt-in `apps/gateway.py mcp` process
+with stdin open, TTY disabled, and no `ports` or `expose`. The example
+[`frontier-mcp-child.example.json`](frontier-mcp-child.example.json) launches it
+with `docker compose run --rm --no-deps -T`, so its lifetime belongs to the MCP
+client and the wire remains standard input/output. There is no MCP proxy route,
+OAuth flow, browser path, or network listener. The profile and existing MCP
+kill switch remain explicit operator decisions; external MCP use is outside
+this package.
+
+The static check is safe without a NAS or source data:
+
+```bash
+python ops/nas/source_gate.py \
+  ops/nas/source-contract.toml \
+  ops/nas/compose.sources.example.yml \
+  ops/nas/compose.example.yml \
+  ops/nas/frontier-mcp-child.example.json \
+  ops/nas/proxy-allowlist.example.caddy
+```
+
 Later packages own executable behavior:
 
 - NAS-02 images supply app/web Dockerfiles and the
@@ -102,4 +133,4 @@ Later packages own executable behavior:
 - NAS-06 private HTTPS ingress, Entra pilot origin, and a verified Microsoft
   OIDC/JWKS egress allowlist for gateway and web;
 - NAS-07 live Apple/TCC activation and real credential minting remain operator gates;
-- NAS-08 source placement; NAS-09 lifecycle; NAS-10 acceptance.
+- NAS-09 lifecycle; NAS-10 acceptance.

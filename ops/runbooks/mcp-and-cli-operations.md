@@ -121,6 +121,13 @@ arguments:
 }
 ```
 
+The NAS-08 placement preserves that lifecycle. Its example client config
+launches the opt-in `frontier-mcp` container with `docker compose run --rm
+--no-deps -T`; the container command remains exactly `python apps/gateway.py
+mcp`. It has stdin, no TTY, no published or exposed port, and no reverse-proxy,
+browser, or OAuth route. The example neither activates an external client nor
+overrides the existing MCP kill switch.
+
 **Startup output goes to standard error, and that is load-bearing.** Standard
 output is the wire; a single line printed there is a parse failure on the
 client's first read, before `initialize` has been answered.
@@ -284,12 +291,15 @@ completed and its audit row was still written.
 
 ## GoodNotes operator plane
 
-The production-reachable GoodNotes command is `apps/cli/goodnotes.py`. It is
-local-only: set `MY_PA_AUTH_MODE=local_operator`, `MY_PA_GOODNOTES_ROOT` to the
-exact already-admitted source root, and `MY_PA_GOODNOTES_OCR_EXECUTABLE` to an
-absolute local executable. Optional OCR arguments are a JSON string list in
-`MY_PA_GOODNOTES_OCR_ARGUMENTS_JSON`; no shell is used. The command derives the
-durable local Principal and accepts no caller-selected Principal.
+The production-reachable GoodNotes command is `apps/cli/goodnotes.py`. Set
+`MY_PA_GOODNOTES_ROOT` to the exact already-admitted source root and
+`MY_PA_GOODNOTES_OCR_ROOT` to the separately admitted executable root, and
+`MY_PA_GOODNOTES_OCR_EXECUTABLE` to an absolute executable inside it. Optional OCR
+arguments are a JSON string list in `MY_PA_GOODNOTES_OCR_ARGUMENTS_JSON`; no
+shell is used. In `local_operator` mode the command derives and pins the durable
+local Principal. In `entra` mode it requires `--principal-id` as the explicit
+owning partition; that identifier selects no authentication authority and the
+repository/persistence boundaries still enforce the partition.
 
 Run `reconcile --idempotency-key KEY`. Then use the ordinary authenticated
 `review.list`, `review.decide`, and `knowledge.search` capabilities through

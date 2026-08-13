@@ -60,7 +60,7 @@ bind_mode = "validated_container_only"
 [services.worker_enrollment]
 host = "nas"
 database_credential = true
-mounts = ["config_ro", "sources_ro", "goodnotes_ro"]
+mounts = ["config_ro", "sources_ro"]
 networks = ["data-plane"]
 
 [services.worker_capture]

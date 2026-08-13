@@ -13,6 +13,7 @@ from sqlalchemy.engine import Engine
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.goodnotes import LocalGoodNotesRuntime, compose_local_goodnotes_runtime
 from my_pa.bootstrap.settings import ENV_PREFIX, AuthMode, load_settings
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 
 EXIT_OK = 0
@@ -21,10 +22,13 @@ EXIT_REFUSED = 1
 
 def _runtime() -> LocalGoodNotesRuntime:
     root = os.environ.get(f"{ENV_PREFIX}GOODNOTES_ROOT", "")
+    ocr_root = os.environ.get(f"{ENV_PREFIX}GOODNOTES_OCR_ROOT", "")
     executable = os.environ.get(f"{ENV_PREFIX}GOODNOTES_OCR_EXECUTABLE", "")
     arguments = os.environ.get(f"{ENV_PREFIX}GOODNOTES_OCR_ARGUMENTS_JSON", "[]")
-    if not root or not executable:
-        raise ValueError("GoodNotes root and OCR executable require explicit operator settings")
+    if not root or not ocr_root or not executable:
+        raise ValueError(
+            "GoodNotes root, OCR root, and OCR executable require explicit operator settings"
+        )
     decoded = json.loads(arguments)
     if not isinstance(decoded, list) or not all(isinstance(value, str) for value in decoded):
         raise ValueError("GoodNotes OCR arguments must be a JSON string list")
@@ -34,6 +38,7 @@ def _runtime() -> LocalGoodNotesRuntime:
             os.environ.get(f"{ENV_PREFIX}GOODNOTES_MANIFEST", "goodnotes-manifest.json")
         ),
         ocr_command=(executable, *decoded),
+        ocr_root=Path(ocr_root),
         ocr_name=os.environ.get(f"{ENV_PREFIX}GOODNOTES_OCR_NAME", "operator_local_ocr"),
         ocr_version=os.environ.get(f"{ENV_PREFIX}GOODNOTES_OCR_VERSION", "1"),
     )
@@ -45,13 +50,17 @@ def _engine() -> Engine:
     )
 
 
-def _operator_principal_id() -> str:
+def _operator_principal_id(supplied: str | None) -> str:
     settings = load_settings()
     if settings.auth_mode is not AuthMode.LOCAL_OPERATOR:
-        raise ValueError("GoodNotes operator commands require local_operator authentication")
+        if supplied is None:
+            raise ValueError("Entra GoodNotes reconciliation requires --principal-id")
+        return validate_identifier(supplied, IdKind.PRINCIPAL)
     principal = local_principal()
     if not principal.is_operator:
         raise ValueError("GoodNotes operator authentication is unavailable")
+    if supplied is not None and supplied != principal.principal_id:
+        raise ValueError("--principal-id does not match the local operator")
     return principal.principal_id
 
 
@@ -60,7 +69,7 @@ def _reconcile(args: argparse.Namespace) -> int:
     try:
         receipt = _runtime().reconcile(
             engine=engine,
-            principal_id=_operator_principal_id(),
+            principal_id=_operator_principal_id(args.principal_id),
             idempotency_key=args.idempotency_key,
         )
     finally:
@@ -73,9 +82,13 @@ def _reconcile(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="goodnotes")
+    parser = argparse.ArgumentParser(prog="goodnotes", allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
     reconcile = commands.add_parser("reconcile")
+    reconcile.add_argument(
+        "--principal-id",
+        help="owning Principal; required in Entra mode and pinned in local_operator mode",
+    )
     reconcile.add_argument("--idempotency-key", required=True)
     reconcile.set_defaults(handler=_reconcile)
     return parser

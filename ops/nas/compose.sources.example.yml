@@ -1,0 +1,55 @@
+# NAS-08 opt-in one-shot/child-process services. This overlay is not activated
+# by the ordinary stack profile. It adds no host port or reverse-proxy route.
+services:
+  goodnotes-reconcile:
+    profiles: [nas-08-goodnotes-operator]
+    image: "${MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}"
+    platform: linux/amd64
+    user: "${MY_PA_UID:?dedicated service uid required}:${MY_PA_GID:?dedicated service gid required}"
+    restart: "no"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command:
+      - python
+      - apps/cli/goodnotes.py
+      - reconcile
+      - --principal-id
+      - "${MY_PA_GOODNOTES_PRINCIPAL_ID:?exact owning Principal required}"
+      - --idempotency-key
+      - "${MY_PA_GOODNOTES_IDEMPOTENCY_KEY:?explicit bounded key required}"
+    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]
+    environment:
+      MY_PA_AUTH_MODE: entra
+      MY_PA_GOODNOTES_ROOT: /srv/my-pa/goodnotes
+      MY_PA_GOODNOTES_MANIFEST: goodnotes-manifest.json
+      MY_PA_GOODNOTES_OCR_ROOT: /srv/my-pa/goodnotes-ocr
+      MY_PA_GOODNOTES_OCR_EXECUTABLE: /srv/my-pa/goodnotes-ocr/ocr
+      MY_PA_GOODNOTES_OCR_ARGUMENTS_JSON: "[]"
+      MY_PA_GOODNOTES_OCR_NAME: "${MY_PA_GOODNOTES_OCR_NAME:?exact OCR provenance name required}"
+      MY_PA_GOODNOTES_OCR_VERSION: "${MY_PA_GOODNOTES_OCR_VERSION:?exact OCR provenance version required}"
+    volumes:
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?explicit NAS root required}/goodnotes-ocr", target: /srv/my-pa/goodnotes-ocr, read_only: true}
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?explicit NAS root required}/goodnotes", target: /srv/my-pa/goodnotes, read_only: true}
+    networks: [data-plane]
+
+  frontier-mcp:
+    profiles: [nas-08-frontier-mcp-stdio]
+    image: "${MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}"
+    platform: linux/amd64
+    user: "${MY_PA_UID:?dedicated service uid required}:${MY_PA_GID:?dedicated service gid required}"
+    restart: "no"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: [python, apps/gateway.py, mcp]
+    stdin_open: true
+    tty: false
+    env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]
+    environment:
+      MY_PA_AUTH_MODE: local_operator
+      MY_PA_MCP_SURFACE_DISABLED: "${MY_PA_MCP_SURFACE_DISABLED:?explicit activation decision required}"
+      MY_PA_MANAGED_DOCUMENT_ROOT: /srv/my-pa/managed-documents
+    volumes:
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?explicit NAS root required}/config", target: /srv/my-pa/config, read_only: true}
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?explicit NAS root required}/managed-documents", target: /srv/my-pa/managed-documents}
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?explicit NAS root required}/sources", target: /srv/my-pa/sources, read_only: true}
+    networks: [data-plane]

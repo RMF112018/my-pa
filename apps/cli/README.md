@@ -32,20 +32,24 @@ correlation input the application does not trust, exactly as it is over HTTP.
 [`ops/runbooks/mcp-and-cli-operations.md`](/ops/runbooks/mcp-and-cli-operations.md)
 covers running it.
 
-## `goodnotes.py` — local operator reconciliation trigger
+## `goodnotes.py` — operator reconciliation trigger
 
 ```text
 MY_PA_AUTH_MODE=local_operator \
 MY_PA_GOODNOTES_ROOT=/operator/admitted/root \
+MY_PA_GOODNOTES_OCR_ROOT=/operator/admitted/ocr-root \
 MY_PA_GOODNOTES_OCR_EXECUTABLE=/absolute/local/ocr \
 python apps/cli/goodnotes.py reconcile --idempotency-key <bounded-key>
 ```
 
-This is an authenticated local-operator surface. It accepts no Principal option:
-the Principal is derived from the same durable local binding as the gateway and
-the command refuses non-`local_operator` authentication mode. The exact root and
-absolute OCR executable are explicit operator settings. Reconciliation reads the
-manifest twice through its page generator: once to compute the bounded immutable
+In `local_operator` mode the Principal is derived from the same durable local
+binding as the gateway and any different `--principal-id` is refused. In
+`entra` mode `--principal-id` is required to bind the owning partition. The
+exact source root, OCR root, and absolute OCR executable are explicit operator
+settings. Every launch resolves the executable inside the OCR root and refuses
+an escaping symlink.
+Reconciliation reads the manifest twice through its page generator: once to
+compute the bounded immutable
 fingerprint and check a short receipt transaction, then once for bounded OCR and
 the disabled-by-default proposal gate. No database connection is held during OCR
 or model work; the write transaction starts only after both finish. Review and

@@ -12,21 +12,21 @@ fi
 }
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$script_dir/tooling-common.sh"
-"$script_dir/preflight.sh" "$1" "$2"
+"$NAS_PYTHON_BIN" "$script_dir/image_gate.py" "$1" --archive-dir "$2" --live
 MY_PA_IMAGE_MANIFEST=$1
 MY_PA_POSTGRES_RESOURCES=$3
 MY_PA_LIFECYCLE_MODE=smoke
 export MY_PA_IMAGE_MANIFEST MY_PA_POSTGRES_RESOURCES MY_PA_LIFECYCLE_MODE
-. "$script_dir/lifecycle-common.sh"
-container_id=$(nas_compose ps -a -q postgres)
+. "$script_dir/postgres-bootstrap-common.sh"
+container_id=$(nas_postgres_compose ps -a -q postgres)
 [ -n "$container_id" ] || { echo "prepared canonical PostgreSQL container is absent" >&2; exit 1; }
 "$NAS_PYTHON_BIN" "$script_dir/postgres_gate.py" "$3" --live --container-id "$container_id"
 
 cleanup() {
-  nas_compose stop --timeout 60 postgres >/dev/null 2>&1 || true
+  nas_postgres_compose stop --timeout 60 postgres >/dev/null 2>&1 || true
 }
 trap cleanup HUP INT TERM
-if ! nas_compose start postgres; then
+if ! nas_postgres_compose start postgres; then
   cleanup
   echo "canonical PostgreSQL start failed" >&2
   exit 1

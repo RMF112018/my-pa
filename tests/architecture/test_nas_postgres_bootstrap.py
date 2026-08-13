@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import subprocess
 import tomllib
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -62,6 +63,8 @@ def _environment(tmp_path: Path, tools: Path) -> dict[str, str]:
         "MY_PA_NAS_COMPOSE_FILE": str(ROOT / "ops/nas/compose.example.yml"),
         "MY_PA_NAS_ROOT": str(tmp_path / "nas"),
         "MY_PA_LIFECYCLE_MODE": "smoke",
+        "MY_PA_POSTGRES_IMAGE_ID": "sha256:" + "1" * 64,
+        "MY_PA_DB_PASSWORD": "synthetic-test-only",
     }
 
 
@@ -126,6 +129,242 @@ def test_bootstrap_contract_prohibits_ad_hoc_targets_and_orders_services() -> No
     assert compose.count("condition: service_healthy") == 3
     assert "name: my-pa-nas-contract_data-plane" in compose
     assert 'postgres --version | grep -Eq "PostgreSQL[)]? 17[.]10' in start
+
+
+def test_postgres_bootstrap_is_independent_of_application_credentials() -> None:
+    prepare = (ROOT / "ops/nas/postgres-bootstrap-prepare.sh").read_text(encoding="utf-8")
+    start = (ROOT / "ops/nas/postgres-bootstrap-start.sh").read_text(encoding="utf-8")
+    common = (ROOT / "ops/nas/postgres-bootstrap-common.sh").read_text(encoding="utf-8")
+    assert "postgres-bootstrap-common.sh" in prepare + start
+    assert "lifecycle-common.sh" not in prepare + start
+    assert "runtime_identity_gate.py" not in prepare + start + common
+    assert "postgres-bootstrap-identity-gate.py" in common
+    assert "MY_PA_NAS_ENV_FILE=/dev/null" in common
+    assert "MY_PA_WEB_ENV_FILE=/dev/null" in common
+
+
+def test_bootstrap_admission_binds_only_selected_postgres_render(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    generator = _module("generate-postgres-bootstrap-admission")
+    image_id = "sha256:" + "1" * 64
+    monkeypatch.setenv("MY_PA_POSTGRES_IMAGE_ID", image_id)
+    monkeypatch.setenv("MY_PA_DB_PASSWORD", "synthetic-db-secret")
+    monkeypatch.setenv("MY_PA_NAS_ROOT", "/volume1/my-pa")
+    rendered = {
+        "name": "my-pa-nas-contract",
+        "services": {
+            "postgres": {
+                "image": image_id,
+                "platform": "linux/amd64",
+                "restart": "no",
+                "environment": {
+                    "POSTGRES_DB": "my_pa",
+                    "POSTGRES_USER": "my_pa",
+                    "POSTGRES_PASSWORD": "synthetic-db-secret",
+                    "POSTGRES_INITDB_ARGS": ("--data-checksums --locale=C.UTF-8 --encoding=UTF8"),
+                },
+                "networks": {"data-plane": None},
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "/volume1/my-pa/postgres/data",
+                        "target": "/var/lib/postgresql/data",
+                    }
+                ],
+            }
+        },
+        "networks": {
+            "data-plane": {
+                "name": "my-pa-nas-contract_data-plane",
+                "internal": True,
+                "external": False,
+            }
+        },
+    }
+    assert generator.render_errors(rendered, image_id=image_id, root="/volume1/my-pa") == []
+    leaked = json.loads(json.dumps(rendered))
+    leaked["services"]["postgres"]["labels"] = {"unsafe": generator.SENTINEL_IMAGE}
+    assert "non_postgres_sentinel_leak" in generator.render_errors(
+        leaked, image_id=image_id, root="/volume1/my-pa"
+    )
+
+
+def test_bootstrap_admission_contains_no_database_password(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    generator = _module("generate-postgres-bootstrap-admission")
+    image_id = "sha256:" + "1" * 64
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        'schema = "my-pa.nas-image-manifest.v1"\nstatus = "deployable"\n'
+        'repository_commit = "' + "a" * 40 + '"\n'
+        'repository_tree = "' + "b" * 40 + '"\n'
+        'docker_engine_id = "engine"\ndocker_engine_name = "nas"\n'
+        f'[images.postgres]\ndocker_image_id = "{image_id}"\n'
+        '[images.app]\ndocker_image_id = "sha256:' + "2" * 64 + '"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MY_PA_POSTGRES_IMAGE_ID", image_id)
+    monkeypatch.setenv("MY_PA_DB_PASSWORD", "synthetic-db-secret")
+    monkeypatch.setenv("MY_PA_NAS_ROOT", "/volume1/my-pa")
+    rendered = {
+        "name": "my-pa-nas-contract",
+        "services": {
+            "postgres": {
+                "image": image_id,
+                "platform": "linux/amd64",
+                "restart": "no",
+                "environment": {
+                    "POSTGRES_DB": "my_pa",
+                    "POSTGRES_USER": "my_pa",
+                    "POSTGRES_PASSWORD": "synthetic-db-secret",
+                    "POSTGRES_INITDB_ARGS": ("--data-checksums --locale=C.UTF-8 --encoding=UTF8"),
+                },
+                "networks": {"data-plane": None},
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "/volume1/my-pa/postgres/data",
+                        "target": "/var/lib/postgresql/data",
+                    }
+                ],
+            }
+        },
+        "networks": {
+            "data-plane": {
+                "name": "my-pa-nas-contract_data-plane",
+                "internal": True,
+                "external": False,
+            }
+        },
+    }
+    monkeypatch.setattr(generator, "render_postgres", lambda _compose: rendered)
+    monkeypatch.setattr(
+        generator,
+        "_run",
+        lambda command, **_kwargs: (
+            '{"ID":"engine","Name":"nas"}'
+            if command[1] == "info"
+            else json.dumps(
+                [
+                    {
+                        "Id": command[-1],
+                        "Os": "linux",
+                        "Architecture": "amd64",
+                    }
+                ]
+            )
+        ),
+    )
+    output = tmp_path / "bootstrap-admission.toml"
+    assert generator.generate(ROOT / "ops/nas/compose.example.yml", manifest, output) == []
+    assert "synthetic-db-secret" not in output.read_text(encoding="utf-8")
+    assert output.stat().st_mode & 0o777 == 0o400
+
+
+def test_database_operations_use_hardened_exact_image_operator() -> None:
+    common = (ROOT / "ops/nas/postgres-common.sh").read_text(encoding="utf-8")
+    migrate = (ROOT / "ops/nas/migrate.sh").read_text(encoding="utf-8")
+    restore = (ROOT / "ops/nas/restore-to-scratch.sh").read_text(encoding="utf-8")
+    assert "database_operator_image_id" in common
+    assert "--network my-pa-nas-contract_data-plane" in common
+    assert "--read-only" in common and "--cap-drop ALL" in common
+    assert "--security-opt no-new-privileges" in common
+    assert "--user 10001:10001" in common
+    assert "--env PGPASSWORD" in common
+    assert "database_operator python -m alembic upgrade head" in migrate
+    assert "nas_compose run" not in migrate
+    assert 'database_operator_with_url "$MY_PA_SCRATCH_DATABASE_URL"' in restore
+
+
+def test_bootstrap_identity_gate_recomputes_every_binding(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    gate = _module("postgres-bootstrap-identity-gate")
+    postgres_id = "sha256:" + "1" * 64
+    app_id = "sha256:" + "2" * 64
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        'repository_commit = "' + "a" * 40 + '"\n'
+        'repository_tree = "' + "b" * 40 + '"\n'
+        'docker_engine_id = "engine"\ndocker_engine_name = "nas"\n'
+        f'[images.postgres]\ndocker_image_id = "{postgres_id}"\n'
+        f'[images.app]\ndocker_image_id = "{app_id}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MY_PA_NAS_ROOT", "/volume1/my-pa")
+    rendered = {"selected": "postgres"}
+    fake_generator = SimpleNamespace(
+        PROJECT="my-pa-nas-contract",
+        SERVICE="postgres",
+        NETWORK="my-pa-nas-contract_data-plane",
+        render_postgres=lambda _compose: rendered,
+        render_errors=lambda _rendered, **_kwargs: [],
+        canonical_render=lambda value: json.dumps(value, sort_keys=True).encode(),
+    )
+    monkeypatch.setattr(gate, "_generator", lambda: fake_generator)
+
+    def run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        if command[1] == "info":
+            return SimpleNamespace(stdout='{"ID":"engine","Name":"nas"}')
+        return SimpleNamespace(
+            stdout=json.dumps(
+                [
+                    {"Id": postgres_id, "Os": "linux", "Architecture": "amd64"},
+                    {"Id": app_id, "Os": "linux", "Architecture": "amd64"},
+                ]
+            )
+        )
+
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    manifest_bytes = manifest.read_bytes()
+    compose = ROOT / "ops/nas/compose.example.yml"
+    admission = tmp_path / "bootstrap-admission.toml"
+    fields = {
+        "schema": "my-pa.nas-postgres-bootstrap-admission.v1",
+        "status": "admitted",
+        "repository_commit": "a" * 40,
+        "repository_tree": "b" * 40,
+        "docker_engine_id": "engine",
+        "docker_engine_name": "nas",
+        "image_manifest_sha256": gate._sha256(manifest_bytes),
+        "compose_sha256": gate._file_sha256(compose),
+        "resolved_postgres_sha256": gate._sha256(fake_generator.canonical_render(rendered)),
+        "postgres_image_id": postgres_id,
+        "database_operator_image_id": app_id,
+        "project_name": fake_generator.PROJECT,
+        "service_name": fake_generator.SERVICE,
+        "data_network": fake_generator.NETWORK,
+        "postgres_data_path": "/volume1/my-pa/postgres/data",
+    }
+    admission.write_text(
+        "\n".join(f"{key} = {json.dumps(value)}" for key, value in fields.items())
+        + "\ndata_network_internal = true\n",
+        encoding="utf-8",
+    )
+    admission.chmod(0o400)
+    assert (
+        gate.verify(
+            compose,
+            manifest,
+            admission_path=admission,
+            owner_uid=os.getuid(),
+        )
+        == []
+    )
+    admission.chmod(0o600)
+    admission.write_text(
+        admission.read_text(encoding="utf-8").replace(fields["resolved_postgres_sha256"], "0" * 64),
+        encoding="utf-8",
+    )
+    admission.chmod(0o400)
+    assert "bootstrap_admission_binding" in gate.verify(
+        compose,
+        manifest,
+        admission_path=admission,
+        owner_uid=os.getuid(),
+    )
 
 
 def test_runtime_admission_generator_binds_engine_renders_and_six_images(

@@ -66,13 +66,18 @@ Migration is never an application startup side effect; canonical migration also
 requires a recent backup receipt. Backups are custom-format, integrity-listed,
 owner-only artifacts outside the repository. Restore accepts only a new
 `my_pa_scratch_*` database and retains a failed scratch target for diagnosis.
-The gated two-phase bootstrap creates the canonical stopped Compose container
-and internal `my-pa-nas-contract_data-plane` network before issuing the
-container-bound resource artifact, then separately revalidates and starts only
-PostgreSQL. That state is temporary; it exists solely to back up, migrate, and
-restore-verify before the six-service runtime starts. `postgresql_default`, the
-local-development Compose file, ad-hoc PostgreSQL, and direct production
-`docker compose up postgres` are not bootstrap paths.
+The gated two-phase bootstrap first issues a separate root-owned PostgreSQL
+bootstrap admission from the selected canonical Compose service. This admission
+requires no application, web, Entra, or edge credentials; fixed invalid values
+satisfy Compose's whole-file interpolation only, and the admission proves none
+reaches the PostgreSQL service or network. Prepare then creates the canonical
+stopped Compose container and internal `my-pa-nas-contract_data-plane` network
+before issuing the container-bound resource artifact; start separately
+revalidates and starts only PostgreSQL. That state is temporary. The full
+six-service runtime still requires its own exact runtime admission and real
+operator-provisioned configuration. `postgresql_default`, the local-development
+Compose file, ad-hoc PostgreSQL, and direct production `docker compose up
+postgres` are not bootstrap paths.
 
 NAS-04/05 add the validated `container` gateway bind mode and the
 [`runtime-services.example.toml`](runtime-services.example.toml) identity

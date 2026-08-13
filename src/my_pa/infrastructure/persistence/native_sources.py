@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
 
-from sqlalchemy import Connection, Engine, func, insert, select, text, update
+from sqlalchemy import ColumnElement, Connection, Engine, Table, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from my_pa.contracts.native_baseline import (
@@ -58,11 +58,19 @@ from my_pa.domain.native_sources import (
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import conflicting_row
+from my_pa.infrastructure.persistence.principal_scope import (
+    MissingPrincipalContextError,
+    PrincipalContext,
+    partition_criterion,
+    principal_bound_values,
+    require_principal_context,
+)
 from my_pa.infrastructure.persistence.registry import observe_object
 from my_pa.infrastructure.persistence.review import open_review_case
 from my_pa.infrastructure.persistence.tables import (
     audit_events,
     capture_proposals,
+    capture_versions,
     native_admission_authorities,
     native_bridge_observations,
     native_bridges,
@@ -142,17 +150,31 @@ class NativeConfigurationSnapshotRecord:
 class SqlNativeSourceRepository:
     """Provider-neutral statements for the WP-12B persistence foundation."""
 
-    def __init__(self, connection: Connection) -> None:
+    def __init__(self, connection: Connection, context: PrincipalContext) -> None:
         self._connection = connection
+        resolved = require_principal_context(context)
+        if resolved.capture_principal_id is None:
+            raise MissingPrincipalContextError()
+        self._context = resolved
+        self._partition_identity = resolved.capture_principal_id
+
+    def _mine(self, table: Table) -> ColumnElement[bool]:
+        return partition_criterion(table, self._context)
+
+    def _bound(self, table: Table, **values: object) -> dict[str, object]:
+        return principal_bound_values(dict(values), table, self._context)
 
     def register_bridge(self, bridge: NativeBridge) -> str:
         statement = (
             pg_insert(native_bridges)
             .values(
-                bridge_id=bridge.bridge_id,
-                protocol_version=bridge.protocol_version,
-                label=bridge.label,
-                created_at=bridge.observed_at,
+                **self._bound(
+                    native_bridges,
+                    bridge_id=bridge.bridge_id,
+                    protocol_version=bridge.protocol_version,
+                    label=bridge.label,
+                    created_at=bridge.observed_at,
+                )
             )
             .on_conflict_do_nothing(constraint="a_native_bridge_identity_is_stable")
             .returning(native_bridges.c.bridge_id)
@@ -164,6 +186,7 @@ class SqlNativeSourceRepository:
             select(native_bridges.c.bridge_id).where(
                 native_bridges.c.protocol_version == bridge.protocol_version,
                 native_bridges.c.label == bridge.label,
+                self._mine(native_bridges),
             )
         ).scalar_one_or_none()
         return str(conflicting_row(existing, "knowledge.native_bridges"))
@@ -172,11 +195,14 @@ class SqlNativeSourceRepository:
         observation_id = issue_identifier(IdKind.SOURCE_OBSERVATION)
         self._connection.execute(
             insert(native_bridge_observations).values(
-                observation_id=observation_id,
-                bridge_id=bridge.bridge_id,
-                available=available,
-                protocol_version=bridge.protocol_version,
-                observed_at=bridge.observed_at,
+                **self._bound(
+                    native_bridge_observations,
+                    observation_id=observation_id,
+                    bridge_id=bridge.bridge_id,
+                    available=available,
+                    protocol_version=bridge.protocol_version,
+                    observed_at=bridge.observed_at,
+                )
             )
         )
         return observation_id
@@ -187,13 +213,16 @@ class SqlNativeSourceRepository:
         statement = (
             pg_insert(native_source_accounts)
             .values(
-                account_id=account.account_id,
-                bridge_id=account.bridge_id,
-                source_id=account.source_id,
-                source_kind=account.kind.value,
-                label=account.label,
-                private_locator=private_locator,
-                first_observed_at=account.observed_at,
+                **self._bound(
+                    native_source_accounts,
+                    account_id=account.account_id,
+                    bridge_id=account.bridge_id,
+                    source_id=account.source_id,
+                    source_kind=account.kind.value,
+                    label=account.label,
+                    private_locator=private_locator,
+                    first_observed_at=account.observed_at,
+                )
             )
             .on_conflict_do_nothing(constraint="native_account_locator_is_issued_once")
             .returning(native_source_accounts.c.account_id)
@@ -210,6 +239,7 @@ class SqlNativeSourceRepository:
                 native_source_accounts.c.bridge_id == account.bridge_id,
                 native_source_accounts.c.source_kind == account.kind.value,
                 native_source_accounts.c.private_locator == private_locator,
+                self._mine(native_source_accounts),
             )
         ).one_or_none()
         row = conflicting_row(existing, "knowledge.native_source_accounts")
@@ -220,7 +250,10 @@ class SqlNativeSourceRepository:
         if row.label != account.label:
             self._connection.execute(
                 update(native_source_accounts)
-                .where(native_source_accounts.c.account_id == row.account_id)
+                .where(
+                    native_source_accounts.c.account_id == row.account_id,
+                    self._mine(native_source_accounts),
+                )
                 .values(label=account.label)
             )
         return str(row.account_id)
@@ -231,14 +264,17 @@ class SqlNativeSourceRepository:
         statement = (
             pg_insert(native_source_buckets)
             .values(
-                bucket_id=bucket.bucket_id,
-                account_id=bucket.account_id,
-                parent_bucket_id=bucket.parent_bucket_id,
-                source_kind=bucket.kind.value,
-                label=bucket.label,
-                private_locator=private_locator,
-                selectable=bucket.selectable,
-                first_observed_at=bucket.observed_at,
+                **self._bound(
+                    native_source_buckets,
+                    bucket_id=bucket.bucket_id,
+                    account_id=bucket.account_id,
+                    parent_bucket_id=bucket.parent_bucket_id,
+                    source_kind=bucket.kind.value,
+                    label=bucket.label,
+                    private_locator=private_locator,
+                    selectable=bucket.selectable,
+                    first_observed_at=bucket.observed_at,
+                )
             )
             .on_conflict_do_nothing(constraint="native_bucket_locator_is_issued_once")
             .returning(native_source_buckets.c.bucket_id)
@@ -250,6 +286,7 @@ class SqlNativeSourceRepository:
             select(native_source_buckets.c.bucket_id).where(
                 native_source_buckets.c.account_id == bucket.account_id,
                 native_source_buckets.c.private_locator == private_locator,
+                self._mine(native_source_buckets),
             )
         ).scalar_one_or_none()
         return str(conflicting_row(existing, "knowledge.native_source_buckets"))
@@ -259,7 +296,8 @@ class SqlNativeSourceRepository:
         validate_identifier(bucket_id, IdKind.NATIVE_BUCKET)
         value = self._connection.execute(
             select(native_source_buckets.c.private_locator).where(
-                native_source_buckets.c.bucket_id == bucket_id
+                native_source_buckets.c.bucket_id == bucket_id,
+                self._mine(native_source_buckets),
             )
         ).scalar_one_or_none()
         if value is None:
@@ -269,26 +307,30 @@ class SqlNativeSourceRepository:
     def append_configuration(self, configuration: NativeConfigurationRevision) -> None:
         self._connection.execute(
             insert(native_configuration_revisions).values(
-                configuration_id=configuration.configuration_id,
-                revision=configuration.revision,
-                bridge_id=configuration.bridge_id,
-                timezone_name=configuration.timezone_name,
-                start_date=configuration.start_date,
-                start_at=configuration.start_at,
-                cutoff_at=configuration.cutoff_at,
-                calendar_horizon_at=configuration.calendar_horizon_at,
-                selection_sha256=configuration.selection_sha256,
-                created_at=configuration.created_at,
+                **self._bound(
+                    native_configuration_revisions,
+                    configuration_id=configuration.configuration_id,
+                    revision=configuration.revision,
+                    bridge_id=configuration.bridge_id,
+                    timezone_name=configuration.timezone_name,
+                    start_date=configuration.start_date,
+                    start_at=configuration.start_at,
+                    cutoff_at=configuration.cutoff_at,
+                    calendar_horizon_at=configuration.calendar_horizon_at,
+                    selection_sha256=configuration.selection_sha256,
+                    created_at=configuration.created_at,
+                )
             )
         )
         self._connection.execute(
             insert(native_configuration_buckets),
             [
-                {
-                    "configuration_id": configuration.configuration_id,
-                    "revision": configuration.revision,
-                    "bucket_id": bucket_id,
-                }
+                self._bound(
+                    native_configuration_buckets,
+                    configuration_id=configuration.configuration_id,
+                    revision=configuration.revision,
+                    bucket_id=bucket_id,
+                )
                 for bucket_id in configuration.selection.bucket_ids
             ],
         )
@@ -299,18 +341,21 @@ class SqlNativeSourceRepository:
         statement = (
             pg_insert(native_sync_runs)
             .values(
-                run_id=run.run_id,
-                configuration_id=run.configuration_id,
-                configuration_revision=run.configuration_revision,
-                bridge_id=run.bridge_id,
-                adapter_identity=run.adapter_identity,
-                run_kind=run.kind.value,
-                state=run.state.value,
-                start_at=run.start_at,
-                cutoff_at=run.cutoff_at,
-                calendar_horizon_at=run.calendar_horizon_at,
-                idempotency_key=idempotency_key,
-                recorded_at=run.recorded_at,
+                **self._bound(
+                    native_sync_runs,
+                    run_id=run.run_id,
+                    configuration_id=run.configuration_id,
+                    configuration_revision=run.configuration_revision,
+                    bridge_id=run.bridge_id,
+                    adapter_identity=run.adapter_identity,
+                    run_kind=run.kind.value,
+                    state=run.state.value,
+                    start_at=run.start_at,
+                    cutoff_at=run.cutoff_at,
+                    calendar_horizon_at=run.calendar_horizon_at,
+                    idempotency_key=idempotency_key,
+                    recorded_at=run.recorded_at,
+                )
             )
             .on_conflict_do_nothing(constraint="native_sync_run_idempotency_is_scoped")
             .returning(native_sync_runs.c.run_id)
@@ -335,6 +380,7 @@ class SqlNativeSourceRepository:
                 native_sync_runs.c.configuration_id == run.configuration_id,
                 native_sync_runs.c.configuration_revision == run.configuration_revision,
                 native_sync_runs.c.idempotency_key == idempotency_key,
+                self._mine(native_sync_runs),
             )
         ).one_or_none()
         row = conflicting_row(existing, "knowledge.native_sync_runs")
@@ -381,12 +427,15 @@ class SqlNativeSourceRepository:
         validate_identifier(bucket_run_id, IdKind.NATIVE_BUCKET_RUN)
         self._connection.execute(
             insert(native_bucket_runs).values(
-                bucket_run_id=bucket_run_id,
-                run_id=run_id,
-                bucket_id=bucket_id,
-                state=state,
-                item_count=item_count,
-                recorded_at=ensure_utc(recorded_at),
+                **self._bound(
+                    native_bucket_runs,
+                    bucket_run_id=bucket_run_id,
+                    run_id=run_id,
+                    bucket_id=bucket_id,
+                    state=state,
+                    item_count=item_count,
+                    recorded_at=ensure_utc(recorded_at),
+                )
             )
         )
 
@@ -424,13 +473,16 @@ class SqlNativeSourceRepository:
         statement = (
             pg_insert(source_version_evidence)
             .values(
-                evidence_id=issue_identifier(IdKind.SOURCE_EVIDENCE),
-                version_id=version_id,
-                evidence_kind=kind.value,
-                payload=payload,
-                payload_sha256=digest,
-                byte_count=len(payload),
-                recorded_at=ensure_utc(recorded_at),
+                **self._bound(
+                    source_version_evidence,
+                    evidence_id=issue_identifier(IdKind.SOURCE_EVIDENCE),
+                    version_id=version_id,
+                    evidence_kind=kind.value,
+                    payload=payload,
+                    payload_sha256=digest,
+                    byte_count=len(payload),
+                    recorded_at=ensure_utc(recorded_at),
+                )
             )
             .on_conflict_do_nothing(constraint="source_version_evidence_is_idempotent")
             .returning(source_version_evidence.c.evidence_id)
@@ -443,6 +495,7 @@ class SqlNativeSourceRepository:
                 source_version_evidence.c.version_id == version_id,
                 source_version_evidence.c.evidence_kind == kind.value,
                 source_version_evidence.c.payload_sha256 == digest,
+                self._mine(source_version_evidence),
             )
         ).scalar_one_or_none()
         return str(conflicting_row(existing, "knowledge.source_version_evidence")), False
@@ -460,11 +513,14 @@ class SqlNativeSourceRepository:
         self._connection.execute(
             pg_insert(source_observations)
             .values(
-                observation_id=observation_id,
-                source_object_id=source_object_id,
-                version_id=version_id,
-                bucket_id=bucket_id,
-                observed_at=ensure_utc(observed_at),
+                **self._bound(
+                    source_observations,
+                    observation_id=observation_id,
+                    source_object_id=source_object_id,
+                    version_id=version_id,
+                    bucket_id=bucket_id,
+                    observed_at=ensure_utc(observed_at),
+                )
             )
             .on_conflict_do_nothing(constraint="source_version_observation_is_idempotent")
         )
@@ -473,11 +529,14 @@ class SqlNativeSourceRepository:
         statement = (
             pg_insert(source_memberships)
             .values(
-                membership_id=membership.membership_id,
-                parent_bucket_id=membership.group_bucket_id,
-                source_object_id=membership.contact_object_id,
-                version_id=membership.version_id,
-                observed_at=membership.observed_at,
+                **self._bound(
+                    source_memberships,
+                    membership_id=membership.membership_id,
+                    parent_bucket_id=membership.group_bucket_id,
+                    source_object_id=membership.contact_object_id,
+                    version_id=membership.version_id,
+                    observed_at=membership.observed_at,
+                )
             )
             .on_conflict_do_nothing(constraint="source_membership_version_is_idempotent")
             .returning(source_memberships.c.membership_id)
@@ -489,6 +548,7 @@ class SqlNativeSourceRepository:
             select(source_memberships.c.membership_id).where(
                 source_memberships.c.parent_bucket_id == membership.group_bucket_id,
                 source_memberships.c.version_id == membership.version_id,
+                self._mine(source_memberships),
             )
         ).scalar_one_or_none()
         return str(conflicting_row(existing, "knowledge.source_memberships"))
@@ -505,12 +565,19 @@ class SqlNativeSourceRepository:
         if sha256(cursor_private.encode()).hexdigest() != checkpoint.cursor_digest:
             raise ValueError("a private checkpoint cursor does not match its digest")
         self._connection.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:bucket_id, 0))"),
-            {"bucket_id": checkpoint.bucket_id},
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(:principal_id || ':' || :bucket_id, 0))"
+            ),
+            {
+                "principal_id": self._partition_identity,
+                "bucket_id": checkpoint.bucket_id,
+            },
         )
         latest = self._connection.execute(
             select(native_checkpoints.c.checkpoint_id, native_checkpoints.c.sequence)
             .where(native_checkpoints.c.bucket_id == checkpoint.bucket_id)
+            .where(self._mine(native_checkpoints))
             .order_by(native_checkpoints.c.sequence.desc())
             .limit(1)
         ).one_or_none()
@@ -527,38 +594,38 @@ class SqlNativeSourceRepository:
             # rejects every new unbound checkpoint; this shape remains useful
             # when validating the pre-WP-12E schema itself.
             self._connection.execute(
-                text(
-                    """INSERT INTO knowledge.native_checkpoints
-                         (checkpoint_id, bucket_id, sequence, previous_checkpoint_id,
-                          cursor_private, cursor_digest, recorded_at)
-                       VALUES (:checkpoint_id, :bucket_id, :sequence,
-                               :previous_checkpoint_id, :cursor_private,
-                               :cursor_digest, :recorded_at)"""
-                ),
-                {
-                    "checkpoint_id": checkpoint.checkpoint_id,
-                    "bucket_id": checkpoint.bucket_id,
-                    "sequence": checkpoint.sequence,
-                    "previous_checkpoint_id": checkpoint.previous_checkpoint_id,
-                    "cursor_private": cursor_private,
-                    "cursor_digest": checkpoint.cursor_digest,
-                    "recorded_at": checkpoint.recorded_at,
-                },
+                insert(native_checkpoints).values(
+                    **self._bound(
+                        native_checkpoints,
+                        checkpoint_id=checkpoint.checkpoint_id,
+                        bucket_id=checkpoint.bucket_id,
+                        sequence=checkpoint.sequence,
+                        previous_checkpoint_id=checkpoint.previous_checkpoint_id,
+                        cursor_private=cursor_private,
+                        cursor_digest=checkpoint.cursor_digest,
+                        terminal=checkpoint.terminal,
+                        item_count=checkpoint.item_count,
+                        recorded_at=checkpoint.recorded_at,
+                    )
+                )
             )
         else:
             self._connection.execute(
                 insert(native_checkpoints).values(
-                    checkpoint_id=checkpoint.checkpoint_id,
-                    bucket_id=checkpoint.bucket_id,
-                    job_id=checkpoint.job_id,
-                    admission_authority_id=checkpoint.admission_authority_id,
-                    sequence=checkpoint.sequence,
-                    previous_checkpoint_id=checkpoint.previous_checkpoint_id,
-                    cursor_private=cursor_private,
-                    cursor_digest=checkpoint.cursor_digest,
-                    terminal=checkpoint.terminal,
-                    item_count=checkpoint.item_count,
-                    recorded_at=checkpoint.recorded_at,
+                    **self._bound(
+                        native_checkpoints,
+                        checkpoint_id=checkpoint.checkpoint_id,
+                        bucket_id=checkpoint.bucket_id,
+                        job_id=checkpoint.job_id,
+                        admission_authority_id=checkpoint.admission_authority_id,
+                        sequence=checkpoint.sequence,
+                        previous_checkpoint_id=checkpoint.previous_checkpoint_id,
+                        cursor_private=cursor_private,
+                        cursor_digest=checkpoint.cursor_digest,
+                        terminal=checkpoint.terminal,
+                        item_count=checkpoint.item_count,
+                        recorded_at=checkpoint.recorded_at,
+                    )
                 )
             )
 
@@ -580,6 +647,7 @@ class SqlNativeSourceRepository:
                 native_checkpoints.c.recorded_at,
             )
             .where(native_checkpoints.c.job_id == job_id)
+            .where(self._mine(native_checkpoints))
             .order_by(native_checkpoints.c.sequence.desc())
             .limit(1)
         ).one_or_none()
@@ -627,27 +695,25 @@ class SqlNativeSourceRepository:
             # rejects this legacy shape so current callers cannot bypass the
             # frozen-run binding.
             inserted = self._connection.execute(
-                text(
-                    """INSERT INTO knowledge.native_sync_jobs
-                         (job_id, configuration_id, configuration_revision, bucket_id,
-                          range_start, range_end, state, idempotency_key, created_at,
-                          updated_at)
-                       VALUES (:job_id, :configuration_id, :configuration_revision,
-                               :bucket_id, :range_start, :range_end, 'queued',
-                               :idempotency_key, :created_at, :created_at)
-                       ON CONFLICT ON CONSTRAINT native_sync_job_idempotency_is_scoped
-                       DO NOTHING RETURNING job_id"""
-                ),
-                {
-                    "job_id": job_id,
-                    "configuration_id": configuration_id,
-                    "configuration_revision": configuration_revision,
-                    "bucket_id": bucket_id,
-                    "range_start": ensure_utc(range_start),
-                    "range_end": ensure_utc(range_end),
-                    "idempotency_key": idempotency_key,
-                    "created_at": ensure_utc(created_at),
-                },
+                pg_insert(native_sync_jobs)
+                .values(
+                    **self._bound(
+                        native_sync_jobs,
+                        job_id=job_id,
+                        configuration_id=configuration_id,
+                        configuration_revision=configuration_revision,
+                        bucket_id=bucket_id,
+                        range_start=ensure_utc(range_start),
+                        range_end=ensure_utc(range_end),
+                        read_mode=read_mode,
+                        state="queued",
+                        idempotency_key=idempotency_key,
+                        created_at=ensure_utc(created_at),
+                        updated_at=ensure_utc(created_at),
+                    )
+                )
+                .on_conflict_do_nothing(constraint="native_sync_job_idempotency_is_scoped")
+                .returning(native_sync_jobs.c.job_id)
             ).scalar_one_or_none()
             if inserted is not None:
                 return str(inserted)
@@ -661,6 +727,7 @@ class SqlNativeSourceRepository:
                     native_sync_jobs.c.configuration_revision == configuration_revision,
                     native_sync_jobs.c.bucket_id == bucket_id,
                     native_sync_jobs.c.idempotency_key == idempotency_key,
+                    self._mine(native_sync_jobs),
                 )
             ).one_or_none()
             row = conflicting_row(existing, "knowledge.native_sync_jobs")
@@ -675,18 +742,21 @@ class SqlNativeSourceRepository:
         statement = (
             pg_insert(native_sync_jobs)
             .values(
-                job_id=job_id,
-                run_id=run_id,
-                configuration_id=configuration_id,
-                configuration_revision=configuration_revision,
-                bucket_id=bucket_id,
-                range_start=ensure_utc(range_start),
-                range_end=ensure_utc(range_end),
-                read_mode=read_mode,
-                state="queued",
-                idempotency_key=idempotency_key,
-                created_at=ensure_utc(created_at),
-                updated_at=ensure_utc(created_at),
+                **self._bound(
+                    native_sync_jobs,
+                    job_id=job_id,
+                    run_id=run_id,
+                    configuration_id=configuration_id,
+                    configuration_revision=configuration_revision,
+                    bucket_id=bucket_id,
+                    range_start=ensure_utc(range_start),
+                    range_end=ensure_utc(range_end),
+                    read_mode=read_mode,
+                    state="queued",
+                    idempotency_key=idempotency_key,
+                    created_at=ensure_utc(created_at),
+                    updated_at=ensure_utc(created_at),
+                )
             )
             .on_conflict_do_nothing(constraint="native_sync_job_idempotency_is_scoped")
             .returning(native_sync_jobs.c.job_id)
@@ -706,6 +776,7 @@ class SqlNativeSourceRepository:
                 native_sync_jobs.c.configuration_revision == configuration_revision,
                 native_sync_jobs.c.bucket_id == bucket_id,
                 native_sync_jobs.c.idempotency_key == idempotency_key,
+                self._mine(native_sync_jobs),
             )
         ).one_or_none()
         row = conflicting_row(existing, "knowledge.native_sync_jobs")
@@ -726,11 +797,12 @@ class SqlNativeSourceRepository:
         candidate = (
             select(native_sync_jobs.c.job_id)
             .where(
+                self._mine(native_sync_jobs),
                 (native_sync_jobs.c.state == "queued")
                 | (
                     (native_sync_jobs.c.state == "running")
                     & (native_sync_jobs.c.lease_expires_at <= text("now()"))
-                )
+                ),
             )
             .order_by(native_sync_jobs.c.created_at, native_sync_jobs.c.job_id)
             .with_for_update(skip_locked=True)
@@ -739,7 +811,10 @@ class SqlNativeSourceRepository:
         )
         row = self._connection.execute(
             update(native_sync_jobs)
-            .where(native_sync_jobs.c.job_id == candidate.c.job_id)
+            .where(
+                native_sync_jobs.c.job_id == candidate.c.job_id,
+                self._mine(native_sync_jobs),
+            )
             .values(
                 state="running",
                 lease_owner=owner,
@@ -777,6 +852,7 @@ class SqlNativeSourceRepository:
             select(native_checkpoints.c.checkpoint_id).where(
                 native_checkpoints.c.job_id == job_id,
                 native_checkpoints.c.terminal.is_(True),
+                self._mine(native_checkpoints),
             )
         ).scalar_one_or_none()
         if terminal is None:
@@ -789,6 +865,7 @@ class SqlNativeSourceRepository:
                 native_sync_jobs.c.job_id == job_id,
                 native_sync_jobs.c.state == "running",
                 native_sync_jobs.c.lease_owner == owner,
+                self._mine(native_sync_jobs),
             )
             .values(
                 state="succeeded",
@@ -812,11 +889,14 @@ class SqlNativeSourceRepository:
     def append_simulation(self, simulation: WatcherSimulation) -> None:
         self._connection.execute(
             insert(native_watcher_simulations).values(
-                simulation_id=simulation.simulation_id,
-                sequence=simulation.sequence,
-                bucket_id=simulation.bucket_id,
-                state=simulation.state.value,
-                recorded_at=simulation.recorded_at,
+                **self._bound(
+                    native_watcher_simulations,
+                    simulation_id=simulation.simulation_id,
+                    sequence=simulation.sequence,
+                    bucket_id=simulation.bucket_id,
+                    state=simulation.state.value,
+                    recorded_at=simulation.recorded_at,
+                )
             )
         )
 
@@ -825,12 +905,15 @@ class SqlNativeSourceRepository:
     ) -> None:
         self._connection.execute(
             insert(native_simulation_receipts).values(
-                receipt_id=receipt.receipt_id,
-                simulation_id=receipt.simulation_id,
-                simulation_sequence=simulation_sequence,
-                checkpoint_id=receipt.checkpoint_id,
-                terminal_state=receipt.terminal_state.value,
-                recorded_at=receipt.recorded_at,
+                **self._bound(
+                    native_simulation_receipts,
+                    receipt_id=receipt.receipt_id,
+                    simulation_id=receipt.simulation_id,
+                    simulation_sequence=simulation_sequence,
+                    checkpoint_id=receipt.checkpoint_id,
+                    terminal_state=receipt.terminal_state.value,
+                    recorded_at=receipt.recorded_at,
+                )
             )
         )
 
@@ -839,11 +922,14 @@ class SqlNativeSourceRepository:
             raise ValueError("a denied live activation gate requires a reason code")
         self._connection.execute(
             insert(native_live_activation_gates).values(
-                gate_id=gate.gate_id,
-                bucket_id=gate.bucket_id,
-                state=gate.state.value,
-                reason_code=reason_code,
-                recorded_at=gate.recorded_at,
+                **self._bound(
+                    native_live_activation_gates,
+                    gate_id=gate.gate_id,
+                    bucket_id=gate.bucket_id,
+                    state=gate.state.value,
+                    reason_code=reason_code,
+                    recorded_at=gate.recorded_at,
+                )
             )
         )
 
@@ -855,14 +941,27 @@ class SqlNativeBaselineStore:
     _MAX_PAGES_PER_JOB = 10_000
     _MAX_RECORDS_PER_JOB = _MAX_PAGES_PER_JOB * NATIVE_SOURCE_MAX_PAGE_SIZE
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, context: PrincipalContext) -> None:
         self._engine = engine
+        resolved = require_principal_context(context)
+        if resolved.capture_principal_id is None:
+            raise MissingPrincipalContextError()
+        self._context = resolved
+        self._partition_identity = resolved.capture_principal_id
 
-    @staticmethod
-    def _lock_configuration(connection: Connection, configuration_id: str) -> None:
+    def _mine(self, table: Table) -> ColumnElement[bool]:
+        return partition_criterion(table, self._context)
+
+    def _lock_configuration(self, connection: Connection, configuration_id: str) -> None:
         connection.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:configuration_id, 0))"),
-            {"configuration_id": configuration_id},
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(:principal_id || ':' || :configuration_id, 0))"
+            ),
+            {
+                "principal_id": self._partition_identity,
+                "configuration_id": configuration_id,
+            },
         )
 
     def selected_kinds(self, configuration_id: str) -> tuple[ContractNativeSourceKind, ...]:
@@ -870,7 +969,8 @@ class SqlNativeBaselineStore:
         with self._engine.connect() as connection:
             revision = connection.scalar(
                 select(func.max(native_configuration_revisions.c.revision)).where(
-                    native_configuration_revisions.c.configuration_id == configuration_id
+                    native_configuration_revisions.c.configuration_id == configuration_id,
+                    self._mine(native_configuration_revisions),
                 )
             )
             if revision is None:
@@ -887,6 +987,8 @@ class SqlNativeBaselineStore:
                 .where(
                     native_configuration_buckets.c.configuration_id == configuration_id,
                     native_configuration_buckets.c.revision == revision,
+                    self._mine(native_configuration_buckets),
+                    self._mine(native_source_buckets),
                 )
                 .distinct()
                 .order_by(native_source_buckets.c.source_kind)
@@ -916,6 +1018,7 @@ class SqlNativeBaselineStore:
                 ).where(
                     native_sync_runs.c.configuration_id == configuration_id,
                     native_sync_runs.c.idempotency_key == idempotency_key,
+                    self._mine(native_sync_runs),
                 )
             ).one_or_none()
             if existing is not None:
@@ -935,7 +1038,10 @@ class SqlNativeBaselineStore:
                     native_configuration_revisions.c.bridge_id,
                     native_configuration_revisions.c.start_at,
                 )
-                .where(native_configuration_revisions.c.configuration_id == configuration_id)
+                .where(
+                    native_configuration_revisions.c.configuration_id == configuration_id,
+                    self._mine(native_configuration_revisions),
+                )
                 .order_by(native_configuration_revisions.c.revision.desc())
                 .limit(1)
             ).one_or_none()
@@ -950,6 +1056,7 @@ class SqlNativeBaselineStore:
                 select(native_configuration_revisions.c.start_at).where(
                     native_configuration_revisions.c.configuration_id == configuration_id,
                     native_configuration_revisions.c.revision == int(configuration.revision) - 1,
+                    self._mine(native_configuration_revisions),
                 )
             )
             backfill = prior_start is not None and start_at < prior_start
@@ -968,7 +1075,7 @@ class SqlNativeBaselineStore:
                 calendar_horizon_at=cutoff + timedelta(days=90),
                 recorded_at=cutoff,
             )
-            repository = SqlNativeSourceRepository(connection)
+            repository = SqlNativeSourceRepository(connection, self._context)
             repository.append_run(run, idempotency_key=idempotency_key)
             selected = connection.execute(
                 select(
@@ -985,6 +1092,8 @@ class SqlNativeBaselineStore:
                 .where(
                     native_configuration_buckets.c.configuration_id == configuration_id,
                     native_configuration_buckets.c.revision == configuration.revision,
+                    self._mine(native_configuration_buckets),
+                    self._mine(native_source_buckets),
                 )
                 .order_by(native_configuration_buckets.c.bucket_id)
             ).all()
@@ -1029,6 +1138,7 @@ class SqlNativeBaselineStore:
                 select(native_sync_jobs.c.job_id)
                 .where(
                     native_sync_jobs.c.run_id == run_id,
+                    self._mine(native_sync_jobs),
                     (native_sync_jobs.c.state == "queued")
                     | (
                         (native_sync_jobs.c.state == "running")
@@ -1045,7 +1155,10 @@ class SqlNativeBaselineStore:
             )
             row = connection.execute(
                 update(native_sync_jobs)
-                .where(native_sync_jobs.c.job_id == candidate.c.job_id)
+                .where(
+                    native_sync_jobs.c.job_id == candidate.c.job_id,
+                    self._mine(native_sync_jobs),
+                )
                 .values(
                     state="running",
                     lease_owner=owner,
@@ -1067,7 +1180,8 @@ class SqlNativeBaselineStore:
                 return None
             kind = connection.scalar(
                 select(native_source_buckets.c.source_kind).where(
-                    native_source_buckets.c.bucket_id == row.bucket_id
+                    native_source_buckets.c.bucket_id == row.bucket_id,
+                    self._mine(native_source_buckets),
                 )
             )
         return NativeBaselineJob(
@@ -1089,6 +1203,7 @@ class SqlNativeBaselineStore:
             rows = connection.execute(
                 select(native_checkpoints.c.cursor_private, native_checkpoints.c.terminal)
                 .where(native_checkpoints.c.job_id == job_id)
+                .where(self._mine(native_checkpoints))
                 .order_by(native_checkpoints.c.sequence)
             ).all()
         if not rows:
@@ -1116,6 +1231,7 @@ class SqlNativeBaselineStore:
                     native_sync_jobs.c.state == "running",
                     native_sync_jobs.c.lease_owner == job.lease_owner,
                     native_sync_jobs.c.lease_expires_at > func.now(),
+                    self._mine(native_sync_jobs),
                 )
             ).scalar_one_or_none()
             if lease is None or str(lease) != job.bucket_id:
@@ -1125,6 +1241,7 @@ class SqlNativeBaselineStore:
                 for value in connection.execute(
                     select(native_checkpoints.c.cursor_private)
                     .where(native_checkpoints.c.job_id == job.job_id)
+                    .where(self._mine(native_checkpoints))
                     .order_by(native_checkpoints.c.sequence)
                 ).scalars()
             )
@@ -1134,7 +1251,7 @@ class SqlNativeBaselineStore:
             prior_count = int(
                 connection.scalar(
                     select(func.coalesce(func.sum(native_checkpoints.c.item_count), 0)).where(
-                        native_checkpoints.c.job_id == job.job_id
+                        native_checkpoints.c.job_id == job.job_id, self._mine(native_checkpoints)
                     )
                 )
                 or 0
@@ -1146,6 +1263,7 @@ class SqlNativeBaselineStore:
             latest = connection.execute(
                 select(native_checkpoints.c.checkpoint_id, native_checkpoints.c.sequence)
                 .where(native_checkpoints.c.bucket_id == job.bucket_id)
+                .where(self._mine(native_checkpoints))
                 .order_by(native_checkpoints.c.sequence.desc())
                 .limit(1)
             ).one_or_none()
@@ -1162,7 +1280,7 @@ class SqlNativeBaselineStore:
                 item_count=page_count,
                 recorded_at=recorded_at,
             )
-            SqlNativeSourceRepository(connection).compare_and_set_checkpoint(
+            SqlNativeSourceRepository(connection, self._context).compare_and_set_checkpoint(
                 checkpoint,
                 expected_sequence=sequence - 1,
                 cursor_private=cursor,
@@ -1172,10 +1290,10 @@ class SqlNativeBaselineStore:
         with self._engine.begin() as connection:
             total = connection.scalar(
                 select(func.coalesce(func.sum(native_checkpoints.c.item_count), 0)).where(
-                    native_checkpoints.c.job_id == job.job_id
+                    native_checkpoints.c.job_id == job.job_id, self._mine(native_checkpoints)
                 )
             )
-            SqlNativeSourceRepository(connection).finish_job(
+            SqlNativeSourceRepository(connection, self._context).finish_job(
                 job_id=job.job_id,
                 owner=job.lease_owner,
                 item_count=int(total or 0),
@@ -1187,13 +1305,14 @@ class SqlNativeBaselineStore:
         with self._engine.connect() as connection:
             total = connection.scalar(
                 select(func.count(native_sync_jobs.c.job_id)).where(
-                    native_sync_jobs.c.run_id == run_id
+                    native_sync_jobs.c.run_id == run_id, self._mine(native_sync_jobs)
                 )
             )
             succeeded = connection.scalar(
                 select(func.count(native_sync_jobs.c.job_id)).where(
                     native_sync_jobs.c.run_id == run_id,
                     native_sync_jobs.c.state == "succeeded",
+                    self._mine(native_sync_jobs),
                 )
             )
         return int(total or 0) > 0 and int(total or 0) == int(succeeded or 0)
@@ -1202,14 +1321,30 @@ class SqlNativeBaselineStore:
 class SqlNativeSourceControlStore:
     """Engine-backed C store whose admission transaction commits before enrichment."""
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, context: PrincipalContext) -> None:
         self._engine = engine
+        resolved = require_principal_context(context)
+        if resolved.capture_principal_id is None:
+            raise MissingPrincipalContextError()
+        self._context = resolved
+        self._partition_identity = resolved.capture_principal_id
 
-    @staticmethod
-    def _lock_configuration(connection: Connection, configuration_id: str) -> None:
+    def _mine(self, table: Table) -> ColumnElement[bool]:
+        return partition_criterion(table, self._context)
+
+    def _bound(self, table: Table, **values: object) -> dict[str, object]:
+        return principal_bound_values(dict(values), table, self._context)
+
+    def _lock_configuration(self, connection: Connection, configuration_id: str) -> None:
         connection.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:configuration_id, 0))"),
-            {"configuration_id": configuration_id},
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(:principal_id || ':' || :configuration_id, 0))"
+            ),
+            {
+                "principal_id": self._partition_identity,
+                "configuration_id": configuration_id,
+            },
         )
 
     def bridge_protocol(self, bridge_id: str) -> str | None:
@@ -1217,7 +1352,8 @@ class SqlNativeSourceControlStore:
         with self._engine.connect() as connection:
             value = connection.execute(
                 select(native_bridges.c.protocol_version).where(
-                    native_bridges.c.bridge_id == bridge_id
+                    native_bridges.c.bridge_id == bridge_id,
+                    self._mine(native_bridges),
                 )
             ).scalar_one_or_none()
         return None if value is None else str(value)
@@ -1243,7 +1379,11 @@ class SqlNativeSourceControlStore:
                     native_source_accounts,
                     native_source_accounts.c.account_id == native_source_buckets.c.account_id,
                 )
-                .where(native_source_buckets.c.bucket_id.in_(bucket_ids))
+                .where(
+                    native_source_buckets.c.bucket_id.in_(bucket_ids),
+                    self._mine(native_source_buckets),
+                    self._mine(native_source_accounts),
+                )
                 .order_by(native_source_buckets.c.bucket_id)
             ).all()
         return tuple(
@@ -1281,6 +1421,8 @@ class SqlNativeSourceControlStore:
                 .where(
                     native_source_accounts.c.bridge_id == bridge_id,
                     native_source_accounts.c.source_id.in_(source_ids),
+                    self._mine(native_source_accounts),
+                    self._mine(native_source_buckets),
                 )
             ).all()
         return frozenset((str(row[0]), str(row[1])) for row in rows)
@@ -1301,7 +1443,8 @@ class SqlNativeSourceControlStore:
             latest = connection.execute(
                 select(func.max(native_configuration_revisions.c.revision)).where(
                     native_configuration_revisions.c.configuration_id
-                    == configuration.configuration_id
+                    == configuration.configuration_id,
+                    self._mine(native_configuration_revisions),
                 )
             ).scalar_one()
             actual_prior = 0 if latest is None else int(latest)
@@ -1309,7 +1452,7 @@ class SqlNativeSourceControlStore:
                 raise NativePersistenceConflictError(
                     "the native configuration expected revision is stale"
                 )
-            SqlNativeSourceRepository(connection).append_configuration(configuration)
+            SqlNativeSourceRepository(connection, self._context).append_configuration(configuration)
             self._record_preflight_rows(
                 connection,
                 configuration.configuration_id,
@@ -1318,8 +1461,8 @@ class SqlNativeSourceControlStore:
                 observed_at=configuration.created_at,
             )
 
-    @staticmethod
     def _record_preflight_rows(
+        self,
         connection: Connection,
         configuration_id: str,
         configuration_revision: int,
@@ -1332,13 +1475,16 @@ class SqlNativeSourceControlStore:
                 raise ValueError("native preflight state is not durable vocabulary")
             connection.execute(
                 insert(native_preflight_observations).values(
-                    observation_id=issue_identifier(IdKind.SOURCE_OBSERVATION),
-                    configuration_id=configuration_id,
-                    configuration_revision=configuration_revision,
-                    bucket_id=result.bucket_id,
-                    state=result.state,
-                    failure=None if result.failure is None else result.failure.value,
-                    observed_at=ensure_utc(observed_at),
+                    **self._bound(
+                        native_preflight_observations,
+                        observation_id=issue_identifier(IdKind.SOURCE_OBSERVATION),
+                        configuration_id=configuration_id,
+                        configuration_revision=configuration_revision,
+                        bucket_id=result.bucket_id,
+                        state=result.state,
+                        failure=None if result.failure is None else result.failure.value,
+                        observed_at=ensure_utc(observed_at),
+                    )
                 )
             )
 
@@ -1375,7 +1521,8 @@ class SqlNativeSourceControlStore:
             latest = connection.execute(
                 select(func.max(native_configuration_revisions.c.revision)).where(
                     native_configuration_revisions.c.configuration_id
-                    == configuration.configuration_id
+                    == configuration.configuration_id,
+                    self._mine(native_configuration_revisions),
                 )
             ).scalar_one()
             allowed_audit = connection.execute(
@@ -1383,6 +1530,7 @@ class SqlNativeSourceControlStore:
                     audit_events.c.audit_id == audit_id,
                     audit_events.c.capability == NativeSourceCapability.SYNC.value,
                     audit_events.c.outcome == "allowed",
+                    self._mine(audit_events),
                 )
             ).scalar_one_or_none()
             selected = connection.execute(
@@ -1402,6 +1550,9 @@ class SqlNativeSourceControlStore:
                     == configuration.configuration_id,
                     native_configuration_buckets.c.revision == configuration.revision,
                     native_configuration_buckets.c.bucket_id == binding.bucket_id,
+                    self._mine(native_configuration_buckets),
+                    self._mine(native_source_buckets),
+                    self._mine(native_source_accounts),
                 )
             ).one_or_none()
             if (
@@ -1421,6 +1572,7 @@ class SqlNativeSourceControlStore:
                     native_admission_authorities.c.bucket_id == binding.bucket_id,
                     native_admission_authorities.c.request_id == request_id,
                     native_admission_authorities.c.expires_at >= ensure_utc(issued_at),
+                    self._mine(native_admission_authorities),
                 )
                 .order_by(native_admission_authorities.c.issued_at.desc())
                 .limit(1)
@@ -1456,18 +1608,21 @@ class SqlNativeSourceControlStore:
             )
             connection.execute(
                 insert(native_admission_authorities).values(
-                    authority_id=authority.authority_id,
-                    audit_id=authority.audit_id,
-                    configuration_id=authority.configuration_id,
-                    configuration_revision=authority.configuration_revision,
-                    bridge_id=authority.bridge_id,
-                    bucket_id=authority.bucket_id,
-                    source_id=authority.source_id,
-                    host_instance_id=authority.bridge_id,
-                    envelope_id=authority.envelope_id,
-                    request_id=authority.request_id,
-                    issued_at=authority.issued_at,
-                    expires_at=authority.expires_at,
+                    **self._bound(
+                        native_admission_authorities,
+                        authority_id=authority.authority_id,
+                        audit_id=authority.audit_id,
+                        configuration_id=authority.configuration_id,
+                        configuration_revision=authority.configuration_revision,
+                        bridge_id=authority.bridge_id,
+                        bucket_id=authority.bucket_id,
+                        source_id=authority.source_id,
+                        host_instance_id=authority.bridge_id,
+                        envelope_id=authority.envelope_id,
+                        request_id=authority.request_id,
+                        issued_at=authority.issued_at,
+                        expires_at=authority.expires_at,
+                    )
                 )
             )
         return authority
@@ -1487,7 +1642,10 @@ class SqlNativeSourceControlStore:
                     native_configuration_revisions.c.cutoff_at,
                     native_configuration_revisions.c.created_at,
                 )
-                .where(native_configuration_revisions.c.configuration_id == configuration_id)
+                .where(
+                    native_configuration_revisions.c.configuration_id == configuration_id,
+                    self._mine(native_configuration_revisions),
+                )
                 .order_by(native_configuration_revisions.c.revision.desc())
                 .limit(1)
             ).one_or_none()
@@ -1500,6 +1658,7 @@ class SqlNativeSourceControlStore:
                     .where(
                         native_configuration_buckets.c.configuration_id == configuration_id,
                         native_configuration_buckets.c.revision == row.revision,
+                        self._mine(native_configuration_buckets),
                     )
                     .order_by(native_configuration_buckets.c.bucket_id)
                 ).scalars()
@@ -1522,7 +1681,8 @@ class SqlNativeSourceControlStore:
         with self._engine.connect() as connection:
             row = connection.execute(
                 select(native_admission_authorities).where(
-                    native_admission_authorities.c.envelope_id == envelope_id
+                    native_admission_authorities.c.envelope_id == envelope_id,
+                    self._mine(native_admission_authorities),
                 )
             ).one_or_none()
         if row is None:
@@ -1558,15 +1718,18 @@ class SqlNativeSourceControlStore:
                 )
                 .outerjoin(
                     source_observations,
-                    source_observations.c.bucket_id == native_configuration_buckets.c.bucket_id,
+                    (source_observations.c.bucket_id == native_configuration_buckets.c.bucket_id)
+                    & self._mine(source_observations),
                 )
                 .outerjoin(
                     native_bucket_runs,
-                    native_bucket_runs.c.bucket_id == native_configuration_buckets.c.bucket_id,
+                    (native_bucket_runs.c.bucket_id == native_configuration_buckets.c.bucket_id)
+                    & self._mine(native_bucket_runs),
                 )
                 .where(
                     native_configuration_buckets.c.configuration_id == configuration_id,
                     native_configuration_buckets.c.revision == snapshot.configuration.revision,
+                    self._mine(native_configuration_buckets),
                 )
                 .group_by(native_configuration_buckets.c.bucket_id)
                 .order_by(native_configuration_buckets.c.bucket_id)
@@ -1583,6 +1746,7 @@ class SqlNativeSourceControlStore:
                         native_preflight_observations.c.configuration_revision
                         == snapshot.configuration.revision,
                         native_preflight_observations.c.bucket_id == row.bucket_id,
+                        self._mine(native_preflight_observations),
                     )
                     .order_by(
                         native_preflight_observations.c.observed_at.desc(),
@@ -1676,12 +1840,17 @@ class SqlNativeSourceControlStore:
                 audit_events,
                 audit_events.c.audit_id == native_admission_authorities.c.audit_id,
             )
-            .where(native_admission_authorities.c.authority_id == authority.authority_id)
+            .where(
+                native_admission_authorities.c.authority_id == authority.authority_id,
+                self._mine(native_admission_authorities),
+                self._mine(audit_events),
+            )
             .with_for_update(of=native_admission_authorities)
         ).one_or_none()
         latest = connection.execute(
             select(func.max(native_configuration_revisions.c.revision)).where(
-                native_configuration_revisions.c.configuration_id == authority.configuration_id
+                native_configuration_revisions.c.configuration_id == authority.configuration_id,
+                self._mine(native_configuration_revisions),
             )
         ).scalar_one()
         selected = connection.execute(
@@ -1707,6 +1876,9 @@ class SqlNativeSourceControlStore:
                 native_configuration_buckets.c.configuration_id == authority.configuration_id,
                 native_configuration_buckets.c.revision == authority.configuration_revision,
                 native_configuration_buckets.c.bucket_id == authority.bucket_id,
+                self._mine(native_configuration_buckets),
+                self._mine(native_source_buckets),
+                self._mine(native_source_accounts),
             )
         ).one_or_none()
         if grant is None or selected is None:
@@ -1815,7 +1987,10 @@ class SqlNativeSourceControlStore:
                         native_sync_jobs.c.configuration_id,
                         native_sync_jobs.c.configuration_revision,
                         native_sync_jobs.c.bucket_id,
-                    ).where(native_sync_jobs.c.job_id == checkpoint_job_id)
+                    ).where(
+                        native_sync_jobs.c.job_id == checkpoint_job_id,
+                        self._mine(native_sync_jobs),
+                    )
                 ).one_or_none()
                 if (
                     job is None
@@ -1844,7 +2019,10 @@ class SqlNativeSourceControlStore:
                     native_admission_authorities.c.checkpoint_cursor_digest,
                     native_admission_authorities.c.checkpoint_terminal,
                     native_admission_authorities.c.checkpoint_item_count,
-                ).where(native_admission_authorities.c.authority_id == authority.authority_id)
+                ).where(
+                    native_admission_authorities.c.authority_id == authority.authority_id,
+                    self._mine(native_admission_authorities),
+                )
             ).one()
             prior_digest = durable_consumption.admission_sha256
             if prior_digest is None:
@@ -1866,6 +2044,7 @@ class SqlNativeSourceControlStore:
                     .where(
                         native_admission_authorities.c.authority_id == authority.authority_id,
                         native_admission_authorities.c.admission_sha256.is_(None),
+                        self._mine(native_admission_authorities),
                     )
                     .values(**values)
                 )
@@ -1898,7 +2077,7 @@ class SqlNativeSourceControlStore:
                 ObjectKind.CONTACT: "application/contact+json",
                 ObjectKind.TASK: "application/task+json",
             }[object_kind]
-            repository = SqlNativeSourceRepository(connection)
+            repository = SqlNativeSourceRepository(connection, self._context)
             for record in envelope.records:
                 modified_at = (
                     recorded_at
@@ -1957,9 +2136,17 @@ class SqlNativeReviewProposalRouter:
         self,
         engine: Engine,
         candidates_for_version: Callable[[str], tuple[str, ...]],
+        context: PrincipalContext,
     ) -> None:
         self._engine = engine
         self._candidates_for_version = candidates_for_version
+        self._context = require_principal_context(context)
+
+    def _mine(self, table: Table) -> ColumnElement[bool]:
+        return partition_criterion(table, self._context)
+
+    def _bound(self, table: Table, **values: object) -> dict[str, object]:
+        return principal_bound_values(dict(values), table, self._context)
 
     def open_review_proposals(self, version_ids: tuple[str, ...]) -> tuple[str, ...]:
         if version_ids != tuple(dict.fromkeys(version_ids)):
@@ -1968,14 +2155,28 @@ class SqlNativeReviewProposalRouter:
         with self._engine.begin() as connection:
             for source_version_id in version_ids:
                 validate_identifier(source_version_id, IdKind.VERSION)
+                owned_evidence = connection.execute(
+                    select(source_version_evidence.c.evidence_id).where(
+                        source_version_evidence.c.version_id == source_version_id,
+                        self._mine(source_version_evidence),
+                    )
+                ).first()
+                if owned_evidence is None:
+                    raise LookupError("native source version is outside the Principal partition")
                 proposal_ids = self._candidates_for_version(source_version_id)
                 if proposal_ids != tuple(dict.fromkeys(proposal_ids)):
                     raise ValueError("native enrichment candidates must be unique")
                 for proposal_id in proposal_ids:
                     validate_identifier(proposal_id, IdKind.PROPOSAL)
                     proposal_exists = connection.execute(
-                        select(capture_proposals.c.proposal_id).where(
-                            capture_proposals.c.proposal_id == proposal_id
+                        select(capture_proposals.c.proposal_id)
+                        .join(
+                            capture_versions,
+                            capture_versions.c.version_id == capture_proposals.c.version_id,
+                        )
+                        .where(
+                            capture_proposals.c.proposal_id == proposal_id,
+                            self._mine(capture_versions),
                         )
                     ).scalar_one_or_none()
                     if proposal_exists is None:
@@ -1987,6 +2188,7 @@ class SqlNativeReviewProposalRouter:
                         select(native_source_review_routes.c.review_case_id).where(
                             native_source_review_routes.c.source_version_id == source_version_id,
                             native_source_review_routes.c.proposal_id == proposal_id,
+                            self._mine(native_source_review_routes),
                         )
                     ).scalar_one_or_none()
                     if prior is not None:
@@ -1997,10 +2199,13 @@ class SqlNativeReviewProposalRouter:
                     else:
                         connection.execute(
                             insert(native_source_review_routes).values(
-                                source_version_id=source_version_id,
-                                proposal_id=proposal_id,
-                                review_case_id=review_case_id,
-                                routed_at=func.now(),
+                                **self._bound(
+                                    native_source_review_routes,
+                                    source_version_id=source_version_id,
+                                    proposal_id=proposal_id,
+                                    review_case_id=review_case_id,
+                                    routed_at=func.now(),
+                                )
                             )
                         )
                     routed.append(proposal_id)

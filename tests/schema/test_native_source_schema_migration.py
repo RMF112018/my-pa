@@ -43,6 +43,7 @@ from my_pa.infrastructure.persistence.native_sources import (
     NativePersistenceConflictError,
     SqlNativeSourceRepository,
 )
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.tables import (
     METADATA,
     native_checkpoints,
@@ -52,10 +53,12 @@ from my_pa.infrastructure.persistence.tables import (
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "8c4d1e7a2b90"
 PRIOR_REVISION = "7f2a9d6c4e18"
-HEAD_REVISION = "b4e8d2c7a613"
+HEAD_REVISION = "d7a4c9e2f165"
 WP12E_PRIOR_REVISION = "9d5e2f7b4c61"
 DATABASE = "my_pa_native_sources_test"
 WHEN = datetime(2026, 8, 4, 12, tzinfo=UTC)
+CONTEXT = capture_context("prn_0000000000000001")
+OTHER_CONTEXT = capture_context("prn_0000000000000002")
 
 EXPECTED_TABLES = frozenset(
     {
@@ -267,6 +270,7 @@ def _seed(connection: Connection) -> None:
         "object_locator": "synthetic-object",
         "account_locator": "synthetic-account",
         "bucket_locator": "synthetic-bucket",
+        "principal_id": CONTEXT.capture_principal_id,
         "at": WHEN,
     }
     statements = (
@@ -280,18 +284,19 @@ def _seed(connection: Connection) -> None:
              (version_id, source_object_id, fingerprint, media_type, size_bytes, modified_at)
            VALUES (:version_id, :object_id, 'synthetic-v1', 'message/rfc822', 4, :at)""",
         """INSERT INTO knowledge.native_bridges
-             (bridge_id, protocol_version, label, created_at)
-           VALUES (:bridge_id, 'my-pa.native-source.v1', 'Synthetic Bridge', :at)""",
+             (bridge_id, protocol_version, label, created_at, principal_id)
+           VALUES (:bridge_id, 'my-pa.native-source.v1', 'Synthetic Bridge', :at,
+                   :principal_id)""",
         """INSERT INTO knowledge.native_source_accounts
              (account_id, bridge_id, source_id, source_kind, label, private_locator,
-              first_observed_at)
+              first_observed_at, principal_id)
            VALUES (:account_id, :bridge_id, :source_id, 'mail', 'Synthetic Account',
-                   :account_locator, :at)""",
+                   :account_locator, :at, :principal_id)""",
         """INSERT INTO knowledge.native_source_buckets
              (bucket_id, account_id, source_kind, label, private_locator, selectable,
-              first_observed_at)
+              first_observed_at, principal_id)
            VALUES (:bucket_id, :account_id, 'mail', 'Synthetic Inbox', :bucket_locator,
-                   true, :at)""",
+                   true, :at, :principal_id)""",
     )
     for statement in statements:
         connection.execute(text(statement), values)
@@ -305,15 +310,23 @@ def _seed(connection: Connection) -> None:
         selection=ExactBucketSelection((_id("nbkt", 1),)),
         created_at=WHEN,
     )
-    SqlNativeSourceRepository(connection).append_configuration(configuration)
+    SqlNativeSourceRepository(connection, CONTEXT).append_configuration(configuration)
 
 
 @pytest.mark.database
 def test_evidence_is_idempotent_and_receipts_are_append_only(native_engine: Engine) -> None:
-    command.downgrade(_config(), WP12E_PRIOR_REVISION)
     with native_engine.begin() as connection:
+        # This WP-12B repository test exercises the historical compare-and-set
+        # primitive in isolation. WP-12E's admitted-page trigger has its own
+        # end-to-end coverage in test_wp12_slice_c_admission.py.
+        connection.execute(
+            text(
+                "ALTER TABLE knowledge.native_checkpoints "
+                "DISABLE TRIGGER native_checkpoint_requires_admitted_page"
+            )
+        )
         _seed(connection)
-        repository = SqlNativeSourceRepository(connection)
+        repository = SqlNativeSourceRepository(connection, CONTEXT)
         first = repository.record_evidence(
             version_id=_id("ver", 1),
             kind=ObjectKind.MAIL_MESSAGE,
@@ -440,12 +453,17 @@ def test_evidence_is_idempotent_and_receipts_are_append_only(native_engine: Engi
         connection.execute(
             text(
                 """INSERT INTO knowledge.native_source_buckets
-                     (bucket_id, account_id, source_kind, label, private_locator, selectable,
-                      first_observed_at)
-                   VALUES (:bucket_id, :account_id, 'mail', 'Other Mailbox',
+                     (principal_id, bucket_id, account_id, source_kind, label, private_locator,
+                      selectable, first_observed_at)
+                   VALUES (:principal_id, :bucket_id, :account_id, 'mail', 'Other Mailbox',
                            'other-simulation-bucket', true, :at)"""
             ),
-            {"bucket_id": _id("nbkt", 2), "account_id": _id("nacct", 1), "at": WHEN},
+            {
+                "principal_id": CONTEXT.capture_principal_id,
+                "bucket_id": _id("nbkt", 2),
+                "account_id": _id("nacct", 1),
+                "at": WHEN,
+            },
         )
         other_cursor = "synthetic-cursor-other-bucket"
         other_checkpoint = NativeCheckpoint(
@@ -514,6 +532,52 @@ def test_evidence_is_idempotent_and_receipts_are_append_only(native_engine: Engi
                 .values(timezone_name="UTC")
             )
         configuration_savepoint.rollback()
+        connection.execute(
+            text(
+                "ALTER TABLE knowledge.native_checkpoints "
+                "ENABLE TRIGGER native_checkpoint_requires_admitted_page"
+            )
+        )
+
+
+@pytest.mark.database
+def test_shared_source_version_evidence_is_idempotent_per_principal(
+    native_engine: Engine,
+) -> None:
+    with native_engine.begin() as connection:
+        _seed(connection)
+        first = SqlNativeSourceRepository(connection, CONTEXT).record_evidence(
+            version_id=_id("ver", 1),
+            kind=ObjectKind.MAIL_MESSAGE,
+            payload=b"same-evidence",
+            recorded_at=WHEN,
+        )
+        second = SqlNativeSourceRepository(connection, OTHER_CONTEXT).record_evidence(
+            version_id=_id("ver", 1),
+            kind=ObjectKind.MAIL_MESSAGE,
+            payload=b"same-evidence",
+            recorded_at=WHEN,
+        )
+        replay = SqlNativeSourceRepository(connection, OTHER_CONTEXT).record_evidence(
+            version_id=_id("ver", 1),
+            kind=ObjectKind.MAIL_MESSAGE,
+            payload=b"same-evidence",
+            recorded_at=WHEN + timedelta(seconds=1),
+        )
+        assert first != second == replay
+        principals = tuple(
+            connection.execute(
+                text(
+                    "SELECT principal_id FROM knowledge.source_version_evidence "
+                    "WHERE version_id = :version_id ORDER BY principal_id"
+                ),
+                {"version_id": _id("ver", 1)},
+            ).scalars()
+        )
+        assert principals == (
+            CONTEXT.capture_principal_id,
+            OTHER_CONTEXT.capture_principal_id,
+        )
 
 
 @pytest.mark.database
@@ -522,7 +586,7 @@ def test_ac_005_account_identity_survives_rename_and_source_rebind_is_refused(
 ) -> None:
     with native_engine.begin() as connection:
         _seed(connection)
-        repository = SqlNativeSourceRepository(connection)
+        repository = SqlNativeSourceRepository(connection, CONTEXT)
         reobserved = NativeSourceAccount(
             _id("nacct", 2),
             _id("nbrg", 1),
@@ -596,15 +660,16 @@ def test_ac_007_future_bucket_is_denied_by_the_immutable_exact_selection(
         connection.execute(
             text(
                 """INSERT INTO knowledge.native_source_buckets
-                     (bucket_id, account_id, source_kind, label, private_locator, selectable,
-                      first_observed_at)
-                   VALUES (:bucket_id, :account_id, 'mail', 'Future Mailbox', :locator,
-                           true, :at)"""
+                     (principal_id, bucket_id, account_id, source_kind, label, private_locator,
+                      selectable, first_observed_at)
+                   VALUES (:principal_id, :bucket_id, :account_id, 'mail',
+                           'Future Mailbox', :locator, true, :at)"""
             ),
             {
                 "bucket_id": _id("nbkt", 2),
                 "account_id": _id("nacct", 1),
                 "locator": "future-synthetic-bucket",
+                "principal_id": CONTEXT.capture_principal_id,
                 "at": WHEN + timedelta(minutes=1),
             },
         )
@@ -626,10 +691,14 @@ def test_ac_007_future_bucket_is_denied_by_the_immutable_exact_selection(
             connection.execute(
                 text(
                     "INSERT INTO knowledge.native_configuration_buckets "
-                    "(configuration_id, revision, bucket_id) "
-                    "VALUES (:configuration_id, 1, :bucket_id)"
+                    "(principal_id, configuration_id, revision, bucket_id) "
+                    "VALUES (:principal_id, :configuration_id, 1, :bucket_id)"
                 ),
-                {"configuration_id": _id("ncfg", 1), "bucket_id": _id("nbkt", 2)},
+                {
+                    "principal_id": CONTEXT.capture_principal_id,
+                    "configuration_id": _id("ncfg", 1),
+                    "bucket_id": _id("nbkt", 2),
+                },
             )
             connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         late_selection.rollback()
@@ -639,10 +708,10 @@ def test_ac_007_future_bucket_is_denied_by_the_immutable_exact_selection(
             connection.execute(
                 text(
                     """INSERT INTO knowledge.native_sync_jobs
-                         (job_id, configuration_id, configuration_revision, bucket_id,
+                         (principal_id, job_id, configuration_id, configuration_revision, bucket_id,
                           range_start, range_end, state, idempotency_key, created_at, updated_at)
-                       VALUES (:job_id, :configuration_id, 1, :bucket_id, :start_at, :cutoff_at,
-                               'queued', 'unselected-job', :at, :at)"""
+                       VALUES (:principal_id, :job_id, :configuration_id, 1, :bucket_id,
+                               :start_at, :cutoff_at, 'queued', 'unselected-job', :at, :at)"""
                 ),
                 {
                     "job_id": _id("njob", 20),
@@ -651,6 +720,7 @@ def test_ac_007_future_bucket_is_denied_by_the_immutable_exact_selection(
                     "start_at": WHEN - timedelta(days=1),
                     "cutoff_at": WHEN,
                     "at": WHEN,
+                    "principal_id": CONTEXT.capture_principal_id,
                 },
             )
         unselected_job.rollback()
@@ -668,20 +738,25 @@ def test_ac_007_future_bucket_is_denied_by_the_immutable_exact_selection(
             WHEN + timedelta(days=90),
             WHEN,
         )
-        SqlNativeSourceRepository(connection).append_run(run, idempotency_key="run-for-selection")
+        SqlNativeSourceRepository(connection, CONTEXT).append_run(
+            run, idempotency_key="run-for-selection"
+        )
         unselected_bucket_run = connection.begin_nested()
         with pytest.raises(DBAPIError, match="outside its exact configuration selection"):
             connection.execute(
                 text(
                     """INSERT INTO knowledge.native_bucket_runs
-                         (bucket_run_id, run_id, bucket_id, state, item_count, recorded_at)
-                       VALUES (:bucket_run_id, :run_id, :bucket_id, 'succeeded', 0, :at)"""
+                         (principal_id, bucket_run_id, run_id, bucket_id, state, item_count,
+                          recorded_at)
+                       VALUES (:principal_id, :bucket_run_id, :run_id, :bucket_id,
+                               'succeeded', 0, :at)"""
                 ),
                 {
                     "bucket_run_id": _id("nbrun", 20),
                     "run_id": run.run_id,
                     "bucket_id": _id("nbkt", 2),
                     "at": WHEN,
+                    "principal_id": CONTEXT.capture_principal_id,
                 },
             )
         unselected_bucket_run.rollback()
@@ -696,6 +771,7 @@ def _seed_contacts(connection: Connection) -> None:
         "account_id": _id("nacct", 2),
         "bucket_id_1": _id("nbkt", 3),
         "bucket_id_2": _id("nbkt", 4),
+        "principal_id": CONTEXT.capture_principal_id,
         "at": WHEN,
     }
     statements = (
@@ -710,20 +786,20 @@ def _seed_contacts(connection: Connection) -> None:
              (version_id, source_object_id, fingerprint, media_type, size_bytes, modified_at)
            VALUES (:version_id, :object_id, 'synthetic-contact-v1', 'text/vcard', 4, :at)""",
         """INSERT INTO knowledge.native_source_accounts
-             (account_id, bridge_id, source_id, source_kind, label, private_locator,
+             (principal_id, account_id, bridge_id, source_id, source_kind, label, private_locator,
               first_observed_at)
-           VALUES (:account_id, :bridge_id, :source_id, 'contacts', 'Synthetic Contacts',
-                   'synthetic-contacts-account', :at)""",
+           VALUES (:principal_id, :account_id, :bridge_id, :source_id, 'contacts',
+                   'Synthetic Contacts', 'synthetic-contacts-account', :at)""",
         """INSERT INTO knowledge.native_source_buckets
-             (bucket_id, account_id, source_kind, label, private_locator, selectable,
+             (principal_id, bucket_id, account_id, source_kind, label, private_locator, selectable,
               first_observed_at)
-           VALUES (:bucket_id_1, :account_id, 'contacts', 'Friends', 'contacts-friends',
-                   true, :at)""",
+           VALUES (:principal_id, :bucket_id_1, :account_id, 'contacts', 'Friends',
+                   'contacts-friends', true, :at)""",
         """INSERT INTO knowledge.native_source_buckets
-             (bucket_id, account_id, source_kind, label, private_locator, selectable,
+             (principal_id, bucket_id, account_id, source_kind, label, private_locator, selectable,
               first_observed_at)
-           VALUES (:bucket_id_2, :account_id, 'contacts', 'Vendors', 'contacts-vendors',
-                   true, :at)""",
+           VALUES (:principal_id, :bucket_id_2, :account_id, 'contacts', 'Vendors',
+                   'contacts-vendors', true, :at)""",
     )
     for statement in statements:
         connection.execute(text(statement), values)
@@ -736,7 +812,7 @@ def test_ac_015_memberships_preserve_multi_container_cardinality_and_source_scop
     with native_engine.begin() as connection:
         _seed(connection)
         _seed_contacts(connection)
-        repository = SqlNativeSourceRepository(connection)
+        repository = SqlNativeSourceRepository(connection, CONTEXT)
         friends = ContactMembership(
             _id("smem", 1), _id("nbkt", 3), _id("obj", 2), _id("ver", 2), WHEN
         )
@@ -761,14 +837,16 @@ def test_ac_015_memberships_preserve_multi_container_cardinality_and_source_scop
         cross_source_statements = (
             (
                 """INSERT INTO knowledge.source_observations
-                     (observation_id, source_object_id, version_id, bucket_id, observed_at)
-                   VALUES (:identifier, :object_id, :version_id, :bucket_id, :at)""",
+                     (principal_id, observation_id, source_object_id, version_id, bucket_id,
+                      observed_at)
+                   VALUES (:principal_id, :identifier, :object_id, :version_id, :bucket_id, :at)""",
                 _id("sobs", 10),
             ),
             (
                 """INSERT INTO knowledge.source_memberships
-                     (membership_id, parent_bucket_id, source_object_id, version_id, observed_at)
-                   VALUES (:identifier, :bucket_id, :object_id, :version_id, :at)""",
+                     (principal_id, membership_id, parent_bucket_id, source_object_id, version_id,
+                      observed_at)
+                   VALUES (:principal_id, :identifier, :bucket_id, :object_id, :version_id, :at)""",
                 _id("smem", 10),
             ),
         )
@@ -783,6 +861,7 @@ def test_ac_015_memberships_preserve_multi_container_cardinality_and_source_scop
                         "version_id": _id("ver", 1),
                         "bucket_id": _id("nbkt", 3),
                         "at": WHEN,
+                        "principal_id": CONTEXT.capture_principal_id,
                     },
                 )
             savepoint.rollback()
@@ -798,55 +877,60 @@ def test_authoritative_source_account_bucket_and_evidence_kinds_cannot_diverge(
         plants = (
             (
                 """INSERT INTO knowledge.source_version_evidence
-                     (evidence_id, version_id, evidence_kind, payload, payload_sha256,
+                     (principal_id, evidence_id, version_id, evidence_kind, payload, payload_sha256,
                       byte_count, recorded_at)
-                   VALUES (:identifier, :version_id, 'contact', 'test', :digest, 4, :at)""",
+                   VALUES (:principal_id, :identifier, :version_id, 'contact', 'test', :digest,
+                           4, :at)""",
                 {
                     "identifier": _id("sevd", 20),
                     "version_id": _id("ver", 1),
                     "digest": sha256(b"test").hexdigest(),
                     "at": WHEN,
+                    "principal_id": CONTEXT.capture_principal_id,
                 },
                 "does not match its authoritative object",
             ),
             (
                 """INSERT INTO knowledge.native_source_accounts
-                     (account_id, bridge_id, source_id, source_kind, label, private_locator,
-                      first_observed_at)
-                   VALUES (:identifier, :bridge_id, :source_id, 'contacts', 'Wrong Kind',
-                           'wrong-kind-account', :at)""",
+                     (principal_id, account_id, bridge_id, source_id, source_kind, label,
+                      private_locator, first_observed_at)
+                   VALUES (:principal_id, :identifier, :bridge_id, :source_id, 'contacts',
+                           'Wrong Kind', 'wrong-kind-account', :at)""",
                 {
                     "identifier": _id("nacct", 20),
                     "bridge_id": _id("nbrg", 1),
                     "source_id": _id("src", 1),
                     "at": WHEN,
+                    "principal_id": CONTEXT.capture_principal_id,
                 },
                 "does not match its authoritative source",
             ),
             (
                 """INSERT INTO knowledge.native_source_buckets
-                     (bucket_id, account_id, source_kind, label, private_locator, selectable,
-                      first_observed_at)
-                   VALUES (:identifier, :account_id, 'contacts', 'Wrong Kind',
+                     (principal_id, bucket_id, account_id, source_kind, label, private_locator,
+                      selectable, first_observed_at)
+                   VALUES (:principal_id, :identifier, :account_id, 'contacts', 'Wrong Kind',
                            'wrong-kind-bucket', true, :at)""",
                 {
                     "identifier": _id("nbkt", 20),
                     "account_id": _id("nacct", 1),
                     "at": WHEN,
+                    "principal_id": CONTEXT.capture_principal_id,
                 },
                 "does not match its account",
             ),
             (
                 """INSERT INTO knowledge.native_source_buckets
-                     (bucket_id, account_id, parent_bucket_id, source_kind, label,
+                     (principal_id, bucket_id, account_id, parent_bucket_id, source_kind, label,
                       private_locator, selectable, first_observed_at)
-                   VALUES (:identifier, :account_id, :parent_bucket_id, 'mail',
+                   VALUES (:principal_id, :identifier, :account_id, :parent_bucket_id, 'mail',
                            'Wrong Parent', 'wrong-parent-bucket', true, :at)""",
                 {
                     "identifier": _id("nbkt", 21),
                     "account_id": _id("nacct", 1),
                     "parent_bucket_id": _id("nbkt", 3),
                     "at": WHEN,
+                    "principal_id": CONTEXT.capture_principal_id,
                 },
                 "outside its parent scope",
             ),
@@ -860,10 +944,15 @@ def test_authoritative_source_account_bucket_and_evidence_kinds_cannot_diverge(
 
 @pytest.mark.database
 def test_native_job_idempotency_and_one_active_range(native_engine: Engine) -> None:
-    command.downgrade(_config(), WP12E_PRIOR_REVISION)
     with native_engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE knowledge.native_sync_jobs "
+                "DISABLE TRIGGER native_job_requires_exact_frozen_run"
+            )
+        )
         _seed(connection)
-        repository = SqlNativeSourceRepository(connection)
+        repository = SqlNativeSourceRepository(connection, CONTEXT)
 
         def enqueue(ordinal: int, key: str) -> str:
             return repository.enqueue_job(
@@ -911,6 +1000,12 @@ def test_native_job_idempotency_and_one_active_range(native_engine: Engine) -> N
                 },
             )
         claim_savepoint.rollback()
+        connection.execute(
+            text(
+                "ALTER TABLE knowledge.native_sync_jobs "
+                "ENABLE TRIGGER native_job_requires_exact_frozen_run"
+            )
+        )
 
 
 @pytest.mark.database
@@ -919,7 +1014,7 @@ def test_native_run_idempotency_replays_exact_inputs_and_rejects_every_mismatch(
 ) -> None:
     with native_engine.begin() as connection:
         _seed(connection)
-        repository = SqlNativeSourceRepository(connection)
+        repository = SqlNativeSourceRepository(connection, CONTEXT)
         run = NativeRun(
             _id("nrun", 1),
             _id("ncfg", 1),
@@ -964,8 +1059,13 @@ def test_native_run_idempotency_replays_exact_inputs_and_rejects_every_mismatch(
 def test_checkpoint_compare_and_set_serializes_concurrent_writers(
     native_engine: Engine,
 ) -> None:
-    command.downgrade(_config(), WP12E_PRIOR_REVISION)
     with native_engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE knowledge.native_checkpoints "
+                "DISABLE TRIGGER native_checkpoint_requires_admitted_page"
+            )
+        )
         _seed(connection)
 
     barrier = Barrier(2)
@@ -983,7 +1083,7 @@ def test_checkpoint_compare_and_set_serializes_concurrent_writers(
         barrier.wait()
         try:
             with native_engine.begin() as connection:
-                SqlNativeSourceRepository(connection).compare_and_set_checkpoint(
+                SqlNativeSourceRepository(connection, CONTEXT).compare_and_set_checkpoint(
                     checkpoint,
                     expected_sequence=0,
                     cursor_private=cursor,
@@ -998,6 +1098,13 @@ def test_checkpoint_compare_and_set_serializes_concurrent_writers(
     with native_engine.connect() as connection:
         stored = tuple(connection.execute(select(native_checkpoints.c.checkpoint_id)).scalars())
         assert stored in ((_id("ncp", 1),), (_id("ncp", 2),))
+    with native_engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE knowledge.native_checkpoints "
+                "ENABLE TRIGGER native_checkpoint_requires_admitted_page"
+            )
+        )
 
 
 @pytest.mark.database
@@ -1025,3 +1132,68 @@ def test_revision_round_trips_from_prior_head(native_engine: Engine) -> None:
             ).scalars()
         )
     assert after - before == EXPECTED_TABLES
+
+
+@pytest.mark.database
+def test_native_partition_upgrades_an_empty_prior_head(native_engine: Engine) -> None:
+    command.downgrade(_config(), "b4e8d2c7a613")
+    command.upgrade(_config(), HEAD_REVISION)
+    columns = inspect(native_engine).get_columns("native_bridges", schema="knowledge")
+    principal = next(column for column in columns if column["name"] == "principal_id")
+    assert principal["nullable"] is False
+
+
+@pytest.mark.database
+def test_native_partition_refuses_populated_prior_without_partial_ddl(
+    native_engine: Engine,
+) -> None:
+    command.downgrade(_config(), "b4e8d2c7a613")
+    with native_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.native_bridges "
+                "(bridge_id, protocol_version, label, created_at) VALUES "
+                "('nbrg_0123456789abcdef', '1', 'synthetic', :at)"
+            ),
+            {"at": WHEN},
+        )
+    with pytest.raises(DBAPIError, match="cannot infer Principal"):
+        command.upgrade(_config(), HEAD_REVISION)
+    assert "principal_id" not in {
+        column["name"]
+        for column in inspect(native_engine).get_columns("native_bridges", schema="knowledge")
+    }
+
+
+@pytest.mark.database
+def test_native_partition_fk_refuses_a_cross_principal_bridge_link(
+    native_engine: Engine,
+) -> None:
+    with native_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.sources "
+                "(source_id, provider_kind, label, classification, native_root) VALUES "
+                "('src_0123456789abcdef', 'apple_mail', 'synthetic', 'private_local', '/synthetic')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.native_bridges "
+                "(bridge_id, protocol_version, label, created_at, principal_id) VALUES "
+                "('nbrg_0123456789abcdef', '1', 'synthetic', :at, 'prn_aaaaaaaaaaaaaaaa')"
+            ),
+            {"at": WHEN},
+        )
+        with pytest.raises(IntegrityError, match="native_account_bridge_stays_in_principal"):
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge.native_source_accounts "
+                    "(account_id, bridge_id, source_id, source_kind, label, private_locator, "
+                    "first_observed_at, principal_id) VALUES "
+                    "('nacct_0123456789abcdef', 'nbrg_0123456789abcdef', "
+                    "'src_0123456789abcdef', 'mail', 'synthetic', 'private', :at, "
+                    "'prn_bbbbbbbbbbbbbbbb')"
+                ),
+                {"at": WHEN},
+            )

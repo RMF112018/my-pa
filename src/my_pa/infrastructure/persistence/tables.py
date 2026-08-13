@@ -2787,6 +2787,7 @@ source_version_evidence = Table(
     Column("payload_sha256", Text, nullable=False),
     Column("byte_count", BigInteger, nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("evidence_id", IdKind.SOURCE_EVIDENCE),
     CheckConstraint(
         "evidence_kind IN ('calendar_event', 'contact', 'mail_message', 'task')",
@@ -2801,11 +2802,13 @@ source_version_evidence = Table(
         name="source_evidence_byte_count_matches_payload",
     ),
     UniqueConstraint(
+        "principal_id",
         "version_id",
         "evidence_kind",
         "payload_sha256",
         name="source_version_evidence_is_idempotent",
     ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_bridges = Table(
@@ -2815,8 +2818,16 @@ native_bridges = Table(
     Column("protocol_version", Text, nullable=False),
     Column("label", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("bridge_id", IdKind.NATIVE_BRIDGE),
-    UniqueConstraint("protocol_version", "label", name="a_native_bridge_identity_is_stable"),
+    UniqueConstraint("principal_id", "bridge_id", name="native_bridge_belongs_to_principal"),
+    UniqueConstraint(
+        "principal_id",
+        "protocol_version",
+        "label",
+        name="a_native_bridge_identity_is_stable",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_bridge_observations = Table(
@@ -2827,7 +2838,14 @@ native_bridge_observations = Table(
     Column("available", Boolean, nullable=False),
     Column("protocol_version", Text, nullable=False),
     Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("observation_id", IdKind.SOURCE_OBSERVATION),
+    ForeignKeyConstraint(
+        ["principal_id", "bridge_id"],
+        [f"{SCHEMA}.native_bridges.principal_id", f"{SCHEMA}.native_bridges.bridge_id"],
+        name="native_bridge_observation_stays_in_principal",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_source_accounts = Table(
@@ -2840,7 +2858,14 @@ native_source_accounts = Table(
     Column("label", Text, nullable=False),
     Column("private_locator", Text, nullable=False),
     Column("first_observed_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("account_id", IdKind.NATIVE_ACCOUNT),
+    UniqueConstraint("principal_id", "account_id", name="native_account_belongs_to_principal"),
+    ForeignKeyConstraint(
+        ["principal_id", "bridge_id"],
+        [f"{SCHEMA}.native_bridges.principal_id", f"{SCHEMA}.native_bridges.bridge_id"],
+        name="native_account_bridge_stays_in_principal",
+    ),
     _one_of("source_kind", NativeSourceKind, name="native_account_source_kind_is_known"),
     UniqueConstraint(
         "bridge_id",
@@ -2848,6 +2873,7 @@ native_source_accounts = Table(
         "private_locator",
         name="native_account_locator_is_issued_once",
     ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_source_buckets = Table(
@@ -2866,7 +2892,25 @@ native_source_buckets = Table(
     Column("private_locator", Text, nullable=False),
     Column("selectable", Boolean, nullable=False),
     Column("first_observed_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("bucket_id", IdKind.NATIVE_BUCKET),
+    UniqueConstraint("principal_id", "bucket_id", name="native_bucket_belongs_to_principal"),
+    ForeignKeyConstraint(
+        ["principal_id", "account_id"],
+        [
+            f"{SCHEMA}.native_source_accounts.principal_id",
+            f"{SCHEMA}.native_source_accounts.account_id",
+        ],
+        name="native_bucket_account_stays_in_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "parent_bucket_id"],
+        [
+            f"{SCHEMA}.native_source_buckets.principal_id",
+            f"{SCHEMA}.native_source_buckets.bucket_id",
+        ],
+        name="native_bucket_parent_stays_in_principal",
+    ),
     _one_of("source_kind", NativeSourceKind, name="native_bucket_source_kind_is_known"),
     CheckConstraint(
         "parent_bucket_id IS NULL OR parent_bucket_id <> bucket_id",
@@ -2877,6 +2921,7 @@ native_source_buckets = Table(
         "private_locator",
         name="native_bucket_locator_is_issued_once",
     ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_discovery_snapshots = Table(
@@ -2886,7 +2931,13 @@ native_discovery_snapshots = Table(
     Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
     Column("snapshot_sha256", Text, nullable=False),
     Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("discovery_id", IdKind.NATIVE_DISCOVERY),
+    ForeignKeyConstraint(
+        ["principal_id", "bridge_id"],
+        [f"{SCHEMA}.native_bridges.principal_id", f"{SCHEMA}.native_bridges.bridge_id"],
+        name="native_discovery_bridge_stays_in_principal",
+    ),
     CheckConstraint(
         "snapshot_sha256 ~ '^[0-9a-f]{64}$'",
         name="native_discovery_digest_is_sha256",
@@ -2896,6 +2947,7 @@ native_discovery_snapshots = Table(
         "snapshot_sha256",
         name="native_discovery_snapshot_is_idempotent",
     ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_configuration_revisions = Table(
@@ -2911,6 +2963,7 @@ native_configuration_revisions = Table(
     Column("calendar_horizon_at", DateTime(timezone=True), nullable=False),
     Column("selection_sha256", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("configuration_id", IdKind.NATIVE_CONFIGURATION),
     CheckConstraint("revision >= 1", name="native_configuration_revision_starts_at_one"),
     CheckConstraint("start_at <= cutoff_at", name="native_configuration_range_is_ordered"),
@@ -2923,6 +2976,18 @@ native_configuration_revisions = Table(
         name="native_configuration_selection_digest_is_sha256",
     ),
     PrimaryKeyConstraint("configuration_id", "revision"),
+    UniqueConstraint(
+        "principal_id",
+        "configuration_id",
+        "revision",
+        name="native_configuration_belongs_to_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "bridge_id"],
+        [f"{SCHEMA}.native_bridges.principal_id", f"{SCHEMA}.native_bridges.bridge_id"],
+        name="native_configuration_bridge_stays_in_principal",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_configuration_buckets = Table(
@@ -2933,6 +2998,7 @@ native_configuration_buckets = Table(
     Column(
         "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
     ),
+    Column("principal_id", Text, nullable=False),
     ForeignKeyConstraint(
         ["configuration_id", "revision"],
         [
@@ -2941,6 +3007,31 @@ native_configuration_buckets = Table(
         ],
     ),
     PrimaryKeyConstraint("configuration_id", "revision", "bucket_id"),
+    UniqueConstraint(
+        "principal_id",
+        "configuration_id",
+        "revision",
+        "bucket_id",
+        name="native_configuration_bucket_belongs_to_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "configuration_id", "revision"],
+        [
+            f"{SCHEMA}.native_configuration_revisions.principal_id",
+            f"{SCHEMA}.native_configuration_revisions.configuration_id",
+            f"{SCHEMA}.native_configuration_revisions.revision",
+        ],
+        name="native_selected_configuration_stays_in_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "bucket_id"],
+        [
+            f"{SCHEMA}.native_source_buckets.principal_id",
+            f"{SCHEMA}.native_source_buckets.bucket_id",
+        ],
+        name="native_selected_bucket_stays_in_principal",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_preflight_observations = Table(
@@ -2953,6 +3044,7 @@ native_preflight_observations = Table(
     Column("state", Text, nullable=False),
     Column("failure", Text),
     Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("observation_id", IdKind.SOURCE_OBSERVATION),
     ForeignKeyConstraint(
         ["configuration_id", "configuration_revision", "bucket_id"],
@@ -2962,6 +3054,16 @@ native_preflight_observations = Table(
             f"{SCHEMA}.native_configuration_buckets.bucket_id",
         ],
         name="native_preflight_requires_selected_bucket",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "configuration_id", "configuration_revision", "bucket_id"],
+        [
+            f"{SCHEMA}.native_configuration_buckets.principal_id",
+            f"{SCHEMA}.native_configuration_buckets.configuration_id",
+            f"{SCHEMA}.native_configuration_buckets.revision",
+            f"{SCHEMA}.native_configuration_buckets.bucket_id",
+        ],
+        name="native_preflight_stays_in_principal",
     ),
     CheckConstraint(
         "state IN ('reachable', 'permission_denied', 'unavailable', 'identity_drift')",
@@ -2987,6 +3089,7 @@ native_preflight_observations = Table(
         "bucket_id",
         "observed_at",
     ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_admission_authorities = Table(
@@ -3012,7 +3115,9 @@ native_admission_authorities = Table(
     Column("checkpoint_cursor_digest", Text),
     Column("checkpoint_terminal", Boolean),
     Column("checkpoint_item_count", Integer),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("authority_id", IdKind.NATIVE_AUTHORITY),
+    UniqueConstraint("principal_id", "authority_id", name="native_authority_belongs_to_principal"),
     _is_identifier("host_instance_id", IdKind.NATIVE_BRIDGE),
     ForeignKeyConstraint(
         ["configuration_id", "configuration_revision", "bucket_id"],
@@ -3022,6 +3127,21 @@ native_admission_authorities = Table(
             f"{SCHEMA}.native_configuration_buckets.bucket_id",
         ],
         name="native_authority_requires_selected_bucket",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "configuration_id", "configuration_revision", "bucket_id"],
+        [
+            f"{SCHEMA}.native_configuration_buckets.principal_id",
+            f"{SCHEMA}.native_configuration_buckets.configuration_id",
+            f"{SCHEMA}.native_configuration_buckets.revision",
+            f"{SCHEMA}.native_configuration_buckets.bucket_id",
+        ],
+        name="native_authority_selection_stays_in_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "bridge_id"],
+        [f"{SCHEMA}.native_bridges.principal_id", f"{SCHEMA}.native_bridges.bridge_id"],
+        name="native_authority_bridge_stays_in_principal",
     ),
     CheckConstraint("bridge_id = host_instance_id", name="native_authority_binds_host"),
     CheckConstraint("expires_at > issued_at", name="native_authority_has_positive_lifetime"),
@@ -3072,6 +3192,7 @@ native_admission_authorities = Table(
         name="native_authority_checkpoint_count_is_page_bounded",
     ),
     UniqueConstraint("envelope_id", name="native_authority_envelope_is_issued_once"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_source_review_routes = Table(
@@ -3098,10 +3219,12 @@ native_source_review_routes = Table(
         unique=True,
     ),
     Column("routed_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("source_version_id", IdKind.VERSION),
     _is_identifier("proposal_id", IdKind.PROPOSAL),
     _is_identifier("review_case_id", IdKind.REVIEW_CASE),
     PrimaryKeyConstraint("source_version_id", "proposal_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_sync_runs = Table(
@@ -3119,7 +3242,9 @@ native_sync_runs = Table(
     Column("recorded_at", DateTime(timezone=True), nullable=False),
     Column("bridge_id", Text, ForeignKey(f"{SCHEMA}.native_bridges.bridge_id"), nullable=False),
     Column("adapter_identity", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("run_id", IdKind.NATIVE_RUN),
+    UniqueConstraint("principal_id", "run_id", name="native_run_belongs_to_principal"),
     _one_of("run_kind", NativeRunKind, name="native_run_kind_is_known"),
     _one_of("state", NativeRunState, name="native_run_state_is_known"),
     ForeignKeyConstraint(
@@ -3128,6 +3253,20 @@ native_sync_runs = Table(
             f"{SCHEMA}.native_configuration_revisions.configuration_id",
             f"{SCHEMA}.native_configuration_revisions.revision",
         ],
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "configuration_id", "configuration_revision"],
+        [
+            f"{SCHEMA}.native_configuration_revisions.principal_id",
+            f"{SCHEMA}.native_configuration_revisions.configuration_id",
+            f"{SCHEMA}.native_configuration_revisions.revision",
+        ],
+        name="native_run_configuration_stays_in_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "bridge_id"],
+        [f"{SCHEMA}.native_bridges.principal_id", f"{SCHEMA}.native_bridges.bridge_id"],
+        name="native_run_bridge_stays_in_principal",
     ),
     CheckConstraint("start_at <= cutoff_at", name="native_run_range_is_ordered"),
     CheckConstraint(
@@ -3144,6 +3283,7 @@ native_sync_runs = Table(
         "idempotency_key",
         name="native_sync_run_idempotency_is_scoped",
     ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_bucket_runs = Table(
@@ -3157,10 +3297,25 @@ native_bucket_runs = Table(
     Column("state", Text, nullable=False),
     Column("item_count", BigInteger, nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("bucket_run_id", IdKind.NATIVE_BUCKET_RUN),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [f"{SCHEMA}.native_sync_runs.principal_id", f"{SCHEMA}.native_sync_runs.run_id"],
+        name="native_bucket_run_stays_in_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "bucket_id"],
+        [
+            f"{SCHEMA}.native_source_buckets.principal_id",
+            f"{SCHEMA}.native_source_buckets.bucket_id",
+        ],
+        name="native_bucket_run_bucket_stays_in_principal",
+    ),
     _one_of("state", NativeRunState, name="native_bucket_run_state_is_known"),
     CheckConstraint("item_count >= 0", name="native_bucket_run_count_is_not_negative"),
     UniqueConstraint("run_id", "bucket_id", name="one_native_bucket_receipt_per_run"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_sync_jobs = Table(
@@ -3182,7 +3337,22 @@ native_sync_jobs = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("run_id", Text, ForeignKey(f"{SCHEMA}.native_sync_runs.run_id")),
     Column("read_mode", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("job_id", IdKind.NATIVE_JOB),
+    UniqueConstraint("principal_id", "job_id", name="native_job_belongs_to_principal"),
+    ForeignKeyConstraint(
+        ["principal_id", "bucket_id"],
+        [
+            f"{SCHEMA}.native_source_buckets.principal_id",
+            f"{SCHEMA}.native_source_buckets.bucket_id",
+        ],
+        name="native_job_bucket_stays_in_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [f"{SCHEMA}.native_sync_runs.principal_id", f"{SCHEMA}.native_sync_runs.run_id"],
+        name="native_job_run_stays_in_principal",
+    ),
     ForeignKeyConstraint(
         ["configuration_id", "configuration_revision"],
         [
@@ -3198,6 +3368,16 @@ native_sync_jobs = Table(
             f"{SCHEMA}.native_configuration_buckets.bucket_id",
         ],
         name="native_job_requires_selected_bucket",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "configuration_id", "configuration_revision", "bucket_id"],
+        [
+            f"{SCHEMA}.native_configuration_buckets.principal_id",
+            f"{SCHEMA}.native_configuration_buckets.configuration_id",
+            f"{SCHEMA}.native_configuration_buckets.revision",
+            f"{SCHEMA}.native_configuration_buckets.bucket_id",
+        ],
+        name="native_job_selection_stays_in_principal",
     ),
     CheckConstraint(
         "state IN ('failed', 'queued', 'running', 'succeeded')",
@@ -3227,6 +3407,7 @@ native_sync_jobs = Table(
         unique=True,
         postgresql_where=text("state = 'running'"),
     ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_checkpoints = Table(
@@ -3255,7 +3436,37 @@ native_checkpoints = Table(
     ),
     Column("terminal", Boolean, nullable=False),
     Column("item_count", Integer, nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("checkpoint_id", IdKind.NATIVE_CHECKPOINT),
+    UniqueConstraint(
+        "principal_id", "checkpoint_id", name="native_checkpoint_belongs_to_principal"
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "bucket_id"],
+        [
+            f"{SCHEMA}.native_source_buckets.principal_id",
+            f"{SCHEMA}.native_source_buckets.bucket_id",
+        ],
+        name="native_checkpoint_bucket_stays_in_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "previous_checkpoint_id"],
+        [f"{SCHEMA}.native_checkpoints.principal_id", f"{SCHEMA}.native_checkpoints.checkpoint_id"],
+        name="native_checkpoint_chain_stays_in_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "job_id"],
+        [f"{SCHEMA}.native_sync_jobs.principal_id", f"{SCHEMA}.native_sync_jobs.job_id"],
+        name="native_checkpoint_job_stays_in_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "admission_authority_id"],
+        [
+            f"{SCHEMA}.native_admission_authorities.principal_id",
+            f"{SCHEMA}.native_admission_authorities.authority_id",
+        ],
+        name="native_checkpoint_authority_stays_in_principal",
+    ),
     CheckConstraint("sequence >= 1", name="native_checkpoint_sequence_starts_at_one"),
     CheckConstraint(
         "(sequence = 1) = (previous_checkpoint_id IS NULL)",
@@ -3270,6 +3481,7 @@ native_checkpoints = Table(
         name="native_checkpoint_item_count_is_page_bounded",
     ),
     UniqueConstraint("bucket_id", "sequence", name="native_checkpoint_sequence_is_monotonic"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 source_observations = Table(
@@ -3292,12 +3504,22 @@ source_observations = Table(
         "bucket_id", Text, ForeignKey(f"{SCHEMA}.native_source_buckets.bucket_id"), nullable=False
     ),
     Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("observation_id", IdKind.SOURCE_OBSERVATION),
+    ForeignKeyConstraint(
+        ["principal_id", "bucket_id"],
+        [
+            f"{SCHEMA}.native_source_buckets.principal_id",
+            f"{SCHEMA}.native_source_buckets.bucket_id",
+        ],
+        name="source_observation_bucket_stays_in_principal",
+    ),
     UniqueConstraint(
         "version_id",
         "bucket_id",
         name="source_version_observation_is_idempotent",
     ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 source_memberships = Table(
@@ -3323,12 +3545,22 @@ source_memberships = Table(
         nullable=False,
     ),
     Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("membership_id", IdKind.SOURCE_MEMBERSHIP),
+    ForeignKeyConstraint(
+        ["principal_id", "parent_bucket_id"],
+        [
+            f"{SCHEMA}.native_source_buckets.principal_id",
+            f"{SCHEMA}.native_source_buckets.bucket_id",
+        ],
+        name="source_membership_bucket_stays_in_principal",
+    ),
     UniqueConstraint(
         "parent_bucket_id",
         "version_id",
         name="source_membership_version_is_idempotent",
     ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_watcher_simulations = Table(
@@ -3341,10 +3573,23 @@ native_watcher_simulations = Table(
     ),
     Column("state", Text, nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("simulation_id", IdKind.NATIVE_SIMULATION),
+    UniqueConstraint(
+        "principal_id", "simulation_id", "sequence", name="native_simulation_belongs_to_principal"
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "bucket_id"],
+        [
+            f"{SCHEMA}.native_source_buckets.principal_id",
+            f"{SCHEMA}.native_source_buckets.bucket_id",
+        ],
+        name="native_simulation_bucket_stays_in_principal",
+    ),
     _one_of("state", WatcherSimulationState, name="native_simulation_state_is_known"),
     CheckConstraint("sequence >= 1", name="native_simulation_sequence_starts_at_one"),
     PrimaryKeyConstraint("simulation_id", "sequence"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_simulation_receipts = Table(
@@ -3361,7 +3606,22 @@ native_simulation_receipts = Table(
     ),
     Column("terminal_state", Text, nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("receipt_id", IdKind.NATIVE_SIMULATION_RECEIPT),
+    ForeignKeyConstraint(
+        ["principal_id", "simulation_id", "simulation_sequence"],
+        [
+            f"{SCHEMA}.native_watcher_simulations.principal_id",
+            f"{SCHEMA}.native_watcher_simulations.simulation_id",
+            f"{SCHEMA}.native_watcher_simulations.sequence",
+        ],
+        name="native_simulation_receipt_stays_in_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "checkpoint_id"],
+        [f"{SCHEMA}.native_checkpoints.principal_id", f"{SCHEMA}.native_checkpoints.checkpoint_id"],
+        name="native_simulation_checkpoint_stays_in_principal",
+    ),
     ForeignKeyConstraint(
         ["simulation_id", "simulation_sequence"],
         [
@@ -3374,6 +3634,7 @@ native_simulation_receipts = Table(
         name="native_simulation_receipt_state_is_terminal",
     ),
     UniqueConstraint("simulation_id", name="one_receipt_per_native_simulation"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 native_live_activation_gates = Table(
@@ -3386,9 +3647,19 @@ native_live_activation_gates = Table(
     Column("state", Text, nullable=False),
     Column("reason_code", Text, nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("principal_id", Text, nullable=False),
     _is_identifier("gate_id", IdKind.NATIVE_LIVE_GATE),
+    ForeignKeyConstraint(
+        ["principal_id", "bucket_id"],
+        [
+            f"{SCHEMA}.native_source_buckets.principal_id",
+            f"{SCHEMA}.native_source_buckets.bucket_id",
+        ],
+        name="native_live_gate_bucket_stays_in_principal",
+    ),
     _one_of("state", LiveActivationGateState, name="native_live_gate_state_is_known"),
     UniqueConstraint("bucket_id", name="one_native_live_gate_per_bucket"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
 )
 
 # ---------------------------------------------------------------------------

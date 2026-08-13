@@ -10,6 +10,16 @@ settings are configured and authorized. The candidate does **not** authorize a
 live GoodNotes/NAS root, select or install an OCR engine, start a model process,
 make a network request, or permit cloud disclosure.
 
+For the NAS contract, “local” means inside the one-shot
+`goodnotes-reconcile` container. The disabled NAS-08 overlay fixes the source
+root at `/srv/my-pa/goodnotes`, the manifest at `goodnotes-manifest.json` below
+that root, and the OCR executable at `/srv/my-pa/goodnotes-ocr/ocr` on a
+separate host `goodnotes-ocr` path. Both host roots are mounted read-only and
+no long-lived service receives either mount. This is placement evidence, not
+permission to admit a live root, select/install an OCR engine, or run OCR.
+`MY_PA_GOODNOTES_OCR_ROOT` names that admitted executable root; every launch
+resolves the executable inside it and refuses an escaping symlink.
+
 ## Synthetic validation path
 
 Most acceptance fixtures construct `FixtureGoodNotesSource` in memory. Its only

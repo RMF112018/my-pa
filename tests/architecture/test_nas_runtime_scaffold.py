@@ -196,7 +196,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "worker_enrollment": {
             "host": "nas",
             "database_credential": True,
-            "mounts": ["config_ro", "sources_ro", "goodnotes_ro"],
+            "mounts": ["config_ro", "sources_ro"],
             "networks": ["data-plane"],
         },
         "worker_capture": {
@@ -315,7 +315,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     expected_mounts = {
         "postgres": ["postgres_data_rw"],
         "gateway": ["config_ro", "managed_documents_rw", "sources_ro"],
-        "worker_enrollment": ["config_ro", "sources_ro", "goodnotes_ro"],
+        "worker_enrollment": ["config_ro", "sources_ro"],
         "worker_capture": ["config_ro"],
         "web": [],
         "proxy": ["proxy_config_ro"],
@@ -633,7 +633,6 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "worker-enrollment": {
             ("${MY_PA_NAS_ROOT:?}/config", "/srv/my-pa/config", True),
             ("${MY_PA_NAS_ROOT:?}/sources", "/srv/my-pa/sources", True),
-            ("${MY_PA_NAS_ROOT:?}/goodnotes", "/srv/my-pa/goodnotes", True),
         },
         "worker-capture": {("${MY_PA_NAS_ROOT:?}/config", "/srv/my-pa/config", True)},
         "web": set(),

@@ -26,6 +26,13 @@ capture worker processes, the Next.js web/BFF process, and one private reverse
 proxy. Optional MCP operation remains the gateway's existing stdio mode and is
 not a network service.
 
+NAS-08 realizes that decision as disabled Compose profiles. GoodNotes uses the
+existing operator reconciliation command in a one-shot service with its
+root/manifest and OCR executable contained by exclusive, separate read-only
+`goodnotes` and `goodnotes-ocr` NAS-local mounts. Frontier remains
+`apps/gateway.py mcp`, launched by its client as a
+child process over stdio without a port or proxy route.
+
 The Mac runs only the Swift Apple source host, its owner-only protected spool,
 and a thin outbound transport agent. The Mac receives neither a PostgreSQL
 credential nor a general NAS filesystem credential.
@@ -72,6 +79,7 @@ mount and is not inferred by application code. Its authority classes are:
 | `managed-documents` | scoped read-write for the owning application service only |
 | `sources` | read-only for source-reading application processes |
 | `goodnotes` | read-only for enrollment/OCR work |
+| `goodnotes-ocr` | read-only executable/provenance input for one-shot GoodNotes only |
 | `app-support` | bounded non-canonical state only |
 | `backups` | database-aware backup tooling only |
 | `logs` | metadata-safe output only |

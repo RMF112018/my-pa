@@ -67,7 +67,6 @@ services:
     volumes:
       - {type: bind, source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, read_only: true}
       - {type: bind, source: "${MY_PA_NAS_ROOT:?}/sources", target: /srv/my-pa/sources, read_only: true}
-      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/goodnotes", target: /srv/my-pa/goodnotes, read_only: true}
     networks: [data-plane]
 
   worker-capture:

@@ -21,7 +21,6 @@ MOUNTS = {
     "worker_enrollment": {
         "/srv/my-pa/config": False,
         "/srv/my-pa/sources": False,
-        "/srv/my-pa/goodnotes": False,
     },
     "worker_capture": {"/srv/my-pa/config": False},
     "web": {},

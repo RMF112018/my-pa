@@ -11,6 +11,7 @@ import {
   homeTenantId,
   MissingAuthModeError,
   MissingHomeTenantError,
+  LocalOperatorHasNoHomeTenantError,
   SyntheticModeInProductionError,
 } from "@/lib/auth/mode";
 import { encodeSession, MissingSessionSecretError } from "@/lib/auth/session";
@@ -48,17 +49,25 @@ describe("auth mode", () => {
     expect(() => authMode()).toThrow(SyntheticModeInProductionError);
   });
 
-  it("accepts the two configured modes", () => {
+  it("accepts the three configured modes", () => {
     vi.stubEnv("MYPA_AUTH_MODE", "synthetic");
     expect(authMode()).toBe("synthetic");
     vi.stubEnv("MYPA_AUTH_MODE", "entra");
     expect(authMode()).toBe("entra");
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    expect(authMode()).toBe("local_operator");
   });
 
   it("permits entra in a production build", () => {
     vi.stubEnv("MYPA_AUTH_MODE", "entra");
     vi.stubEnv("NODE_ENV", "production");
     expect(authMode()).toBe("entra");
+  });
+
+  it("permits credentialed local_operator in a production build", () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("NODE_ENV", "production");
+    expect(authMode()).toBe("local_operator");
   });
 });
 
@@ -78,6 +87,12 @@ describe("home tenant", () => {
     vi.stubEnv("MYPA_AUTH_MODE", "entra");
     vi.stubEnv("MYPA_ENTRA_HOME_TENANT_ID", "");
     expect(() => homeTenantId()).toThrow(MissingHomeTenantError);
+  });
+
+  it("never invents an Entra-shaped tenant for local_operator", () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("MYPA_ENTRA_HOME_TENANT_ID", "");
+    expect(() => homeTenantId()).toThrow(LocalOperatorHasNoHomeTenantError);
   });
 });
 

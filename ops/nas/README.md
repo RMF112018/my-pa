@@ -100,11 +100,13 @@ requires reads through allowed roots, refuses writes to config/source roots,
 and performs a create/sync/rename/delete probe only in the gateway's managed
 root. The checked-in example refuses until live NAS IDs and ACLs are provisioned.
 
-NAS-06 separates the internal `ingress-plane` from the gateway/web-only
-`entra-egress` plane, hardens the exact Caddy route allowlist, and requires a
-server-only canonical HTTPS origin. [`ingress_gate.py`](ingress_gate.py) is
-read-only: it binds verified proxy, loopback publication, config hash, private
-Tailscale Serve mapping, disabled Funnel, and installed Entra egress evidence.
+NAS-06 keeps both the data and ingress planes internal, gives the application
+services no external egress plane, hardens the exact Caddy route allowlist, and
+requires a server-only canonical HTTPS origin. [`ingress_gate.py`](ingress_gate.py)
+is read-only: it binds verified proxy, loopback publication, config hash, private
+Tailscale Serve mapping, disabled Funnel, the credentialed `local_operator`
+browser mode, and the absence of Entra configuration in the live gateway/web
+environments.
 The checked-in ingress manifest refuses. Enabling Serve or changing a firewall
 remains an explicit operator action and has no script in this package.
 
@@ -119,11 +121,10 @@ is the operator-only, show-once credential mint path. None of these commands
 enables ingress, invokes live TCC access by itself, or supplies the Mac with a
 database or general NAS filesystem credential.
 
-In pilot `entra` mode, both operator commands require the owning
-`--principal-id`; their database operations remain partitioned by that value and
-refuse a bridge, configuration, or bucket owned by any other Principal. In
-scratch `local_operator` mode the flag may be omitted and, if supplied, must
-match the fixed local operator. The Mac agent requires
+The canonical pilot runs `local_operator`; the flag may be omitted and, if
+supplied, must match the fixed local operator. The dormant source overlay still
+contains its separately gated multi-principal mode, but it is not selected by
+the production stack. The Mac agent requires
 `MYPA_APPLE_CONTROL_ORIGIN`, `MYPA_APPLE_PRINCIPAL_ID`, `MYPA_APPLE_BRIDGE_ID`,
 `MYPA_APPLE_BRIDGE_CREDENTIAL`, `MYPA_APPLE_HOST_EXECUTABLE`,
 `MYPA_APPLE_SPOOL_DIRECTORY`, `MYPA_APPLE_GRANT_JOURNAL`,
@@ -195,7 +196,7 @@ Later packages own executable behavior:
   operator/device gates; no image here is currently deployable;
 - NAS-03 PostgreSQL storage, migration, backup, and scratch restore;
 - NAS-04/05 services and filesystem permissions;
-- NAS-06 private HTTPS ingress, Entra pilot origin, and a verified Microsoft
-  OIDC/JWKS egress allowlist for gateway and web;
+- NAS-06 private HTTPS ingress, credentialed local-operator browser access,
+  and proof that gateway/web have no Entra configuration or application egress;
 - NAS-07 live Apple/TCC activation and real credential minting remain operator gates;
 - NAS-10 acceptance.

@@ -186,7 +186,9 @@ export async function verifySessionEnvelope(
     typeof p.tid !== "string" ||
     typeof p.oid !== "string" ||
     typeof p.upn !== "string" ||
-    typeof p.displayName !== "string"
+    typeof p.displayName !== "string" ||
+    (p.authenticationProvider !== undefined &&
+      !["synthetic", "entra", "local_operator"].includes(p.authenticationProvider))
   ) {
     return null;
   }

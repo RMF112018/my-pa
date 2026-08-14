@@ -43,6 +43,14 @@ describe("the sign-in screen", () => {
     expect(screen.getByTestId("sign-in-synthetic-b")).toBeInTheDocument();
   });
 
+  it("offers only a credential field in local_operator auth mode", () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    render(<SignInPage />);
+    expect(screen.getByLabelText("Operator secret")).toHaveAttribute("type", "password");
+    expect(screen.queryByTestId("sign-in-synthetic-a")).toBeNull();
+    expect(screen.queryByText("Microsoft Entra")).toBeNull();
+  });
+
   it("ships no claims to the browser", () => {
     vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "entra");
     const { container } = render(<SignInPage />);

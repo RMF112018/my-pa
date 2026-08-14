@@ -36,6 +36,11 @@ import {
 } from "@/lib/auth/synthetic";
 import { authMode, homeTenantId } from "@/lib/auth/mode";
 import {
+  authenticateLocalOperator,
+  localOperatorPrincipal,
+  MissingLocalOperatorSecretError,
+} from "@/lib/auth/local-operator";
+import {
   encodeSession,
   newSessionId,
   sessionReplayBinding,
@@ -80,7 +85,7 @@ export async function GET(request: NextRequest) {
  * behind a login screen — the same reason `verifySession` throws rather than
  * returning `null` when the signing key is missing.
  */
-function configuredMode(): { mode: "synthetic" | "entra" } | { failure: NextResponse } {
+function configuredMode(): { mode: "synthetic" | "entra" | "local_operator" } | { failure: NextResponse } {
   try {
     return { mode: authMode() };
   } catch (error) {
@@ -115,6 +120,34 @@ export async function POST(request: NextRequest) {
       return refuse("caller_supplied_principal", error.message, 400);
     }
     throw error;
+  }
+
+  if (configured.mode === "local_operator") {
+    let result;
+    try {
+      result = authenticateLocalOperator(body["operatorSecret"]);
+    } catch (error) {
+      if (error instanceof MissingLocalOperatorSecretError) {
+        return refuse("auth_mode_not_configured", error.message, 500);
+      }
+      throw error;
+    }
+    if (result === "rate_limited") {
+      return refuse("sign_in_rate_limited", "sign-in temporarily refused", 429);
+    }
+    if (result !== "authenticated") {
+      return refuse("invalid_credentials", "sign-in failed", 401);
+    }
+    const principal = localOperatorPrincipal();
+    const sid = newSessionId();
+    const token = await encodeSession(principal, sid);
+    registerSession(principal.principalId, sid);
+    const response = NextResponse.json({ signedIn: true });
+    response.cookies.set(SESSION_COOKIE_NAME, token, {
+      ...SESSION_COOKIE_OPTIONS,
+      maxAge: SESSION_MAX_AGE_SECONDS,
+    });
+    return response;
   }
 
   if (configured.mode !== "synthetic") {

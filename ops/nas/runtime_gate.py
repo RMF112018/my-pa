@@ -34,10 +34,10 @@ PATH_KEYS = {
     "/srv/my-pa/managed-documents": "managed_documents",
 }
 NETWORKS = {
-    "gateway": {"data-plane", "ingress-plane", "entra-egress"},
+    "gateway": {"data-plane", "ingress-plane"},
     "worker_enrollment": {"data-plane"},
     "worker_capture": {"data-plane"},
-    "web": {"ingress-plane", "entra-egress"},
+    "web": {"ingress-plane"},
 }
 COMPOSE_SERVICES = {
     "gateway": "gateway",

@@ -44,7 +44,7 @@ services:
     environment:
       MY_PA_GATEWAY_BIND_MODE: container
       MY_PA_MANAGED_DOCUMENT_ROOT: /srv/my-pa/managed-documents
-      MY_PA_AUTH_MODE: entra
+      MY_PA_AUTH_MODE: local_operator
       MY_PA_REMOTE_INGRESS_ENABLED: "true"
     env_file: ["${MY_PA_NAS_ENV_FILE:?owner-only NAS env file required}"]
     expose: ["8765"]
@@ -55,7 +55,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    networks: [data-plane, ingress-plane, entra-egress]
+    networks: [data-plane, ingress-plane]
 
   worker-enrollment:
     profiles: [nas-01-contract-only]
@@ -104,13 +104,12 @@ services:
     env_file: ["${MY_PA_WEB_ENV_FILE:?owner-only web env file required}"]
     environment:
       NODE_ENV: production
-      MYPA_AUTH_MODE: entra
+      MYPA_AUTH_MODE: local_operator
       MYPA_GATEWAY_URL: http://gateway:8765
-      MYPA_GATEWAY_AUTH_MODE: entra
+      MYPA_GATEWAY_AUTH_MODE: local_operator
       MYPA_CANONICAL_ORIGIN: "${MYPA_CANONICAL_ORIGIN:?exact private HTTPS origin required}"
-      MYPA_ENTRA_REDIRECT_URI: "${MYPA_ENTRA_REDIRECT_URI:?exact callback required}"
     expose: ["3000"]
-    networks: [ingress-plane, entra-egress]
+    networks: [ingress-plane]
 
   proxy:
     profiles: [nas-01-contract-only]
@@ -138,7 +137,3 @@ networks:
     internal: true
   ingress-plane:
     internal: true
-  # Only gateway and web join this plane. Live activation additionally requires
-  # a verified host/DNS firewall allowlist for the measured Entra endpoints.
-  entra-egress:
-    internal: false

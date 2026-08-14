@@ -55,7 +55,7 @@ or the operator image, so loss of auxiliary state cannot prevent shutdown.
 The invoking identity must already have bounded Docker authority; tooling never
 prompts for or changes that authority. PostgreSQL bootstrap has a distinct
 root-owned mode-0400 admission because database provisioning must not require
-external Entra or web credentials. It selects only the canonical `postgres`
+external identity or web credentials. It selects only the canonical `postgres`
 service from the canonical six-service Compose file and proves that fixed
 parser-only sentinel values cannot reach that service or its internal network.
 Those sentinels never authorize or start another service. Before rendering the
@@ -96,7 +96,7 @@ ops/nas/load-candidates.sh CANDIDATE_MANIFEST ARCHIVE_DIRECTORY DEPLOYABLE_MANIF
 PostgreSQL, and proxy, then binds exact loaded config IDs to the live engine.
 The bootstrap admission binds the canonical source file, selected PostgreSQL
 render, internal network, exact loaded image, repository, and live engine. It
-contains no database password. Application/web env files and external identity
+contains no database password. Application/web env files and browser identity
 values are neither read nor required.
 
 3. Select and record a positive operator-reviewed byte floor below current

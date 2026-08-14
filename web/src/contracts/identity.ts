@@ -1,9 +1,9 @@
 /**
  * Identity contracts — parity with `my_pa.domain.identity.user_account`.
  *
- * Principal identity derives ONLY from validated Entra token claims
- * `(tid, oid)`. It is never caller-supplied. `upn` and `display_name`
- * are mutable observations, not identity.
+ * Claim-based identity derives only from validated Entra token claims. The
+ * production local-operator mode instead selects one deterministic server-side
+ * Principal. Identity is never caller-supplied in either mode.
  */
 
 /** Entra-shaped token claims. Synthetic in development; MSAL-issued later. */
@@ -39,6 +39,8 @@ export interface PrincipalSession {
   readonly lifecycleState: UserLifecycleState;
   /** True while the session is issued by the synthetic development provider. */
   readonly synthetic: boolean;
+  /** Explicit provider for non-Entra production sessions. */
+  readonly authenticationProvider?: "synthetic" | "entra" | "local_operator";
 }
 
 /**

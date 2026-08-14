@@ -154,12 +154,10 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         or network.get("data_network_internal") is not True
         or network.get("ingress_network") != "ingress-plane"
         or network.get("ingress_network_internal") is not True
-        or network.get("egress_network") != "entra-egress"
-        or network.get("egress_network_policy") != "firewall_allowlisted_entra_only"
-        or network.get("egress_services") != ["gateway", "web"]
+        or network.get("application_egress") != "forbidden"
     ):
         errors.add("network_planes")
-    if contract.get("auth", {}).get("pilot_web") != "entra":
+    if contract.get("auth", {}).get("pilot_web") != "local_operator":
         errors.add("pilot_auth")
     if (
         contract.get("restart", {}).get("pilot_after_nas_10_and_operator_activation")
@@ -188,7 +186,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "host": "nas",
             "database_credential": True,
             "mounts": ["config_ro", "managed_documents_rw", "sources_ro"],
-            "networks": ["data-plane", "ingress-plane", "entra-egress"],
+            "networks": ["data-plane", "ingress-plane"],
             "container_bind": "0.0.0.0:8765",
             "bind_implementation_owned_by": "NAS-04",
             "bind_mode": "validated_container_only",
@@ -209,7 +207,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "host": "nas",
             "database_credential": False,
             "mounts": [],
-            "networks": ["ingress-plane", "entra-egress"],
+            "networks": ["ingress-plane"],
         },
         "proxy": {
             "host": "nas",
@@ -245,16 +243,14 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "data_network_internal": True,
             "ingress_network": "ingress-plane",
             "ingress_network_internal": True,
-            "egress_network": "entra-egress",
-            "egress_network_policy": "firewall_allowlisted_entra_only",
-            "egress_services": ["gateway", "web"],
+            "application_egress": "forbidden",
             "only_host_published_service": "proxy",
             "postgres_published": False,
             "smoke_publish_interface": "loopback",
             "pilot_https": "tailscale_serve",
             "public_exposure": "forbidden",
         },
-        "auth": {"pilot_web": "entra", "scratch_only": "local_operator"},
+        "auth": {"pilot_web": "local_operator", "scratch_only": "local_operator"},
         "restart": {"smoke": "no", "pilot_after_nas_10_and_operator_activation": "unless-stopped"},
         "postgres": {
             "storage": "nas_local_bind",
@@ -306,7 +302,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
                 "principal_source": "credential",
                 "enabled_by_default": False,
             },
-            "browser": {"upstream": "web", "auth": "entra"},
+            "browser": {"upstream": "web", "auth": "local_operator"},
         },
         "mcp": {"transport": "stdio_only"},
     }
@@ -326,10 +322,10 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("mount_ownership")
     expected_networks = {
         "postgres": ["data-plane"],
-        "gateway": ["data-plane", "ingress-plane", "entra-egress"],
+        "gateway": ["data-plane", "ingress-plane"],
         "worker_enrollment": ["data-plane"],
         "worker_capture": ["data-plane"],
-        "web": ["ingress-plane", "entra-egress"],
+        "web": ["ingress-plane"],
         "proxy": ["ingress-plane"],
     }
     if any(
@@ -443,20 +439,19 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "gateway": {
             "MY_PA_GATEWAY_BIND_MODE": "container",
             "MY_PA_MANAGED_DOCUMENT_ROOT": "/srv/my-pa/managed-documents",
-            "MY_PA_AUTH_MODE": "entra",
+            "MY_PA_AUTH_MODE": "local_operator",
             "MY_PA_REMOTE_INGRESS_ENABLED": "true",
         },
         "worker-enrollment": None,
         "worker-capture": None,
         "web": {
             "NODE_ENV": "production",
-            "MYPA_AUTH_MODE": "entra",
+            "MYPA_AUTH_MODE": "local_operator",
             "MYPA_GATEWAY_URL": "http://gateway:8765",
-            "MYPA_GATEWAY_AUTH_MODE": "entra",
+            "MYPA_GATEWAY_AUTH_MODE": "local_operator",
             "MYPA_CANONICAL_ORIGIN": (
                 "${MYPA_CANONICAL_ORIGIN:?exact private HTTPS origin required}"
             ),
-            "MYPA_ENTRA_REDIRECT_URI": "${MYPA_ENTRA_REDIRECT_URI:?exact callback required}",
         },
         "proxy": {
             "MY_PA_TAILNET_HOST": (
@@ -682,10 +677,10 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("mount_ownership")
     expected_compose_networks = {
         "postgres": {"data-plane"},
-        "gateway": {"data-plane", "ingress-plane", "entra-egress"},
+        "gateway": {"data-plane", "ingress-plane"},
         "worker-enrollment": {"data-plane"},
         "worker-capture": {"data-plane"},
-        "web": {"ingress-plane", "entra-egress"},
+        "web": {"ingress-plane"},
         "proxy": {"ingress-plane"},
     }
     actual_compose_networks = {
@@ -702,7 +697,6 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     if compose_model.get("networks") != {
         "data-plane": {"name": "my-pa-nas-contract_data-plane", "internal": True},
         "ingress-plane": {"internal": True},
-        "entra-egress": {"internal": False},
     }:
         errors.add("network_planes")
     if any(not block or "    platform: linux/amd64" not in block for block in blocks.values()):
@@ -729,12 +723,11 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         errors.add("web_gateway_contract")
     if (
         "MY_PA_GATEWAY_BIND_MODE: container" not in blocks["gateway"]
-        or "networks: [data-plane, ingress-plane, entra-egress]" not in blocks["gateway"]
-        or "networks: [ingress-plane, entra-egress]" not in blocks["web"]
+        or "networks: [data-plane, ingress-plane]" not in blocks["gateway"]
+        or "networks: [ingress-plane]" not in blocks["web"]
         or "networks: [data-plane]" not in blocks["postgres"]
         or "data-plane:\n    name: my-pa-nas-contract_data-plane\n    internal: true" not in compose
         or "ingress-plane:\n    internal: true" not in compose
-        or "entra-egress:\n    internal: false" not in compose
     ):
         errors.add("network_planes")
     if "managed-documents" in compose.replace(blocks["gateway"], ""):
@@ -917,20 +910,20 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/compose.example.yml",
-            "networks: [data-plane, ingress-plane, entra-egress]",
+            "networks: [data-plane, ingress-plane]",
             "networks: [data-plane]",
             "network_planes",
         ),
         (
             "ops/nas/compose.example.yml",
             "    networks: [data-plane]\n\n  web:",
-            "    networks: [data-plane, ingress-plane, entra-egress]\n\n  web:",
+            "    networks: [data-plane, ingress-plane]\n\n  web:",
             "network_planes",
         ),
         (
             "ops/nas/compose.example.yml",
-            "entra-egress:\n    internal: false",
-            "entra-egress:\n    internal: true",
+            "ingress-plane:\n    internal: true",
+            "ingress-plane:\n    internal: false",
             "network_planes",
         ),
         (
@@ -994,8 +987,8 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/compose.example.yml",
-            "entra-egress:\n    internal: false",
-            "entra-egress:\n    internal: false\n  entra-egress:\n    internal: true",
+            "ingress-plane:\n    internal: true",
+            "ingress-plane:\n    internal: true\n  ingress-plane:\n    internal: false",
             "compose_parse",
         ),
         (
@@ -1213,7 +1206,7 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/runtime-contract.toml",
-            'pilot_web = "entra"',
+            'pilot_web = "local_operator"',
             'pilot_web = "synthetic"',
             "pilot_auth",
         ),
@@ -1269,7 +1262,7 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/runtime-contract.toml",
-            '[ingress.browser]\nupstream = "web"\nauth = "entra"',
+            '[ingress.browser]\nupstream = "web"\nauth = "local_operator"',
             '[ingress.browser]\nupstream = "web"\nauth = "disabled"',
             "contract_values",
         ),

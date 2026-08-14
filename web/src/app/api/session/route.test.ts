@@ -14,7 +14,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { POST, DELETE } from "@/app/api/session/route";
+import { POST, DELETE, GET } from "@/app/api/session/route";
 import { GET as pulse } from "@/app/api/pulse/route";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resetSessionRegistry, IDLE_TIMEOUT_SECONDS } from "@/lib/auth/session-registry";
@@ -190,6 +190,94 @@ describe("idle timeout", () => {
 });
 
 describe("mode gating", () => {
+  const operatorSecret = "A_credentialed_local_operator_secret_1234567890";
+
+  it("authenticates only the configured local operator and ignores no caller identity", async () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", operatorSecret);
+    const denied = await POST(
+      signInRequest(undefined, { body: { operatorSecret: "wrong" } }),
+    );
+    expect(denied.status).toBe(401);
+    const accepted = await POST(
+      signInRequest(undefined, {
+        body: { operatorSecret },
+      }),
+    );
+    expect(accepted.status).toBe(200);
+    const cookie = issuedCookie(accepted);
+    const session = await (await GET(protectedRequest(cookie))).json();
+    expect(session.principalId).toBe("prn_24abf5d2d0c25e1c82f6e72425e9ed37");
+  });
+
+  it("rate-limits the ninth failure without locking out the correct credential", async () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", operatorSecret);
+    // A correct request resets state from any preceding test.
+    expect(
+      (await POST(signInRequest(undefined, { body: { operatorSecret } }))).status,
+    ).toBe(200);
+    for (let attempt = 0; attempt < 8; attempt++) {
+      expect(
+        (await POST(signInRequest(undefined, { body: { operatorSecret: "wrong" } }))).status,
+      ).toBe(401);
+    }
+    expect(
+      (await POST(signInRequest(undefined, { body: { operatorSecret: "wrong" } }))).status,
+    ).toBe(429);
+    for (let attempt = 0; attempt < 32; attempt++) {
+      expect(
+        (await POST(signInRequest(undefined, { body: { operatorSecret: "wrong" } }))).status,
+      ).toBe(429);
+    }
+    expect(
+      (await POST(signInRequest(undefined, { body: { operatorSecret } }))).status,
+    ).toBe(200);
+  });
+
+  it("expires failed attempts after the bounded window", async () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", operatorSecret);
+    expect(
+      (await POST(signInRequest(undefined, { body: { operatorSecret } }))).status,
+    ).toBe(200);
+    const start = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+    for (let attempt = 0; attempt < 8; attempt++) {
+      expect(
+        (await POST(signInRequest(undefined, { body: { operatorSecret: "wrong" } }))).status,
+      ).toBe(401);
+    }
+    vi.setSystemTime(start + 60_001);
+    expect(
+      (await POST(signInRequest(undefined, { body: { operatorSecret: "wrong" } }))).status,
+    ).toBe(401);
+  });
+
+  it("refuses local_operator mode without an admitted secret", async () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", "");
+    const response = await POST(signInRequest(undefined, { body: { operatorSecret: "x" } }));
+    expect(response.status).toBe(500);
+    expect((await response.json()).error.code).toBe("auth_mode_not_configured");
+  });
+
+  it("rejects caller-selected identity before local operator authentication", async () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", operatorSecret);
+    const response = await POST(
+      signInRequest(undefined, {
+        body: {
+          operatorSecret,
+          principalId: "forged",
+        },
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("caller_supplied_principal");
+  });
+
   it("refuses to sign anyone in when MYPA_AUTH_MODE is unset", async () => {
     vi.stubEnv("MYPA_AUTH_MODE", "");
     const response = await POST(signInRequest("synthetic-a"));

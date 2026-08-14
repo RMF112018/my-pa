@@ -11,7 +11,7 @@ ocr_executable = "/srv/my-pa/goodnotes-ocr/ocr"
 root_mount = "goodnotes_ro"
 ocr_mount = "goodnotes_ocr_ro"
 source_writes = "forbidden"
-principal_partitioning = "explicit_entra_owner"
+principal_partitioning = "fixed_local_operator"
 
 [frontier_mcp]
 service = "frontier-mcp"

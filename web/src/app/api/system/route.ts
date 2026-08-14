@@ -54,7 +54,8 @@ export async function GET(request: NextRequest) {
   if (serving.kind === "refused") return serving.response;
 
   const identity = {
-    identityProvider: guard.principal.synthetic ? "synthetic" : "entra",
+    identityProvider:
+      guard.principal.authenticationProvider ?? (guard.principal.synthetic ? "synthetic" : "entra"),
     entraConfigured: msalSeamConfig().enabled,
     graphConnector: GRAPH_CONNECTOR,
     principal: {

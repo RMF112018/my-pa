@@ -142,7 +142,7 @@ def verify(
         "${MY_PA_GOODNOTES_IDEMPOTENCY_KEY:?explicit bounded key required}",
     ]
     expected_environment = {
-        "MY_PA_AUTH_MODE": "entra",
+        "MY_PA_AUTH_MODE": "local_operator",
         "MY_PA_GOODNOTES_ROOT": str(root),
         "MY_PA_GOODNOTES_MANIFEST": str(manifest),
         "MY_PA_GOODNOTES_OCR_ROOT": str(ocr_root),
@@ -176,7 +176,7 @@ def verify(
         or command != expected_command
         or environment != expected_environment
         or goodnotes.get("source_writes") != "forbidden"
-        or goodnotes.get("principal_partitioning") != "explicit_entra_owner"
+        or goodnotes.get("principal_partitioning") != "fixed_local_operator"
         or goodnotes_service.get("restart") != "no"
         or goodnotes_service.get("networks") != ["data-plane"]
         or goodnotes_service.get("cap_drop") != ["ALL"]

@@ -14,7 +14,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { POST, DELETE } from "@/app/api/session/route";
+import { POST, DELETE, GET } from "@/app/api/session/route";
 import { GET as pulse } from "@/app/api/pulse/route";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resetSessionRegistry, IDLE_TIMEOUT_SECONDS } from "@/lib/auth/session-registry";
@@ -190,6 +190,47 @@ describe("idle timeout", () => {
 });
 
 describe("mode gating", () => {
+  it("authenticates only the configured local operator and ignores no caller identity", async () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", "A_credentialed_local_operator_secret_1234567890");
+    const denied = await POST(
+      signInRequest(undefined, { body: { operatorSecret: "wrong" } }),
+    );
+    expect(denied.status).toBe(401);
+    const accepted = await POST(
+      signInRequest(undefined, {
+        body: { operatorSecret: "A_credentialed_local_operator_secret_1234567890" },
+      }),
+    );
+    expect(accepted.status).toBe(200);
+    const cookie = issuedCookie(accepted);
+    const session = await (await GET(protectedRequest(cookie))).json();
+    expect(session.principalId).toBe("prn_24abf5d2d0c25e1c82f6e72425e9ed37");
+  });
+
+  it("refuses local_operator mode without an admitted secret", async () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", "");
+    const response = await POST(signInRequest(undefined, { body: { operatorSecret: "x" } }));
+    expect(response.status).toBe(500);
+    expect((await response.json()).error.code).toBe("auth_mode_not_configured");
+  });
+
+  it("rejects caller-selected identity before local operator authentication", async () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", "A_credentialed_local_operator_secret_1234567890");
+    const response = await POST(
+      signInRequest(undefined, {
+        body: {
+          operatorSecret: "A_credentialed_local_operator_secret_1234567890",
+          principalId: "forged",
+        },
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("caller_supplied_principal");
+  });
+
   it("refuses to sign anyone in when MYPA_AUTH_MODE is unset", async () => {
     vi.stubEnv("MYPA_AUTH_MODE", "");
     const response = await POST(signInRequest("synthetic-a"));

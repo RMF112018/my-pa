@@ -1,4 +1,4 @@
-schema = "my-pa.nas-ingress-evidence.v1"
+schema = "my-pa.nas-ingress-evidence.v2"
 status = "unverified_not_deployable"
 docker_engine_id = "REQUIRED"
 compose_project = "my-pa-nas-contract"
@@ -9,14 +9,8 @@ loopback_target = "127.0.0.1:8443"
 proxy_uid = 0
 proxy_gid = 0
 tailscale_version = "REQUIRED_PINNED_TARGET_VERSION"
-egress_policy_sha256 = "REQUIRED_HASH_OF_LIVE_NFT_JSON"
-entra_hosts = []
-entra_addresses = []
-dns_servers = []
 web_env_file = "REQUIRED_CANONICAL_OWNER_ONLY_PATH_OUTSIDE_REPOSITORY"
 web_env_owner_uid = 0
-
-[endpoint_evidence]
 
 [services.postgres]
 container_id = "REQUIRED"

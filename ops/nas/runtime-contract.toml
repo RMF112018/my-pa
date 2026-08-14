@@ -15,9 +15,7 @@ data_network = "data-plane"
 data_network_internal = true
 ingress_network = "ingress-plane"
 ingress_network_internal = true
-egress_network = "entra-egress"
-egress_network_policy = "firewall_allowlisted_entra_only"
-egress_services = ["gateway", "web"]
+application_egress = "forbidden"
 only_host_published_service = "proxy"
 postgres_published = false
 smoke_publish_interface = "loopback"
@@ -25,7 +23,7 @@ pilot_https = "tailscale_serve"
 public_exposure = "forbidden"
 
 [auth]
-pilot_web = "entra"
+pilot_web = "local_operator"
 scratch_only = "local_operator"
 
 [restart]
@@ -52,7 +50,7 @@ networks = ["data-plane"]
 host = "nas"
 database_credential = true
 mounts = ["config_ro", "managed_documents_rw", "sources_ro"]
-networks = ["data-plane", "ingress-plane", "entra-egress"]
+networks = ["data-plane", "ingress-plane"]
 container_bind = "0.0.0.0:8765"
 bind_implementation_owned_by = "NAS-04"
 bind_mode = "validated_container_only"
@@ -73,7 +71,7 @@ networks = ["data-plane"]
 host = "nas"
 database_credential = false
 mounts = []
-networks = ["ingress-plane", "entra-egress"]
+networks = ["ingress-plane"]
 
 [services.proxy]
 host = "nas"
@@ -143,7 +141,7 @@ enabled_by_default = false
 
 [ingress.browser]
 upstream = "web"
-auth = "entra"
+auth = "local_operator"
 
 [mcp]
 transport = "stdio_only"

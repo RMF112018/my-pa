@@ -11,12 +11,14 @@
  * this screen offers one sign-in. The screen and `POST /api/session` cannot
  * disagree about it, because neither holds its own copy of the list.
  *
- * In Entra mode the page offers one link to the server-side authorization-code
- * flow. It never imports MSAL Browser, accepts claims, or receives a token.
+ * In local-operator mode the page accepts only the owner-held credential; the
+ * Principal remains server-selected. In Entra mode it offers the dormant
+ * server-side authorization-code flow.
  */
 import { admissibleSyntheticPrincipals } from "@/lib/auth/synthetic";
 import { authMode } from "@/lib/auth/mode";
 import { SignInForm } from "@/app/sign-in/sign-in-form";
+import { LocalOperatorSignInForm } from "@/app/sign-in/local-operator-sign-in-form";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
@@ -54,6 +56,26 @@ export default function SignInPage() {
             <a className="mt-4 inline-flex rounded-md bg-moss-green px-4 py-2 text-white" href="/auth/sign-in">
               Continue with Microsoft Entra
             </a>
+          </CardBody>
+        </Card>
+      </main>
+    );
+  }
+  if (mode === "local_operator") {
+    return (
+      <main id="main" className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 p-6">
+        <div className="text-center">
+          <h1 className="text-2xl font-semibold text-moss-green">my-pa</h1>
+          <p className="mt-1 text-sm text-muted">MossAIc personal assistant</p>
+        </div>
+        <Card>
+          <div className="flex items-center justify-between">
+            <CardTitle>Sign in</CardTitle>
+            <Badge>Local operator</Badge>
+          </div>
+          <CardBody>
+            <p>Authenticate as this deployment&apos;s single, server-selected operator.</p>
+            <LocalOperatorSignInForm />
           </CardBody>
         </Card>
       </main>

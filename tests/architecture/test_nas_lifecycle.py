@@ -818,7 +818,9 @@ def test_restart_policy_planted_violations_fail(
     )
 
 
-@pytest.mark.parametrize("mode", ["up_nonzero", "ps_failure", "too_few", "stop_failure_partial"])
+@pytest.mark.parametrize(
+    "mode", ["firewall_missing", "up_nonzero", "ps_failure", "too_few", "stop_failure_partial"]
+)
 def test_failed_compose_start_always_stops_and_verifies_partial_stack(
     tmp_path: Path, mode: str
 ) -> None:
@@ -833,6 +835,10 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
         "#!/bin/sh\n"
         f"printf '%s\\n' \"$*\" >> {log}\n"
         'case " $* " in\n'
+        "  *' network inspect --format '*' my-pa-nas-contract_data-plane '*) "
+        "echo 'd4d93b2566666666666666666666666666666666666666666666666666666666"
+        "|my-pa-nas-contract_data-plane|bridge|local|true|my-pa-nas-contract"
+        "|data-plane|172.22.0.0/16'; exit 0 ;;\n"
         "  *' up '*) [ \"$MY_TEST_MODE\" = up_nonzero ] || "
         '[ "$MY_TEST_MODE" = stop_failure_partial ] || exit 0; exit 1 ;;\n'
         "  *' stop --timeout 60 '*) "
@@ -849,6 +855,27 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
     )
     fake_python.chmod(0o700)
     fake_docker.chmod(0o700)
+    fake_ip = tools / "ip"
+    fake_ip.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_iptables = tools / "iptables"
+    fake_iptables.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        "  '-S') printf '%s\\n' '-A FORWARD -j FORWARD_FIREWALL' "
+        "'-A FORWARD -j DEFAULT_FORWARD' ;;\n"
+        "  '-S FORWARD_FIREWALL') "
+        '[ "$MY_TEST_MODE" = firewall_missing ] || '
+        "printf '%s\\n' '-A FORWARD_FIREWALL -i docker-d4d93b25 -o docker-d4d93b25 "
+        "-s 172.22.0.0/16 -d 172.22.0.0/16 -j RETURN';;\n"
+        "  '-C DEFAULT_FORWARD -i docker-d4d93b25 -o docker-d4d93b25 -j ACCEPT') exit 0 ;;\n"
+        "  '-C FORWARD_FIREWALL -i docker-d4d93b25 -o docker-d4d93b25 "
+        "-s 172.22.0.0/16 -d 172.22.0.0/16 -j RETURN') exit 0 ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_ip.chmod(0o700)
+    fake_iptables.chmod(0o700)
     result = subprocess.run(  # noqa: S603 - fixed checked-in script with synthetic PATH
         [str(ROOT / "ops/nas/start.sh"), str(tmp_path / "manifest"), str(tmp_path)],
         cwd=ROOT,
@@ -856,6 +883,8 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
             **os.environ,
             "PATH": f"{tools}:/usr/bin:/bin",
             "MY_PA_NAS_COMPOSE_FILE": str(COMPOSE),
+            "MY_PA_NAS_IP": str(fake_ip),
+            "MY_PA_NAS_IPTABLES": str(fake_iptables),
             "MY_TEST_MODE": mode,
         },
         check=False,
@@ -864,6 +893,11 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
     )
     calls = log.read_text(encoding="utf-8")
     assert result.returncode == 1
+    if mode == "firewall_missing":
+        assert " up --detach --no-build --pull never" not in calls
+        assert " stop --timeout 60" not in calls
+        assert " ps --status running -q" not in calls
+        return
     assert " up --detach --no-build --pull never" in calls
     assert " stop --timeout 60" in calls
     assert " ps --status running -q" in calls

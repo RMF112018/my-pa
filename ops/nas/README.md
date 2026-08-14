@@ -79,6 +79,18 @@ operator-provisioned configuration. `postgresql_default`, the local-development
 Compose file, ad-hoc PostgreSQL, and direct production `docker compose up
 postgres` are not bootstrap paths.
 
+[`synology-data-plane-firewall.sh`](synology-data-plane-firewall.sh) closes the
+DSM-specific forwarding-order prerequisite without disabling the host
+firewall. It derives and verifies the exact Compose-owned internal network,
+Synology bridge, subnet, Docker same-bridge ACCEPT rule, and chain ordering.
+Read-only `plan`/`check` are separate from explicitly confirmed, idempotent
+`apply` and exact `remove`. Admission requires one exact rule in the first
+`FORWARD_FIREWALL` position; a duplicate or misplaced rule is refused rather
+than treated as effective. PostgreSQL database operations and ordinary runtime
+start/restart/health refuse if the rule is missing. DSM firewall reload or NAS
+reboot can clear runtime iptables state, so recovery must re-apply and re-check
+the rule before service lifecycle operations.
+
 NAS-04/05 add the validated `container` gateway bind mode and the
 [`runtime-services.example.toml`](runtime-services.example.toml) identity
 contract. [`runtime_gate.py`](runtime_gate.py) binds each app container to its

@@ -12,6 +12,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 MY_PA_IMAGE_MANIFEST=$1
 export MY_PA_IMAGE_MANIFEST
 . "$script_dir/lifecycle-common.sh"
+"$script_dir/synology-data-plane-firewall.sh" check
 nas_compose config --quiet
 if ! nas_compose up --detach --no-build --pull never; then
   echo "Compose start failed; stopping any partial stack" >&2

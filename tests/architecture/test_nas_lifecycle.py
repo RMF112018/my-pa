@@ -819,7 +819,15 @@ def test_restart_policy_planted_violations_fail(
 
 
 @pytest.mark.parametrize(
-    "mode", ["firewall_missing", "up_nonzero", "ps_failure", "too_few", "stop_failure_partial"]
+    "mode",
+    [
+        "firewall_missing",
+        "ingress_firewall_missing",
+        "up_nonzero",
+        "ps_failure",
+        "too_few",
+        "stop_failure_partial",
+    ],
 )
 def test_failed_compose_start_always_stops_and_verifies_partial_stack(
     tmp_path: Path, mode: str
@@ -839,6 +847,10 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
         "echo 'd4d93b2566666666666666666666666666666666666666666666666666666666"
         "|my-pa-nas-contract_data-plane|bridge|local|true|my-pa-nas-contract"
         "|data-plane|172.22.0.0/16'; exit 0 ;;\n"
+        "  *' network inspect --format '*' my-pa-nas-contract_ingress-plane '*) "
+        "echo 'a1b2c3d477777777777777777777777777777777777777777777777777777777"
+        "|my-pa-nas-contract_ingress-plane|bridge|local|true|my-pa-nas-contract"
+        "|ingress-plane|172.23.0.0/16'; exit 0 ;;\n"
         "  *' up '*) [ \"$MY_TEST_MODE\" = up_nonzero ] || "
         '[ "$MY_TEST_MODE" = stop_failure_partial ] || exit 0; exit 1 ;;\n'
         "  *' stop --timeout 60 '*) "
@@ -863,13 +875,20 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
         'case "$*" in\n'
         "  '-S') printf '%s\\n' '-A FORWARD -j FORWARD_FIREWALL' "
         "'-A FORWARD -j DEFAULT_FORWARD' ;;\n"
-        "  '-S FORWARD_FIREWALL') "
-        '[ "$MY_TEST_MODE" = firewall_missing ] || '
+        "  '-S FORWARD_FIREWALL')\n"
+        '    [ "$MY_TEST_MODE" = firewall_missing ] || '
         "printf '%s\\n' '-A FORWARD_FIREWALL -s 172.22.0.0/16 -d 172.22.0.0/16 "
-        "-i docker-d4d93b25 -o docker-d4d93b25 -j RETURN';;\n"
+        "-i docker-d4d93b25 -o docker-d4d93b25 -j RETURN'\n"
+        '    [ "$MY_TEST_MODE" = firewall_missing ] || '
+        '[ "$MY_TEST_MODE" = ingress_firewall_missing ] || '
+        "printf '%s\\n' '-A FORWARD_FIREWALL -s 172.23.0.0/16 -d 172.23.0.0/16 "
+        "-i docker-a1b2c3d4 -o docker-a1b2c3d4 -j RETURN';;\n"
         "  '-C DEFAULT_FORWARD -i docker-d4d93b25 -o docker-d4d93b25 -j ACCEPT') exit 0 ;;\n"
+        "  '-C DEFAULT_FORWARD -i docker-a1b2c3d4 -o docker-a1b2c3d4 -j ACCEPT') exit 0 ;;\n"
         "  '-C FORWARD_FIREWALL -i docker-d4d93b25 -o docker-d4d93b25 "
         "-s 172.22.0.0/16 -d 172.22.0.0/16 -j RETURN') exit 0 ;;\n"
+        "  '-C FORWARD_FIREWALL -i docker-a1b2c3d4 -o docker-a1b2c3d4 "
+        "-s 172.23.0.0/16 -d 172.23.0.0/16 -j RETURN') exit 0 ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",
         encoding="utf-8",
@@ -894,9 +913,16 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
     calls = log.read_text(encoding="utf-8")
     assert result.returncode == 1
     if mode == "firewall_missing":
+        assert " create --no-build --pull never" not in calls
         assert " up --detach --no-build --pull never" not in calls
         assert " stop --timeout 60" not in calls
         assert " ps --status running -q" not in calls
+        return
+    assert " create --no-build --pull never" in calls
+    if mode == "ingress_firewall_missing":
+        assert " up --detach --no-build --pull never" not in calls
+        assert " stop --timeout 60" in calls
+        assert " ps --status running -q" in calls
         return
     assert " up --detach --no-build --pull never" in calls
     assert " stop --timeout 60" in calls

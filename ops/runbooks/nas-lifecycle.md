@@ -154,6 +154,21 @@ start/restart, and health fail closed when `check` does not pass. Do not add a
 broad subnet rule to `INPUT_FIREWALL`, disable DSM firewall, or allow unrelated
 Docker networks.
 
+The canonical ingress plane needs the same bounded same-bridge allowance so
+the proxy can reach the web service. It does not exist during PostgreSQL-only
+bootstrap. Do not attempt ingress admission yet. After ordinary runtime
+admission exists, the first `start.sh` invocation in step 7 creates the admitted
+six-service Compose topology in a stopped state and must refuse before `up` for
+the missing ingress rule. Step 7 then admits the real network and reruns start.
+
+The ingress gate first requires the data-plane rule to remain effective, then
+requires one exact ingress bridge/subnet rule in the second
+`FORWARD_FIREWALL` position. Apply inserts only at position 2, preserving the
+data-plane rule at position 1; removal targets only the exact ingress rule.
+Start, restart, health, and diagnostics fail closed if the ingress rule is
+missing. After a DSM firewall reload or reboot, reapply the data-plane rule
+first and the ingress-plane rule second before lifecycle recovery.
+
 6. Export the admitted resource artifact, validate it against the running
    container, take the required initial backup, and invoke migration explicitly:
 
@@ -181,9 +196,26 @@ ops/nas/restore-to-scratch.sh "${post_receipt%.sha256}" my_pa_scratch_BOOTSTRAP
 "$MY_PA_NAS_PYTHON" ops/nas/generate-runtime-admission.py \
   ops/nas/compose.example.yml ops/nas/compose.pilot.example.yml \
   DEPLOYABLE_MANIFEST /etc/my-pa/runtime-admission.toml
+# This first invocation prepares the stopped topology. Confirm that it refuses
+# specifically because the ingress-plane firewall rule is not effective. Any
+# other refusal is a blocker and must not be treated as successful preparation.
+ops/nas/start.sh DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY
+ops/nas/synology-ingress-plane-firewall.sh plan
+export MY_PA_CONFIRM_FIREWALL_MUTATION=my-pa-nas-contract_ingress-plane
+ops/nas/synology-ingress-plane-firewall.sh apply
+unset MY_PA_CONFIRM_FIREWALL_MUTATION
+ops/nas/synology-ingress-plane-firewall.sh check
 ops/nas/start.sh DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY
 ops/nas/health.sh
 ```
+
+The first `start.sh` invocation above is an expected nonzero gate, not a
+successful start. Its bounded cleanup must leave zero running runtime services
+and print
+`Synology ingress-plane firewall is not admitted; stopping the prepared stack`.
+Continue only after checking that exact refusal and confirming that the
+canonical ingress network now exists. The second invocation is the only one
+that may reach `up`.
 
 The scratch URL is non-secret and must name only the verified Compose database;
 authentication remains in the protected service environment. Gateway and both
@@ -192,7 +224,8 @@ a terminal runtime.
 
 Run `preflight.sh IMAGE_MANIFEST ARCHIVE_DIRECTORY` before `start.sh` with the
 same arguments. Both reverify exact loaded images and parse Compose. Start uses
-only `up --detach --no-build --pull never`.
+only `create --no-build --pull never` followed, after both firewall gates pass,
+by `up --detach --no-build --pull never`.
 
 The root-published mode-0400 `/etc/my-pa/runtime-admission.toml` closes the
 remaining Compose interpolation boundary. It binds the complete deployable

@@ -3,6 +3,7 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$script_dir/lifecycle-common.sh"
 "$script_dir/synology-data-plane-firewall.sh" check
+"$script_dir/synology-ingress-plane-firewall.sh" check
 verify_running_identity
 before=$(nas_compose ps -q postgres)
 [ -n "$before" ] || { echo "postgres is not an existing Compose service instance" >&2; exit 1; }

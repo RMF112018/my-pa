@@ -91,6 +91,15 @@ start/restart/health refuse if the rule is missing. DSM firewall reload or NAS
 reboot can clear runtime iptables state, so recovery must re-apply and re-check
 the rule before service lifecycle operations.
 
+[`synology-ingress-plane-firewall.sh`](synology-ingress-plane-firewall.sh)
+applies the same exact-identity contract to the internal ingress bridge without
+widening the host firewall. The data-plane rule must remain first; the ingress
+rule must be the single exact second `FORWARD_FIREWALL` rule. Ordinary start
+creates the stopped six-service topology before checking this gate, allowing a
+new deployment to admit the real Compose-owned ingress bridge without starting
+services. Start, restart, health, and diagnostics refuse when the gate is not
+effective.
+
 NAS-04/05 add the validated `container` gateway bind mode and the
 [`runtime-services.example.toml`](runtime-services.example.toml) identity
 contract. [`runtime_gate.py`](runtime_gate.py) binds each app container to its

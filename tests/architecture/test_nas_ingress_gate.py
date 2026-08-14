@@ -50,6 +50,8 @@ def _live_fixture(
     proxy_cap_add: list[str] | None = None,
     host_edge_internal: bool = False,
     extra_host_edge_member: bool = False,
+    proxy_live_publication: bool = True,
+    lookalike_proxy_host_edge: bool = False,
 ) -> tuple[Path, object]:
     gate = _gate()
     config = ROOT / "ops/nas/proxy-allowlist.example.caddy"
@@ -162,7 +164,25 @@ def _live_fixture(
                     },
                     "HostConfig": host,
                     "NetworkSettings": {
-                        "Networks": {f"stack_{item}": {} for item in gate.NETWORKS[name]}
+                        "Networks": {
+                            (
+                                f"evil_{item}"
+                                if lookalike_proxy_host_edge
+                                and name == "proxy"
+                                and item == "host-edge"
+                                else f"my-pa-nas-contract_{item}"
+                            ): {}
+                            for item in gate.NETWORKS[name]
+                        },
+                        "Ports": (
+                            {
+                                "80/tcp": None,
+                                "443/tcp": None,
+                                "8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8443"}],
+                            }
+                            if name == "proxy" and proxy_live_publication
+                            else {}
+                        ),
                     },
                     "Mounts": (
                         [
@@ -221,6 +241,30 @@ def test_gate_refuses_an_unrelated_host_edge_member(tmp_path: Path) -> None:
         runner=runner,
     )
     assert "host_edge_membership" in errors
+
+
+def test_gate_refuses_saved_binding_without_live_port_allocation(tmp_path: Path) -> None:
+    manifest, runner = _live_fixture(tmp_path, proxy_live_publication=False)
+    errors = _gate().verify(
+        manifest,
+        ROOT / "ops/nas/proxy-allowlist.example.caddy",
+        ROOT / "ops/nas/compose.example.yml",
+        live=True,
+        runner=runner,
+    )
+    assert "proxy_publication" in errors
+
+
+def test_gate_refuses_suffix_matching_lookalike_network(tmp_path: Path) -> None:
+    manifest, runner = _live_fixture(tmp_path, lookalike_proxy_host_edge=True)
+    errors = _gate().verify(
+        manifest,
+        ROOT / "ops/nas/proxy-allowlist.example.caddy",
+        ROOT / "ops/nas/compose.example.yml",
+        live=True,
+        runner=runner,
+    )
+    assert "proxy_networks" in errors
 
 
 def test_gate_refuses_any_residual_entra_environment(tmp_path: Path) -> None:

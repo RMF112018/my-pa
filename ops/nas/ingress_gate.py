@@ -223,19 +223,24 @@ def verify(
             errors.append(f"{name}_compose_identity")
         if inspected.get("Image") != identity["image_id"]:
             errors.append(f"{name}_image_identity")
-        actual_networks = {
-            item.rpartition("_")[2]
-            for item in inspected.get("NetworkSettings", {}).get("Networks", {})
-        }
-        if actual_networks != NETWORKS[name]:
+        actual_networks = set(inspected.get("NetworkSettings", {}).get("Networks", {}))
+        expected_networks = {f"{data['compose_project']}_{network}" for network in NETWORKS[name]}
+        if actual_networks != expected_networks:
             errors.append(f"{name}_networks")
         published = inspected.get("HostConfig", {}).get("PortBindings") or {}
+        live_ports = inspected.get("NetworkSettings", {}).get("Ports")
         expected_ports = (
             {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": target.rsplit(":", 1)[1]}]}
             if name == "proxy"
             else {}
         )
-        if published != expected_ports:
+        live_publication = (
+            isinstance(live_ports, dict)
+            and live_ports.get("8080/tcp") == expected_ports.get("8080/tcp")
+            if name == "proxy"
+            else isinstance(live_ports, dict) and not any(live_ports.values())
+        )
+        if published != expected_ports or not live_publication:
             errors.append(f"{name}_publication")
     if errors:
         return errors

@@ -101,16 +101,6 @@ on the exact image recorded by the verified PostgreSQL resource artifact.
 On Synology, run `ops/nas/synology-data-plane-firewall.sh check` before private
 MCP startup. A missing exact same-bridge rule is a deployment refusal; never
 replace it with a broad `INPUT_FIREWALL` exception or disable DSM firewall.
-After Compose has created the stopped `cloudflare-egress` network and before
-starting the connector, run the repository-controlled egress sequence:
-
-```bash
-sudo ops/nas/synology-cloudflare-egress-firewall.sh plan
-sudo env MY_PA_CONFIRM_FIREWALL_MUTATION=my-pa-remote-mcp_cloudflare-egress \
-  ops/nas/synology-cloudflare-egress-firewall.sh apply
-sudo ops/nas/synology-cloudflare-egress-firewall.sh check
-```
-
 The four exact rules occupy positions 3–6 after the canonical data- and
 ingress-plane rules. They admit only DNS over TCP/UDP 53, Cloudflare Tunnel
 QUIC over UDP 7844, and the documented TCP 7844/443 paths from the exact
@@ -142,6 +132,9 @@ docker compose --env-file /volume1/my-pa/config/remote-compose.env \
   -f ops/nas/remote/compose.yml --profile remote-edge pull
 docker compose --env-file /volume1/my-pa/config/remote-compose.env \
   -f ops/nas/remote/compose.yml --profile remote-edge create cloudflared
+sudo ops/nas/synology-cloudflare-egress-firewall.sh plan
+sudo env MY_PA_CONFIRM_FIREWALL_MUTATION=my-pa-remote-mcp_cloudflare-egress \
+  ops/nas/synology-cloudflare-egress-firewall.sh apply
 sudo ops/nas/synology-cloudflare-egress-firewall.sh check
 docker compose --env-file /volume1/my-pa/config/remote-compose.env \
   -f ops/nas/remote/compose.yml --profile remote-edge up -d --no-build
@@ -198,6 +191,20 @@ or managed files merely to roll back these stateless containers. Re-run private
 readiness and the unauthenticated-denial check before restoring the route. If
 the new release wrote data, older code may be incompatible; keep the tunnel
 stopped and escalate rather than altering durable state.
+
+Never delete the Compose egress network while its firewall rules remain. For a
+full remote-edge teardown, stop the connector, remove and verify the exact
+rules while the admitted network identity still exists, and only then run
+Compose down:
+
+```bash
+docker compose --env-file /volume1/my-pa/config/remote-compose.env \
+  -f ops/nas/remote/compose.yml --profile remote-edge stop cloudflared
+sudo env MY_PA_CONFIRM_FIREWALL_MUTATION=my-pa-remote-mcp_cloudflare-egress \
+  ops/nas/synology-cloudflare-egress-firewall.sh remove
+docker compose --env-file /volume1/my-pa/config/remote-compose.env \
+  -f ops/nas/remote/compose.yml --profile remote-edge down
+```
 
 Exact stateless rollback sequence, after replacing the two image entries in the
 owner-only Compose environment with the recorded prior digests:

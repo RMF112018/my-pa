@@ -46,7 +46,15 @@ printf '%s\n' "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef|
         tools / "iptables",
         f"""#!/bin/sh
 state_file=${{FAKE_STATE:?}}
-if [ "$1" = -t ]; then exit 0; fi
+if [ "$1 $2 $3 $4" = '-t nat -S DEFAULT_POSTROUTING' ]; then
+  printf '%s\n' '-N DEFAULT_POSTROUTING'
+  printf '%s\n' '-A DEFAULT_POSTROUTING -s {SUBNET} ! -o {BRIDGE} -j MASQUERADE'
+  case "${{FAKE_NAT_STATE:-exact}}" in
+    duplicate) printf '%s\n' '-A DEFAULT_POSTROUTING -s {SUBNET} ! -o {BRIDGE} -j MASQUERADE' ;;
+    lookalike) printf '%s\n' '-A DEFAULT_POSTROUTING -s {SUBNET} -j MASQUERADE' ;;
+  esac
+  exit 0
+fi
 if [ "$1" = -S ] && [ "$#" -eq 1 ]; then
   printf '%s\n' '-A FORWARD -j FORWARD_FIREWALL' '-A FORWARD -j DEFAULT_FORWARD'
   exit 0
@@ -56,14 +64,16 @@ if [ "$1 $2" = '-S FORWARD_FIREWALL' ]; then
   printf '%s\n' '-A FORWARD_FIREWALL -s 172.22.0.0/16 -d 172.22.0.0/16 -i docker-data -o docker-data -j RETURN'
   printf '%s\n' '-A FORWARD_FIREWALL -s 172.18.0.0/16 -d 172.18.0.0/16 -i docker-ingress -o docker-ingress -j RETURN'
   case "$(cat "$state_file")" in
-    effective)
+    effective|foreign)
       printf '%s\n' \
         '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p udp -m udp --dport 53 -j RETURN' \
         '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p tcp -m tcp --dport 53 -j RETURN' \
         '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p udp -m udp --dport 7844 -j RETURN' \
         '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p tcp -m multiport --dports 443,7844 -j RETURN'
+      [ "$(cat "$state_file")" != foreign ] || \
+        printf '%s\n' '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -j RETURN'
       ;;
-    partial)
+    partial|insert1|insert2|insert3)
       printf '%s\n' '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p udp -m udp --dport 53 -j RETURN'
       ;;
   esac
@@ -76,7 +86,16 @@ if [ "$1" = -I ]; then
   [ ! -f "$count_file" ] || count=$(cat "$count_file")
   count=$((count + 1))
   printf '%s' "$count" > "$count_file"
-  [ "$count" -ne 4 ] || printf '%s' effective > "$state_file"
+  if [ "${{FAKE_INSERT_FAIL_AT:-0}}" -eq "$count" ]; then exit 1; fi
+  if [ "$count" -eq 4 ]; then
+    printf '%s' effective > "$state_file"
+  else
+    printf 'insert%s' "$count" > "$state_file"
+  fi
+  exit 0
+fi
+if [ "$1" = -C ]; then
+  [ "$(cat "$state_file")" = missing ] && exit 1
   exit 0
 fi
 if [ "$1" = -D ]; then
@@ -85,7 +104,8 @@ if [ "$1" = -D ]; then
   [ ! -f "$count_file" ] || count=$(cat "$count_file")
   count=$((count + 1))
   printf '%s' "$count" > "$count_file"
-  [ "$count" -ne 4 ] || printf '%s' missing > "$state_file"
+  if [ "${{FAKE_DELETE_FAIL_AT:-0}}" -eq "$count" ]; then exit 1; fi
+  printf '%s' missing > "$state_file"
   exit 0
 fi
 exit 1
@@ -140,6 +160,46 @@ def test_identity_drift_and_partial_rules_fail_closed(tmp_path: Path) -> None:
     assert "explicit removal" in result.stderr
 
 
+def test_extra_broad_rule_and_nat_drift_fail_closed(tmp_path: Path) -> None:
+    script, environment, state = _scene(tmp_path)
+    state.write_text("foreign")
+    assert _run(script, "check", environment).returncode != 0
+    state.write_text("missing")
+    for nat_state in ("duplicate", "lookalike"):
+        environment["FAKE_NAT_STATE"] = nat_state
+        result = _run(script, "plan", environment)
+        assert result.returncode != 0
+        assert "masquerade rule identity mismatch" in result.stderr
+
+
+def test_failed_insert_rolls_back_and_reports_failed_rollback(tmp_path: Path) -> None:
+    script, environment, state = _scene(tmp_path)
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = NETWORK
+    environment["FAKE_INSERT_FAIL_AT"] = "2"
+    rolled_back = _run(script, "apply", environment)
+    assert rolled_back.returncode != 0
+    assert state.read_text() == "missing"
+    assert "were rolled back" in rolled_back.stderr
+
+    (state.parent / "state.count").unlink()
+    (state.parent / "state.delete").unlink()
+    state.write_text("missing")
+    environment["FAKE_DELETE_FAIL_AT"] = "1"
+    failed = _run(script, "apply", environment)
+    assert failed.returncode != 0
+    assert state.read_text() != "missing"
+    assert "rollback left rule drift" in failed.stderr
+
+
+def test_remove_recovers_partial_exact_state(tmp_path: Path) -> None:
+    script, environment, state = _scene(tmp_path)
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = NETWORK
+    state.write_text("partial")
+    removed = _run(script, "remove", environment)
+    assert removed.returncode == 0, removed.stderr
+    assert state.read_text() == "missing"
+
+
 def test_contract_is_port_bounded_and_runbook_orders_the_gate() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
     assert "--dport 53" in source
@@ -149,6 +209,10 @@ def test_contract_is_port_bounded_and_runbook_orders_the_gate() -> None:
     assert "0.0.0.0/0" not in source.split("exact_rule", 1)[-1]
     runbook = (ROOT / "ops/runbooks/remote-mcp-cloudflare.md").read_text(encoding="utf-8")
     create = runbook.index("--profile remote-edge create cloudflared")
-    check = runbook.index("synology-cloudflare-egress-firewall.sh check", create)
+    plan = runbook.index("synology-cloudflare-egress-firewall.sh plan", create)
+    apply = runbook.index("synology-cloudflare-egress-firewall.sh apply", plan)
+    check = runbook.index("synology-cloudflare-egress-firewall.sh check", apply)
     start = runbook.index("--profile remote-edge up -d --no-build", check)
-    assert create < check < start
+    remove = runbook.index("synology-cloudflare-egress-firewall.sh remove", start)
+    down = runbook.index("--profile remote-edge down", remove)
+    assert create < plan < apply < check < start < remove < down

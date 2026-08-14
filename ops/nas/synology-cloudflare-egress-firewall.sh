@@ -95,9 +95,24 @@ esac
   echo "Synology firewall does not precede Docker forwarding as expected" >&2
   exit 1
 }
-"$iptables_bin" -t nat -C DEFAULT_POSTROUTING \
-  -s "$subnet" ! -o "$bridge" -j MASQUERADE >/dev/null 2>&1 || {
-  echo "Docker Cloudflare egress masquerade rule is unavailable" >&2
+nat_rule="-A DEFAULT_POSTROUTING -s $subnet ! -o $bridge -j MASQUERADE"
+nat_rules=$("$iptables_bin" -t nat -S DEFAULT_POSTROUTING) || {
+  echo "Docker Cloudflare egress masquerade rule inspection failed" >&2
+  exit 1
+}
+nat_exact_count=$(printf '%s\n' "$nat_rules" | awk -v exact="$nat_rule" \
+  '$0 == exact {count++} END {print count + 0}')
+nat_source_count=$(printf '%s\n' "$nat_rules" | awk -v subnet="$subnet" '
+  {
+    source = 0
+    for (field = 1; field < NF; field++) {
+      if ($field == "-s" && $(field + 1) == subnet) source = 1
+    }
+    if (source) count++
+  }
+  END {print count + 0}')
+[ "$nat_exact_count:$nat_source_count" = 1:1 ] || {
+  echo "Docker Cloudflare egress masquerade rule identity mismatch" >&2
   exit 1
 }
 
@@ -112,33 +127,73 @@ rule_state() {
     return 1
   }
   counts=""
+  exact_total=0
   for exact in "$rule_dns_udp" "$rule_dns_tcp" "$rule_quic" "$rule_tls"; do
     count=$(printf '%s\n' "$chain_rules" | awk -v exact="$exact" '$0 == exact {count++} END {print count + 0}')
     counts="${counts}${counts:+:}${count}"
+    exact_total=$((exact_total + count))
   done
+  source_bridge_count=$(printf '%s\n' "$chain_rules" | awk -v subnet="$subnet" -v bridge="$bridge" '
+    {
+      source = 0
+      ingress = 0
+      for (field = 1; field < NF; field++) {
+        if ($field == "-s" && $(field + 1) == subnet) source = 1
+        if ($field == "-i" && $(field + 1) == bridge) ingress = 1
+      }
+      if (source && ingress) count++
+    }
+    END {print count + 0}')
   positions=$(printf '%s\n' "$chain_rules" | awk \
     '$1 == "-A" && $2 == "FORWARD_FIREWALL" {count++; if (count >= 3 && count <= 6) print}')
   expected=$(printf '%s\n%s\n%s\n%s\n' "$rule_dns_udp" "$rule_dns_tcp" "$rule_quic" "$rule_tls")
   case "$counts" in
-    0:0:0:0) echo missing ;;
-    1:1:1:1)
-      if [ "$positions" = "$expected" ]; then echo effective; else echo misordered; fi
+    0:0:0:0)
+      if [ "$source_bridge_count" -eq 0 ]; then echo missing; else echo foreign; fi
       ;;
-    *) echo partial_or_duplicate ;;
+    1:1:1:1)
+      if [ "$source_bridge_count" -ne 4 ]; then
+        echo foreign
+      elif [ "$positions" = "$expected" ]; then
+        echo effective
+      else
+        echo recoverable_exact_drift
+      fi
+      ;;
+    *)
+      if [ "$source_bridge_count" -eq "$exact_total" ]; then
+        echo recoverable_exact_drift
+      else
+        echo foreign
+      fi
+      ;;
   esac
 }
 
-delete_exact_rules() {
-  status=0
-  "$iptables_bin" -D FORWARD_FIREWALL -s "$subnet" -i "$bridge" \
-    -p tcp -m multiport --dports 443,7844 -j RETURN >/dev/null 2>&1 || status=1
-  "$iptables_bin" -D FORWARD_FIREWALL -s "$subnet" -i "$bridge" \
-    -p udp -m udp --dport 7844 -j RETURN >/dev/null 2>&1 || status=1
-  "$iptables_bin" -D FORWARD_FIREWALL -s "$subnet" -i "$bridge" \
-    -p tcp -m tcp --dport 53 -j RETURN >/dev/null 2>&1 || status=1
-  "$iptables_bin" -D FORWARD_FIREWALL -s "$subnet" -i "$bridge" \
-    -p udp -m udp --dport 53 -j RETURN >/dev/null 2>&1 || status=1
-  return "$status"
+delete_all_exact_rules() {
+  for arguments in \
+    'tcp|-m|multiport|--dports|443,7844' \
+    'udp|-m|udp|--dport|7844' \
+    'tcp|-m|tcp|--dport|53' \
+    'udp|-m|udp|--dport|53'
+  do
+    old_ifs=$IFS
+    IFS='|'
+    set -- $arguments
+    IFS=$old_ifs
+    deletions=0
+    while "$iptables_bin" -C FORWARD_FIREWALL -s "$subnet" -i "$bridge" \
+      -p "$1" "$2" "$3" "$4" "$5" -j RETURN >/dev/null 2>&1
+    do
+      [ "$deletions" -lt 8 ] || {
+        echo "Synology Cloudflare egress exact-rule deletion bound exceeded" >&2
+        return 1
+      }
+      "$iptables_bin" -D FORWARD_FIREWALL -s "$subnet" -i "$bridge" \
+        -p "$1" "$2" "$3" "$4" "$5" -j RETURN >/dev/null 2>&1 || return 1
+      deletions=$((deletions + 1))
+    done
+  done
 }
 
 case "$action" in
@@ -176,13 +231,21 @@ case "$action" in
           -p udp -m udp --dport 7844 -j RETURN || \
            ! "$iptables_bin" -I FORWARD_FIREWALL 6 -s "$subnet" -i "$bridge" \
           -p tcp -m multiport --dports 443,7844 -j RETURN; then
-          delete_exact_rules || true
-          echo "Synology Cloudflare egress firewall admission failed; exact rollback attempted" >&2
+          rollback_status=0
+          delete_all_exact_rules || rollback_status=1
+          rollback_state=$(rule_state) || rollback_status=1
+          [ "$rollback_status" -eq 0 ] && [ "$rollback_state" = missing ] || {
+            echo "Synology Cloudflare egress admission failed and rollback left rule drift" >&2
+            exit 1
+          }
+          echo "Synology Cloudflare egress admission failed; inserted rules were rolled back" >&2
           exit 1
         fi
         if [ "$(rule_state)" != effective ]; then
-          delete_exact_rules || true
-          [ "$(rule_state)" = missing ] || {
+          rollback_status=0
+          delete_all_exact_rules || rollback_status=1
+          rollback_state=$(rule_state) || rollback_status=1
+          [ "$rollback_status" -eq 0 ] && [ "$rollback_state" = missing ] || {
             echo "Synology Cloudflare egress admission failed and rollback left rule drift" >&2
             exit 1
           }
@@ -204,11 +267,15 @@ case "$action" in
       exit 1
     }
     state=$(rule_state)
-    [ "$state" = effective ] || {
-      echo "exact Synology Cloudflare egress firewall rules are not effective: $state" >&2
-      exit 1
-    }
-    delete_exact_rules || {
+    case "$state" in
+      missing) echo "Synology Cloudflare egress firewall rules are already absent"; exit 0 ;;
+      effective|recoverable_exact_drift) ;;
+      *)
+        echo "Synology Cloudflare egress firewall state contains foreign rules: $state" >&2
+        exit 1
+        ;;
+    esac
+    delete_all_exact_rules || {
       echo "Synology Cloudflare egress firewall rule removal failed" >&2
       exit 1
     }

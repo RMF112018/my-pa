@@ -89,14 +89,33 @@ def violations(
             errors.append(f"{name}_missing_init")
         if host.get("RestartPolicy", {}).get("Name") != "unless-stopped":
             errors.append(f"{name}_restart_policy")
-        pid_limit = host.get("PidsLimit")
-        expected_pid_limit = 128 if name == "app" else 64
-        if not isinstance(pid_limit, int) or not 0 < pid_limit <= expected_pid_limit:
-            errors.append(f"{name}_pid_limit")
-        for field, suffix in (("NanoCpus", "cpu_limit"), ("Memory", "memory_limit")):
-            value = host.get(field)
-            if not isinstance(value, int) or value <= 0:
-                errors.append(f"{name}_{suffix}")
+        expected_cpuset = "0" if name == "app" else "1"
+        if host.get("CpusetCpus") != expected_cpuset:
+            errors.append(f"{name}_cpuset")
+        expected_memory = (768 if name == "app" else 256) * 1024 * 1024
+        unadmitted_controls = {
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "CpuShares": 0,
+            "NanoCpus": 0,
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetMems": "",
+            "PidsLimit": None,
+            "Ulimits": None,
+            "MemoryReservation": 0,
+            "MemorySwap": expected_memory * 2,
+            "MemorySwappiness": None,
+            "OomKillDisable": False,
+            "BlkioWeight": 0,
+        }
+        if any(host.get(field) != value for field, value in unadmitted_controls.items()):
+            errors.append(f"{name}_unadmitted_resource_control")
+        memory = host.get("Memory")
+        if memory != expected_memory:
+            errors.append(f"{name}_memory_limit")
         if any("docker.sock" in str(mount.get("Source", "")) for mount in state.get("Mounts", ())):
             errors.append(f"{name}_docker_socket")
 

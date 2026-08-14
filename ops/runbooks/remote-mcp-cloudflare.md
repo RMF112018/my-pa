@@ -31,6 +31,14 @@ The checked-in Cloudflare example pins the official multi-platform
 Re-verify that tag-to-digest binding against the official registry before every
 deployment; an upgrade is a reviewed repository change, never a mutable tag.
 
+The Synology cgroup-v1 kernel exposes neither the CFS quota controller nor the
+PIDs controller. This stack therefore pins the MCP origin and connector to
+different single-core CPU sets and retains hard memory limits. Do not replace
+the CPU sets with Compose `cpus`: Docker rejects that setting on the production
+NAS before container startup. The stack makes no false PID-controller claim:
+Docker silently discards `pids_limit` there, and UID-scoped `nproc` is not a
+container-isolated substitute.
+
 Allow outbound traffic only as follows: `cloudflared` needs DNS and Cloudflare
 Tunnel connectivity on TCP/UDP 7844 (TCP 443 fallback) to Cloudflare's published
 Tunnel endpoints. The MCP process needs only the private PostgreSQL and origin

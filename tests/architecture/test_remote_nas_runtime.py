@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 from pathlib import Path
 from types import ModuleType
 
@@ -20,6 +21,34 @@ def _module(path: Path) -> ModuleType:
 def test_remote_runtime_contract_passes_static_gate() -> None:
     gate = _module(ROOT / "ops/nas/remote/validate.py")
     assert gate.validate() == []
+
+
+def test_remote_runtime_contract_refuses_unsupported_synology_cgroup_controls(
+    tmp_path: Path,
+) -> None:
+    gate = _module(ROOT / "ops/nas/remote/validate.py")
+    remote = tmp_path / "remote"
+    shutil.copytree(ROOT / "ops/nas/remote", remote)
+    compose = remote / "compose.yml"
+    expected = '    cpuset: "${MY_PA_REMOTE_CPUSET:?remote MCP CPU set required}"'
+    compose.write_text(
+        compose.read_text().replace(expected, f"    # {expected.strip()}\n    cpuset: 2")
+    )
+    assert "my-pa-mcp-remote_resource_contract" in gate.validate(remote)
+    compose.write_text(
+        compose.read_text().replace("    cpuset: 2", "    pids_limit: 128\n    cpuset: 2")
+    )
+    assert "my-pa-mcp-remote_unsupported_synology_cgroup_control" in gate.validate(remote)
+    compose.write_text(
+        compose.read_text().replace(
+            "    pids_limit: 128",
+            "    cpu_quota: 50000\n    cpu_period: 100000\n    pids_limit: 128",
+        )
+    )
+    assert "my-pa-mcp-remote_unsupported_synology_cgroup_control" in gate.validate(remote)
+    environment = remote / "compose.env.example"
+    environment.write_text(environment.read_text() + "MY_PA_REMOTE_CPUSET=7\n")
+    assert "resource_example_contract" in gate.validate(remote)
 
 
 def test_production_remote_contract_is_local_operator_and_has_no_entra_dependency() -> None:
@@ -87,9 +116,24 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
                 "PortBindings": {},
                 "Init": True,
                 "RestartPolicy": {"Name": "unless-stopped"},
-                "PidsLimit": 128 if image.startswith("app") else 64,
-                "NanoCpus": 1_000_000_000,
-                "Memory": 256 * 1024 * 1024,
+                "CpusetCpus": "0" if image.startswith("app") else "1",
+                "CpusetMems": "",
+                "CpuShares": 0,
+                "NanoCpus": 0,
+                "CpuPeriod": 0,
+                "CpuQuota": 0,
+                "CpuCount": 0,
+                "CpuPercent": 0,
+                "CpuRealtimePeriod": 0,
+                "CpuRealtimeRuntime": 0,
+                "PidsLimit": None,
+                "Ulimits": None,
+                "Memory": (768 if image.startswith("app") else 256) * 1024 * 1024,
+                "MemoryReservation": 0,
+                "MemorySwap": (1536 if image.startswith("app") else 512) * 1024 * 1024,
+                "MemorySwappiness": None,
+                "OomKillDisable": False,
+                "BlkioWeight": 0,
             },
             "Mounts": mounts,
             "NetworkSettings": {"Networks": {name: {} for name in networks}},
@@ -172,6 +216,118 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
         )
         == []
     )
+    app["HostConfig"]["CpusetCpus"] = "0-3"
+    assert "app_cpuset" in gate.violations(
+        app,
+        edge,
+        app_image="app@sha256:exact",
+        edge_image="edge@sha256:exact",
+        data_network="my-pa-nas-contract_data-plane",
+        networks=network_states,
+        postgres_resources={
+            "status": "verified",
+            "data_network": "my-pa-nas-contract_data-plane",
+            "postgres_container_id": "postgres-id",
+            "postgres_image_id": "sha256:postgres",
+        },
+        postgres={
+            "Id": "postgres-id",
+            "Image": "sha256:postgres",
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "my-pa-nas-contract",
+                    "com.docker.compose.service": "postgres",
+                }
+            },
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
+        },
+    )
+    app["HostConfig"]["CpusetCpus"] = "0"
+    edge["HostConfig"]["NanoCpus"] = 500_000_000
+    assert "edge_unadmitted_resource_control" in gate.violations(
+        app,
+        edge,
+        app_image="app@sha256:exact",
+        edge_image="edge@sha256:exact",
+        data_network="my-pa-nas-contract_data-plane",
+        networks=network_states,
+        postgres_resources={
+            "status": "verified",
+            "data_network": "my-pa-nas-contract_data-plane",
+            "postgres_container_id": "postgres-id",
+            "postgres_image_id": "sha256:postgres",
+        },
+        postgres={
+            "Id": "postgres-id",
+            "Image": "sha256:postgres",
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "my-pa-nas-contract",
+                    "com.docker.compose.service": "postgres",
+                }
+            },
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
+        },
+    )
+    edge["HostConfig"]["NanoCpus"] = 0
+    edge["HostConfig"]["CpuRealtimeRuntime"] = 10_000
+    assert "edge_unadmitted_resource_control" in gate.violations(
+        app,
+        edge,
+        app_image="app@sha256:exact",
+        edge_image="edge@sha256:exact",
+        data_network="my-pa-nas-contract_data-plane",
+        networks=network_states,
+        postgres_resources={
+            "status": "verified",
+            "data_network": "my-pa-nas-contract_data-plane",
+            "postgres_container_id": "postgres-id",
+            "postgres_image_id": "sha256:postgres",
+        },
+        postgres={
+            "Id": "postgres-id",
+            "Image": "sha256:postgres",
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "my-pa-nas-contract",
+                    "com.docker.compose.service": "postgres",
+                }
+            },
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
+        },
+    )
+    edge["HostConfig"]["CpuRealtimeRuntime"] = 0
+    app["HostConfig"]["Memory"] = 1
+    assert "app_memory_limit" in gate.violations(
+        app,
+        edge,
+        app_image="app@sha256:exact",
+        edge_image="edge@sha256:exact",
+        data_network="my-pa-nas-contract_data-plane",
+        networks=network_states,
+        postgres_resources={
+            "status": "verified",
+            "data_network": "my-pa-nas-contract_data-plane",
+            "postgres_container_id": "postgres-id",
+            "postgres_image_id": "sha256:postgres",
+        },
+        postgres={
+            "Id": "postgres-id",
+            "Image": "sha256:postgres",
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "my-pa-nas-contract",
+                    "com.docker.compose.service": "postgres",
+                }
+            },
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
+        },
+    )
+    app["HostConfig"]["Memory"] = 768 * 1024 * 1024
     assert "noncanonical_data_network" in gate.violations(
         app,
         edge,

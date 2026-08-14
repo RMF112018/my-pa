@@ -101,11 +101,14 @@ on the exact image recorded by the verified PostgreSQL resource artifact.
 On Synology, run `ops/nas/synology-data-plane-firewall.sh check` before private
 MCP startup. A missing exact same-bridge rule is a deployment refusal; never
 replace it with a broad `INPUT_FIREWALL` exception or disable DSM firewall.
-The four exact rules occupy positions 3–6 after the canonical data- and
-ingress-plane rules. They admit only DNS over TCP/UDP 53, Cloudflare Tunnel
-QUIC over UDP 7844, and the documented TCP 7844/443 paths from the exact
-Compose-owned egress bridge. The gate also requires Docker's exact masquerade
-rule. A broad source-network or all-port allowance is not supported.
+The five exact rules occupy positions 3–7 after the canonical data- and
+ingress-plane rules. The first admits only same-bridge TCP 8766 on the exact
+internal Compose-owned `mcp-origin` network, allowing `cloudflared` to reach the
+origin without admitting host or external ingress. The remaining four admit
+only DNS over TCP/UDP 53, Cloudflare Tunnel QUIC over UDP 7844, and the
+documented TCP 7844/443 paths from the exact Compose-owned egress bridge. The
+gate also requires Docker's exact masquerade rule. A broad source-network or
+all-port allowance is not supported.
 
 Inspect the rendered model: it must contain no `ports`, no database service,
 no Docker socket, and only `/mcp`, `/healthz`, OAuth discovery, registration,

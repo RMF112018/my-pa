@@ -10,7 +10,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Mapping
 from typing import Final, ParamSpec, Protocol, TypeVar
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -25,11 +25,8 @@ _APPROVAL_ATTEMPTS: Final = 5
 _APPROVAL_WINDOW_SECONDS: Final = 60.0
 _DATABASE_TIMEOUT_SECONDS: Final = 30.0
 _DATABASE_CONCURRENCY: Final = 4
-_CONSENT_HEADERS: Final = {
+_CONSENT_STATIC_HEADERS: Final = {
     "Cache-Control": "no-store",
-    "Content-Security-Policy": (
-        "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
-    ),
     "Referrer-Policy": "no-referrer",
     "X-Frame-Options": "DENY",
 }
@@ -124,6 +121,36 @@ def _redirect(uri: str, values: Mapping[str, str]) -> str:
     return f"{uri}{separator}{urlencode(values)}"
 
 
+def _csp_form_action_origin(redirect_uri: str) -> str:
+    """Return the HTTPS origin Chromium must be allowed to follow after POST.
+
+    Chromium and Brave apply `form-action` to the redirect that follows a form
+    submission. A consent page limited to `'self'` therefore blocks the OAuth
+    303 to a registered third-party callback, which presents as an inert
+    Approve button even though the origin persisted the authorization code.
+    """
+    parsed = urlsplit(redirect_uri)
+    host = parsed.hostname
+    if parsed.scheme != "https" or not host:
+        raise OAuthError("invalid_redirect_uri", "an HTTPS redirect URI is required")
+    if ":" in host:
+        host = f"[{host}]"
+    origin = f"https://{host}" if parsed.port is None else f"https://{host}:{parsed.port}"
+    return origin
+
+
+def _consent_headers(redirect_uri: str) -> dict[str, str]:
+    origin = _csp_form_action_origin(redirect_uri)
+    return {
+        **_CONSENT_STATIC_HEADERS,
+        "Content-Security-Policy": (
+            "default-src 'none'; "
+            f"form-action 'self' {origin}; "
+            "frame-ancestors 'none'; base-uri 'none'"
+        ),
+    }
+
+
 def _consent(request: AuthorizationRequest, *, refused: bool = False) -> str:
     hidden = {
         "response_type": "code",
@@ -192,7 +219,10 @@ def build_origin_oauth_routes(
         except TimeoutError:
             return _unavailable()
         if request.method == "GET":
-            return HTMLResponse(_consent(authorization), headers=_CONSENT_HEADERS)
+            return HTMLResponse(
+                _consent(authorization),
+                headers=_consent_headers(authorization.redirect_uri),
+            )
         if values.get("decision") == "deny":
             return RedirectResponse(
                 _redirect(
@@ -205,22 +235,31 @@ def build_origin_oauth_routes(
         while failed_approvals and failed_approvals[0] <= now - _APPROVAL_WINDOW_SECONDS:
             failed_approvals.popleft()
         presented = values.get("operator_secret", "")
-        if not secrets.compare_digest(presented, operator_secret):
+        try:
+            secret_matches = secrets.compare_digest(presented, operator_secret)
+        except (TypeError, ValueError):
+            secret_matches = False
+        if not secret_matches:
             if len(failed_approvals) >= _APPROVAL_ATTEMPTS:
                 return HTMLResponse(
                     _consent(authorization, refused=True),
                     status_code=429,
-                    headers={**_CONSENT_HEADERS, "Retry-After": "60"},
+                    headers={
+                        **_consent_headers(authorization.redirect_uri),
+                        "Retry-After": "60",
+                    },
                 )
             failed_approvals.append(now)
             return HTMLResponse(
                 _consent(authorization, refused=True),
                 status_code=403,
-                headers=_CONSENT_HEADERS,
+                headers=_consent_headers(authorization.redirect_uri),
             )
         failed_approvals.clear()
         try:
             code = await calls.run(server.issue_authorization_code, authorization)
+        except OAuthError as exc:
+            return _error(exc)
         except TimeoutError:
             return _unavailable()
         return RedirectResponse(

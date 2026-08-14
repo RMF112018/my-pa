@@ -162,6 +162,13 @@ The private readiness probe must return 200 before client use. Prove discovery,
 DCR, operator-secret approval, PKCE S256 exchange, one-time code use, bearer
 validation, token revocation, and the server-side local-operator binding before
 edge cutover. Never print the approval secret, authorization code, or token.
+
+The origin consent page sets `Content-Security-Policy` `form-action` to `'self'`
+plus the registered callback origin. Chromium and Brave apply `form-action` to
+the 303 that follows Approve; omitting the callback origin makes the button
+appear inert after a successful authorization-code write. Do not tighten
+`form-action` back to `'self'` alone.
+
 From outside the
 NAS, `/healthz` may return only generic liveness, `/readyz` must return the
 catch-all 404, and `/mcp` without a valid bearer token must fail closed. Configure

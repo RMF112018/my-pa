@@ -27,7 +27,7 @@ class FakeAuthorizationServer:
         return AuthorizationRequest(
             client_id="client",
             client_name="Synthetic client",
-            redirect_uri="https://client.example/callback",
+            redirect_uri=values.get("redirect_uri", "https://client.example/callback"),
             scope="my-pa.read",
             state=values.get("state", ""),
             code_challenge="a" * 43,
@@ -73,7 +73,8 @@ async def test_operator_secret_is_required_only_for_code_approval() -> None:
         assert consent.status_code == 200
         assert SYNTHETIC_APPROVAL_VALUE not in consent.text
         assert consent.headers["content-security-policy"] == (
-            "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+            "default-src 'none'; form-action 'self' https://client.example; "
+            "frame-ancestors 'none'; base-uri 'none'"
         )
         assert consent.headers["x-frame-options"] == "DENY"
         assert "Client ID: <code>client</code>" in consent.text
@@ -105,3 +106,88 @@ async def test_operator_secret_is_required_only_for_code_approval() -> None:
         assert approved.status_code == 303
         assert approved.headers["location"].startswith("https://client.example/callback?")
         assert server.issued == 1
+        assert refused.headers["content-security-policy"] == (
+            "default-src 'none'; form-action 'self' https://client.example; "
+            "frame-ancestors 'none'; base-uri 'none'"
+        )
+        assert limited.headers["content-security-policy"] == (
+            "default-src 'none'; form-action 'self' https://client.example; "
+            "frame-ancestors 'none'; base-uri 'none'"
+        )
+
+
+@pytest.mark.anyio
+async def test_consent_csp_allows_chromium_to_follow_registered_callback() -> None:
+    """Approve is a form POST; Chromium blocks 303s outside form-action.
+
+    Production ChatLLM reached GET /oauth/authorize, submitted the correct
+    operator secret, and the origin persisted authorization codes with a 303 to
+    https://abacus.ai/oauth/callback. Chromium/Brave then refused to navigate
+    because form-action was only 'self', so the callback never ran.
+    """
+    server = FakeAuthorizationServer()
+    app = Starlette(
+        routes=build_origin_oauth_routes(server, operator_secret=SYNTHETIC_APPROVAL_VALUE)
+    )
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="https://mcp.example.invalid"
+    ) as client:
+        consent = await client.get(
+            "/oauth/authorize",
+            params={
+                "response_type": "code",
+                "client_id": "client",
+                "redirect_uri": "https://abacus.ai/oauth/callback",
+                "scope": "my-pa.read",
+                "state": "chatllm-state",
+                "code_challenge": "a" * 43,
+                "code_challenge_method": "S256",
+                "resource": server.resource,
+            },
+        )
+        policy = consent.headers["content-security-policy"]
+        assert policy == (
+            "default-src 'none'; form-action 'self' https://abacus.ai; "
+            "frame-ancestors 'none'; base-uri 'none'"
+        )
+        mismatched = await client.post(
+            "/oauth/authorize",
+            data={
+                "response_type": "code",
+                "client_id": "client",
+                "redirect_uri": "https://abacus.ai/oauth/callback",
+                "scope": "my-pa.read",
+                "state": "chatllm-state",
+                "code_challenge": "a" * 43,
+                "code_challenge_method": "S256",
+                "resource": server.resource,
+                "operator_secret": "short",
+                "decision": "approve",
+            },
+        )
+        assert mismatched.status_code == 403
+        assert SYNTHETIC_APPROVAL_VALUE not in mismatched.text
+        assert (
+            "form-action 'self' https://abacus.ai;" in mismatched.headers["content-security-policy"]
+        )
+        approved = await client.post(
+            "/oauth/authorize",
+            data={
+                "response_type": "code",
+                "client_id": "client",
+                "redirect_uri": "https://abacus.ai/oauth/callback",
+                "scope": "my-pa.read",
+                "state": "chatllm-state",
+                "code_challenge": "a" * 43,
+                "code_challenge_method": "S256",
+                "resource": server.resource,
+                "operator_secret": SYNTHETIC_APPROVAL_VALUE,
+                "decision": "approve",
+            },
+        )
+        assert approved.status_code == 303
+        assert approved.headers["location"].startswith("https://abacus.ai/oauth/callback?")
+        assert "code=" in approved.headers["location"]
+        assert "state=chatllm-state" in approved.headers["location"]
+        assert server.issued == 1
+        assert SYNTHETIC_APPROVAL_VALUE not in approved.headers["location"]

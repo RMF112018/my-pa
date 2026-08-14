@@ -55,6 +55,8 @@ def _live_fixture(
     extra_live_publication: bool = False,
     missing_proxy_tmpfs: bool = False,
     extra_proxy_tmpfs: bool = False,
+    compose_missing_web_key: str | None = None,
+    compose_changed_web_key: str | None = None,
 ) -> tuple[Path, object]:
     gate = _gate()
     config = ROOT / "ops/nas/proxy-allowlist.example.caddy"
@@ -109,13 +111,12 @@ def _live_fixture(
             )
         if command[0:2] == ["docker", "compose"] and "config" in command:
             assert "--no-env-resolution" not in command
-            return json.dumps(
-                {
-                    "services": {
-                        "web": {"environment": dict(item.split("=", 1) for item in web_environment)}
-                    }
-                }
-            )
+            configured_environment = dict(item.split("=", 1) for item in web_environment)
+            if compose_missing_web_key is not None:
+                configured_environment.pop(compose_missing_web_key)
+            if compose_changed_web_key is not None:
+                configured_environment[compose_changed_web_key] = "different-resolved-value"
+            return json.dumps({"services": {"web": {"environment": configured_environment}}})
         if command[0:2] == ["docker", "compose"]:
             return f"{command[-1]}-id\n"
         if command[0:3] == ["docker", "network", "inspect"]:
@@ -271,6 +272,34 @@ def test_gate_requires_the_canonical_web_env_file_declaration() -> None:
         'env_file: ["${UNBOUND_WEB_ENV_FILE:?owner-only web env file required}"]',
     )
     assert not gate._web_env_file_contract(changed)
+    decoy = (
+        "x-decoy:\n  web:\n"
+        '    env_file: ["${MY_PA_WEB_ENV_FILE:?owner-only web env file required}"]\n' + changed
+    )
+    assert not gate._web_env_file_contract(decoy)
+
+
+@pytest.mark.parametrize(
+    ("missing_key", "changed_key"),
+    (("MYPA_SESSION_SECRET", None), (None, "MYPA_LOCAL_OPERATOR_SECRET")),
+)
+def test_gate_refuses_resolved_web_environment_drift(
+    tmp_path: Path, missing_key: str | None, changed_key: str | None
+) -> None:
+    manifest, runner = _live_fixture(
+        tmp_path,
+        compose_missing_web_key=missing_key,
+        compose_changed_web_key=changed_key,
+    )
+    errors = _gate().verify(
+        manifest,
+        ROOT / "ops/nas/proxy-allowlist.example.caddy",
+        ROOT / "ops/nas/compose.example.yml",
+        live=True,
+        runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
+    )
+    assert "web_env_compose_binding" in errors
 
 
 def test_gate_requires_non_internal_proxy_only_host_edge(tmp_path: Path) -> None:

@@ -26,6 +26,15 @@ NETWORKS = {
     "web": {"ingress-plane"},
     "proxy": {"ingress-plane", "host-edge"},
 }
+WEB_COMPOSE_ENVIRONMENT_KEYS = {
+    "NODE_ENV",
+    "MYPA_AUTH_MODE",
+    "MYPA_GATEWAY_URL",
+    "MYPA_GATEWAY_AUTH_MODE",
+    "MYPA_CANONICAL_ORIGIN",
+    "MYPA_SESSION_SECRET",
+    "MYPA_LOCAL_OPERATOR_SECRET",
+}
 
 
 def _run(command: list[str]) -> str:
@@ -70,13 +79,31 @@ def _environment(config: dict[str, Any]) -> dict[str, str] | None:
     return {key: value for key, _separator, value in pairs}
 
 
+def _yaml_block(lines: list[str], name: str, indent: int) -> list[str] | None:
+    marker = f"{' ' * indent}{name}:"
+    matches = [index for index, line in enumerate(lines) if line == marker]
+    if len(matches) != 1:
+        return None
+    start = matches[0] + 1
+    end = len(lines)
+    for index in range(start, len(lines)):
+        line = lines[index]
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if len(line) - len(stripped) <= indent:
+            end = index
+            break
+    return lines[start:end]
+
+
 def _web_env_file_contract(compose_text: str) -> bool:
-    match = re.search(r"(?m)^  web:\s*$", compose_text)
-    if match is None:
+    services = _yaml_block(compose_text.splitlines(), "services", 0)
+    if services is None:
         return False
-    following = compose_text[match.end() :]
-    next_service = re.search(r"(?m)^  [a-z0-9][a-z0-9-]*:\s*$", following)
-    block = following[: next_service.start()] if next_service is not None else following
+    block = _yaml_block(services, "web", 2)
+    if block is None:
+        return False
     declaration = '    env_file: ["${MY_PA_WEB_ENV_FILE:?owner-only web env file required}"]'
     return block.count(declaration) == 1
 
@@ -205,15 +232,16 @@ def verify(
     if version.get("short") != data["tailscale_version"]:
         errors.append("tailscale_version")
     configured_web_environment = compose_model.get("services", {}).get("web", {}).get("environment")
-    if (
+    configured_web_environment_error = (
         not isinstance(configured_web_environment, dict)
         or not configured_web_environment
+        or set(configured_web_environment) != WEB_COMPOSE_ENVIRONMENT_KEYS
         or not all(
             isinstance(key, str) and isinstance(value, str)
             for key, value in configured_web_environment.items()
         )
-    ):
-        errors.append("web_env_compose_binding")
+    )
+    if configured_web_environment_error:
         configured_web_environment = {}
     inspected_by_name: dict[str, dict[str, Any]] = {}
     for name in SERVICES:
@@ -307,10 +335,14 @@ def verify(
     }
     session_secret = web_env.get("MYPA_SESSION_SECRET", "") if web_env is not None else ""
     operator_secret = web_env.get("MYPA_LOCAL_OPERATOR_SECRET", "") if web_env is not None else ""
+    if configured_web_environment_error or any(
+        web_env is None or web_env.get(key) != value
+        for key, value in configured_web_environment.items()
+    ):
+        errors.append("web_env_compose_binding")
     if (
         web_env is None
         or any(web_env.get(key) != value for key, value in required_web.items())
-        or any(web_env.get(key) != value for key, value in configured_web_environment.items())
         or len(session_secret.strip()) < 32
         or re.fullmatch(r"[A-Za-z0-9_-]{43,128}", operator_secret) is None
         or any("DATABASE" in key or "POSTGRES" in key for key in web_env)

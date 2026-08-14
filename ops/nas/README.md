@@ -106,7 +106,10 @@ requires a server-only canonical HTTPS origin. [`ingress_gate.py`](ingress_gate.
 is read-only: it binds verified proxy, loopback publication, config hash, private
 Tailscale Serve mapping, disabled Funnel, the credentialed `local_operator`
 browser mode, and the absence of Entra configuration in the live gateway/web
-environments.
+environments. The proxy drops every capability before adding back only
+`NET_BIND_SERVICE`: the pinned upstream Caddy binary carries that file capability
+and Linux refuses to execute it under `no-new-privileges` when it is absent,
+even though the runtime listener itself is the unprivileged port 8080.
 The checked-in ingress manifest refuses. Enabling Serve or changing a firewall
 remains an explicit operator action and has no script in this package.
 

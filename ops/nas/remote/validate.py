@@ -66,7 +66,22 @@ def validate(root: Path = ROOT) -> list[str]:
             '    mem_limit: "${MY_PA_CLOUDFLARED_MEMORY:?cloudflared memory limit required}"',
         ),
     }
-    unsupported = ("cpus:", "cpu_shares:", "pids_limit:", "ulimits:")
+    unsupported = (
+        "cpus:",
+        "cpu_count:",
+        "cpu_percent:",
+        "cpu_shares:",
+        "cpu_quota:",
+        "cpu_period:",
+        "cpu_rt_runtime:",
+        "cpu_rt_period:",
+        "pids_limit:",
+        "ulimits:",
+        "mem_reservation:",
+        "mem_swappiness:",
+        "memswap_limit:",
+        "oom_kill_disable:",
+    )
     for service, expected in resource_contracts.items():
         active = _service_lines(compose, service)
         stripped = [line.strip() for line in active]
@@ -74,12 +89,20 @@ def validate(root: Path = ROOT) -> list[str]:
             errors.append(f"{service}_unsupported_synology_cgroup_control")
         if any(active.count(line) != 1 for line in expected):
             errors.append(f"{service}_resource_contract")
-    environment = (root / "compose.env.example").read_text(encoding="utf-8").splitlines()
-    if (
-        environment.count("MY_PA_REMOTE_CPUSET=0") != 1
-        or environment.count("MY_PA_CLOUDFLARED_CPUSET=1") != 1
-    ):
-        errors.append("cpuset_example_contract")
+    environment: dict[str, list[str]] = {}
+    for line in (root / "compose.env.example").read_text(encoding="utf-8").splitlines():
+        if not line or line.lstrip().startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        environment.setdefault(key, []).append(value)
+    expected_environment = {
+        "MY_PA_REMOTE_CPUSET": ["0"],
+        "MY_PA_REMOTE_MEMORY": ["768m"],
+        "MY_PA_CLOUDFLARED_CPUSET": ["1"],
+        "MY_PA_CLOUDFLARED_MEMORY": ["256m"],
+    }
+    if any(environment.get(key) != value for key, value in expected_environment.items()):
+        errors.append("resource_example_contract")
     if "127.0.0.1:" not in fallback or "0.0.0.0:" in fallback:
         errors.append("fallback_not_loopback")
     for name, block in (("remote", remote), ("cloudflared", edge)):

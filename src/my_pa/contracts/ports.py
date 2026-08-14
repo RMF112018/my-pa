@@ -1,4 +1,4 @@
-"""The ports the fifteen capability use cases call, and nothing else.
+"""The ports the public capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -44,7 +44,7 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from hashlib import sha256
 from types import TracebackType
 
@@ -74,6 +74,16 @@ from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.provider import SourceProvider
 from my_pa.domain.source.registry import ConfiguredSource
+from my_pa.domain.tasks.models import (
+    Commitment,
+    CommitmentDirection,
+    RecurrenceRule,
+    Task,
+    TaskContextLink,
+    TaskRevision,
+    TaskRole,
+    TaskState,
+)
 
 __all__ = [
     "Acceptance",
@@ -99,6 +109,9 @@ __all__ = [
     "SearchOutcome",
     "SourceProviders",
     "SourceRepository",
+    "TaskIdempotencyRecord",
+    "TaskPreviewRecord",
+    "TaskRepository",
     "UnitOfWork",
     "UnknownScopeError",
 ]
@@ -731,6 +744,135 @@ class SourceProviders(ABC):
         """The provider serving `source_id`, or `None` when none is configured."""
 
 
+@dataclass(frozen=True, slots=True)
+class TaskIdempotencyRecord:
+    request_hash: str
+    result: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class TaskPreviewRecord:
+    preview_id: str
+    principal_id: str
+    operation: str
+    operation_hash: str
+    targets: tuple[tuple[str, int], ...]
+    scheduled_date: date | None = None
+    scheduled_at: datetime | None = None
+    due_date: date | None = None
+    due_at: datetime | None = None
+    due_timezone: str | None = None
+    target_state: TaskState | None = None
+
+
+class TaskRepository(ABC):
+    """Principal-partitioned Task and Commitment store."""
+
+    @abstractmethod
+    def get_task(self, principal_id: str, task_id: str) -> Task | None:
+        """One Task owned by this Principal, or None."""
+
+    @abstractmethod
+    def list_tasks(
+        self,
+        principal_id: str,
+        *,
+        state: TaskState | None,
+        task_role: TaskRole | None,
+        include_archived: bool,
+        limit: int,
+    ) -> tuple[Task, ...]:
+        """A bounded page of the Principal's Tasks."""
+
+    @abstractmethod
+    def search_tasks(self, principal_id: str, query: str, *, limit: int) -> tuple[Task, ...]:
+        """Lexical title/description matches."""
+
+    @abstractmethod
+    def tasks_with_title(self, principal_id: str, title: str) -> tuple[Task, ...]:
+        """Exact title matches used by conversational resolution."""
+
+    @abstractmethod
+    def insert_task(self, task: Task) -> None:
+        """Insert a new Task row."""
+
+    @abstractmethod
+    def save_task(self, task: Task, *, expected_version: int) -> bool:
+        """Update when the stored version matches. False on conflict."""
+
+    @abstractmethod
+    def append_revision(self, revision: TaskRevision) -> None:
+        """Append one immutable revision."""
+
+    @abstractmethod
+    def history(self, principal_id: str, task_id: str) -> tuple[TaskRevision, ...]:
+        """Revisions in version order."""
+
+    @abstractmethod
+    def insert_recurrence(self, rule: RecurrenceRule) -> None:
+        """Store a series definition."""
+
+    @abstractmethod
+    def get_recurrence(self, principal_id: str, recurrence_id: str) -> RecurrenceRule | None:
+        """One series owned by this Principal."""
+
+    @abstractmethod
+    def actionable_occurrence(self, principal_id: str, recurrence_id: str) -> Task | None:
+        """The single non-terminal occurrence, if any."""
+
+    @abstractmethod
+    def occurrence(self, principal_id: str, recurrence_id: str, occurrence_key: str) -> Task | None:
+        """One occurrence by stable key."""
+
+    @abstractmethod
+    def insert_commitment(self, commitment: Commitment) -> None:
+        """Insert a Commitment."""
+
+    @abstractmethod
+    def get_commitment(self, principal_id: str, commitment_id: str) -> Commitment | None:
+        """One Commitment owned by this Principal."""
+
+    @abstractmethod
+    def save_commitment(self, commitment: Commitment, *, expected_version: int) -> bool:
+        """Update a Commitment when the version matches."""
+
+    @abstractmethod
+    def list_commitments(
+        self,
+        principal_id: str,
+        *,
+        direction: CommitmentDirection | None,
+        limit: int,
+    ) -> tuple[Commitment, ...]:
+        """A bounded page of Commitments."""
+
+    @abstractmethod
+    def insert_link(self, link: TaskContextLink) -> None:
+        """Cite another record from a Task."""
+
+    @abstractmethod
+    def links_for(self, principal_id: str, task_id: str) -> tuple[TaskContextLink, ...]:
+        """Context links for one Task."""
+
+    @abstractmethod
+    def get_idempotency(self, principal_id: str, key: str) -> TaskIdempotencyRecord | None:
+        """The stored result for one key, if any."""
+
+    @abstractmethod
+    def put_idempotency(
+        self, principal_id: str, key: str, request_hash: str, result: dict[str, object]
+    ) -> None:
+        """Remember the first committed result for a key."""
+
+    @abstractmethod
+    def insert_preview(self, preview: TaskPreviewRecord) -> None:
+        """Bind a bulk preview token."""
+
+    @abstractmethod
+    def get_preview(self, principal_id: str, preview_id: str) -> TaskPreviewRecord | None:
+        """One preview owned by this Principal."""
+
+
 class UnitOfWork(ABC):
     """One transaction, and the repositories that run inside it.
 
@@ -811,6 +953,11 @@ class UnitOfWork(ABC):
     @abstractmethod
     def reviews(self) -> ReviewRepository:
         """The review and promotion plane, inside this transaction."""
+
+    @property
+    @abstractmethod
+    def tasks(self) -> TaskRepository:
+        """The Task and Commitment store, inside this transaction."""
 
     @property
     @abstractmethod

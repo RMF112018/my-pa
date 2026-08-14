@@ -43,3 +43,8 @@ class Purpose(StrEnum):
     # permits is denied for everything and reads as a mistake rather than as a
     # decision.
     REVIEW_DISPOSITION = "review_disposition"
+    # Task reads and writes are a separate plane from capture. Reusing
+    # capture_authoring for a task mutation would let a grant issued to append
+    # a note also rewrite the Principal's execution state.
+    TASK_AUTHORING = "task_authoring"
+    TASK_REVIEW = "task_review"

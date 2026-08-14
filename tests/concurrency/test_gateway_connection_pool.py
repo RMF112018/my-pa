@@ -89,6 +89,7 @@ from my_pa.contracts.ports import (
     ReviewRepository,
     SourceProviders,
     SourceRepository,
+    TaskRepository,
     UnitOfWork,
 )
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
@@ -203,6 +204,10 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def reviews(self) -> ReviewRepository:
         return self._inner.reviews
+
+    @property
+    def tasks(self) -> TaskRepository:
+        return self._inner.tasks
 
     @property
     def audit(self) -> AuditSink:

@@ -209,6 +209,19 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.CAPTURE_SEARCH, Purpose.CAPTURE_REVIEW),
         (Capability.REVIEW_LIST, Purpose.CAPTURE_REVIEW),
         (Capability.REVIEW_DECIDE, Purpose.REVIEW_DISPOSITION),
+        (Capability.TASKS_READ, Purpose.TASK_REVIEW),
+        (Capability.TASKS_LIST, Purpose.TASK_REVIEW),
+        (Capability.TASKS_SEARCH, Purpose.TASK_REVIEW),
+        (Capability.TASKS_HISTORY, Purpose.TASK_REVIEW),
+        (Capability.TASKS_ATTENTION, Purpose.TASK_REVIEW),
+        (Capability.TASKS_WAITING_ON, Purpose.TASK_REVIEW),
+        (Capability.COMMITMENTS_LIST, Purpose.TASK_REVIEW),
+        (Capability.TASKS_CREATE, Purpose.TASK_AUTHORING),
+        (Capability.TASKS_UPDATE, Purpose.TASK_AUTHORING),
+        (Capability.TASKS_TRANSITION, Purpose.TASK_AUTHORING),
+        (Capability.TASKS_PREVIEW, Purpose.TASK_AUTHORING),
+        (Capability.TASKS_BULK, Purpose.TASK_AUTHORING),
+        (Capability.COMMITMENTS_CREATE, Purpose.TASK_AUTHORING),
     }
 )
 
@@ -232,8 +245,8 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # empty the table below. The three numbers are written out rather than
     # derived from each other: the arithmetic is what makes the second a check on
     # the enums, and the literals are what make it a check on the arithmetic.
-    assert len(PERMITTED_PAIRS) == 17
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 17 == 133
+    assert len(PERMITTED_PAIRS) == 30
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 30 == 306
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

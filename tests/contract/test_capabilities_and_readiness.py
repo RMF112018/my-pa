@@ -49,7 +49,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 15
+    assert len(names) == len(Capability)
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -71,6 +71,19 @@ def test_capability_names_match_the_published_contract() -> None:
         "capture.search",
         "review.list",
         "review.decide",
+        "tasks.read",
+        "tasks.list",
+        "tasks.search",
+        "tasks.history",
+        "tasks.attention",
+        "tasks.create",
+        "tasks.update",
+        "tasks.transition",
+        "tasks.preview",
+        "tasks.bulk",
+        "tasks.waiting_on",
+        "commitments.create",
+        "commitments.list",
     }
 
 

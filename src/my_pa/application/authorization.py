@@ -49,8 +49,11 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from my_pa.application.commands import (
+    ApplyTaskBulk,
     Command,
     CreateCapture,
+    CreateCommitment,
+    CreateTask,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -58,13 +61,23 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListCommitments,
     ListReviewCases,
     ListSources,
+    ListTasks,
+    PreviewTaskBulk,
     ReadCapture,
     ReadKnowledge,
+    ReadTask,
+    ReadTaskHistory,
     ReviseCapture,
     SearchCaptures,
     SearchKnowledge,
+    SearchTasks,
+    TasksAttention,
+    TasksWaitingOn,
+    TransitionTask,
+    UpdateTask,
 )
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.audit.events import audit_event_for
@@ -153,6 +166,19 @@ def _requested_scope(
             | SearchCaptures()
             | ListReviewCases()
             | DecideReviewCase()
+            | ReadTask()
+            | ListTasks()
+            | SearchTasks()
+            | ReadTaskHistory()
+            | TasksAttention()
+            | CreateTask()
+            | UpdateTask()
+            | TransitionTask()
+            | PreviewTaskBulk()
+            | ApplyTaskBulk()
+            | TasksWaitingOn()
+            | CreateCommitment()
+            | ListCommitments()
         ):
             return frozenset()
         case CreateCapture():

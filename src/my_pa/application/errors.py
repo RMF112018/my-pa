@@ -97,6 +97,18 @@ class SafeDetail(StrEnum):
     #: What the extractor said about an object's content type.
     MEDIA_TYPE_NOT_EXTRACTABLE = "media_type_not_extractable"
     PROCESSING_STOPPED = "processing_stopped"
+    TASK_ID = "task_id"
+    COMMITMENT_ID = "commitment_id"
+    EXPECTED_VERSION = "expected_version"
+    TITLE = "title"
+    PRIORITY = "priority"
+    STATE = "state"
+    DUE = "due"
+    SCHEDULE = "schedule"
+    PREVIEW_TOKEN = "preview_token"  # noqa: S105
+    REFERENCED_TASK_ID = "referenced_task_id"
+    CONVERSATION_ID = "conversation_id"
+    RECURRENCE = "recurrence"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

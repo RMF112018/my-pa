@@ -367,6 +367,23 @@ def promote_proposal(
             issued_at=accepted_at,
         )
     )
+    if ProposalType(row.proposal_type) is ProposalType.TASK:
+        from my_pa.infrastructure.persistence.tasks import persist_reviewed_task
+
+        title = value or "untitled task"
+        principal_id = connection.execute(
+            select(capture_review_decisions.c.principal_id).where(
+                capture_review_decisions.c.decision_id == decision_id
+            )
+        ).scalar_one()
+        persist_reviewed_task(
+            connection,
+            principal_id=str(principal_id),
+            title=str(title),
+            review_decision_id=decision_id,
+            origin_evidence_ref=proposal_id,
+            at=accepted_at,
+        )
     return assertion_id, receipt_id
 
 

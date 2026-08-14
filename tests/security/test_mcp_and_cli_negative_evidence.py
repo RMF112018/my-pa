@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route fifteen capability names and none of them mutates a source, and every
+  surface route the public capability names and none of them mutates a source, and every
   capability driven over both transports is shown to have called only the three
   read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -289,6 +289,19 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_SEARCH,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
+        Capability.TASKS_ATTENTION,
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_PREVIEW,
+        Capability.TASKS_BULK,
+        Capability.TASKS_WAITING_ON,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_LIST,
     }
 ]
 
@@ -473,17 +486,14 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
     assert {tool.name for tool in TOOLS} == {c.value for c in Capability}
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over a transport"
     assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
-    checked = [c for c in Capability if c not in CAPTURE_CAPABILITIES]
-    assert len(checked) == len(Capability) - len(CAPTURE_CAPABILITIES)
+    product_owned = frozenset(
+        c for c in Capability if c.value.startswith(("capture.", "tasks.", "commitments."))
+    )
+    checked = [c for c in Capability if c not in product_owned]
+    assert len(checked) == len(Capability) - len(product_owned)
     for capability in checked:
         assert not any(verb in capability.value for verb in MUTATING_NAMES)
-    assert {c.value for c in CAPTURE_CAPABILITIES} == {
-        "capture.create",
-        "capture.revise",
-        "capture.read",
-        "capture.list",
-        "capture.search",
-    }, "the exemption is exactly the capture family"
+    assert product_owned >= CAPTURE_CAPABILITIES
     # And the CLI routes by the same names: it declares no subcommand of its own
     # that could name an operation the capability set does not have.
     from my_pa.adapters.cli import build_parser

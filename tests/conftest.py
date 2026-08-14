@@ -63,6 +63,9 @@ from my_pa.contracts.ports import (
     SearchOutcome,
     SourceProviders,
     SourceRepository,
+    TaskIdempotencyRecord,
+    TaskPreviewRecord,
+    TaskRepository,
     UnitOfWork,
     UnknownScopeError,
 )
@@ -113,6 +116,19 @@ from my_pa.domain.source.provider import (
     SourceProvider,
 )
 from my_pa.domain.source.registry import ConfiguredSource, SourceProviderKind, issue_identifier
+from my_pa.domain.tasks.models import (
+    AcceptanceKind,
+    Commitment,
+    CommitmentDirection,
+    ContinuityEvidenceState,
+    RecurrenceRule,
+    Task,
+    TaskContextLink,
+    TaskPriority,
+    TaskRevision,
+    TaskRole,
+    TaskState,
+)
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
 #: One fixed instant, so every disclosure in a test is comparable.
@@ -164,6 +180,13 @@ class World:
     capture_keys: dict[str, tuple[str, str]] = field(default_factory=dict)
     review_cases: list[ReviewCase] = field(default_factory=list)
     review_decisions: list[ReviewDecision] = field(default_factory=list)
+    task_rows: dict[str, Task] = field(default_factory=dict)
+    commitments: dict[str, Commitment] = field(default_factory=dict)
+    recurrences: dict[str, RecurrenceRule] = field(default_factory=dict)
+    task_revisions: list[TaskRevision] = field(default_factory=list)
+    task_links: list[TaskContextLink] = field(default_factory=list)
+    task_keys: dict[tuple[str, str], TaskIdempotencyRecord] = field(default_factory=dict)
+    task_previews: dict[str, TaskPreviewRecord] = field(default_factory=dict)
     audit: list[AuditEvent] = field(default_factory=list)
     commits: int = 0
     rollbacks: int = 0
@@ -562,6 +585,165 @@ class _Captures(CaptureRepository):
         return max(held, key=lambda v: v.version_number) if held else None
 
 
+class _Tasks(TaskRepository):
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def get_task(self, principal_id: str, task_id: str) -> Task | None:
+        task = self._world.task_rows.get(task_id)
+        if task is None or task.principal_id != principal_id:
+            return None
+        return task
+
+    def list_tasks(
+        self,
+        principal_id: str,
+        *,
+        state: TaskState | None,
+        task_role: TaskRole | None,
+        include_archived: bool,
+        limit: int,
+    ) -> tuple[Task, ...]:
+        found = [
+            task
+            for task in self._world.task_rows.values()
+            if task.principal_id == principal_id
+            and (state is None or task.state is state)
+            and (task_role is None or task.task_role is task_role)
+            and (include_archived or task.archived_at is None)
+        ]
+        return tuple(found[:limit])
+
+    def search_tasks(self, principal_id: str, query: str, *, limit: int) -> tuple[Task, ...]:
+        needle = query.lower()
+        found = [
+            task
+            for task in self._world.task_rows.values()
+            if task.principal_id == principal_id
+            and (
+                needle in task.title.lower()
+                or (task.description is not None and needle in task.description.lower())
+            )
+        ]
+        return tuple(found[:limit])
+
+    def tasks_with_title(self, principal_id: str, title: str) -> tuple[Task, ...]:
+        return tuple(
+            task
+            for task in self._world.task_rows.values()
+            if task.principal_id == principal_id and task.title == title
+        )
+
+    def insert_task(self, task: Task) -> None:
+        self._world.task_rows[task.task_id] = task
+
+    def save_task(self, task: Task, *, expected_version: int) -> bool:
+        current = self.get_task(task.principal_id, task.task_id)
+        if current is None or current.current_version != expected_version:
+            return False
+        self._world.task_rows[task.task_id] = task
+        return True
+
+    def append_revision(self, revision: TaskRevision) -> None:
+        self._world.task_revisions.append(revision)
+
+    def history(self, principal_id: str, task_id: str) -> tuple[TaskRevision, ...]:
+        return tuple(
+            row
+            for row in self._world.task_revisions
+            if row.principal_id == principal_id and row.task_id == task_id
+        )
+
+    def insert_recurrence(self, rule: RecurrenceRule) -> None:
+        self._world.recurrences[rule.recurrence_id] = rule
+
+    def get_recurrence(self, principal_id: str, recurrence_id: str) -> RecurrenceRule | None:
+        rule = self._world.recurrences.get(recurrence_id)
+        if rule is None or rule.principal_id != principal_id:
+            return None
+        return rule
+
+    def actionable_occurrence(self, principal_id: str, recurrence_id: str) -> Task | None:
+        for task in self._world.task_rows.values():
+            if (
+                task.principal_id == principal_id
+                and task.recurrence_id == recurrence_id
+                and not task.is_terminal
+            ):
+                return task
+        return None
+
+    def occurrence(self, principal_id: str, recurrence_id: str, occurrence_key: str) -> Task | None:
+        for task in self._world.task_rows.values():
+            if (
+                task.principal_id == principal_id
+                and task.recurrence_id == recurrence_id
+                and task.occurrence_key == occurrence_key
+            ):
+                return task
+        return None
+
+    def insert_commitment(self, commitment: Commitment) -> None:
+        self._world.commitments[commitment.commitment_id] = commitment
+
+    def get_commitment(self, principal_id: str, commitment_id: str) -> Commitment | None:
+        commitment = self._world.commitments.get(commitment_id)
+        if commitment is None or commitment.principal_id != principal_id:
+            return None
+        return commitment
+
+    def save_commitment(self, commitment: Commitment, *, expected_version: int) -> bool:
+        current = self.get_commitment(commitment.principal_id, commitment.commitment_id)
+        if current is None or current.current_version != expected_version:
+            return False
+        self._world.commitments[commitment.commitment_id] = commitment
+        return True
+
+    def list_commitments(
+        self,
+        principal_id: str,
+        *,
+        direction: CommitmentDirection | None,
+        limit: int,
+    ) -> tuple[Commitment, ...]:
+        found = [
+            item
+            for item in self._world.commitments.values()
+            if item.principal_id == principal_id
+            and (direction is None or item.direction is direction)
+        ]
+        return tuple(found[:limit])
+
+    def insert_link(self, link: TaskContextLink) -> None:
+        self._world.task_links.append(link)
+
+    def links_for(self, principal_id: str, task_id: str) -> tuple[TaskContextLink, ...]:
+        return tuple(
+            link
+            for link in self._world.task_links
+            if link.principal_id == principal_id and link.task_id == task_id
+        )
+
+    def get_idempotency(self, principal_id: str, key: str) -> TaskIdempotencyRecord | None:
+        return self._world.task_keys.get((principal_id, key))
+
+    def put_idempotency(
+        self, principal_id: str, key: str, request_hash: str, result: dict[str, object]
+    ) -> None:
+        self._world.task_keys[(principal_id, key)] = TaskIdempotencyRecord(
+            request_hash=request_hash, result=result
+        )
+
+    def insert_preview(self, preview: TaskPreviewRecord) -> None:
+        self._world.task_previews[preview.preview_id] = preview
+
+    def get_preview(self, principal_id: str, preview_id: str) -> TaskPreviewRecord | None:
+        preview = self._world.task_previews.get(preview_id)
+        if preview is None or preview.principal_id != principal_id:
+            return None
+        return preview
+
+
 class _Reviews(ReviewRepository):
     def __init__(self, world: World) -> None:
         self._world = world
@@ -715,6 +897,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def reviews(self) -> ReviewRepository:
         return _Reviews(self._world)
+
+    @property
+    def tasks(self) -> TaskRepository:
+        return _Tasks(self._world)
 
     @property
     def audit(self) -> AuditSink:
@@ -974,6 +1160,26 @@ def staged_review_case(scene: Scene, capture: CaptureVersion | None = None) -> R
     )
     scene.world.review_cases.append(case)
     return case
+
+
+def staged_task(scene: Scene, *, title: str = "synthetic staged task") -> Task:
+    """One accepted Task so read/update/transition/history have a subject."""
+    task = Task(
+        task_id=issue_identifier(IdKind.TASK),
+        principal_id=scene.principal.principal_id,
+        title=title,
+        state=TaskState.OPEN,
+        task_role=TaskRole.ACTION,
+        priority=TaskPriority.P3,
+        evidence_state=ContinuityEvidenceState.ACCEPTED,
+        acceptance_kind=AcceptanceKind.DIRECT_PRINCIPAL,
+        current_version=1,
+        opened_at=WHEN,
+        created_at=WHEN,
+        updated_at=WHEN,
+    )
+    scene.world.task_rows[task.task_id] = task
+    return task
 
 
 @pytest.fixture

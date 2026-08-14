@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-fifteen capabilities. There are two ways to prove that and only one of them stays
+public capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -26,7 +26,7 @@ way to see what a transport *built* rather than what it returned — and compare
 as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
-**And the answers, over all fifteen capabilities and ten refusals.** Each
+**And the answers, over the public capabilities and ten refusals.** Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
 `sources.enroll` alone would make the second and third callers idempotent
@@ -136,6 +136,20 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     """
     capture = staged_capture(scene)
     review_case = staged_review_case(scene, capture)
+    from tests.conftest import staged_task
+
+    from my_pa.contracts.ports import TaskPreviewRecord
+
+    readable = staged_task(scene, title="parity readable task")
+    mutable = staged_task(scene, title="parity mutable task")
+    preview = issue_identifier(IdKind.BULK_PREVIEW)
+    scene.world.task_previews[preview] = TaskPreviewRecord(
+        preview_id=preview,
+        principal_id=scene.principal.principal_id,
+        operation="reschedule",
+        operation_hash="0" * 64,
+        targets=((mutable.task_id, 1),),
+    )
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -194,6 +208,44 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "expected_review_version": 0,
             "disposition": "reject",
         },
+        Capability.TASKS_READ: {"task_id": readable.task_id},
+        Capability.TASKS_LIST: {"page_size": 10},
+        Capability.TASKS_SEARCH: {"query": "turner", "page_size": 10},
+        Capability.TASKS_HISTORY: {"task_id": readable.task_id},
+        Capability.TASKS_ATTENTION: {},
+        Capability.TASKS_CREATE: {
+            "title": "parity probe task",
+            "idempotency_key": "parity-task-0001",
+        },
+        Capability.TASKS_UPDATE: {
+            "task_id": readable.task_id,
+            "expected_version": 1,
+            "idempotency_key": "parity-task-upd-0001",
+            "title": "renamed",
+        },
+        Capability.TASKS_TRANSITION: {
+            "task_id": mutable.task_id,
+            "expected_version": 1,
+            "idempotency_key": "parity-task-trn-0001",
+            "target_state": "completed",
+        },
+        Capability.TASKS_PREVIEW: {
+            "operation": "reschedule",
+            "task_ids": [mutable.task_id],
+            "expected_versions": [1],
+        },
+        Capability.TASKS_BULK: {
+            "preview_token": preview,
+            "idempotency_key": "parity-task-blk-0001",
+        },
+        Capability.TASKS_WAITING_ON: {},
+        Capability.COMMITMENTS_CREATE: {
+            "counterparty_person_id": "per_00000000deadbeef",
+            "direction": "owed_to_principal",
+            "summary": "parity commitment",
+            "idempotency_key": "parity-cmt-0001",
+        },
+        Capability.COMMITMENTS_LIST: {},
     }
 
 
@@ -317,7 +369,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 16, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 29, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -988,7 +1040,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: fifteen capabilities answered from an empty world prove little."""
+    """Guard the matrix: public capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

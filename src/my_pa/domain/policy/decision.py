@@ -153,6 +153,19 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.CAPTURE_SEARCH,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
+        Capability.TASKS_ATTENTION,
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_PREVIEW,
+        Capability.TASKS_BULK,
+        Capability.TASKS_WAITING_ON,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_LIST,
     }
 )
 

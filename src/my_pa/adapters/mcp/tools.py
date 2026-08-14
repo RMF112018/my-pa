@@ -41,7 +41,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from types import MappingProxyType, UnionType
 from typing import Any, Final, Union, get_args, get_origin, get_type_hints
@@ -81,6 +81,8 @@ def _schema_for(annotation: Any) -> dict[str, Any] | None:  # noqa: ANN401 - a t
         # has a name for which kind, so this publishes the wire shape rather than
         # the Python type.
         return {"type": "string", "format": "date-time"}
+    if annotation is date:
+        return {"type": "string", "format": "date"}
     origin = get_origin(annotation)
     if origin is UnionType or origin is Union:
         optional = [member for member in get_args(annotation) if member is not type(None)]

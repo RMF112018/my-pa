@@ -112,11 +112,15 @@ from itertools import islice
 from types import MappingProxyType
 from typing import Any, Final, assert_never
 
+from my_pa.application import tasks as task_use_cases
 from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.commands import (
+    ApplyTaskBulk,
     Command,
     CreateCapture,
+    CreateCommitment,
+    CreateTask,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -124,14 +128,24 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListCommitments,
     ListReviewCases,
     ListSources,
+    ListTasks,
+    PreviewTaskBulk,
     ReadCapture,
     ReadKnowledge,
+    ReadTask,
+    ReadTaskHistory,
     Representation,
     ReviseCapture,
     SearchCaptures,
     SearchKnowledge,
+    SearchTasks,
+    TasksAttention,
+    TasksWaitingOn,
+    TransitionTask,
+    UpdateTask,
 )
 from my_pa.application.disclosure import Limitation, disclosure_for, unenrolled_disclosure
 from my_pa.application.errors import (
@@ -1311,6 +1325,172 @@ class ApplicationService:
             ),
         )
 
+    def _tasks_read(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadTask
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.read_task(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _tasks_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListTasks
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.list_tasks(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+                page_size=self._page_size(command.page_size),
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _tasks_search(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchTasks
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.search_tasks(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+                page_size=self._page_size(command.page_size),
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _tasks_history(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadTaskHistory
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.history(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _tasks_attention(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: TasksAttention
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.attention(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+                now=self._clock(),
+                page_size=self._page_size(None),
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _tasks_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateTask
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.create_task(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+                at=self._clock(),
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _tasks_update(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: UpdateTask
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.update_task(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+                at=self._clock(),
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _tasks_transition(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: TransitionTask
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.transition_task(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+                at=self._clock(),
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _tasks_preview(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: PreviewTaskBulk
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.preview_bulk(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _tasks_bulk(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ApplyTaskBulk
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.apply_bulk(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+                at=self._clock(),
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _tasks_waiting_on(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: TasksWaitingOn
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.waiting_on(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                page_size=self._page_size(command.page_size),
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _commitments_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateCommitment
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.create_commitment(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+                at=self._clock(),
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
+    def _commitments_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListCommitments
+    ) -> _Result:
+        return _Result(
+            payload=task_use_cases.list_commitments(
+                unit_of_work.tasks,
+                principal_id=authorization.principal.principal_id,
+                command=command,
+                page_size=self._page_size(command.page_size),
+            ),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("task_store",)),
+        )
+
     def _admit(
         self,
         unit_of_work: UnitOfWork,
@@ -1719,5 +1899,18 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CAPTURE_SEARCH: ApplicationService._capture_search,
         Capability.REVIEW_LIST: ApplicationService._review_list,
         Capability.REVIEW_DECIDE: ApplicationService._review_decide,
+        Capability.TASKS_READ: ApplicationService._tasks_read,
+        Capability.TASKS_LIST: ApplicationService._tasks_list,
+        Capability.TASKS_SEARCH: ApplicationService._tasks_search,
+        Capability.TASKS_HISTORY: ApplicationService._tasks_history,
+        Capability.TASKS_ATTENTION: ApplicationService._tasks_attention,
+        Capability.TASKS_CREATE: ApplicationService._tasks_create,
+        Capability.TASKS_UPDATE: ApplicationService._tasks_update,
+        Capability.TASKS_TRANSITION: ApplicationService._tasks_transition,
+        Capability.TASKS_PREVIEW: ApplicationService._tasks_preview,
+        Capability.TASKS_BULK: ApplicationService._tasks_bulk,
+        Capability.TASKS_WAITING_ON: ApplicationService._tasks_waiting_on,
+        Capability.COMMITMENTS_CREATE: ApplicationService._commitments_create,
+        Capability.COMMITMENTS_LIST: ApplicationService._commitments_list,
     }
 )

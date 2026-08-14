@@ -172,6 +172,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "native_source_review_routes",
         }
     ),
+    "b8c4d1e6a907": frozenset(
+        {
+            "task_recurrences",
+            "tasks",
+            "task_revisions",
+            "task_context_links",
+            "task_idempotency",
+            "task_bulk_previews",
+            "commitments",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

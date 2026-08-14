@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the fifteen capabilities is addressable over HTTP
+**Reachability.** Every one of the public capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a sixteenth capability added to the domain arrives as a failing row instead
+here, so a later capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -47,6 +47,7 @@ from tests.conftest import (
     staged_capture,
     staged_review_case,
     staged_search,
+    staged_task,
 )
 from tests.wire import Wire, serve
 
@@ -54,8 +55,11 @@ from my_pa.adapters.http import create_http_app
 from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
+    ApplyTaskBulk,
     Command,
     CreateCapture,
+    CreateCommitment,
+    CreateTask,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -63,14 +67,24 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListCommitments,
     ListReviewCases,
     ListSources,
+    ListTasks,
+    PreviewTaskBulk,
     ReadCapture,
     ReadKnowledge,
+    ReadTask,
+    ReadTaskHistory,
     Representation,
     ReviseCapture,
     SearchCaptures,
     SearchKnowledge,
+    SearchTasks,
+    TasksAttention,
+    TasksWaitingOn,
+    TransitionTask,
+    UpdateTask,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import KnowledgeRecord
@@ -83,6 +97,7 @@ from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.tasks.models import CommitmentDirection, TaskState
 
 ALL_CAPABILITIES = list(Capability)
 
@@ -123,6 +138,18 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     """
     capture = staged_capture(scene)
     review_case = staged_review_case(scene, capture)
+    readable = staged_task(scene, title="http readable task")
+    mutable = staged_task(scene, title="http mutable task")
+    preview = issue_identifier(IdKind.BULK_PREVIEW)
+    from my_pa.contracts.ports import TaskPreviewRecord
+
+    scene.world.task_previews[preview] = TaskPreviewRecord(
+        preview_id=preview,
+        principal_id=scene.principal.principal_id,
+        operation="reschedule",
+        operation_hash="0" * 64,
+        targets=((mutable.task_id, 1),),
+    )
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id},
@@ -168,6 +195,43 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "expected_review_version": 0,
             "disposition": "reject",
         },
+        Capability.TASKS_READ: {"task_id": readable.task_id},
+        Capability.TASKS_LIST: {},
+        Capability.TASKS_SEARCH: {"query": "turner"},
+        Capability.TASKS_HISTORY: {"task_id": readable.task_id},
+        Capability.TASKS_ATTENTION: {},
+        Capability.TASKS_CREATE: {
+            "title": "http probe task",
+            "idempotency_key": "http-task-0001",
+        },
+        Capability.TASKS_UPDATE: {
+            "task_id": readable.task_id,
+            "expected_version": 1,
+            "idempotency_key": "http-task-upd-0001",
+        },
+        Capability.TASKS_TRANSITION: {
+            "task_id": mutable.task_id,
+            "expected_version": 1,
+            "idempotency_key": "http-task-trn-0001",
+            "target_state": "completed",
+        },
+        Capability.TASKS_PREVIEW: {
+            "operation": "reschedule",
+            "task_ids": [mutable.task_id],
+            "expected_versions": [1],
+        },
+        Capability.TASKS_BULK: {
+            "preview_token": preview,
+            "idempotency_key": "http-task-blk-0001",
+        },
+        Capability.TASKS_WAITING_ON: {},
+        Capability.COMMITMENTS_CREATE: {
+            "counterparty_person_id": "per_00000000deadbeef",
+            "direction": "owed_to_principal",
+            "summary": "http commitment",
+            "idempotency_key": "http-cmt-0001",
+        },
+        Capability.COMMITMENTS_LIST: {},
     }
 
 
@@ -185,6 +249,13 @@ def commands_for(
     normalisation test below compares the two, and a comparison against the
     function under test would prove only that it agrees with itself.
     """
+    readable = next(
+        task for task in scene.world.task_rows.values() if task.title == "http readable task"
+    )
+    mutable = next(
+        task for task in scene.world.task_rows.values() if task.title == "http mutable task"
+    )
+    preview = next(iter(scene.world.task_previews))
     return {
         Capability.CAPABILITIES_GET: GetCapabilities(),
         Capability.SOURCES_LIST: ListSources(source_id=scene.source.source_id),
@@ -229,6 +300,42 @@ def commands_for(
             expected_review_version=0,
             disposition=Disposition.REJECT,
         ),
+        Capability.TASKS_READ: ReadTask(task_id=readable.task_id),
+        Capability.TASKS_LIST: ListTasks(),
+        Capability.TASKS_SEARCH: SearchTasks(query="turner"),
+        Capability.TASKS_HISTORY: ReadTaskHistory(task_id=readable.task_id),
+        Capability.TASKS_ATTENTION: TasksAttention(),
+        Capability.TASKS_CREATE: CreateTask(
+            title="http probe task", idempotency_key="http-task-0001"
+        ),
+        Capability.TASKS_UPDATE: UpdateTask(
+            task_id=readable.task_id,
+            expected_version=1,
+            idempotency_key="http-task-upd-0001",
+        ),
+        Capability.TASKS_TRANSITION: TransitionTask(
+            task_id=mutable.task_id,
+            expected_version=1,
+            idempotency_key="http-task-trn-0001",
+            target_state=TaskState.COMPLETED,
+        ),
+        Capability.TASKS_PREVIEW: PreviewTaskBulk(
+            operation="reschedule",
+            task_ids=(mutable.task_id,),
+            expected_versions=(1,),
+        ),
+        Capability.TASKS_BULK: ApplyTaskBulk(
+            preview_token=preview,
+            idempotency_key="http-task-blk-0001",
+        ),
+        Capability.TASKS_WAITING_ON: TasksWaitingOn(),
+        Capability.COMMITMENTS_CREATE: CreateCommitment(
+            counterparty_person_id="per_00000000deadbeef",
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            summary="http commitment",
+            idempotency_key="http-cmt-0001",
+        ),
+        Capability.COMMITMENTS_LIST: ListCommitments(),
     }
 
 

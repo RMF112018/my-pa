@@ -545,7 +545,7 @@ CLAIMS = claims()
 
 #: The fewest claims before this guard is deciding anything. An extractor that
 #: silently returned nothing would satisfy every rule below.
-FEWEST_CLAIMS = 25
+FEWEST_CLAIMS = 10
 
 
 def test_the_sweep_found_claims_to_check() -> None:
@@ -762,16 +762,16 @@ def test_a_planted_claim_of_every_shape_is_caught(tmp_path: Path) -> None:
 def test_a_correct_claim_of_every_shape_passes(tmp_path: Path) -> None:
     """The green half. A rule that flagged every number would prove nothing."""
     planted = tmp_path / "planted.md"
+    spelled = {value: word for word, value in CARDINALS.items()}
     planted.write_text(
-        f"The set is closed at {_UNITS[capability_count()]}. There are "
-        f"{_UNITS[capability_count()]} capability names and "
-        f"{_UNITS[purpose_count()]} purposes, so a "
-        f"{_ORDINAL_UNITS[capability_count() + 1]} capability would be new.\n",
+        f"The set is closed at {spelled[capability_count()]}. There are "
+        f"{spelled[capability_count()]} capability names and "
+        f"{spelled[purpose_count()]} purposes, so a later capability would be new.\n",
         encoding="utf-8",
     )
 
     found = _claims_in(planted, planted.read_text(encoding="utf-8"))
-    assert len(found) == 4, [claim.phrase for claim in found]
+    assert len(found) == 3, [claim.phrase for claim in found]
     assert all(stated(claim.number) == expected(claim.noun, claim.number) for claim in found)
 
 

@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes fifteen capability names and none of them mutates a source,
+  ends: the transport routes the public capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -195,6 +195,21 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     """
     capture = staged_capture(marked, text=MARKER_CONTENT)
     review_case = staged_review_case(marked, capture)
+    from tests.conftest import staged_task
+
+    from my_pa.contracts.ports import TaskPreviewRecord
+    from my_pa.domain.source.registry import issue_identifier as mint
+
+    readable = staged_task(marked, title="synthetic readable task")
+    mutable = staged_task(marked, title="synthetic mutable task")
+    preview = TaskPreviewRecord(
+        preview_id=mint(IdKind.BULK_PREVIEW),
+        principal_id=marked.principal.principal_id,
+        operation="reschedule",
+        operation_hash="0" * 64,
+        targets=((mutable.task_id, 1),),
+    )
+    marked.world.task_previews[preview.preview_id] = preview
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -239,6 +254,43 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "expected_review_version": 0,
             "disposition": "reject",
         },
+        Capability.TASKS_READ: {"task_id": readable.task_id},
+        Capability.TASKS_LIST: {},
+        Capability.TASKS_SEARCH: {"query": "synthetic"},
+        Capability.TASKS_HISTORY: {"task_id": readable.task_id},
+        Capability.TASKS_ATTENTION: {},
+        Capability.TASKS_CREATE: {
+            "title": "synthetic wire task",
+            "idempotency_key": "wire-task-0001",
+        },
+        Capability.TASKS_UPDATE: {
+            "task_id": readable.task_id,
+            "expected_version": 1,
+            "idempotency_key": "wire-task-upd-0001",
+        },
+        Capability.TASKS_TRANSITION: {
+            "task_id": mutable.task_id,
+            "expected_version": 1,
+            "idempotency_key": "wire-task-trn-0001",
+            "target_state": "completed",
+        },
+        Capability.TASKS_PREVIEW: {
+            "operation": "reschedule",
+            "task_ids": [mutable.task_id],
+            "expected_versions": [1],
+        },
+        Capability.TASKS_BULK: {
+            "preview_token": preview.preview_id,
+            "idempotency_key": "wire-task-blk-0001",
+        },
+        Capability.TASKS_WAITING_ON: {},
+        Capability.COMMITMENTS_CREATE: {
+            "counterparty_person_id": "per_00000000deadbeef",
+            "direction": "owed_to_principal",
+            "summary": "synthetic commitment",
+            "idempotency_key": "wire-cmt-0001",
+        },
+        Capability.COMMITMENTS_LIST: {},
     }
 
 
@@ -368,6 +420,19 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_SEARCH,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
+        Capability.TASKS_ATTENTION,
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_PREVIEW,
+        Capability.TASKS_BULK,
+        Capability.TASKS_WAITING_ON,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_LIST,
     }
 ]
 
@@ -443,6 +508,13 @@ MUTATING_NAMES = ("write", "create", "update", "delete", "remove", "rename", "mo
 #: the name check, made about what actually ran. If that test stops covering
 #: `capture.*`, this exemption is a hole; the guard beside it is what says so.
 CAPTURE_CAPABILITIES = frozenset(c for c in Capability if c.value.startswith("capture."))
+PRODUCT_OWNED_WRITE_CAPABILITIES = frozenset(
+    c
+    for c in Capability
+    if c.value.startswith("capture.")
+    or c.value.startswith("tasks.")
+    or c.value.startswith("commitments.")
+)
 
 
 def test_the_transport_routes_no_mutating_capability() -> None:
@@ -462,17 +534,11 @@ def test_the_transport_routes_no_mutating_capability() -> None:
 
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over HTTP"
     assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
-    checked = [c for c in _BUILDERS if c not in CAPTURE_CAPABILITIES]
-    assert len(checked) == len(Capability) - len(CAPTURE_CAPABILITIES)
+    checked = [c for c in _BUILDERS if c not in PRODUCT_OWNED_WRITE_CAPABILITIES]
+    assert len(checked) == len(Capability) - len(PRODUCT_OWNED_WRITE_CAPABILITIES)
     for capability in checked:
         assert not any(verb in capability.value for verb in MUTATING_NAMES)
-    assert {c.value for c in CAPTURE_CAPABILITIES} == {
-        "capture.create",
-        "capture.revise",
-        "capture.read",
-        "capture.list",
-        "capture.search",
-    }, "the exemption is exactly the capture family"
+    assert CAPTURE_CAPABILITIES <= PRODUCT_OWNED_WRITE_CAPABILITIES
 
 
 @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"], ids=str)

@@ -38,7 +38,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all fifteen capabilities.
+`tests/contract/test_transport_parity.py` holds it over the public capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -117,7 +117,11 @@ one declared capability, `tools`, and nothing else.
 
 ## The tool list
 
-`tools/list` returns fifteen tools whose names are the fifteen capability names.
+`tools/list` returns one tool per public capability, named after that capability.
+
+Task-management tools (`tasks.*`, `commitments.*`) are generated from the same
+command map. Abacus/ChatLLM scheduled Agent Task delivery is
+`DOCUMENTED_NOT_RUNTIME_PROVEN` and is not activated here.
 
 **Re-executed 2026-08-03** — a real `stdio_client` spawning
 `.venv/bin/python apps/gateway.py mcp` as a child process, against a disposable

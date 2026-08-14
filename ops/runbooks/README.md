@@ -7,7 +7,7 @@ Operational procedures for running `my-pa` locally.
 | [`end-to-end-operations.md`](end-to-end-operations.md) | **Start here.** The ordered sequence: probe the database, migrate, register, enroll, run the worker, search and read, and stop both processes — and the limitation that sequence walked into. |
 | [`postgres-operations.md`](postgres-operations.md) | The canonical `my_pa` PostgreSQL database: start, stop, health check, connect, back up, restore. |
 | [`worker-operations.md`](worker-operations.md) | The worker process: running it bounded or until signalled, stopping it cleanly, and how a crashed worker's job is recovered. |
-| [`gateway-operations.md`](gateway-operations.md) | The HTTP gateway process: running it on loopback, calling the fifteen capabilities, the status each error code takes, its two connection pools, and stopping it. |
+| [`gateway-operations.md`](gateway-operations.md) | The HTTP gateway process: running it on loopback, calling the public capabilities, the status each error code takes, its two connection pools, and stopping it. |
 | [`mcp-and-cli-operations.md`](mcp-and-cli-operations.md) | The other two transports: the MCP server on stdio and the operator CLI. What is identical to HTTP and why, the handshake and derived tool list, the CLI's options and exit status, and what a bad command line does. |
 
 Related, outside this directory:

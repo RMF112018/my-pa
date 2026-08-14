@@ -151,6 +151,21 @@ from my_pa.domain.source.enrollment import (
 )
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind
+from my_pa.domain.tasks.models import (
+    MAX_DESCRIPTION_CHARACTERS,
+    MAX_SUMMARY_CHARACTERS,
+    MAX_TITLE_CHARACTERS,
+    AcceptanceKind,
+    CommitmentDirection,
+    CommitmentState,
+    ContextLinkKind,
+    ContinuityEvidenceState,
+    RecurrenceFrequency,
+    TaskOrigin,
+    TaskPriority,
+    TaskRole,
+    TaskState,
+)
 
 SCHEMA: Final = "knowledge"
 
@@ -2837,4 +2852,249 @@ native_live_activation_gates = Table(
     _is_identifier("gate_id", IdKind.NATIVE_LIVE_GATE),
     _one_of("state", LiveActivationGateState, name="native_live_gate_state_is_known"),
     UniqueConstraint("bucket_id", name="one_native_live_gate_per_bucket"),
+)
+
+task_recurrences = Table(
+    "task_recurrences",
+    METADATA,
+    Column("recurrence_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("frequency", Text, nullable=False),
+    Column("timezone", Text, nullable=False),
+    Column("interval", Integer, nullable=False, server_default=text("1")),
+    Column("weekdays", ARRAY(Integer), nullable=False, server_default=text("'{}'")),
+    Column("start_date", Date),
+    Column("start_at", DateTime(timezone=True)),
+    Column("series_title", Text, nullable=False, server_default=text("''")),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("recurrence_id", IdKind.TASK_RECURRENCE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("frequency", RecurrenceFrequency),
+    CheckConstraint("interval >= 1", name="task_recurrence_interval_is_positive"),
+    CheckConstraint(
+        "(start_date IS NULL) <> (start_at IS NULL)",
+        name="task_recurrence_start_is_date_xor_instant",
+    ),
+    UniqueConstraint("principal_id", "recurrence_id", name="task_recurrence_is_principal_local"),
+    Index("task_recurrences_by_principal", "principal_id"),
+)
+
+tasks = Table(
+    "tasks",
+    METADATA,
+    Column("task_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("description", Text),
+    Column("state", Text, nullable=False),
+    Column("task_role", Text, nullable=False),
+    Column("priority", Text, nullable=False, server_default=text("'p3'")),
+    Column("evidence_state", Text, nullable=False),
+    Column("acceptance_kind", Text, nullable=False),
+    Column("accepted_by_review_decision_id", Text),
+    Column("origin_evidence_ref", Text),
+    Column("due_date", Date),
+    Column("due_at", DateTime(timezone=True)),
+    Column("due_timezone", Text),
+    Column("scheduled_date", Date),
+    Column("scheduled_at", DateTime(timezone=True)),
+    Column("deferred_until", DateTime(timezone=True)),
+    Column("archived_at", DateTime(timezone=True)),
+    Column("current_version", Integer, nullable=False, server_default=text("1")),
+    Column("recurrence_id", Text),
+    Column("occurrence_key", Text),
+    Column("project_id", Text),
+    Column("situation_id", Text),
+    Column("person_id", Text),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True)),
+    Column("closure_evidence_ref", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("task_id", IdKind.TASK),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("state", TaskState),
+    _one_of("task_role", TaskRole),
+    _one_of("priority", TaskPriority),
+    _one_of("evidence_state", ContinuityEvidenceState),
+    _one_of("acceptance_kind", AcceptanceKind),
+    CheckConstraint(
+        f"char_length(title) BETWEEN 1 AND {MAX_TITLE_CHARACTERS}",
+        name="task_title_is_bounded",
+    ),
+    CheckConstraint(
+        f"description IS NULL OR char_length(description) <= {MAX_DESCRIPTION_CHARACTERS}",
+        name="task_description_is_bounded",
+    ),
+    CheckConstraint("current_version >= 1", name="task_version_starts_at_one"),
+    CheckConstraint(
+        "(due_date IS NULL) OR (due_at IS NULL)",
+        name="task_due_is_date_xor_instant",
+    ),
+    CheckConstraint(
+        "(scheduled_date IS NULL) OR (scheduled_at IS NULL)",
+        name="task_schedule_is_date_xor_instant",
+    ),
+    CheckConstraint(
+        "(recurrence_id IS NULL) = (occurrence_key IS NULL)",
+        name="task_occurrence_names_its_series",
+    ),
+    CheckConstraint(
+        "(state IN ('completed', 'cancelled')) = (closed_at IS NOT NULL)",
+        name="task_terminal_state_records_closed_at",
+    ),
+    CheckConstraint(
+        "project_id IS NULL OR project_id ~ '^prj_[A-Za-z0-9]{8,64}$'",
+        name="task_project_id_has_prefix",
+    ),
+    CheckConstraint(
+        "situation_id IS NULL OR situation_id ~ '^sit_[A-Za-z0-9]{8,64}$'",
+        name="task_situation_id_has_prefix",
+    ),
+    CheckConstraint(
+        "person_id IS NULL OR person_id ~ '^per_[A-Za-z0-9]{8,64}$'",
+        name="task_person_id_has_prefix",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "recurrence_id"],
+        [
+            f"{SCHEMA}.task_recurrences.principal_id",
+            f"{SCHEMA}.task_recurrences.recurrence_id",
+        ],
+        name="task_recurrence_is_principal_local",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "recurrence_id",
+        "occurrence_key",
+        name="task_occurrence_key_is_unique",
+    ),
+    Index("tasks_by_principal", "principal_id"),
+    Index(
+        "one_actionable_occurrence_per_recurrence",
+        "principal_id",
+        "recurrence_id",
+        unique=True,
+        postgresql_where=text(
+            "recurrence_id IS NOT NULL AND state NOT IN ('completed', 'cancelled')"
+        ),
+    ),
+)
+
+task_revisions = Table(
+    "task_revisions",
+    METADATA,
+    Column("revision_id", Text, primary_key=True),
+    Column("task_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("origin", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("priority", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("prior_revision_id", Text),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("revision_id", IdKind.TASK_REVISION),
+    _is_identifier("task_id", IdKind.TASK),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("origin", TaskOrigin),
+    _one_of("state", TaskState),
+    _one_of("priority", TaskPriority),
+    UniqueConstraint("principal_id", "task_id", "version", name="task_revision_version_is_unique"),
+    Index("task_revisions_by_task", "principal_id", "task_id"),
+)
+
+task_context_links = Table(
+    "task_context_links",
+    METADATA,
+    Column("link_id", Text, primary_key=True),
+    Column("task_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("target_id", Text, nullable=False),
+    _is_identifier("link_id", IdKind.TASK_LINK),
+    _is_identifier("task_id", IdKind.TASK),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("kind", ContextLinkKind),
+    UniqueConstraint(
+        "principal_id", "task_id", "kind", "target_id", name="task_context_link_is_unique"
+    ),
+)
+
+task_idempotency = Table(
+    "task_idempotency",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_hash", Text, nullable=False),
+    Column("result_json", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "char_length(idempotency_key) BETWEEN 8 AND 128",
+        name="task_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_hash ~ '^[0-9a-f]{64}$'",
+        name="task_idempotency_hash_is_sha256",
+    ),
+    PrimaryKeyConstraint("principal_id", "idempotency_key"),
+)
+
+task_bulk_previews = Table(
+    "task_bulk_previews",
+    METADATA,
+    Column("preview_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("operation", Text, nullable=False),
+    Column("operation_hash", Text, nullable=False),
+    Column("targets_json", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("preview_id", IdKind.BULK_PREVIEW),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "operation_hash ~ '^[0-9a-f]{64}$'",
+        name="task_preview_hash_is_sha256",
+    ),
+)
+
+commitments = Table(
+    "commitments",
+    METADATA,
+    Column("commitment_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("counterparty_person_id", Text, nullable=False),
+    Column("direction", Text, nullable=False),
+    Column("summary", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("evidence_state", Text, nullable=False),
+    Column("origin_evidence_ref", Text),
+    Column("due_date", Date),
+    Column("due_at", DateTime(timezone=True)),
+    Column("due_timezone", Text),
+    Column("current_version", Integer, nullable=False, server_default=text("1")),
+    Column("opened_at", DateTime(timezone=True), nullable=False),
+    Column("closed_at", DateTime(timezone=True)),
+    Column("closure_evidence_ref", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("commitment_id", IdKind.COMMITMENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("counterparty_person_id", IdKind.PERSON),
+    _one_of("direction", CommitmentDirection),
+    _one_of("state", CommitmentState),
+    _one_of("evidence_state", ContinuityEvidenceState),
+    CheckConstraint(
+        f"char_length(summary) BETWEEN 1 AND {MAX_SUMMARY_CHARACTERS}",
+        name="commitment_summary_is_bounded",
+    ),
+    CheckConstraint(
+        "(due_date IS NULL) OR (due_at IS NULL)",
+        name="commitment_due_is_date_xor_instant",
+    ),
+    CheckConstraint(
+        "(state = 'closed') = (closed_at IS NOT NULL)",
+        name="commitment_closed_state_records_closed_at",
+    ),
+    Index("commitments_by_principal", "principal_id"),
 )

@@ -33,7 +33,7 @@ inside the payload the caller controls.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import ClassVar
 
@@ -44,10 +44,20 @@ from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.tasks.models import (
+    IDEMPOTENCY_KEY_PATTERN,
+    CommitmentDirection,
+    RecurrenceFrequency,
+    TaskRole,
+    TaskState,
+)
 
 __all__ = [
+    "ApplyTaskBulk",
     "Command",
     "CreateCapture",
+    "CreateCommitment",
+    "CreateTask",
     "DecideReviewCase",
     "EnrollSource",
     "FetchSource",
@@ -55,14 +65,24 @@ __all__ = [
     "GetSourceMetadata",
     "GetSourceStatus",
     "ListCaptures",
+    "ListCommitments",
     "ListReviewCases",
     "ListSources",
+    "ListTasks",
+    "PreviewTaskBulk",
     "ReadCapture",
     "ReadKnowledge",
+    "ReadTask",
+    "ReadTaskHistory",
     "Representation",
     "ReviseCapture",
     "SearchCaptures",
     "SearchKnowledge",
+    "SearchTasks",
+    "TasksAttention",
+    "TasksWaitingOn",
+    "TransitionTask",
+    "UpdateTask",
 ]
 
 
@@ -559,6 +579,300 @@ class DecideReviewCase:
             raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
 
 
+def _optional_identifier(value: str | None, kind: IdKind, detail: SafeDetail) -> str | None:
+    if value is None:
+        return None
+    return _identifier(value, kind, detail)
+
+
+def _idempotency_key(value: str) -> str:
+    if not isinstance(value, str) or not IDEMPOTENCY_KEY_PATTERN.fullmatch(value):
+        raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+    return value
+
+
+def _optional_date(value: date | None, detail: SafeDetail) -> date | None:
+    if value is None:
+        return None
+    if not isinstance(value, date) or isinstance(value, datetime):
+        raise InvalidRequestError(detail)
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class ReadTask:
+    """`tasks.read`: one Principal-owned Task by identifier."""
+
+    capability: ClassVar[Capability] = Capability.TASKS_READ
+
+    task_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListTasks:
+    """`tasks.list`: a bounded page of the Principal's Tasks."""
+
+    capability: ClassVar[Capability] = Capability.TASKS_LIST
+
+    state: TaskState | None = None
+    task_role: TaskRole | None = None
+    include_archived: bool = False
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.state is not None and not isinstance(self.state, TaskState):
+            raise InvalidRequestError(SafeDetail.STATE)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchTasks:
+    """`tasks.search`: lexical search over the Principal's Task titles."""
+
+    capability: ClassVar[Capability] = Capability.TASKS_SEARCH
+
+    query: str = field(repr=False)
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, str) or not self.query.strip():
+            raise InvalidRequestError(SafeDetail.QUERY)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadTaskHistory:
+    """`tasks.history`: append-only revisions for one Task."""
+
+    capability: ClassVar[Capability] = Capability.TASKS_HISTORY
+
+    task_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class TasksAttention:
+    """`tasks.attention`: deterministic next-work ranking with reason codes."""
+
+    capability: ClassVar[Capability] = Capability.TASKS_ATTENTION
+
+    include_waiting: bool = False
+    include_deferred: bool = False
+    timezone: str = "UTC"
+
+
+@dataclass(frozen=True, slots=True)
+class CreateTask:
+    """`tasks.create`: accept a direct Principal instruction as a Task."""
+
+    capability: ClassVar[Capability] = Capability.TASKS_CREATE
+
+    title: str
+    idempotency_key: str
+    description: str | None = None
+    priority: str = "p3"
+    task_role: TaskRole = TaskRole.ACTION
+    due_date: date | None = None
+    due_at: datetime | None = None
+    due_timezone: str | None = None
+    scheduled_date: date | None = None
+    scheduled_at: datetime | None = None
+    deferred_until: datetime | None = None
+    person_id: str | None = None
+    project_id: str | None = None
+    situation_id: str | None = None
+    origin_evidence_ref: str | None = None
+    recurrence_frequency: RecurrenceFrequency | None = None
+    recurrence_weekdays: tuple[int, ...] = ()
+    conversation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.title, str) or not self.title.strip():
+            raise InvalidRequestError(SafeDetail.TITLE)
+        _idempotency_key(self.idempotency_key)
+        _optional_date(self.due_date, SafeDetail.DUE)
+        _optional_date(self.scheduled_date, SafeDetail.SCHEDULE)
+        _moment(self.due_at, SafeDetail.DUE)
+        _moment(self.scheduled_at, SafeDetail.SCHEDULE)
+        _moment(self.deferred_until, SafeDetail.SCHEDULE)
+        if self.due_date is not None and self.due_at is not None:
+            raise InvalidRequestError(SafeDetail.DUE)
+        if self.scheduled_date is not None and self.scheduled_at is not None:
+            raise InvalidRequestError(SafeDetail.SCHEDULE)
+        _optional_identifier(self.conversation_id, IdKind.CONVERSATION, SafeDetail.CONVERSATION_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateTask:
+    """`tasks.update`: mutate fields of one Task under optimistic concurrency."""
+
+    capability: ClassVar[Capability] = Capability.TASKS_UPDATE
+
+    expected_version: int
+    idempotency_key: str
+    task_id: str | None = None
+    referenced_task_id: str | None = None
+    conversation_id: str | None = None
+    title: str | None = None
+    description: str | None = None
+    priority: str | None = None
+    task_role: TaskRole | None = None
+    due_date: date | None = None
+    due_at: datetime | None = None
+    due_timezone: str | None = None
+    scheduled_date: date | None = None
+    scheduled_at: datetime | None = None
+    deferred_until: datetime | None = None
+    clear_deferred: bool = False
+    archived: bool | None = None
+    person_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.expected_version) is not int or self.expected_version < 1:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        _idempotency_key(self.idempotency_key)
+        _optional_identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
+        _optional_identifier(self.referenced_task_id, IdKind.TASK, SafeDetail.REFERENCED_TASK_ID)
+        _optional_identifier(self.conversation_id, IdKind.CONVERSATION, SafeDetail.CONVERSATION_ID)
+        _optional_date(self.due_date, SafeDetail.DUE)
+        _optional_date(self.scheduled_date, SafeDetail.SCHEDULE)
+        _moment(self.due_at, SafeDetail.DUE)
+        _moment(self.scheduled_at, SafeDetail.SCHEDULE)
+        _moment(self.deferred_until, SafeDetail.SCHEDULE)
+        if self.due_date is not None and self.due_at is not None:
+            raise InvalidRequestError(SafeDetail.DUE)
+        if self.scheduled_date is not None and self.scheduled_at is not None:
+            raise InvalidRequestError(SafeDetail.SCHEDULE)
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionTask:
+    """`tasks.transition`: one lifecycle step, including reopen."""
+
+    capability: ClassVar[Capability] = Capability.TASKS_TRANSITION
+
+    target_state: TaskState
+    expected_version: int
+    idempotency_key: str
+    task_id: str | None = None
+    referenced_task_id: str | None = None
+    conversation_id: str | None = None
+    cancel_series: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.target_state, TaskState):
+            raise InvalidRequestError(SafeDetail.STATE)
+        if type(self.expected_version) is not int or self.expected_version < 1:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        _idempotency_key(self.idempotency_key)
+        _optional_identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
+        _optional_identifier(self.referenced_task_id, IdKind.TASK, SafeDetail.REFERENCED_TASK_ID)
+        _optional_identifier(self.conversation_id, IdKind.CONVERSATION, SafeDetail.CONVERSATION_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewTaskBulk:
+    """`tasks.preview`: bind target ids, versions, and an operation hash."""
+
+    capability: ClassVar[Capability] = Capability.TASKS_PREVIEW
+
+    operation: str
+    task_ids: tuple[str, ...]
+    expected_versions: tuple[int, ...]
+    scheduled_date: date | None = None
+    scheduled_at: datetime | None = None
+    due_date: date | None = None
+    due_at: datetime | None = None
+    due_timezone: str | None = None
+    target_state: TaskState | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operation, str) or not self.operation.strip():
+            raise InvalidRequestError(SafeDetail.SUBJECT)
+        if not self.task_ids or len(self.task_ids) != len(self.expected_versions):
+            raise InvalidRequestError(SafeDetail.TASK_ID)
+        for task_id in self.task_ids:
+            _identifier(task_id, IdKind.TASK, SafeDetail.TASK_ID)
+        if any(type(version) is not int or version < 1 for version in self.expected_versions):
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        _optional_date(self.scheduled_date, SafeDetail.SCHEDULE)
+        _optional_date(self.due_date, SafeDetail.DUE)
+        _moment(self.scheduled_at, SafeDetail.SCHEDULE)
+        _moment(self.due_at, SafeDetail.DUE)
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyTaskBulk:
+    """`tasks.bulk`: apply a previously bound preview, failing closed on drift."""
+
+    capability: ClassVar[Capability] = Capability.TASKS_BULK
+
+    preview_token: str
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.preview_token, IdKind.BULK_PREVIEW, SafeDetail.PREVIEW_TOKEN)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class TasksWaitingOn:
+    """`tasks.waiting_on`: derived view over OWED_TO_PRINCIPAL commitments."""
+
+    capability: ClassVar[Capability] = Capability.TASKS_WAITING_ON
+
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateCommitment:
+    """`commitments.create`: record a social obligation the Principal holds."""
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_CREATE
+
+    counterparty_person_id: str
+    direction: CommitmentDirection
+    summary: str
+    idempotency_key: str
+    due_date: date | None = None
+    due_at: datetime | None = None
+    due_timezone: str | None = None
+    origin_evidence_ref: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.counterparty_person_id, IdKind.PERSON, SafeDetail.SUBJECT)
+        if not isinstance(self.direction, CommitmentDirection):
+            raise InvalidRequestError(SafeDetail.SUBJECT)
+        if not isinstance(self.summary, str) or not self.summary.strip():
+            raise InvalidRequestError(SafeDetail.TITLE)
+        _idempotency_key(self.idempotency_key)
+        _optional_date(self.due_date, SafeDetail.DUE)
+        _moment(self.due_at, SafeDetail.DUE)
+        if self.due_date is not None and self.due_at is not None:
+            raise InvalidRequestError(SafeDetail.DUE)
+
+
+@dataclass(frozen=True, slots=True)
+class ListCommitments:
+    """`commitments.list`: a bounded page of the Principal's commitments."""
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_LIST
+
+    direction: CommitmentDirection | None = None
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
 type Command = (
@@ -577,4 +891,17 @@ type Command = (
     | SearchCaptures
     | ListReviewCases
     | DecideReviewCase
+    | ReadTask
+    | ListTasks
+    | SearchTasks
+    | ReadTaskHistory
+    | TasksAttention
+    | CreateTask
+    | UpdateTask
+    | TransitionTask
+    | PreviewTaskBulk
+    | ApplyTaskBulk
+    | TasksWaitingOn
+    | CreateCommitment
+    | ListCommitments
 )

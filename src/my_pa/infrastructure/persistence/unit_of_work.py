@@ -75,6 +75,7 @@ from my_pa.contracts.ports import (
     SearchOutcome,
     SourceProviders,
     SourceRepository,
+    TaskRepository,
     UnitOfWork,
     UnknownScopeError,
 )
@@ -505,6 +506,12 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def reviews(self) -> ReviewRepository:
         return _Reviews(self._open)
+
+    @property
+    def tasks(self) -> TaskRepository:
+        from my_pa.infrastructure.persistence.tasks import SqlAlchemyTaskRepository
+
+        return SqlAlchemyTaskRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

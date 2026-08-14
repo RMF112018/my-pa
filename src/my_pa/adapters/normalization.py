@@ -49,13 +49,16 @@ delivered — but the number they enforce is one number.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any, Final
 
 from my_pa.application.commands import (
+    ApplyTaskBulk,
     Command,
     CreateCapture,
+    CreateCommitment,
+    CreateTask,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -63,14 +66,24 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListCommitments,
     ListReviewCases,
     ListSources,
+    ListTasks,
+    PreviewTaskBulk,
     ReadCapture,
     ReadKnowledge,
+    ReadTask,
+    ReadTaskHistory,
     Representation,
     ReviseCapture,
     SearchCaptures,
     SearchKnowledge,
+    SearchTasks,
+    TasksAttention,
+    TasksWaitingOn,
+    TransitionTask,
+    UpdateTask,
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail, UnsupportedError
 from my_pa.contracts.v1.envelope import RequestMetadata
@@ -78,6 +91,12 @@ from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
+from my_pa.domain.tasks.models import (
+    CommitmentDirection,
+    RecurrenceFrequency,
+    TaskRole,
+    TaskState,
+)
 
 __all__ = ["MAX_REQUEST_BYTES", "PAYLOAD_KEY", "normalize"]
 
@@ -294,6 +313,132 @@ def _decide_review_case(payload: Mapping[str, Any]) -> Command:
     return DecideReviewCase(**converted)
 
 
+def _parse_date(value: object, detail: SafeDetail) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        raise InvalidRequestError(detail)
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            raise InvalidRequestError(detail) from None
+    raise InvalidRequestError(detail)
+
+
+def _enum(value: object, enum: type, detail: SafeDetail) -> object:
+    if value is None or isinstance(value, enum):
+        return value
+    if isinstance(value, str):
+        try:
+            return enum(value)
+        except ValueError:
+            raise InvalidRequestError(detail) from None
+    raise InvalidRequestError(detail)
+
+
+def _task_dates(payload: Mapping[str, Any]) -> dict[str, Any]:
+    converted = dict(payload)
+    for name, detail in (
+        ("due_date", SafeDetail.DUE),
+        ("scheduled_date", SafeDetail.SCHEDULE),
+    ):
+        if name in converted:
+            converted[name] = _parse_date(converted[name], detail)
+    return converted
+
+
+def _read_task(payload: Mapping[str, Any]) -> Command:
+    return ReadTask(**payload)
+
+
+def _list_tasks(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    if "state" in converted:
+        converted["state"] = _enum(converted["state"], TaskState, SafeDetail.STATE)
+    if "task_role" in converted:
+        converted["task_role"] = _enum(converted["task_role"], TaskRole, SafeDetail.STATE)
+    return ListTasks(**converted)
+
+
+def _search_tasks(payload: Mapping[str, Any]) -> Command:
+    return SearchTasks(**payload)
+
+
+def _read_task_history(payload: Mapping[str, Any]) -> Command:
+    return ReadTaskHistory(**payload)
+
+
+def _tasks_attention(payload: Mapping[str, Any]) -> Command:
+    return TasksAttention(**payload)
+
+
+def _create_task(payload: Mapping[str, Any]) -> Command:
+    converted = _task_dates(payload)
+    if "task_role" in converted:
+        converted["task_role"] = _enum(converted["task_role"], TaskRole, SafeDetail.STATE)
+    if "recurrence_frequency" in converted:
+        converted["recurrence_frequency"] = _enum(
+            converted["recurrence_frequency"], RecurrenceFrequency, SafeDetail.RECURRENCE
+        )
+    if "recurrence_weekdays" in converted and isinstance(converted["recurrence_weekdays"], list):
+        converted["recurrence_weekdays"] = tuple(converted["recurrence_weekdays"])
+    return CreateTask(**converted)
+
+
+def _update_task(payload: Mapping[str, Any]) -> Command:
+    converted = _task_dates(payload)
+    if "task_role" in converted:
+        converted["task_role"] = _enum(converted["task_role"], TaskRole, SafeDetail.STATE)
+    return UpdateTask(**converted)
+
+
+def _transition_task(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    if "target_state" in converted:
+        converted["target_state"] = _enum(converted["target_state"], TaskState, SafeDetail.STATE)
+    return TransitionTask(**converted)
+
+
+def _preview_task_bulk(payload: Mapping[str, Any]) -> Command:
+    converted = _task_dates(payload)
+    if "task_ids" in converted and isinstance(converted["task_ids"], list):
+        converted["task_ids"] = tuple(converted["task_ids"])
+    if "expected_versions" in converted and isinstance(converted["expected_versions"], list):
+        converted["expected_versions"] = tuple(converted["expected_versions"])
+    if "target_state" in converted:
+        converted["target_state"] = _enum(converted["target_state"], TaskState, SafeDetail.STATE)
+    return PreviewTaskBulk(**converted)
+
+
+def _apply_task_bulk(payload: Mapping[str, Any]) -> Command:
+    return ApplyTaskBulk(**payload)
+
+
+def _tasks_waiting_on(payload: Mapping[str, Any]) -> Command:
+    return TasksWaitingOn(**payload)
+
+
+def _create_commitment(payload: Mapping[str, Any]) -> Command:
+    converted = _task_dates(payload)
+    if "direction" in converted:
+        converted["direction"] = _enum(
+            converted["direction"], CommitmentDirection, SafeDetail.SUBJECT
+        )
+    return CreateCommitment(**converted)
+
+
+def _list_commitments(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    if "direction" in converted:
+        converted["direction"] = _enum(
+            converted["direction"], CommitmentDirection, SafeDetail.SUBJECT
+        )
+    return ListCommitments(**converted)
+
+
 #: One builder per command owned by these legacy transports. WP-12C adds a
 #: distinct authenticated native-host boundary; its capabilities are valid
 #: audit vocabulary but remain intentionally absent here until WP-12G owns the
@@ -316,6 +461,19 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CAPTURE_SEARCH: _search_captures,
         Capability.REVIEW_LIST: _list_review_cases,
         Capability.REVIEW_DECIDE: _decide_review_case,
+        Capability.TASKS_READ: _read_task,
+        Capability.TASKS_LIST: _list_tasks,
+        Capability.TASKS_SEARCH: _search_tasks,
+        Capability.TASKS_HISTORY: _read_task_history,
+        Capability.TASKS_ATTENTION: _tasks_attention,
+        Capability.TASKS_CREATE: _create_task,
+        Capability.TASKS_UPDATE: _update_task,
+        Capability.TASKS_PREVIEW: _preview_task_bulk,
+        Capability.TASKS_TRANSITION: _transition_task,
+        Capability.TASKS_BULK: _apply_task_bulk,
+        Capability.TASKS_WAITING_ON: _tasks_waiting_on,
+        Capability.COMMITMENTS_CREATE: _create_commitment,
+        Capability.COMMITMENTS_LIST: _list_commitments,
     }
 )
 
@@ -325,7 +483,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the fifteen names nothing.
+    not one of the public capability names nothing.
     """
     try:
         return Capability(capability)

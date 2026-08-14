@@ -51,8 +51,11 @@ from tests.conftest import (
 )
 
 from my_pa.application.commands import (
+    ApplyTaskBulk,
     Command,
     CreateCapture,
+    CreateCommitment,
+    CreateTask,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -60,13 +63,23 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     ListCaptures,
+    ListCommitments,
     ListReviewCases,
     ListSources,
+    ListTasks,
+    PreviewTaskBulk,
     ReadCapture,
     ReadKnowledge,
+    ReadTask,
+    ReadTaskHistory,
     ReviseCapture,
     SearchCaptures,
     SearchKnowledge,
+    SearchTasks,
+    TasksAttention,
+    TasksWaitingOn,
+    TransitionTask,
+    UpdateTask,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -80,6 +93,7 @@ from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.domain.source.provider import SourceProvider
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.tasks.models import CommitmentDirection, TaskState
 
 
 def commands_for(scene: Scene) -> dict[Capability, Command]:
@@ -136,6 +150,42 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             expected_review_version=0,
             disposition=Disposition.REJECT,
         ),
+        Capability.TASKS_READ: ReadTask(task_id=issue_identifier(IdKind.TASK)),
+        Capability.TASKS_LIST: ListTasks(),
+        Capability.TASKS_SEARCH: SearchTasks(query="synthetic"),
+        Capability.TASKS_HISTORY: ReadTaskHistory(task_id=issue_identifier(IdKind.TASK)),
+        Capability.TASKS_ATTENTION: TasksAttention(),
+        Capability.TASKS_CREATE: CreateTask(
+            title="denial probe", idempotency_key="denial-task-0001"
+        ),
+        Capability.TASKS_UPDATE: UpdateTask(
+            task_id=issue_identifier(IdKind.TASK),
+            expected_version=1,
+            idempotency_key="denial-task-0002",
+        ),
+        Capability.TASKS_TRANSITION: TransitionTask(
+            task_id=issue_identifier(IdKind.TASK),
+            expected_version=1,
+            idempotency_key="denial-task-0003",
+            target_state=TaskState.COMPLETED,
+        ),
+        Capability.TASKS_PREVIEW: PreviewTaskBulk(
+            operation="reschedule",
+            task_ids=(issue_identifier(IdKind.TASK),),
+            expected_versions=(1,),
+        ),
+        Capability.TASKS_BULK: ApplyTaskBulk(
+            preview_token=issue_identifier(IdKind.BULK_PREVIEW),
+            idempotency_key="denial-task-0004",
+        ),
+        Capability.TASKS_WAITING_ON: TasksWaitingOn(),
+        Capability.COMMITMENTS_CREATE: CreateCommitment(
+            counterparty_person_id=issue_identifier(IdKind.PERSON),
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            summary="denial probe",
+            idempotency_key="denial-cmt-0001",
+        ),
+        Capability.COMMITMENTS_LIST: ListCommitments(),
     }
 
 
@@ -278,6 +328,19 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_SEARCH,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
+        Capability.TASKS_ATTENTION,
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_PREVIEW,
+        Capability.TASKS_BULK,
+        Capability.TASKS_WAITING_ON,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_LIST,
     }
 ]
 
@@ -342,6 +405,19 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CAPTURE_SEARCH,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
+        Capability.TASKS_ATTENTION,
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_PREVIEW,
+        Capability.TASKS_BULK,
+        Capability.TASKS_WAITING_ON,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_LIST,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

@@ -70,6 +70,19 @@ class Capability(StrEnum):
     # land together because `adapters/mcp/tools` derives its tool set at import.
     REVIEW_LIST = "review.list"
     REVIEW_DECIDE = "review.decide"
+    TASKS_READ = "tasks.read"
+    TASKS_LIST = "tasks.list"
+    TASKS_SEARCH = "tasks.search"
+    TASKS_HISTORY = "tasks.history"
+    TASKS_ATTENTION = "tasks.attention"
+    TASKS_CREATE = "tasks.create"
+    TASKS_UPDATE = "tasks.update"
+    TASKS_TRANSITION = "tasks.transition"
+    TASKS_PREVIEW = "tasks.preview"
+    TASKS_BULK = "tasks.bulk"
+    TASKS_WAITING_ON = "tasks.waiting_on"
+    COMMITMENTS_CREATE = "commitments.create"
+    COMMITMENTS_LIST = "commitments.list"
 
 
 class NativeSourceCapability(StrEnum):
@@ -159,6 +172,19 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # the enum above records.
         Capability.REVIEW_LIST: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.REVIEW_DECIDE: frozenset({Purpose.REVIEW_DISPOSITION}),
+        Capability.TASKS_READ: frozenset({Purpose.TASK_REVIEW}),
+        Capability.TASKS_LIST: frozenset({Purpose.TASK_REVIEW}),
+        Capability.TASKS_SEARCH: frozenset({Purpose.TASK_REVIEW}),
+        Capability.TASKS_HISTORY: frozenset({Purpose.TASK_REVIEW}),
+        Capability.TASKS_ATTENTION: frozenset({Purpose.TASK_REVIEW}),
+        Capability.TASKS_WAITING_ON: frozenset({Purpose.TASK_REVIEW}),
+        Capability.COMMITMENTS_LIST: frozenset({Purpose.TASK_REVIEW}),
+        Capability.TASKS_CREATE: frozenset({Purpose.TASK_AUTHORING}),
+        Capability.TASKS_UPDATE: frozenset({Purpose.TASK_AUTHORING}),
+        Capability.TASKS_TRANSITION: frozenset({Purpose.TASK_AUTHORING}),
+        Capability.TASKS_PREVIEW: frozenset({Purpose.TASK_AUTHORING}),
+        Capability.TASKS_BULK: frozenset({Purpose.TASK_AUTHORING}),
+        Capability.COMMITMENTS_CREATE: frozenset({Purpose.TASK_AUTHORING}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

@@ -23,7 +23,7 @@ NETWORKS = {
     "worker-enrollment": {"data-plane"},
     "worker-capture": {"data-plane"},
     "web": {"ingress-plane"},
-    "proxy": {"ingress-plane"},
+    "proxy": {"ingress-plane", "host-edge"},
 }
 
 
@@ -223,19 +223,23 @@ def verify(
             errors.append(f"{name}_compose_identity")
         if inspected.get("Image") != identity["image_id"]:
             errors.append(f"{name}_image_identity")
-        actual_networks = {
-            item.rpartition("_")[2]
-            for item in inspected.get("NetworkSettings", {}).get("Networks", {})
-        }
-        if actual_networks != NETWORKS[name]:
+        actual_networks = set(inspected.get("NetworkSettings", {}).get("Networks", {}))
+        expected_networks = {f"{data['compose_project']}_{network}" for network in NETWORKS[name]}
+        if actual_networks != expected_networks:
             errors.append(f"{name}_networks")
         published = inspected.get("HostConfig", {}).get("PortBindings") or {}
+        live_ports = inspected.get("NetworkSettings", {}).get("Ports")
         expected_ports = (
             {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": target.rsplit(":", 1)[1]}]}
             if name == "proxy"
             else {}
         )
-        if published != expected_ports:
+        live_publication = (
+            {port: bindings for port, bindings in live_ports.items() if bindings}
+            if isinstance(live_ports, dict)
+            else None
+        )
+        if published != expected_ports or live_publication != expected_ports:
             errors.append(f"{name}_publication")
     if errors:
         return errors
@@ -302,12 +306,19 @@ def verify(
             name: _json_single_object(
                 runner([docker(), "network", "inspect", f"{data['compose_project']}_{name}"])
             )
-            for name in ("data-plane", "ingress-plane")
+            for name in ("data-plane", "ingress-plane", "host-edge")
         }
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError):
         return [*errors, "network_inspection"]
-    if any(network.get("Internal") is not True for network in internal.values()):
+    if any(internal[name].get("Internal") is not True for name in ("data-plane", "ingress-plane")):
         errors.append("network_internality")
+    if internal["host-edge"].get("Internal") is not False:
+        errors.append("host_edge_network")
+    host_edge_members = internal["host-edge"].get("Containers")
+    if not isinstance(host_edge_members, dict) or set(host_edge_members) != {
+        services["proxy"]["container_id"]
+    }:
+        errors.append("host_edge_membership")
     hostport = f"{host}:443"
     if tailscale.get("TCP") != {"443": {"HTTPS": True}} or tailscale.get("Web") != {
         hostport: {"Handlers": {"/": {"Proxy": f"http://{target}"}}}

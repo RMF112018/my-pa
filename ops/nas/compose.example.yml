@@ -135,7 +135,7 @@ services:
     tmpfs:
       - /config
       - /data
-    networks: [ingress-plane]
+    networks: [ingress-plane, host-edge]
 
 networks:
   data-plane:
@@ -143,3 +143,8 @@ networks:
     internal: true
   ingress-plane:
     internal: true
+  # Synology Docker does not materialize host port publication for a container
+  # attached only to an internal bridge. This non-internal bridge is therefore
+  # proxy-only; application and database services remain on internal planes.
+  host-edge:
+    internal: false

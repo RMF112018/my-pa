@@ -102,7 +102,12 @@ root. The checked-in example refuses until live NAS IDs and ACLs are provisioned
 
 NAS-06 keeps both the data and ingress planes internal, gives the application
 services no external egress plane, hardens the exact Caddy route allowlist, and
-requires a server-only canonical HTTPS origin. [`ingress_gate.py`](ingress_gate.py)
+requires a server-only canonical HTTPS origin. Synology Docker 24 does not
+materialize a loopback host publication for a container attached only to an
+internal bridge, so the hardened proxy alone also joins the non-internal
+`host-edge` bridge. No application or database service joins that bridge, and
+the proxy retains no database credential or application filesystem authority.
+[`ingress_gate.py`](ingress_gate.py)
 is read-only: it binds verified proxy, loopback publication, config hash, private
 Tailscale Serve mapping, disabled Funnel, the credentialed `local_operator`
 browser mode, and the absence of Entra configuration in the live gateway/web

@@ -22,8 +22,9 @@ services:
       - /run:size=4m,mode=0755
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    pids_limit: 128
-    cpus: "${MY_PA_REMOTE_CPUS:?remote MCP CPU limit required}"
+    ulimits:
+      nproc: 128
+    cpu_shares: "${MY_PA_REMOTE_CPU_SHARES:?remote MCP CPU shares required}"
     mem_limit: "${MY_PA_REMOTE_MEMORY:?remote MCP memory limit required}"
     volumes:
       - type: bind
@@ -63,8 +64,9 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    pids_limit: 64
-    cpus: "${MY_PA_CLOUDFLARED_CPUS:?cloudflared CPU limit required}"
+    ulimits:
+      nproc: 64
+    cpu_shares: "${MY_PA_CLOUDFLARED_CPU_SHARES:?cloudflared CPU shares required}"
     mem_limit: "${MY_PA_CLOUDFLARED_MEMORY:?cloudflared memory limit required}"
     volumes:
       - type: bind

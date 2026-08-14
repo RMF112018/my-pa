@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 from pathlib import Path
 from types import ModuleType
 
@@ -20,6 +21,17 @@ def _module(path: Path) -> ModuleType:
 def test_remote_runtime_contract_passes_static_gate() -> None:
     gate = _module(ROOT / "ops/nas/remote/validate.py")
     assert gate.validate() == []
+
+
+def test_remote_runtime_contract_refuses_unsupported_synology_cgroup_controls(
+    tmp_path: Path,
+) -> None:
+    gate = _module(ROOT / "ops/nas/remote/validate.py")
+    remote = tmp_path / "remote"
+    shutil.copytree(ROOT / "ops/nas/remote", remote)
+    compose = remote / "compose.yml"
+    compose.write_text(compose.read_text().replace("cpu_shares:", "cpus:"))
+    assert "unsupported_synology_cgroup_control" in gate.validate(remote)
 
 
 def test_production_remote_contract_is_local_operator_and_has_no_entra_dependency() -> None:
@@ -87,8 +99,14 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
                 "PortBindings": {},
                 "Init": True,
                 "RestartPolicy": {"Name": "unless-stopped"},
-                "PidsLimit": 128 if image.startswith("app") else 64,
-                "NanoCpus": 1_000_000_000,
+                "Ulimits": [
+                    {
+                        "Name": "nproc",
+                        "Soft": 128 if image.startswith("app") else 64,
+                        "Hard": 128 if image.startswith("app") else 64,
+                    }
+                ],
+                "CpuShares": 1024 if image.startswith("app") else 512,
                 "Memory": 256 * 1024 * 1024,
             },
             "Mounts": mounts,
@@ -172,6 +190,62 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
         )
         == []
     )
+    app["HostConfig"]["CpuShares"] = 0
+    assert "app_cpu_shares" in gate.violations(
+        app,
+        edge,
+        app_image="app@sha256:exact",
+        edge_image="edge@sha256:exact",
+        data_network="my-pa-nas-contract_data-plane",
+        networks=network_states,
+        postgres_resources={
+            "status": "verified",
+            "data_network": "my-pa-nas-contract_data-plane",
+            "postgres_container_id": "postgres-id",
+            "postgres_image_id": "sha256:postgres",
+        },
+        postgres={
+            "Id": "postgres-id",
+            "Image": "sha256:postgres",
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "my-pa-nas-contract",
+                    "com.docker.compose.service": "postgres",
+                }
+            },
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
+        },
+    )
+    app["HostConfig"]["CpuShares"] = 1024
+    app["HostConfig"]["Ulimits"] = []
+    assert "app_nproc_limit" in gate.violations(
+        app,
+        edge,
+        app_image="app@sha256:exact",
+        edge_image="edge@sha256:exact",
+        data_network="my-pa-nas-contract_data-plane",
+        networks=network_states,
+        postgres_resources={
+            "status": "verified",
+            "data_network": "my-pa-nas-contract_data-plane",
+            "postgres_container_id": "postgres-id",
+            "postgres_image_id": "sha256:postgres",
+        },
+        postgres={
+            "Id": "postgres-id",
+            "Image": "sha256:postgres",
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "my-pa-nas-contract",
+                    "com.docker.compose.service": "postgres",
+                }
+            },
+            "State": {"Status": "running", "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
+        },
+    )
+    app["HostConfig"]["Ulimits"] = [{"Name": "nproc", "Soft": 128, "Hard": 128}]
     assert "noncanonical_data_network" in gate.violations(
         app,
         edge,

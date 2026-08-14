@@ -19,6 +19,8 @@ def validate(root: Path = ROOT) -> list[str]:
     edge = compose.split("  cloudflared:", 1)[-1].split("\nnetworks:\n", 1)[0]
     if "ports:" in compose or "network_mode:" in compose:
         errors.append("default_host_publication")
+    if "\n    cpus:" in compose or "pids_limit:" in compose:
+        errors.append("unsupported_synology_cgroup_control")
     if "127.0.0.1:" not in fallback or "0.0.0.0:" in fallback:
         errors.append("fallback_not_loopback")
     for name, block in (("remote", remote), ("cloudflared", edge)):
@@ -27,8 +29,9 @@ def validate(root: Path = ROOT) -> list[str]:
             "read_only: true",
             "cap_drop: [ALL]",
             "no-new-privileges:true",
-            "pids_limit:",
-            "cpus:",
+            "ulimits:",
+            "nproc:",
+            "cpu_shares:",
             "mem_limit:",
             "healthcheck:",
         ):

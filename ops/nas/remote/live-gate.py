@@ -89,14 +89,17 @@ def violations(
             errors.append(f"{name}_missing_init")
         if host.get("RestartPolicy", {}).get("Name") != "unless-stopped":
             errors.append(f"{name}_restart_policy")
-        pid_limit = host.get("PidsLimit")
-        expected_pid_limit = 128 if name == "app" else 64
-        if not isinstance(pid_limit, int) or not 0 < pid_limit <= expected_pid_limit:
-            errors.append(f"{name}_pid_limit")
-        for field, suffix in (("NanoCpus", "cpu_limit"), ("Memory", "memory_limit")):
-            value = host.get(field)
-            if not isinstance(value, int) or value <= 0:
-                errors.append(f"{name}_{suffix}")
+        expected_nproc = 128 if name == "app" else 64
+        if host.get("Ulimits") != [
+            {"Name": "nproc", "Soft": expected_nproc, "Hard": expected_nproc}
+        ]:
+            errors.append(f"{name}_nproc_limit")
+        expected_cpu_shares = 1024 if name == "app" else 512
+        if host.get("CpuShares") != expected_cpu_shares:
+            errors.append(f"{name}_cpu_shares")
+        memory = host.get("Memory")
+        if not isinstance(memory, int) or memory <= 0:
+            errors.append(f"{name}_memory_limit")
         if any("docker.sock" in str(mount.get("Source", "")) for mount in state.get("Mounts", ())):
             errors.append(f"{name}_docker_socket")
 

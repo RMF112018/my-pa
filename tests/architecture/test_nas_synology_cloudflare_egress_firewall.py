@@ -64,14 +64,17 @@ if [ "$1 $2" = '-S FORWARD_FIREWALL' ]; then
   printf '%s\n' '-A FORWARD_FIREWALL -s 172.22.0.0/16 -d 172.22.0.0/16 -i docker-data -o docker-data -j RETURN'
   printf '%s\n' '-A FORWARD_FIREWALL -s 172.18.0.0/16 -d 172.18.0.0/16 -i docker-ingress -o docker-ingress -j RETURN'
   case "$(cat "$state_file")" in
-    effective|foreign)
+    effective|foreign|foreign_bridge|foreign_source)
       printf '%s\n' \
         '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p udp -m udp --dport 53 -j RETURN' \
         '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p tcp -m tcp --dport 53 -j RETURN' \
         '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p udp -m udp --dport 7844 -j RETURN' \
         '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p tcp -m multiport --dports 443,7844 -j RETURN'
-      [ "$(cat "$state_file")" != foreign ] || \
-        printf '%s\n' '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -j RETURN'
+      case "$(cat "$state_file")" in
+        foreign) printf '%s\n' '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -j RETURN' ;;
+        foreign_bridge) printf '%s\n' '-A FORWARD_FIREWALL -i {BRIDGE} -j RETURN' ;;
+        foreign_source) printf '%s\n' '-A FORWARD_FIREWALL -s {SUBNET} -j RETURN' ;;
+      esac
       ;;
     partial|insert1|insert2|insert3)
       printf '%s\n' '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p udp -m udp --dport 53 -j RETURN'
@@ -162,8 +165,9 @@ def test_identity_drift_and_partial_rules_fail_closed(tmp_path: Path) -> None:
 
 def test_extra_broad_rule_and_nat_drift_fail_closed(tmp_path: Path) -> None:
     script, environment, state = _scene(tmp_path)
-    state.write_text("foreign")
-    assert _run(script, "check", environment).returncode != 0
+    for foreign_state in ("foreign", "foreign_bridge", "foreign_source"):
+        state.write_text(foreign_state)
+        assert _run(script, "check", environment).returncode != 0
     state.write_text("missing")
     for nat_state in ("duplicate", "lookalike"):
         environment["FAKE_NAT_STATE"] = nat_state

@@ -133,7 +133,7 @@ rule_state() {
     counts="${counts}${counts:+:}${count}"
     exact_total=$((exact_total + count))
   done
-  source_bridge_count=$(printf '%s\n' "$chain_rules" | awk -v subnet="$subnet" -v bridge="$bridge" '
+  network_scope_count=$(printf '%s\n' "$chain_rules" | awk -v subnet="$subnet" -v bridge="$bridge" '
     {
       source = 0
       ingress = 0
@@ -141,7 +141,7 @@ rule_state() {
         if ($field == "-s" && $(field + 1) == subnet) source = 1
         if ($field == "-i" && $(field + 1) == bridge) ingress = 1
       }
-      if (source && ingress) count++
+      if (source || ingress) count++
     }
     END {print count + 0}')
   positions=$(printf '%s\n' "$chain_rules" | awk \
@@ -149,10 +149,10 @@ rule_state() {
   expected=$(printf '%s\n%s\n%s\n%s\n' "$rule_dns_udp" "$rule_dns_tcp" "$rule_quic" "$rule_tls")
   case "$counts" in
     0:0:0:0)
-      if [ "$source_bridge_count" -eq 0 ]; then echo missing; else echo foreign; fi
+      if [ "$network_scope_count" -eq 0 ]; then echo missing; else echo foreign; fi
       ;;
     1:1:1:1)
-      if [ "$source_bridge_count" -ne 4 ]; then
+      if [ "$network_scope_count" -ne 4 ]; then
         echo foreign
       elif [ "$positions" = "$expected" ]; then
         echo effective
@@ -161,7 +161,7 @@ rule_state() {
       fi
       ;;
     *)
-      if [ "$source_bridge_count" -eq "$exact_total" ]; then
+      if [ "$network_scope_count" -eq "$exact_total" ]; then
         echo recoverable_exact_drift
       else
         echo foreign

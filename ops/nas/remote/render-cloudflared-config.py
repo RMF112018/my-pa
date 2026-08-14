@@ -19,7 +19,7 @@ def render(template: Path, output: Path, *, tunnel_id: str, hostname: str) -> No
     if output.exists():
         raise FileExistsError(f"refusing to overwrite {output}")
     source = template.read_text(encoding="utf-8")
-    if source.count("__TUNNEL_ID__") != 1 or source.count("__MCP_HOSTNAME__") != 6:
+    if source.count("__TUNNEL_ID__") != 1 or source.count("__MCP_HOSTNAME__") != 20:
         raise ValueError("unexpected template placeholders")
     rendered = source.replace("__TUNNEL_ID__", tunnel_id).replace("__MCP_HOSTNAME__", hostname)
     output.parent.mkdir(parents=True, exist_ok=True)

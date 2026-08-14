@@ -139,18 +139,16 @@ def violations(
         errors.append("edge_host_port")
 
     origin_network = f"{PROJECT}_mcp-origin"
-    identity_network = f"{PROJECT}_identity-egress"
     cloudflare_network = f"{PROJECT}_cloudflare-egress"
     app_networks = set(app.get("NetworkSettings", {}).get("Networks", {}))
     edge_networks = set(edge.get("NetworkSettings", {}).get("Networks", {}))
-    if app_networks != {data_network, origin_network, identity_network}:
+    if app_networks != {data_network, origin_network}:
         errors.append("app_network_identity")
     if edge_networks != {origin_network, cloudflare_network}:
         errors.append("edge_network_identity")
     expected_internal = {
         data_network: None,
         origin_network: True,
-        identity_network: False,
         cloudflare_network: False,
     }
     for network, internal in expected_internal.items():
@@ -216,7 +214,6 @@ def main() -> int:
     network_names = (
         args.data_network,
         f"{PROJECT}_mcp-origin",
-        f"{PROJECT}_identity-egress",
         f"{PROJECT}_cloudflare-egress",
     )
     try:

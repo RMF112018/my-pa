@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Final
@@ -14,7 +14,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.routing import BaseRoute, Route
 from starlette.types import Receive, Scope, Send
 
 from my_pa.adapters.mcp.server import McpAccess, create_mcp_server, published_tools
@@ -64,6 +64,12 @@ class RemoteAccessContext:
 RemoteAccessResolver = Callable[[str | None], RemoteAccessContext | None]
 
 
+def _metadata_url(resource: str) -> str:
+    suffix = "/mcp" if resource.endswith("/mcp") else ""
+    origin = resource.removesuffix(suffix).rstrip("/")
+    return f"{origin}/.well-known/oauth-protected-resource{suffix}"
+
+
 class _McpEndpoint:
     """Keep the SDK manager on Starlette's ASGI endpoint path."""
 
@@ -111,10 +117,7 @@ class _McpEndpoint:
             else:
                 self.auth_slots.release()
             if resolved is None:
-                challenge = (
-                    f'Bearer resource_metadata="{self.resource}'
-                    '/.well-known/oauth-protected-resource"'
-                )
+                challenge = f'Bearer resource_metadata="{_metadata_url(self.resource)}"'
                 response = JSONResponse(
                     {"error": "invalid_token"},
                     status_code=401,
@@ -172,6 +175,7 @@ def create_remote_mcp_app(
     resource: str = "",
     authorization_servers: tuple[str, ...] = (),
     scopes: frozenset[str] = frozenset(),
+    additional_routes: Sequence[BaseRoute] = (),
 ) -> Starlette:
     """Compose `/mcp` without moving identity or policy into the transport.
 
@@ -257,6 +261,7 @@ def create_remote_mcp_app(
 
     return Starlette(
         routes=[
+            *additional_routes,
             Route(
                 MCP_PATH,
                 _McpEndpoint(
@@ -271,6 +276,7 @@ def create_remote_mcp_app(
                 methods=["GET", "POST", "DELETE"],
             ),
             Route(metadata_path, protected_resource, methods=["GET"]),
+            Route(f"{metadata_path}/mcp", protected_resource, methods=["GET"]),
             Route(HEALTH_PATH, health, methods=["GET"]),
             Route(READINESS_PATH, ready, methods=["GET"]),
         ],

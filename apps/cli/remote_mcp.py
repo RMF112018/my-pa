@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import UTC, datetime
 from uuid import UUID
+
+from sqlalchemy import select
 
 from my_pa.bootstrap.settings import load_settings
 from my_pa.domain.identity.operation import Capability
@@ -36,12 +39,14 @@ def main(argv: list[str] | None = None) -> int:
     control.add_argument("--remote-enabled", action=argparse.BooleanOptionalAction, required=True)
     control.add_argument("--writes-enabled", action=argparse.BooleanOptionalAction, required=True)
     register = sub.add_parser("register")
-    register.add_argument("--principal-uuid", type=_uuid, required=True)
     register.add_argument("--oauth-client-id", required=True)
+    register.add_argument("--client-name", required=True)
+    register.add_argument("--redirect-uri", action="append", required=True)
+    register.add_argument("--scope", action="append", required=True)
     register.add_argument("--writes-enabled", action="store_true")
     register.add_argument("--expires-at", type=_instant)
     grant = sub.add_parser("grant")
-    grant.add_argument("--remote-client-uuid", type=_uuid, required=True)
+    grant.add_argument("--oauth-client-id", required=True)
     grant.add_argument("--scope", required=True)
     grant.add_argument("--capability", type=Capability, choices=list(Capability), required=True)
     grant.add_argument("--purpose", type=Purpose, choices=list(Purpose))
@@ -49,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     grant.add_argument("--expires-at", type=_instant)
     grant.add_argument("--write", action="store_true")
     revoke = sub.add_parser("revoke")
-    revoke.add_argument("--remote-client-uuid", type=_uuid, required=True)
+    revoke.add_argument("--oauth-client-id", required=True)
     revoke_grant = sub.add_parser("revoke-grant")
     revoke_grant.add_argument("--grant-uuid", type=_uuid, required=True)
     args = parser.parse_args(argv)
@@ -73,16 +78,25 @@ def main(argv: list[str] | None = None) -> int:
                 print("remote MCP controls updated")
             elif args.command == "register":
                 identifier = repository.register_client(
-                    principal_id=args.principal_uuid,
                     oauth_client_id=args.oauth_client_id,
+                    client_name=args.client_name,
+                    redirect_uris=json.dumps(args.redirect_uri, separators=(",", ":")),
+                    registered_scopes=" ".join(sorted(set(args.scope))),
                     now=now,
                     writes_enabled=args.writes_enabled,
                     expires_at=args.expires_at,
                 )
                 print(identifier)
             elif args.command == "grant":
+                remote_client_id = connection.execute(
+                    select(remote_clients.c.id).where(
+                        remote_clients.c.oauth_client_id == args.oauth_client_id
+                    )
+                ).scalar_one_or_none()
+                if remote_client_id is None:
+                    parser.error("remote client not found")
                 identifier = repository.grant(
-                    remote_client_id=args.remote_client_uuid,
+                    remote_client_id=remote_client_id,
                     external_scope=args.scope,
                     capability=args.capability,
                     now=now,
@@ -95,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "revoke":
                 result = connection.execute(
                     remote_clients.update()
-                    .where(remote_clients.c.id == args.remote_client_uuid)
+                    .where(remote_clients.c.oauth_client_id == args.oauth_client_id)
                     .values(enabled=False, writes_enabled=False, revoked_at=now)
                 )
                 if result.rowcount != 1:

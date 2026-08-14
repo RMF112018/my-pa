@@ -22,6 +22,20 @@ def test_remote_runtime_contract_passes_static_gate() -> None:
     assert gate.validate() == []
 
 
+def test_production_remote_contract_is_local_operator_and_has_no_entra_dependency() -> None:
+    environment = (ROOT / "ops/nas/remote/remote.env.example").read_text()
+    compose = (ROOT / "ops/nas/remote/compose.yml").read_text()
+    gateway = (ROOT / "apps/gateway.py").read_text()
+    assert "MY_PA_AUTH_MODE=local_operator" in environment
+    assert "MY_PA_OAUTH_OPERATOR_SECRET=" in environment
+    for forbidden in ("ENTRA", "JWKS", "OAUTH_TENANT", "OAUTH_ISSUER"):
+        assert forbidden not in environment
+    assert "identity-egress" not in compose
+    remote_entrypoint = gateway.split("def _mcp_remote", 1)[1].split("def build_parser", 1)[0]
+    assert "Entra" not in remote_entrypoint
+    assert "jwks" not in remote_entrypoint.lower()
+
+
 def test_cloudflared_renderer_is_exact_and_refuses_overwrite(tmp_path: Path) -> None:
     renderer = _module(ROOT / "ops/nas/remote/render-cloudflared-config.py")
     output = tmp_path / "config.yml"
@@ -33,7 +47,7 @@ def test_cloudflared_renderer_is_exact_and_refuses_overwrite(tmp_path: Path) -> 
     )
     text = output.read_text()
     assert "__" not in text
-    assert text.count("hostname: mcp.example.com") == 3
+    assert text.count("hostname: mcp.example.com") == 10
     assert "http_status:404" in text
     with pytest.raises(FileExistsError):
         renderer.render(
@@ -86,7 +100,6 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
         networks=(
             "my-pa-remote-mcp_mcp-origin",
             "my-pa-nas-contract_data-plane",
-            "my-pa-remote-mcp_identity-egress",
         ),
         mounts=[
             {"Source": "/nas/config", "Destination": "/srv/my-pa/config", "RW": False},
@@ -128,7 +141,6 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
             "Containers": {"postgres-id": {}},
         },
         "my-pa-remote-mcp_mcp-origin": {"Internal": True},
-        "my-pa-remote-mcp_identity-egress": {"Internal": False},
         "my-pa-remote-mcp_cloudflare-egress": {"Internal": False},
     }
     assert (

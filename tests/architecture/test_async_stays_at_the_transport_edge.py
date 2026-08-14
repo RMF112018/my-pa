@@ -6,10 +6,11 @@ in this system that must be `async def`, and `D-27` admits them as a bounded
 edge rather than as the start of an asynchronous application.
 
 "Bounded" is the part a comment cannot hold. These rules parse the tree and say
-where a coroutine may exist: **inside `adapters/mcp` and nowhere else in
-`src/`**, and nowhere at all in `apps/`, which is where a composition root would
-otherwise acquire an event loop of its own. `serve_stdio` is an ordinary `def`
-precisely so that no caller ever sees one, and `test_the_mcp_entry_points_are_synchronous`
+where a coroutine may exist: **inside `adapters/mcp` or the exact origin OAuth
+HTTP adapter and nowhere else in `src/`**, and nowhere at all in `apps/`, which
+is where a composition root would otherwise acquire an event loop of its own.
+`serve_stdio` is an ordinary `def` precisely so that no caller ever sees one,
+and `test_the_mcp_entry_points_are_synchronous`
 is what says so.
 
 The counts are asserted too, and deliberately: two coroutine functions and one
@@ -32,6 +33,7 @@ APPS = ROOT / "apps"
 #: puts transport concerns in a transport adapter, and the concurrency the SDK
 #: brings is one.
 ASYNC_SUBTREE = PACKAGE / "adapters" / "mcp"
+OAUTH_ADAPTER = PACKAGE / "adapters" / "http" / "oauth.py"
 
 #: Every node that makes a module asynchronous. `AsyncFunctionDef` is the
 #: coroutine, and the other three are the statements that can only appear inside
@@ -59,21 +61,21 @@ def test_there_is_async_to_confine() -> None:
 
 @pytest.mark.parametrize(
     "path",
-    [p for p in _modules(PACKAGE) if not p.is_relative_to(ASYNC_SUBTREE)],
+    [p for p in _modules(PACKAGE) if not p.is_relative_to(ASYNC_SUBTREE) and p != OAUTH_ADAPTER],
     ids=lambda p: str(p.name),
 )
 def test_no_module_outside_the_mcp_adapter_is_asynchronous(path: Path) -> None:
     """`D-27`: `domain`, `application`, `infrastructure`, and the other transports.
 
-    Including `adapters/http`, which bridges the *other* way — it schedules a
+    Including the existing application HTTP adapter, which bridges the *other* way — it schedules a
     coroutine onto a loop from a worker thread and never declares one — and
     `adapters/normalization`, which is shared by all three and would drag async
     into every transport if it acquired any.
     """
     found = sorted(set(_async_nodes(path)))
     assert not found, (
-        f"{path.relative_to(PACKAGE)} contains {found}; `D-27` keeps async inside "
-        "adapters/mcp, which is the only package the SDK's signature reaches"
+        f"{path.relative_to(PACKAGE)} contains {found}; `D-27` confines async to "
+        "the MCP SDK edge and the exact origin OAuth HTTP adapter"
     )
 
 
@@ -103,6 +105,14 @@ def test_the_async_surface_remains_confined_and_bounded() -> None:
     assert found.count("AsyncFunctionDef") == 8, found
     assert found.count("Await") == 11, found
     assert found.count("AsyncWith") == 3, found
+    assert found.count("AsyncFor") == 0, found
+
+
+def test_the_origin_oauth_async_surface_is_exact_and_bounded() -> None:
+    found = _async_nodes(OAUTH_ADAPTER)
+    assert found.count("AsyncFunctionDef") == 8, found
+    assert found.count("Await") == 13, found
+    assert found.count("AsyncWith") == 0, found
     assert found.count("AsyncFor") == 0, found
 
 

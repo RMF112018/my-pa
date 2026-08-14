@@ -86,11 +86,15 @@ tailscale_args=""
 if [ "${MY_PA_NAS_TAILSCALE+x}" = x ] || [ "${MY_PA_NAS_TAILSCALE_SOCKET+x}" = x ]; then
   : "${MY_PA_NAS_TAILSCALE:?exact NAS Tailscale executable required}"
   : "${MY_PA_NAS_TAILSCALE_SOCKET:?exact NAS Tailscale socket required}"
+  case "$MY_PA_NAS_TAILSCALE$MY_PA_NAS_TAILSCALE_SOCKET" in
+    *'
+'*) echo "newline-containing Tailscale paths are prohibited" >&2; exit 64 ;;
+  esac
   case "$MY_PA_NAS_TAILSCALE" in
     /*) tailscale_host_binary=$MY_PA_NAS_TAILSCALE ;;
     *) tailscale_host_binary=$(command -v "$MY_PA_NAS_TAILSCALE") ;;
   esac
-  [ -x "$tailscale_host_binary" ] || {
+  [ -f "$tailscale_host_binary" ] && [ -x "$tailscale_host_binary" ] || {
     echo "Tailscale executable is unavailable" >&2
     exit 1
   }

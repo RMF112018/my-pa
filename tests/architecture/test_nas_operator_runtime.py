@@ -307,7 +307,9 @@ def test_container_python_preserves_stdin_compose_plugin_and_closed_environment(
     assert stdin.read_text(encoding="utf-8") == "stdin-sentinel"
 
 
-def test_container_python_refuses_partial_tailscale_authority(tmp_path: Path) -> None:
+def test_container_python_refuses_invalid_tailscale_authority(
+    tmp_path: Path, request: pytest.FixtureRequest
+) -> None:
     tools = tmp_path / "bin"
     tools.mkdir()
     image_id = "sha256:" + "a" * 64
@@ -331,21 +333,60 @@ def test_container_python_refuses_partial_tailscale_authority(tmp_path: Path) ->
     fake_tailscale.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     for path in (fake_stat, fake_compose, fake_docker, fake_tailscale):
         path.chmod(0o700)
-
-    result = subprocess.run(  # noqa: S603 - checked-in wrapper with synthetic tools
-        [str(ROOT / "ops/nas/container-python.sh"), "-c", "pass"],
-        cwd=ROOT,
-        env={
-            **os.environ,
-            "PATH": f"{tools}:/usr/bin:/bin",
-            "MY_PA_NAS_DOCKER": str(fake_docker),
-            "MY_PA_NAS_COMPOSE_PLUGIN": str(fake_compose),
-            "MY_PA_NAS_OPERATOR_ADMISSION": str(admission),
-            "MY_PA_NAS_TAILSCALE": str(fake_tailscale),
-        },
-        check=False,
-        capture_output=True,
-        text=True,
+    socket_suffix = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]
+    tailscale_socket = Path(tempfile.gettempdir()) / f"my-pa-neg-{socket_suffix}.sock"
+    socket_handle = socket.socket(socket.AF_UNIX)
+    socket_handle.bind(str(tailscale_socket))
+    request.addfinalizer(socket_handle.close)
+    request.addfinalizer(lambda: tailscale_socket.unlink(missing_ok=True))
+    nonsocket = tmp_path / "not-a-socket"
+    nonsocket.touch()
+    base_environment = {
+        **os.environ,
+        "PATH": f"{tools}:/usr/bin:/bin",
+        "MY_PA_NAS_DOCKER": str(fake_docker),
+        "MY_PA_NAS_COMPOSE_PLUGIN": str(fake_compose),
+        "MY_PA_NAS_OPERATOR_ADMISSION": str(admission),
+    }
+    cases = (
+        (
+            {"MY_PA_NAS_TAILSCALE": str(fake_tailscale)},
+            "exact NAS Tailscale socket required",
+        ),
+        (
+            {"MY_PA_NAS_TAILSCALE_SOCKET": str(tailscale_socket)},
+            "exact NAS Tailscale executable required",
+        ),
+        (
+            {
+                "MY_PA_NAS_TAILSCALE": str(fake_tailscale),
+                "MY_PA_NAS_TAILSCALE_SOCKET": str(nonsocket),
+            },
+            "Tailscale socket is unavailable",
+        ),
+        (
+            {
+                "MY_PA_NAS_TAILSCALE": str(tools),
+                "MY_PA_NAS_TAILSCALE_SOCKET": str(tailscale_socket),
+            },
+            "Tailscale executable is unavailable",
+        ),
+        (
+            {
+                "MY_PA_NAS_TAILSCALE": f"{fake_tailscale}\n--privileged",
+                "MY_PA_NAS_TAILSCALE_SOCKET": str(tailscale_socket),
+            },
+            "newline-containing Tailscale paths are prohibited",
+        ),
     )
-    assert result.returncode != 0
-    assert "exact NAS Tailscale socket required" in result.stderr
+    for extra_environment, expected_error in cases:
+        result = subprocess.run(  # noqa: S603 - wrapper with synthetic tools
+            [str(ROOT / "ops/nas/container-python.sh"), "-c", "pass"],
+            cwd=ROOT,
+            env={**base_environment, **extra_environment},
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0
+        assert expected_error in result.stderr

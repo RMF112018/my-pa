@@ -110,6 +110,9 @@ def verify(
         errors.append("postgres_image_identity")
     if container.get("HostConfig", {}).get("PortBindings"):
         errors.append("postgres_host_port")
+    running = container.get("State", {}).get("Running")
+    if running is not True and running is not False:
+        errors.append("postgres_running_state")
     attached_networks = set(container.get("NetworkSettings", {}).get("Networks", {}))
     if attached_networks != {CANONICAL_DATA_NETWORK}:
         errors.append("postgres_network_identity")
@@ -122,7 +125,9 @@ def verify(
         or network_labels.get("com.docker.compose.network") != "data-plane"
     ):
         errors.append("data_network_identity")
-    if data.get("postgres_container_id") not in (network_state.get("Containers") or {}):
+    if running is True and data.get("postgres_container_id") not in (
+        network_state.get("Containers") or {}
+    ):
         errors.append("data_network_postgres_attachment")
     expected_mount = {
         "Type": "bind",

@@ -145,6 +145,67 @@ def test_prepare_creates_and_captures_without_starting(tmp_path: Path) -> None:
     assert "start postgres" not in calls and "up postgres" not in calls
 
 
+def test_resource_admission_accepts_synology_stopped_network_state(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    generator = _module("generate-postgres-resources")
+    container_id = "a" * 64
+
+    def run(command: list[str]) -> str:
+        if command[0] == "df":
+            return (
+                "Filesystem Type 1024-blocks Used Available Capacity Mounted on\n"
+                "/dev/x btrfs 1 0 1 0% /\n"
+            )
+        if command[1] == "info":
+            return '{"ID":"nas","NCPU":4,"MemTotal":1024}'
+        if command[1] == "inspect":
+            return json.dumps(
+                [
+                    {
+                        "Image": "sha256:image",
+                        "State": {"Running": False},
+                        "Config": {
+                            "Labels": {
+                                "com.docker.compose.project": "my-pa-nas-contract",
+                                "com.docker.compose.service": "postgres",
+                            }
+                        },
+                        "HostConfig": {"PortBindings": {}},
+                        "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
+                        "Mounts": [
+                            {
+                                "Type": "bind",
+                                "Source": str(tmp_path),
+                                "Destination": "/var/lib/postgresql/data",
+                                "RW": True,
+                            }
+                        ],
+                    }
+                ]
+            )
+        if command[1:3] == ["network", "inspect"]:
+            return json.dumps(
+                [
+                    {
+                        "Name": "my-pa-nas-contract_data-plane",
+                        "Internal": True,
+                        "Labels": {
+                            "com.docker.compose.project": "my-pa-nas-contract",
+                            "com.docker.compose.network": "data-plane",
+                        },
+                        "Containers": {},
+                    }
+                ]
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(generator, "_run", run)
+    output = tmp_path / "resources.toml"
+    assert generator.generate(container_id, tmp_path, 1, output) == []
+    assert f'postgres_container_id = "{container_id}"' in output.read_text(encoding="utf-8")
+
+
 def test_start_revalidates_before_start_and_checks_health(tmp_path: Path) -> None:
     tools, log = _tools(tmp_path)
     (tmp_path / "created").touch()

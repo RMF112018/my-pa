@@ -70,8 +70,11 @@ def generate(container_id: str, data_path: Path, floor: int, output: Path) -> li
         or network_labels.get("com.docker.compose.network") != "data-plane"
     ):
         errors.append("data_network_identity")
-    if container_id not in (network.get("Containers") or {}):
-        errors.append("data_network_postgres_attachment")
+    # Docker 24 on Synology records the stopped container's configured network
+    # in container inspection but does not publish a live network attachment
+    # until the container starts. The exact container network and exact network
+    # identity above are the complete pre-start contract; the live gate requires
+    # membership once PostgreSQL is running.
     image_id = inspected.get("Image", "")
     if not str(image_id).startswith("sha256:"):
         errors.append("postgres_image_identity")

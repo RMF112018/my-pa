@@ -96,14 +96,14 @@ def test_operator_admission_is_exclusive_and_engine_bound() -> None:
     assert 'engine.get("Architecture") != "x86_64"' in source
     assert 'labels.get("io.my-pa.operator-runtime") != "python-3.12"' in source
     assert '"compose", "version", "--short"' in source
-    assert '"--no-interpolate"' in source and '"--services"' in source
+    assert '"--services"' in source
+    assert '"--profile"' in source and '"nas-01-contract-only"' in source
+    assert "COMPOSE_SENTINEL_ENVIRONMENT" in source
+    assert '"--no-interpolate"' not in source
     assert 'f"compose_version = ' in source
 
 
-def test_operator_admission_refuses_undiscoverable_compose_plugin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = _module("admit-operator-runtime")
+def _operator_artifacts(tmp_path: Path) -> tuple[Path, Path, Path, str]:
     archive = tmp_path / "operator.tar"
     image_id = _archive(archive)
     metadata = tmp_path / "operator.metadata.json"
@@ -136,13 +136,23 @@ def test_operator_admission_refuses_undiscoverable_compose_plugin(
         + "\n",
         encoding="utf-8",
     )
+    return candidate, archive, metadata, image_id
 
-    def run(command: list[str]) -> str:
+
+def test_operator_admission_refuses_undiscoverable_compose_plugin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _module("admit-operator-runtime")
+    candidate, archive, metadata, _ = _operator_artifacts(tmp_path)
+
+    def run(command: list[str], *, environment: dict[str, str] | None = None) -> str:
+        del environment
         if command[1:3] == ["compose", "version"]:
             raise subprocess.CalledProcessError(125, command, stderr="unknown flag: --file")
         if command[1] == "info":
             return '{"OSType":"linux","Architecture":"x86_64","ID":"engine","Name":"nas"}'
         if command[1:3] == ["image", "inspect"]:
+            image_id = module.inspect_archive(archive).config_digest
             return json.dumps(
                 [
                     {
@@ -170,6 +180,59 @@ def test_operator_admission_refuses_undiscoverable_compose_plugin(
     output = tmp_path / "admission.toml"
     assert "live_operator_inspection" in module.admit(candidate, archive, metadata, output)
     assert not output.exists()
+
+
+def test_operator_admission_renders_with_closed_nonsecret_sentinels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _module("admit-operator-runtime")
+    candidate, archive, metadata, image_id = _operator_artifacts(tmp_path)
+
+    def run(command: list[str], *, environment: dict[str, str] | None = None) -> str:
+        if command[1] == "info":
+            return '{"OSType":"linux","Architecture":"x86_64","ID":"engine","Name":"nas"}'
+        if command[1:3] == ["image", "inspect"]:
+            return json.dumps(
+                [
+                    {
+                        "Id": image_id,
+                        "Os": "linux",
+                        "Architecture": "amd64",
+                        "Config": {
+                            "Labels": {
+                                "org.opencontainers.image.revision": "a" * 40,
+                                "io.my-pa.repository-tree": "c" * 40,
+                                "io.my-pa.target-platform": "linux/amd64",
+                                "io.my-pa.operator-runtime": "python-3.12",
+                            }
+                        },
+                    }
+                ]
+            )
+        if command == ["git", "--version"]:
+            return "git version 2.47.3"
+        if command == ["/usr/bin/openssl", "version"]:
+            return "OpenSSL 3.5.1"
+        if command[1:4] == ["compose", "version", "--short"]:
+            return "2.20.1-6047-g6817716"
+        if command[1:3] == ["compose", "--file"]:
+            assert environment is not None
+            assert environment["MY_PA_DB_PASSWORD"] == "operator-admission-sentinel"  # noqa: S105
+            assert environment["MY_PA_PROXY_PORT"] == "1"
+            assert "--no-interpolate" not in command
+            assert command[-4:] == [
+                "--profile",
+                "nas-01-contract-only",
+                "config",
+                "--services",
+            ]
+            return "postgres\ngateway\nproxy\nweb\nworker-capture\nworker-enrollment"
+        raise AssertionError(command)
+
+    monkeypatch.setattr(module, "_run", run)
+    output = tmp_path / "admission.toml"
+    assert module.admit(candidate, archive, metadata, output) == []
+    assert 'compose_version = "2.20.1-6047-g6817716"' in output.read_text(encoding="utf-8")
 
 
 def test_container_python_preserves_stdin_compose_plugin_and_closed_environment(

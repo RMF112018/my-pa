@@ -29,6 +29,25 @@ COMPOSE_SERVICES = {
     "worker-capture",
     "worker-enrollment",
 }
+COMPOSE_SENTINEL_ENVIRONMENT = {
+    "MY_PA_APP_IMAGE_ID": "sha256:" + "0" * 64,
+    "MY_PA_WEB_IMAGE_ID": "sha256:" + "0" * 64,
+    "MY_PA_POSTGRES_IMAGE_ID": "sha256:" + "0" * 64,
+    "MY_PA_PROXY_IMAGE": "invalid.example/operator-admission-sentinel",
+    "MY_PA_PROXY_IMAGE_DIGEST": "sha256:" + "0" * 64,
+    "MY_PA_UID": "1",
+    "MY_PA_GID": "1",
+    "MY_PA_NAS_ROOT": "/volume1/my-pa",
+    "MY_PA_NAS_ENV_FILE": "/dev/null",
+    "MY_PA_WEB_ENV_FILE": "/dev/null",
+    "MY_PA_DB_PASSWORD": "operator-admission-sentinel",
+    "MY_PA_PROXY_UID": "1",
+    "MY_PA_PROXY_GID": "1",
+    "MY_PA_PROXY_PORT": "1",
+    "MY_PA_TAILNET_HOST": "invalid.example",
+    "MYPA_CANONICAL_ORIGIN": "https://invalid.example",
+    "MYPA_ENTRA_REDIRECT_URI": "https://invalid.example/callback",
+}
 EXPECTED_KEYS = {
     "schema",
     "status",
@@ -52,9 +71,9 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _run(command: list[str]) -> str:
+def _run(command: list[str], *, environment: dict[str, str] | None = None) -> str:
     return subprocess.run(  # noqa: S603 - closed operator tool argument vectors
-        command, check=True, capture_output=True, text=True
+        command, check=True, capture_output=True, text=True, env=environment
     ).stdout.strip()
 
 
@@ -94,16 +113,19 @@ def admit(candidate: Path, archive: Path, metadata: Path, output: Path) -> list[
         git_version = _run(["git", "--version"])
         openssl_version = _run(["/usr/bin/openssl", "version"])
         compose_version = _run([docker(), "compose", "version", "--short"])
+        compose_environment = {**os.environ, **COMPOSE_SENTINEL_ENVIRONMENT}
         compose_services = _run(
             [
                 docker(),
                 "compose",
                 "--file",
                 str(Path(__file__).with_name("compose.example.yml")),
+                "--profile",
+                "nas-01-contract-only",
                 "config",
-                "--no-interpolate",
                 "--services",
-            ]
+            ],
+            environment=compose_environment,
         ).splitlines()
     except (
         OSError,

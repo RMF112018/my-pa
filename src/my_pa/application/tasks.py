@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date, datetime
 from hashlib import sha256
 from typing import Any
@@ -49,6 +50,7 @@ from my_pa.domain.tasks.models import (
     TaskRole,
     TaskState,
     Weekday,
+    can_transition,
     next_occurrence,
     normalize_priority,
     occurrence_key_for,
@@ -431,11 +433,20 @@ def update_task(
     return _remember(store, principal_id, command.idempotency_key, digest, result)
 
 
+def _mark_series_cancelled(store: TaskRepository, task: Task, *, at: datetime) -> None:
+    if task.recurrence_id is None:
+        return
+    rule = store.get_recurrence(task.principal_id, task.recurrence_id)
+    if rule is None or rule.cancelled_at is not None:
+        return
+    store.save_recurrence(replace(rule, cancelled_at=at))
+
+
 def _spawn_next_occurrence(store: TaskRepository, task: Task, *, at: datetime) -> None:
     if task.recurrence_id is None:
         return
     rule = store.get_recurrence(task.principal_id, task.recurrence_id)
-    if rule is None:
+    if rule is None or rule.cancelled_at is not None:
         return
     after: date | datetime
     if task.due_at is not None:
@@ -504,6 +515,11 @@ def transition_task(
     task = _resolve(store, principal_id, command)
     if task.current_version != command.expected_version:
         raise ConflictError(SafeDetail.EXPECTED_VERSION)
+    if command.cancel_series and command.target_state not in {
+        TaskState.COMPLETED,
+        TaskState.CANCELLED,
+    }:
+        raise InvalidRequestError(SafeDetail.RECURRENCE)
     try:
         updated = task.transitioned(command.target_state, at=at, version=command.expected_version)
     except TaskError:
@@ -515,6 +531,8 @@ def transition_task(
     store.append_revision(
         _revision_for(updated, origin=TaskOrigin.PRINCIPAL_DIRECT, prior=prior_id)
     )
+    if command.cancel_series:
+        _mark_series_cancelled(store, updated, at=at)
     if command.target_state is TaskState.COMPLETED:
         _spawn_next_occurrence(store, updated, at=at)
     result = {
@@ -688,85 +706,59 @@ def apply_bulk(
                 "expected_version": expected,
                 "current_version": None if task is None else task.current_version,
             }
+        if preview.target_state is not None and not can_transition(
+            task.state, preview.target_state
+        ):
+            raise InvalidRequestError(SafeDetail.STATE)
     applied: list[dict[str, Any]] = []
     for task_id, expected in preview.targets:
         current = store.get_task(principal_id, task_id)
-        if current is None:
-            return {"status": "drift", "task_id": task_id}
-        updated = Task(
-            task_id=current.task_id,
-            principal_id=current.principal_id,
-            title=current.title,
-            description=current.description,
-            state=preview.target_state or current.state,
-            task_role=current.task_role,
-            priority=current.priority,
-            evidence_state=current.evidence_state,
-            acceptance_kind=current.acceptance_kind,
-            accepted_by_review_decision_id=current.accepted_by_review_decision_id,
-            origin_evidence_ref=current.origin_evidence_ref,
-            due_date=(
-                current.due_date
-                if preview.due_date is None and preview.due_at is None
-                else preview.due_date
-            ),
-            due_at=(
-                current.due_at
-                if preview.due_at is None and preview.due_date is None
-                else preview.due_at
-            ),
-            due_timezone=(
-                current.due_timezone if preview.due_timezone is None else preview.due_timezone
-            ),
-            scheduled_date=(
-                current.scheduled_date
-                if preview.scheduled_date is None and preview.scheduled_at is None
-                else preview.scheduled_date
-            ),
-            scheduled_at=(
-                current.scheduled_at
-                if preview.scheduled_at is None and preview.scheduled_date is None
-                else preview.scheduled_at
-            ),
-            deferred_until=current.deferred_until,
-            archived_at=current.archived_at,
-            current_version=current.current_version + 1,
-            recurrence_id=current.recurrence_id,
-            occurrence_key=current.occurrence_key,
-            project_id=current.project_id,
-            situation_id=current.situation_id,
-            person_id=current.person_id,
-            opened_at=current.opened_at,
-            closed_at=current.closed_at
-            if preview.target_state is None
-            else (
-                at if preview.target_state in {TaskState.COMPLETED, TaskState.CANCELLED} else None
-            ),
-            closure_evidence_ref=current.closure_evidence_ref,
-            created_at=current.created_at,
-            updated_at=at,
-        )
+        if current is None or current.current_version != expected:
+            raise ConflictError(SafeDetail.EXPECTED_VERSION)
+        try:
+            updated = _apply_preview_fields(current, preview, at=at, expected_version=expected)
+        except TaskError:
+            raise InvalidRequestError(SafeDetail.STATE) from None
         if not store.save_task(updated, expected_version=expected):
-            return {
-                "status": "drift",
-                "task_id": task_id,
-                "expected_version": expected,
-                "current_version": current.current_version,
-            }
+            raise ConflictError(SafeDetail.EXPECTED_VERSION)
         prior = store.history(principal_id, task_id)
         prior_id = prior[-1].revision_id if prior else None
         store.append_revision(
             _revision_for(updated, origin=TaskOrigin.PRINCIPAL_DIRECT, prior=prior_id)
         )
+        if preview.target_state is TaskState.COMPLETED:
+            _spawn_next_occurrence(store, updated, at=at)
         applied.append(_task_view(updated))
     result = {"status": "ok", "tasks": applied}
     return _remember(store, principal_id, command.idempotency_key, digest, result)
 
 
 def _apply_preview_fields(
-    task: Task, preview: TaskPreviewRecord, *, at: datetime, command: PreviewTaskBulk | None
+    task: Task, preview: TaskPreviewRecord, *, at: datetime, expected_version: int
 ) -> Task:
-    return task
+    if preview.target_state is not None:
+        updated = task.transitioned(preview.target_state, at=at, version=expected_version)
+    else:
+        updated = replace(task, current_version=task.current_version + 1, updated_at=at)
+    due_date = updated.due_date
+    due_at = updated.due_at
+    if preview.due_date is not None or preview.due_at is not None:
+        due_date = preview.due_date
+        due_at = preview.due_at
+    scheduled_date = updated.scheduled_date
+    scheduled_at = updated.scheduled_at
+    if preview.scheduled_date is not None or preview.scheduled_at is not None:
+        scheduled_date = preview.scheduled_date
+        scheduled_at = preview.scheduled_at
+    return replace(
+        updated,
+        due_date=due_date,
+        due_at=due_at,
+        due_timezone=updated.due_timezone if preview.due_timezone is None else preview.due_timezone,
+        scheduled_date=scheduled_date,
+        scheduled_at=scheduled_at,
+        updated_at=at,
+    )
 
 
 def create_commitment(
@@ -832,10 +824,15 @@ def waiting_on(store: TaskRepository, *, principal_id: str, page_size: int) -> d
         include_archived=False,
         limit=page_size,
     )
+    accepted_open = [
+        item
+        for item in follow_ups
+        if not item.is_terminal and item.evidence_state is ContinuityEvidenceState.ACCEPTED
+    ]
     return {
         "status": "ok",
         "commitments": [_commitment_view(item) for item in open_owed],
-        "follow_ups": [_task_view(item) for item in follow_ups if not item.is_terminal],
+        "follow_ups": [_task_view(item) for item in accepted_open],
     }
 
 

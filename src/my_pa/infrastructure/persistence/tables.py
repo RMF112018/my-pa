@@ -2866,6 +2866,7 @@ task_recurrences = Table(
     Column("start_date", Date),
     Column("start_at", DateTime(timezone=True)),
     Column("series_title", Text, nullable=False, server_default=text("''")),
+    Column("cancelled_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     _is_identifier("recurrence_id", IdKind.TASK_RECURRENCE),
     _is_identifier("principal_id", IdKind.PRINCIPAL),

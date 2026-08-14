@@ -356,6 +356,7 @@ class SqlAlchemyTaskRepository(TaskRepository):
                 start_date=rule.start_date,
                 start_at=rule.start_at,
                 series_title=rule.series_title,
+                cancelled_at=rule.cancelled_at,
             )
         )
 
@@ -378,6 +379,17 @@ class SqlAlchemyTaskRepository(TaskRepository):
             start_date=row.start_date,
             start_at=row.start_at,
             series_title=row.series_title,
+            cancelled_at=row.cancelled_at,
+        )
+
+    def save_recurrence(self, rule: RecurrenceRule) -> None:
+        self._connection.execute(
+            task_recurrences.update()
+            .where(
+                task_recurrences.c.principal_id == rule.principal_id,
+                task_recurrences.c.recurrence_id == rule.recurrence_id,
+            )
+            .values(cancelled_at=rule.cancelled_at)
         )
 
     def actionable_occurrence(self, principal_id: str, recurrence_id: str) -> Task | None:

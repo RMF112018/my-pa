@@ -187,6 +187,7 @@ class World:
     task_links: list[TaskContextLink] = field(default_factory=list)
     task_keys: dict[tuple[str, str], TaskIdempotencyRecord] = field(default_factory=dict)
     task_previews: dict[str, TaskPreviewRecord] = field(default_factory=dict)
+    task_save_reject: set[str] = field(default_factory=set)
     audit: list[AuditEvent] = field(default_factory=list)
     commits: int = 0
     rollbacks: int = 0
@@ -638,6 +639,8 @@ class _Tasks(TaskRepository):
         self._world.task_rows[task.task_id] = task
 
     def save_task(self, task: Task, *, expected_version: int) -> bool:
+        if task.task_id in self._world.task_save_reject:
+            return False
         current = self.get_task(task.principal_id, task.task_id)
         if current is None or current.current_version != expected_version:
             return False
@@ -662,6 +665,9 @@ class _Tasks(TaskRepository):
         if rule is None or rule.principal_id != principal_id:
             return None
         return rule
+
+    def save_recurrence(self, rule: RecurrenceRule) -> None:
+        self._world.recurrences[rule.recurrence_id] = rule
 
     def actionable_occurrence(self, principal_id: str, recurrence_id: str) -> Task | None:
         for task in self._world.task_rows.values():
@@ -853,9 +859,23 @@ class FakeUnitOfWork(UnitOfWork):
     def __init__(self, world: World) -> None:
         self._world = world
         self._open = False
+        self._task_rows: dict[str, Task] | None = None
+        self._commitments: dict[str, Commitment] | None = None
+        self._recurrences: dict[str, RecurrenceRule] | None = None
+        self._task_revisions: list[TaskRevision] | None = None
+        self._task_links: list[TaskContextLink] | None = None
+        self._task_keys: dict[tuple[str, str], TaskIdempotencyRecord] | None = None
+        self._task_previews: dict[str, TaskPreviewRecord] | None = None
 
     def __enter__(self) -> UnitOfWork:
         self._open = True
+        self._task_rows = dict(self._world.task_rows)
+        self._commitments = dict(self._world.commitments)
+        self._recurrences = dict(self._world.recurrences)
+        self._task_revisions = list(self._world.task_revisions)
+        self._task_links = list(self._world.task_links)
+        self._task_keys = dict(self._world.task_keys)
+        self._task_previews = dict(self._world.task_previews)
         return self
 
     def __exit__(
@@ -867,8 +887,21 @@ class FakeUnitOfWork(UnitOfWork):
         self._open = False
         if exc is None:
             self._world.commits += 1
-        else:
-            self._world.rollbacks += 1
+            return
+        if self._task_rows is not None:
+            self._world.task_rows.clear()
+            self._world.task_rows.update(self._task_rows)
+            self._world.commitments.clear()
+            self._world.commitments.update(self._commitments or {})
+            self._world.recurrences.clear()
+            self._world.recurrences.update(self._recurrences or {})
+            self._world.task_revisions[:] = list(self._task_revisions or [])
+            self._world.task_links[:] = list(self._task_links or [])
+            self._world.task_keys.clear()
+            self._world.task_keys.update(self._task_keys or {})
+            self._world.task_previews.clear()
+            self._world.task_previews.update(self._task_previews or {})
+        self._world.rollbacks += 1
 
     @property
     def providers(self) -> SourceProviders:

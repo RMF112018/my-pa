@@ -817,6 +817,10 @@ class TaskRepository(ABC):
         """One series owned by this Principal."""
 
     @abstractmethod
+    def save_recurrence(self, rule: RecurrenceRule) -> None:
+        """Persist a series mutation such as cancellation."""
+
+    @abstractmethod
     def actionable_occurrence(self, principal_id: str, recurrence_id: str) -> Task | None:
         """The single non-terminal occurrence, if any."""
 

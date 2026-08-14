@@ -312,6 +312,7 @@ class RecurrenceRule:
     start_date: date | None = None
     start_at: datetime | None = None
     series_title: str = ""
+    cancelled_at: datetime | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.recurrence_id, IdKind.TASK_RECURRENCE)
@@ -321,6 +322,8 @@ class RecurrenceRule:
         validate_temporal_pair(self.start_date, self.start_at, self.timezone)
         if self.start_date is None and self.start_at is None:
             raise TaskError("a recurrence must name a start date or instant")
+        if self.cancelled_at is not None:
+            ensure_utc(self.cancelled_at)
         selected = self.frequency is RecurrenceFrequency.SELECTED_WEEKDAYS
         weekly = self.frequency is RecurrenceFrequency.WEEKLY
         if selected and not self.weekdays:

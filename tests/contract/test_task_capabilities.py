@@ -273,6 +273,205 @@ def test_bulk_preview_then_stale_apply_drifts(world: World) -> None:
     assert drifted.result["status"] == "drift"
 
 
+def test_bulk_mid_apply_mismatch_rolls_back_the_prefix(world: World) -> None:
+    first = _run(
+        world,
+        Capability.TASKS_CREATE,
+        Purpose.TASK_AUTHORING,
+        CreateTask(title="Turner permit call", idempotency_key="task-create-0010"),
+    )
+    second = _run(
+        world,
+        Capability.TASKS_CREATE,
+        Purpose.TASK_AUTHORING,
+        CreateTask(title="Turner inspection", idempotency_key="task-create-0011"),
+    )
+    first_id = first.result["task"]["task_id"]
+    second_id = second.result["task"]["task_id"]
+    preview = _run(
+        world,
+        Capability.TASKS_PREVIEW,
+        Purpose.TASK_AUTHORING,
+        PreviewTaskBulk(
+            operation="reschedule",
+            task_ids=(first_id, second_id),
+            expected_versions=(1, 1),
+            scheduled_at=datetime(2026, 8, 13, 15, 0, tzinfo=UTC),
+        ),
+    )
+    world.task_save_reject.add(second_id)
+    drifted = _run(
+        world,
+        Capability.TASKS_BULK,
+        Purpose.TASK_AUTHORING,
+        ApplyTaskBulk(
+            preview_token=preview.result["preview_token"],
+            idempotency_key="task-blk-0002",
+        ),
+    )
+    assert drifted.error is not None
+    assert drifted.error.code is ErrorCode.CONFLICT
+    assert world.task_rows[first_id].current_version == 1
+    assert world.task_rows[first_id].scheduled_at is None
+    assert world.task_rows[second_id].current_version == 1
+
+
+def test_bulk_complete_uses_lifecycle_and_spawns_recurrence(world: World) -> None:
+    created = _run(
+        world,
+        Capability.TASKS_CREATE,
+        Purpose.TASK_AUTHORING,
+        CreateTask(
+            title="Friday executive report",
+            idempotency_key="task-create-0012",
+            recurrence_frequency=RecurrenceFrequency.WEEKLY,
+            recurrence_weekdays=(4,),
+            due_date=date(2026, 8, 14),
+            due_timezone="America/New_York",
+        ),
+    )
+    task_id = created.result["task"]["task_id"]
+    preview = _run(
+        world,
+        Capability.TASKS_PREVIEW,
+        Purpose.TASK_AUTHORING,
+        PreviewTaskBulk(
+            operation="complete",
+            task_ids=(task_id,),
+            expected_versions=(1,),
+            target_state=TaskState.COMPLETED,
+        ),
+    )
+    applied = _run(
+        world,
+        Capability.TASKS_BULK,
+        Purpose.TASK_AUTHORING,
+        ApplyTaskBulk(
+            preview_token=preview.result["preview_token"],
+            idempotency_key="task-blk-0003",
+        ),
+    )
+    assert applied.error is None
+    assert applied.result["tasks"][0]["state"] == "completed"
+    occurrences = [
+        task
+        for task in world.task_rows.values()
+        if task.recurrence_id == created.result["task"]["recurrence_id"]
+    ]
+    assert len(occurrences) == 2
+    assert sum(1 for task in occurrences if not task.is_terminal) == 1
+
+
+def test_bulk_cannot_force_a_disallowed_transition(world: World) -> None:
+    created = _run(
+        world,
+        Capability.TASKS_CREATE,
+        Purpose.TASK_AUTHORING,
+        CreateTask(title="already done", idempotency_key="task-create-0013"),
+    )
+    task_id = created.result["task"]["task_id"]
+    _run(
+        world,
+        Capability.TASKS_TRANSITION,
+        Purpose.TASK_AUTHORING,
+        TransitionTask(
+            task_id=task_id,
+            expected_version=1,
+            idempotency_key="task-trn-0004",
+            target_state=TaskState.COMPLETED,
+        ),
+    )
+    preview = _run(
+        world,
+        Capability.TASKS_PREVIEW,
+        Purpose.TASK_AUTHORING,
+        PreviewTaskBulk(
+            operation="reopen-as-waiting",
+            task_ids=(task_id,),
+            expected_versions=(2,),
+            target_state=TaskState.WAITING,
+        ),
+    )
+    refused = _run(
+        world,
+        Capability.TASKS_BULK,
+        Purpose.TASK_AUTHORING,
+        ApplyTaskBulk(
+            preview_token=preview.result["preview_token"],
+            idempotency_key="task-blk-0004",
+        ),
+    )
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.INVALID_REQUEST
+    assert world.task_rows[task_id].state is TaskState.COMPLETED
+
+
+def test_cancel_series_does_not_spawn_the_next_occurrence(world: World) -> None:
+    created = _run(
+        world,
+        Capability.TASKS_CREATE,
+        Purpose.TASK_AUTHORING,
+        CreateTask(
+            title="Friday executive report",
+            idempotency_key="task-create-0014",
+            recurrence_frequency=RecurrenceFrequency.WEEKLY,
+            recurrence_weekdays=(4,),
+            due_date=date(2026, 8, 14),
+            due_timezone="America/New_York",
+        ),
+    )
+    task_id = created.result["task"]["task_id"]
+    recurrence_id = created.result["task"]["recurrence_id"]
+    done = _run(
+        world,
+        Capability.TASKS_TRANSITION,
+        Purpose.TASK_AUTHORING,
+        TransitionTask(
+            task_id=task_id,
+            expected_version=1,
+            idempotency_key="task-trn-0005",
+            target_state=TaskState.COMPLETED,
+            cancel_series=True,
+        ),
+    )
+    assert done.error is None
+    occurrences = [task for task in world.task_rows.values() if task.recurrence_id == recurrence_id]
+    assert len(occurrences) == 1
+    assert occurrences[0].is_terminal
+    assert world.recurrences[recurrence_id].cancelled_at is not None
+
+
+def test_waiting_on_excludes_proposed_follow_ups(world: World) -> None:
+    person = "per_sarah00000001"
+    _run(
+        world,
+        Capability.COMMITMENTS_CREATE,
+        Purpose.TASK_AUTHORING,
+        CreateCommitment(
+            counterparty_person_id=person,
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            summary="Sarah owes the permit log",
+            idempotency_key="cmt-create-0003",
+        ),
+    )
+    _run(
+        world,
+        Capability.TASKS_CREATE,
+        Purpose.TASK_AUTHORING,
+        CreateTask(
+            title="Follow up with Sarah",
+            idempotency_key="task-create-0015",
+            task_role=TaskRole.FOLLOW_UP,
+            person_id=person,
+            proposed=True,
+            origin_evidence_ref="sevd_meeting000001",
+        ),
+    )
+    view = _run(world, Capability.TASKS_WAITING_ON, Purpose.TASK_REVIEW, TasksWaitingOn())
+    assert view.result["commitments"]
+    assert view.result["follow_ups"] == []
+
+
 def test_recurring_completion_creates_one_next_occurrence(world: World) -> None:
     created = _run(
         world,

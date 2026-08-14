@@ -61,9 +61,7 @@ _PRIOR_PURPOSES = (
 
 def _replace(name: str, expression: str) -> None:
     op.execute(f'ALTER TABLE knowledge.audit_events DROP CONSTRAINT "{name}"')
-    op.execute(
-        f'ALTER TABLE knowledge.audit_events ADD CONSTRAINT "{name}" CHECK ({expression})'
-    )
+    op.execute(f'ALTER TABLE knowledge.audit_events ADD CONSTRAINT "{name}" CHECK ({expression})')
 
 
 def upgrade() -> None:
@@ -88,6 +86,7 @@ def upgrade() -> None:
           start_date date,
           start_at timestamptz,
           series_title text NOT NULL DEFAULT '',
+          cancelled_at timestamptz,
           created_at timestamptz NOT NULL DEFAULT now(),
           CONSTRAINT task_recurrence_start_is_date_xor_instant
             CHECK ((start_date IS NULL) <> (start_at IS NULL)),

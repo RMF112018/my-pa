@@ -12,7 +12,8 @@ RUN test "${TARGETPLATFORM}" = "linux/amd64" \
  && test -n "${BUILD_TIMESTAMP}" \
  && python -c 'import sys, tomllib; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' \
  && git --version \
- && /usr/bin/openssl version
+ && /usr/bin/openssl version \
+ && mkdir -p /usr/local/lib/docker/cli-plugins
 
 LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
       io.my-pa.repository-tree="${SOURCE_TREE}" \

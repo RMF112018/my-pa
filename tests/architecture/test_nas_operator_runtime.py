@@ -83,7 +83,10 @@ def test_operator_runtime_is_separate_hardened_and_nonpersistent() -> None:
         assert "/var/run/docker.sock:/var/run/docker.sock" in script
     assert "operator admission must be root-owned mode 0400 with one link" in wrapper
     assert "--rm -i" in wrapper
-    assert "DOCKER_CLI_PLUGIN_EXTRA_DIRS=/usr/local/bin" in wrapper
+    for script in (bootstrap, wrapper):
+        assert "$compose_plugin_dir/docker-compose:ro" in script
+        assert 'DOCKER_CLI_PLUGIN_EXTRA_DIRS="$compose_plugin_dir"' in script
+    assert "mkdir -p /usr/local/lib/docker/cli-plugins" in dockerfile
     assert "python3.12" not in (ROOT / "ops/nas/tooling-common.sh").read_text(encoding="utf-8")
 
 
@@ -92,6 +95,81 @@ def test_operator_admission_is_exclusive_and_engine_bound() -> None:
     assert "os.O_EXCL" in source and "0o400" in source
     assert 'engine.get("Architecture") != "x86_64"' in source
     assert 'labels.get("io.my-pa.operator-runtime") != "python-3.12"' in source
+    assert '"compose", "version", "--short"' in source
+    assert '"--no-interpolate"' in source and '"--services"' in source
+    assert 'f"compose_version = ' in source
+
+
+def test_operator_admission_refuses_undiscoverable_compose_plugin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _module("admit-operator-runtime")
+    archive = tmp_path / "operator.tar"
+    image_id = _archive(archive)
+    metadata = tmp_path / "operator.metadata.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "containerimage.digest": "sha256:" + "b" * 64,
+                "containerimage.config.digest": image_id,
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "operator.toml"
+    candidate.write_text(
+        "\n".join(
+            [
+                'schema = "my-pa.nas-operator-runtime-candidate.v1"',
+                'status = "candidate_not_admitted"',
+                'repository_commit = "' + "a" * 40 + '"',
+                'repository_tree = "' + "c" * 40 + '"',
+                'built_at = "2026-08-14T00:00:00Z"',
+                'target_os = "linux"',
+                'target_architecture = "amd64"',
+                'oci_manifest_digest = "sha256:' + "b" * 64 + '"',
+                f'docker_image_id = "{image_id}"',
+                f'archive_sha256 = "{hashlib.sha256(archive.read_bytes()).hexdigest()}"',
+                f'build_metadata_sha256 = "{hashlib.sha256(metadata.read_bytes()).hexdigest()}"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def run(command: list[str]) -> str:
+        if command[1:3] == ["compose", "version"]:
+            raise subprocess.CalledProcessError(125, command, stderr="unknown flag: --file")
+        if command[1] == "info":
+            return '{"OSType":"linux","Architecture":"x86_64","ID":"engine","Name":"nas"}'
+        if command[1:3] == ["image", "inspect"]:
+            return json.dumps(
+                [
+                    {
+                        "Id": image_id,
+                        "Os": "linux",
+                        "Architecture": "amd64",
+                        "Config": {
+                            "Labels": {
+                                "org.opencontainers.image.revision": "a" * 40,
+                                "io.my-pa.repository-tree": "c" * 40,
+                                "io.my-pa.target-platform": "linux/amd64",
+                                "io.my-pa.operator-runtime": "python-3.12",
+                            }
+                        },
+                    }
+                ]
+            )
+        if command == ["git", "--version"]:
+            return "git version 2.47.3"
+        if command == ["/usr/bin/openssl", "version"]:
+            return "OpenSSL 3.5.1"
+        raise AssertionError(command)
+
+    monkeypatch.setattr(module, "_run", run)
+    output = tmp_path / "admission.toml"
+    assert "live_operator_inspection" in module.admit(candidate, archive, metadata, output)
+    assert not output.exists()
 
 
 def test_container_python_preserves_stdin_compose_plugin_and_closed_environment(
@@ -143,8 +221,8 @@ def test_container_python_preserves_stdin_compose_plugin_and_closed_environment(
     assert result.returncode == 0, result.stderr
     arguments = calls.read_text(encoding="utf-8").splitlines()
     assert "-i" in arguments
-    assert f"{fake_compose}:/usr/local/bin/docker-compose:ro" in arguments
-    assert "DOCKER_CLI_PLUGIN_EXTRA_DIRS=/usr/local/bin" in arguments
+    assert f"{fake_compose}:/usr/local/lib/docker/cli-plugins/docker-compose:ro" in arguments
+    assert "DOCKER_CLI_PLUGIN_EXTRA_DIRS=/usr/local/lib/docker/cli-plugins" in arguments
     assert "MY_PA_DB_PASSWORD" in arguments
     assert "UNAPPROVED_OPERATOR_VALUE" not in arguments
     assert "synthetic-not-a-secret" not in arguments

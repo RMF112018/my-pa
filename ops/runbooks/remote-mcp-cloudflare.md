@@ -32,11 +32,12 @@ Re-verify that tag-to-digest binding against the official registry before every
 deployment; an upgrade is a reviewed repository change, never a mutable tag.
 
 The Synology cgroup-v1 kernel exposes neither the CFS quota controller nor the
-PIDs controller. This stack therefore uses exact relative CPU shares (1024 for
-the MCP origin and 512 for the connector), exact `nproc` ulimits, and hard
-memory limits. Do not replace the shares with Compose `cpus`: Docker rejects
-that setting on the production NAS before container startup. Do not replace
-the ulimits with `pids_limit`: Docker silently discards that limit there.
+PIDs controller. This stack therefore pins the MCP origin and connector to
+different single-core CPU sets and retains hard memory limits. Do not replace
+the CPU sets with Compose `cpus`: Docker rejects that setting on the production
+NAS before container startup. The stack makes no false PID-controller claim:
+Docker silently discards `pids_limit` there, and UID-scoped `nproc` is not a
+container-isolated substitute.
 
 Allow outbound traffic only as follows: `cloudflared` needs DNS and Cloudflare
 Tunnel connectivity on TCP/UDP 7844 (TCP 443 fallback) to Cloudflare's published

@@ -30,8 +30,15 @@ def test_remote_runtime_contract_refuses_unsupported_synology_cgroup_controls(
     remote = tmp_path / "remote"
     shutil.copytree(ROOT / "ops/nas/remote", remote)
     compose = remote / "compose.yml"
-    compose.write_text(compose.read_text().replace("cpu_shares:", "cpus:"))
-    assert "unsupported_synology_cgroup_control" in gate.validate(remote)
+    expected = '    cpuset: "${MY_PA_REMOTE_CPUSET:?remote MCP CPU set required}"'
+    compose.write_text(
+        compose.read_text().replace(expected, f"    # {expected.strip()}\n    cpuset: 2")
+    )
+    assert "my-pa-mcp-remote_resource_contract" in gate.validate(remote)
+    compose.write_text(
+        compose.read_text().replace("    cpuset: 2", "    pids_limit: 128\n    cpuset: 2")
+    )
+    assert "my-pa-mcp-remote_unsupported_synology_cgroup_control" in gate.validate(remote)
 
 
 def test_production_remote_contract_is_local_operator_and_has_no_entra_dependency() -> None:
@@ -99,15 +106,15 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
                 "PortBindings": {},
                 "Init": True,
                 "RestartPolicy": {"Name": "unless-stopped"},
-                "Ulimits": [
-                    {
-                        "Name": "nproc",
-                        "Soft": 128 if image.startswith("app") else 64,
-                        "Hard": 128 if image.startswith("app") else 64,
-                    }
-                ],
-                "CpuShares": 1024 if image.startswith("app") else 512,
-                "Memory": 256 * 1024 * 1024,
+                "CpusetCpus": "0" if image.startswith("app") else "1",
+                "CpusetMems": "",
+                "CpuShares": 0,
+                "NanoCpus": 0,
+                "CpuPeriod": 0,
+                "CpuQuota": 0,
+                "PidsLimit": None,
+                "Ulimits": None,
+                "Memory": (768 if image.startswith("app") else 256) * 1024 * 1024,
             },
             "Mounts": mounts,
             "NetworkSettings": {"Networks": {name: {} for name in networks}},
@@ -190,8 +197,8 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
         )
         == []
     )
-    app["HostConfig"]["CpuShares"] = 0
-    assert "app_cpu_shares" in gate.violations(
+    app["HostConfig"]["CpusetCpus"] = "0-3"
+    assert "app_cpuset" in gate.violations(
         app,
         edge,
         app_image="app@sha256:exact",
@@ -217,9 +224,9 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
             "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
         },
     )
-    app["HostConfig"]["CpuShares"] = 1024
-    app["HostConfig"]["Ulimits"] = []
-    assert "app_nproc_limit" in gate.violations(
+    app["HostConfig"]["CpusetCpus"] = "0"
+    edge["HostConfig"]["NanoCpus"] = 500_000_000
+    assert "edge_unadmitted_resource_control" in gate.violations(
         app,
         edge,
         app_image="app@sha256:exact",
@@ -245,7 +252,7 @@ def test_live_gate_accepts_only_the_expected_least_privilege_shape() -> None:
             "NetworkSettings": {"Networks": {"my-pa-nas-contract_data-plane": {}}},
         },
     )
-    app["HostConfig"]["Ulimits"] = [{"Name": "nproc", "Soft": 128, "Hard": 128}]
+    edge["HostConfig"]["NanoCpus"] = 0
     assert "noncanonical_data_network" in gate.violations(
         app,
         edge,

@@ -89,16 +89,23 @@ def violations(
             errors.append(f"{name}_missing_init")
         if host.get("RestartPolicy", {}).get("Name") != "unless-stopped":
             errors.append(f"{name}_restart_policy")
-        expected_nproc = 128 if name == "app" else 64
-        if host.get("Ulimits") != [
-            {"Name": "nproc", "Soft": expected_nproc, "Hard": expected_nproc}
-        ]:
-            errors.append(f"{name}_nproc_limit")
-        expected_cpu_shares = 1024 if name == "app" else 512
-        if host.get("CpuShares") != expected_cpu_shares:
-            errors.append(f"{name}_cpu_shares")
+        expected_cpuset = "0" if name == "app" else "1"
+        if host.get("CpusetCpus") != expected_cpuset:
+            errors.append(f"{name}_cpuset")
+        unadmitted_controls = {
+            "CpuShares": 0,
+            "NanoCpus": 0,
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpusetMems": "",
+            "PidsLimit": None,
+            "Ulimits": None,
+        }
+        if any(host.get(field) != value for field, value in unadmitted_controls.items()):
+            errors.append(f"{name}_unadmitted_resource_control")
         memory = host.get("Memory")
-        if not isinstance(memory, int) or memory <= 0:
+        expected_memory = (768 if name == "app" else 256) * 1024 * 1024
+        if memory != expected_memory:
             errors.append(f"{name}_memory_limit")
         if any("docker.sock" in str(mount.get("Source", "")) for mount in state.get("Mounts", ())):
             errors.append(f"{name}_docker_socket")

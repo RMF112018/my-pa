@@ -10,6 +10,43 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 
+def _service_lines(compose: str, service: str) -> list[str]:
+    lines = compose.splitlines()
+    try:
+        services_start = lines.index("services:")
+    except ValueError:
+        return []
+    services_end = next(
+        (
+            index
+            for index in range(services_start + 1, len(lines))
+            if lines[index] and not lines[index].startswith(" ")
+        ),
+        len(lines),
+    )
+    marker = f"  {service}:"
+    try:
+        service_start = lines.index(marker, services_start + 1, services_end)
+    except ValueError:
+        return []
+    service_end = next(
+        (
+            index
+            for index in range(service_start + 1, services_end)
+            if lines[index].startswith("  ")
+            and not lines[index].startswith("    ")
+            and lines[index].strip()
+            and not lines[index].lstrip().startswith("#")
+        ),
+        services_end,
+    )
+    return [
+        line
+        for line in lines[service_start + 1 : service_end]
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
 def validate(root: Path = ROOT) -> list[str]:
     compose = (root / "compose.yml").read_text(encoding="utf-8")
     fallback = (root / "compose.loopback.yml").read_text(encoding="utf-8")
@@ -19,8 +56,30 @@ def validate(root: Path = ROOT) -> list[str]:
     edge = compose.split("  cloudflared:", 1)[-1].split("\nnetworks:\n", 1)[0]
     if "ports:" in compose or "network_mode:" in compose:
         errors.append("default_host_publication")
-    if "\n    cpus:" in compose or "pids_limit:" in compose:
-        errors.append("unsupported_synology_cgroup_control")
+    resource_contracts = {
+        "my-pa-mcp-remote": (
+            '    cpuset: "${MY_PA_REMOTE_CPUSET:?remote MCP CPU set required}"',
+            '    mem_limit: "${MY_PA_REMOTE_MEMORY:?remote MCP memory limit required}"',
+        ),
+        "cloudflared": (
+            '    cpuset: "${MY_PA_CLOUDFLARED_CPUSET:?cloudflared CPU set required}"',
+            '    mem_limit: "${MY_PA_CLOUDFLARED_MEMORY:?cloudflared memory limit required}"',
+        ),
+    }
+    unsupported = ("cpus:", "cpu_shares:", "pids_limit:", "ulimits:")
+    for service, expected in resource_contracts.items():
+        active = _service_lines(compose, service)
+        stripped = [line.strip() for line in active]
+        if any(line.startswith(unsupported) for line in stripped):
+            errors.append(f"{service}_unsupported_synology_cgroup_control")
+        if any(active.count(line) != 1 for line in expected):
+            errors.append(f"{service}_resource_contract")
+    environment = (root / "compose.env.example").read_text(encoding="utf-8").splitlines()
+    if (
+        environment.count("MY_PA_REMOTE_CPUSET=0") != 1
+        or environment.count("MY_PA_CLOUDFLARED_CPUSET=1") != 1
+    ):
+        errors.append("cpuset_example_contract")
     if "127.0.0.1:" not in fallback or "0.0.0.0:" in fallback:
         errors.append("fallback_not_loopback")
     for name, block in (("remote", remote), ("cloudflared", edge)):
@@ -29,9 +88,7 @@ def validate(root: Path = ROOT) -> list[str]:
             "read_only: true",
             "cap_drop: [ALL]",
             "no-new-privileges:true",
-            "ulimits:",
-            "nproc:",
-            "cpu_shares:",
+            "cpuset:",
             "mem_limit:",
             "healthcheck:",
         ):

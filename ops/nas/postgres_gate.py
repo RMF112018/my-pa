@@ -81,8 +81,12 @@ def verify(
         resolved = candidate.resolve(strict=True)
         if resolved != candidate:
             errors.append("path_not_canonical")
-        if not resolved.is_dir() or not os.access(resolved, os.W_OK | os.X_OK):
-            errors.append("path_not_writable_directory")
+        # Initial resource admission proves the empty bind root is writable.
+        # After initdb, the official image correctly owns it as the postgres
+        # user with mode 0700. The capability-dropped operator must not need
+        # DAC override; the exact RW bind mount below proves service access.
+        if not resolved.is_dir():
+            errors.append("path_not_directory")
         info = json.loads(runner([docker(), "info", "--format", "{{json .}}"]))
         live_filesystem_type = filesystem_type(runner(["df", "-PT", str(resolved)]))
         inspected = json.loads(runner([docker(), "inspect", data["postgres_container_id"]]))

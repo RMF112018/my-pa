@@ -124,3 +124,6 @@ def test_receipt_recency_uses_portable_admitted_python(tmp_path: Path) -> None:
     stale = verify(datetime.now(UTC) - timedelta(days=2))
     assert stale.returncode != 0
     assert "not recent" in stale.stderr
+    future = verify(datetime.now(UTC) + timedelta(days=2))
+    assert future.returncode != 0
+    assert "not recent" in future.stderr

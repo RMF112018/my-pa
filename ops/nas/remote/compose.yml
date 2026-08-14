@@ -37,7 +37,7 @@ services:
       - type: bind
         source: "${MY_PA_NAS_MANAGED_ROOT:?exact NAS managed root required}"
         target: /srv/my-pa/managed-documents
-    networks: [data-plane, mcp-origin, identity-egress]
+    networks: [data-plane, mcp-origin]
     healthcheck:
       test:
         - CMD
@@ -94,5 +94,4 @@ networks:
     name: "${MY_PA_DATA_NETWORK:?existing private PostgreSQL network required}"
   mcp-origin:
     internal: true
-  identity-egress: {}
   cloudflare-egress: {}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import traceback
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -44,6 +45,37 @@ def test_container_gateway_bind_is_explicit_and_closed() -> None:
     assert settings.gateway_bind_host() == "0.0.0.0"  # noqa: S104
     with pytest.raises(SettingsError, match="GATEWAY_BIND_MODE"):
         load_settings({DATABASE_URL: _A_URL, f"{ENV_PREFIX}GATEWAY_BIND_MODE": "lan"})
+
+
+def test_remote_oauth_is_one_exact_non_entra_public_origin() -> None:
+    values = {
+        DATABASE_URL: _A_URL,
+        f"{ENV_PREFIX}REMOTE_MCP_ENABLED": "true",
+        f"{ENV_PREFIX}REMOTE_MCP_PUBLIC_HOST": "mcp.example.invalid",
+        f"{ENV_PREFIX}OAUTH_AUTHORIZATION_SERVER": "https://mcp.example.invalid",
+        f"{ENV_PREFIX}OAUTH_AUDIENCE": "https://mcp.example.invalid/mcp",
+        f"{ENV_PREFIX}OAUTH_SCOPES": "my-pa.read",
+        f"{ENV_PREFIX}OAUTH_OPERATOR_SECRET": "s" * 43,
+    }
+    assert load_settings(values).auth_mode.value == "local_operator"
+    for name, invalid in (
+        ("OAUTH_AUTHORIZATION_SERVER", "http://mcp.example.invalid"),
+        ("OAUTH_AUDIENCE", "https://other.example.invalid/mcp"),
+        ("REMOTE_MCP_PUBLIC_HOST", "other.example.invalid"),
+    ):
+        with pytest.raises(SettingsError, match="exact HTTPS public origin"):
+            load_settings({**values, f"{ENV_PREFIX}{name}": invalid})
+
+
+def test_checked_in_remote_environment_cannot_start_unchanged() -> None:
+    example = (
+        Path(__file__).resolve().parents[2] / "ops/nas/remote/remote.env.example"
+    ).read_text()
+    environment = dict(
+        line.split("=", 1) for line in example.splitlines() if line and not line.startswith("#")
+    )
+    with pytest.raises(SettingsError, match="generated operator secret"):
+        load_settings(environment)
 
 
 def test_unrelated_environment_variables_are_ignored() -> None:
@@ -201,20 +233,21 @@ def test_unknown_environment_is_rejected() -> None:
         load_settings({f"{ENV_PREFIX}ENVIRONMENT": "production"})
 
 
-def test_only_the_database_url_may_be_credential_bearing() -> None:
+def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
     """One setting can carry a credential; a second one arriving is a decision.
 
     `database_url` is exempt because a PostgreSQL URL is where a password
-    belongs when the environment supplies one. Every other field must stay
-    plainly non-secret, so a `MY_PA_API_TOKEN` cannot appear as an ordinary
-    setting and inherit this module's handling by accident.
+    belongs when the environment supplies one. The origin OAuth operator secret
+    is the one deliberately admitted approval credential; both fields are
+    hidden from repr. Every other field must stay plainly non-secret.
     """
     tokens = ("password", "secret", "token", "key", "credential", "dsn", "url", "path")
     for name in Settings.model_fields:
-        if name == "database_url":
+        if name in {"database_url", "oauth_operator_secret"}:
             continue
         for token in tokens:
             assert token not in name, f"settings field {name!r} looks secret-bearing"
+    assert Settings.model_fields["oauth_operator_secret"].repr is False
 
 
 def test_an_absent_database_url_is_refused_rather_than_defaulted() -> None:

@@ -62,6 +62,12 @@ def validate(root: Path = ROOT) -> list[str]:
             "^/mcp$",
             "^/healthz$",
             "^/.well-known/oauth-protected-resource$",
+            "^/.well-known/oauth-protected-resource/mcp$",
+            "^/.well-known/oauth-authorization-server$",
+            "^/oauth/register$",
+            "^/oauth/authorize$",
+            "^/oauth/token$",
+            "^/oauth/revoke$",
         ]
         or "- service: http_status:404" not in tunnel
     ):

@@ -326,10 +326,7 @@ UNPARTITIONED_JOB_STATEMENTS: Final = {
 #: appear silently — which is exactly how the relationship plane ended up with
 #: three hand-written predicates and twenty-odd statements with none.
 HAND_WRITTEN_COMPARISONS: Final = {
-    "infrastructure/persistence/remote_identity.py": (
-        ("remote_clients", "principal_id"),
-        ("user_accounts", "principal_id"),
-    ),
+    "infrastructure/persistence/remote_identity.py": (("remote_clients", "principal_id"),),
     "infrastructure/persistence/enrollment.py": (
         ("enrollments", "principal_id"),
         ("enrollments", "principal_id"),

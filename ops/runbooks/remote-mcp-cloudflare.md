@@ -9,9 +9,9 @@ no NAS port; PostgreSQL remains on an existing private Docker network.
 
 Choose the stable MCP hostname, Cloudflare account/tunnel UUID, exact NAS paths,
 dedicated numeric UIDs/GIDs, and digest-pinned application and `cloudflared`
-images. Register the OAuth client and the existing durable `my-pa`
-client-to-Principal/capability binding before startup; the caller never supplies
-an authoritative Principal. Store the database password, OAuth material (if any),
+images. The origin OAuth server dynamically registers a public PKCE client and
+binds it to the repository-defined `LOCAL_OPERATOR_UUID`; the caller never
+supplies an authoritative Principal. Store the database password, OAuth operator secret,
 and named-tunnel `credentials.json` only in owner-readable NAS files. Never put
 them in the Compose interpolation file, Git, command history, or logs.
 
@@ -33,10 +33,9 @@ deployment; an upgrade is a reviewed repository change, never a mutable tag.
 
 Allow outbound traffic only as follows: `cloudflared` needs DNS and Cloudflare
 Tunnel connectivity on TCP/UDP 7844 (TCP 443 fallback) to Cloudflare's published
-Tunnel endpoints; the MCP process needs DNS plus HTTPS only to the exact issuer
-and JWKS hosts in its environment. Neither service needs inbound firewall rules.
-Reconcile these names against current Cloudflare and identity-provider primary
-documentation when activating; IPs are intentionally not frozen in Git.
+Tunnel endpoints. The MCP process needs only the private PostgreSQL and origin
+networks; it performs no identity-provider or JWKS egress. Neither service needs
+an inbound firewall rule.
 
 Cloudflare Access is optional defense in depth only. If enabled, its policy must
 admit the chosen MCP client's OAuth flow without widening either route, and its
@@ -44,22 +43,22 @@ identity never substitutes for the origin bearer token, durable client binding,
 or application authorization. A request that passes Access but fails origin
 OAuth validation remains denied. Do not add an Access bypass rule for `/mcp`.
 
-After migrating the database, use the supported operator CLI rather than direct
-SQL to establish the initial read-only binding:
+After migrating the database, complete dynamic client registration. It creates a
+write-disabled durable client already constrained to `LOCAL_OPERATOR_UUID`.
+Use the returned public client ID with the supported operator CLI, rather than
+direct SQL, to establish explicit read grants:
 
 ```bash
-python apps/cli/remote_mcp.py register \
-  --principal-uuid "$PRINCIPAL_UUID" --oauth-client-id "$OAUTH_CLIENT_ID"
 python apps/cli/remote_mcp.py grant \
-  --remote-client-uuid "$REMOTE_CLIENT_UUID" --scope my-pa.read \
+  --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
   --capability capabilities.get --resource "$OAUTH_AUDIENCE"
 python apps/cli/remote_mcp.py control --remote-enabled --no-writes-enabled
 ```
 
 Emergency withdrawal is durable: run `control --no-remote-enabled
---no-writes-enabled`; revoke one client with `revoke --remote-client-uuid ...`.
+--no-writes-enabled`; revoke one client with `revoke --oauth-client-id ...`.
 Revoke an individual grant with `revoke-grant --grant-uuid ...`. Production
-client registrations and grants should include a UTC `--expires-at` timestamp.
+grants should include a UTC `--expires-at` timestamp.
 For a purpose-bound grant, add `--purpose <canonical-purpose>`. Enabling a
 write-capable client requires all three independent inputs: register it with
 `--writes-enabled`, create only the required grants with `--write` and an exact
@@ -96,11 +95,18 @@ MCP startup. A missing exact same-bridge rule is a deployment refusal; never
 replace it with a broad `INPUT_FIREWALL` exception or disable DSM firewall.
 
 Inspect the rendered model: it must contain no `ports`, no database service,
-no Docker socket, and only `/mcp`, `/healthz`, and OAuth protected-resource
-metadata, followed by the 404 catch-all. `/readyz` is intentionally not an
-edge route. Validate the tunnel ownership/UUID with the operator's authenticated
+no Docker socket, and only `/mcp`, `/healthz`, OAuth discovery, registration,
+authorization, token, revocation, and protected-resource routes followed by the
+404 catch-all. `/readyz` is intentionally not an edge route. Validate the tunnel
+ownership/UUID with the operator's authenticated
 Cloudflare tooling; do not paste its output into tickets or logs if it contains
 account or credential data.
+
+The origin-OAuth migration admits only the established empty remote-client
+baseline. If any legacy `identity.remote_clients` row exists, migration refuses
+before changing the schema. Resolve that identity through the repository-owned
+operator workflow and obtain a fresh backup before retrying; do not relabel or
+delete a row merely to satisfy the gate.
 
 ## Deploy, verify, and connect
 
@@ -130,7 +136,11 @@ docker compose --env-file /volume1/my-pa/config/remote-compose.env \
   python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8766/readyz').status)"
 ```
 
-The private readiness probe must return 200 before client use. From outside the
+The private readiness probe must return 200 before client use. Prove discovery,
+DCR, operator-secret approval, PKCE S256 exchange, one-time code use, bearer
+validation, token revocation, and the server-side local-operator binding before
+edge cutover. Never print the approval secret, authorization code, or token.
+From outside the
 NAS, `/healthz` may return only generic liveness, `/readyz` must return the
 catch-all 404, and `/mcp` without a valid bearer token must fail closed. Configure
 the MCP client for Streamable HTTP at `https://<stable-hostname>/mcp` and its

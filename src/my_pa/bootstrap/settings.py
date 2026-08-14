@@ -4,10 +4,11 @@ Settings fail closed. An unknown `MY_PA_` variable, an unparseable value, or an
 out-of-range value raises rather than falling back to a default, so a typo in a
 security-relevant name cannot silently leave the safe setting in place.
 
-No secret is committed. `database_url` is the one setting whose value may carry a
-credential, and it has no default at all. The messages this module composes never
-echo a setting's value, and the field is `repr=False` so the value does not ride
-out in `repr(settings)` either — the channel that mattered most, because pytest
+No secret is committed. `database_url` and the origin OAuth operator approval
+secret are the two settings whose values may carry credentials; neither has a
+usable default. The messages this module composes never echo either value, and
+both fields are `repr=False` so their values do not ride out in `repr(settings)`
+either — the channel that mattered most, because pytest
 prints the `repr` of a failing assertion's operands.
 
 Two channels were open here and are named rather than left to be found. The first
@@ -31,7 +32,7 @@ reading `str(exc)`, because reading only the top-level message is what let this
 survive a review.
 
 The second channel is open by design: `model_dump` and `model_dump_json` return
-`database_url` with its password. They are asked for explicitly rather than
+both credential-bearing fields. They are asked for explicitly rather than
 reached by accident, and callers must not log their output. `repr`, `str` and the
 exception chain are the paths something reaches without meaning to, and those are
 the ones closed.
@@ -52,11 +53,13 @@ import os
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Final
+from urllib.parse import urlsplit
 
 from pydantic import Field, PrivateAttr, ValidationError, model_validator
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
+from my_pa.contracts.oauth import valid_operator_secret
 from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
@@ -295,12 +298,15 @@ class Settings(StrictModel):
     remote_mcp_enabled: bool = False
     remote_writes_enabled: bool = False
     remote_mcp_public_host: str = ""
+    #: Legacy Entra verifier inputs remain available only to the dormant
+    #: `auth_mode=entra` path. Remote MCP never reads them.
     oauth_issuer: str = Field(default="", repr=False)
     oauth_audience: str = Field(default="", repr=False)
     oauth_jwks_uri: str = Field(default="", repr=False)
     oauth_tenant_id: str = Field(default="", repr=False)
     oauth_authorization_server: str = Field(default="", repr=False)
     oauth_scopes: str = ""
+    oauth_operator_secret: str = Field(default="", repr=False)
     #: Which registered capture client this MCP process serves as, or empty for
     #: none (WP-28).
     #:
@@ -368,19 +374,40 @@ class Settings(StrictModel):
         self._check_auth_mode()
         if self.remote_mcp_enabled and not all(
             (
-                self.oauth_issuer.strip(),
                 self.oauth_audience.strip(),
-                self.oauth_jwks_uri.strip(),
-                self.oauth_tenant_id.strip(),
                 self.oauth_authorization_server.strip(),
                 self.oauth_scopes.strip(),
+                valid_operator_secret(self.oauth_operator_secret),
                 self.remote_mcp_public_host.strip(),
             )
         ):
             raise SettingsError(
-                "remote MCP requires OAuth issuer, audience, JWKS URI, tenant ID, "
-                "authorization server, scopes, and public host"
+                "remote MCP requires its origin OAuth authorization server, audience, scopes, "
+                "generated operator secret, and public host"
             )
+        if self.remote_mcp_enabled and self.auth_mode is not AuthMode.LOCAL_OPERATOR:
+            raise SettingsError("remote MCP requires the canonical local_operator identity mode")
+        if self.remote_mcp_enabled:
+            issuer = urlsplit(self.oauth_authorization_server)
+            resource = urlsplit(self.oauth_audience)
+            if (
+                issuer.scheme != "https"
+                or not issuer.hostname
+                or issuer.path not in ("", "/")
+                or issuer.query
+                or issuer.fragment
+                or issuer.username is not None
+                or issuer.password is not None
+                or resource.scheme != "https"
+                or resource.netloc != issuer.netloc
+                or resource.path != "/mcp"
+                or resource.query
+                or resource.fragment
+                or self.remote_mcp_public_host != issuer.hostname
+            ):
+                raise SettingsError(
+                    "remote MCP OAuth requires one exact HTTPS public origin and its /mcp resource"
+                )
         if not self.redaction_enabled:
             raise SettingsError(
                 "redaction cannot be disabled; debug mode does not bypass redaction"

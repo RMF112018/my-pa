@@ -23,4 +23,40 @@ ingress:
     originRequest:
       connectTimeout: 3s
       httpHostHeader: __MCP_HOSTNAME__
+  - hostname: __MCP_HOSTNAME__
+    path: ^/.well-known/oauth-protected-resource/mcp$
+    service: http://my-pa-mcp-remote:8766
+    originRequest:
+      connectTimeout: 3s
+      httpHostHeader: __MCP_HOSTNAME__
+  - hostname: __MCP_HOSTNAME__
+    path: ^/.well-known/oauth-authorization-server$
+    service: http://my-pa-mcp-remote:8766
+    originRequest:
+      connectTimeout: 3s
+      httpHostHeader: __MCP_HOSTNAME__
+  - hostname: __MCP_HOSTNAME__
+    path: ^/oauth/register$
+    service: http://my-pa-mcp-remote:8766
+    originRequest:
+      connectTimeout: 3s
+      httpHostHeader: __MCP_HOSTNAME__
+  - hostname: __MCP_HOSTNAME__
+    path: ^/oauth/authorize$
+    service: http://my-pa-mcp-remote:8766
+    originRequest:
+      connectTimeout: 3s
+      httpHostHeader: __MCP_HOSTNAME__
+  - hostname: __MCP_HOSTNAME__
+    path: ^/oauth/token$
+    service: http://my-pa-mcp-remote:8766
+    originRequest:
+      connectTimeout: 3s
+      httpHostHeader: __MCP_HOSTNAME__
+  - hostname: __MCP_HOSTNAME__
+    path: ^/oauth/revoke$
+    service: http://my-pa-mcp-remote:8766
+    originRequest:
+      connectTimeout: 3s
+      httpHostHeader: __MCP_HOSTNAME__
   - service: http_status:404

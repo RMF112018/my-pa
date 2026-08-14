@@ -9,6 +9,7 @@ import pytest
 from pytest import MonkeyPatch
 from sqlalchemy import create_engine
 
+from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.persistence.remote_identity import (
@@ -18,8 +19,8 @@ from my_pa.infrastructure.persistence.remote_identity import (
     remote_clients,
     remote_security_controls,
 )
-from my_pa.infrastructure.persistence.user_accounts import user_accounts
 from my_pa.infrastructure.security.remote_oauth import (
+    OriginTokenContext,
     RemoteAuthenticationError,
     RemoteAuthenticator,
     protected_resource_metadata,
@@ -30,7 +31,7 @@ WHEN = datetime(2026, 8, 13, tzinfo=UTC)
 
 
 class RepositoryAnswer:
-    principal_id = UUID("12345678-1234-5678-1234-567812345678")
+    principal_id = LOCAL_OPERATOR_UUID
     scopes = frozenset({"my-pa.read"})
     capabilities = frozenset({Capability.KNOWLEDGE_SEARCH})
     capability_purposes = frozenset({(Capability.KNOWLEDGE_SEARCH, Purpose.KNOWLEDGE_SEARCH)})
@@ -46,14 +47,12 @@ def connections() -> Iterator[FakeConnection]:
     yield FakeConnection()
 
 
-def claims(_: str) -> dict[str, object]:
-    return {
-        "tid": "tenant",
-        "oid": "person",
-        "azp": "client",
-        "scp": "my-pa.read ungranted.scope",
-        "resource": "https://mcp.example.invalid",
-    }
+def token_context(_: str) -> OriginTokenContext:
+    return OriginTokenContext(
+        client_id="client",
+        scopes=frozenset({"my-pa.read", "ungranted.scope"}),
+        resource="https://mcp.example.invalid",
+    )
 
 
 def test_header_only_authentication_returns_server_resolved_context(
@@ -69,15 +68,14 @@ def test_header_only_authentication_returns_server_resolved_context(
         authenticate,
     )
     auth = RemoteAuthenticator(
-        token_claims=claims,
+        token_context=token_context,
         connections=connections,
-        tenant_id="tenant",
         required_resource="https://mcp.example.invalid",
         now=lambda: WHEN,
     )
     context = auth.authenticate("Bearer synthetic-token")
     assert context.principal.authenticated
-    assert context.principal_id == "prn_12345678123456781234567812345678"
+    assert context.principal_id == "prn_24abf5d2d0c25e1c82f6e72425e9ed37"
     assert context.client_id == "client"
     assert context.scopes == frozenset({"my-pa.read"})
     assert context.capabilities == frozenset({Capability.KNOWLEDGE_SEARCH})
@@ -89,9 +87,8 @@ def test_header_only_authentication_returns_server_resolved_context(
 @pytest.mark.parametrize("header", [None, "", "Basic value", "Bearer", "Bearer a b"])
 def test_malformed_headers_have_one_safe_failure(header: str | None) -> None:
     auth = RemoteAuthenticator(
-        token_claims=claims,
+        token_context=token_context,
         connections=connections,
-        tenant_id="tenant",
         required_resource="https://mcp.example.invalid",
         now=lambda: WHEN,
     )
@@ -102,22 +99,16 @@ def test_malformed_headers_have_one_safe_failure(header: str | None) -> None:
 
 
 @pytest.mark.parametrize(
-    "changed",
-    [
-        {"tid": "foreign"},
-        {"oid": ""},
-        {"azp": ""},
-        {"resource": "https://other.invalid"},
-    ],
+    "context",
+    [None, OriginTokenContext("client", frozenset({"my-pa.read"}), "https://other.invalid")],
 )
-def test_tenant_identity_client_and_resource_fail_closed(changed: dict[str, str]) -> None:
-    def invalid(_: str) -> dict[str, object]:
-        return {**claims("token"), **changed}
+def test_token_and_resource_fail_closed(context: OriginTokenContext | None) -> None:
+    def invalid(_: str) -> OriginTokenContext | None:
+        return context
 
     auth = RemoteAuthenticator(
-        token_claims=invalid,
+        token_context=invalid,
         connections=connections,
-        tenant_id="tenant",
         required_resource="https://mcp.example.invalid",
         now=lambda: WHEN,
     )
@@ -142,30 +133,19 @@ def test_metadata_and_redaction_are_deterministic() -> None:
 def test_repository_enforces_binding_grants_and_kill_switches() -> None:
     """A real SQL query intersects scope and denies cross-Principal bindings."""
     engine = create_engine("sqlite://")
-    principal_a = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-    principal_b = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    principal_a = LOCAL_OPERATOR_UUID
     client = UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
     with engine.begin() as connection:
         connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS identity")
         REMOTE_IDENTITY_METADATA.create_all(connection)
-        for principal, oid in ((principal_a, "person-a"), (principal_b, "person-b")):
-            connection.execute(
-                user_accounts.insert().values(
-                    id=principal,
-                    principal_id=principal,
-                    tid="tenant",
-                    oid=oid,
-                    first_seen_at=WHEN,
-                    consent_state="granted",
-                    lifecycle_state="active",
-                    home_tenant_verified=True,
-                )
-            )
         connection.execute(
             remote_clients.insert().values(
                 id=client,
                 principal_id=principal_a,
                 oauth_client_id="client-a",
+                client_name="client a",
+                redirect_uris='["https://client.example/callback"]',
+                registered_scopes="my-pa.read my-pa.write",
                 enabled=True,
                 writes_enabled=True,
                 created_at=WHEN,
@@ -208,8 +188,6 @@ def test_repository_enforces_binding_grants_and_kill_switches() -> None:
         )
         repository = RemoteIdentityRepository(connection)
         resolved = repository.authenticate(
-            tenant_id="tenant",
-            object_id="person-a",
             oauth_client_id="client-a",
             token_scopes=frozenset({"my-pa.read", "my-pa.write", "token-only"}),
             resource="https://mcp.example.invalid",
@@ -221,26 +199,11 @@ def test_repository_enforces_binding_grants_and_kill_switches() -> None:
         assert resolved.capabilities == frozenset({Capability.KNOWLEDGE_SEARCH})
         assert not resolved.write_allowed
 
-        # The client is bound to A: B's otherwise valid identity cannot use it.
-        assert (
-            repository.authenticate(
-                tenant_id="tenant",
-                object_id="person-b",
-                oauth_client_id="client-a",
-                token_scopes=frozenset({"my-pa.read"}),
-                resource="https://mcp.example.invalid",
-                now=WHEN,
-            )
-            is None
-        )
-
         connection.execute(
             remote_security_controls.update().values(remote_enabled=False, updated_at=WHEN)
         )
         assert (
             repository.authenticate(
-                tenant_id="tenant",
-                object_id="person-a",
                 oauth_client_id="client-a",
                 token_scopes=frozenset({"my-pa.read"}),
                 resource="https://mcp.example.invalid",
@@ -255,8 +218,6 @@ def test_repository_enforces_binding_grants_and_kill_switches() -> None:
         connection.execute(remote_clients.update().values(revoked_at=WHEN, enabled=False))
         assert (
             repository.authenticate(
-                tenant_id="tenant",
-                object_id="person-a",
                 oauth_client_id="client-a",
                 token_scopes=frozenset({"my-pa.read"}),
                 resource="https://mcp.example.invalid",

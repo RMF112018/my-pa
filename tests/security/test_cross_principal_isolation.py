@@ -135,6 +135,8 @@ def test_the_identity_revision_round_trips_from_empty(disposable_database: str) 
                 "remote_clients",
                 "remote_capability_grants",
                 "remote_security_controls",
+                "oauth_authorization_codes",
+                "oauth_access_tokens",
             }
         command.downgrade(_config(), "base")
         with engine.connect() as connection:

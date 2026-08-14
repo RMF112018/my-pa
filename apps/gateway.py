@@ -77,12 +77,13 @@ from typing import Final
 import uvicorn
 
 from my_pa.adapters.http import REMOTE_CAPTURE_PATH, create_http_app
+from my_pa.adapters.http.oauth import build_origin_oauth_routes
 from my_pa.adapters.mcp import RemoteAccessContext, create_remote_mcp_app, serve_stdio
 from my_pa.adapters.mcp.server import SERVER_NAME
 from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.settings import load_settings
 from my_pa.infrastructure.security import RemoteAuthenticationError, RemoteAuthenticator
-from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
+from my_pa.infrastructure.security.origin_authorization import OriginOAuthServer
 
 #: The safe default address. Container binding is a validated deployment mode,
 #: not a CLI host argument, and Compose publishes no gateway host port.
@@ -231,15 +232,15 @@ def _mcp_remote(args: argparse.Namespace) -> int:
         print("refusing    remote MCP is disabled", file=sys.stderr)
         return 2
     runtime = build_gateway_runtime(settings)
-    verifier = EntraTokenVerifier(
-        audience=settings.oauth_audience,
-        issuer=settings.oauth_issuer,
-        signing_key=jwks_signing_key_source(settings.oauth_jwks_uri),
+    authorization_server = OriginOAuthServer(
+        connections=runtime.work_engine.begin,
+        issuer=settings.oauth_authorization_server,
+        resource=settings.oauth_audience,
+        supported_scopes=frozenset(settings.oauth_scopes.split()),
     )
     authenticator = RemoteAuthenticator(
-        token_claims=verifier.claims,
+        token_context=authorization_server.introspect,
         connections=runtime.work_engine.begin,
-        tenant_id=settings.oauth_tenant_id,
         required_resource=settings.oauth_audience,
     )
 
@@ -287,6 +288,10 @@ def _mcp_remote(args: argparse.Namespace) -> int:
         resource=settings.oauth_audience,
         authorization_servers=(settings.oauth_authorization_server,),
         scopes=frozenset(settings.oauth_scopes.split()),
+        additional_routes=build_origin_oauth_routes(
+            authorization_server,
+            operator_secret=settings.oauth_operator_secret,
+        ),
     )
     print(f"serving     remote mcp on {args.host}:{args.port}/mcp", file=sys.stderr, flush=True)
     try:

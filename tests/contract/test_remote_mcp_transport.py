@@ -116,7 +116,7 @@ async def test_origin_publishes_metadata_and_challenges_missing_credentials(scen
         resolve_access=lambda _authorization: None,
         allowed_hosts=("testserver",),
         remote_enabled=True,
-        resource="https://mcp.example.invalid",
+        resource="https://mcp.example.invalid/mcp",
         authorization_servers=("https://issuer.example.invalid",),
         scopes=frozenset({"my-pa.read"}),
     )
@@ -126,14 +126,14 @@ async def test_origin_publishes_metadata_and_challenges_missing_credentials(scen
             transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
         ) as client,
     ):
-        metadata = await client.get("/.well-known/oauth-protected-resource")
+        metadata = await client.get("/.well-known/oauth-protected-resource/mcp")
         refused = await client.post(
             "/mcp",
             json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
         )
     assert metadata.status_code == 200
     assert metadata.json() == {
-        "resource": "https://mcp.example.invalid",
+        "resource": "https://mcp.example.invalid/mcp",
         "authorization_servers": ["https://issuer.example.invalid"],
         "bearer_methods_supported": ["header"],
         "scopes_supported": ["my-pa.read"],
@@ -142,7 +142,7 @@ async def test_origin_publishes_metadata_and_challenges_missing_credentials(scen
     assert refused.json() == {"error": "invalid_token"}
     assert refused.headers["WWW-Authenticate"] == (
         'Bearer resource_metadata="https://mcp.example.invalid/'
-        '.well-known/oauth-protected-resource"'
+        '.well-known/oauth-protected-resource/mcp"'
     )
 
 

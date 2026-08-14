@@ -47,6 +47,7 @@ def _live_fixture(
     planted_entra: bool = False,
     session_secret: str = "S" * 32,
     operator_secret: str = "O" * 43,
+    proxy_cap_add: list[str] | None = None,
 ) -> tuple[Path, object]:
     gate = _gate()
     config = ROOT / "ops/nas/proxy-allowlist.example.caddy"
@@ -100,7 +101,11 @@ def _live_fixture(
             "Privileged": False,
             "PublishAllPorts": False,
             "NetworkMode": "default",
-            "CapAdd": [],
+            "CapAdd": (
+                ["NET_BIND_SERVICE"]
+                if name == "proxy" and proxy_cap_add is None
+                else proxy_cap_add or []
+            ),
             "CapDrop": ["ALL"],
             "Devices": [],
             "SecurityOpt": ["no-new-privileges:true"],
@@ -186,6 +191,21 @@ def test_gate_refuses_any_residual_entra_environment(tmp_path: Path) -> None:
         runner=runner,
     )
     assert "entra_environment_present" in errors
+
+
+@pytest.mark.parametrize("capabilities", ([], ["SYS_ADMIN"], ["NET_BIND_SERVICE", "CHOWN"]))
+def test_gate_refuses_proxy_without_the_exact_caddy_exec_capability(
+    tmp_path: Path, capabilities: list[str]
+) -> None:
+    manifest, runner = _live_fixture(tmp_path, proxy_cap_add=capabilities)
+    errors = _gate().verify(
+        manifest,
+        ROOT / "ops/nas/proxy-allowlist.example.caddy",
+        ROOT / "ops/nas/compose.example.yml",
+        live=True,
+        runner=runner,
+    )
+    assert "proxy_runtime_authority" in errors
 
 
 @pytest.mark.parametrize(

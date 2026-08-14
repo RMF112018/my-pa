@@ -249,7 +249,7 @@ def verify(
         or host_config.get("Privileged")
         or host_config.get("PublishAllPorts")
         or host_config.get("NetworkMode") == "host"
-        or host_config.get("CapAdd")
+        or set(host_config.get("CapAdd") or []) != {"NET_BIND_SERVICE"}
         or set(host_config.get("CapDrop") or []) != {"ALL"}
         or host_config.get("Devices")
         or set(host_config.get("SecurityOpt") or []) != {"no-new-privileges:true"}

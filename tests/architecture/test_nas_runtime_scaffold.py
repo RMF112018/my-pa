@@ -563,6 +563,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "user",
             "restart",
             "cap_drop",
+            "cap_add",
             "security_opt",
             "read_only",
             "environment",
@@ -585,6 +586,12 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             errors.add("restart_policy")
         if name in {"gateway", "worker-enrollment", "worker-capture", "web"} and (
             service.get("cap_drop") != ["ALL"]
+            or service.get("security_opt") != ["no-new-privileges:true"]
+        ):
+            errors.add("service_privilege")
+        if name == "proxy" and (
+            service.get("cap_drop") != ["ALL"]
+            or service.get("cap_add") != ["NET_BIND_SERVICE"]
             or service.get("security_opt") != ["no-new-privileges:true"]
         ):
             errors.add("service_privilege")

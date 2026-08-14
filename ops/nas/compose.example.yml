@@ -118,6 +118,11 @@ services:
     user: "${MY_PA_PROXY_UID:?verified proxy uid required}:${MY_PA_PROXY_GID:?verified proxy gid required}"
     restart: "no"
     cap_drop: [ALL]
+    # The pinned upstream Caddy binary carries cap_net_bind_service as a file
+    # capability. Linux refuses to exec that binary under no-new-privileges
+    # unless the capability remains in the container's permitted set, even
+    # though this deployment listens only on unprivileged port 8080.
+    cap_add: [NET_BIND_SERVICE]
     security_opt: ["no-new-privileges:true"]
     read_only: true
     environment:

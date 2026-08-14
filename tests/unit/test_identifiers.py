@@ -73,6 +73,12 @@ def test_contract_prefixes_are_stable() -> None:
         "nsimr",
         "nlg",
         "nauth",
+        "tsk",
+        "cmt",
+        "trev",
+        "trcur",
+        "tlnk",
+        "tbprv",
     }
 
 

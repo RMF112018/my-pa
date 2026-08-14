@@ -49,6 +49,7 @@ def _live_fixture(
     operator_secret: str = "O" * 43,
     proxy_cap_add: list[str] | None = None,
     host_edge_internal: bool = False,
+    extra_host_edge_member: bool = False,
 ) -> tuple[Path, object]:
     gate = _gate()
     config = ROOT / "ops/nas/proxy-allowlist.example.caddy"
@@ -96,13 +97,20 @@ def _live_fixture(
         if command[0:2] == ["docker", "compose"]:
             return f"{command[-1]}-id\n"
         if command[0:3] == ["docker", "network", "inspect"]:
+            is_host_edge = command[-1].endswith("_host-edge")
             return json.dumps(
                 [
                     {
-                        "Internal": (
-                            host_edge_internal if command[-1].endswith("_host-edge") else True
-                        ),
+                        "Internal": host_edge_internal if is_host_edge else True,
                         "Id": "a" * 64,
+                        "Containers": (
+                            {
+                                "proxy-id": {},
+                                **({"unrelated-id": {}} if extra_host_edge_member else {}),
+                            }
+                            if is_host_edge
+                            else {}
+                        ),
                     }
                 ]
             )
@@ -201,6 +209,18 @@ def test_gate_requires_non_internal_proxy_only_host_edge(tmp_path: Path) -> None
         runner=runner,
     )
     assert "host_edge_network" in errors
+
+
+def test_gate_refuses_an_unrelated_host_edge_member(tmp_path: Path) -> None:
+    manifest, runner = _live_fixture(tmp_path, extra_host_edge_member=True)
+    errors = _gate().verify(
+        manifest,
+        ROOT / "ops/nas/proxy-allowlist.example.caddy",
+        ROOT / "ops/nas/compose.example.yml",
+        live=True,
+        runner=runner,
+    )
+    assert "host_edge_membership" in errors
 
 
 def test_gate_refuses_any_residual_entra_environment(tmp_path: Path) -> None:

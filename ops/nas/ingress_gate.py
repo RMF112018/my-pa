@@ -310,6 +310,11 @@ def verify(
         errors.append("network_internality")
     if internal["host-edge"].get("Internal") is not False:
         errors.append("host_edge_network")
+    host_edge_members = internal["host-edge"].get("Containers")
+    if not isinstance(host_edge_members, dict) or set(host_edge_members) != {
+        services["proxy"]["container_id"]
+    }:
+        errors.append("host_edge_membership")
     hostport = f"{host}:443"
     if tailscale.get("TCP") != {"443": {"HTTPS": True}} or tailscale.get("Web") != {
         hostport: {"Handlers": {"/": {"Proxy": f"http://{target}"}}}

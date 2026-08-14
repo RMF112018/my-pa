@@ -141,13 +141,18 @@ ops/nas/synology-data-plane-firewall.sh check
 The script derives the current network ID, Synology bridge name, and subnet
 from the exact internal Compose-owned data plane. It also requires Docker's
 same-bridge ACCEPT rule and the proven Synology chain ordering before it will
-mutate anything. `plan` is read-only; `apply` is idempotent and requires the
-exact confirmation value; `remove` is the exact bounded rollback and requires
-the same confirmation. The rule is runtime firewall state, not a DSM profile
-mutation. A DSM firewall reload or NAS reboot can remove it, so re-run `apply`
-before lifecycle recovery. Database operations, six-service start/restart, and
-health fail closed when `check` does not pass. Do not add a broad subnet rule to
-`INPUT_FIREWALL`, disable DSM firewall, or allow unrelated Docker networks.
+mutate anything. Admission means one exact rule in the first
+`FORWARD_FIREWALL` position, before DSM deny rules. `plan` is read-only; `apply`
+is idempotent and requires the exact confirmation value; `remove` is the exact
+bounded rollback and requires the same confirmation. A duplicate or misplaced
+exact rule is refused: use confirmed `remove` and then `apply`, rather than
+layering another rule over ambiguous state. A failed post-insert check rolls
+back the rule inserted by that invocation. The rule is runtime firewall state,
+not a DSM profile mutation. A DSM firewall reload or NAS reboot can remove it,
+so re-run `apply` before lifecycle recovery. Database operations, six-service
+start/restart, and health fail closed when `check` does not pass. Do not add a
+broad subnet rule to `INPUT_FIREWALL`, disable DSM firewall, or allow unrelated
+Docker networks.
 
 6. Export the admitted resource artifact, validate it against the running
    container, take the required initial backup, and invoke migration explicitly:

@@ -818,7 +818,9 @@ def test_restart_policy_planted_violations_fail(
     )
 
 
-@pytest.mark.parametrize("mode", ["up_nonzero", "ps_failure", "too_few", "stop_failure_partial"])
+@pytest.mark.parametrize(
+    "mode", ["firewall_missing", "up_nonzero", "ps_failure", "too_few", "stop_failure_partial"]
+)
 def test_failed_compose_start_always_stops_and_verifies_partial_stack(
     tmp_path: Path, mode: str
 ) -> None:
@@ -861,6 +863,10 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
         'case "$*" in\n'
         "  '-S') printf '%s\\n' '-A FORWARD -j FORWARD_FIREWALL' "
         "'-A FORWARD -j DEFAULT_FORWARD' ;;\n"
+        "  '-S FORWARD_FIREWALL') "
+        '[ "$MY_TEST_MODE" = firewall_missing ] || '
+        "printf '%s\\n' '-A FORWARD_FIREWALL -i docker-d4d93b25 -o docker-d4d93b25 "
+        "-s 172.22.0.0/16 -d 172.22.0.0/16 -j RETURN';;\n"
         "  '-C DEFAULT_FORWARD -i docker-d4d93b25 -o docker-d4d93b25 -j ACCEPT') exit 0 ;;\n"
         "  '-C FORWARD_FIREWALL -i docker-d4d93b25 -o docker-d4d93b25 "
         "-s 172.22.0.0/16 -d 172.22.0.0/16 -j RETURN') exit 0 ;;\n"
@@ -887,6 +893,11 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
     )
     calls = log.read_text(encoding="utf-8")
     assert result.returncode == 1
+    if mode == "firewall_missing":
+        assert " up --detach --no-build --pull never" not in calls
+        assert " stop --timeout 60" not in calls
+        assert " ps --status running -q" not in calls
+        return
     assert " up --detach --no-build --pull never" in calls
     assert " stop --timeout 60" in calls
     assert " ps --status running -q" in calls

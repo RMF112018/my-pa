@@ -94,23 +94,42 @@ esac
   exit 1
 }
 
+exact_rule="-A FORWARD_FIREWALL -i $bridge -o $bridge -s $subnet -d $subnet -j RETURN"
+
 rule_present() {
   "$iptables_bin" -C FORWARD_FIREWALL \
     -i "$bridge" -o "$bridge" -s "$subnet" -d "$subnet" -j RETURN \
     >/dev/null 2>&1
 }
 
+rule_state() {
+  chain_rules=$("$iptables_bin" -S FORWARD_FIREWALL) || {
+    echo "Synology data-plane firewall rule inspection failed" >&2
+    return 1
+  }
+  exact_count=$(printf '%s\n' "$chain_rules" | awk -v exact="$exact_rule" '$0 == exact {count++} END {print count + 0}')
+  first_rule=$(printf '%s\n' "$chain_rules" | awk '$1 == "-A" && $2 == "FORWARD_FIREWALL" {print; exit}')
+  case "$exact_count:$first_rule" in
+    0:*) echo missing ;;
+    1:"$exact_rule") echo effective ;;
+    1:*) echo misordered ;;
+    *) echo duplicate ;;
+  esac
+}
+
 case "$action" in
   plan)
-    if rule_present; then
+    state=$(rule_state)
+    if [ "$state" = effective ]; then
       echo "Synology data-plane firewall rule is already admitted for $network_name"
     else
-      echo "Synology data-plane firewall rule requires admission for $network_name on $bridge ($subnet)"
+      echo "Synology data-plane firewall rule requires admission for $network_name on $bridge ($subnet): $state"
     fi
     ;;
   check)
-    rule_present || {
-      echo "Synology data-plane firewall rule is missing" >&2
+    state=$(rule_state)
+    [ "$state" = effective ] || {
+      echo "Synology data-plane firewall rule is not effective: $state" >&2
       exit 1
     }
     echo "Synology data-plane firewall gate passed"
@@ -124,14 +143,31 @@ case "$action" in
       echo "set MY_PA_CONFIRM_FIREWALL_MUTATION=$network_name to admit the exact rule" >&2
       exit 1
     }
-    if ! rule_present; then
-      "$iptables_bin" -I FORWARD_FIREWALL 1 \
-        -i "$bridge" -o "$bridge" -s "$subnet" -d "$subnet" -j RETURN
-    fi
-    rule_present || {
-      echo "Synology data-plane firewall admission failed" >&2
-      exit 1
-    }
+    state=$(rule_state)
+    case "$state" in
+      effective) ;;
+      missing)
+        "$iptables_bin" -I FORWARD_FIREWALL 1 \
+          -i "$bridge" -o "$bridge" -s "$subnet" -d "$subnet" -j RETURN
+        if [ "$(rule_state)" != effective ]; then
+          if ! "$iptables_bin" -D FORWARD_FIREWALL \
+            -i "$bridge" -o "$bridge" -s "$subnet" -d "$subnet" -j RETURN; then
+            echo "Synology data-plane firewall admission failed and exact rollback failed" >&2
+            exit 1
+          fi
+          if rule_present; then
+            echo "Synology data-plane firewall admission failed and rollback left the exact rule present" >&2
+            exit 1
+          fi
+          echo "Synology data-plane firewall admission failed; inserted rule was rolled back" >&2
+          exit 1
+        fi
+        ;;
+      *)
+        echo "Synology data-plane firewall state requires explicit removal before apply: $state" >&2
+        exit 1
+        ;;
+    esac
     echo "Synology data-plane firewall rule admitted"
     ;;
   remove)
@@ -143,10 +179,14 @@ case "$action" in
       echo "set MY_PA_CONFIRM_FIREWALL_MUTATION=$network_name to remove the exact rule" >&2
       exit 1
     }
-    rule_present || {
-      echo "exact Synology data-plane firewall rule is not present" >&2
-      exit 1
-    }
+    state=$(rule_state)
+    case "$state" in
+      effective|misordered) ;;
+      *)
+        echo "one exact Synology data-plane firewall rule is not present: $state" >&2
+        exit 1
+        ;;
+    esac
     "$iptables_bin" -D FORWARD_FIREWALL \
       -i "$bridge" -o "$bridge" -s "$subnet" -d "$subnet" -j RETURN
     if rule_present; then

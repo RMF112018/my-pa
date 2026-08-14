@@ -45,6 +45,7 @@ if [ -L "$compose_host_binary" ]; then
   esac
 fi
 [ -x "$compose_host_binary" ] || { echo "resolved Docker Compose plugin is unavailable" >&2; exit 1; }
+compose_plugin_dir=/usr/local/lib/docker/cli-plugins
 
 python_arguments=$#
 [ "$python_arguments" -gt 0 ] || { echo "Python arguments are required" >&2; exit 64; }
@@ -98,12 +99,12 @@ IFS=$old_ifs
   --user 0:0 \
   --volume /var/run/docker.sock:/var/run/docker.sock \
   --volume "$docker_host_binary:/usr/local/bin/docker:ro" \
-  --volume "$compose_host_binary:/usr/local/bin/docker-compose:ro" \
+  --volume "$compose_host_binary:$compose_plugin_dir/docker-compose:ro" \
   --volume /volume1/my-pa:/volume1/my-pa \
   --volume /etc/my-pa:/etc/my-pa \
   --volume "$repo_root:$repo_root:ro" \
   --env MY_PA_NAS_DOCKER=/usr/local/bin/docker \
-  --env DOCKER_CLI_PLUGIN_EXTRA_DIRS=/usr/local/bin \
+  --env DOCKER_CLI_PLUGIN_EXTRA_DIRS="$compose_plugin_dir" \
   --workdir "$repo_root" \
   --entrypoint python \
   "$@"

@@ -83,7 +83,8 @@ def test_operator_runtime_is_separate_hardened_and_nonpersistent() -> None:
         assert "/var/run/docker.sock:/var/run/docker.sock" in script
     assert "operator admission must be root-owned mode 0400 with one link" in wrapper
     assert "--rm -i" in wrapper
-    assert "DOCKER_CLI_PLUGIN_EXTRA_DIRS=/usr/local/bin" in wrapper
+    assert 'DOCKER_CLI_PLUGIN_EXTRA_DIRS="$compose_plugin_dir"' in wrapper
+    assert "mkdir -p /usr/local/lib/docker/cli-plugins" in dockerfile
     assert "python3.12" not in (ROOT / "ops/nas/tooling-common.sh").read_text(encoding="utf-8")
 
 
@@ -143,8 +144,8 @@ def test_container_python_preserves_stdin_compose_plugin_and_closed_environment(
     assert result.returncode == 0, result.stderr
     arguments = calls.read_text(encoding="utf-8").splitlines()
     assert "-i" in arguments
-    assert f"{fake_compose}:/usr/local/bin/docker-compose:ro" in arguments
-    assert "DOCKER_CLI_PLUGIN_EXTRA_DIRS=/usr/local/bin" in arguments
+    assert f"{fake_compose}:/usr/local/lib/docker/cli-plugins/docker-compose:ro" in arguments
+    assert "DOCKER_CLI_PLUGIN_EXTRA_DIRS=/usr/local/lib/docker/cli-plugins" in arguments
     assert "MY_PA_DB_PASSWORD" in arguments
     assert "UNAPPROVED_OPERATOR_VALUE" not in arguments
     assert "synthetic-not-a-secret" not in arguments

@@ -79,6 +79,39 @@ ${name}"
   fi
 done
 
+# Live ingress verification also needs the NAS Tailscale control socket. Keep
+# that authority opt-in so ordinary image, database, and lifecycle gates retain
+# only the Docker authority they already require.
+tailscale_args=""
+if [ "${MY_PA_NAS_TAILSCALE+x}" = x ] || [ "${MY_PA_NAS_TAILSCALE_SOCKET+x}" = x ]; then
+  : "${MY_PA_NAS_TAILSCALE:?exact NAS Tailscale executable required}"
+  : "${MY_PA_NAS_TAILSCALE_SOCKET:?exact NAS Tailscale socket required}"
+  case "$MY_PA_NAS_TAILSCALE$MY_PA_NAS_TAILSCALE_SOCKET" in
+    *'
+'*) echo "newline-containing Tailscale paths are prohibited" >&2; exit 64 ;;
+  esac
+  case "$MY_PA_NAS_TAILSCALE" in
+    /*) tailscale_host_binary=$MY_PA_NAS_TAILSCALE ;;
+    *) echo "Tailscale executable path must be absolute" >&2; exit 64 ;;
+  esac
+  case "$MY_PA_NAS_TAILSCALE_SOCKET" in
+    /*) ;;
+    *) echo "Tailscale socket path must be absolute" >&2; exit 64 ;;
+  esac
+  [ -f "$tailscale_host_binary" ] && [ -x "$tailscale_host_binary" ] || {
+    echo "Tailscale executable is unavailable" >&2
+    exit 1
+  }
+  [ -S "$MY_PA_NAS_TAILSCALE_SOCKET" ] || {
+    echo "Tailscale socket is unavailable" >&2
+    exit 1
+  }
+  tailscale_args="--volume
+${tailscale_host_binary}:/usr/local/bin/tailscale:ro
+--volume
+${MY_PA_NAS_TAILSCALE_SOCKET}:/var/run/tailscale/tailscaled.sock:ro"
+fi
+
 # Reconstruct allowlisted environment options, the image, then the original
 # Python argv. Repository gate arguments are ordinary newline-free paths/flags.
 old_ifs=$IFS
@@ -86,6 +119,7 @@ IFS='
 '
 set --
 for value in $env_args; do set -- "$@" "$value"; done
+for value in $tailscale_args; do set -- "$@" "$value"; done
 set -- "$@" "$image_id"
 for value in $python_args; do set -- "$@" "$value"; done
 IFS=$old_ifs

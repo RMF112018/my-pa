@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
+import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -96,3 +99,28 @@ def test_receipt_rejects_multi_entry_before_checksum_reads(tmp_path: Path) -> No
     )
     assert completed.returncode != 0
     assert "exactly one dump" in completed.stderr
+
+
+def test_receipt_recency_uses_portable_admitted_python(tmp_path: Path) -> None:
+    def verify(created: datetime) -> subprocess.CompletedProcess[str]:
+        dump = tmp_path / f"my-pa-{created:%Y%m%dT%H%M%SZ}.dump"
+        dump.write_bytes(b"synthetic-backup")
+        receipt = dump.with_suffix(".dump.sha256")
+        digest = hashlib.sha256(dump.read_bytes()).hexdigest()
+        receipt.write_text(f"{digest}  {dump.name}\n", encoding="utf-8")
+        return subprocess.run(  # noqa: S603 - repository script under test
+            [str(ROOT / "ops/nas/verify-backup-receipt.sh"), str(receipt)],
+            env={
+                **os.environ,
+                "MY_PA_NAS_DOCKER": "/usr/bin/true",
+                "MY_PA_NAS_PYTHON": sys.executable,
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    assert verify(datetime.now(UTC) - timedelta(minutes=1)).returncode == 0
+    stale = verify(datetime.now(UTC) - timedelta(days=2))
+    assert stale.returncode != 0
+    assert "not recent" in stale.stderr

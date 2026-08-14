@@ -15,9 +15,15 @@ dump_name=$(awk '{print $2}' "$receipt")
 dump=$(dirname "$receipt")/$dump_name
 [ -f "$dump" ] && [ ! -L "$dump" ] || { echo "backup dump missing or linked" >&2; exit 1; }
 (CDPATH= cd -- "$(dirname -- "$receipt")" && sha256_check_receipt "$(basename "$receipt")") >/dev/null
-now=$(date +%s)
-stamp=$(printf '%s' "$dump_name" | sed -E 's/^my-pa-([0-9]{8}T[0-9]{6})Z[.]dump$/\1/')
-created=$(date -u -d "${stamp%T*} ${stamp#*T}" +%s)
-[ "$created" -le "$now" ] && [ $((now - created)) -le 86400 ] || {
-  echo "backup receipt is not recent" >&2; exit 1;
-}
+"$NAS_PYTHON_BIN" - "$dump_name" <<'PY'
+from datetime import UTC, datetime
+import sys
+
+try:
+    created = datetime.strptime(sys.argv[1], "my-pa-%Y%m%dT%H%M%SZ.dump").replace(tzinfo=UTC)
+except ValueError:
+    raise SystemExit("backup receipt timestamp is invalid") from None
+age = (datetime.now(UTC) - created).total_seconds()
+if age < 0 or age > 86_400:
+    raise SystemExit("backup receipt is not recent")
+PY

@@ -7,6 +7,7 @@ if [ "$#" -ne 4 ]; then
 fi
 
 : "${MY_PA_NAS_DOCKER:=/usr/local/bin/docker}"
+: "${MY_PA_NAS_COMPOSE_PLUGIN:=/usr/local/bin/docker-compose}"
 candidate=$1
 archive=$2
 metadata=$3
@@ -64,6 +65,21 @@ if [ -L "$docker_host_binary" ]; then
 fi
 [ -x "$docker_host_binary" ] || { echo "resolved Docker binary is unavailable" >&2; exit 1; }
 
+compose_host_binary=$MY_PA_NAS_COMPOSE_PLUGIN
+case "$compose_host_binary" in
+  /*) ;;
+  *) compose_host_binary=$(command -v "$compose_host_binary") ;;
+esac
+if [ -L "$compose_host_binary" ]; then
+  link=$(readlink "$compose_host_binary")
+  case "$link" in
+    /*) compose_host_binary=$link ;;
+    *) compose_host_binary=$(dirname "$compose_host_binary")/$link ;;
+  esac
+fi
+[ -x "$compose_host_binary" ] || { echo "resolved Docker Compose plugin is unavailable" >&2; exit 1; }
+compose_plugin_dir=/usr/local/lib/docker/cli-plugins
+
 "$NAS_DOCKER_BIN" run --rm \
   --network none \
   --read-only \
@@ -73,12 +89,14 @@ fi
   --user 0:0 \
   --volume /var/run/docker.sock:/var/run/docker.sock \
   --volume "$docker_host_binary:/usr/local/bin/docker:ro" \
+  --volume "$compose_host_binary:$compose_plugin_dir/docker-compose:ro" \
   --volume "$repo_root:$repo_root:ro" \
   --volume "$candidate:$candidate:ro" \
   --volume "$archive:$archive:ro" \
   --volume "$metadata:$metadata:ro" \
   --volume "$(dirname "$output"):$(dirname "$output")" \
   --env MY_PA_NAS_DOCKER=/usr/local/bin/docker \
+  --env DOCKER_CLI_PLUGIN_EXTRA_DIRS="$compose_plugin_dir" \
   --workdir "$repo_root" \
   --entrypoint python \
   "$expected_image" \

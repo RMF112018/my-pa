@@ -20,6 +20,15 @@ from nas_tools import docker
 SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 GIT_OBJECT = re.compile(r"[0-9a-f]{40}\Z")
+COMPOSE_VERSION = re.compile(r"v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?\Z")
+COMPOSE_SERVICES = {
+    "gateway",
+    "postgres",
+    "proxy",
+    "web",
+    "worker-capture",
+    "worker-enrollment",
+}
 EXPECTED_KEYS = {
     "schema",
     "status",
@@ -84,6 +93,18 @@ def admit(candidate: Path, archive: Path, metadata: Path, output: Path) -> list[
         ]
         git_version = _run(["git", "--version"])
         openssl_version = _run(["/usr/bin/openssl", "version"])
+        compose_version = _run([docker(), "compose", "version", "--short"])
+        compose_services = _run(
+            [
+                docker(),
+                "compose",
+                "--file",
+                str(Path(__file__).with_name("compose.example.yml")),
+                "config",
+                "--no-interpolate",
+                "--services",
+            ]
+        ).splitlines()
     except (
         OSError,
         ValueError,
@@ -109,6 +130,8 @@ def admit(candidate: Path, archive: Path, metadata: Path, output: Path) -> list[
         errors.append("python_version")
     if not git_version.startswith("git version ") or not openssl_version.startswith("OpenSSL "):
         errors.append("operator_tools")
+    if not COMPOSE_VERSION.fullmatch(compose_version) or set(compose_services) != COMPOSE_SERVICES:
+        errors.append("operator_compose_contract")
     if (
         not isinstance(engine, dict)
         or engine.get("OSType") != "linux"
@@ -143,6 +166,7 @@ def admit(candidate: Path, archive: Path, metadata: Path, output: Path) -> list[
         f"python_version = {json.dumps('.'.join(map(str, sys.version_info[:3])))}",
         f"git_version = {json.dumps(git_version)}",
         f"openssl_version = {json.dumps(openssl_version)}",
+        f"compose_version = {json.dumps(compose_version)}",
     ]
     try:
         descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)

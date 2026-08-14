@@ -550,6 +550,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "restart",
             "cap_drop",
             "security_opt",
+            "entrypoint",
             "command",
             "env_file",
             "environment",
@@ -604,6 +605,8 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         if service.get("environment") != expected_environments[name]:
             errors.add("environment_contract")
         if service.get("command") != expected_commands[name]:
+            errors.add("process_placement")
+        if name == "web" and service.get("entrypoint") != []:
             errors.add("process_placement")
         if service.get("user") != expected_users[name]:
             errors.add("service_identity")

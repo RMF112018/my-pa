@@ -100,6 +100,7 @@ services:
     restart: "no"
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    entrypoint: []
     command: [node, server.js]
     env_file: ["${MY_PA_WEB_ENV_FILE:?owner-only web env file required}"]
     environment:

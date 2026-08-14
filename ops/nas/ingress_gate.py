@@ -235,12 +235,11 @@ def verify(
             else {}
         )
         live_publication = (
-            isinstance(live_ports, dict)
-            and live_ports.get("8080/tcp") == expected_ports.get("8080/tcp")
-            if name == "proxy"
-            else isinstance(live_ports, dict) and not any(live_ports.values())
+            {port: bindings for port, bindings in live_ports.items() if bindings}
+            if isinstance(live_ports, dict)
+            else None
         )
-        if published != expected_ports or not live_publication:
+        if published != expected_ports or live_publication != expected_ports:
             errors.append(f"{name}_publication")
     if errors:
         return errors

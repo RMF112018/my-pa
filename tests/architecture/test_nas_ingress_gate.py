@@ -52,6 +52,7 @@ def _live_fixture(
     extra_host_edge_member: bool = False,
     proxy_live_publication: bool = True,
     lookalike_proxy_host_edge: bool = False,
+    extra_live_publication: bool = False,
 ) -> tuple[Path, object]:
     gate = _gate()
     config = ROOT / "ops/nas/proxy-allowlist.example.caddy"
@@ -179,6 +180,18 @@ def _live_fixture(
                                 "80/tcp": None,
                                 "443/tcp": None,
                                 "8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8443"}],
+                                **(
+                                    {
+                                        "8443/tcp": [
+                                            {
+                                                "HostIp": "0.0.0.0",  # noqa: S104
+                                                "HostPort": "9443",
+                                            }
+                                        ]
+                                    }
+                                    if extra_live_publication
+                                    else {}
+                                ),
                             }
                             if name == "proxy" and proxy_live_publication
                             else {}
@@ -265,6 +278,18 @@ def test_gate_refuses_suffix_matching_lookalike_network(tmp_path: Path) -> None:
         runner=runner,
     )
     assert "proxy_networks" in errors
+
+
+def test_gate_refuses_an_extra_live_publication(tmp_path: Path) -> None:
+    manifest, runner = _live_fixture(tmp_path, extra_live_publication=True)
+    errors = _gate().verify(
+        manifest,
+        ROOT / "ops/nas/proxy-allowlist.example.caddy",
+        ROOT / "ops/nas/compose.example.yml",
+        live=True,
+        runner=runner,
+    )
+    assert "proxy_publication" in errors
 
 
 def test_gate_refuses_any_residual_entra_environment(tmp_path: Path) -> None:

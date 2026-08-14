@@ -865,8 +865,8 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
         "'-A FORWARD -j DEFAULT_FORWARD' ;;\n"
         "  '-S FORWARD_FIREWALL') "
         '[ "$MY_TEST_MODE" = firewall_missing ] || '
-        "printf '%s\\n' '-A FORWARD_FIREWALL -i docker-d4d93b25 -o docker-d4d93b25 "
-        "-s 172.22.0.0/16 -d 172.22.0.0/16 -j RETURN';;\n"
+        "printf '%s\\n' '-A FORWARD_FIREWALL -s 172.22.0.0/16 -d 172.22.0.0/16 "
+        "-i docker-d4d93b25 -o docker-d4d93b25 -j RETURN';;\n"
         "  '-C DEFAULT_FORWARD -i docker-d4d93b25 -o docker-d4d93b25 -j ACCEPT') exit 0 ;;\n"
         "  '-C FORWARD_FIREWALL -i docker-d4d93b25 -o docker-d4d93b25 "
         "-s 172.22.0.0/16 -d 172.22.0.0/16 -j RETURN') exit 0 ;;\n"

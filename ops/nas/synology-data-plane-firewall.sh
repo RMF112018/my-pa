@@ -94,7 +94,9 @@ esac
   exit 1
 }
 
-exact_rule="-A FORWARD_FIREWALL -i $bridge -o $bridge -s $subnet -d $subnet -j RETURN"
+# Synology's iptables 1.8 renderer canonicalizes address matches before
+# interface matches regardless of insertion argument order.
+exact_rule="-A FORWARD_FIREWALL -s $subnet -d $subnet -i $bridge -o $bridge -j RETURN"
 
 rule_present() {
   "$iptables_bin" -C FORWARD_FIREWALL \

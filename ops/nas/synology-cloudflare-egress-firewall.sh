@@ -102,16 +102,18 @@ nat_rules=$("$iptables_bin" -t nat -S DEFAULT_POSTROUTING) || {
 }
 nat_exact_count=$(printf '%s\n' "$nat_rules" | awk -v exact="$nat_rule" \
   '$0 == exact {count++} END {print count + 0}')
-nat_source_count=$(printf '%s\n' "$nat_rules" | awk -v subnet="$subnet" '
+nat_scope_count=$(printf '%s\n' "$nat_rules" | awk -v subnet="$subnet" -v bridge="$bridge" '
   {
     source = 0
+    output = 0
     for (field = 1; field < NF; field++) {
       if ($field == "-s" && $(field + 1) == subnet) source = 1
+      if ($field == "-o" && $(field + 1) == bridge) output = 1
     }
-    if (source) count++
+    if (source || output) count++
   }
   END {print count + 0}')
-[ "$nat_exact_count:$nat_source_count" = 1:1 ] || {
+[ "$nat_exact_count:$nat_scope_count" = 1:1 ] || {
   echo "Docker Cloudflare egress masquerade rule identity mismatch" >&2
   exit 1
 }

@@ -52,6 +52,7 @@ if [ "$1 $2 $3 $4" = '-t nat -S DEFAULT_POSTROUTING' ]; then
   case "${{FAKE_NAT_STATE:-exact}}" in
     duplicate) printf '%s\n' '-A DEFAULT_POSTROUTING -s {SUBNET} ! -o {BRIDGE} -j MASQUERADE' ;;
     lookalike) printf '%s\n' '-A DEFAULT_POSTROUTING -s {SUBNET} -j MASQUERADE' ;;
+    bridge) printf '%s\n' '-A DEFAULT_POSTROUTING ! -o {BRIDGE} -j MASQUERADE' ;;
   esac
   exit 0
 fi
@@ -169,7 +170,7 @@ def test_extra_broad_rule_and_nat_drift_fail_closed(tmp_path: Path) -> None:
         state.write_text(foreign_state)
         assert _run(script, "check", environment).returncode != 0
     state.write_text("missing")
-    for nat_state in ("duplicate", "lookalike"):
+    for nat_state in ("duplicate", "lookalike", "bridge"):
         environment["FAKE_NAT_STATE"] = nat_state
         result = _run(script, "plan", environment)
         assert result.returncode != 0

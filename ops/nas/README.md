@@ -110,6 +110,8 @@ environments. The proxy drops every capability before adding back only
 `NET_BIND_SERVICE`: the pinned upstream Caddy binary carries that file capability
 and Linux refuses to execute it under `no-new-privileges` when it is absent,
 even though the runtime listener itself is the unprivileged port 8080.
+The web service also clears the upstream Node image entrypoint explicitly, so
+the inspected runtime process is exactly the declared `node server.js` command.
 The checked-in ingress manifest refuses. Enabling Serve or changing a firewall
 remains an explicit operator action and has no script in this package.
 

@@ -244,3 +244,17 @@ def test_runtime_paths_require_ingress_firewall_gate() -> None:
     assert start.index('"$script_dir/synology-ingress-plane-firewall.sh" check') < start.index(
         "nas_compose up --detach --no-build --pull never"
     )
+
+
+def test_fresh_bootstrap_runbook_prepares_before_ingress_admission() -> None:
+    runbook = (ROOT / "ops/runbooks/nas-lifecycle.md").read_text(encoding="utf-8")
+    runtime_admission = runbook.index("generate-runtime-admission.py")
+    first_start = runbook.index(
+        "ops/nas/start.sh DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY", runtime_admission
+    )
+    ingress_plan = runbook.index("ops/nas/synology-ingress-plane-firewall.sh plan")
+    second_start = runbook.index(
+        "ops/nas/start.sh DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY", first_start + 1
+    )
+    assert runtime_admission < first_start < ingress_plan < second_start
+    assert "other refusal is a blocker" in runbook

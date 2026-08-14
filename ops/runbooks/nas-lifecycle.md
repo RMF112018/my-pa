@@ -156,19 +156,10 @@ Docker networks.
 
 The canonical ingress plane needs the same bounded same-bridge allowance so
 the proxy can reach the web service. It does not exist during PostgreSQL-only
-bootstrap. The first ordinary `start.sh` invocation therefore creates the
-admitted six-service Compose topology in a stopped state, then refuses before
-`up` until the exact ingress rule is present. After that refusal, admit the
-second rule and rerun `start.sh`:
-
-```sh
-ops/nas/synology-ingress-plane-firewall.sh plan
-export MY_PA_CONFIRM_FIREWALL_MUTATION=my-pa-nas-contract_ingress-plane
-ops/nas/synology-ingress-plane-firewall.sh apply
-unset MY_PA_CONFIRM_FIREWALL_MUTATION
-ops/nas/synology-ingress-plane-firewall.sh check
-ops/nas/start.sh DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY
-```
+bootstrap. Do not attempt ingress admission yet. After ordinary runtime
+admission exists, the first `start.sh` invocation in step 7 creates the admitted
+six-service Compose topology in a stopped state and must refuse before `up` for
+the missing ingress rule. Step 7 then admits the real network and reruns start.
 
 The ingress gate first requires the data-plane rule to remain effective, then
 requires one exact ingress bridge/subnet rule in the second
@@ -205,9 +196,26 @@ ops/nas/restore-to-scratch.sh "${post_receipt%.sha256}" my_pa_scratch_BOOTSTRAP
 "$MY_PA_NAS_PYTHON" ops/nas/generate-runtime-admission.py \
   ops/nas/compose.example.yml ops/nas/compose.pilot.example.yml \
   DEPLOYABLE_MANIFEST /etc/my-pa/runtime-admission.toml
+# This first invocation prepares the stopped topology. Confirm that it refuses
+# specifically because the ingress-plane firewall rule is not effective. Any
+# other refusal is a blocker and must not be treated as successful preparation.
+ops/nas/start.sh DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY
+ops/nas/synology-ingress-plane-firewall.sh plan
+export MY_PA_CONFIRM_FIREWALL_MUTATION=my-pa-nas-contract_ingress-plane
+ops/nas/synology-ingress-plane-firewall.sh apply
+unset MY_PA_CONFIRM_FIREWALL_MUTATION
+ops/nas/synology-ingress-plane-firewall.sh check
 ops/nas/start.sh DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY
 ops/nas/health.sh
 ```
+
+The first `start.sh` invocation above is an expected nonzero gate, not a
+successful start. Its bounded cleanup must leave zero running runtime services
+and print
+`Synology ingress-plane firewall is not admitted; stopping the prepared stack`.
+Continue only after checking that exact refusal and confirming that the
+canonical ingress network now exists. The second invocation is the only one
+that may reach `up`.
 
 The scratch URL is non-secret and must name only the verified Compose database;
 authentication remains in the protected service environment. Gateway and both

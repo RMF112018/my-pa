@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -49,8 +52,20 @@ def test_resource_example_and_network_filesystem_refuse(tmp_path: Path) -> None:
     assert "network_filesystem" in gate.verify(manifest)
 
 
-def test_live_gate_binds_engine_resources_and_canonical_path(tmp_path: Path) -> None:
+def test_live_gate_binds_engine_resources_and_canonical_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     gate = _gate()
+    monkeypatch.setattr(
+        gate,
+        "os",
+        SimpleNamespace(
+            access=lambda *_args: False,
+            statvfs=os.statvfs,
+            W_OK=os.W_OK,
+            X_OK=os.X_OK,
+        ),
+    )
     manifest = tmp_path / "resources.toml"
     manifest.write_text(
         'schema = "my-pa.nas-postgres-resources.v1"\nstatus = "verified"\n'

@@ -280,7 +280,7 @@ case "$action" in
     if [ "$state" = effective ]; then
       echo "Synology Cloudflare egress firewall rules are already admitted for $network_name"
     else
-      echo "Synology Cloudflare egress firewall rules require admission for $network_name on $bridge ($subnet): $state"
+      echo "Synology remote MCP firewall rules require admission: origin=$origin_network_name on $origin_bridge ($origin_subnet), egress=$network_name on $bridge ($subnet): $state"
     fi
     ;;
   check)

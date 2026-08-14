@@ -12,6 +12,8 @@ SCRIPT = ROOT / "ops/nas/synology-cloudflare-egress-firewall.sh"
 NETWORK = "my-pa-remote-mcp_cloudflare-egress"
 SUBNET = "172.26.0.0/16"
 BRIDGE = "docker-12345678"
+ORIGIN_SUBNET = "172.25.0.0/16"
+ORIGIN_BRIDGE = "docker-abcdef12"
 
 
 def _write(path: Path, text: str) -> None:
@@ -37,7 +39,15 @@ def _scene(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
         tools / "docker",
         """#!/bin/sh
 if [ "$1 $2" != "network inspect" ]; then exit 1; fi
-printf '%s\n' "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef|my-pa-remote-mcp_cloudflare-egress|bridge|local|${FAKE_INTERNAL:-false}|my-pa-remote-mcp|cloudflare-egress|172.26.0.0/16"
+case "$5" in
+  my-pa-remote-mcp_cloudflare-egress)
+    printf '%s\n' "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef|my-pa-remote-mcp_cloudflare-egress|bridge|local|${FAKE_INTERNAL:-false}|my-pa-remote-mcp|cloudflare-egress|172.26.0.0/16"
+    ;;
+  my-pa-remote-mcp_mcp-origin)
+    printf '%s\n' "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890|my-pa-remote-mcp_mcp-origin|bridge|local|${FAKE_ORIGIN_INTERNAL:-true}|my-pa-remote-mcp|mcp-origin|172.25.0.0/16"
+    ;;
+  *) exit 1 ;;
+esac
 """,
     )
     _write(tools / "ip", "#!/bin/sh\nexit 0\n")
@@ -65,8 +75,9 @@ if [ "$1 $2" = '-S FORWARD_FIREWALL' ]; then
   printf '%s\n' '-A FORWARD_FIREWALL -s 172.22.0.0/16 -d 172.22.0.0/16 -i docker-data -o docker-data -j RETURN'
   printf '%s\n' '-A FORWARD_FIREWALL -s 172.18.0.0/16 -d 172.18.0.0/16 -i docker-ingress -o docker-ingress -j RETURN'
   case "$(cat "$state_file")" in
-    effective|foreign|foreign_bridge|foreign_source)
+    effective|foreign|foreign_bridge|foreign_source|foreign_origin|foreign_origin_bridge)
       printf '%s\n' \
+        '-A FORWARD_FIREWALL -s {ORIGIN_SUBNET} -d {ORIGIN_SUBNET} -i {ORIGIN_BRIDGE} -o {ORIGIN_BRIDGE} -p tcp -m tcp --dport 8766 -j RETURN' \
         '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p udp -m udp --dport 53 -j RETURN' \
         '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p tcp -m tcp --dport 53 -j RETURN' \
         '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -p udp -m udp --dport 7844 -j RETURN' \
@@ -75,6 +86,8 @@ if [ "$1 $2" = '-S FORWARD_FIREWALL' ]; then
         foreign) printf '%s\n' '-A FORWARD_FIREWALL -s {SUBNET} -i {BRIDGE} -j RETURN' ;;
         foreign_bridge) printf '%s\n' '-A FORWARD_FIREWALL -i {BRIDGE} -j RETURN' ;;
         foreign_source) printf '%s\n' '-A FORWARD_FIREWALL -s {SUBNET} -j RETURN' ;;
+        foreign_origin) printf '%s\n' '-A FORWARD_FIREWALL -s {ORIGIN_SUBNET} -d {ORIGIN_SUBNET} -i {ORIGIN_BRIDGE} -o {ORIGIN_BRIDGE} -j RETURN' ;;
+        foreign_origin_bridge) printf '%s\n' '-A FORWARD_FIREWALL -i {ORIGIN_BRIDGE} -o {ORIGIN_BRIDGE} -j RETURN' ;;
       esac
       ;;
     partial|insert1|insert2|insert3)
@@ -91,7 +104,7 @@ if [ "$1" = -I ]; then
   count=$((count + 1))
   printf '%s' "$count" > "$count_file"
   if [ "${{FAKE_INSERT_FAIL_AT:-0}}" -eq "$count" ]; then exit 1; fi
-  if [ "$count" -eq 4 ]; then
+  if [ "$count" -eq 5 ]; then
     printf '%s' effective > "$state_file"
   else
     printf 'insert%s' "$count" > "$state_file"
@@ -157,6 +170,9 @@ def test_identity_drift_and_partial_rules_fail_closed(tmp_path: Path) -> None:
     environment["FAKE_INTERNAL"] = "true"
     assert _run(script, "check", environment).returncode != 0
     environment["FAKE_INTERNAL"] = "false"
+    environment["FAKE_ORIGIN_INTERNAL"] = "false"
+    assert _run(script, "check", environment).returncode != 0
+    environment["FAKE_ORIGIN_INTERNAL"] = "true"
     environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = NETWORK
     state.write_text("partial")
     result = _run(script, "apply", environment)
@@ -166,7 +182,13 @@ def test_identity_drift_and_partial_rules_fail_closed(tmp_path: Path) -> None:
 
 def test_extra_broad_rule_and_nat_drift_fail_closed(tmp_path: Path) -> None:
     script, environment, state = _scene(tmp_path)
-    for foreign_state in ("foreign", "foreign_bridge", "foreign_source"):
+    for foreign_state in (
+        "foreign",
+        "foreign_bridge",
+        "foreign_source",
+        "foreign_origin",
+        "foreign_origin_bridge",
+    ):
         state.write_text(foreign_state)
         assert _run(script, "check", environment).returncode != 0
     state.write_text("missing")
@@ -208,9 +230,11 @@ def test_remove_recovers_partial_exact_state(tmp_path: Path) -> None:
 def test_contract_is_port_bounded_and_runbook_orders_the_gate() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
     assert "--dport 53" in source
+    assert "--dport 8766" in source
     assert "--dport 7844" in source
     assert "--dports 443,7844" in source
     assert "-I FORWARD_FIREWALL 3" in source
+    assert "-I FORWARD_FIREWALL 7" in source
     assert "0.0.0.0/0" not in source.split("exact_rule", 1)[-1]
     runbook = (ROOT / "ops/runbooks/remote-mcp-cloudflare.md").read_text(encoding="utf-8")
     create = runbook.index("--profile remote-edge create cloudflared")

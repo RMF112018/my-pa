@@ -8,8 +8,10 @@ fi
 
 action=$1
 network_name=my-pa-remote-mcp_cloudflare-egress
+origin_network_name=my-pa-remote-mcp_mcp-origin
 project_name=my-pa-remote-mcp
 logical_network=cloudflare-egress
+origin_logical_network=mcp-origin
 : "${MY_PA_NAS_DOCKER:=/usr/local/bin/docker}"
 : "${MY_PA_NAS_IPTABLES:=/usr/bin/iptables}"
 : "${MY_PA_NAS_IP:=/usr/bin/ip}"
@@ -50,10 +52,26 @@ network_state=$(
   exit 1
 }
 
+origin_network_state=$(
+  "$docker_bin" network inspect --format \
+    '{{.Id}}|{{.Name}}|{{.Driver}}|{{.Scope}}|{{.Internal}}|{{index .Labels "com.docker.compose.project"}}|{{index .Labels "com.docker.compose.network"}}|{{(index .IPAM.Config 0).Subnet}}' \
+    "$origin_network_name"
+) || {
+  echo "canonical MCP origin network is unavailable" >&2
+  exit 1
+}
+
 old_ifs=$IFS
 IFS='|'
 read -r network_id actual_name driver scope internal project logical subnet <<EOF
 $network_state
+EOF
+IFS=$old_ifs
+
+old_ifs=$IFS
+IFS='|'
+read -r origin_network_id origin_actual_name origin_driver origin_scope origin_internal origin_project origin_logical origin_subnet <<EOF
+$origin_network_state
 EOF
 IFS=$old_ifs
 
@@ -76,9 +94,34 @@ if [ "$actual_name" != "$network_name" ] || [ "$driver" != bridge ] || \
   exit 1
 fi
 
+printf '%s\n' "$origin_network_id" | grep -Eq '^[0-9a-f]{64}$' || {
+  echo "canonical MCP origin network ID is invalid" >&2
+  exit 1
+}
+printf '%s\n' "$origin_subnet" | grep -Eq '^([0-9]{1,3}[.]){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$' || {
+  echo "canonical MCP origin subnet is invalid" >&2
+  exit 1
+}
+[ "$origin_subnet" != 0.0.0.0/0 ] || {
+  echo "canonical MCP origin subnet is unbounded" >&2
+  exit 1
+}
+if [ "$origin_actual_name" != "$origin_network_name" ] || \
+   [ "$origin_driver" != bridge ] || [ "$origin_scope" != local ] || \
+   [ "$origin_internal" != true ] || [ "$origin_project" != "$project_name" ] || \
+   [ "$origin_logical" != "$origin_logical_network" ]; then
+  echo "canonical MCP origin network identity mismatch" >&2
+  exit 1
+fi
+
 bridge="docker-$(printf '%s\n' "$network_id" | cut -c1-8)"
+origin_bridge="docker-$(printf '%s\n' "$origin_network_id" | cut -c1-8)"
 "$ip_bin" link show dev "$bridge" >/dev/null 2>&1 || {
   echo "Synology Cloudflare egress bridge is unavailable: $bridge" >&2
+  exit 1
+}
+"$ip_bin" link show dev "$origin_bridge" >/dev/null 2>&1 || {
+  echo "Synology MCP origin bridge is unavailable: $origin_bridge" >&2
   exit 1
 }
 
@@ -118,6 +161,7 @@ nat_scope_count=$(printf '%s\n' "$nat_rules" | awk -v subnet="$subnet" -v bridge
   exit 1
 }
 
+rule_origin="-A FORWARD_FIREWALL -s $origin_subnet -d $origin_subnet -i $origin_bridge -o $origin_bridge -p tcp -m tcp --dport 8766 -j RETURN"
 rule_dns_udp="-A FORWARD_FIREWALL -s $subnet -i $bridge -p udp -m udp --dport 53 -j RETURN"
 rule_dns_tcp="-A FORWARD_FIREWALL -s $subnet -i $bridge -p tcp -m tcp --dport 53 -j RETURN"
 rule_quic="-A FORWARD_FIREWALL -s $subnet -i $bridge -p udp -m udp --dport 7844 -j RETURN"
@@ -130,11 +174,22 @@ rule_state() {
   }
   counts=""
   exact_total=0
-  for exact in "$rule_dns_udp" "$rule_dns_tcp" "$rule_quic" "$rule_tls"; do
+  for exact in "$rule_origin" "$rule_dns_udp" "$rule_dns_tcp" "$rule_quic" "$rule_tls"; do
     count=$(printf '%s\n' "$chain_rules" | awk -v exact="$exact" '$0 == exact {count++} END {print count + 0}')
     counts="${counts}${counts:+:}${count}"
     exact_total=$((exact_total + count))
   done
+  origin_scope_count=$(printf '%s\n' "$chain_rules" | awk \
+    -v subnet="$origin_subnet" -v bridge="$origin_bridge" '
+    {
+      associated = 0
+      for (field = 1; field < NF; field++) {
+        if (($field == "-s" || $field == "-d") && $(field + 1) == subnet) associated = 1
+        if (($field == "-i" || $field == "-o") && $(field + 1) == bridge) associated = 1
+      }
+      if (associated) count++
+    }
+    END {print count + 0}')
   network_scope_count=$(printf '%s\n' "$chain_rules" | awk -v subnet="$subnet" -v bridge="$bridge" '
     {
       source = 0
@@ -147,14 +202,19 @@ rule_state() {
     }
     END {print count + 0}')
   positions=$(printf '%s\n' "$chain_rules" | awk \
-    '$1 == "-A" && $2 == "FORWARD_FIREWALL" {count++; if (count >= 3 && count <= 6) print}')
-  expected=$(printf '%s\n%s\n%s\n%s\n' "$rule_dns_udp" "$rule_dns_tcp" "$rule_quic" "$rule_tls")
+    '$1 == "-A" && $2 == "FORWARD_FIREWALL" {count++; if (count >= 3 && count <= 7) print}')
+  expected=$(printf '%s\n%s\n%s\n%s\n%s\n' \
+    "$rule_origin" "$rule_dns_udp" "$rule_dns_tcp" "$rule_quic" "$rule_tls")
   case "$counts" in
-    0:0:0:0)
-      if [ "$network_scope_count" -eq 0 ]; then echo missing; else echo foreign; fi
+    0:0:0:0:0)
+      if [ "$origin_scope_count" -eq 0 ] && [ "$network_scope_count" -eq 0 ]; then
+        echo missing
+      else
+        echo foreign
+      fi
       ;;
-    1:1:1:1)
-      if [ "$network_scope_count" -ne 4 ]; then
+    1:1:1:1:1)
+      if [ "$origin_scope_count" -ne 1 ] || [ "$network_scope_count" -ne 4 ]; then
         echo foreign
       elif [ "$positions" = "$expected" ]; then
         echo effective
@@ -163,7 +223,7 @@ rule_state() {
       fi
       ;;
     *)
-      if [ "$network_scope_count" -eq "$exact_total" ]; then
+      if [ $((origin_scope_count + network_scope_count)) -eq "$exact_total" ]; then
         echo recoverable_exact_drift
       else
         echo foreign
@@ -196,6 +256,22 @@ delete_all_exact_rules() {
       deletions=$((deletions + 1))
     done
   done
+  deletions=0
+  while "$iptables_bin" -C FORWARD_FIREWALL \
+    -s "$origin_subnet" -d "$origin_subnet" \
+    -i "$origin_bridge" -o "$origin_bridge" \
+    -p tcp -m tcp --dport 8766 -j RETURN >/dev/null 2>&1
+  do
+    [ "$deletions" -lt 8 ] || {
+      echo "Synology MCP origin exact-rule deletion bound exceeded" >&2
+      return 1
+    }
+    "$iptables_bin" -D FORWARD_FIREWALL \
+      -s "$origin_subnet" -d "$origin_subnet" \
+      -i "$origin_bridge" -o "$origin_bridge" \
+      -p tcp -m tcp --dport 8766 -j RETURN >/dev/null 2>&1 || return 1
+    deletions=$((deletions + 1))
+  done
 }
 
 case "$action" in
@@ -225,13 +301,17 @@ case "$action" in
     case "$state" in
       effective) ;;
       missing)
-        if ! "$iptables_bin" -I FORWARD_FIREWALL 3 -s "$subnet" -i "$bridge" \
-          -p udp -m udp --dport 53 -j RETURN || \
+        if ! "$iptables_bin" -I FORWARD_FIREWALL 3 \
+          -s "$origin_subnet" -d "$origin_subnet" \
+          -i "$origin_bridge" -o "$origin_bridge" \
+          -p tcp -m tcp --dport 8766 -j RETURN || \
            ! "$iptables_bin" -I FORWARD_FIREWALL 4 -s "$subnet" -i "$bridge" \
-          -p tcp -m tcp --dport 53 -j RETURN || \
+          -p udp -m udp --dport 53 -j RETURN || \
            ! "$iptables_bin" -I FORWARD_FIREWALL 5 -s "$subnet" -i "$bridge" \
-          -p udp -m udp --dport 7844 -j RETURN || \
+          -p tcp -m tcp --dport 53 -j RETURN || \
            ! "$iptables_bin" -I FORWARD_FIREWALL 6 -s "$subnet" -i "$bridge" \
+          -p udp -m udp --dport 7844 -j RETURN || \
+           ! "$iptables_bin" -I FORWARD_FIREWALL 7 -s "$subnet" -i "$bridge" \
           -p tcp -m multiport --dports 443,7844 -j RETURN; then
           rollback_status=0
           delete_all_exact_rules || rollback_status=1

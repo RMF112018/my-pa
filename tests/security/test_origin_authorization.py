@@ -3,12 +3,14 @@ from __future__ import annotations
 import base64
 import hashlib
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import Connection, create_engine, select
 from sqlalchemy.engine import Engine
+from sqlalchemy.pool import StaticPool
 
 from my_pa.contracts.oauth import AuthorizationRequest, OAuthError
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
@@ -92,6 +94,38 @@ def test_dcr_binds_every_client_to_the_local_operator_without_a_secret(engine: E
     assert row.principal_id == LOCAL_OPERATOR_UUID
     assert row.writes_enabled is False
     assert row.registered_scopes == "my-pa.read"
+
+
+def test_dcr_active_client_limit_is_atomic_under_concurrency() -> None:
+    built = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    with built.begin() as connection:
+        connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS identity")
+        REMOTE_IDENTITY_METADATA.create_all(connection)
+    service = server(built)
+    for _client in range(31):
+        register(service)
+
+    def attempt() -> bool:
+        try:
+            register(service)
+        except OAuthError as exc:
+            assert exc.error == "invalid_client_metadata"
+            assert str(exc) == "active client limit reached"
+            return False
+        return True
+
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            outcomes = tuple(pool.map(lambda _item: attempt(), range(4)))
+        assert outcomes.count(True) == 1
+        with built.connect() as connection:
+            assert len(connection.execute(select(remote_clients)).all()) == 32
+    finally:
+        built.dispose()
 
 
 def test_pkce_code_is_single_use_and_only_hashes_are_persisted(engine: Engine) -> None:

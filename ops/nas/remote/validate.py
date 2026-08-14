@@ -64,7 +64,6 @@ def validate(root: Path = ROOT) -> list[str]:
             "^/.well-known/oauth-protected-resource$",
             "^/.well-known/oauth-protected-resource/mcp$",
             "^/.well-known/oauth-authorization-server$",
-            "^/.well-known/openid-configuration$",
             "^/oauth/register$",
             "^/oauth/authorize$",
             "^/oauth/token$",

@@ -36,12 +36,6 @@ ingress:
       connectTimeout: 3s
       httpHostHeader: __MCP_HOSTNAME__
   - hostname: __MCP_HOSTNAME__
-    path: ^/.well-known/openid-configuration$
-    service: http://my-pa-mcp-remote:8766
-    originRequest:
-      connectTimeout: 3s
-      httpHostHeader: __MCP_HOSTNAME__
-  - hostname: __MCP_HOSTNAME__
     path: ^/oauth/register$
     service: http://my-pa-mcp-remote:8766
     originRequest:

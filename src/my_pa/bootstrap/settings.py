@@ -59,6 +59,7 @@ from pydantic import Field, PrivateAttr, ValidationError, model_validator
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import ArgumentError
 
+from my_pa.contracts.oauth import valid_operator_secret
 from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
@@ -376,13 +377,13 @@ class Settings(StrictModel):
                 self.oauth_audience.strip(),
                 self.oauth_authorization_server.strip(),
                 self.oauth_scopes.strip(),
-                len(self.oauth_operator_secret) >= 24,
+                valid_operator_secret(self.oauth_operator_secret),
                 self.remote_mcp_public_host.strip(),
             )
         ):
             raise SettingsError(
                 "remote MCP requires its origin OAuth authorization server, audience, scopes, "
-                "operator secret of at least 24 characters, and public host"
+                "generated operator secret, and public host"
             )
         if self.remote_mcp_enabled and self.auth_mode is not AuthMode.LOCAL_OPERATOR:
             raise SettingsError("remote MCP requires the canonical local_operator identity mode")

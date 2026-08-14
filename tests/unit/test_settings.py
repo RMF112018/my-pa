@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import traceback
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -54,7 +55,7 @@ def test_remote_oauth_is_one_exact_non_entra_public_origin() -> None:
         f"{ENV_PREFIX}OAUTH_AUTHORIZATION_SERVER": "https://mcp.example.invalid",
         f"{ENV_PREFIX}OAUTH_AUDIENCE": "https://mcp.example.invalid/mcp",
         f"{ENV_PREFIX}OAUTH_SCOPES": "my-pa.read",
-        f"{ENV_PREFIX}OAUTH_OPERATOR_SECRET": "synthetic-operator-approval-value",
+        f"{ENV_PREFIX}OAUTH_OPERATOR_SECRET": "s" * 43,
     }
     assert load_settings(values).auth_mode.value == "local_operator"
     for name, invalid in (
@@ -64,6 +65,17 @@ def test_remote_oauth_is_one_exact_non_entra_public_origin() -> None:
     ):
         with pytest.raises(SettingsError, match="exact HTTPS public origin"):
             load_settings({**values, f"{ENV_PREFIX}{name}": invalid})
+
+
+def test_checked_in_remote_environment_cannot_start_unchanged() -> None:
+    example = (
+        Path(__file__).resolve().parents[2] / "ops/nas/remote/remote.env.example"
+    ).read_text()
+    environment = dict(
+        line.split("=", 1) for line in example.splitlines() if line and not line.startswith("#")
+    )
+    with pytest.raises(SettingsError, match="generated operator secret"):
+        load_settings(environment)
 
 
 def test_unrelated_environment_variables_are_ignored() -> None:

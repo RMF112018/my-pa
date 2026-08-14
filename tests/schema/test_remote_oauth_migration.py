@@ -60,6 +60,7 @@ def test_remote_tables_share_the_canonical_identity_metadata() -> None:
 def test_origin_oauth_migration_removes_entra_identity_and_hashes_credentials() -> None:
     text = ORIGIN_MIGRATION.read_text()
     assert "DROP CONSTRAINT remote_clients_principal_id_fkey" in text
+    assert "migration refused: legacy remote clients require explicit operator resolution" in text
     assert "remote_client_is_local_operator" in text
     assert str(LOCAL_OPERATOR_UUID) in text
     assert "code_hash varchar(64) PRIMARY KEY" in text

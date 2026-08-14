@@ -16,7 +16,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import BaseRoute, Route
 
-from my_pa.contracts.oauth import AuthorizationRequest, OAuthError
+from my_pa.contracts.oauth import AuthorizationRequest, OAuthError, valid_operator_secret
 
 __all__ = ["build_origin_oauth_routes"]
 
@@ -25,6 +25,14 @@ _APPROVAL_ATTEMPTS: Final = 5
 _APPROVAL_WINDOW_SECONDS: Final = 60.0
 _DATABASE_TIMEOUT_SECONDS: Final = 30.0
 _DATABASE_CONCURRENCY: Final = 4
+_CONSENT_HEADERS: Final = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": (
+        "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    ),
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+}
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
@@ -136,6 +144,8 @@ def _consent(request: AuthorizationRequest, *, refused: bool = False) -> str:
         "<!doctype html><html><head><meta charset='utf-8'><title>Authorize my-pa</title></head>"
         "<body><main><h1>Authorize my-pa remote access</h1>"
         f"<p>Client: <strong>{html.escape(request.client_name)}</strong></p>"
+        f"<p>Client ID: <code>{html.escape(request.client_id)}</code></p>"
+        f"<p>Redirect URI: <code>{html.escape(request.redirect_uri)}</code></p>"
         f"<p>Scope: <code>{html.escape(request.scope)}</code></p>{notice}"
         "<form method='post' action='/oauth/authorize'>"
         f"{fields}<label>Operator secret <input type='password' name='operator_secret' "
@@ -152,9 +162,9 @@ def build_origin_oauth_routes(
     operator_secret: str,
 ) -> list[BaseRoute]:
     """Build public OAuth routes; only authorization approval consumes the secret."""
-    if len(operator_secret) < 24:
-        raise ValueError("OAuth operator secret must be at least 24 characters")
-    failed_approvals: deque[float] = deque()
+    if not valid_operator_secret(operator_secret):
+        raise ValueError("OAuth operator secret must be a generated URL-safe value")
+    failed_approvals: deque[float] = deque(maxlen=_APPROVAL_ATTEMPTS)
     calls = _BoundedCalls()
 
     async def metadata(_request: Request) -> JSONResponse:
@@ -182,7 +192,7 @@ def build_origin_oauth_routes(
         except TimeoutError:
             return _unavailable()
         if request.method == "GET":
-            return HTMLResponse(_consent(authorization), headers={"Cache-Control": "no-store"})
+            return HTMLResponse(_consent(authorization), headers=_CONSENT_HEADERS)
         if values.get("decision") == "deny":
             return RedirectResponse(
                 _redirect(
@@ -195,16 +205,20 @@ def build_origin_oauth_routes(
         while failed_approvals and failed_approvals[0] <= now - _APPROVAL_WINDOW_SECONDS:
             failed_approvals.popleft()
         presented = values.get("operator_secret", "")
-        approved = len(failed_approvals) < _APPROVAL_ATTEMPTS and secrets.compare_digest(
-            presented, operator_secret
-        )
-        if not approved:
+        if not secrets.compare_digest(presented, operator_secret):
+            if len(failed_approvals) >= _APPROVAL_ATTEMPTS:
+                return HTMLResponse(
+                    _consent(authorization, refused=True),
+                    status_code=429,
+                    headers={**_CONSENT_HEADERS, "Retry-After": "60"},
+                )
             failed_approvals.append(now)
             return HTMLResponse(
                 _consent(authorization, refused=True),
                 status_code=403,
-                headers={"Cache-Control": "no-store"},
+                headers=_CONSENT_HEADERS,
             )
+        failed_approvals.clear()
         try:
             code = await calls.run(server.issue_authorization_code, authorization)
         except TimeoutError:
@@ -241,7 +255,6 @@ def build_origin_oauth_routes(
 
     return [
         Route("/.well-known/oauth-authorization-server", metadata, methods=["GET"]),
-        Route("/.well-known/openid-configuration", metadata, methods=["GET"]),
         Route("/oauth/register", register, methods=["POST"]),
         Route("/oauth/authorize", approval_endpoint, methods=["GET", "POST"]),
         Route("/oauth/token", token, methods=["POST"]),

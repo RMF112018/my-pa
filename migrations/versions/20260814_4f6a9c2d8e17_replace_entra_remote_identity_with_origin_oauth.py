@@ -7,12 +7,17 @@ down_revision: str | None = "e3b7a1d5c942"
 branch_labels: str | None = None
 depends_on: str | None = None
 
-_LOCAL_OPERATOR_UUID = "24abf5d2-d0c2-5e1c-82f6-e72425e9ed37"
-
 
 def upgrade() -> None:
     op.execute(
-        f"""
+        """
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM identity.remote_clients) THEN
+            RAISE EXCEPTION
+              'migration refused: legacy remote clients require explicit operator resolution';
+          END IF;
+        END $$;
         ALTER TABLE identity.remote_clients
           DROP CONSTRAINT remote_clients_principal_id_fkey;
         ALTER TABLE identity.remote_clients
@@ -25,7 +30,7 @@ def upgrade() -> None:
           ALTER COLUMN registered_scopes DROP DEFAULT;
         ALTER TABLE identity.remote_clients
           ADD CONSTRAINT remote_client_is_local_operator
-          CHECK (principal_id = '{_LOCAL_OPERATOR_UUID}'::uuid);
+          CHECK (principal_id = '24abf5d2-d0c2-5e1c-82f6-e72425e9ed37'::uuid);
 
         CREATE TABLE identity.oauth_authorization_codes (
           code_hash varchar(64) PRIMARY KEY,

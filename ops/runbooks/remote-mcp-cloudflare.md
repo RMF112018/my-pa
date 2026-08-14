@@ -102,6 +102,12 @@ ownership/UUID with the operator's authenticated
 Cloudflare tooling; do not paste its output into tickets or logs if it contains
 account or credential data.
 
+The origin-OAuth migration admits only the established empty remote-client
+baseline. If any legacy `identity.remote_clients` row exists, migration refuses
+before changing the schema. Resolve that identity through the repository-owned
+operator workflow and obtain a fresh backup before retrying; do not relabel or
+delete a row merely to satisfy the gate.
+
 ## Deploy, verify, and connect
 
 ```bash

@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import secrets
+import threading
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
@@ -64,6 +65,7 @@ class OriginOAuthServer:
         self.resource = resource.strip()
         self.supported_scopes = frozenset(scope.strip() for scope in supported_scopes if scope)
         self.now = now
+        self._registration_lock = threading.Lock()
         if not self.resource or not self.supported_scopes:
             raise ValueError("resource and supported scopes are required")
 
@@ -116,7 +118,9 @@ class OriginOAuthServer:
         scopes = self._scopes(str(payload.get("scope", "my-pa.read")))
         client_id = secrets.token_urlsafe(24)
         registered = _aware(self.now())
-        with self.connections() as connection:
+        with self._registration_lock, self.connections() as connection:
+            if connection.dialect.name == "postgresql":
+                connection.exec_driver_sql("SELECT pg_advisory_xact_lock(7420196)")
             active_clients = connection.execute(
                 select(func.count())
                 .select_from(remote_clients)

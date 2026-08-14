@@ -15,6 +15,9 @@ data_network = "data-plane"
 data_network_internal = true
 ingress_network = "ingress-plane"
 ingress_network_internal = true
+host_edge_network = "host-edge"
+host_edge_network_internal = false
+host_edge_members = ["proxy"]
 application_egress = "forbidden"
 only_host_published_service = "proxy"
 postgres_published = false
@@ -77,7 +80,7 @@ networks = ["ingress-plane"]
 host = "nas"
 database_credential = false
 mounts = ["proxy_config_ro"]
-networks = ["ingress-plane"]
+networks = ["ingress-plane", "host-edge"]
 
 [services.apple_source_host]
 host = "mac"

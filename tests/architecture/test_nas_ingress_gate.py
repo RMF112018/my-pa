@@ -48,6 +48,7 @@ def _live_fixture(
     session_secret: str = "S" * 32,
     operator_secret: str = "O" * 43,
     proxy_cap_add: list[str] | None = None,
+    host_edge_internal: bool = False,
 ) -> tuple[Path, object]:
     gate = _gate()
     config = ROOT / "ops/nas/proxy-allowlist.example.caddy"
@@ -95,7 +96,16 @@ def _live_fixture(
         if command[0:2] == ["docker", "compose"]:
             return f"{command[-1]}-id\n"
         if command[0:3] == ["docker", "network", "inspect"]:
-            return json.dumps([{"Internal": True, "Id": "a" * 64}])
+            return json.dumps(
+                [
+                    {
+                        "Internal": (
+                            host_edge_internal if command[-1].endswith("_host-edge") else True
+                        ),
+                        "Id": "a" * 64,
+                    }
+                ]
+            )
         name = command[-1].removesuffix("-id")
         host = {
             "Privileged": False,
@@ -179,6 +189,18 @@ def test_gate_binds_private_local_operator_runtime(tmp_path: Path) -> None:
         )
         == []
     )
+
+
+def test_gate_requires_non_internal_proxy_only_host_edge(tmp_path: Path) -> None:
+    manifest, runner = _live_fixture(tmp_path, host_edge_internal=True)
+    errors = _gate().verify(
+        manifest,
+        ROOT / "ops/nas/proxy-allowlist.example.caddy",
+        ROOT / "ops/nas/compose.example.yml",
+        live=True,
+        runner=runner,
+    )
+    assert "host_edge_network" in errors
 
 
 def test_gate_refuses_any_residual_entra_environment(tmp_path: Path) -> None:

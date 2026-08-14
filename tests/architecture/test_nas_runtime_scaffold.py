@@ -154,6 +154,9 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         or network.get("data_network_internal") is not True
         or network.get("ingress_network") != "ingress-plane"
         or network.get("ingress_network_internal") is not True
+        or network.get("host_edge_network") != "host-edge"
+        or network.get("host_edge_network_internal") is not False
+        or network.get("host_edge_members") != ["proxy"]
         or network.get("application_egress") != "forbidden"
     ):
         errors.add("network_planes")
@@ -213,7 +216,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "host": "nas",
             "database_credential": False,
             "mounts": ["proxy_config_ro"],
-            "networks": ["ingress-plane"],
+            "networks": ["ingress-plane", "host-edge"],
         },
         "apple_source_host": {
             "host": "mac",
@@ -243,6 +246,9 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "data_network_internal": True,
             "ingress_network": "ingress-plane",
             "ingress_network_internal": True,
+            "host_edge_network": "host-edge",
+            "host_edge_network_internal": False,
+            "host_edge_members": ["proxy"],
             "application_egress": "forbidden",
             "only_host_published_service": "proxy",
             "postgres_published": False,
@@ -326,7 +332,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "worker_enrollment": ["data-plane"],
         "worker_capture": ["data-plane"],
         "web": ["ingress-plane"],
-        "proxy": ["ingress-plane"],
+        "proxy": ["ingress-plane", "host-edge"],
     }
     if any(
         services.get(name, {}).get("networks") != networks
@@ -691,7 +697,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "worker-enrollment": {"data-plane"},
         "worker-capture": {"data-plane"},
         "web": {"ingress-plane"},
-        "proxy": {"ingress-plane"},
+        "proxy": {"ingress-plane", "host-edge"},
     }
     actual_compose_networks = {
         name: set(compose_services.get(name, {}).get("networks", []))
@@ -707,6 +713,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
     if compose_model.get("networks") != {
         "data-plane": {"name": "my-pa-nas-contract_data-plane", "internal": True},
         "ingress-plane": {"internal": True},
+        "host-edge": {"internal": False},
     }:
         errors.add("network_planes")
     if any(not block or "    platform: linux/amd64" not in block for block in blocks.values()):
@@ -738,6 +745,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         or "networks: [data-plane]" not in blocks["postgres"]
         or "data-plane:\n    name: my-pa-nas-contract_data-plane\n    internal: true" not in compose
         or "ingress-plane:\n    internal: true" not in compose
+        or "host-edge:\n    internal: false" not in compose
     ):
         errors.add("network_planes")
     if "managed-documents" in compose.replace(blocks["gateway"], ""):

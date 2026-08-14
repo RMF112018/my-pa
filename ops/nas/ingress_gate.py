@@ -23,7 +23,7 @@ NETWORKS = {
     "worker-enrollment": {"data-plane"},
     "worker-capture": {"data-plane"},
     "web": {"ingress-plane"},
-    "proxy": {"ingress-plane"},
+    "proxy": {"ingress-plane", "host-edge"},
 }
 
 
@@ -302,12 +302,14 @@ def verify(
             name: _json_single_object(
                 runner([docker(), "network", "inspect", f"{data['compose_project']}_{name}"])
             )
-            for name in ("data-plane", "ingress-plane")
+            for name in ("data-plane", "ingress-plane", "host-edge")
         }
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError):
         return [*errors, "network_inspection"]
-    if any(network.get("Internal") is not True for network in internal.values()):
+    if any(internal[name].get("Internal") is not True for name in ("data-plane", "ingress-plane")):
         errors.append("network_internality")
+    if internal["host-edge"].get("Internal") is not False:
+        errors.append("host_edge_network")
     hostport = f"{host}:443"
     if tailscale.get("TCP") != {"443": {"HTTPS": True}} or tailscale.get("Web") != {
         hostport: {"Handlers": {"/": {"Proxy": f"http://{target}"}}}

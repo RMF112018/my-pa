@@ -196,7 +196,7 @@ Later packages own executable behavior:
   operator/device gates; no image here is currently deployable;
 - NAS-03 PostgreSQL storage, migration, backup, and scratch restore;
 - NAS-04/05 services and filesystem permissions;
-- NAS-06 private HTTPS ingress, Entra pilot origin, and a verified Microsoft
-  OIDC/JWKS egress allowlist for gateway and web;
+- NAS-06 private HTTPS ingress, credentialed local-operator browser access,
+  and proof that gateway/web have no Entra configuration or application egress;
 - NAS-07 live Apple/TCC activation and real credential minting remain operator gates;
 - NAS-10 acceptance.

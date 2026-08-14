@@ -190,22 +190,69 @@ describe("idle timeout", () => {
 });
 
 describe("mode gating", () => {
+  const operatorSecret = "A_credentialed_local_operator_secret_1234567890";
+
   it("authenticates only the configured local operator and ignores no caller identity", async () => {
     vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
-    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", "A_credentialed_local_operator_secret_1234567890");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", operatorSecret);
     const denied = await POST(
       signInRequest(undefined, { body: { operatorSecret: "wrong" } }),
     );
     expect(denied.status).toBe(401);
     const accepted = await POST(
       signInRequest(undefined, {
-        body: { operatorSecret: "A_credentialed_local_operator_secret_1234567890" },
+        body: { operatorSecret },
       }),
     );
     expect(accepted.status).toBe(200);
     const cookie = issuedCookie(accepted);
     const session = await (await GET(protectedRequest(cookie))).json();
     expect(session.principalId).toBe("prn_24abf5d2d0c25e1c82f6e72425e9ed37");
+  });
+
+  it("rate-limits the ninth failure without locking out the correct credential", async () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", operatorSecret);
+    // A correct request resets state from any preceding test.
+    expect(
+      (await POST(signInRequest(undefined, { body: { operatorSecret } }))).status,
+    ).toBe(200);
+    for (let attempt = 0; attempt < 8; attempt++) {
+      expect(
+        (await POST(signInRequest(undefined, { body: { operatorSecret: "wrong" } }))).status,
+      ).toBe(401);
+    }
+    expect(
+      (await POST(signInRequest(undefined, { body: { operatorSecret: "wrong" } }))).status,
+    ).toBe(429);
+    for (let attempt = 0; attempt < 32; attempt++) {
+      expect(
+        (await POST(signInRequest(undefined, { body: { operatorSecret: "wrong" } }))).status,
+      ).toBe(429);
+    }
+    expect(
+      (await POST(signInRequest(undefined, { body: { operatorSecret } }))).status,
+    ).toBe(200);
+  });
+
+  it("expires failed attempts after the bounded window", async () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", operatorSecret);
+    expect(
+      (await POST(signInRequest(undefined, { body: { operatorSecret } }))).status,
+    ).toBe(200);
+    const start = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+    for (let attempt = 0; attempt < 8; attempt++) {
+      expect(
+        (await POST(signInRequest(undefined, { body: { operatorSecret: "wrong" } }))).status,
+      ).toBe(401);
+    }
+    vi.setSystemTime(start + 60_001);
+    expect(
+      (await POST(signInRequest(undefined, { body: { operatorSecret: "wrong" } }))).status,
+    ).toBe(401);
   });
 
   it("refuses local_operator mode without an admitted secret", async () => {
@@ -218,11 +265,11 @@ describe("mode gating", () => {
 
   it("rejects caller-selected identity before local operator authentication", async () => {
     vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
-    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", "A_credentialed_local_operator_secret_1234567890");
+    vi.stubEnv("MYPA_LOCAL_OPERATOR_SECRET", operatorSecret);
     const response = await POST(
       signInRequest(undefined, {
         body: {
-          operatorSecret: "A_credentialed_local_operator_secret_1234567890",
+          operatorSecret,
           principalId: "forged",
         },
       }),

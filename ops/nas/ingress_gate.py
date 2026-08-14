@@ -283,12 +283,13 @@ def verify(
         "MYPA_GATEWAY_AUTH_MODE": "local_operator",
         "MYPA_CANONICAL_ORIGIN": f"https://{host}",
     }
+    session_secret = web_env.get("MYPA_SESSION_SECRET", "") if web_env is not None else ""
+    operator_secret = web_env.get("MYPA_LOCAL_OPERATOR_SECRET", "") if web_env is not None else ""
     if (
         web_env is None
         or any(web_env.get(key) != value for key, value in required_web.items())
-        or any(
-            not web_env.get(key) for key in ("MYPA_SESSION_SECRET", "MYPA_LOCAL_OPERATOR_SECRET")
-        )
+        or len(session_secret.strip()) < 32
+        or re.fullmatch(r"[A-Za-z0-9_-]{43,128}", operator_secret) is None
         or any("DATABASE" in key or "POSTGRES" in key for key in web_env)
         or web.get("Mounts")
     ):

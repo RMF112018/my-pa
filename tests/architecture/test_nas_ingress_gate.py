@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -39,7 +41,13 @@ def test_example_refuses_without_external_commands() -> None:
     assert not called
 
 
-def _live_fixture(tmp_path: Path, *, planted_entra: bool = False) -> tuple[Path, object]:
+def _live_fixture(
+    tmp_path: Path,
+    *,
+    planted_entra: bool = False,
+    session_secret: str = "S" * 32,
+    operator_secret: str = "O" * 43,
+) -> tuple[Path, object]:
     gate = _gate()
     config = ROOT / "ops/nas/proxy-allowlist.example.caddy"
     image = "sha256:" + "1" * 64
@@ -114,8 +122,8 @@ def _live_fixture(tmp_path: Path, *, planted_entra: bool = False) -> tuple[Path,
                 "MYPA_GATEWAY_URL=http://gateway:8765",
                 "MYPA_GATEWAY_AUTH_MODE=local_operator",
                 "MYPA_CANONICAL_ORIGIN=https://my-pa.tail.example",
-                "MYPA_SESSION_SECRET=session-secret",
-                "MYPA_LOCAL_OPERATOR_SECRET=operator-secret",
+                f"MYPA_SESSION_SECRET={session_secret}",
+                f"MYPA_LOCAL_OPERATOR_SECRET={operator_secret}",
                 *(["MYPA_ENTRA_CLIENT_ID=forbidden"] if planted_entra else []),
             ]
             if name == "web"
@@ -178,6 +186,26 @@ def test_gate_refuses_any_residual_entra_environment(tmp_path: Path) -> None:
         runner=runner,
     )
     assert "entra_environment_present" in errors
+
+
+@pytest.mark.parametrize(
+    ("session_secret", "operator_secret"),
+    (("short", "O" * 43), ("S" * 32, "short"), ("S" * 32, "!" * 43)),
+)
+def test_gate_refuses_credentials_the_runtime_would_reject(
+    tmp_path: Path, session_secret: str, operator_secret: str
+) -> None:
+    manifest, runner = _live_fixture(
+        tmp_path, session_secret=session_secret, operator_secret=operator_secret
+    )
+    errors = _gate().verify(
+        manifest,
+        ROOT / "ops/nas/proxy-allowlist.example.caddy",
+        ROOT / "ops/nas/compose.example.yml",
+        live=True,
+        runner=runner,
+    )
+    assert "web_runtime_authority" in errors
 
 
 def test_proxy_strips_cross_route_and_spoofable_authority_headers() -> None:

@@ -7,10 +7,11 @@ import argparse
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import subprocess
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -69,6 +70,17 @@ def _environment(config: dict[str, Any]) -> dict[str, str] | None:
     return {key: value for key, _separator, value in pairs}
 
 
+def _web_env_file_contract(compose_text: str) -> bool:
+    match = re.search(r"(?m)^  web:\s*$", compose_text)
+    if match is None:
+        return False
+    following = compose_text[match.end() :]
+    next_service = re.search(r"(?m)^  [a-z0-9][a-z0-9-]*:\s*$", following)
+    block = following[: next_service.start()] if next_service is not None else following
+    declaration = '    env_file: ["${MY_PA_WEB_ENV_FILE:?owner-only web env file required}"]'
+    return block.count(declaration) == 1
+
+
 def verify(
     manifest_path: Path,
     proxy_config: Path,
@@ -76,6 +88,7 @@ def verify(
     *,
     live: bool = False,
     runner: Callable[[list[str]], str] = _run,
+    process_environment: Mapping[str, str] | None = None,
 ) -> list[str]:
     try:
         data = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
@@ -142,6 +155,7 @@ def verify(
     if errors or not compose_file.is_file():
         return errors or ["compose_file_required"]
     try:
+        compose_text = compose_file.read_text(encoding="utf-8")
         web_env_path = Path(cast(str, web_env_raw)).resolve(strict=True)
         metadata = web_env_path.stat()
         repo_root = compose_file.resolve(strict=True).parents[2]
@@ -156,6 +170,11 @@ def verify(
         or repo_root in web_env_path.parents
     ):
         return ["web_env_file"]
+    environment_source = os.environ if process_environment is None else process_environment
+    if environment_source.get("MY_PA_WEB_ENV_FILE") != str(
+        web_env_path
+    ) or not _web_env_file_contract(compose_text):
+        return ["web_env_compose_binding"]
     services = cast(dict[str, dict[str, str]], services)
     target = cast(str, target)
     try:
@@ -176,7 +195,6 @@ def verify(
                     "config",
                     "--format",
                     "json",
-                    "--no-env-resolution",
                 ]
             )
         )
@@ -184,17 +202,19 @@ def verify(
         return ["live_inspection"]
     if engine.get("ID") != data["docker_engine_id"]:
         errors.append("docker_engine_identity")
-    if version.get("Short") != data["tailscale_version"]:
+    if version.get("short") != data["tailscale_version"]:
         errors.append("tailscale_version")
-    configured_env_files = compose_model.get("services", {}).get("web", {}).get("env_file")
+    configured_web_environment = compose_model.get("services", {}).get("web", {}).get("environment")
     if (
-        not isinstance(configured_env_files, list)
-        or len(configured_env_files) != 1
-        or not isinstance(configured_env_files[0], dict)
-        or configured_env_files[0].get("path") != str(web_env_path)
-        or configured_env_files[0].get("required", True) is not True
+        not isinstance(configured_web_environment, dict)
+        or not configured_web_environment
+        or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in configured_web_environment.items()
+        )
     ):
         errors.append("web_env_compose_binding")
+        configured_web_environment = {}
     inspected_by_name: dict[str, dict[str, Any]] = {}
     for name in SERVICES:
         identity = services[name]
@@ -265,11 +285,9 @@ def verify(
         for item in proxy.get("Mounts") or []
         if isinstance(item, dict)
     }
-    if mounts != {
-        "/etc/caddy/Caddyfile": ("bind", str(config_path), False),
-        "/config": ("tmpfs", "", True),
-        "/data": ("tmpfs", "", True),
-    }:
+    if mounts != {"/etc/caddy/Caddyfile": ("bind", str(config_path), False)} or host_config.get(
+        "Tmpfs"
+    ) != {"/config": "", "/data": ""}:
         errors.append("proxy_config_mount")
     gateway_env = _environment(inspected_by_name["gateway"].get("Config", {}))
     web = inspected_by_name["web"]
@@ -292,6 +310,7 @@ def verify(
     if (
         web_env is None
         or any(web_env.get(key) != value for key, value in required_web.items())
+        or any(web_env.get(key) != value for key, value in configured_web_environment.items())
         or len(session_secret.strip()) < 32
         or re.fullmatch(r"[A-Za-z0-9_-]{43,128}", operator_secret) is None
         or any("DATABASE" in key or "POSTGRES" in key for key in web_env)

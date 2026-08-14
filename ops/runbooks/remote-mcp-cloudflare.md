@@ -91,6 +91,9 @@ docker compose --env-file /volume1/my-pa/config/remote-compose.env \
 The network must already be internal and owned by Compose project
 `my-pa-nas-contract`; its admitted `postgres` service must be running healthy
 on the exact image recorded by the verified PostgreSQL resource artifact.
+On Synology, run `ops/nas/synology-data-plane-firewall.sh check` before private
+MCP startup. A missing exact same-bridge rule is a deployment refusal; never
+replace it with a broad `INPUT_FIREWALL` exception or disable DSM firewall.
 
 Inspect the rendered model: it must contain no `ports`, no database service,
 no Docker socket, and only `/mcp`, `/healthz`, and OAuth protected-resource

@@ -11,6 +11,7 @@ postgres_container_id=$(nas_compose ps -q postgres)
 [ -n "$postgres_container_id" ] || { echo "Compose postgres service is not running" >&2; exit 1; }
 "$NAS_PYTHON_BIN" "$script_dir/postgres_gate.py" "$MY_PA_POSTGRES_RESOURCES" --live \
   --container-id "$postgres_container_id"
+"$script_dir/synology-data-plane-firewall.sh" check
 nas_docker exec -i "$postgres_container_id" sh -eu -c \
   'test -w /var/lib/postgresql/data && postgres --version | grep -Eq "PostgreSQL[)]? 17[.]10([[:space:]]|$)"'
 pg_exec() {

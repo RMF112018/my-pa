@@ -123,7 +123,33 @@ ops/nas/postgres-bootstrap-start.sh \
   DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY /etc/my-pa/postgres-resources.toml
 ```
 
-5. Export the admitted resource artifact, validate it against the running
+5. Synology DSM evaluates `FORWARD_FIREWALL` before Docker's
+   `DEFAULT_FORWARD` chain. On a deny-by-default host this can drop traffic
+   between two containers on the same otherwise-correct internal bridge. Plan,
+   explicitly admit, and verify only the exact canonical bridge/subnet rule:
+
+```sh
+export MY_PA_NAS_IPTABLES=/usr/bin/iptables
+export MY_PA_NAS_IP=/usr/bin/ip
+ops/nas/synology-data-plane-firewall.sh plan
+export MY_PA_CONFIRM_FIREWALL_MUTATION=my-pa-nas-contract_data-plane
+ops/nas/synology-data-plane-firewall.sh apply
+unset MY_PA_CONFIRM_FIREWALL_MUTATION
+ops/nas/synology-data-plane-firewall.sh check
+```
+
+The script derives the current network ID, Synology bridge name, and subnet
+from the exact internal Compose-owned data plane. It also requires Docker's
+same-bridge ACCEPT rule and the proven Synology chain ordering before it will
+mutate anything. `plan` is read-only; `apply` is idempotent and requires the
+exact confirmation value; `remove` is the exact bounded rollback and requires
+the same confirmation. The rule is runtime firewall state, not a DSM profile
+mutation. A DSM firewall reload or NAS reboot can remove it, so re-run `apply`
+before lifecycle recovery. Database operations, six-service start/restart, and
+health fail closed when `check` does not pass. Do not add a broad subnet rule to
+`INPUT_FIREWALL`, disable DSM firewall, or allow unrelated Docker networks.
+
+6. Export the admitted resource artifact, validate it against the running
    container, take the required initial backup, and invoke migration explicitly:
 
 ```sh
@@ -138,7 +164,7 @@ ops/nas/migrate.sh
 Migration derives the repository's single Alembic head at execution time; no
 revision is copied into deployment state.
 
-6. Take a post-migration backup and restore it into a new scratch database.
+7. Take a post-migration backup and restore it into a new scratch database.
    Before entering the ordinary six-service lifecycle, provision every real
    application/web value and generate the ordinary runtime admission:
 

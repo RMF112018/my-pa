@@ -2,6 +2,7 @@
 set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$script_dir/lifecycle-common.sh"
+"$script_dir/synology-data-plane-firewall.sh" check
 verify_running_identity
 running=$(nas_compose ps --status running -q | wc -l | tr -d ' ')
 [ "$running" -eq 6 ] || { echo "expected six running runtime services" >&2; exit 1; }

@@ -127,8 +127,8 @@ even though the runtime listener itself is the unprivileged port 8080.
 The web service also clears the upstream Node image entrypoint explicitly, so
 the inspected runtime process is exactly the declared `node server.js` command.
 On Synology, invoke the gate through `container-python.sh` with
-`MY_PA_NAS_TAILSCALE` bound to the exact host CLI and
-`MY_PA_NAS_TAILSCALE_SOCKET` bound to the exact live daemon socket. The wrapper
+`MY_PA_NAS_TAILSCALE` bound to the exact absolute host CLI path and
+`MY_PA_NAS_TAILSCALE_SOCKET` bound to the exact absolute live daemon-socket path. The wrapper
 mounts both read-only at their conventional container paths only when both
 values are present; supplying just one or a non-socket path refuses before the
 operator container starts.

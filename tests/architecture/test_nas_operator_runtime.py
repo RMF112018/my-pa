@@ -378,6 +378,20 @@ def test_container_python_refuses_invalid_tailscale_authority(
             },
             "newline-containing Tailscale paths are prohibited",
         ),
+        (
+            {
+                "MY_PA_NAS_TAILSCALE": fake_tailscale.name,
+                "MY_PA_NAS_TAILSCALE_SOCKET": str(tailscale_socket),
+            },
+            "Tailscale executable path must be absolute",
+        ),
+        (
+            {
+                "MY_PA_NAS_TAILSCALE": str(fake_tailscale),
+                "MY_PA_NAS_TAILSCALE_SOCKET": os.path.relpath(tailscale_socket, ROOT),
+            },
+            "Tailscale socket path must be absolute",
+        ),
     )
     for extra_environment, expected_error in cases:
         result = subprocess.run(  # noqa: S603 - wrapper with synthetic tools

@@ -92,7 +92,11 @@ if [ "${MY_PA_NAS_TAILSCALE+x}" = x ] || [ "${MY_PA_NAS_TAILSCALE_SOCKET+x}" = x
   esac
   case "$MY_PA_NAS_TAILSCALE" in
     /*) tailscale_host_binary=$MY_PA_NAS_TAILSCALE ;;
-    *) tailscale_host_binary=$(command -v "$MY_PA_NAS_TAILSCALE") ;;
+    *) echo "Tailscale executable path must be absolute" >&2; exit 64 ;;
+  esac
+  case "$MY_PA_NAS_TAILSCALE_SOCKET" in
+    /*) ;;
+    *) echo "Tailscale socket path must be absolute" >&2; exit 64 ;;
   esac
   [ -f "$tailscale_host_binary" ] && [ -x "$tailscale_host_binary" ] || {
     echo "Tailscale executable is unavailable" >&2

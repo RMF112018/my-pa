@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import ModuleType
 
@@ -81,6 +82,7 @@ def test_live_gate_binds_engine_resources_and_canonical_path(tmp_path: Path) -> 
                 '[{"Image":"sha256:image","Config":{"Labels":{'
                 '"com.docker.compose.project":"my-pa-nas-contract",'
                 '"com.docker.compose.service":"postgres"}},'
+                '"State":{"Running":true},'
                 '"HostConfig":{"PortBindings":{}},'
                 '"NetworkSettings":{"Networks":{"my-pa-nas-contract_data-plane":{}}},'
                 '"Mounts":[{"Type":"bind","Source":"'
@@ -90,6 +92,46 @@ def test_live_gate_binds_engine_resources_and_canonical_path(tmp_path: Path) -> 
         return '{"ID":"nas","NCPU":4,"MemTotal":1024}'
 
     assert gate.verify(manifest, live=True, container_id="pg", runner=runner) == []
+
+    def stopped_runner(command: list[str]) -> str:
+        value = runner(command)
+        if command[1] == "network":
+            return value.replace('"Containers":{"pg":{}}', '"Containers":{}')
+        if command[1] == "inspect":
+            return value.replace('"Running":true', '"Running":false')
+        return value
+
+    assert gate.verify(manifest, live=True, container_id="pg", runner=stopped_runner) == []
+
+    def unattached_running(command: list[str]) -> str:
+        value = runner(command)
+        if command[1] == "network":
+            return value.replace('"Containers":{"pg":{}}', '"Containers":{}')
+        return value
+
+    assert "data_network_postgres_attachment" in gate.verify(
+        manifest, live=True, container_id="pg", runner=unattached_running
+    )
+
+    missing = object()
+    for invalid_state in (missing, None, "true", 0, 1):
+
+        def invalid_state_runner(command: list[str], *, state: object = invalid_state) -> str:
+            value = runner(command)
+            if command[1] == "network":
+                return value.replace('"Containers":{"pg":{}}', '"Containers":{}')
+            if command[1] == "inspect":
+                parsed = json.loads(value)
+                if state is missing:
+                    del parsed[0]["State"]["Running"]
+                else:
+                    parsed[0]["State"]["Running"] = state
+                return json.dumps(parsed)
+            return value
+
+        assert "postgres_running_state" in gate.verify(
+            manifest, live=True, container_id="pg", runner=invalid_state_runner
+        )
 
     insufficient = tmp_path / "insufficient.toml"
     insufficient.write_text(

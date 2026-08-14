@@ -53,6 +53,10 @@ def _live_fixture(
     proxy_live_publication: bool = True,
     lookalike_proxy_host_edge: bool = False,
     extra_live_publication: bool = False,
+    missing_proxy_tmpfs: bool = False,
+    extra_proxy_tmpfs: bool = False,
+    compose_missing_web_key: str | None = None,
+    compose_changed_web_key: str | None = None,
 ) -> tuple[Path, object]:
     gate = _gate()
     config = ROOT / "ops/nas/proxy-allowlist.example.caddy"
@@ -77,12 +81,22 @@ def _live_fixture(
         + service_sections,
         encoding="utf-8",
     )
+    web_environment = [
+        "NODE_ENV=production",
+        "MYPA_AUTH_MODE=local_operator",
+        "MYPA_GATEWAY_URL=http://gateway:8765",
+        "MYPA_GATEWAY_AUTH_MODE=local_operator",
+        "MYPA_CANONICAL_ORIGIN=https://my-pa.tail.example",
+        f"MYPA_SESSION_SECRET={session_secret}",
+        f"MYPA_LOCAL_OPERATOR_SECRET={operator_secret}",
+        *(["MYPA_ENTRA_CLIENT_ID=forbidden"] if planted_entra else []),
+    ]
 
     def runner(command: list[str]) -> str:
         if command[0:2] == ["docker", "info"]:
             return '{"ID":"nas"}'
         if command[0:2] == ["tailscale", "version"]:
-            return '{"Short":"1.90.1"}'
+            return '{"short":"1.90.1"}'
         if command[0:3] == ["tailscale", "serve", "status"]:
             return json.dumps(
                 {
@@ -96,7 +110,13 @@ def _live_fixture(
                 }
             )
         if command[0:2] == ["docker", "compose"] and "config" in command:
-            return json.dumps({"services": {"web": {"env_file": [{"path": str(web_env)}]}}})
+            assert "--no-env-resolution" not in command
+            configured_environment = dict(item.split("=", 1) for item in web_environment)
+            if compose_missing_web_key is not None:
+                configured_environment.pop(compose_missing_web_key)
+            if compose_changed_web_key is not None:
+                configured_environment[compose_changed_web_key] = "different-resolved-value"
+            return json.dumps({"services": {"web": {"environment": configured_environment}}})
         if command[0:2] == ["docker", "compose"]:
             return f"{command[-1]}-id\n"
         if command[0:3] == ["docker", "network", "inspect"]:
@@ -131,6 +151,14 @@ def _live_fixture(
             "Devices": [],
             "SecurityOpt": ["no-new-privileges:true"],
             "ReadonlyRootfs": name == "proxy",
+            "Tmpfs": (
+                {
+                    **({} if missing_proxy_tmpfs else {"/config": "", "/data": ""}),
+                    **({"/unexpected": ""} if extra_proxy_tmpfs else {}),
+                }
+                if name == "proxy"
+                else None
+            ),
             "PortBindings": (
                 {"8080/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8443"}]}
                 if name == "proxy"
@@ -142,16 +170,7 @@ def _live_fixture(
             if name == "proxy"
             else ["MY_PA_AUTH_MODE=local_operator", "MY_PA_REMOTE_INGRESS_ENABLED=true"]
             if name == "gateway"
-            else [
-                "NODE_ENV=production",
-                "MYPA_AUTH_MODE=local_operator",
-                "MYPA_GATEWAY_URL=http://gateway:8765",
-                "MYPA_GATEWAY_AUTH_MODE=local_operator",
-                "MYPA_CANONICAL_ORIGIN=https://my-pa.tail.example",
-                f"MYPA_SESSION_SECRET={session_secret}",
-                f"MYPA_LOCAL_OPERATOR_SECRET={operator_secret}",
-                *(["MYPA_ENTRA_CLIENT_ID=forbidden"] if planted_entra else []),
-            ]
+            else web_environment
             if name == "web"
             else []
         )
@@ -204,9 +223,7 @@ def _live_fixture(
                                 "Source": str(config.resolve()),
                                 "Destination": "/etc/caddy/Caddyfile",
                                 "RW": False,
-                            },
-                            {"Type": "tmpfs", "Source": "", "Destination": "/config", "RW": True},
-                            {"Type": "tmpfs", "Source": "", "Destination": "/data", "RW": True},
+                            }
                         ]
                         if name == "proxy"
                         else []
@@ -227,9 +244,62 @@ def test_gate_binds_private_local_operator_runtime(tmp_path: Path) -> None:
             ROOT / "ops/nas/compose.example.yml",
             live=True,
             runner=runner,
+            process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
         )
         == []
     )
+
+
+def test_gate_refuses_a_different_web_env_interpolation_path(tmp_path: Path) -> None:
+    manifest, runner = _live_fixture(tmp_path)
+    errors = _gate().verify(
+        manifest,
+        ROOT / "ops/nas/proxy-allowlist.example.caddy",
+        ROOT / "ops/nas/compose.example.yml",
+        live=True,
+        runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "other.env")},
+    )
+    assert errors == ["web_env_compose_binding"]
+
+
+def test_gate_requires_the_canonical_web_env_file_declaration() -> None:
+    gate = _gate()
+    compose = (ROOT / "ops/nas/compose.example.yml").read_text(encoding="utf-8")
+    assert gate._web_env_file_contract(compose)
+    changed = compose.replace(
+        'env_file: ["${MY_PA_WEB_ENV_FILE:?owner-only web env file required}"]',
+        'env_file: ["${UNBOUND_WEB_ENV_FILE:?owner-only web env file required}"]',
+    )
+    assert not gate._web_env_file_contract(changed)
+    decoy = (
+        "x-decoy:\n  web:\n"
+        '    env_file: ["${MY_PA_WEB_ENV_FILE:?owner-only web env file required}"]\n' + changed
+    )
+    assert not gate._web_env_file_contract(decoy)
+
+
+@pytest.mark.parametrize(
+    ("missing_key", "changed_key"),
+    (("MYPA_SESSION_SECRET", None), (None, "MYPA_LOCAL_OPERATOR_SECRET")),
+)
+def test_gate_refuses_resolved_web_environment_drift(
+    tmp_path: Path, missing_key: str | None, changed_key: str | None
+) -> None:
+    manifest, runner = _live_fixture(
+        tmp_path,
+        compose_missing_web_key=missing_key,
+        compose_changed_web_key=changed_key,
+    )
+    errors = _gate().verify(
+        manifest,
+        ROOT / "ops/nas/proxy-allowlist.example.caddy",
+        ROOT / "ops/nas/compose.example.yml",
+        live=True,
+        runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
+    )
+    assert "web_env_compose_binding" in errors
 
 
 def test_gate_requires_non_internal_proxy_only_host_edge(tmp_path: Path) -> None:
@@ -240,6 +310,7 @@ def test_gate_requires_non_internal_proxy_only_host_edge(tmp_path: Path) -> None
         ROOT / "ops/nas/compose.example.yml",
         live=True,
         runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
     )
     assert "host_edge_network" in errors
 
@@ -252,6 +323,7 @@ def test_gate_refuses_an_unrelated_host_edge_member(tmp_path: Path) -> None:
         ROOT / "ops/nas/compose.example.yml",
         live=True,
         runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
     )
     assert "host_edge_membership" in errors
 
@@ -264,6 +336,7 @@ def test_gate_refuses_saved_binding_without_live_port_allocation(tmp_path: Path)
         ROOT / "ops/nas/compose.example.yml",
         live=True,
         runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
     )
     assert "proxy_publication" in errors
 
@@ -276,6 +349,7 @@ def test_gate_refuses_suffix_matching_lookalike_network(tmp_path: Path) -> None:
         ROOT / "ops/nas/compose.example.yml",
         live=True,
         runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
     )
     assert "proxy_networks" in errors
 
@@ -288,8 +362,27 @@ def test_gate_refuses_an_extra_live_publication(tmp_path: Path) -> None:
         ROOT / "ops/nas/compose.example.yml",
         live=True,
         runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
     )
     assert "proxy_publication" in errors
+
+
+@pytest.mark.parametrize("mode", ("missing", "extra"))
+def test_gate_requires_the_exact_proxy_tmpfs_set(tmp_path: Path, mode: str) -> None:
+    manifest, runner = _live_fixture(
+        tmp_path,
+        missing_proxy_tmpfs=mode == "missing",
+        extra_proxy_tmpfs=mode == "extra",
+    )
+    errors = _gate().verify(
+        manifest,
+        ROOT / "ops/nas/proxy-allowlist.example.caddy",
+        ROOT / "ops/nas/compose.example.yml",
+        live=True,
+        runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
+    )
+    assert "proxy_config_mount" in errors
 
 
 def test_gate_refuses_any_residual_entra_environment(tmp_path: Path) -> None:
@@ -300,6 +393,7 @@ def test_gate_refuses_any_residual_entra_environment(tmp_path: Path) -> None:
         ROOT / "ops/nas/compose.example.yml",
         live=True,
         runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
     )
     assert "entra_environment_present" in errors
 
@@ -315,6 +409,7 @@ def test_gate_refuses_proxy_without_the_exact_caddy_exec_capability(
         ROOT / "ops/nas/compose.example.yml",
         live=True,
         runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
     )
     assert "proxy_runtime_authority" in errors
 
@@ -335,6 +430,7 @@ def test_gate_refuses_credentials_the_runtime_would_reject(
         ROOT / "ops/nas/compose.example.yml",
         live=True,
         runner=runner,
+        process_environment={"MY_PA_WEB_ENV_FILE": str(tmp_path / "web.env")},
     )
     assert "web_runtime_authority" in errors
 

@@ -101,6 +101,21 @@ on the exact image recorded by the verified PostgreSQL resource artifact.
 On Synology, run `ops/nas/synology-data-plane-firewall.sh check` before private
 MCP startup. A missing exact same-bridge rule is a deployment refusal; never
 replace it with a broad `INPUT_FIREWALL` exception or disable DSM firewall.
+After Compose has created the stopped `cloudflare-egress` network and before
+starting the connector, run the repository-controlled egress sequence:
+
+```bash
+sudo ops/nas/synology-cloudflare-egress-firewall.sh plan
+sudo env MY_PA_CONFIRM_FIREWALL_MUTATION=my-pa-remote-mcp_cloudflare-egress \
+  ops/nas/synology-cloudflare-egress-firewall.sh apply
+sudo ops/nas/synology-cloudflare-egress-firewall.sh check
+```
+
+The four exact rules occupy positions 3–6 after the canonical data- and
+ingress-plane rules. They admit only DNS over TCP/UDP 53, Cloudflare Tunnel
+QUIC over UDP 7844, and the documented TCP 7844/443 paths from the exact
+Compose-owned egress bridge. The gate also requires Docker's exact masquerade
+rule. A broad source-network or all-port allowance is not supported.
 
 Inspect the rendered model: it must contain no `ports`, no database service,
 no Docker socket, and only `/mcp`, `/healthz`, OAuth discovery, registration,
@@ -125,6 +140,9 @@ set +a
 python -m alembic upgrade head
 docker compose --env-file /volume1/my-pa/config/remote-compose.env \
   -f ops/nas/remote/compose.yml --profile remote-edge pull
+docker compose --env-file /volume1/my-pa/config/remote-compose.env \
+  -f ops/nas/remote/compose.yml --profile remote-edge create cloudflared
+sudo ops/nas/synology-cloudflare-egress-firewall.sh check
 docker compose --env-file /volume1/my-pa/config/remote-compose.env \
   -f ops/nas/remote/compose.yml --profile remote-edge up -d --no-build
 docker compose --env-file /volume1/my-pa/config/remote-compose.env \

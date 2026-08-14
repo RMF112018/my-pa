@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.engine import Connection
 
-from my_pa.contracts.ports import TaskIdempotencyRecord, TaskPreviewRecord
+from my_pa.contracts.ports import TaskIdempotencyRecord, TaskPreviewRecord, TaskRepository
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.tasks.models import (
@@ -95,7 +96,59 @@ def persist_reviewed_task(
     return task
 
 
-def _task_from_row(row: object) -> Task:
+class _MappedTaskRow(Protocol):
+    task_id: str
+    principal_id: str
+    title: str
+    description: str | None
+    state: str
+    task_role: str
+    priority: str
+    evidence_state: str
+    acceptance_kind: str
+    accepted_by_review_decision_id: str | None
+    origin_evidence_ref: str | None
+    due_date: date | None
+    due_at: datetime | None
+    due_timezone: str | None
+    scheduled_date: date | None
+    scheduled_at: datetime | None
+    deferred_until: datetime | None
+    archived_at: datetime | None
+    current_version: int
+    recurrence_id: str | None
+    occurrence_key: str | None
+    project_id: str | None
+    situation_id: str | None
+    person_id: str | None
+    opened_at: datetime
+    closed_at: datetime | None
+    closure_evidence_ref: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class _MappedCommitmentRow(Protocol):
+    commitment_id: str
+    principal_id: str
+    counterparty_person_id: str
+    direction: str
+    summary: str
+    state: str
+    evidence_state: str
+    origin_evidence_ref: str | None
+    due_date: date | None
+    due_at: datetime | None
+    due_timezone: str | None
+    current_version: int
+    opened_at: datetime
+    closed_at: datetime | None
+    closure_evidence_ref: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+def _task_from_row(row: _MappedTaskRow) -> Task:
     return Task(
         task_id=row.task_id,
         principal_id=row.principal_id,
@@ -129,7 +182,7 @@ def _task_from_row(row: object) -> Task:
     )
 
 
-def _commitment_from_row(row: object) -> Commitment:
+def _commitment_from_row(row: _MappedCommitmentRow) -> Commitment:
     return Commitment(
         commitment_id=row.commitment_id,
         principal_id=row.principal_id,
@@ -185,7 +238,7 @@ def _task_values(task: Task) -> dict[str, object]:
     }
 
 
-class SqlAlchemyTaskRepository:
+class SqlAlchemyTaskRepository(TaskRepository):
     """Task store bound to one open connection."""
 
     def __init__(self, connection: Connection) -> None:

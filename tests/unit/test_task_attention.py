@@ -99,3 +99,13 @@ def test_follow_up_due_and_commitment_waiting_are_reason_codes() -> None:
     ranked = rank_attention((follow,), (commitment,), now=NOW)
     assert AttentionReason.FOLLOW_UP_DUE in ranked[0].reasons
     assert AttentionReason.COMMITMENT_WAITING in ranked[0].reasons
+
+
+def test_proposed_tasks_are_not_ranked() -> None:
+    proposed = _task(
+        title="inferred",
+        due_date=date(2026, 8, 10),
+        evidence_state=ContinuityEvidenceState.PROPOSED,
+        acceptance_kind=AcceptanceKind.NONE,
+    )
+    assert rank_attention((proposed,), now=NOW) == ()

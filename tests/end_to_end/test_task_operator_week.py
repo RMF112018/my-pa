@@ -95,9 +95,23 @@ def test_operator_week_through_invoke(world: World) -> None:
             title="send the meeting action",
             idempotency_key="week-meeting-0001",
             origin_evidence_ref="prop_meeting00000001",
+            proposed=True,
         ),
     )
     assert proposed.result["task"]["origin_evidence_ref"] == "prop_meeting00000001"
+    assert proposed.result["task"]["evidence_state"] == "proposed"
+    accepted_meeting = _invoke(
+        world,
+        Capability.TASKS_UPDATE,
+        Purpose.TASK_AUTHORING,
+        UpdateTask(
+            task_id=proposed.result["task"]["task_id"],
+            expected_version=1,
+            idempotency_key="week-meeting-accept",
+            accept=True,
+        ),
+    )
+    assert accepted_meeting.result["task"]["evidence_state"] == "accepted"
 
     attention = _invoke(world, Capability.TASKS_ATTENTION, Purpose.TASK_REVIEW, TasksAttention())
     assert any(item["task_id"] == turner_id for item in attention.result["items"])

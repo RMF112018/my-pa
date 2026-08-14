@@ -199,6 +199,7 @@ def create_task(
         "project_id": command.project_id,
         "situation_id": command.situation_id,
         "origin_evidence_ref": command.origin_evidence_ref,
+        "proposed": command.proposed,
         "recurrence_frequency": (
             None if command.recurrence_frequency is None else command.recurrence_frequency.value
         ),
@@ -240,12 +241,12 @@ def create_task(
         store.insert_recurrence(rule)
         first = next_occurrence(rule)
         occurrence_key = occurrence_key_for(first, rule.timezone)
-        if isinstance(first, date) and not isinstance(first, datetime):
+        if isinstance(first, datetime):
+            due_at = first
+            due_date = None
+        else:
             due_date = first
             due_at = None
-        else:
-            due_at = first  # type: ignore[assignment]
-            due_date = None
     try:
         task = Task(
             task_id=issue_identifier(IdKind.TASK),
@@ -255,8 +256,14 @@ def create_task(
             state=TaskState.OPEN,
             task_role=command.task_role,
             priority=priority,
-            evidence_state=ContinuityEvidenceState.ACCEPTED,
-            acceptance_kind=AcceptanceKind.DIRECT_PRINCIPAL,
+            evidence_state=(
+                ContinuityEvidenceState.PROPOSED
+                if command.proposed
+                else ContinuityEvidenceState.ACCEPTED
+            ),
+            acceptance_kind=(
+                AcceptanceKind.NONE if command.proposed else AcceptanceKind.DIRECT_PRINCIPAL
+            ),
             current_version=1,
             opened_at=at,
             created_at=at,
@@ -283,7 +290,9 @@ def create_task(
         "task": _task_view(task),
         "version_before": 0,
         "version_after": 1,
-        "acceptance_kind": AcceptanceKind.DIRECT_PRINCIPAL.value,
+        "acceptance_kind": (
+            AcceptanceKind.NONE.value if command.proposed else AcceptanceKind.DIRECT_PRINCIPAL.value
+        ),
     }
     return _remember(store, principal_id, command.idempotency_key, digest, result)
 
@@ -332,6 +341,7 @@ def update_task(
             ),
             "clear_deferred": command.clear_deferred,
             "archived": command.archived,
+            "accept": command.accept,
         }
     )
     replayed = _replay_or_conflict(store, principal_id, command.idempotency_key, digest)
@@ -340,6 +350,8 @@ def update_task(
     task = _resolve(store, principal_id, command)
     if task.current_version != command.expected_version:
         raise ConflictError(SafeDetail.EXPECTED_VERSION)
+    if command.accept and task.evidence_state is not ContinuityEvidenceState.PROPOSED:
+        raise InvalidRequestError(SafeDetail.STATE)
     try:
         priority = (
             task.priority if command.priority is None else normalize_priority(command.priority)
@@ -354,8 +366,12 @@ def update_task(
         state=task.state,
         task_role=task.task_role if command.task_role is None else command.task_role,
         priority=priority,
-        evidence_state=task.evidence_state,
-        acceptance_kind=task.acceptance_kind,
+        evidence_state=(
+            ContinuityEvidenceState.ACCEPTED if command.accept else task.evidence_state
+        ),
+        acceptance_kind=(
+            AcceptanceKind.DIRECT_PRINCIPAL if command.accept else task.acceptance_kind
+        ),
         accepted_by_review_decision_id=task.accepted_by_review_decision_id,
         origin_evidence_ref=task.origin_evidence_ref,
         due_date=(
@@ -421,17 +437,27 @@ def _spawn_next_occurrence(store: TaskRepository, task: Task, *, at: datetime) -
     rule = store.get_recurrence(task.principal_id, task.recurrence_id)
     if rule is None:
         return
-    after: date | datetime = task.due_at or task.due_date or task.occurrence_key or at
-    if isinstance(after, str):
-        after = date.fromisoformat(after)
+    after: date | datetime
+    if task.due_at is not None:
+        after = task.due_at
+    elif task.due_date is not None:
+        after = task.due_date
+    elif task.occurrence_key is not None:
+        after = date.fromisoformat(task.occurrence_key)
+    else:
+        after = at
     nxt = next_occurrence(rule, after=after)
     key = occurrence_key_for(nxt, rule.timezone)
     if store.occurrence(task.principal_id, task.recurrence_id, key) is not None:
         return
     if store.actionable_occurrence(task.principal_id, task.recurrence_id) is not None:
         return
-    due_date = nxt if isinstance(nxt, date) and not isinstance(nxt, datetime) else None
-    due_at = nxt if isinstance(nxt, datetime) else None
+    if isinstance(nxt, datetime):
+        due_at = nxt
+        due_date = None
+    else:
+        due_date = nxt
+        due_at = None
     spawned = Task(
         task_id=issue_identifier(IdKind.TASK),
         principal_id=task.principal_id,
@@ -517,7 +543,8 @@ def list_tasks(
         include_archived=command.include_archived,
         limit=page_size,
     )
-    return {"status": "ok", "tasks": [_task_view(task) for task in found]}
+    visible = [task for task in found if task.evidence_state is ContinuityEvidenceState.ACCEPTED]
+    return {"status": "ok", "tasks": [_task_view(task) for task in visible]}
 
 
 def search_tasks(

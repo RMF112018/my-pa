@@ -280,9 +280,9 @@ def validate_temporal_pair(
 
 
 def _bounded_text(value: str, *, name: str, ceiling: int) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise TaskError(f"{name} must be a non-empty string")
     stripped = value.strip()
+    if not stripped:
+        raise TaskError(f"{name} must be a non-empty string")
     if len(stripped) > ceiling:
         raise TaskError(f"{name} exceeds the stored bound")
     return stripped
@@ -291,7 +291,7 @@ def _bounded_text(value: str, *, name: str, ceiling: int) -> str:
 def _optional_context_id(value: str | None, *, kind: str) -> str | None:
     if value is None:
         return None
-    if not isinstance(value, str) or not _OPTIONAL_PREFIX.fullmatch(value):
+    if not _OPTIONAL_PREFIX.fullmatch(value):
         raise TaskError(f"{kind} must be an opaque prefixed identifier")
     expected = {"person": "per", "project": "prj", "situation": "sit"}[kind]
     if not value.startswith(f"{expected}_"):
@@ -667,7 +667,7 @@ class TaskContextLink:
         validate_identifier(self.link_id, IdKind.TASK_LINK)
         validate_identifier(self.task_id, IdKind.TASK)
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
-        if not isinstance(self.target_id, str) or not self.target_id:
+        if not self.target_id.strip():
             raise TaskError("a context link names a target")
 
 

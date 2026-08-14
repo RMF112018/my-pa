@@ -586,7 +586,7 @@ def _optional_identifier(value: str | None, kind: IdKind, detail: SafeDetail) ->
 
 
 def _idempotency_key(value: str) -> str:
-    if not isinstance(value, str) or not IDEMPOTENCY_KEY_PATTERN.fullmatch(value):
+    if not IDEMPOTENCY_KEY_PATTERN.fullmatch(value):
         raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
     return value
 
@@ -594,7 +594,7 @@ def _idempotency_key(value: str) -> str:
 def _optional_date(value: date | None, detail: SafeDetail) -> date | None:
     if value is None:
         return None
-    if not isinstance(value, date) or isinstance(value, datetime):
+    if type(value) is not date:
         raise InvalidRequestError(detail)
     return value
 
@@ -638,7 +638,7 @@ class SearchTasks:
     page_size: int | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.query, str) or not self.query.strip():
+        if not self.query.strip():
             raise InvalidRequestError(SafeDetail.QUERY)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
 
@@ -687,13 +687,16 @@ class CreateTask:
     project_id: str | None = None
     situation_id: str | None = None
     origin_evidence_ref: str | None = None
+    proposed: bool = False
     recurrence_frequency: RecurrenceFrequency | None = None
     recurrence_weekdays: tuple[int, ...] = ()
     conversation_id: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.title, str) or not self.title.strip():
+        if not self.title.strip():
             raise InvalidRequestError(SafeDetail.TITLE)
+        if self.proposed and self.recurrence_frequency is not None:
+            raise InvalidRequestError(SafeDetail.RECURRENCE)
         _idempotency_key(self.idempotency_key)
         _optional_date(self.due_date, SafeDetail.DUE)
         _optional_date(self.scheduled_date, SafeDetail.SCHEDULE)
@@ -731,6 +734,7 @@ class UpdateTask:
     clear_deferred: bool = False
     archived: bool | None = None
     person_id: str | None = None
+    accept: bool = False
 
     def __post_init__(self) -> None:
         if type(self.expected_version) is not int or self.expected_version < 1:
@@ -792,7 +796,7 @@ class PreviewTaskBulk:
     target_state: TaskState | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.operation, str) or not self.operation.strip():
+        if not self.operation.strip():
             raise InvalidRequestError(SafeDetail.SUBJECT)
         if not self.task_ids or len(self.task_ids) != len(self.expected_versions):
             raise InvalidRequestError(SafeDetail.TASK_ID)
@@ -851,7 +855,7 @@ class CreateCommitment:
         _identifier(self.counterparty_person_id, IdKind.PERSON, SafeDetail.SUBJECT)
         if not isinstance(self.direction, CommitmentDirection):
             raise InvalidRequestError(SafeDetail.SUBJECT)
-        if not isinstance(self.summary, str) or not self.summary.strip():
+        if not self.summary.strip():
             raise InvalidRequestError(SafeDetail.TITLE)
         _idempotency_key(self.idempotency_key)
         _optional_date(self.due_date, SafeDetail.DUE)

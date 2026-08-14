@@ -12,6 +12,7 @@ from my_pa.domain.tasks.models import (
     Commitment,
     CommitmentDirection,
     CommitmentState,
+    ContinuityEvidenceState,
     Task,
     TaskPriority,
     TaskRole,
@@ -81,6 +82,8 @@ def rank_attention(
     )
     for task in tasks:
         if task.archived_at is not None:
+            continue
+        if task.evidence_state is not ContinuityEvidenceState.ACCEPTED:
             continue
         if task.is_terminal:
             continue

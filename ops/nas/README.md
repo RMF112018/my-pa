@@ -210,6 +210,9 @@ candidate; it performs no activation. See
 The separately enabled remote MCP candidate is owned by [`remote/compose.yml`](remote/compose.yml).
 It does not modify the existing private web ingress: its Cloudflare origin network
 is internal, its tunnel is outbound-only, and the default publishes no NAS port.
+On Synology, [`synology-cloudflare-egress-firewall.sh`](synology-cloudflare-egress-firewall.sh)
+admits only the exact Compose egress bridge and DNS/Cloudflare Tunnel ports,
+after the existing data- and ingress-plane rules.
 See [`../runbooks/remote-mcp-cloudflare.md`](../runbooks/remote-mcp-cloudflare.md)
 for exact configuration, deployment, rollback, client, and loopback-fallback procedures.
 

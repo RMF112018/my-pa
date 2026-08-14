@@ -154,6 +154,30 @@ start/restart, and health fail closed when `check` does not pass. Do not add a
 broad subnet rule to `INPUT_FIREWALL`, disable DSM firewall, or allow unrelated
 Docker networks.
 
+The canonical ingress plane needs the same bounded same-bridge allowance so
+the proxy can reach the web service. It does not exist during PostgreSQL-only
+bootstrap. The first ordinary `start.sh` invocation therefore creates the
+admitted six-service Compose topology in a stopped state, then refuses before
+`up` until the exact ingress rule is present. After that refusal, admit the
+second rule and rerun `start.sh`:
+
+```sh
+ops/nas/synology-ingress-plane-firewall.sh plan
+export MY_PA_CONFIRM_FIREWALL_MUTATION=my-pa-nas-contract_ingress-plane
+ops/nas/synology-ingress-plane-firewall.sh apply
+unset MY_PA_CONFIRM_FIREWALL_MUTATION
+ops/nas/synology-ingress-plane-firewall.sh check
+ops/nas/start.sh DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY
+```
+
+The ingress gate first requires the data-plane rule to remain effective, then
+requires one exact ingress bridge/subnet rule in the second
+`FORWARD_FIREWALL` position. Apply inserts only at position 2, preserving the
+data-plane rule at position 1; removal targets only the exact ingress rule.
+Start, restart, health, and diagnostics fail closed if the ingress rule is
+missing. After a DSM firewall reload or reboot, reapply the data-plane rule
+first and the ingress-plane rule second before lifecycle recovery.
+
 6. Export the admitted resource artifact, validate it against the running
    container, take the required initial backup, and invoke migration explicitly:
 
@@ -192,7 +216,8 @@ a terminal runtime.
 
 Run `preflight.sh IMAGE_MANIFEST ARCHIVE_DIRECTORY` before `start.sh` with the
 same arguments. Both reverify exact loaded images and parse Compose. Start uses
-only `up --detach --no-build --pull never`.
+only `create --no-build --pull never` followed, after both firewall gates pass,
+by `up --detach --no-build --pull never`.
 
 The root-published mode-0400 `/etc/my-pa/runtime-admission.toml` closes the
 remaining Compose interpolation boundary. It binds the complete deployable

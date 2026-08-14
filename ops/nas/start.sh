@@ -14,6 +14,16 @@ export MY_PA_IMAGE_MANIFEST
 . "$script_dir/lifecycle-common.sh"
 "$script_dir/synology-data-plane-firewall.sh" check
 nas_compose config --quiet
+if ! nas_compose create --no-build --pull never; then
+  echo "Compose preparation failed; stopping any partial stack" >&2
+  "$script_dir/cleanup-partial-start.sh" || true
+  exit 1
+fi
+if ! "$script_dir/synology-ingress-plane-firewall.sh" check; then
+  echo "Synology ingress-plane firewall is not admitted; stopping the prepared stack" >&2
+  "$script_dir/cleanup-partial-start.sh" || true
+  exit 1
+fi
 if ! nas_compose up --detach --no-build --pull never; then
   echo "Compose start failed; stopping any partial stack" >&2
   "$script_dir/cleanup-partial-start.sh" || true

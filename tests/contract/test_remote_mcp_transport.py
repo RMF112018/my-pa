@@ -13,13 +13,19 @@ import pytest
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from tests.conftest import Scene, build_service, staged_record, staged_search
-from tests.contract.test_transport_parity import document, payloads_for
+from tests.contract.test_transport_parity import payloads_for
 
 import my_pa.adapters.mcp.remote as remote_module
 from my_pa.adapters.mcp.remote import RemoteAccessContext, create_remote_mcp_app, remote_tool_names
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES
+from my_pa.adapters.remote_request import SERVER_OWNED_REMOTE_FIELDS
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
+
+
+def remote_arguments(payload: dict[str, object] | None = None) -> dict[str, object]:
+    """Domain arguments only — the remote MCP caller surface after this change."""
+    return {} if not payload else {"payload": dict(payload)}
 
 
 @pytest.fixture
@@ -64,15 +70,10 @@ async def test_streamable_http_initializes_lists_and_invokes(scene: Scene) -> No
     ):
         initialized = await session.initialize()
         listed = await session.list_tools()
-        request = document(Capability.CAPABILITIES_GET, scene.principal.principal_id, {})
-        request.pop("principal_id")
-        result = await session.call_tool(
-            Capability.CAPABILITIES_GET.value,
-            request,
-        )
+        result = await session.call_tool(Capability.CAPABILITIES_GET.value, remote_arguments())
         forged = await session.call_tool(
             Capability.CAPABILITIES_GET.value,
-            {**request, "principal_id": "prn_00000000000000000000000000000000"},
+            {**remote_arguments(), "principal_id": "prn_00000000000000000000000000000000"},
         )
     assert initialized.server_info.name == "my-pa"
     assert Capability.KNOWLEDGE_SEARCH.value in {tool.name for tool in listed.tools}
@@ -80,7 +81,7 @@ async def test_streamable_http_initializes_lists_and_invokes(scene: Scene) -> No
     capability_tool = next(
         tool for tool in listed.tools if tool.name == Capability.CAPABILITIES_GET.value
     )
-    assert "principal_id" not in capability_tool.input_schema["properties"]
+    assert SERVER_OWNED_REMOTE_FIELDS.isdisjoint(capability_tool.input_schema["properties"])
     assert json.loads(result.content[0].text)["error"] is None
     assert forged.is_error is True
     assert json.loads(forged.content[0].text)["code"] == "invalid_request"
@@ -289,9 +290,7 @@ async def test_remote_request_and_result_bounds_fail_safely(
             ClientSession(*streams[:2]) as session,
         ):
             await session.initialize()
-            request = document(Capability.CAPABILITIES_GET, scene.principal.principal_id, {})
-            request.pop("principal_id")
-            bounded = await session.call_tool(Capability.CAPABILITIES_GET.value, request)
+            bounded = await session.call_tool(Capability.CAPABILITIES_GET.value, remote_arguments())
     assert oversized.status_code == 413
     assert bounded.is_error is True
     assert json.loads(bounded.content[0].text)["code"] == "internal_error"
@@ -308,8 +307,7 @@ async def test_remote_write_e2e_is_idempotent_and_independently_disableable(scen
         "content": b64encode(b"# Synthetic remote document").decode("ascii"),
         "idempotency_key": "remote-document-create-0001",
     }
-    request = document(capability, scene.principal.principal_id, payload)
-    request.pop("principal_id")
+    request = remote_arguments(payload)
 
     def application(*, writes_enabled: bool) -> object:
         return create_remote_mcp_app(
@@ -345,9 +343,7 @@ async def test_remote_write_e2e_is_idempotent_and_independently_disableable(scen
             first = await session.call_tool(capability.value, request)
             replay = await session.call_tool(capability.value, request)
             body = json.loads(first.content[0].text)
-            stale_request = document(
-                revise_capability,
-                scene.principal.principal_id,
+            stale_request = remote_arguments(
                 {
                     "document_id": body.get("result", {})
                     .get("receipt", {})
@@ -357,9 +353,8 @@ async def test_remote_write_e2e_is_idempotent_and_independently_disableable(scen
                     "media_type": "text/markdown",
                     "content": b64encode(b"# stale").decode("ascii"),
                     "idempotency_key": "remote-document-revise-stale-0001",
-                },
+                }
             )
-            stale_request.pop("principal_id")
             conflict = await session.call_tool(revise_capability.value, stale_request)
             return first, replay, conflict, names
 
@@ -485,7 +480,111 @@ async def test_remote_read_only_reference_client_matrix(scene: Scene) -> None:
     ):
         await session.initialize()
         for capability in capabilities:
-            request = document(capability, scene.principal.principal_id, payloads[capability])
-            request.pop("principal_id")
+            request = remote_arguments(payloads[capability])
             answer = await session.call_tool(capability.value, request)
             assert answer.is_error is False, (capability.value, answer.content)
+
+
+def _continuity_app(scene: Scene) -> object:
+    capabilities = (
+        Capability.CAPABILITIES_GET,
+        Capability.CONTINUITY_PULSE,
+        Capability.CONTINUITY_SITUATIONS,
+        Capability.CONTINUITY_PROJECTS,
+    )
+    return create_remote_mcp_app(
+        build_service(scene.world, scene.providers),
+        resolve_access=lambda _authorization: RemoteAccessContext(
+            scene.principal,
+            allowed_capabilities=frozenset(capability.value for capability in capabilities),
+            capability_purposes=frozenset(
+                {
+                    (Capability.CAPABILITIES_GET, None),
+                    (Capability.CONTINUITY_PULSE, Purpose.CAPTURE_REVIEW),
+                    (Capability.CONTINUITY_SITUATIONS, Purpose.CAPTURE_REVIEW),
+                    (Capability.CONTINUITY_PROJECTS, Purpose.CAPTURE_REVIEW),
+                }
+            ),
+        ),
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        resource="https://mcp.example.invalid",
+        authorization_servers=("https://issuer.example.invalid",),
+        scopes=frozenset({"my-pa.read"}),
+    )
+
+
+@pytest.mark.anyio
+async def test_chatllm_legacy_metadata_is_rejected_not_merged(scene: Scene) -> None:
+    """The production ChatLLM continuity.projects shape is no longer accepted."""
+    app = _continuity_app(scene)
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        await session.initialize()
+        listed = {tool.name: tool for tool in (await session.list_tools()).tools}
+        schema = listed["continuity.projects"].input_schema
+        assert SERVER_OWNED_REMOTE_FIELDS.isdisjoint(schema["properties"])
+        answer = await session.call_tool(
+            Capability.CONTINUITY_PROJECTS.value,
+            {
+                "purpose": "Retrieve the user's current projects from their personal assistant",
+                "request_id": "projects-list-003",
+                "requested_at": "2026-08-15T00:00:00Z",
+                "payload": {"page_size": 20},
+                "scope": {"source_ids": [], "enrollment_ids": []},
+            },
+        )
+    assert answer.is_error is True
+    assert json.loads(answer.content[0].text)["code"] == "invalid_request"
+
+
+@pytest.mark.anyio
+async def test_chatllm_domain_only_continuity_calls_succeed(scene: Scene) -> None:
+    app = _continuity_app(scene)
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        initialized = await session.initialize()
+        listed = {tool.name: tool for tool in (await session.list_tools()).tools}
+        projects = await session.call_tool(
+            Capability.CONTINUITY_PROJECTS.value, remote_arguments({"page_size": 20})
+        )
+        situations = await session.call_tool(
+            Capability.CONTINUITY_SITUATIONS.value, remote_arguments({"page_size": 20})
+        )
+        pulse = await session.call_tool(Capability.CONTINUITY_PULSE.value, remote_arguments())
+        capabilities = await session.call_tool(
+            Capability.CAPABILITIES_GET.value, remote_arguments()
+        )
+    assert initialized.server_info.name == "my-pa"
+    for name in (
+        "continuity.projects",
+        "continuity.situations",
+        "continuity.pulse",
+        "capabilities.get",
+    ):
+        assert name in listed
+        assert SERVER_OWNED_REMOTE_FIELDS.isdisjoint(listed[name].input_schema["properties"])
+        assert "Purpose" not in listed[name].input_schema.get("$defs", {})
+    for answer in (projects, situations, pulse, capabilities):
+        body = json.loads(answer.content[0].text)
+        assert answer.is_error is False
+        assert body["error"] is None
+        assert body["disclosure"] is not None
+        assert body["request_id"]
+        assert body["correlation_id"]

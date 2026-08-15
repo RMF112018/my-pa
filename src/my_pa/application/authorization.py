@@ -50,8 +50,12 @@ from datetime import datetime
 
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    BulkConfirmTasks,
+    BulkPreviewTasks,
+    CloseCommitment,
     Command,
     CreateCapture,
+    CreateCommitment,
     CreateManagedDocument,
     CreateProject,
     CreateSituation,
@@ -64,21 +68,30 @@ from my_pa.application.commands import (
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
+    GetTaskHistory,
     ListCaptures,
+    ListCommitments,
     ListManagedDocuments,
     ListProjects,
     ListReviewCases,
     ListSituations,
     ListSources,
+    ListTasks,
     ReadCapture,
+    ReadCommitment,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadTask,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
     SearchKnowledge,
+    SearchTasks,
+    TransitionTask,
+    UpdateTask,
+    WaitingOn,
 )
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.audit.events import audit_event_for
@@ -210,6 +223,27 @@ def _requested_scope(
             | ListManagedDocuments()
             | ArchiveManagedDocument()
             | RestoreManagedDocument()
+            # A task (WP-TM-03 and WP-TM-04) is opened by a Principal directly
+            # and belongs to no configured source and no enrollment, exactly as
+            # a managed document does not — its rows carry no `source_id` for a
+            # scope to be compared against. The same measurement, for the same
+            # reason, and `_SCOPELESS` in `domain.policy.decision` is where all
+            # nine `tasks.*` capabilities (four reads and five writes) are read
+            # that way.
+            | ReadTask()
+            | ListTasks()
+            | SearchTasks()
+            | GetTaskHistory()
+            | CreateTask()
+            | UpdateTask()
+            | TransitionTask()
+            | BulkPreviewTasks()
+            | BulkConfirmTasks()
+            | ReadCommitment()
+            | ListCommitments()
+            | WaitingOn()
+            | CreateCommitment()
+            | CloseCommitment()
         ):
             return frozenset()
         case CreateCapture():

@@ -123,6 +123,8 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "decisions",
         "tasks",
         "continuity_lifecycle_events",
+        "task_recurrences",
+        "task_history",
         "situations",
         "frames",
         "traces",

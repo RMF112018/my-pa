@@ -88,6 +88,7 @@ from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     Commitment,
     CommitmentDirection,
+    CommitmentState,
     ContinuityEvidenceState,
     ContinuityLifecycleEvent,
     ContinuityObjectKind,
@@ -106,6 +107,11 @@ from my_pa.domain.situation.situation import (
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.provider import SourceProvider
 from my_pa.domain.source.registry import ConfiguredSource
+from my_pa.domain.task.commitment import Commitment as CommitmentAggregate
+from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
+from my_pa.domain.task.history import TaskHistoryEntry
+from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.task import Task as TaskAggregate
 
 __all__ = [
     "Acceptance",
@@ -120,6 +126,8 @@ __all__ = [
     "CaptureSearchRequest",
     "CaptureSummary",
     "ContinuityAuthoringRepository",
+    "CommitmentManagementRepository",
+    "CommitmentManagementUnitOfWork",
     "ContinuityReadRepository",
     "ContinuityRepository",
     "EnrollmentRepository",
@@ -145,6 +153,8 @@ __all__ = [
     "SituationRepository",
     "SourceProviders",
     "SourceRepository",
+    "TaskManagementRepository",
+    "TaskManagementUnitOfWork",
     "TraceRepository",
     "UnitOfWork",
     "UnknownScopeError",
@@ -1155,6 +1165,46 @@ class UnitOfWork(ABC):
 
     @property
     @abstractmethod
+    def tasks(self) -> TaskManagementRepository:
+        """The task-management rows, inside this transaction (WP-TM-02/03).
+
+        Placed here for the same reason `managed_documents` is: WP-TM-02 gave
+        the plane a capability seat of its own for mutation, and WP-TM-03 gives
+        it four more for reading, so it is reached the way every other plane
+        with a seat is — through `ApplicationService.invoke`, behind
+        `authorize`, inside the one transaction a request owns. A handler that
+        opened a second transaction to read or write a task would put the rows
+        outside the transaction whose rollback is what makes a failed request
+        leave nothing.
+
+        `TaskManagementRepository` is the one ABC for both directions: WP-TM-02
+        defined the locking write-side methods on it, and WP-TM-03 adds the
+        four non-locking read methods alongside them, rather than splitting a
+        read-only ABC off. A `list_tasks` or `search` call has no single row to
+        lock in the first place — each answers with a page, not a row a
+        subsequent write in the same request will touch — so the distinction
+        that matters is per-method, not per-object.
+
+        `principal_id` remains a parameter on every method of the port and is
+        the authenticated caller's partition, never a caller-supplied field.
+        """
+
+    @property
+    @abstractmethod
+    def commitments(self) -> CommitmentManagementRepository:
+        """The commitment-management rows, inside this transaction (WP-TM-05).
+
+        Placed here for the same reason `tasks` is: WP-TM-05 gives the plane
+        capability seats for read and write, so it is reached through
+        `ApplicationService.invoke`, behind `authorize`, inside the one
+        transaction a request owns.
+
+        `principal_id` remains a parameter on every method of the port and is
+        the authenticated caller's partition, never a caller-supplied field.
+        """
+
+    @property
+    @abstractmethod
     def audit(self) -> AuditSink:
         """The audit sink, inside this transaction.
 
@@ -1860,3 +1910,269 @@ class ManagedByteStore(ABC):
     @abstractmethod
     def read_manifest(self) -> bytes:
         """Return the backup manifest this store holds."""
+
+
+# --- WP-TM-02: canonical Task mutation, receipts, idempotency, concurrency --
+#
+# Deliberately **not** a method added to the existing `UnitOfWork` at the time
+# this section was written, and deliberately not `ContinuityRepository`.
+# `ContinuityRepository` is the WP-11 two-state `Task`'s port, reached by the
+# capability dispatcher `ApplicationService.invoke` already serves. Wiring the
+# richer `domain.task.task.Task` into that same dispatcher and its shared
+# transaction was explicitly deferred past WP-TM-02 — WP-TM-01's own deferral
+# note names "wiring the new domain into ... the application-service layer"
+# as such — so adding a property to `UnitOfWork` in WP-TM-02 would have reached
+# past what that package did and would have forced every existing fake that
+# implements `UnitOfWork` to grow a method it had no use for yet.
+#
+# `TaskManagementUnitOfWork` is therefore its own transaction boundary, over its
+# own repository, following the identical shape `UnitOfWork` already
+# establishes: a context manager that commits on success and rolls back on
+# exception, handing out one repository bound to the connection it opened.
+#
+# **WP-TM-03 is the wiring that comment deferred, and only the read half of
+# it.** This package gives `Capability.TASKS_*` a dispatch seat in
+# `ApplicationService.invoke`, which means the read handlers now run inside
+# the one shared transaction every other capability's handler already runs
+# in — the same argument `managed_documents` recorded for its own reversal of
+# WP-27's separation. `UnitOfWork.tasks` below reaches this same
+# `TaskManagementRepository`, unchanged in shape; `TaskManagementUnitOfWork`
+# is left in place rather than deleted, because WP-TM-02's own mutation
+# service (`application.tasks.TaskManagementService`) still opens it directly
+# and is not itself reached from `invoke` yet — wiring *mutation* through the
+# shared dispatcher remains WP-TM-04's job, not this one's.
+
+
+class TaskManagementRepository(ABC):
+    """`knowledge.tasks` and `knowledge.task_history`, inside one transaction.
+
+    Every method takes `principal_id` and it is the authenticated caller's
+    partition, exactly as `ContinuityRepository` states for the two-state
+    model: a task belonging to another Principal is answered as an absent one.
+
+    **`get_for_update` is the read every mutation attempt runs first.** Reading
+    the row inside the same transaction that will conditionally write it, under
+    a row lock the implementation is asked to hold for the rest of the
+    transaction, is what keeps the optimistic-concurrency comparison honest
+    against a second writer racing between the read and the write — the
+    isolation this port asks of its implementation, stated once here rather
+    than left to be assumed true of whichever adapter is composed in.
+    """
+
+    @abstractmethod
+    def get_for_update(self, principal_id: str, task_id: str) -> TaskAggregate | None:
+        """One task in this Principal's partition, row-locked for this transaction, or `None`."""
+
+    @abstractmethod
+    def insert_task(self, task: TaskAggregate) -> None:
+        """Insert one newly created task row."""
+
+    @abstractmethod
+    def update_task(self, task: TaskAggregate) -> None:
+        """Overwrite the mutable columns of an existing task row with `task`'s values."""
+
+    @abstractmethod
+    def find_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskHistoryEntry | None:
+        """The one prior mutation receipt recorded under this key, or `None`.
+
+        `task_history_idempotency_key_is_unique_per_principal` is what makes
+        this a lookup rather than a search: at most one row can ever match a
+        given `(principal_id, idempotency_key)` pair.
+        """
+
+    @abstractmethod
+    def insert_history(self, entry: TaskHistoryEntry) -> None:
+        """Append one mutation receipt. Never updated, never deleted."""
+
+    # --- WP-TM-03: the read plane -------------------------------------------
+    #
+    # The four methods below answer `tasks.read`/`list`/`search`/`history` and
+    # are deliberately **not** locking. `get_for_update` above exists because a
+    # mutation attempt has to compare against, and then overwrite, the exact
+    # row it locked; none of these four ever writes anything back, so there is
+    # nothing for a lock to protect and taking one would only hold other
+    # writers behind a request that was only ever going to look.
+
+    @abstractmethod
+    def get(self, principal_id: str, task_id: str) -> TaskAggregate | None:
+        """One task in this Principal's partition, unlocked, or `None`.
+
+        The read `ReadTask` (`tasks.read`) runs. A task belonging to another
+        Principal is answered exactly as an absent one — `principal_id` is
+        part of the lookup key, not a filter applied after the fact, so there
+        is no code path in which this method can observe that a differently
+        owned row exists at all.
+        """
+
+    @abstractmethod
+    def list_tasks(
+        self,
+        principal_id: str,
+        *,
+        lifecycle_state: TaskLifecycleState | None = None,
+        priority: TaskPriority | None = None,
+        include_archived: bool = False,
+        limit: int,
+    ) -> tuple[TaskAggregate, ...]:
+        """One bounded page of this Principal's own tasks, newest created first.
+
+        `lifecycle_state` and `priority`, when given, are exact matches — a
+        structured filter, not the lexical one `search` performs. Archived
+        tasks are excluded unless `include_archived` says otherwise, for the
+        same reason `ListManagedDocuments` excludes archived documents: a
+        caller who wants a withdrawn task back has to ask for it by name.
+        """
+
+    @abstractmethod
+    def search(self, principal_id: str, query: str, limit: int) -> tuple[TaskAggregate, ...]:
+        """One bounded page of this Principal's own tasks whose title matches `query`.
+
+        A case-insensitive substring match against `title`, the one free-text
+        field `domain.task.task.Task` carries — `ILIKE`, executed by
+        PostgreSQL, and never a vector or embedding search, which stays behind
+        an abstraction and a benchmark gate under `AGENTS.md` section 4 rather
+        than becoming an MCV prerequisite.
+        """
+
+    @abstractmethod
+    def list_history(
+        self, principal_id: str, task_id: str, limit: int
+    ) -> tuple[TaskHistoryEntry, ...]:
+        """One bounded page of one task's append-only mutation record, oldest first.
+
+        Ordered the opposite of `list_tasks`, on purpose: a history answers how
+        a task got here, and the useful order for that is the one events
+        actually happened in. Scoped by `principal_id` in the same lookup-key
+        sense `get` is — a history entry for a task belonging to another
+        Principal is unreachable, not merely filtered out.
+        """
+
+
+class TaskManagementUnitOfWork(ABC):
+    """One transaction over the task-management tables, and the repository inside it.
+
+    The identical shape `UnitOfWork` establishes, held as a separate port for
+    the reason given in the section comment above this class.
+    """
+
+    @abstractmethod
+    def __enter__(self) -> TaskManagementUnitOfWork:
+        """Begin the transaction and return the unit of work it belongs to."""
+
+    @abstractmethod
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Commit when the block succeeded, roll back when it did not."""
+
+    @property
+    @abstractmethod
+    def tasks(self) -> TaskManagementRepository:
+        """The task-management repository, inside this transaction."""
+
+
+# --- WP-TM-05: Commitment/Waiting-On/Follow-Up -----------------------------
+#
+# `CommitmentManagementRepository`/`CommitmentManagementUnitOfWork` mirror
+# `TaskManagementRepository`/`TaskManagementUnitOfWork` method-for-method,
+# over `knowledge.commitments`/`knowledge.commitment_history` instead of
+# `knowledge.tasks`/`knowledge.task_history`. There is no `WaitingOn`
+# repository here and there will not be one: "what am I waiting on" is a
+# derived read the application layer assembles from `list_commitments` and
+# `TaskManagementRepository.list_tasks`/`get`, per the operator-approved
+# scope's explicit refusal of a separate WaitingOn store.
+
+
+class CommitmentManagementRepository(ABC):
+    """`knowledge.commitments` and `knowledge.commitment_history`, inside one transaction.
+
+    Every method takes `principal_id` and it is the authenticated caller's
+    partition, exactly as `TaskManagementRepository` states for the task
+    plane: a commitment belonging to another Principal is answered as an
+    absent one.
+    """
+
+    @abstractmethod
+    def get_for_update(self, principal_id: str, commitment_id: str) -> CommitmentAggregate | None:
+        """One commitment in this Principal's partition, row-locked for this transaction, or `None`.
+
+        `None` when it is absent from this Principal's partition, exactly as
+        `TaskManagementRepository.get_for_update` treats an absent task.
+        """
+
+    @abstractmethod
+    def get(self, principal_id: str, commitment_id: str) -> CommitmentAggregate | None:
+        """One commitment in this Principal's partition, unlocked, or `None`."""
+
+    @abstractmethod
+    def list_commitments(
+        self,
+        principal_id: str,
+        *,
+        direction: CommitmentDirection | None = None,
+        state: CommitmentState | None = None,
+        limit: int,
+    ) -> tuple[CommitmentAggregate, ...]:
+        """One bounded page of this Principal's own commitments, newest created first.
+
+        `direction` and `state`, when given, are exact matches — the same
+        structured-filter shape `TaskManagementRepository.list_tasks` gives
+        `lifecycle_state`/`priority`.
+        """
+
+    @abstractmethod
+    def insert_commitment(self, commitment: CommitmentAggregate) -> None:
+        """Insert one newly created commitment row."""
+
+    @abstractmethod
+    def update_commitment(self, commitment: CommitmentAggregate) -> None:
+        """Overwrite the mutable columns of an existing commitment row with `commitment`'s values.
+
+        The identical shape `TaskManagementRepository.update_task` gives.
+        """
+
+    @abstractmethod
+    def find_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> CommitmentHistoryEntry | None:
+        """The one prior mutation receipt recorded under this key, or `None`."""
+
+    @abstractmethod
+    def insert_history(self, entry: CommitmentHistoryEntry) -> None:
+        """Append one mutation receipt. Never updated, never deleted."""
+
+    @abstractmethod
+    def list_history(
+        self, principal_id: str, commitment_id: str, limit: int
+    ) -> tuple[CommitmentHistoryEntry, ...]:
+        """One bounded page of one commitment's append-only mutation record, oldest first."""
+
+
+class CommitmentManagementUnitOfWork(ABC):
+    """One transaction over the commitment-management tables, and the repository inside it.
+
+    The identical shape `TaskManagementUnitOfWork` establishes.
+    """
+
+    @abstractmethod
+    def __enter__(self) -> CommitmentManagementUnitOfWork:
+        """Begin the transaction and return the unit of work it belongs to."""
+
+    @abstractmethod
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Commit when the block succeeded, roll back when it did not."""
+
+    @property
+    @abstractmethod
+    def commitments(self) -> CommitmentManagementRepository:
+        """The commitment-management repository, inside this transaction."""

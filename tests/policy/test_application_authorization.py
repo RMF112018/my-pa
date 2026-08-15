@@ -66,21 +66,25 @@ from my_pa.application.commands import (
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
+    GetTaskHistory,
     ListCaptures,
     ListManagedDocuments,
     ListProjects,
     ListReviewCases,
     ListSituations,
     ListSources,
+    ListTasks,
     ReadCapture,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadTask,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
     SearchKnowledge,
+    SearchTasks,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -194,6 +198,14 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.DOCUMENTS_RESTORE: RestoreManagedDocument(
             document_id=issue_identifier(IdKind.MANAGED_DOCUMENT)
         ),
+        # The task-read plane (WP-TM-03). Every identifier is minted rather than
+        # staged, for the reason this table exists: a denial test must fail on
+        # the authority and on nothing else, and a task that existed would let a
+        # `not_found` stand in for a `denied`.
+        Capability.TASKS_READ: ReadTask(task_id=issue_identifier(IdKind.TASK)),
+        Capability.TASKS_LIST: ListTasks(),
+        Capability.TASKS_SEARCH: SearchTasks(query="synthetic"),
+        Capability.TASKS_HISTORY: GetTaskHistory(task_id=issue_identifier(IdKind.TASK)),
     }
 
 
@@ -385,6 +397,14 @@ SCOPED_CAPABILITIES = [
         Capability.DOCUMENTS_LIST,
         Capability.DOCUMENTS_ARCHIVE,
         Capability.DOCUMENTS_RESTORE,
+        # The task-read plane names a task, not a source. A task is the
+        # product's own work item: its rows carry no `source_id` and no
+        # `enrollment_id`, exactly as a capture's do not, so there is no scope
+        # for a request to name (WP-TM-03).
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
     }
 ]
 
@@ -463,6 +483,10 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.DOCUMENTS_LIST,
         Capability.DOCUMENTS_ARCHIVE,
         Capability.DOCUMENTS_RESTORE,
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

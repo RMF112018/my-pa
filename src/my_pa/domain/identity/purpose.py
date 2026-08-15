@@ -66,3 +66,49 @@ class Purpose(StrEnum):
     # one-to-one and cost three frozen-constraint literals for a distinction
     # nobody in this build can enforce.
     CONTINUITY_AUTHORING = "continuity_authoring"
+    # The task plane's read purpose (WP-TM-03). A single purpose covers all
+    # four `tasks.*` capabilities rather than the authoring/reading pair the
+    # capture and managed-document planes each carry, because WP-TM-03 admits
+    # no write capability for tasks to pair it against — task mutation
+    # (WP-TM-02's `TaskManagementService`) is not yet reachable through
+    # `ApplicationService.invoke`, so there is no `task_authoring` purpose for
+    # `task_read` to be kept narrower than. It is declared as its own purpose
+    # rather than a reuse of `capture_review` or `document_read`: a task is
+    # neither a captured proposal awaiting promotion nor a byte-bearing
+    # managed document, and a grant issued to read the review queue or a
+    # document body has no occasion to also return a principal's task list,
+    # history, or search results. When task mutation is exposed to the
+    # assistant surface, the write purpose it is given should be a purpose of
+    # its own for the same reason the capture and document pairs are two:
+    # a purpose wide enough to cover writing and reading is a purpose that
+    # grants both.
+    TASK_READ = "task_read"
+    # The task plane's write purpose (WP-TM-04). Separated from `task_read` for
+    # the same reason the capture and managed-document planes each have two
+    # purposes: a purpose wide enough to cover writing and reading is a purpose
+    # that grants both, and a grant issued to read a task list should not also
+    # authorize creating, updating, or transitioning tasks. This purpose covers
+    # all five task mutation capabilities (`tasks.create`, `tasks.update`,
+    # `tasks.transition`, `tasks.bulk_preview`, `tasks.bulk_confirm`) because
+    # they are all writes to the same task partition under the same principal,
+    # and a grant issued to create a task has no reason to be narrower than one
+    # issued to update or transition it — the principal owns all of them.
+    TASK_AUTHORING = "task_authoring"
+    # The Commitment plane's purpose pair (WP-TM-05), separated from each
+    # other for the identical reason `task_read`/`task_authoring` and the
+    # capture/managed-document pairs are each two: a purpose wide enough to
+    # cover writing and reading is a purpose that grants both, and a grant
+    # issued to read a Principal's Commitments and derived Waiting-On view
+    # should not also authorize creating or closing one. Declared as their
+    # own purposes rather than a reuse of `task_read`/`task_authoring`: a
+    # Commitment is a distinct canonical object from a Task (a social
+    # obligation with a counterparty and a direction, not a work item), and a
+    # grant issued over the task plane has no occasion to also reach the
+    # commitment plane. `COMMITMENT_READ` covers the two reads
+    # (`commitments.read`, `commitments.list`) and the derived
+    # `commitments.waiting_on` query alike, because `waiting_on` reads no row
+    # `commitments.list` and `tasks.list` do not already return to the same
+    # Principal — it is an assembled view, not a new store, so it carries no
+    # wider authority than the two reads it is assembled from.
+    COMMITMENT_READ = "commitment_read"
+    COMMITMENT_AUTHORING = "commitment_authoring"

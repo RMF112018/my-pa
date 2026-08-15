@@ -1,39 +1,33 @@
-"""Revision `6b3d9a2f8c14`: both audited vocabularies widened for the `documents.` plane.
+"""Revision `d15c0dc14d09`: both audited vocabularies widened for the `tasks.` read plane.
 
-WP-28, in the shape `tests/schema/test_corpus_coverage_migration.py` set, and
-named by the revision's own docstring before this file existed.
+WP-TM-03, in the shape `tests/schema/test_managed_document_capability_migration.py`
+set, and named by the revision's own docstring before this file existed.
 
-**Two closed sets move together, which is what makes this revision different
-from the four widenings before it.** `capability_is_known` gains the six
-`documents.` names and `purpose_is_known` gains `document_authoring` and
-`document_read`. A revision that widened one and not the other would leave the
-first audited managed request refused by the half it forgot — and refused
-*after* the policy allowed it, which is the worst place to discover a schema
-gap. Both halves are checked here at head, one revision down, and back.
+**Two closed sets move together, which is what makes this revision look like
+`6b3d9a2f8c14` rather than like the single-purpose widenings before it.**
+`capability_is_known` gains the four `tasks.` names and `purpose_is_known` gains
+the single `task_read` purpose all four share. A revision that widened one and
+not the other would leave the first audited `tasks.read` request refused by the
+half it forgot — and refused *after* the policy allowed it, which is the worst
+place to discover a schema gap. Both halves are checked here at head, one
+revision down, and back.
 
 **Why this revision exists at all.** `authorize()` writes an audit row in the
 request's own transaction on every invocation, so these two constraints are not
-descriptions of two enums — they are the gate the first `documents.create`
-request in the field would meet. A member added to `Capability` or `Purpose`
-with no forward `ALTER` leaves every test green, because every test builds its
-database from scratch, and is refused by the stored constraint the moment a real
+descriptions of two enums — they are the gate the first `tasks.read` request in
+the field would meet. A member added to `Capability` or `Purpose` with no
+forward `ALTER` leaves every test green, because every test builds its database
+from scratch, and is refused by the stored constraint the moment a real
 deployment serves the capability.
 `test_a_member_without_this_alter_would_be_refused_in_the_field` is that claim as
 a measurement rather than as a paragraph, and it makes it for **both** columns.
 
-**The frozen literals were checked against the domain at head, in both
-directions, until WP-TM-03.** `D-69` forbids a revision from deriving a closed
-set from an enum, so the revision writes its vocabularies out; the risk that
-creates is a written set that has quietly stopped matching the enum it was
-copied from. Until `d15c0dc14d09` this revision was the head, so "what the
-domain declares" and "what this revision installs" were the same set and
-`test_the_frozen_literals_are_the_domain_at_head` compared them by equality.
-They are no longer the same set — `d15c0dc14d09` widened both closed sets again
-for the `tasks.` read plane — so that comparison is now
-`test_the_widening_is_exactly_the_managed_plane`'s one-directional live check
-instead, for the reason `test_corpus_coverage_migration.py`'s own superseded
-equality check was converted the same way when this revision took the head from
-it.
+**The frozen literals are checked against the domain at head, in both
+directions.** `D-69` forbids a revision from deriving a closed set from an enum,
+so the revision writes its vocabularies out; the risk that creates is a written
+set that has quietly stopped matching the enum it was copied from. That is what
+`test_the_frozen_literals_are_the_domain_at_head` closes, for the capability
+pair and the purpose pair, by equality rather than by containment.
 
 The database is disposable, created and dropped by this module's fixture, and is
 never the configured one: `downgrade base` deletes schemas. Every value is
@@ -67,26 +61,19 @@ from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 
-DISPOSABLE_DATABASE: Final = "my_pa_managed_document_capability_migration_test"
+DISPOSABLE_DATABASE: Final = "my_pa_task_read_capability_migration_test"
 
 SCHEMA: Final = "knowledge"
 
 #: This revision and the one it revises.
-MANAGED_REVISION: Final = "6b3d9a2f8c14"
-PREVIOUS_REVISION: Final = "4c7b2e91d8a5"
+TASK_READ_REVISION: Final = "d15c0dc14d09"
+PREVIOUS_REVISION: Final = "3d7a2a3e8277"
 
-#: The names this revision admits, and the purposes beside them.
+#: The names this revision admits, and the purpose beside them.
 CAPABILITIES_ADDED: Final[frozenset[str]] = frozenset(
-    {
-        "documents.archive",
-        "documents.create",
-        "documents.list",
-        "documents.read",
-        "documents.restore",
-        "documents.revise",
-    }
+    {"tasks.history", "tasks.list", "tasks.read", "tasks.search"}
 )
-PURPOSES_ADDED: Final[frozenset[str]] = frozenset({"document_authoring", "document_read"})
+PURPOSES_ADDED: Final[frozenset[str]] = frozenset({"task_read"})
 
 #: What each constraint admitted before this revision. Written out here as well
 #: as in the revision, and the duplication is the point: a test that imported the
@@ -103,6 +90,12 @@ CAPABILITIES_BEFORE: Final[frozenset[str]] = frozenset(
         "continuity.projects",
         "continuity.pulse",
         "continuity.situations",
+        "documents.archive",
+        "documents.create",
+        "documents.list",
+        "documents.read",
+        "documents.restore",
+        "documents.revise",
         "knowledge.coverage",
         "knowledge.read",
         "knowledge.reveal",
@@ -133,6 +126,8 @@ PURPOSES_BEFORE: Final[frozenset[str]] = frozenset(
         "capture_authoring",
         "capture_review",
         "content_extraction",
+        "document_authoring",
+        "document_read",
         "knowledge_read",
         "knowledge_search",
         "review_disposition",
@@ -142,7 +137,7 @@ PURPOSES_BEFORE: Final[frozenset[str]] = frozenset(
     }
 )
 
-WHEN: Final = datetime(2026, 8, 11, 12, 0, tzinfo=UTC)
+WHEN: Final = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
 
 _CONSTRAINT: Final = text(
     "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c "
@@ -211,9 +206,9 @@ def _frozen_literals(constant: str) -> frozenset[str]:
     matches = [
         path
         for path in (ROOT / "migrations" / "versions").glob("*.py")
-        if MANAGED_REVISION in path.name
+        if TASK_READ_REVISION in path.name
     ]
-    assert len(matches) == 1, f"{MANAGED_REVISION} names {len(matches)} revision files"
+    assert len(matches) == 1, f"{TASK_READ_REVISION} names {len(matches)} revision files"
     source = matches[0].read_text(encoding="utf-8")
     start = source.index(f"{constant}: Final = (")
     end = source.index("\n)", start)
@@ -248,8 +243,8 @@ def _tables(engine: Engine) -> set[str]:
         )
 
 
-def test_the_chain_has_one_head_and_this_revision_revises_the_managed_plane() -> None:
-    """One head, and this revision revises the one that created the managed tables.
+def test_the_chain_has_one_head_and_this_revision_revises_the_task_read_plane() -> None:
+    """One head, and this revision revises the one that extended `knowledge.tasks`.
 
     "Is in the chain" rather than "is the head" for the revision itself: that
     property is true only until the next work package writes one, and asserting
@@ -260,52 +255,31 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_managed_plane() ->
     """
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1
-    assert MANAGED_REVISION in {entry.revision for entry in script.walk_revisions()}
-    assert script.get_revision(MANAGED_REVISION).down_revision == PREVIOUS_REVISION
+    assert TASK_READ_REVISION in {entry.revision for entry in script.walk_revisions()}
+    assert script.get_revision(TASK_READ_REVISION).down_revision == PREVIOUS_REVISION
     # The revision count, so a chain that lost a file is not read as a chain that
     # never had one. Derived from the directory rather than restated.
     assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 40
 
 
-def test_the_widening_is_exactly_the_managed_plane() -> None:
-    """Guards the downgrade assertions below: equal sets would make them vacuous.
+def test_the_frozen_literals_are_the_domain_at_head() -> None:
+    """`D-69`'s standing risk, closed for both pairs by equality rather than containment.
 
-    **Read off this revision's own frozen literals, not off the live domain**,
-    for the reason `test_corpus_coverage_migration.py`'s own superseded test
-    states: until `d15c0dc14d09` this revision was the head, so "what the domain
-    declares" and "what this revision installs" were the same set and this test
-    compared the domain by equality. They are no longer the same set —
-    `d15c0dc14d09` widened both closed sets again for the `tasks.` read plane —
-    and continuing to compare the domain would have made this test a statement
-    about whichever revision happens to be head rather than about this one. What
-    it is *for* is that this revision admits exactly the six `documents.` names
-    and two purposes more than the revision below it, which is a property of the
-    four frozen texts in the revision file and of nothing else, and is therefore
-    true forever.
+    A revision may not derive a closed set from an enum, so it writes the set
+    out — and a written set can quietly stop matching the enum it was copied
+    from. At head the two must be equal in both directions: a name in the domain
+    and not in the constraint is a capability the first real request is refused
+    for, and a name in the constraint and not in the domain is a vocabulary the
+    product can no longer produce and no longer refuses.
     """
     admitted = _frozen_literals("_CAPABILITIES_AT_THIS_REVISION")
-    before = _frozen_literals("_CAPABILITIES_BEFORE_THIS_REVISION")
-    assert before == CAPABILITIES_BEFORE
-    assert admitted - before == CAPABILITIES_ADDED
-    assert len(before) == 31
-    assert len(admitted) == 37
-
-    purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
-    purposes_before = _frozen_literals("_PURPOSES_BEFORE_THIS_REVISION")
-    assert purposes_before == PURPOSES_BEFORE
-    assert purposes - purposes_before == PURPOSES_ADDED
-    assert len(purposes_before) == 10
-    assert len(purposes) == 12
-
-    # The live domain is still checked, one direction only: this revision's names
-    # must all still exist. It may hold more — `d15c0dc14d09`'s four do — and a
-    # name that vanished from the enum while the constraint still admitted it
-    # would be the drift this says nothing else about.
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
-    assert admitted <= declared
-    assert purposes <= {member.value for member in Purpose}
+    assert admitted == declared
+
+    purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
+    assert purposes == {member.value for member in Purpose}
 
     # Sorted, which is the order the declarative helper produces, so the stored
     # constraint text and a freshly generated one can be compared directly. A
@@ -314,7 +288,7 @@ def test_the_widening_is_exactly_the_managed_plane() -> None:
     source = next(
         path
         for path in (ROOT / "migrations" / "versions").glob("*.py")
-        if MANAGED_REVISION in path.name
+        if TASK_READ_REVISION in path.name
     ).read_text(encoding="utf-8")
     for constant in (
         "_CAPABILITIES_AT_THIS_REVISION",
@@ -326,6 +300,27 @@ def test_the_widening_is_exactly_the_managed_plane() -> None:
         end = source.index("\n)", start)
         names = re.findall(r"'([^']+)'", source[start:end])
         assert names == sorted(names), f"{constant} is not in sorted order"
+
+
+def test_the_widening_is_exactly_the_task_read_plane() -> None:
+    """Guards the downgrade assertions below: equal sets would make them vacuous.
+
+    Both halves are read off the revision's own two pairs of frozen texts, so
+    this stays a statement about *this* revision after a later one becomes head.
+    """
+    admitted = _frozen_literals("_CAPABILITIES_AT_THIS_REVISION")
+    before = _frozen_literals("_CAPABILITIES_BEFORE_THIS_REVISION")
+    assert before == CAPABILITIES_BEFORE
+    assert admitted - before == CAPABILITIES_ADDED
+    assert len(before) == 37
+    assert len(admitted) == 41
+
+    purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
+    purposes_before = _frozen_literals("_PURPOSES_BEFORE_THIS_REVISION")
+    assert purposes_before == PURPOSES_BEFORE
+    assert purposes - purposes_before == PURPOSES_ADDED
+    assert len(purposes_before) == 12
+    assert len(purposes) == 13
 
 
 def test_the_revision_reads_no_enum() -> None:
@@ -340,7 +335,7 @@ def test_the_revision_reads_no_enum() -> None:
     source = next(
         path
         for path in (ROOT / "migrations" / "versions").glob("*.py")
-        if MANAGED_REVISION in path.name
+        if TASK_READ_REVISION in path.name
     ).read_text(encoding="utf-8")
     for forbidden in ("Capability", "Purpose", "operation", "purpose."):
         assert f"import {forbidden}" not in source
@@ -355,10 +350,10 @@ def test_the_revision_runs_empty_to_head_and_head_to_empty(disposable_database: 
         command.upgrade(_config(), "head")
         assert _admitted(engine, "capability_is_known") >= CAPABILITIES_ADDED
         assert _admitted(engine, "purpose_is_known") >= PURPOSES_ADDED
-        # A positive control on the reader: the managed tables the parent
-        # revision creates are present, so "the schema is at head" is a
+        # A positive control on the reader: the tables the parent revision's
+        # ancestry creates are present, so "the schema is at head" is a
         # measurement rather than an assumption about an empty database.
-        assert "managed_documents" in _tables(engine)
+        assert "task_history" in _tables(engine)
 
         command.downgrade(_config(), "base")
         assert _tables(engine) == set()
@@ -373,11 +368,11 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabularies(
     """Head to the previous head and back, for both constraints.
 
     At head each constraint admits exactly what its enum declares; one revision
-    down each admits exactly what `4c7b2e91d8a5` denotes — **not** whatever the
+    down each admits exactly what `3d7a2a3e8277` denotes — **not** whatever the
     domain declares on the day the downgrade runs, which is the whole of what
-    `D-69` means by a frozen vocabulary. A downgrade that left the six new names
-    standing would make "the database is at `4c7b2e91d8a5`" name two different
-    schemas.
+    `D-69` means by a frozen vocabulary. A downgrade that left the four new
+    names standing would make "the database is at `3d7a2a3e8277`" name two
+    different schemas.
 
     The round trip rather than a one-way observation: a downgrade that dropped
     both constraints entirely would satisfy "the new name is gone" and would be a
@@ -397,7 +392,7 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabularies(
         assert _admitted(engine, "purpose_is_known") == PURPOSES_BEFORE
         # The parent's tables are untouched by this revision either way, which is
         # what makes the downgrade a vocabulary change and not a schema loss.
-        assert "managed_documents" in _tables(engine)
+        assert "task_history" in _tables(engine)
 
         command.upgrade(_config(), "head")
         assert _admitted(engine, "capability_is_known") == declared
@@ -424,21 +419,21 @@ def test_a_member_without_this_alter_would_be_refused_in_the_field(
     try:
         command.upgrade(_config(), PREVIOUS_REVISION)
         with pytest.raises(IntegrityError):
-            _record(engine, "documents.create", "capture_authoring")
+            _record(engine, "tasks.read", "document_read")
         with pytest.raises(IntegrityError):
-            _record(engine, "capture.create", "document_authoring")
+            _record(engine, "documents.read", "task_read")
         # The control: a pair the previous revision does admit goes in, so both
         # refusals above are about the vocabularies and not about the statement.
-        _record(engine, "capture.create", "capture_authoring")
+        _record(engine, "documents.read", "document_read")
 
         command.upgrade(_config(), "head")
-        _record(engine, "documents.create", "document_authoring")
+        _record(engine, "tasks.read", "task_read")
         with engine.connect() as connection:
             stored = set(
                 connection.execute(
                     text("SELECT capability || ' ' || purpose FROM knowledge.audit_events")
                 ).scalars()
             )
-        assert stored == {"capture.create capture_authoring", "documents.create document_authoring"}
+        assert stored == {"documents.read document_read", "tasks.read task_read"}
     finally:
         engine.dispose()

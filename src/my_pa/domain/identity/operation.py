@@ -209,6 +209,105 @@ class Capability(StrEnum):
     DOCUMENTS_LIST = "documents.list"
     DOCUMENTS_ARCHIVE = "documents.archive"
     DOCUMENTS_RESTORE = "documents.restore"
+    # The `tasks.` read plane (WP-TM-03), and the forward `ALTER` that admits all
+    # four lands with them, in the shape `6b3d9a2f8c14` set for the `documents.`
+    # plane and for the reason `5e2c7b0a94f6` records: a member added here with
+    # no widened constraint leaves every test green — every test builds its
+    # database from scratch — and is refused by the stored check the first time
+    # a real deployment serves the capability.
+    #
+    # **Four rather than one `tasks.read`, by `D-91`'s own test — does one name
+    # reach rows another does not.** `read` answers about one named task;
+    # `list` answers a bounded page of every task this Principal holds, filtered
+    # by lifecycle state and priority; `search` answers the same page filtered by
+    # a lexical match on the title instead of by a structured column; and
+    # `history` answers the append-only mutation receipts for one task, which is
+    # `knowledge.task_history` and not `knowledge.tasks` at all. A single name
+    # covering the four would let a grant issued to look up one task by
+    # identifier also enumerate every task the Principal holds, search all of
+    # them, and read the mutation trail behind any of them — four different
+    # answers over two different tables under one name.
+    #
+    # **`tasks.` rather than `continuity.` or `knowledge.`.** `WP-TM-01`'s
+    # `domain.task.task.Task` is the richer per-task model this build is
+    # growing deliberately apart from `situation.continuity.Task`'s two-state
+    # shape, and `continuity.situations`/`continuity.projects`/`continuity.pulse`
+    # read the accepted end of that older, coarser model. A `continuity.` name
+    # here would tell a caller that a grant issued for the Pulse also reaches
+    # the finer lifecycle, priority, and scheduling fields this plane adds, which
+    # is not true today and need not become true for this package to ship.
+    # `knowledge.` is the extraction plane's, scoped by enrollment, and a task
+    # belongs to no enrollment — exactly the reasoning `capture.` and
+    # `documents.` already state for themselves.
+    #
+    # **Read-only, and MCP-exposed for the first time.** WP-TM-01 built the
+    # domain and schema and WP-TM-02 built the canonical mutation mechanism,
+    # both deliberately unreachable from any transport. This package is the
+    # first time a `tasks.` request can be made from outside this process, and
+    # it admits only the four reads above — no create, update, or transition
+    # capability is named here, because exposing mutation over MCP is a later
+    # package's job (the plan's WP-TM-04), not this one's.
+    #
+    # None is operator-only: each reads the acting Principal's own tasks inside
+    # the acting Principal's own partition, grants nothing, and promotes
+    # nothing — exactly the test `_OPERATOR_ONLY` applies to every other read
+    # capability above.
+    TASKS_READ = "tasks.read"
+    TASKS_LIST = "tasks.list"
+    TASKS_SEARCH = "tasks.search"
+    TASKS_HISTORY = "tasks.history"
+    # The task plane's write capabilities (WP-TM-04), and the forward `ALTER`
+    # that admits all five lands with them, in the shape `6b3d9a2f8c14` set for
+    # the `documents.` plane and for the reason `5e2c7b0a94f6` records: a member
+    # added here with no widened constraint leaves every test green — every test
+    # builds its database from scratch — and is refused by the stored check the
+    # first time a real deployment serves the capability.
+    #
+    # **Five rather than fewer, by `D-91`'s own test — does one name reach rows
+    # another does not.** `create` writes a task that did not exist and `update`
+    # modifies one that did, which is the difference `CreateTask` and `UpdateTask`
+    # already make in the type rather than in a nullable field; conflating them
+    # would let a grant issued to start a task rewrite every task the Principal
+    # holds. `transition` moves a task through its lifecycle and is a distinct
+    # operation from `update` because it carries closure evidence and enforces
+    # terminal-state rules. `bulk_preview` and `bulk_confirm` are the two-phase
+    # bulk operation: preview returns changes without applying them, confirm
+    # applies them atomically. A grant issued to preview changes should not also
+    # authorize applying them without the caller's explicit confirmation, so they
+    # are separate capabilities.
+    #
+    # None is operator-only. The test `_OPERATOR_ONLY` applies is whether the
+    # capability *grants authority* — widens the scope a later request is
+    # evaluated against — and none of these does: they write the acting
+    # Principal's own tasks inside the acting Principal's own partition, exactly
+    # as `documents.create` does for the managed-document plane. No write shares
+    # a name with a read, which is the line `domain/identity/purpose.py` draws
+    # for the capture plane and this plane is no different.
+    TASKS_CREATE = "tasks.create"
+    TASKS_UPDATE = "tasks.update"
+    TASKS_TRANSITION = "tasks.transition"
+    TASKS_BULK_PREVIEW = "tasks.bulk_preview"
+    TASKS_BULK_CONFIRM = "tasks.bulk_confirm"
+    # The Commitment plane (WP-TM-05). `COMMITMENTS_READ`/`COMMITMENTS_LIST`
+    # are the two direct reads, over `knowledge.commitments`, exactly
+    # parallel to `TASKS_READ`/`TASKS_LIST`. `COMMITMENTS_WAITING_ON` is a
+    # third read rather than a filter on `COMMITMENTS_LIST`: it answers a
+    # different question ("what am I waiting on", assembled from accepted
+    # `OWED_TO_PRINCIPAL` Commitments plus linked `WAITING`/Follow-Up Task
+    # state) over two tables rather than one, and no new table or store backs
+    # it — see `application.service`'s handler. `COMMITMENTS_CREATE`/
+    # `COMMITMENTS_CLOSE` are the two writes `CommitmentManagementService`
+    # exposes; there is no update capability beyond closure because that
+    # service names no other Commitment mutation. None of the five is
+    # operator-only, for the identical reason the task plane's own nine are
+    # not: each reads or writes the acting Principal's own Commitments inside
+    # the acting Principal's own partition, granting nothing and promoting
+    # nothing.
+    COMMITMENTS_READ = "commitments.read"
+    COMMITMENTS_LIST = "commitments.list"
+    COMMITMENTS_WAITING_ON = "commitments.waiting_on"
+    COMMITMENTS_CREATE = "commitments.create"
+    COMMITMENTS_CLOSE = "commitments.close"
 
 
 class NativeSourceCapability(StrEnum):
@@ -386,6 +485,53 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.DOCUMENTS_RESTORE: frozenset({Purpose.DOCUMENT_AUTHORING}),
         Capability.DOCUMENTS_READ: frozenset({Purpose.DOCUMENT_READ}),
         Capability.DOCUMENTS_LIST: frozenset({Purpose.DOCUMENT_READ}),
+        # The four `tasks.` reads map to one purpose of their own, `task_read`,
+        # rather than to a reuse. `D-91`'s test is whether reuse would widen the
+        # grant, and here it would in every direction available: `capture_review`
+        # is the capture plane's, scoped to captures and to the continuity rows
+        # that plane's own proposals promote into, and a task is promoted by no
+        # capture-plane review; `document_read` is the managed-document plane's
+        # own custody, over `knowledge.managed_documents` and its bytes, and a
+        # task is neither a document nor written by that plane; `knowledge_read`
+        # is the extraction plane's and scoped by an enrollment a task has none
+        # of. One purpose for all four rather than one apiece, for the reason
+        # `document_authoring`/`document_read` are a pair and not six: `read`,
+        # `list`, `search` and `history` are four different queries over the
+        # acting Principal's own rows and no write, so a purpose wide enough to
+        # cover any one of them is wide enough to cover the rest without
+        # widening what a grant reaches.
+        Capability.TASKS_READ: frozenset({Purpose.TASK_READ}),
+        Capability.TASKS_LIST: frozenset({Purpose.TASK_READ}),
+        Capability.TASKS_SEARCH: frozenset({Purpose.TASK_READ}),
+        Capability.TASKS_HISTORY: frozenset({Purpose.TASK_READ}),
+        # The five `tasks.` write capabilities map to `task_authoring`, and all
+        # five are covered by one purpose for the reason `document_authoring`
+        # covers `documents.create`, `documents.revise`, `documents.archive`,
+        # and `documents.restore`: they are all writes to the same partition
+        # under the same principal, and a grant issued to create a task has no
+        # reason to be narrower than one issued to update or transition it. The
+        # two-phase bulk operation (`bulk_preview` and `bulk_confirm`) is
+        # covered by the same purpose because both are writes — preview is a
+        # write of the bulk operation's state, and confirm is a write of the
+        # task mutations themselves — and a grant issued to preview changes
+        # should not also authorize applying them without the caller's explicit
+        # confirmation, so they are separate capabilities, but they are not
+        # separate purposes.
+        Capability.TASKS_CREATE: frozenset({Purpose.TASK_AUTHORING}),
+        Capability.TASKS_UPDATE: frozenset({Purpose.TASK_AUTHORING}),
+        Capability.TASKS_TRANSITION: frozenset({Purpose.TASK_AUTHORING}),
+        Capability.TASKS_BULK_PREVIEW: frozenset({Purpose.TASK_AUTHORING}),
+        Capability.TASKS_BULK_CONFIRM: frozenset({Purpose.TASK_AUTHORING}),
+        # The Commitment plane's purpose pair (WP-TM-05): `commitment_read`
+        # covers the three reads (`commitments.read`, `commitments.list`,
+        # and the derived `commitments.waiting_on`), and `commitment_authoring`
+        # covers the two writes (`commitments.create`, `commitments.close`),
+        # for the identical reason the task plane's own pair is split.
+        Capability.COMMITMENTS_READ: frozenset({Purpose.COMMITMENT_READ}),
+        Capability.COMMITMENTS_LIST: frozenset({Purpose.COMMITMENT_READ}),
+        Capability.COMMITMENTS_WAITING_ON: frozenset({Purpose.COMMITMENT_READ}),
+        Capability.COMMITMENTS_CREATE: frozenset({Purpose.COMMITMENT_AUTHORING}),
+        Capability.COMMITMENTS_CLOSE: frozenset({Purpose.COMMITMENT_AUTHORING}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

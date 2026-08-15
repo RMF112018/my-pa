@@ -58,6 +58,7 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
     CaptureSummary,
+    CommitmentManagementRepository,
     ContinuityAuthoringRepository,
     EnrollmentRepository,
     KnowledgeRecord,
@@ -77,6 +78,7 @@ from my_pa.contracts.ports import (
     SituationRepository,
     SourceProviders,
     SourceRepository,
+    TaskManagementRepository,
     UnitOfWork,
     UnknownScopeError,
 )
@@ -140,6 +142,8 @@ from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     Commitment,
+    CommitmentDirection,
+    CommitmentState,
     ContinuityAcceptanceKind,
     ContinuityEvidenceState,
     TaskState,
@@ -167,6 +171,11 @@ from my_pa.domain.source.provider import (
     SourceProvider,
 )
 from my_pa.domain.source.registry import ConfiguredSource, SourceProviderKind, issue_identifier
+from my_pa.domain.task.commitment import Commitment as CommitmentV2
+from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
+from my_pa.domain.task.history import TaskHistoryEntry
+from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.task import Task as TaskV2
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
 # Operational scripts execute with this directory on sys.path. Architecture
@@ -319,6 +328,21 @@ class World:
     continuity_decisions: list[ContinuityDecision] = field(default_factory=list)
     authoring_keys: dict[tuple[str, str], AuthoringReceipt] = field(default_factory=dict)
     framed_obligations: list[FramedObligation] = field(default_factory=list)
+    #: The WP-TM-01/02 task-management plane's own rows (WP-TM-03 reads them).
+    #: Named `tasks_v2`/`task_history_v2` rather than `tasks`/`task_history`,
+    #: which would collide with nothing declared on `World` today but would
+    #: read as though it were the same plane `continuity_tasks` above already
+    #: names — it is not: `domain.task.task.Task` is the richer per-task model
+    #: WP-TM-01's own module docstring describes as growing deliberately apart
+    #: from `situation.continuity.Task`'s two-state shape, over the same
+    #: `knowledge.tasks` row but reached through a different repository. Flat
+    #: lists for the same reason every other plane on `World` is one: the
+    #: fake's whole job is the partition predicate, and a list a filter runs
+    #: over is the clearest place to see one missing.
+    tasks_v2: list[TaskV2] = field(default_factory=list)
+    task_history_v2: list[TaskHistoryEntry] = field(default_factory=list)
+    commitments_v2: list[CommitmentV2] = field(default_factory=list)
+    commitment_history_v2: list[CommitmentHistoryEntry] = field(default_factory=list)
     dismissed_pulse_ids: set[str] = field(default_factory=set)
     audit: list[AuditEvent] = field(default_factory=list)
     commits: int = 0
@@ -1307,6 +1331,167 @@ class _ManagedDocuments(ManagedDocumentRepository):
         return frozenset(row.version_id for row in self._world.managed_versions)
 
 
+class _TasksRead(TaskManagementRepository):
+    """The WP-TM-03 read plane over `World.tasks_v2`/`task_history_v2`.
+
+    Only the four read methods below are exercised through `FakeUnitOfWork`
+    (WP-TM-03 wires `UnitOfWork.tasks` to reads only, the way WP-TM-04's own
+    mutation wiring is deferred); the four write/lock methods
+    `TaskManagementRepository` also declares are implemented here purely so
+    this class remains a complete ABC, and raise if a test somehow reaches
+    them — a signal that a test is exercising mutation through the wrong seam,
+    since WP-TM-02's own `TaskManagementService`/`TaskManagementUnitOfWork`
+    fakes (`tests/unit/test_task_management_service.py`) are what a mutation
+    test should use instead.
+
+    Every read method filters by `principal_id` first, exactly as
+    `_ManagedDocuments` above filters by owner: a task belonging to another
+    Principal is answered exactly as an absent one, never distinguished from
+    "no such task at all".
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def get_for_update(self, principal_id: str, task_id: str) -> TaskV2 | None:
+        raise NotImplementedError("the read plane's fake does not serve mutation")
+
+    def insert_task(self, task: TaskV2) -> None:
+        raise NotImplementedError("the read plane's fake does not serve mutation")
+
+    def update_task(self, task: TaskV2) -> None:
+        raise NotImplementedError("the read plane's fake does not serve mutation")
+
+    def find_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskHistoryEntry | None:
+        raise NotImplementedError("the read plane's fake does not serve mutation")
+
+    def insert_history(self, entry: TaskHistoryEntry) -> None:
+        raise NotImplementedError("the read plane's fake does not serve mutation")
+
+    def get(self, principal_id: str, task_id: str) -> TaskV2 | None:
+        return next(
+            (
+                task
+                for task in self._world.tasks_v2
+                if task.principal_id == principal_id and task.task_id == task_id
+            ),
+            None,
+        )
+
+    def list_tasks(
+        self,
+        principal_id: str,
+        *,
+        lifecycle_state: TaskLifecycleState | None = None,
+        priority: TaskPriority | None = None,
+        include_archived: bool = False,
+        limit: int,
+    ) -> tuple[TaskV2, ...]:
+        owned = [task for task in self._world.tasks_v2 if task.principal_id == principal_id]
+        if lifecycle_state is not None:
+            owned = [task for task in owned if task.lifecycle_state is lifecycle_state]
+        if priority is not None:
+            owned = [task for task in owned if task.priority is priority]
+        if not include_archived:
+            owned = [task for task in owned if task.archived_at is None]
+        ordered = sorted(owned, key=lambda task: (task.created_at, task.task_id), reverse=True)
+        # `reverse=True` sorts `task_id` descending alongside `created_at`, which
+        # is not what the real `ORDER BY created_at DESC, task_id ASC` does for
+        # two rows sharing one `created_at`. No test in this fake's suite pins two
+        # rows to the same instant deliberately for that reason; the real
+        # tie-break is proved against PostgreSQL in `tests/database`.
+        return tuple(ordered[:limit])
+
+    def search(self, principal_id: str, query: str, limit: int) -> tuple[TaskV2, ...]:
+        needle = query.casefold()
+        owned = [
+            task
+            for task in self._world.tasks_v2
+            if task.principal_id == principal_id and needle in task.title.casefold()
+        ]
+        ordered = sorted(owned, key=lambda task: (task.created_at, task.task_id), reverse=True)
+        return tuple(ordered[:limit])
+
+    def list_history(
+        self, principal_id: str, task_id: str, limit: int
+    ) -> tuple[TaskHistoryEntry, ...]:
+        owned = [
+            entry
+            for entry in self._world.task_history_v2
+            if entry.principal_id == principal_id and entry.task_id == task_id
+        ]
+        ordered = sorted(owned, key=lambda entry: (entry.recorded_at, entry.history_id))
+        return tuple(ordered[:limit])
+
+
+class _CommitmentsRead(CommitmentManagementRepository):
+    """The WP-TM-05 read plane over `World.commitments_v2`/`commitment_history_v2`.
+
+    Only the read methods are exercised through `FakeUnitOfWork`; the write
+    methods raise so that a test reaching them signals it is exercising
+    mutation through the wrong seam — the same pattern `_TasksRead` uses.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def get_for_update(self, principal_id: str, commitment_id: str) -> CommitmentV2 | None:
+        raise NotImplementedError("the read plane's fake does not serve mutation")
+
+    def get(self, principal_id: str, commitment_id: str) -> CommitmentV2 | None:
+        return next(
+            (
+                c
+                for c in self._world.commitments_v2
+                if c.principal_id == principal_id and c.commitment_id == commitment_id
+            ),
+            None,
+        )
+
+    def list_commitments(
+        self,
+        principal_id: str,
+        *,
+        direction: CommitmentDirection | None = None,
+        state: CommitmentState | None = None,
+        limit: int,
+    ) -> tuple[CommitmentV2, ...]:
+        owned = [c for c in self._world.commitments_v2 if c.principal_id == principal_id]
+        if direction is not None:
+            owned = [c for c in owned if c.direction is direction]
+        if state is not None:
+            owned = [c for c in owned if c.state is state]
+        ordered = sorted(owned, key=lambda c: (c.created_at, c.commitment_id), reverse=True)
+        return tuple(ordered[:limit])
+
+    def insert_commitment(self, commitment: CommitmentV2) -> None:
+        raise NotImplementedError("the read plane's fake does not serve mutation")
+
+    def update_commitment(self, commitment: CommitmentV2) -> None:
+        raise NotImplementedError("the read plane's fake does not serve mutation")
+
+    def find_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> CommitmentHistoryEntry | None:
+        raise NotImplementedError("the read plane's fake does not serve mutation")
+
+    def insert_history(self, entry: CommitmentHistoryEntry) -> None:
+        raise NotImplementedError("the read plane's fake does not serve mutation")
+
+    def list_history(
+        self, principal_id: str, commitment_id: str, limit: int
+    ) -> tuple[CommitmentHistoryEntry, ...]:
+        owned = [
+            entry
+            for entry in self._world.commitment_history_v2
+            if entry.principal_id == principal_id and entry.commitment_id == commitment_id
+        ]
+        ordered = sorted(owned, key=lambda entry: (entry.recorded_at, entry.history_id))
+        return tuple(ordered[:limit])
+
+
 class _Situations(SituationRepository):
     """Situations over the `World`, with the partition predicate written out.
 
@@ -1681,6 +1866,16 @@ class FakeUnitOfWork(UnitOfWork):
     def managed_documents(self) -> ManagedDocumentRepository:
         """The managed-document plane over this `World` (WP-28)."""
         return _ManagedDocuments(self._world)
+
+    @property
+    def tasks(self) -> TaskManagementRepository:
+        """The task-management read plane over this `World` (WP-TM-03)."""
+        return _TasksRead(self._world)
+
+    @property
+    def commitments(self) -> CommitmentManagementRepository:
+        """The commitment-management read plane over this `World` (WP-TM-05)."""
+        return _CommitmentsRead(self._world)
 
     @property
     def audit(self) -> AuditSink:

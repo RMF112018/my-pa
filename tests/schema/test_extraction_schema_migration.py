@@ -222,6 +222,10 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "b4e8d2c7a613": frozenset({"worker_heartbeats"}),
     "a9e4c7b2d610": frozenset({"native_apple_bridge_credentials", "native_apple_read_grants"}),
     "7c2e9b4a1d80": frozenset({"continuity_authoring_submissions"}),
+    # WP-TM-01's task-management foundation: `tasks` itself is extended, not
+    # created, so it stays out of this dict; these two satellite tables are what
+    # `3d7a2a3e8277` creates.
+    "3d7a2a3e8277": frozenset({"task_recurrences", "task_history"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

@@ -208,6 +208,13 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "continuity.projects.create",
         "continuity.situations.create",
         "continuity.tasks.create",
+        # WP-TM-03. `d15c0dc14d09` is the forward `ALTER` that admits the
+        # `tasks.` read plane, and the same revision widens `purpose_is_known`
+        # for the single `task_read` purpose all four map to.
+        "tasks.history",
+        "tasks.list",
+        "tasks.read",
+        "tasks.search",
     }
 )
 

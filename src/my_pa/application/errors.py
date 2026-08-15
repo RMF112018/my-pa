@@ -111,6 +111,37 @@ class SafeDetail(StrEnum):
     #: What the extractor said about an object's content type.
     MEDIA_TYPE_NOT_EXTRACTABLE = "media_type_not_extractable"
     PROCESSING_STOPPED = "processing_stopped"
+    #: The task-read plane's own fields (WP-TM-03). `TASK_ID` names the request
+    #: field, exactly as `DOCUMENT_ID` and `CAPTURE_ID` do for their own planes;
+    #: `LIFECYCLE_STATE` and `PRIORITY` name the two structured filters
+    #: `tasks.list` accepts, and each says only that the filter value was
+    #: rejected, never what it was.
+    TASK_ID = "task_id"
+    LIFECYCLE_STATE = "lifecycle_state"
+    PRIORITY = "priority"
+    #: The task-write plane's own fields (WP-TM-04). Each names a field and
+    #: never its value, exactly as every member above does. `EXPECTED_VERSION`
+    #: says the version was rejected, `ORIGIN_EVIDENCE_REF` says the evidence
+    #: reference was rejected, and so on. `SCHEDULED_AT`, `DEFERRED_UNTIL`, and
+    #: `CLOSURE_EVIDENCE_REF` are task-specific fields that may be rejected.
+    #: `BULK_OPERATION_ID` names the bulk operation identifier, and `MUTATIONS`
+    #: says the mutations list was rejected.
+    EXPECTED_VERSION = "expected_version"
+    ORIGIN_EVIDENCE_REF = "origin_evidence_ref"
+    SCHEDULED_AT = "scheduled_at"
+    DEFERRED_UNTIL = "deferred_until"
+    CLOSURE_EVIDENCE_REF = "closure_evidence_ref"
+    REVIEW_DECISION_ID = "review_decision_id"
+    BULK_OPERATION_ID = "bulk_operation_id"
+    MUTATIONS = "mutations"
+    #: The Commitment plane's own fields (WP-TM-05), each naming a field and
+    #: never its value, exactly as every member above does.
+    #: `COUNTERPARTY_PERSON_ID` says the counterparty identifier was rejected
+    #: — malformed, or, where a caller supplied more than one plausible
+    #: candidate for it, ambiguous. `COMMITMENT_ID` names the request field,
+    #: exactly as `TASK_ID` does for the task plane.
+    COUNTERPARTY_PERSON_ID = "counterparty_person_id"
+    COMMITMENT_ID = "commitment_id"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

@@ -93,6 +93,7 @@ from my_pa.contracts.ports import (
     SituationRepository,
     SourceProviders,
     SourceRepository,
+    TaskManagementRepository,
     UnitOfWork,
 )
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
@@ -223,6 +224,10 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def managed_documents(self) -> ManagedDocumentRepository:
         return self._inner.managed_documents
+
+    @property
+    def tasks(self) -> TaskManagementRepository:
+        return self._inner.tasks
 
     @property
     def audit(self) -> AuditSink:

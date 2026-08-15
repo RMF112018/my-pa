@@ -131,6 +131,29 @@ class IdKind(StrEnum):
     CONTINUITY_DECISION = "cdec"
     TASK = "tsk"
     LIFECYCLE_EVENT = "lce"
+    #: WP-TM-01: the task-management foundation built natively on top of the
+    #: minimal continuity `Task`. `TASK_RECURRENCE` names a durable series
+    #: definition, not any one generated occurrence, and `TASK_HISTORY` names one
+    #: append-only mutation receipt. Neither reuses `TASK` or `LIFECYCLE_EVENT`:
+    #: a series is not a Task and outlives any one of its occurrences, and a
+    #: mutation receipt records a request's outcome rather than a lifecycle
+    #: transition, so the same argument `CAPTURE_VERSION` makes against reusing
+    #: `VERSION` applies here — a stored reference has to say which of the three
+    #: kinds it names.
+    TASK_RECURRENCE = "trec"
+    TASK_HISTORY = "thst"
+    #: WP-TM-05: one append-only mutation receipt per Commitment write, the
+    #: same shape `TASK_HISTORY` names for a Task. Its own prefix rather than a
+    #: reuse of `TASK_HISTORY`, for the same reason `TASK_HISTORY` is not
+    #: `LIFECYCLE_EVENT`: a stored reference has to say which of the two
+    #: history rows it names.
+    COMMITMENT_HISTORY = "cmthst"
+    #: WP-TM-04: bulk task operations. `BULK_OPERATION` names a two-phase
+    #: operation (preview and confirm) that applies multiple task mutations
+    #: atomically. It is its own prefix rather than a reuse of `TASK` because
+    #: a bulk operation is not a task and outlives any one of its constituent
+    #: mutations.
+    BULK_OPERATION = "bulk"
     #: The managed-document plane (WP-27): the one plane whose records name bytes
     #: this product wrote. Five prefixes rather than a reuse of the capture
     #: plane's four, on the argument `CAPTURE_VERSION` makes against reusing

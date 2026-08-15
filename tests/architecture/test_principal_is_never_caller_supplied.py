@@ -262,6 +262,10 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # `document` read is the backup manifest's own `principal_id`, compared
     # against the Principal being restored and refused when they differ — so a
     # backup cannot move a document between partitions by being restored.
+    "application/service.py": (
+        ("commitment", "principal_id"),
+        ("commitment", "principal_id"),
+    ),
     "application/managed_documents.py": (
         ("command", "principal_id"),
         ("command", "principal_id"),
@@ -272,6 +276,11 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("command", "principal_id"),
         ("command", "principal_id"),
         ("document", "principal_id"),
+    ),
+    "infrastructure/persistence/commitment_management.py": (
+        ("commitment", "principal_id"),
+        ("commitment", "principal_id"),
+        ("entry", "principal_id"),
     ),
     "infrastructure/persistence/capture.py": (
         ("request", "principal_id"),
@@ -364,6 +373,12 @@ _DERIVED_RECEIVERS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
         "client": frozenset({"RegisteredCaptureClient"}),
         # A domain audit event.
         "event": frozenset({"AuditEvent"}),
+        # A task-management domain aggregate or mutation receipt, never a
+        # request document: `application.tasks.TaskManagementService` and
+        # `infrastructure.persistence.task_management` construct both only from
+        # a prior read or from values the service itself derived.
+        "task": frozenset({"Task"}),
+        "entry": frozenset({"TaskHistoryEntry"}),
         # A database row.
         "row": frozenset({"Row"}),
         # A database row mapping. Deliberately not bare `Mapping`: a caller's

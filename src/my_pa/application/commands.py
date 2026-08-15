@@ -50,15 +50,25 @@ from my_pa.domain.documents.managed import (
 )
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.event import RelationshipEventType
-from my_pa.domain.situation.continuity import ClosureEvidenceKind
+from my_pa.domain.situation.continuity import (
+    ClosureEvidenceKind,
+    CommitmentDirection,
+    CommitmentState,
+)
+from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.role import TaskRole
 
 __all__ = [
     "AddProjectCommand",
     "ArchiveManagedDocument",
     "ArchiveManagedDocumentCommand",
+    "BulkConfirmTasks",
+    "BulkPreviewTasks",
+    "CloseCommitment",
     "CloseSituationCommand",
     "Command",
     "CreateCapture",
+    "CreateCommitment",
     "CreateManagedDocument",
     "CreateManagedDocumentCommand",
     "CreateProject",
@@ -73,19 +83,24 @@ __all__ = [
     "GetPulse",
     "GetSourceMetadata",
     "GetSourceStatus",
+    "GetTaskHistory",
     "LinkSituationToProjectCommand",
     "ListCaptures",
+    "ListCommitments",
     "ListManagedDocuments",
     "ListManagedDocumentsCommand",
     "ListProjects",
     "ListReviewCases",
     "ListSituations",
     "ListSources",
+    "ListTasks",
     "OpenSituationCommand",
     "ReadCapture",
+    "ReadCommitment",
     "ReadKnowledge",
     "ReadManagedDocument",
     "ReadManagedDocumentCommand",
+    "ReadTask",
     "RecordRelationshipEventCommand",
     "Representation",
     "RestoreManagedDocument",
@@ -96,7 +111,11 @@ __all__ = [
     "ReviseManagedDocumentCommand",
     "SearchCaptures",
     "SearchKnowledge",
+    "SearchTasks",
     "TraceObjectCommand",
+    "TransitionTask",
+    "UpdateTask",
+    "WaitingOn",
 ]
 
 
@@ -952,6 +971,483 @@ class RestoreManagedDocument:
         _identifier(self.document_id, IdKind.MANAGED_DOCUMENT, SafeDetail.DOCUMENT_ID)
 
 
+@dataclass(frozen=True, slots=True)
+class ReadTask:
+    """`tasks.read`: one task, exactly as this Principal's own copy of it stands.
+
+    There is no `version_id` selector here, unlike `ReadCapture` and
+    `ReadManagedDocument`. A task's `version` (`domain.task.task.Task.version`)
+    is an optimistic-concurrency counter WP-TM-02's mutation service checks and
+    increments, not an index into a chain of immutable, independently
+    retrievable prior states — there is nothing archived for this command to
+    name.
+    """
+
+    capability: ClassVar[Capability] = Capability.TASKS_READ
+
+    task_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListTasks:
+    """`tasks.list`: one bounded page of this Principal's own tasks, newest first.
+
+    The two filters are structured rather than a free-text query, which is the
+    line this command keeps against `SearchTasks`: a lifecycle state or a
+    priority is a closed enum value the store can index and compare exactly,
+    where a query string is the substring `SearchTasks` matches lexically.
+    Mixing the two into one command would make "no filter supplied" ambiguous
+    between "list everything" and "search for nothing".
+
+    Archived tasks are excluded by default for the reason `ListManagedDocuments`
+    excludes archived documents: an archived task withdrew itself from the
+    active set on purpose, and a caller who wants it back has to ask for it by
+    name.
+    """
+
+    capability: ClassVar[Capability] = Capability.TASKS_LIST
+
+    lifecycle_state: TaskLifecycleState | None = None
+    priority: TaskPriority | None = None
+    include_archived: bool = False
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.lifecycle_state is not None and not isinstance(
+            self.lifecycle_state, TaskLifecycleState
+        ):
+            raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE)
+        if self.priority is not None and not isinstance(self.priority, TaskPriority):
+            raise InvalidRequestError(SafeDetail.PRIORITY)
+        if not isinstance(self.include_archived, bool):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchTasks:
+    """`tasks.search`: lexical search over this Principal's own task titles.
+
+    **Title only, and the absence of a broader field is the schema's, not this
+    command's.** WP-TM-01's `Task` carries no free-text body beyond `title` —
+    there is no `notes` or `description` column on the `tasks` table for a
+    search to reach — so this searches the one field there is rather than
+    promising a field the domain does not carry.
+
+    **No cursor**, for the reason `SearchCaptures` has none: this build issues
+    no continuation token, truncation is disclosed rather than paged around, and
+    a task belongs to no enrollment for a `SearchCursor` to bind to.
+
+    **`ILIKE`, not `to_tsvector`.** `capture.search` matches the capture plane's
+    stored text with a `websearch_to_tsquery` expression over a generated
+    `tsvector` column, because a capture's text is long enough for ranked,
+    stemmed matching to matter. A task title is a short, caller-authored label,
+    and the case-insensitive substring match `ILIKE` performs is the
+    proportionate lexical match for it — still real SQL executed by PostgreSQL,
+    and still no embedding or vector index, exactly as the plane's governance
+    during MCV requires.
+    """
+
+    capability: ClassVar[Capability] = Capability.TASKS_SEARCH
+
+    query: str = field(repr=False)
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, str):
+            raise InvalidRequestError(SafeDetail.QUERY)
+        if not self.query.strip():
+            raise InvalidRequestError(SafeDetail.QUERY)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class GetTaskHistory:
+    """`tasks.history`: one bounded page of one task's append-only mutation record.
+
+    Ordered oldest first, deliberately the opposite of `ListTasks`. A task list
+    answers "what do I have right now", for which newest-first is the useful
+    order; a history answers "how did this task get here", for which the useful
+    order is the one events actually happened in — reading it newest-first would
+    make every page start with the ending.
+    """
+
+    capability: ClassVar[Capability] = Capability.TASKS_HISTORY
+
+    task_id: str
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateTask:
+    """`tasks.create`: create a new task.
+
+    `origin_evidence_ref` is required and has no default, because a task
+    created inside this product must cite what prompted its creation — a
+    capture, a situation, a relationship event, or another task. Omitting it
+    would be a task with no recorded justification, which is exactly what the
+    append-only history exists to prevent.
+
+    `idempotency_key` is required and has no default, for the same reason
+    `EnrollSource` requires it: a write that did not state its own idempotency
+    key would be a blind write, and the whole of WP-TM-02's idempotency
+    guarantee is that a writer says which request it is.
+    """
+
+    capability: ClassVar[Capability] = Capability.TASKS_CREATE
+
+    title: str
+    origin_evidence_ref: str
+    idempotency_key: str
+    priority: TaskPriority | None = None
+    due_at: datetime | None = None
+    project_id: str | None = None
+    situation_id: str | None = None
+    accepted_by_review_decision_id: str | None = None
+    #: WP-TM-05: link the newly created task to a Commitment, and/or tag it
+    #: with a `TaskRole`, in the same call. Neither field is forwarded to
+    #: `TaskManagementService.create_task` directly — that method's own
+    #: signature is unchanged — the handler issues the ordinary `create_task`
+    #: call and then, only if either is supplied, a follow-up
+    #: `link_commitment`/`set_role` call under the identical
+    #: `idempotency_key`'s own transaction semantics. See
+    #: `application.service._tasks_create` for the composition.
+    commitment_id: str | None = None
+    role: TaskRole | None = None
+    client_context: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.title.strip():
+            raise InvalidRequestError(SafeDetail.TITLE)
+        if not self.origin_evidence_ref.strip():
+            raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
+        if not self.idempotency_key:
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        if self.priority is not None and not isinstance(self.priority, TaskPriority):
+            raise InvalidRequestError(SafeDetail.PRIORITY)
+        if self.due_at is not None:
+            _moment(self.due_at, SafeDetail.DUE_AT)
+        if self.project_id is not None:
+            _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        if self.situation_id is not None:
+            _identifier(self.situation_id, IdKind.SITUATION, SafeDetail.SITUATION_ID)
+        if self.accepted_by_review_decision_id is not None:
+            _identifier(
+                self.accepted_by_review_decision_id,
+                IdKind.REVIEW_DECISION,
+                SafeDetail.REVIEW_DECISION_ID,
+            )
+        if self.commitment_id is not None:
+            _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
+        if self.role is not None and not isinstance(self.role, TaskRole):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateTask:
+    """`tasks.update`: modify one task's mutable fields.
+
+    `expected_version` is required and has no default. An update that did not
+    state what it was updating would be a blind write, and the whole of
+    WP-TM-02's optimistic concurrency is that a writer says which version it
+    read before it says what should follow.
+
+    `idempotency_key` is required and has no default, for the same reason
+    `CreateTask` requires it: a write that did not state its own idempotency
+    key would be a blind write.
+
+    At least one of the mutable fields must be supplied and different from the
+    current value, or the update is a no-op. The service records no-ops as
+    `NO_OP` outcomes, not `APPLIED`, so a caller can tell a replay from a first
+    attempt.
+    """
+
+    capability: ClassVar[Capability] = Capability.TASKS_UPDATE
+
+    task_id: str
+    expected_version: int
+    idempotency_key: str
+    title: str | None = None
+    priority: TaskPriority | None = None
+    due_at: datetime | None = None
+    scheduled_at: datetime | None = None
+    deferred_until: datetime | None = None
+    #: WP-TM-05: the identical pair `CreateTask` carries, for the identical
+    #: reason — see that command's own fields.
+    commitment_id: str | None = None
+    role: TaskRole | None = None
+    client_context: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
+        if type(self.expected_version) is not int or self.expected_version < 1:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        if not self.idempotency_key:
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        if self.title is not None and not self.title.strip():
+            raise InvalidRequestError(SafeDetail.TITLE)
+        if self.priority is not None and not isinstance(self.priority, TaskPriority):
+            raise InvalidRequestError(SafeDetail.PRIORITY)
+        if self.due_at is not None:
+            _moment(self.due_at, SafeDetail.DUE_AT)
+        if self.scheduled_at is not None:
+            _moment(self.scheduled_at, SafeDetail.SCHEDULED_AT)
+        if self.deferred_until is not None:
+            _moment(self.deferred_until, SafeDetail.DEFERRED_UNTIL)
+        if self.commitment_id is not None:
+            _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
+        if self.role is not None and not isinstance(self.role, TaskRole):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionTask:
+    """`tasks.transition`: move a task to a new lifecycle state.
+
+    `expected_version` is required and has no default, for the same reason
+    `UpdateTask` requires it: optimistic concurrency.
+
+    `idempotency_key` is required and has no default, for the same reason
+    `CreateTask` requires it: idempotency.
+
+    `to_state` is required and has no default, because a transition that did
+    not state where it is going would be a no-op by definition.
+
+    `closure_evidence_ref` is required when transitioning to a terminal state
+    (`COMPLETED` or `CANCELLED`), and the service enforces this. Omitting it
+    when required raises `IllegalTaskTransitionError`, which the handler
+    translates to `InvalidRequestError`.
+    """
+
+    capability: ClassVar[Capability] = Capability.TASKS_TRANSITION
+
+    task_id: str
+    to_state: TaskLifecycleState
+    expected_version: int
+    idempotency_key: str
+    closure_evidence_ref: str | None = None
+    client_context: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
+        if not isinstance(self.to_state, TaskLifecycleState):
+            raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE)
+        if type(self.expected_version) is not int or self.expected_version < 1:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        if not self.idempotency_key:
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        if self.closure_evidence_ref is not None and not self.closure_evidence_ref.strip():
+            raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_REF)
+
+
+@dataclass(frozen=True, slots=True)
+class BulkPreviewTasks:
+    """`tasks.bulk_preview`: preview changes to multiple tasks without applying them.
+
+    Returns a list of proposed changes, each with the task's current state and
+    the state it would have after the mutation. No changes are applied, and the
+    transaction is rolled back after the preview is returned.
+
+    `mutations` is a list of mutation requests, each carrying the same fields as
+    the corresponding single-task mutation command (`CreateTask`, `UpdateTask`,
+    `TransitionTask`). The preview returns one result per mutation, in order,
+    with the outcome of each (applied, no-op, rejected, or error).
+
+    `idempotency_key` is required and has no default, because the bulk operation
+    itself is a write and must be idempotent.
+    """
+
+    capability: ClassVar[Capability] = Capability.TASKS_BULK_PREVIEW
+
+    mutations: tuple[dict[str, object], ...]
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        if not self.mutations:
+            raise InvalidRequestError(SafeDetail.MUTATIONS)
+        if not self.idempotency_key:
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+
+
+@dataclass(frozen=True, slots=True)
+class BulkConfirmTasks:
+    """`tasks.bulk_confirm`: apply previewed changes to multiple tasks atomically.
+
+    Applies all mutations from a prior `BulkPreviewTasks` call in one
+    transaction. If any mutation fails, the entire operation is rolled back and
+    no changes are applied.
+
+    `bulk_operation_id` is the identifier of the bulk operation returned by
+    `BulkPreviewTasks`, and it is required and has no default.
+
+    `idempotency_key` is required and has no default, because the confirm is a
+    write and must be idempotent.
+    """
+
+    capability: ClassVar[Capability] = Capability.TASKS_BULK_CONFIRM
+
+    bulk_operation_id: str
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.bulk_operation_id, IdKind.BULK_OPERATION, SafeDetail.BULK_OPERATION_ID)
+        if not self.idempotency_key:
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadCommitment:
+    """`commitments.read`: one commitment, exactly as this Principal's own copy of it stands.
+
+    The identical shape `ReadTask` gives: no `version_id` selector, because
+    `Commitment.version` is an optimistic-concurrency counter
+    `CommitmentManagementService` checks and increments, not an index into a
+    chain of independently retrievable prior states.
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_READ
+
+    commitment_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListCommitments:
+    """`commitments.list`: one bounded page of this Principal's own commitments, newest first.
+
+    `direction` and `state` are structured filters, the same shape
+    `ListTasks` gives `lifecycle_state`/`priority`: a closed enum value the
+    store can index and compare exactly.
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_LIST
+
+    direction: CommitmentDirection | None = None
+    state: CommitmentState | None = None
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.direction is not None and not isinstance(self.direction, CommitmentDirection):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.state is not None and not isinstance(self.state, CommitmentState):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class WaitingOn:
+    """`commitments.waiting_on`: "what am I waiting on?", derived and assembled, not stored.
+
+    Answers from accepted `OWED_TO_PRINCIPAL` Commitments still `OPEN`, together
+    with whichever Tasks this Principal has linked to them (a `WAITING`-state
+    Task, a Follow-Up Task, or both) — assembled in memory from
+    `commitments.list` and `tasks.list`/`tasks.read`-shaped reads at request
+    time, the operator-confirmed refusal of a separate WaitingOn table,
+    aggregate, or repository. Carries no filter of its own: the whole point of
+    this command is that its answer is not a filtered slice of one table but a
+    join over two, computed fresh on every call.
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_WAITING_ON
+
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateCommitment:
+    """`commitments.create`: create a new commitment.
+
+    `counterparty_person_id` and `origin_evidence_ref` are required and have
+    no default: a commitment that did not name who the obligation runs
+    against, or what prompted its creation, would be exactly the kind of
+    unjustified row the append-only history exists to prevent — the identical
+    reasoning `CreateTask` gives for `origin_evidence_ref`.
+
+    `idempotency_key` is required and has no default, for the identical
+    reason `CreateTask` requires it.
+
+    The direct-acceptance path is the identical one `CreateTask` gives: pass
+    `accepted_by_review_decision_id` to create the commitment already
+    `ContinuityEvidenceState.ACCEPTED`; omit it and the commitment is created
+    `PROPOSED`, the proposal-first path AI/source-inferred commitments take.
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_CREATE
+
+    counterparty_person_id: str
+    direction: CommitmentDirection
+    summary: str
+    origin_evidence_ref: str
+    idempotency_key: str
+    due_at: datetime | None = None
+    project_id: str | None = None
+    situation_id: str | None = None
+    accepted_by_review_decision_id: str | None = None
+    client_context: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.counterparty_person_id, IdKind.PERSON, SafeDetail.COUNTERPARTY_PERSON_ID)
+        if not isinstance(self.direction, CommitmentDirection):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if not self.summary.strip():
+            raise InvalidRequestError(SafeDetail.TITLE)
+        if not self.origin_evidence_ref.strip():
+            raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
+        if not self.idempotency_key:
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        if self.due_at is not None:
+            _moment(self.due_at, SafeDetail.DUE_AT)
+        if self.project_id is not None:
+            _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        if self.situation_id is not None:
+            _identifier(self.situation_id, IdKind.SITUATION, SafeDetail.SITUATION_ID)
+        if self.accepted_by_review_decision_id is not None:
+            _identifier(
+                self.accepted_by_review_decision_id,
+                IdKind.REVIEW_DECISION,
+                SafeDetail.REVIEW_DECISION_ID,
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class CloseCommitment:
+    """`commitments.close`: close a commitment. Always an explicit, separate call.
+
+    `expected_version` and `idempotency_key` are required and have no
+    default, for the identical reasons `UpdateTask`/`CreateTask` require
+    them: optimistic concurrency and idempotency.
+    """
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_CLOSE
+
+    commitment_id: str
+    expected_version: int
+    closure_evidence_ref: str
+    idempotency_key: str
+    client_context: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
+        if type(self.expected_version) is not int or self.expected_version < 1:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        if not self.closure_evidence_ref.strip():
+            raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_REF)
+        if not self.idempotency_key:
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+
+
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
 type Command = (
@@ -984,6 +1480,20 @@ type Command = (
     | ListManagedDocuments
     | ArchiveManagedDocument
     | RestoreManagedDocument
+    | ReadTask
+    | ListTasks
+    | SearchTasks
+    | GetTaskHistory
+    | CreateTask
+    | UpdateTask
+    | TransitionTask
+    | BulkPreviewTasks
+    | BulkConfirmTasks
+    | ReadCommitment
+    | ListCommitments
+    | WaitingOn
+    | CreateCommitment
+    | CloseCommitment
 )
 
 

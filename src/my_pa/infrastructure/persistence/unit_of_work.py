@@ -63,6 +63,7 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
     CaptureSummary,
+    CommitmentManagementRepository,
     ContinuityAuthoringRepository,
     ContinuityReadRepository,
     EnrollmentRepository,
@@ -81,6 +82,7 @@ from my_pa.contracts.ports import (
     SituationRepository,
     SourceProviders,
     SourceRepository,
+    TaskManagementRepository,
     UnitOfWork,
     UnknownScopeError,
     WorkerHealthRepository,
@@ -104,6 +106,7 @@ from my_pa.infrastructure.persistence.capture import (
     capture_version,
 )
 from my_pa.infrastructure.persistence.capture_search import search_captures
+from my_pa.infrastructure.persistence.commitment_management import SqlCommitmentManagementRepository
 from my_pa.infrastructure.persistence.continuity_authoring import (
     SqlContinuityAuthoringRepository,
 )
@@ -148,6 +151,7 @@ from my_pa.infrastructure.persistence.situation_repository import (
     SqlSituationRepository,
 )
 from my_pa.infrastructure.persistence.tables import JobState
+from my_pa.infrastructure.persistence.task_management import SqlTaskManagementRepository
 from my_pa.infrastructure.persistence.worker_health import worker_plane_health
 from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
 
@@ -708,6 +712,16 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def managed_documents(self) -> ManagedDocumentRepository:
         """The managed-document rows, on this transaction's connection (WP-28)."""
         return SqlManagedDocumentRepository(self._open)
+
+    @property
+    def tasks(self) -> TaskManagementRepository:
+        """The task-management rows, on this transaction's connection (WP-TM-03)."""
+        return SqlTaskManagementRepository(self._open)
+
+    @property
+    def commitments(self) -> CommitmentManagementRepository:
+        """The commitment-management rows, on this transaction's connection (WP-TM-05)."""
+        return SqlCommitmentManagementRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

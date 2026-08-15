@@ -302,6 +302,7 @@ def test_each_created_table_matches_the_live_declaration(
                     "Text": "text",
                     "DateTime": "timestamp with time zone",
                     "JSONB": "jsonb",
+                    "Integer": "integer",
                 }[column.type.__class__.__name__],
                 "NO" if not column.nullable else "YES",
             )

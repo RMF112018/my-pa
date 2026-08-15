@@ -208,6 +208,22 @@ QUARANTINED: Final = {
         "below. The write stamps the authenticated Principal and recalls by "
         "that same partition; there is no caller-supplied owner field."
     ),
+    "infrastructure/persistence/task_management.py": (
+        "scopes `tasks` and `task_history` by hand-written `principal_id` "
+        "comparisons, registered in HAND_WRITTEN_COMPARISONS below, exactly the "
+        "shape `situation_repository.py` is quarantined for above. WP-TM-02 "
+        "wires this module into `application.tasks.TaskManagementService`, its "
+        "own transaction boundary, not into `invoke` or `SqlAlchemyUnitOfWork`; "
+        "composing it through `principal_scope` is wiring work for the package "
+        "that joins it to the shared dispatcher, not this one's."
+    ),
+    "infrastructure/persistence/commitment_management.py": (
+        "scopes `commitments_v2` and `commitment_history` by hand-written "
+        "`principal_id` comparisons, the same shape `task_management.py` is "
+        "quarantined for above. WP-TM-05 wires this into "
+        "`application.commitments.CommitmentManagementService`."
+    ),
+    ),
 }
 
 #: The guarded modules whose *statements* are checked one by one, rather than
@@ -386,6 +402,23 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("tasks", "principal_id"),
         ("tasks", "principal_id"),
         ("traces", "principal_id"),
+    ),
+    "infrastructure/persistence/task_management.py": (
+        ("task_history", "principal_id"),
+        ("task_history", "principal_id"),
+        ("tasks", "principal_id"),
+        ("tasks", "principal_id"),
+        ("tasks", "principal_id"),
+        ("tasks", "principal_id"),
+        ("tasks", "principal_id"),
+    ),
+    "infrastructure/persistence/commitment_management.py": (
+        ("commitment_history", "principal_id"),
+        ("commitment_history", "principal_id"),
+        ("commitments", "principal_id"),
+        ("commitments", "principal_id"),
+        ("commitments", "principal_id"),
+        ("commitments", "principal_id"),
     ),
 }
 

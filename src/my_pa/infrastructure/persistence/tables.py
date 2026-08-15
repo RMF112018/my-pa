@@ -184,6 +184,15 @@ from my_pa.domain.source.enrollment import (
 )
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind
+from my_pa.domain.task.history import (
+    MAX_CLIENT_CONTEXT_CHARACTERS,
+    TaskMutationAction,
+    TaskMutationActor,
+    TaskMutationOutcome,
+)
+from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.recurrence import RecurrenceFrequency
+from my_pa.domain.task.role import TaskRole
 
 SCHEMA: Final = "knowledge"
 NATIVE_BASELINE_TERMINAL_CURSOR: Final = "__my_pa_native_baseline_complete__"
@@ -3809,6 +3818,10 @@ commitments = Table(
     Column("accepted_by_review_decision_id", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    #: WP-TM-05: the optimistic-concurrency counter `commitment_history` reads
+    #: before and after every attempted mutation, the same shape `tasks.version`
+    #: already carries for the task-management plane.
+    Column("version", Integer, nullable=False, server_default=text("1")),
     _is_identifier("commitment_id", IdKind.COMMITMENT),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("counterparty_person_id", IdKind.PERSON),
@@ -3839,6 +3852,7 @@ commitments = Table(
         "OR accepted_by_review_decision_id ~ '^rdec_[A-Za-z0-9]{8,64}$'",
         name="a_commitment_review_decision_is_an_opaque_identifier",
     ),
+    CheckConstraint("version >= 1", name="a_commitment_version_is_positive"),
     Index("commitments_by_principal", "principal_id"),
     Index("commitments_by_principal_state", "principal_id", "state"),
     Index("commitments_by_principal_evidence_state", "principal_id", "evidence_state"),
@@ -3904,6 +3918,30 @@ decisions = Table(
 #: is the whole difference from `commitments` and is structural: there is no
 #: field a counterparty could be written into, so a task cannot quietly become a
 #: social obligation nobody was told about.
+#:
+#: WP-TM-01 extends this table rather than replacing it: every column above
+#: this note is `8f2b6c4d1a37`'s, unchanged, and every column below it is
+#: additive. `state`/`closed_at` remain exactly what `continuity_lifecycle_events`
+#: and the existing Pulse/`situation_repository` callers read and write; nothing
+#: here repoints them.
+#:
+#: **`lifecycle_state` is the finer vocabulary and `state` is the legacy one,
+#: and the CHECK `a_task_lifecycle_state_matches_its_legacy_state` is the
+#: biconditional that keeps them from drifting**: `lifecycle_state` is terminal
+#: (`completed`/`cancelled`) exactly when `state = 'closed'`. A writer that
+#: advances one without the other is refused at the server, not merely by
+#: convention.
+#:
+#: `priority` is nullable and Principal-assigned; nothing in this schema derives
+#: it from a ranking and nothing may write it from one.
+#: `scheduled_at`/`deferred_until`/`archived_at` are orthogonal to
+#: `lifecycle_state` — each is a fact recorded beside the lifecycle, not a
+#: transition of it, so none of the three carries a CHECK relating it back to
+#: `lifecycle_state`. `version` is the optimistic-concurrency counter
+#: `task_history` reads before and after every attempted mutation.
+#: `recurrence_id` is nullable and names the series a generated occurrence
+#: belongs to, if any; a Task with no `recurrence_id` is simply not part of a
+#: series.
 tasks = Table(
     "tasks",
     METADATA,
@@ -3928,6 +3966,20 @@ tasks = Table(
     ),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("lifecycle_state", Text, nullable=False, server_default=text("'open'")),
+    Column("priority", Text),
+    Column("scheduled_at", DateTime(timezone=True)),
+    Column("deferred_until", DateTime(timezone=True)),
+    Column("archived_at", DateTime(timezone=True)),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("recurrence_id", Text, ForeignKey(f"{SCHEMA}.task_recurrences.recurrence_id")),
+    #: WP-TM-05: the `Commitment` this Task is linked to, if any, and the role
+    #: it serves. Neither column turns this table into a link table between
+    #: two canonical planes — a Task still names at most one Commitment, never
+    #: the reverse, and "Waiting On" stays a derived, in-memory-assembled read
+    #: over both tables rather than a third one.
+    Column("commitment_id", Text, ForeignKey(f"{SCHEMA}.commitments.commitment_id")),
+    Column("role", Text),
     _is_identifier("task_id", IdKind.TASK),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("state", TaskState, name="a_task_state_is_known"),
@@ -3965,9 +4017,147 @@ tasks = Table(
         "OR accepted_by_review_decision_id ~ '^rdec_[A-Za-z0-9]{8,64}$'",
         name="a_task_review_decision_is_an_opaque_identifier",
     ),
+    _one_of("lifecycle_state", TaskLifecycleState, name="a_task_lifecycle_state_is_known"),
+    CheckConstraint(
+        "(lifecycle_state IN ('completed', 'cancelled')) = (state = 'closed')",
+        name="a_task_lifecycle_state_matches_its_legacy_state",
+    ),
+    CheckConstraint(
+        f"priority IS NULL OR priority IN ({_literals(TaskPriority)})",
+        name="a_task_priority_is_known",
+    ),
+    CheckConstraint("version >= 1", name="a_task_version_is_positive"),
+    CheckConstraint(
+        "recurrence_id IS NULL OR recurrence_id ~ '^trec_[A-Za-z0-9]{8,64}$'",
+        name="a_task_recurrence_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "commitment_id IS NULL OR commitment_id ~ '^cmt_[A-Za-z0-9]{8,64}$'",
+        name="a_task_commitment_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        f"role IS NULL OR role IN ({_literals(TaskRole)})",
+        name="a_task_role_is_known",
+    ),
     Index("tasks_by_principal", "principal_id"),
     Index("tasks_by_principal_state", "principal_id", "state"),
     Index("tasks_by_principal_evidence_state", "principal_id", "evidence_state"),
+    Index("tasks_by_principal_lifecycle_state", "principal_id", "lifecycle_state"),
+    Index("tasks_by_recurrence", "recurrence_id"),
+    Index("tasks_by_commitment", "commitment_id"),
+)
+
+#: `task_recurrences`: a durable recurring-series definition, independent of any
+#: one occurrence `Task`. WP-TM-01. One row per series; `tasks.recurrence_id`
+#: names the series a generated occurrence belongs to.
+#:
+#: **`weekdays` is a JSON array of `0`-`6` (Monday-first), not a bitmask or a
+#: comma-joined string.** `pulse_items.basis_refs` already establishes JSONB as
+#: this schema's shape for "an array PostgreSQL should validate the shape of",
+#: and `a_task_recurrence_weekdays_is_a_json_array_of_small_ints` restates the
+#: same rule this table needs a second time.
+#:
+#: **`next_occurrence_at` is the one actionable occurrence the series holds at a
+#: time, computed and stored rather than derived on read.** It is `NULL` exactly
+#: when the series is cancelled or has none left to generate; nothing in this
+#: table enumerates a calendar of future occurrences, which is what "one at a
+#: time" means.
+task_recurrences = Table(
+    "task_recurrences",
+    METADATA,
+    Column("recurrence_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("frequency", Text, nullable=False),
+    Column("interval", Integer, nullable=False, server_default=text("1")),
+    Column("weekdays", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("timezone", Text, nullable=False),
+    Column("anchor_at", DateTime(timezone=True), nullable=False),
+    Column("next_occurrence_at", DateTime(timezone=True)),
+    Column("cancelled_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("recurrence_id", IdKind.TASK_RECURRENCE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("frequency", RecurrenceFrequency, name="a_task_recurrence_frequency_is_known"),
+    CheckConstraint("interval >= 1", name="a_task_recurrence_interval_is_positive"),
+    CheckConstraint(
+        "jsonb_typeof(weekdays) = 'array'",
+        name="a_task_recurrence_weekdays_is_a_json_array_of_small_ints",
+    ),
+    CheckConstraint("length(trim(timezone)) > 0", name="a_task_recurrence_timezone_is_not_blank"),
+    CheckConstraint(
+        "cancelled_at IS NULL OR next_occurrence_at IS NULL",
+        name="a_cancelled_task_recurrence_holds_no_next_occurrence",
+    ),
+    Index("task_recurrences_by_principal", "principal_id"),
+)
+
+#: `task_history`: one append-only mutation receipt per attempted `Task` write.
+#: WP-TM-01. Never the caller's raw request: `client_context` is a bounded
+#: client/tool label, never a request body or a natural-language instruction,
+#: on the same rule `AGENTS.md` section 5 states for every log in this codebase.
+#:
+#: **`idempotency_key` is nullable and, when present, unique per Principal.**
+#: `task_history_idempotency_key_is_unique_per_principal` is the partial unique
+#: index that makes replay detection possible without forcing every mutation to
+#: carry a key — the same shape `capture_submissions` uses, scoped the same way.
+#:
+#: **The version pairing is the receipt's whole point.** `after_version` exceeds
+#: `before_version` exactly when `outcome = 'applied'`, and is equal to it
+#: otherwise: a rejected or no-op mutation attempt is not permitted to claim a
+#: version it did not produce.
+task_history = Table(
+    "task_history",
+    METADATA,
+    Column("history_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("task_id", Text, ForeignKey(f"{SCHEMA}.tasks.task_id"), nullable=False),
+    Column("action", Text, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("before_version", Integer, nullable=False),
+    Column("after_version", Integer, nullable=False),
+    Column("idempotency_key", Text),
+    Column("client_context", Text),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("history_id", IdKind.TASK_HISTORY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("task_id", IdKind.TASK),
+    _one_of("action", TaskMutationAction, name="a_task_history_action_is_known"),
+    _one_of("actor", TaskMutationActor, name="a_task_history_actor_is_known"),
+    _one_of("outcome", TaskMutationOutcome, name="a_task_history_outcome_is_known"),
+    CheckConstraint("before_version >= 0", name="a_task_history_before_version_is_non_negative"),
+    CheckConstraint(
+        "(outcome = 'applied') = (after_version > before_version)",
+        name="an_applied_task_mutation_advances_its_version",
+    ),
+    CheckConstraint(
+        "outcome = 'applied' OR after_version = before_version",
+        name="an_unapplied_task_mutation_records_no_version_change",
+    ),
+    #: Restates `IDEMPOTENCY_KEY_PATTERN`'s shape rather than importing the
+    #: compiled pattern object into a CHECK expression: opaque and bounded,
+    #: 8-128 characters, no separator a request body could smuggle meaning
+    #: through.
+    CheckConstraint(
+        "idempotency_key IS NULL OR idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_task_history_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        f"client_context IS NULL "
+        f"OR length(trim(client_context)) BETWEEN 1 AND {MAX_CLIENT_CONTEXT_CHARACTERS}",
+        name="a_task_history_client_context_is_bounded",
+    ),
+    Index("task_history_by_principal", "principal_id"),
+    Index("task_history_by_principal_task", "principal_id", "task_id"),
+    Index(
+        "task_history_idempotency_key_is_unique_per_principal",
+        "principal_id",
+        "idempotency_key",
+        unique=True,
+        postgresql_where=text("idempotency_key IS NOT NULL"),
+    ),
 )
 
 #: Replay gate for user-directed continuity writes. Unique per Principal and
@@ -3987,6 +4177,67 @@ continuity_authoring_submissions = Table(
     CheckConstraint("length(trim(idempotency_key)) > 0", name="an_authoring_key_is_not_blank"),
     CheckConstraint("length(trim(payload_digest)) > 0", name="an_authoring_digest_is_not_blank"),
     CheckConstraint("length(trim(object_id)) > 0", name="an_authoring_object_is_not_blank"),
+
+
+#: `commitment_history`: one append-only mutation receipt per Commitment write
+#: (WP-TM-05), the identical shape `task_history` establishes above for the
+#: Task plane. See `domain.task.commitment_history` for the field-by-field
+#: rationale, which restates `domain.task.history`'s own unchanged.
+commitment_history = Table(
+    "commitment_history",
+    METADATA,
+    Column("history_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("commitment_id", Text, ForeignKey(f"{SCHEMA}.commitments.commitment_id"), nullable=False),
+    Column("action", Text, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("before_version", Integer, nullable=False),
+    Column("after_version", Integer, nullable=False),
+    Column("idempotency_key", Text),
+    Column("client_context", Text),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("history_id", IdKind.COMMITMENT_HISTORY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("commitment_id", IdKind.COMMITMENT),
+    _one_of(
+        "action",
+        frozenset({"create", "close"}),
+        name="a_commitment_history_action_is_known",
+    ),
+    _one_of("actor", TaskMutationActor, name="a_commitment_history_actor_is_known"),
+    _one_of("outcome", TaskMutationOutcome, name="a_commitment_history_outcome_is_known"),
+    CheckConstraint(
+        "before_version >= 0", name="a_commitment_history_before_version_is_non_negative"
+    ),
+    CheckConstraint(
+        "(outcome = 'applied') = (after_version > before_version)",
+        name="an_applied_commitment_mutation_advances_its_version",
+    ),
+    CheckConstraint(
+        "outcome = 'applied' OR after_version = before_version",
+        name="an_unapplied_commitment_mutation_records_no_version_change",
+    ),
+    CheckConstraint(
+        "idempotency_key IS NULL OR idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_commitment_history_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        f"client_context IS NULL "
+        f"OR length(trim(client_context)) BETWEEN 1 AND {MAX_CLIENT_CONTEXT_CHARACTERS}",
+        name="a_commitment_history_client_context_is_bounded",
+    ),
+    Index("commitment_history_by_principal", "principal_id"),
+    Index("commitment_history_by_principal_commitment", "principal_id", "commitment_id"),
+    Index(
+        "commitment_history_idempotency_key_is_unique_per_principal",
+        "principal_id",
+        "idempotency_key",
+        unique=True,
+        postgresql_where=text("idempotency_key IS NOT NULL"),
+    ),
+
 )
 
 #: `continuity_lifecycle_events`: one append-only row per transition, for all

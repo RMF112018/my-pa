@@ -190,6 +190,52 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.DOCUMENTS_LIST,
         Capability.DOCUMENTS_ARCHIVE,
         Capability.DOCUMENTS_RESTORE,
+        # The task plane (WP-TM-03) names a Principal, not a source. A task is
+        # opened by a Principal directly — through the assistant surface or an
+        # accepted review decision — and never through a configured source's
+        # ingest path, so its rows carry no `source_id` and no `enrollment_id`
+        # for a scope to be compared against, exactly as a managed document's
+        # do not. Exact Principal scoping is enforced the same way
+        # `knowledge.coverage` enforces it: the repository filters by
+        # `principal_id` on every read, which is not a caller-stated scope at
+        # all, so a request that named one would be naming a grant this plane
+        # cannot hold.
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
+        # The task plane's five write capabilities (WP-TM-04) belong here for
+        # the identical reason its four reads do, immediately above: a task's
+        # rows carry no `source_id` and no `enrollment_id` for a scope to be
+        # compared against, whether the request reads or writes them. This
+        # entry corrects a gap against this module's own stated intent — the
+        # comment above the four reads already says "all nine `tasks.*`
+        # capabilities (four reads and five writes)" are scopeless, but only
+        # the four reads were actually admitted here, which denied every
+        # `tasks.create`/`update`/`transition`/`bulk_preview`/`bulk_confirm`
+        # request with `scope_not_authorized` regardless of purpose or
+        # authority. WP-TM-05's own representative scenario test is what
+        # surfaced it, by being the first test in this build to invoke task
+        # mutation through `ApplicationService.invoke`'s full authorize path
+        # rather than only through `TaskManagementService` directly.
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_PREVIEW,
+        Capability.TASKS_BULK_CONFIRM,
+        # The Commitment plane (WP-TM-05) names a Principal, not a source, for
+        # the identical reason the task plane does: a Commitment is opened
+        # directly by a Principal or accepted through an accepted review
+        # decision, never through a configured source's ingest path, so its
+        # rows carry no `source_id` and no `enrollment_id` for a scope to be
+        # compared against. `commitments.waiting_on` is scopeless for the same
+        # reason: it is an assembled read over the same two scopeless planes,
+        # naming no source of its own.
+        Capability.COMMITMENTS_READ,
+        Capability.COMMITMENTS_LIST,
+        Capability.COMMITMENTS_WAITING_ON,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_CLOSE,
     }
 )
 

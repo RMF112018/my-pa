@@ -226,6 +226,31 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.DOCUMENTS_RESTORE, Purpose.DOCUMENT_AUTHORING),
         (Capability.DOCUMENTS_READ, Purpose.DOCUMENT_READ),
         (Capability.DOCUMENTS_LIST, Purpose.DOCUMENT_READ),
+        # WP-TM-03's task-read plane. All four capabilities share the single
+        # `task_read` purpose, exactly as the capture-plane reads share
+        # `capture_review` and the knowledge-plane reads share `knowledge_read`.
+        (Capability.TASKS_READ, Purpose.TASK_READ),
+        (Capability.TASKS_LIST, Purpose.TASK_READ),
+        (Capability.TASKS_SEARCH, Purpose.TASK_READ),
+        (Capability.TASKS_HISTORY, Purpose.TASK_READ),
+        # WP-TM-04's task-write plane. All five capabilities share the single
+        # `task_authoring` purpose, exactly as the managed-document writes share
+        # `document_authoring` and the capture writes share `capture_authoring`.
+        # A purpose wide enough to cover writing and reading is a purpose that
+        # grants both, so the write purpose is separate from the read purpose.
+        (Capability.TASKS_CREATE, Purpose.TASK_AUTHORING),
+        (Capability.TASKS_UPDATE, Purpose.TASK_AUTHORING),
+        (Capability.TASKS_TRANSITION, Purpose.TASK_AUTHORING),
+        (Capability.TASKS_BULK_PREVIEW, Purpose.TASK_AUTHORING),
+        (Capability.TASKS_BULK_CONFIRM, Purpose.TASK_AUTHORING),
+        # WP-TM-05's commitment plane. Three reads share `commitment_read`,
+        # two writes share `commitment_authoring`, exactly paralleling the
+        # task plane's read/authoring split.
+        (Capability.COMMITMENTS_READ, Purpose.COMMITMENT_READ),
+        (Capability.COMMITMENTS_LIST, Purpose.COMMITMENT_READ),
+        (Capability.COMMITMENTS_WAITING_ON, Purpose.COMMITMENT_READ),
+        (Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING),
+        (Capability.COMMITMENTS_CLOSE, Purpose.COMMITMENT_AUTHORING),
     }
 )
 
@@ -249,8 +274,19 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # empty the table below. The three numbers are written out rather than
     # derived from each other: the arithmetic is what makes the second a check on
     # the enums, and the literals are what make it a check on the arithmetic.
-    assert len(PERMITTED_PAIRS) == 31
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 31 == 346
+    # WP-TM-03 added 4 capabilities (tasks.read/list/search/history) and 1
+    # purpose (task_read), all four capabilities paired with the one purpose,
+    # so PERMITTED_PAIRS grew by 4 and MISMATCHED_PAIRS by (30*13 - 28*12) - 4 = 78.
+    # WP-TM-04 added 5 capabilities (tasks.create/update/transition/bulk_preview/bulk_confirm)
+    # and 1 purpose (task_authoring), all five capabilities paired with the one purpose,
+    # so PERMITTED_PAIRS grew by 5 and MISMATCHED_PAIRS by (35*14 - 32*13) - 5 = 99.
+    # WP-TM-05 added 5 capabilities (commitments.read/list/waiting_on/create/close)
+    # and 2 purposes (commitment_read, commitment_authoring); 3 reads paired with
+    # commitment_read and 2 writes paired with commitment_authoring = 5 new permitted
+    # pairs, so PERMITTED_PAIRS grew by 5 and MISMATCHED_PAIRS by
+    # (40*16 - 35*14) - 5 = 145.
+    assert len(PERMITTED_PAIRS) == 42
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 42 == 598
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

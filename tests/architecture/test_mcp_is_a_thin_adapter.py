@@ -278,7 +278,11 @@ NETWORK_MODULES: Final[frozenset[str]] = frozenset(
 #: spelled with — removing it to silence this one entry would blind the scan to
 #: the two names that would actually matter.
 EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
-    {("sources.enroll", "root_object_id")}
+    {
+        ("sources.enroll", "root_object_id"),
+        ("commitments.list", "direction"),
+        ("commitments.create", "direction"),
+    }
 )
 
 
@@ -571,7 +575,7 @@ def test_the_location_scan_would_catch_one() -> None:
     # The exemption is exactly one entry, it names a tool that exists, and the
     # property it names is really published — so it cannot rot into a permission
     # for a property that has since changed meaning or disappeared.
-    assert len(EXEMPT_PROPERTIES) == 1
+    assert len(EXEMPT_PROPERTIES) == 3
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

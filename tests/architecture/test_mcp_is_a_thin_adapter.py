@@ -84,6 +84,8 @@ MODULES: Final[frozenset[str]] = frozenset({"__init__.py", "remote.py", "server.
 #: * `adapters.normalization` — the one shared `(metadata, command)` builder all
 #:   three transports call. Reaching it is the *point*; a transport that did not
 #:   would be building its own request pair.
+#: * `adapters.remote_request` — remote MCP envelope composition. It stamps
+#:   server-owned metadata and refuses caller copies; it does not authorize.
 #: * `adapters.mcp.tools` — this package's own module.
 #: * `application.commands` — the command *types*, read to derive schemas. Types,
 #:   not behaviour: `tools.py` never constructs one.
@@ -106,12 +108,14 @@ ADMISSIBLE_IMPORTS: Final[frozenset[str]] = frozenset(
         "my_pa.adapters.mcp.remote",
         "my_pa.adapters.mcp.tools",
         "my_pa.adapters.normalization",
+        "my_pa.adapters.remote_request",
         "my_pa.application.commands",
         "my_pa.application.errors",
         "my_pa.application.service",
         "my_pa.contracts.v1.envelope",
         "my_pa.contracts.v1.errors",
         "my_pa.domain.common.identifiers",
+        "my_pa.domain.common.time",
         "my_pa.domain.identity.operation",
         "my_pa.domain.identity.principal",
         "my_pa.domain.identity.purpose",

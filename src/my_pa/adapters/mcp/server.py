@@ -8,6 +8,10 @@ arguments)` with nothing in between, which is why `SPEC-AC-001` is a structural
 claim in this repository rather than a comparison of three pipelines: all three
 transports call one function, and the pair it builds is the same pair.
 
+Remote MCP is the same path after one extra shaping step: the adapter refuses
+caller-owned copies of server-owned envelope fields and then composes those
+fields from authenticated context. `normalize` still builds the pair.
+
 **The official SDK, stdio only** (`D-26`, `D-30`). `initialize`, `tools/list`,
 `tools/call`, the JSON-RPC framing, and the protocol-version negotiation are the
 SDK's, because they are conformance to a specification this repository does not
@@ -78,6 +82,7 @@ import asyncio
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from mcp.server.context import ServerRequestContext
@@ -95,6 +100,7 @@ from mcp.types import PaginatedRequestParams as ListToolsParams
 from my_pa import __version__
 from my_pa.adapters.mcp.tools import TOOLS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
+from my_pa.adapters.remote_request import compose_remote_arguments, remote_tool_schema
 from my_pa.application.errors import (
     ApplicationError,
     InternalError,
@@ -106,6 +112,7 @@ from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.errors import ProblemDetail
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.common.time import utc_now
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
@@ -179,6 +186,7 @@ def _answer(
     arguments: Mapping[str, Any] | None,
     transport: CaptureTransport = CaptureTransport.LOCAL,
     allowed_capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None,
+    clock: Callable[[], datetime] = utc_now,
 ) -> tuple[str, bool]:
     """One tool call, executed synchronously: the text to return and whether it failed.
 
@@ -195,9 +203,18 @@ def _answer(
     """
     request_arguments = arguments
     if transport is CaptureTransport.REMOTE_CLIENT:
-        if arguments is not None and "principal_id" in arguments:
-            return _problem(InvalidRequestError()).to_canonical_json(), True
-        request_arguments = {**(arguments or {}), "principal_id": principal.principal_id}
+        try:
+            request_arguments = compose_remote_arguments(
+                capability_name=name,
+                arguments=arguments or {},
+                principal=principal,
+                grants=allowed_capability_purposes,
+                clock=clock,
+            )
+        except InvalidRequestError as refusal:
+            return _problem(refusal).to_canonical_json(), True
+        except UnsupportedError as refusal:
+            return _problem(refusal).to_canonical_json(), True
     try:
         metadata, command = normalize(name, _document(request_arguments))
     except ApplicationError as refusal:
@@ -237,12 +254,8 @@ def published_tools(service: ApplicationService) -> tuple[Tool, ...]:
 
 
 def _remote_tool(tool: Tool) -> Tool:
-    """A canonical schema view with server-owned Principal metadata removed."""
-    schema = dict(tool.input_schema)
-    properties = dict(schema.get("properties", {}))
-    properties.pop("principal_id", None)
-    schema["properties"] = properties
-    schema["required"] = [name for name in schema.get("required", []) if name != "principal_id"]
+    """A canonical schema view with server-owned envelope fields removed."""
+    schema = remote_tool_schema(tool.input_schema)
     return tool.model_copy(update={"inputSchema": schema, "input_schema": schema})
 
 
@@ -255,6 +268,7 @@ def create_mcp_server(
     max_concurrent_calls: int | None = None,
     call_timeout_seconds: float | None = None,
     max_result_bytes: int | None = None,
+    clock: Callable[[], datetime] = utc_now,
 ) -> Server[object]:
     """The MCP server serving `service` as the one local `principal`.
 
@@ -353,6 +367,7 @@ def create_mcp_server(
             params.arguments,
             access.transport,
             access.allowed_capability_purposes,
+            clock,
         )
         release_here = True
         try:

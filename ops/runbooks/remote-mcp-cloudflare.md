@@ -174,7 +174,21 @@ NAS, `/healthz` may return only generic liveness, `/readyz` must return the
 catch-all 404, and `/mcp` without a valid bearer token must fail closed. Configure
 the MCP client for Streamable HTTP at `https://<stable-hostname>/mcp` and its
 OAuth bearer flow; never put a bearer token in the URL. Validate `initialize`,
-`tools/list`, then the read-only `capabilities.get` before broader reads.
+`tools/list`, then a domain-only `capabilities.get` before broader reads.
+
+Remote MCP clients send domain/tool arguments only. The origin establishes
+authenticated Principal, contract version, request identity, request time,
+authorization Purpose, and an empty declared scope at the remote MCP boundary.
+Do not coach a generic MCP client to invent `purpose`, `request_id`,
+`requested_at`, `principal_id`, `contract_version`, or `scope`. Caller-supplied
+copies of those fields are refused.
+
+When a capability permits more than one Purpose and the client holds more than
+one of them (or a capability-wide grant), the origin stamps a canonical remote
+Purpose: `capabilities.get` uses `status_observation`, and `sources.fetch` uses
+`source_inspection`. A client granted only the other permitted Purpose still
+receives that one. HTTP, stdio MCP, and the operator CLI keep the full
+canonical envelope.
 
 The deterministic reference-client profile validated on 2026-08-13 is the
 official Python `mcp==2.0.0` `streamable_http_client` plus `ClientSession`. It
@@ -184,7 +198,10 @@ body/result/concurrency bounds, origin authentication refusals, remote write
 enablement/disablement, idempotent replay, dependency outages, and reconnect to
 a newly composed server. Proprietary ChatLLM/Abacus configuration remains an
 operator acceptance step because no account or client build was available here;
-record its exact version and OAuth profile before production routing.
+record its exact version and OAuth profile before production routing. A later
+adapter correction made remote `tools/call` accept domain arguments without
+internal envelope fields; reconnect ChatLLM after deploying that image so it
+reloads `tools/list`.
 
 Start only the origin for private diagnostics with `--profile remote-mcp up -d
 my-pa-mcp-remote`; this does not start the tunnel. The origin-only profile may

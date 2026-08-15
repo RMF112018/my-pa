@@ -70,6 +70,7 @@ from my_pa.domain.situation.continuity import (
     Commitment,
     CommitmentDirection,
     CommitmentState,
+    ContinuityAcceptanceKind,
     ContinuityEvidenceState,
     ContinuityLifecycleEvent,
     ContinuityObjectKind,
@@ -1188,6 +1189,11 @@ class SqlContinuityRepository(ContinuityRepository):
                 evidence_state=ContinuityEvidenceState.ACCEPTED.value,
                 accepted_by_review_decision_id=review_decision_id,
                 updated_at=utc_now(),
+                **(
+                    {"acceptance_kind": ContinuityAcceptanceKind.REVIEW.value}
+                    if "acceptance_kind" in table.c
+                    else {}
+                ),
             )
             .returning(id_column)
         ).one_or_none()
@@ -1509,6 +1515,11 @@ class SqlContinuityRepository(ContinuityRepository):
             closed_at=mapping["closed_at"],
             closure_evidence_ref=mapping["closure_evidence_ref"],
             accepted_by_review_decision_id=mapping["accepted_by_review_decision_id"],
+            acceptance_kind=(
+                ContinuityAcceptanceKind(mapping["acceptance_kind"])
+                if mapping.get("acceptance_kind") is not None
+                else None
+            ),
         )
 
     @staticmethod

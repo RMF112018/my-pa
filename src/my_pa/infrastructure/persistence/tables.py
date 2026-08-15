@@ -163,6 +163,7 @@ from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     CommitmentDirection,
     CommitmentState,
+    ContinuityAcceptanceKind,
     ContinuityEvidenceState,
     ContinuityObjectKind,
     DecisionState,
@@ -3919,12 +3920,19 @@ tasks = Table(
     Column("closed_at", DateTime(timezone=True)),
     Column("closure_evidence_ref", Text),
     Column("accepted_by_review_decision_id", Text),
+    Column(
+        "acceptance_kind",
+        Text,
+        nullable=False,
+        server_default=text("'none'"),
+    ),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     _is_identifier("task_id", IdKind.TASK),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("state", TaskState, name="a_task_state_is_known"),
     _one_of("evidence_state", ContinuityEvidenceState, name="a_task_evidence_state_is_known"),
+    _one_of("acceptance_kind", ContinuityAcceptanceKind, name="a_task_acceptance_kind_is_known"),
     CheckConstraint("length(trim(title)) > 0", name="a_task_title_is_not_blank"),
     CheckConstraint(
         "length(trim(origin_evidence_ref)) > 0", name="a_task_cites_its_origin_evidence"
@@ -3937,12 +3945,20 @@ tasks = Table(
         "state <> 'closed' OR length(trim(coalesce(closure_evidence_ref, ''))) > 0",
         name="a_closed_task_carries_closure_evidence",
     ),
-    #: **Accepted continuity cannot exist without the review decision that made
-    #: it accepted.** A biconditional rather than an implication: a `proposed`
-    #: row holding a review decision would be a half-finished promotion.
+    #: Review-accepted tasks still name the decision. Direct Principal
+    #: authoring is accepted without one, because the write is the instruction.
     CheckConstraint(
-        "(evidence_state = 'accepted') = (accepted_by_review_decision_id IS NOT NULL)",
-        name="an_accepted_task_records_its_review_decision",
+        "("
+        "evidence_state = 'proposed' AND acceptance_kind = 'none' "
+        "AND accepted_by_review_decision_id IS NULL"
+        ") OR ("
+        "evidence_state = 'accepted' AND acceptance_kind = 'review' "
+        "AND accepted_by_review_decision_id IS NOT NULL"
+        ") OR ("
+        "evidence_state = 'accepted' AND acceptance_kind = 'direct_principal' "
+        "AND accepted_by_review_decision_id IS NULL"
+        ")",
+        name="an_accepted_task_records_how_it_was_accepted",
     ),
     CheckConstraint(
         "accepted_by_review_decision_id IS NULL "
@@ -3952,6 +3968,25 @@ tasks = Table(
     Index("tasks_by_principal", "principal_id"),
     Index("tasks_by_principal_state", "principal_id", "state"),
     Index("tasks_by_principal_evidence_state", "principal_id", "evidence_state"),
+)
+
+#: Replay gate for user-directed continuity writes. Unique per Principal and
+#: key, so a retry returns the same object and a reused key with different
+#: content is a conflict rather than a second write.
+continuity_authoring_submissions = Table(
+    "continuity_authoring_submissions",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("payload_digest", Text, nullable=False),
+    Column("object_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "idempotency_key", name="one_authoring_key_per_principal"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("length(trim(idempotency_key)) > 0", name="an_authoring_key_is_not_blank"),
+    CheckConstraint("length(trim(payload_digest)) > 0", name="an_authoring_digest_is_not_blank"),
+    CheckConstraint("length(trim(object_id)) > 0", name="an_authoring_object_is_not_blank"),
 )
 
 #: `continuity_lifecycle_events`: one append-only row per transition, for all

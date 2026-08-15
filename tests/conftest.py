@@ -49,6 +49,8 @@ from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import (
     Acceptance,
     AuditSink,
+    AuthoringConflictError,
+    AuthoringReceipt,
     CaptureAdmission,
     CaptureAdmissionRequest,
     CaptureRepository,
@@ -56,6 +58,7 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
     CaptureSummary,
+    ContinuityAuthoringRepository,
     EnrollmentRepository,
     KnowledgeRecord,
     KnowledgeRepository,
@@ -137,7 +140,9 @@ from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     Commitment,
+    ContinuityAcceptanceKind,
     ContinuityEvidenceState,
+    TaskState,
 )
 from my_pa.domain.situation.continuity import Decision as ContinuityDecision
 from my_pa.domain.situation.continuity import Task as ContinuityTask
@@ -312,6 +317,7 @@ class World:
     commitments: list[Commitment] = field(default_factory=list)
     continuity_tasks: list[ContinuityTask] = field(default_factory=list)
     continuity_decisions: list[ContinuityDecision] = field(default_factory=list)
+    authoring_keys: dict[tuple[str, str], AuthoringReceipt] = field(default_factory=dict)
     framed_obligations: list[FramedObligation] = field(default_factory=list)
     dismissed_pulse_ids: set[str] = field(default_factory=set)
     audit: list[AuditEvent] = field(default_factory=list)
@@ -1453,6 +1459,65 @@ class _Projects(ProjectRepository):
             self._world.project_situations.append(link)
 
 
+class _ContinuityAuthoring(ContinuityAuthoringRepository):
+    """Idempotent user-directed continuity writes over a `World`."""
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def recall(self, principal_id: str, idempotency_key: str) -> AuthoringReceipt | None:
+        return self._world.authoring_keys.get((principal_id, idempotency_key))
+
+    def record(
+        self,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        capability: str,
+        payload_digest: str,
+        object_id: str,
+    ) -> None:
+        prior = self.recall(principal_id, idempotency_key)
+        if prior is not None:
+            if prior.payload_digest != payload_digest or prior.capability != capability:
+                raise AuthoringConflictError
+            return
+        self._world.authoring_keys[(principal_id, idempotency_key)] = AuthoringReceipt(
+            capability=capability,
+            object_id=object_id,
+            payload_digest=payload_digest,
+        )
+
+    def author_task(
+        self,
+        *,
+        principal_id: str,
+        title: str,
+        origin_evidence_ref: str,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+        due_at: datetime | None = None,
+    ) -> ContinuityTask:
+        now = utc_now()
+        task = ContinuityTask(
+            task_id=issue_identifier(IdKind.TASK),
+            principal_id=principal_id,
+            title=title,
+            state=TaskState.OPEN,
+            evidence_state=ContinuityEvidenceState.ACCEPTED,
+            origin_evidence_ref=origin_evidence_ref,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            due_at=due_at,
+            project_id=project_id,
+            situation_id=situation_id,
+            acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
+        )
+        self._world.continuity_tasks.append(task)
+        return task
+
+
 class _Pulse(PulseRepository):
     """The Pulse over the `World`: stored items, and the real derivation.
 
@@ -1561,6 +1626,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def pulse(self) -> PulseRepository:
         return _Pulse(self._world)
+
+    @property
+    def continuity_authoring(self) -> ContinuityAuthoringRepository:
+        return _ContinuityAuthoring(self._world)
 
     @property
     def managed_documents(self) -> ManagedDocumentRepository:

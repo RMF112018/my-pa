@@ -234,6 +234,7 @@ def test_readme_derives_the_current_alembic_count_and_head() -> None:
         36: "Thirty-six",
         37: "Thirty-seven",
         38: "Thirty-eight",
+        39: "Thirty-nine",
     }
     count, head = _alembic_identity()
     assert count in words, "extend the readable README count vocabulary"
@@ -316,9 +317,9 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
     }
     for label, path in documents.items():
         text = path.read_text(encoding="utf-8")
-        assert "twenty-six" in text, f"{label} lost the current capability count"
-        assert "thirty-four" in text, f"{label} lost the current revision count"
-        assert "b4e8d2c7a613" in text, f"{label} lost the current Alembic head"
+        assert "twenty-nine" in text, f"{label} lost the current capability count"
+        assert "thirty-nine" in text, f"{label} lost the current revision count"
+        assert "7c2e9b4a1d80" in text, f"{label} lost the current Alembic head"
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:
@@ -369,7 +370,7 @@ def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
     assert routed <= documented, (
         f"web README omits routed capabilities {sorted(routed - documented)}"
     )
-    assert "twenty-six capability names" in lowered
+    assert "twenty-nine capability names" in lowered
     assert "worker_planes" in text and "capture" in text and "enrollment" in text
     assert "managed-document lifecycle" in lowered
 

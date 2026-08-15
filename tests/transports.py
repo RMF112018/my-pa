@@ -94,7 +94,7 @@ class Answer:
 
 
 class Transport(Protocol):
-    """One way of reaching the twenty-six capabilities."""
+    """One way of reaching the twenty-nine capabilities."""
 
     name: str
 

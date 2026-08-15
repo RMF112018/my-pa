@@ -113,6 +113,18 @@ class Capability(StrEnum):
     CONTINUITY_PULSE = "continuity.pulse"
     CONTINUITY_SITUATIONS = "continuity.situations"
     CONTINUITY_PROJECTS = "continuity.projects"
+    # User-directed continuity writes. Three rather than one, by `D-91`:
+    # `projects.create` writes a Project row, `situations.create` writes a
+    # Situation row, and `tasks.create` writes a Task row. One grant covering
+    # all three would let a request permitted to start a project also open a
+    # situation and accept a task. None is operator-only: each writes the
+    # acting Principal's own partition and grants nothing.
+    #
+    # `7c2e9b4a1d80` carries the forward `ALTER` that admits these three writes
+    # and `continuity_authoring`.
+    CONTINUITY_PROJECTS_CREATE = "continuity.projects.create"
+    CONTINUITY_SITUATIONS_CREATE = "continuity.situations.create"
+    CONTINUITY_TASKS_CREATE = "continuity.tasks.create"
     # The twentieth, and `2d9f4a7c1e58` carries the forward `ALTER` that admits
     # it — written before the member, for the reason `5e2c7b0a94f6` records: a
     # member with no `ALTER` leaves every test green, because every test builds
@@ -323,6 +335,9 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.CONTINUITY_PULSE: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CONTINUITY_SITUATIONS: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CONTINUITY_PROJECTS: frozenset({Purpose.CAPTURE_REVIEW}),
+        Capability.CONTINUITY_PROJECTS_CREATE: frozenset({Purpose.CONTINUITY_AUTHORING}),
+        Capability.CONTINUITY_SITUATIONS_CREATE: frozenset({Purpose.CONTINUITY_AUTHORING}),
+        Capability.CONTINUITY_TASKS_CREATE: frozenset({Purpose.CONTINUITY_AUTHORING}),
         # `STATUS_OBSERVATION`, reused, and the residual is stated rather than
         # smoothed over. `D-91`'s test asks whether the reuse widens the grant.
         # Honestly answered: partly. Corpus coverage is a status observation —

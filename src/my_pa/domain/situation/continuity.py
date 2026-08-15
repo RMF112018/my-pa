@@ -52,6 +52,7 @@ __all__ = [
     "Commitment",
     "CommitmentDirection",
     "CommitmentState",
+    "ContinuityAcceptanceKind",
     "ContinuityEvidenceState",
     "ContinuityLifecycleEvent",
     "ContinuityObjectKind",
@@ -67,13 +68,27 @@ class ContinuityEvidenceState(StrEnum):
     """Whether a continuity object is a proposal or established continuity.
 
     Two members and no third. `PROPOSED` is what a derivation or an import may
-    write; `ACCEPTED` is what a human review produced. Every continuity read
-    filters to `ACCEPTED`, so widening this vocabulary would widen what counts
-    as established fact — which is why it is closed here and in the schema.
+    write; `ACCEPTED` is established continuity. Every continuity read filters
+    to `ACCEPTED`, so widening this vocabulary would widen what counts as
+    established fact — which is why it is closed here and in the schema.
     """
 
     PROPOSED = "proposed"
     ACCEPTED = "accepted"
+
+
+class ContinuityAcceptanceKind(StrEnum):
+    """How an accepted continuity object became accepted.
+
+    `none` is the proposed state. `review` names a capture-review decision.
+    `direct_principal` is an explicit user-directed write: the Principal
+    instructed the create, which is not the same act as a model inferring a
+    commitment from a note.
+    """
+
+    NONE = "none"
+    REVIEW = "review"
+    DIRECT_PRINCIPAL = "direct_principal"
 
 
 class CommitmentState(StrEnum):
@@ -172,19 +187,39 @@ def _require_closure_pairing(state_is_closed: bool, closed_at: datetime | None, 
 
 
 def _require_acceptance_pairing(
-    evidence_state: ContinuityEvidenceState, review_decision_id: str | None, noun: str
+    evidence_state: ContinuityEvidenceState,
+    review_decision_id: str | None,
+    noun: str,
+    acceptance_kind: ContinuityAcceptanceKind | None = None,
 ) -> None:
-    """Accepted continuity names the review decision that accepted it, and only then.
+    """Accepted continuity names how it became accepted.
 
-    The domain half of `a_<noun>_accepted_records_its_review_decision`. It is a
-    biconditional rather than a one-way implication on purpose: a `proposed` row
-    carrying a review decision would be a promotion somebody started and did not
-    finish, and reading it as a proposal afterwards would be reading past a fact.
+    Review-accepted objects still name the review decision. Direct Principal
+    authoring names no review decision, because the write *is* the instruction.
+    A proposed row carrying either would be a promotion somebody started and
+    did not finish.
     """
-    if (evidence_state is ContinuityEvidenceState.ACCEPTED) is not (review_decision_id is not None):
-        raise ValueError(f"an accepted {noun} names the review decision that accepted it")
-    if review_decision_id is not None:
+    kind = acceptance_kind
+    if kind is None:
+        kind = (
+            ContinuityAcceptanceKind.REVIEW
+            if review_decision_id is not None
+            else ContinuityAcceptanceKind.NONE
+        )
+    if evidence_state is ContinuityEvidenceState.PROPOSED:
+        if kind is not ContinuityAcceptanceKind.NONE or review_decision_id is not None:
+            raise ValueError(f"a proposed {noun} names the review decision that accepted it")
+        return
+    if kind is ContinuityAcceptanceKind.REVIEW:
+        if review_decision_id is None:
+            raise ValueError(f"an accepted {noun} names the review decision that accepted it")
         validate_identifier(review_decision_id, IdKind.REVIEW_DECISION)
+        return
+    if kind is ContinuityAcceptanceKind.DIRECT_PRINCIPAL:
+        if review_decision_id is not None:
+            raise ValueError(f"a directly authored {noun} does not cite a review decision")
+        return
+    raise ValueError(f"an accepted {noun} names the review decision that accepted it")
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,6 +363,7 @@ class Task:
     closed_at: datetime | None = None
     closure_evidence_ref: str | None = None
     accepted_by_review_decision_id: str | None = None
+    acceptance_kind: ContinuityAcceptanceKind | None = None
 
     def __post_init__(self) -> None:
         _require_identifier(self.task_id, IdKind.TASK, "a task identifier")
@@ -339,7 +375,10 @@ class Task:
         if not isinstance(self.evidence_state, ContinuityEvidenceState):
             raise ValueError("a task names one evidence state")
         _require_acceptance_pairing(
-            self.evidence_state, self.accepted_by_review_decision_id, "task"
+            self.evidence_state,
+            self.accepted_by_review_decision_id,
+            "task",
+            self.acceptance_kind,
         )
         if not self.origin_evidence_ref.strip():
             raise ValueError("a task records the evidence it was read out of")

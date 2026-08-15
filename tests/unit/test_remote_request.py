@@ -11,6 +11,7 @@ from my_pa.adapters.mcp.remote import _WRITE_PURPOSES
 from my_pa.adapters.mcp.tools import input_schema_for
 from my_pa.adapters.remote_request import (
     CANONICAL_REMOTE_PURPOSES,
+    REMOTE_OWNED_PAYLOAD_FIELDS,
     SERVER_OWNED_REMOTE_FIELDS,
     compose_remote_arguments,
     remote_tool_schema,
@@ -157,3 +158,61 @@ def test_remote_schemas_exclude_server_owned_metadata() -> None:
         assert schema.get("additionalProperties") is False
         assert "Purpose" not in schema.get("$defs", {})
         assert "Scope" not in schema.get("$defs", {})
+
+
+def _remote_write_capabilities() -> tuple[Capability, ...]:
+    return tuple(
+        capability
+        for capability in Capability
+        if not is_operator_only(capability)
+        and bool(permitted_purposes(capability) & _WRITE_PURPOSES)
+    )
+
+
+def test_remote_write_schemas_are_domain_only() -> None:
+    commands = {member.capability: member for member in get_args(Command.__value__)}
+    for capability in _remote_write_capabilities():
+        schema = remote_tool_schema(input_schema_for(commands[capability]))
+        properties = schema["properties"]
+        assert SERVER_OWNED_REMOTE_FIELDS.isdisjoint(properties)
+        payload = properties.get("payload", {})
+        payload_properties = payload.get("properties", {})
+        assert REMOTE_OWNED_PAYLOAD_FIELDS.isdisjoint(payload_properties)
+        assert "idempotency_key" not in payload_properties
+        assert "principal_id" not in properties
+        assert "Purpose" not in schema.get("$defs", {})
+
+
+def test_compose_rejects_caller_owned_idempotency_key() -> None:
+    with pytest.raises(InvalidRequestError):
+        compose_remote_arguments(
+            capability_name=Capability.CONTINUITY_PROJECTS_CREATE.value,
+            arguments={"payload": {"name": "Home", "idempotency_key": "forged"}},
+            principal=PRINCIPAL,
+            grants=None,
+            clock=lambda: FROZEN,
+            issue_id=_issue,
+        )
+
+
+def test_compose_stamps_content_addressed_idempotency_key() -> None:
+    composed = compose_remote_arguments(
+        capability_name=Capability.CONTINUITY_PROJECTS_CREATE.value,
+        arguments={"payload": {"name": "Home Renovation"}},
+        principal=PRINCIPAL,
+        grants=frozenset({(Capability.CONTINUITY_PROJECTS_CREATE, Purpose.CONTINUITY_AUTHORING)}),
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    key = composed["payload"]["idempotency_key"]
+    assert key.startswith("idk_")
+    replay = compose_remote_arguments(
+        capability_name=Capability.CONTINUITY_PROJECTS_CREATE.value,
+        arguments={"payload": {"name": "Home Renovation"}},
+        principal=PRINCIPAL,
+        grants=frozenset({(Capability.CONTINUITY_PROJECTS_CREATE, Purpose.CONTINUITY_AUTHORING)}),
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert replay["payload"]["idempotency_key"] == key
+    assert composed["purpose"] == Purpose.CONTINUITY_AUTHORING.value

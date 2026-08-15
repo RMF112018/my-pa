@@ -1,4 +1,4 @@
-"""The ports the twenty-six capability use cases call, and nothing else.
+"""The ports the twenty-nine capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -110,6 +110,8 @@ from my_pa.domain.source.registry import ConfiguredSource
 __all__ = [
     "Acceptance",
     "AuditSink",
+    "AuthoringConflictError",
+    "AuthoringReceipt",
     "CaptureAdmission",
     "CaptureAdmissionRequest",
     "CaptureRepository",
@@ -117,6 +119,7 @@ __all__ = [
     "CaptureSearchOutcome",
     "CaptureSearchRequest",
     "CaptureSummary",
+    "ContinuityAuthoringRepository",
     "ContinuityReadRepository",
     "ContinuityRepository",
     "EnrollmentRepository",
@@ -908,6 +911,52 @@ class WorkerHealthRepository(ABC):
         """Return both worker planes without identifiers or queued content."""
 
 
+class AuthoringConflictError(Exception):
+    """The same idempotency key was reused with a different payload."""
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoringReceipt:
+    """What a prior user-directed continuity write produced for one key."""
+
+    capability: str
+    object_id: str
+    payload_digest: str
+
+
+class ContinuityAuthoringRepository(ABC):
+    """Idempotent user-directed Project, Situation, and Task writes."""
+
+    @abstractmethod
+    def recall(self, principal_id: str, idempotency_key: str) -> AuthoringReceipt | None:
+        """The prior receipt for this key, or None if the key is unused."""
+
+    @abstractmethod
+    def record(
+        self,
+        *,
+        principal_id: str,
+        idempotency_key: str,
+        capability: str,
+        payload_digest: str,
+        object_id: str,
+    ) -> None:
+        """Remember the object this key created. Raises AuthoringConflictError on clash."""
+
+    @abstractmethod
+    def author_task(
+        self,
+        *,
+        principal_id: str,
+        title: str,
+        origin_evidence_ref: str,
+        project_id: str | None = None,
+        situation_id: str | None = None,
+        due_at: datetime | None = None,
+    ) -> Task:
+        """Create one accepted Task from an explicit Principal instruction."""
+
+
 class UnitOfWork(ABC):
     """One transaction, and the repositories that run inside it.
 
@@ -1023,6 +1072,15 @@ class UnitOfWork(ABC):
         the canonical PostgreSQL composition overrides this property. A caller
         must treat the absence as an unavailable optional projection, never as
         an empty authoritative result.
+        """
+        raise NotImplementedError
+
+    @property
+    def continuity_authoring(self) -> ContinuityAuthoringRepository:
+        """User-directed continuity writes and their idempotency receipts.
+
+        Optional on older test doubles. Production and the FAST world implement
+        it; a caller that meets this default must treat authoring as unsupported.
         """
         raise NotImplementedError
 

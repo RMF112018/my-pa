@@ -12,6 +12,7 @@ misunderstanding into authority.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Mapping
 from datetime import datetime
@@ -29,6 +30,7 @@ from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
     "CANONICAL_REMOTE_PURPOSES",
+    "REMOTE_OWNED_PAYLOAD_FIELDS",
     "SERVER_OWNED_REMOTE_FIELDS",
     "compose_remote_arguments",
     "remote_tool_schema",
@@ -47,6 +49,24 @@ SERVER_OWNED_REMOTE_FIELDS: Final[frozenset[str]] = frozenset(
         "request_id",
         "requested_at",
         "scope",
+    }
+)
+
+#: Payload fields a remote MCP caller may not state. Replay safety is a server
+#: concern: a model inventing `idempotency_key` is the same class of defect as
+#: inventing `request_id`.
+REMOTE_OWNED_PAYLOAD_FIELDS: Final[frozenset[str]] = frozenset({"idempotency_key"})
+
+_IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.SOURCES_ENROLL,
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_SITUATIONS_CREATE,
+        Capability.CONTINUITY_TASKS_CREATE,
     }
 )
 
@@ -119,12 +139,29 @@ def compose_remote_arguments(
     """
     if SERVER_OWNED_REMOTE_FIELDS.intersection(arguments):
         raise InvalidRequestError()
+    payload = arguments.get("payload")
+    if isinstance(payload, Mapping) and REMOTE_OWNED_PAYLOAD_FIELDS.intersection(payload):
+        raise InvalidRequestError()
     try:
         capability = Capability(capability_name)
     except ValueError:
         raise InvalidRequestError() from None
     purpose = resolve_remote_purpose(capability, grants)
     composed = dict(arguments)
+    if capability in _IDEMPOTENT_REMOTE_CAPABILITIES:
+        domain = dict(payload) if isinstance(payload, Mapping) else {}
+        digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "capability": capability.value,
+                    "principal_id": principal.principal_id,
+                    "payload": domain,
+                },
+                sort_keys=True,
+                default=str,
+            ).encode()
+        ).hexdigest()
+        composed["payload"] = {**domain, "idempotency_key": f"idk_{digest[:32]}"}
     composed.update(
         {
             "contract_version": CONTRACT_VERSION,
@@ -150,6 +187,22 @@ def remote_tool_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
     view["required"] = [
         name for name in view.get("required", []) if name not in SERVER_OWNED_REMOTE_FIELDS
     ]
+    payload_schema = properties.get("payload")
+    if isinstance(payload_schema, dict):
+        payload_view = dict(payload_schema)
+        payload_properties = {
+            name: value
+            for name, value in dict(payload_view.get("properties", {})).items()
+            if name not in REMOTE_OWNED_PAYLOAD_FIELDS
+        }
+        payload_view["properties"] = payload_properties
+        payload_view["required"] = [
+            name
+            for name in payload_view.get("required", [])
+            if name not in REMOTE_OWNED_PAYLOAD_FIELDS
+        ]
+        properties["payload"] = payload_view
+        view["properties"] = properties
     definitions = view.get("$defs")
     if not definitions:
         return view

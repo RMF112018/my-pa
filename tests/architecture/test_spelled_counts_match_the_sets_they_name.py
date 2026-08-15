@@ -154,6 +154,8 @@ _ORDINAL_UNITS = (
     "twenty-seventh",
     "twenty-eighth",
     "twenty-ninth",
+    "thirtieth",
+    "thirty-first",
 )
 
 

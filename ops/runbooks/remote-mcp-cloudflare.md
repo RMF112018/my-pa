@@ -68,10 +68,12 @@ Emergency withdrawal is durable: run `control --no-remote-enabled
 Revoke an individual grant with `revoke-grant --grant-uuid ...`. Production
 grants should include a UTC `--expires-at` timestamp.
 For a purpose-bound grant, add `--purpose <canonical-purpose>`. Enabling a
-write-capable client requires all three independent inputs: register it with
-`--writes-enabled`, create only the required grants with `--write` and an exact
-`--purpose`, and run `control --remote-enabled --writes-enabled`. The process
-setting `MY_PA_REMOTE_WRITES_ENABLED` remains a fourth, default-off ceiling.
+write-capable client requires all independent inputs: the existing client must
+be marked write-enabled with `set-client-writes --oauth-client-id ...
+--writes-enabled` (do not re-register a live client just to flip that flag),
+create only the required grants with `--write` and an exact `--purpose`, and
+run `control --remote-enabled --writes-enabled`. The process setting
+`MY_PA_REMOTE_WRITES_ENABLED` remains a further, default-off ceiling.
 
 ## Prepare and validate
 
@@ -180,8 +182,11 @@ Remote MCP clients send domain/tool arguments only. The origin establishes
 authenticated Principal, contract version, request identity, request time,
 authorization Purpose, and an empty declared scope at the remote MCP boundary.
 Do not coach a generic MCP client to invent `purpose`, `request_id`,
-`requested_at`, `principal_id`, `contract_version`, or `scope`. Caller-supplied
-copies of those fields are refused.
+`requested_at`, `principal_id`, `contract_version`, `scope`, or
+`idempotency_key`. Caller-supplied copies of those fields are refused. The
+origin stamps a content-addressed idempotency key for remote writes so a model
+retry does not invent a protocol. HTTP, stdio MCP, and the operator CLI keep
+the caller-visible key on the canonical command.
 
 When a capability permits more than one Purpose and the client holds more than
 one of them (or a capability-wide grant), the origin stamps a canonical remote

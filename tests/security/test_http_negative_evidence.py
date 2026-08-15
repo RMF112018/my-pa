@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes twenty-six capability names and none of them mutates a source,
+  ends: the transport routes twenty-nine capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -258,6 +258,18 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.CONTINUITY_PULSE: {},
         Capability.CONTINUITY_SITUATIONS: {},
         Capability.CONTINUITY_PROJECTS: {},
+        Capability.CONTINUITY_PROJECTS_CREATE: {
+            "name": "Marked authoring project",
+            "idempotency_key": "wire-project-0001",
+        },
+        Capability.CONTINUITY_SITUATIONS_CREATE: {
+            "title": "Marked authoring situation",
+            "idempotency_key": "wire-situation-0001",
+        },
+        Capability.CONTINUITY_TASKS_CREATE: {
+            "title": "Marked authoring task",
+            "idempotency_key": "wire-task-0001",
+        },
         Capability.KNOWLEDGE_COVERAGE: {},
         Capability.REVIEW_DECIDE: {
             "review_case_id": review_case.review_case_id,
@@ -423,6 +435,9 @@ SCOPED_CAPABILITIES = [
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_SITUATIONS_CREATE,
+        Capability.CONTINUITY_TASKS_CREATE,
         Capability.KNOWLEDGE_COVERAGE,
         # The managed-document plane names a document, not a source: its rows
         # carry no `source_id` and no `enrollment_id`, so there is no scope for a
@@ -524,6 +539,13 @@ CAPTURE_CAPABILITIES = frozenset(c for c in Capability if c.value.startswith("ca
 #: exempt: they pass the name check on their own, so exempting them would widen
 #: the hole for nothing. A future `documents.delete` is still caught here.
 MANAGED_DOCUMENT_EXEMPTION = frozenset({Capability.DOCUMENTS_CREATE})
+CONTINUITY_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_SITUATIONS_CREATE,
+        Capability.CONTINUITY_TASKS_CREATE,
+    }
+)
 
 
 def test_the_transport_routes_no_mutating_capability() -> None:
@@ -556,7 +578,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
 
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over HTTP"
     assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
-    exempt = CAPTURE_CAPABILITIES | MANAGED_DOCUMENT_EXEMPTION
+    exempt = CAPTURE_CAPABILITIES | MANAGED_DOCUMENT_EXEMPTION | CONTINUITY_AUTHORING_EXEMPTION
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)
     for capability in checked:

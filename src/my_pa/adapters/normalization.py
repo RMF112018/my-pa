@@ -60,6 +60,9 @@ from my_pa.application.commands import (
     Command,
     CreateCapture,
     CreateManagedDocument,
+    CreateProject,
+    CreateSituation,
+    CreateTask,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -312,6 +315,25 @@ def _list_projects(payload: Mapping[str, Any]) -> Command:
     return ListProjects(**payload)
 
 
+def _create_project(payload: Mapping[str, Any]) -> Command:
+    return CreateProject(**payload)
+
+
+def _create_situation(payload: Mapping[str, Any]) -> Command:
+    return CreateSituation(**payload)
+
+
+def _create_task(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    supplied = converted.get("due_at")
+    if isinstance(supplied, str):
+        try:
+            converted["due_at"] = datetime.fromisoformat(supplied)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.DUE_AT) from None
+    return CreateTask(**converted)
+
+
 def _get_corpus_coverage(payload: Mapping[str, Any]) -> Command:
     return GetCorpusCoverage(**payload)
 
@@ -409,6 +431,9 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CONTINUITY_PULSE: _get_pulse,
         Capability.CONTINUITY_SITUATIONS: _list_situations,
         Capability.CONTINUITY_PROJECTS: _list_projects,
+        Capability.CONTINUITY_PROJECTS_CREATE: _create_project,
+        Capability.CONTINUITY_SITUATIONS_CREATE: _create_situation,
+        Capability.CONTINUITY_TASKS_CREATE: _create_task,
         Capability.KNOWLEDGE_COVERAGE: _get_corpus_coverage,
         Capability.DOCUMENTS_CREATE: _create_managed_document,
         Capability.DOCUMENTS_REVISE: _revise_managed_document,
@@ -425,7 +450,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the twenty-six names nothing.
+    not one of the twenty-nine names nothing.
     """
     try:
         return Capability(capability)

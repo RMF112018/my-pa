@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route twenty-six capability names and none of them mutates a source, and every
+  surface route twenty-nine capability names and none of them mutates a source, and every
   capability driven over both transports is shown to have called only the three
   read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -293,6 +293,9 @@ SCOPED_CAPABILITIES = [
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_SITUATIONS_CREATE,
+        Capability.CONTINUITY_TASKS_CREATE,
         Capability.KNOWLEDGE_COVERAGE,
         # The managed-document plane names a document, not a source: its rows
         # carry no `source_id` and no `enrollment_id`, so there is no scope for a
@@ -488,6 +491,13 @@ CAPTURE_CAPABILITIES = frozenset(c for c in Capability if c.value.startswith("ca
 #: exempt: they pass the name check on their own, so exempting them would widen
 #: the hole for nothing. A future `documents.delete` is still caught here.
 MANAGED_DOCUMENT_EXEMPTION = frozenset({Capability.DOCUMENTS_CREATE})
+CONTINUITY_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_SITUATIONS_CREATE,
+        Capability.CONTINUITY_TASKS_CREATE,
+    }
+)
 
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
@@ -503,7 +513,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
     assert {tool.name for tool in TOOLS} == {c.value for c in Capability}
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over a transport"
     assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
-    exempt = CAPTURE_CAPABILITIES | MANAGED_DOCUMENT_EXEMPTION
+    exempt = CAPTURE_CAPABILITIES | MANAGED_DOCUMENT_EXEMPTION | CONTINUITY_AUTHORING_EXEMPTION
     checked = [c for c in Capability if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)
     for capability in checked:

@@ -57,6 +57,13 @@ def main(argv: list[str] | None = None) -> int:
     revoke.add_argument("--oauth-client-id", required=True)
     revoke_grant = sub.add_parser("revoke-grant")
     revoke_grant.add_argument("--grant-uuid", type=_uuid, required=True)
+    set_writes = sub.add_parser("set-client-writes")
+    set_writes.add_argument("--oauth-client-id", required=True)
+    set_writes.add_argument(
+        "--writes-enabled",
+        action=argparse.BooleanOptionalAction,
+        required=True,
+    )
     args = parser.parse_args(argv)
 
     settings = load_settings()
@@ -124,6 +131,20 @@ def main(argv: list[str] | None = None) -> int:
                 if result.rowcount != 1:
                     parser.error("remote grant not found")
                 print("remote MCP grant revoked")
+            elif args.command == "set-client-writes":
+                result = connection.execute(
+                    remote_clients.update()
+                    .where(
+                        remote_clients.c.oauth_client_id == args.oauth_client_id,
+                        remote_clients.c.revoked_at.is_(None),
+                    )
+                    .values(writes_enabled=args.writes_enabled)
+                )
+                if result.rowcount != 1:
+                    parser.error("remote client not found")
+                print(
+                    "remote MCP client writes " + ("enabled" if args.writes_enabled else "disabled")
+                )
     finally:
         engine.dispose()
     return 0

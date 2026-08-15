@@ -55,6 +55,9 @@ from my_pa.application.commands import (
     Command,
     CreateCapture,
     CreateManagedDocument,
+    CreateProject,
+    CreateSituation,
+    CreateTask,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -148,6 +151,15 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.CONTINUITY_PULSE: GetPulse(),
         Capability.CONTINUITY_SITUATIONS: ListSituations(),
         Capability.CONTINUITY_PROJECTS: ListProjects(),
+        Capability.CONTINUITY_PROJECTS_CREATE: CreateProject(
+            name="Denial-path project", idempotency_key="denial-project-0001"
+        ),
+        Capability.CONTINUITY_SITUATIONS_CREATE: CreateSituation(
+            title="Denial-path situation", idempotency_key="denial-situation-0001"
+        ),
+        Capability.CONTINUITY_TASKS_CREATE: CreateTask(
+            title="Denial-path task", idempotency_key="denial-task-0001"
+        ),
         Capability.KNOWLEDGE_COVERAGE: GetCorpusCoverage(),
         Capability.REVIEW_DECIDE: DecideReviewCase(
             review_case_id=issue_identifier(IdKind.REVIEW_CASE),
@@ -355,6 +367,9 @@ SCOPED_CAPABILITIES = [
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_SITUATIONS_CREATE,
+        Capability.CONTINUITY_TASKS_CREATE,
         # The corpus coverage read names a Principal, not a source. The scope it
         # reports is derived from `enrollments.principal_id` in the repository,
         # so a request that named one would be asking a corpus-wide question
@@ -438,6 +453,9 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_SITUATIONS_CREATE,
+        Capability.CONTINUITY_TASKS_CREATE,
         Capability.KNOWLEDGE_COVERAGE,
         Capability.DOCUMENTS_CREATE,
         Capability.DOCUMENTS_REVISE,

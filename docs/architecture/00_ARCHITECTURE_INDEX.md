@@ -34,7 +34,7 @@ See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md) and the unres
 ## Implementation boundary
 
 This index records architecture direction and current composition. The `my_pa`
-package exposes twenty-six shared application capabilities through the HTTP,
+package exposes twenty-nine shared application capabilities through the HTTP,
 MCP, and operator-CLI adapters; the gateway and worker composition roots use the
 same PostgreSQL-backed policy and application seams. Alembic owns thirty-four
 revisions at head `b4e8d2c7a613`. The current candidate also includes the

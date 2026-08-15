@@ -181,6 +181,7 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "native_source_review_routes",
         "native_apple_bridge_credentials",
         "native_apple_read_grants",
+        "continuity_authoring_submissions",
     }
 )
 

@@ -203,6 +203,11 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "documents.read",
         "documents.restore",
         "documents.revise",
+        # Continuity authoring. `7c2e9b4a1d80` is the forward `ALTER` that admits
+        # the three explicit create names.
+        "continuity.projects.create",
+        "continuity.situations.create",
+        "continuity.tasks.create",
     }
 )
 

@@ -257,27 +257,27 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_managed_plane() ->
     assert script.get_revision(MANAGED_REVISION).down_revision == PREVIOUS_REVISION
     # The revision count, so a chain that lost a file is not read as a chain that
     # never had one. Derived from the directory rather than restated.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 38
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 39
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:
-    """`D-69`'s standing risk, closed for both pairs by equality rather than containment.
+    """`D-69`'s standing risk, closed for this revision's own frozen texts.
 
-    A revision may not derive a closed set from an enum, so it writes the set
-    out — and a written set can quietly stop matching the enum it was copied
-    from. At head the two must be equal in both directions: a name in the domain
-    and not in the constraint is a capability the first real request is refused
-    for, and a name in the constraint and not in the domain is a vocabulary the
-    product can no longer produce and no longer refuses.
+    A later revision may widen the live enums again. This file then stays a
+    statement about `6b3d9a2f8c14`: its written sets still exist in the domain,
+    are sorted, and are exactly the managed-plane widening. Head equality lives
+    on the revision that is currently head.
     """
     admitted = _frozen_literals("_CAPABILITIES_AT_THIS_REVISION")
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
-    assert admitted == declared
+    assert admitted <= declared
+    assert admitted == CAPABILITIES_BEFORE | CAPABILITIES_ADDED
 
     purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
-    assert purposes == {member.value for member in Purpose}
+    assert purposes <= {member.value for member in Purpose}
+    assert purposes == PURPOSES_BEFORE | PURPOSES_ADDED
 
     # Sorted, which is the order the declarative helper produces, so the stored
     # constraint text and a freshly generated one can be compared directly. A

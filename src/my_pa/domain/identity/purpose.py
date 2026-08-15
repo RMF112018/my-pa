@@ -56,3 +56,13 @@ class Purpose(StrEnum):
     # and reading is a purpose that grants both.
     DOCUMENT_AUTHORING = "document_authoring"
     DOCUMENT_READ = "document_read"
+    # User-directed continuity writes. A purpose of its own rather than a reuse
+    # of `capture_authoring` or `review_disposition`: those write ADR-003 notes
+    # and promote capture proposals. Admitting a Project write under either
+    # would let a grant issued to store a note or decide a review also create
+    # durable work context. One purpose for the three create capabilities,
+    # because they are the same authority class — explicit Principal authoring
+    # of the acting Principal's own continuity — and a further split would map
+    # one-to-one and cost three frozen-constraint literals for a distinction
+    # nobody in this build can enforce.
+    CONTINUITY_AUTHORING = "continuity_authoring"

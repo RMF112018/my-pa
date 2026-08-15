@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the twenty-six capabilities is addressable over HTTP
+**Reachability.** Every one of the twenty-nine capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a twenty-seventh capability added to the domain arrives as a failing row instead
+here, so a thirtieth capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -60,6 +60,9 @@ from my_pa.application.commands import (
     Command,
     CreateCapture,
     CreateManagedDocument,
+    CreateProject,
+    CreateSituation,
+    CreateTask,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -181,6 +184,18 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONTINUITY_PULSE: {},
         Capability.CONTINUITY_SITUATIONS: {},
         Capability.CONTINUITY_PROJECTS: {},
+        Capability.CONTINUITY_PROJECTS_CREATE: {
+            "name": "HTTP authoring project",
+            "idempotency_key": "http-project-0001",
+        },
+        Capability.CONTINUITY_SITUATIONS_CREATE: {
+            "title": "HTTP authoring situation",
+            "idempotency_key": "http-situation-0001",
+        },
+        Capability.CONTINUITY_TASKS_CREATE: {
+            "title": "HTTP authoring task",
+            "idempotency_key": "http-task-0001",
+        },
         # The corpus answer takes no payload: its subject is the acting
         # Principal, which no request may state.
         Capability.KNOWLEDGE_COVERAGE: {},
@@ -278,6 +293,15 @@ def commands_for(
         Capability.CONTINUITY_PULSE: GetPulse(),
         Capability.CONTINUITY_SITUATIONS: ListSituations(),
         Capability.CONTINUITY_PROJECTS: ListProjects(),
+        Capability.CONTINUITY_PROJECTS_CREATE: CreateProject(
+            name="HTTP authoring project", idempotency_key="http-project-0001"
+        ),
+        Capability.CONTINUITY_SITUATIONS_CREATE: CreateSituation(
+            title="HTTP authoring situation", idempotency_key="http-situation-0001"
+        ),
+        Capability.CONTINUITY_TASKS_CREATE: CreateTask(
+            title="HTTP authoring task", idempotency_key="http-task-0001"
+        ),
         Capability.KNOWLEDGE_COVERAGE: GetCorpusCoverage(),
         Capability.REVIEW_DECIDE: DecideReviewCase(
             review_case_id=staged_review_case(scene).review_case_id,

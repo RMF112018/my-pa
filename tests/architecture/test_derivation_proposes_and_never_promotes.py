@@ -12,10 +12,12 @@ Four properties, read off the tree rather than trusted:
    is nothing in it that could write.
 2. **The repository's derivation is a read.** `SqlPulseRepository.derive_pulse`
    builds no `insert`, `update`, or `delete`, and calls nothing that does.
-3. **Only one method writes `accepted`.** `ContinuityEvidenceState.ACCEPTED`
-   appears in exactly one write in `situation_repository.py`, inside
-   `SqlContinuityRepository.accept`; the three `propose_*` methods write the
-   `PROPOSED` literal and take no parameter that could change it.
+3. **Only one method writes `accepted` in the review-gated repository.**
+   `ContinuityEvidenceState.ACCEPTED` appears in exactly one write in
+   `situation_repository.py`, inside `SqlContinuityRepository.accept`; the
+   three `propose_*` methods write the `PROPOSED` literal and take no
+   parameter that could change it. User-directed Task authoring lives in
+   `continuity_authoring.py` and is a different path.
 4. **Acceptance is gated on a review decision.** `accept` reads
    `capture_review_decisions` before it writes, so promotion cannot happen
    without a review that happened.
@@ -36,6 +38,7 @@ PACKAGE: Final = ROOT / "src" / "my_pa"
 
 DERIVATION: Final = PACKAGE / "domain" / "situation" / "pulse_derivation.py"
 REPOSITORY: Final = PACKAGE / "infrastructure" / "persistence" / "situation_repository.py"
+AUTHORING: Final = PACKAGE / "infrastructure" / "persistence" / "continuity_authoring.py"
 
 #: Statement builders that write. Named rather than inferred, because "does this
 #: expression write" is not decidable in general and these five are what this
@@ -168,7 +171,18 @@ def test_acceptance_reads_a_review_decision_before_it_writes() -> None:
     )
 
 
-@pytest.mark.parametrize("path", [DERIVATION, REPOSITORY], ids=lambda p: p.name)
+def test_user_directed_task_authoring_is_not_review_promotion() -> None:
+    """Direct Principal authoring writes accepted state without a review decision."""
+    author = _function(
+        _module(AUTHORING), klass="SqlContinuityAuthoringRepository", name="author_task"
+    )
+    source = ast.dump(author)
+    assert "ACCEPTED" in source
+    assert "DIRECT_PRINCIPAL" in source
+    assert "capture_review_decisions" not in source
+
+
+@pytest.mark.parametrize("path", [DERIVATION, REPOSITORY, AUTHORING], ids=lambda p: p.name)
 def test_the_modules_this_guard_reads_exist_and_parse(path: Path) -> None:
     """Guards every assertion above: a moved file would make them all vacuous."""
     assert path.is_file()

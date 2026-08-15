@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     Uuid,
     select,
+    update,
 )
 
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
@@ -244,6 +245,18 @@ class RemoteIdentityRepository:
             )
         )
         return identifier
+
+    def set_client_writes(self, *, oauth_client_id: str, writes_enabled: bool) -> bool:
+        """Toggle writes on one unrevoked client. Does not change client identity."""
+        result = self._connection.execute(
+            update(remote_clients)
+            .where(
+                remote_clients.c.oauth_client_id == oauth_client_id,
+                remote_clients.c.revoked_at.is_(None),
+            )
+            .values(writes_enabled=writes_enabled)
+        )
+        return result.rowcount == 1
 
     def grant(
         self,

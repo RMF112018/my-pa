@@ -53,6 +53,9 @@ from my_pa.application.commands import (
     Command,
     CreateCapture,
     CreateManagedDocument,
+    CreateProject,
+    CreateSituation,
+    CreateTask,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -185,6 +188,9 @@ def _requested_scope(
             | GetPulse()
             | ListSituations()
             | ListProjects()
+            | CreateProject()
+            | CreateSituation()
+            | CreateTask()
             # A corpus answer names a Principal and no source. The scope it
             # reports is read from `enrollments.principal_id` inside the
             # repository, so there is nothing here for a caller to state and

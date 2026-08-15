@@ -61,6 +61,9 @@ __all__ = [
     "CreateCapture",
     "CreateManagedDocument",
     "CreateManagedDocumentCommand",
+    "CreateProject",
+    "CreateSituation",
+    "CreateTask",
     "DecideReviewCase",
     "EnrollSource",
     "EnterFrameCommand",
@@ -704,6 +707,83 @@ class ListProjects:
 
 
 @dataclass(frozen=True, slots=True)
+class CreateProject:
+    """Create a project the user explicitly asked to create. Requires name.
+
+    An explicit user instruction. The authenticated Principal is the owner; this
+    command does not carry a Principal field. `name` is the project title the
+    user chose. `idempotency_key` is required on the canonical contract; the
+    remote MCP adapter stamps it so a model does not invent one.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS_CREATE
+
+    name: str
+    idempotency_key: str
+    description: str | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.name, SafeDetail.NAME)
+        if not self.name.strip():
+            raise InvalidRequestError(SafeDetail.NAME)
+        _idempotency_key(self.idempotency_key)
+        if self.description is not None and not isinstance(self.description, str):
+            raise InvalidRequestError(SafeDetail.TEXT)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateSituation:
+    """Create a situation the user explicitly asked to open. Requires title.
+
+    An explicit user instruction. The Situation references other objects and
+    never owns them; this command creates the context itself.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_SITUATIONS_CREATE
+
+    title: str
+    idempotency_key: str
+    description: str | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.title, SafeDetail.TITLE)
+        if not self.title.strip():
+            raise InvalidRequestError(SafeDetail.TITLE)
+        _idempotency_key(self.idempotency_key)
+        if self.description is not None and not isinstance(self.description, str):
+            raise InvalidRequestError(SafeDetail.TEXT)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateTask:
+    """Create a task the user explicitly asked to record. Requires title.
+
+    This is Principal authoring, not a model-inferred proposal. The resulting
+    Task is accepted continuity because the user instructed the write. Optional
+    `project_id` attaches it to a Project the same Principal already holds.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_TASKS_CREATE
+
+    title: str
+    idempotency_key: str
+    project_id: str | None = None
+    situation_id: str | None = None
+    due_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.title, SafeDetail.TITLE)
+        if not self.title.strip():
+            raise InvalidRequestError(SafeDetail.TITLE)
+        _idempotency_key(self.idempotency_key)
+        if self.project_id is not None:
+            _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        if self.situation_id is not None:
+            _identifier(self.situation_id, IdKind.SITUATION, SafeDetail.SITUATION_ID)
+        _moment(self.due_at, SafeDetail.DUE_AT)
+
+
+@dataclass(frozen=True, slots=True)
 class GetCorpusCoverage:
     """`knowledge.coverage`: how much of everything this Principal holds was covered.
 
@@ -894,6 +974,9 @@ type Command = (
     | GetPulse
     | ListSituations
     | ListProjects
+    | CreateProject
+    | CreateSituation
+    | CreateTask
     | GetCorpusCoverage
     | CreateManagedDocument
     | ReviseManagedDocument

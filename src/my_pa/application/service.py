@@ -104,6 +104,8 @@ publishes and what every clamp below reads. There is no second copy to drift
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -121,6 +123,9 @@ from my_pa.application.commands import (
     CreateCapture,
     CreateManagedDocument,
     CreateManagedDocumentCommand,
+    CreateProject,
+    CreateSituation,
+    CreateTask,
     DecideReviewCase,
     EnrollSource,
     FetchSource,
@@ -176,6 +181,7 @@ from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.model_gate import BoundedModelGate
 from my_pa.contracts.ports import (
     Acceptance,
+    AuthoringConflictError,
     CaptureAdmission,
     CaptureAdmissionRequest,
     CaptureSearchOutcome,
@@ -245,6 +251,7 @@ from my_pa.domain.search.query import (
     SearchRequest,
     label_for_media_type,
 )
+from my_pa.domain.situation.situation import Project, Situation
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
     MAX_ENROLLMENT_DEPTH,
@@ -442,6 +449,18 @@ _REVEAL_TRUST_BASIS: Final = ("stored_evidence_rows", "reviewed_promotion")
 #: the Pulse derivation additionally filters to `evidence_state = 'accepted'`. Two
 #: named bases rather than one, so a reader can tell which claim is which.
 _CONTINUITY_TRUST_BASIS: Final = ("principal_partition", "accepted_continuity")
+
+
+def _authoring_digest(capability: str, fields: Mapping[str, object]) -> str:
+    """Stable digest of the domain fields that make two writes the same write."""
+    return hashlib.sha256(
+        json.dumps(
+            {"capability": capability, **fields},
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
 
 
 def _capture_content(text: str) -> CaptureContent:
@@ -1922,6 +1941,193 @@ class ApplicationService:
             ),
         )
 
+    def _continuity_projects_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateProject
+    ) -> _Result:
+        """Create one Project from an explicit user instruction."""
+        principal_id = authorization.principal.principal_id
+        digest = _authoring_digest(
+            command.capability.value,
+            {"name": command.name, "description": command.description},
+        )
+        object_id = issue_identifier(IdKind.PROJECT)
+        with _translated():
+            authoring = unit_of_work.continuity_authoring
+            try:
+                owned = authoring.reserve(
+                    principal_id=principal_id,
+                    idempotency_key=command.idempotency_key,
+                    capability=command.capability.value,
+                    payload_digest=digest,
+                    object_id=object_id,
+                )
+            except AuthoringConflictError:
+                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+            if not owned:
+                prior = authoring.recall(principal_id, command.idempotency_key)
+                if prior is None:
+                    raise InternalError()
+                project = unit_of_work.projects.get_project(principal_id, prior.object_id)
+                if project is None:
+                    raise InternalError()
+                return self._project_authoring_result(authorization, project, replayed=True)
+            project = authoring.author_project(
+                principal_id=authorization.principal.principal_id,
+                project_id=object_id,
+                name=command.name,
+                description=command.description,
+            )
+        return self._project_authoring_result(authorization, project, replayed=False)
+
+    def _continuity_situations_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateSituation
+    ) -> _Result:
+        """Open one Situation from an explicit user instruction."""
+        principal_id = authorization.principal.principal_id
+        digest = _authoring_digest(
+            command.capability.value,
+            {"title": command.title, "description": command.description},
+        )
+        object_id = issue_identifier(IdKind.SITUATION)
+        with _translated():
+            authoring = unit_of_work.continuity_authoring
+            try:
+                owned = authoring.reserve(
+                    principal_id=principal_id,
+                    idempotency_key=command.idempotency_key,
+                    capability=command.capability.value,
+                    payload_digest=digest,
+                    object_id=object_id,
+                )
+            except AuthoringConflictError:
+                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+            if not owned:
+                prior = authoring.recall(principal_id, command.idempotency_key)
+                if prior is None:
+                    raise InternalError()
+                situation = unit_of_work.situations.get_situation(principal_id, prior.object_id)
+                if situation is None:
+                    raise InternalError()
+                return self._situation_authoring_result(authorization, situation, replayed=True)
+            situation = authoring.author_situation(
+                principal_id=authorization.principal.principal_id,
+                situation_id=object_id,
+                title=command.title,
+                description=command.description,
+            )
+        return self._situation_authoring_result(authorization, situation, replayed=False)
+
+    def _continuity_tasks_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateTask
+    ) -> _Result:
+        """Record one accepted Task from an explicit user instruction."""
+        principal_id = authorization.principal.principal_id
+        digest = _authoring_digest(
+            command.capability.value,
+            {
+                "title": command.title,
+                "project_id": command.project_id,
+                "situation_id": command.situation_id,
+                "due_at": None if command.due_at is None else format_rfc3339(command.due_at),
+            },
+        )
+        with _translated():
+            if command.project_id is not None and (
+                unit_of_work.projects.get_project(principal_id, command.project_id) is None
+            ):
+                raise NotFoundError(SafeDetail.PROJECT_ID)
+            if command.situation_id is not None and (
+                unit_of_work.situations.get_situation(principal_id, command.situation_id) is None
+            ):
+                raise NotFoundError(SafeDetail.SITUATION_ID)
+            authoring = unit_of_work.continuity_authoring
+            object_id = issue_identifier(IdKind.TASK)
+            try:
+                owned = authoring.reserve(
+                    principal_id=principal_id,
+                    idempotency_key=command.idempotency_key,
+                    capability=command.capability.value,
+                    payload_digest=digest,
+                    object_id=object_id,
+                )
+            except AuthoringConflictError:
+                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+            if not owned:
+                prior = authoring.recall(principal_id, command.idempotency_key)
+                if prior is None:
+                    raise InternalError()
+                return _Result(
+                    payload={
+                        "task_id": prior.object_id,
+                        "title": command.title,
+                        "state": "open",
+                        "evidence_state": "accepted",
+                        "acceptance_kind": "direct_principal",
+                        "project_id": command.project_id,
+                        "situation_id": command.situation_id,
+                        "due_at": (
+                            None if command.due_at is None else format_rfc3339(command.due_at)
+                        ),
+                        "replayed": True,
+                    },
+                    disclosure=unenrolled_disclosure(
+                        authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS
+                    ),
+                )
+            task = authoring.author_task(
+                principal_id=principal_id,
+                task_id=object_id,
+                title=command.title,
+                origin_evidence_ref=authorization.request_id,
+                project_id=command.project_id,
+                situation_id=command.situation_id,
+                due_at=command.due_at,
+            )
+        return _Result(
+            payload={
+                "task_id": task.task_id,
+                "title": task.title,
+                "state": task.state.value,
+                "evidence_state": task.evidence_state.value,
+                "acceptance_kind": (
+                    task.acceptance_kind.value if task.acceptance_kind is not None else None
+                ),
+                "project_id": task.project_id,
+                "situation_id": task.situation_id,
+                "due_at": None if task.due_at is None else format_rfc3339(task.due_at),
+                "replayed": False,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS),
+        )
+
+    def _project_authoring_result(
+        self, authorization: Authorization, project: Project, *, replayed: bool
+    ) -> _Result:
+        return _Result(
+            payload={
+                "project_id": project.project_id,
+                "name": project.name,
+                "state": project.state.value,
+                "description": project.description,
+                "replayed": replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS),
+        )
+
+    def _situation_authoring_result(
+        self, authorization: Authorization, situation: Situation, *, replayed: bool
+    ) -> _Result:
+        return _Result(
+            payload={
+                "situation_id": situation.situation_id,
+                "title": situation.title,
+                "state": situation.state.value,
+                "description": situation.description,
+                "replayed": replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS),
+        )
+
     # ---- the managed-document plane ----------------------------------------
     #
     # Six handlers, and every one of them is the same three lines: resolve the
@@ -2622,6 +2828,9 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CONTINUITY_PULSE: ApplicationService._continuity_pulse,
         Capability.CONTINUITY_SITUATIONS: ApplicationService._continuity_situations,
         Capability.CONTINUITY_PROJECTS: ApplicationService._continuity_projects,
+        Capability.CONTINUITY_PROJECTS_CREATE: ApplicationService._continuity_projects_create,
+        Capability.CONTINUITY_SITUATIONS_CREATE: ApplicationService._continuity_situations_create,
+        Capability.CONTINUITY_TASKS_CREATE: ApplicationService._continuity_tasks_create,
         Capability.DOCUMENTS_CREATE: ApplicationService._documents_create,
         Capability.DOCUMENTS_REVISE: ApplicationService._documents_revise,
         Capability.DOCUMENTS_READ: ApplicationService._documents_read,

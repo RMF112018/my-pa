@@ -202,6 +202,12 @@ QUARANTINED: Final = {
         "now reached by a capability (WP-11); the continuity *write* path is "
         "still driven only by `SituationService`, outside `invoke`."
     ),
+    "infrastructure/persistence/continuity_authoring.py": (
+        "scopes user-directed continuity submissions by a hand-written "
+        "`principal_id` comparison, registered in HAND_WRITTEN_COMPARISONS "
+        "below. The write stamps the authenticated Principal and recalls by "
+        "that same partition; there is no caller-supplied owner field."
+    ),
 }
 
 #: The guarded modules whose *statements* are checked one by one, rather than
@@ -326,6 +332,9 @@ UNPARTITIONED_JOB_STATEMENTS: Final = {
 #: appear silently — which is exactly how the relationship plane ended up with
 #: three hand-written predicates and twenty-odd statements with none.
 HAND_WRITTEN_COMPARISONS: Final = {
+    "infrastructure/persistence/continuity_authoring.py": (
+        ("continuity_authoring_submissions", "principal_id"),
+    ),
     "infrastructure/persistence/remote_identity.py": (("remote_clients", "principal_id"),),
     "infrastructure/persistence/enrollment.py": (
         ("enrollments", "principal_id"),

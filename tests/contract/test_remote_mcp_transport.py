@@ -39,8 +39,15 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert first == remote_tool_names(service, writes_enabled=False)
     assert Capability.KNOWLEDGE_SEARCH.value in first
     assert Capability.CAPTURE_CREATE.value not in first
+    assert Capability.CONTINUITY_PROJECTS_CREATE.value not in first
     assert Capability.SOURCES_ENROLL.value not in first
     assert Capability.DOCUMENTS_CREATE.value not in first
+    enabled = remote_tool_names(service, writes_enabled=True)
+    assert Capability.CAPTURE_CREATE.value in enabled
+    assert Capability.CONTINUITY_PROJECTS_CREATE.value in enabled
+    assert Capability.CONTINUITY_SITUATIONS_CREATE.value in enabled
+    assert Capability.CONTINUITY_TASKS_CREATE.value in enabled
+    assert Capability.SOURCES_ENROLL.value not in enabled
 
 
 @pytest.mark.anyio
@@ -305,7 +312,6 @@ async def test_remote_write_e2e_is_idempotent_and_independently_disableable(scen
         "title": "Synthetic remote document",
         "media_type": "text/markdown",
         "content": b64encode(b"# Synthetic remote document").decode("ascii"),
-        "idempotency_key": "remote-document-create-0001",
     }
     request = remote_arguments(payload)
 
@@ -352,7 +358,6 @@ async def test_remote_write_e2e_is_idempotent_and_independently_disableable(scen
                     "title": "Synthetic stale revision",
                     "media_type": "text/markdown",
                     "content": b64encode(b"# stale").decode("ascii"),
-                    "idempotency_key": "remote-document-revise-stale-0001",
                 }
             )
             conflict = await session.call_tool(revise_capability.value, stale_request)
@@ -376,6 +381,63 @@ async def test_remote_write_e2e_is_idempotent_and_independently_disableable(scen
     assert refused.is_error is True
     assert [event.capability for event in scene.world.audit].count(capability) == 2
     assert [event.capability for event in scene.world.audit].count(revise_capability) == 1
+
+
+@pytest.mark.anyio
+async def test_remote_project_create_is_visible_on_continuity_projects(scene: Scene) -> None:
+    create = Capability.CONTINUITY_PROJECTS_CREATE
+    listing = Capability.CONTINUITY_PROJECTS
+    app = create_remote_mcp_app(
+        build_service(scene.world, scene.providers),
+        resolve_access=lambda _authorization: RemoteAccessContext(
+            scene.principal,
+            allowed_capabilities=frozenset({create.value, listing.value}),
+            capability_purposes=frozenset(
+                {
+                    (create, Purpose.CONTINUITY_AUTHORING),
+                    (listing, Purpose.CAPTURE_REVIEW),
+                }
+            ),
+        ),
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        writes_enabled=True,
+        resource="https://mcp.example.invalid",
+        authorization_servers=("https://issuer.example.invalid",),
+        scopes=frozenset({"my-pa.read"}),
+    )
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        await session.initialize()
+        names = {tool.name for tool in (await session.list_tools()).tools}
+        created = await session.call_tool(
+            create.value, remote_arguments({"name": "MCP Write Acceptance Test"})
+        )
+        listed = await session.call_tool(listing.value, remote_arguments({"page_size": 20}))
+        forged = await session.call_tool(
+            create.value,
+            {
+                **remote_arguments({"name": "Should not land"}),
+                "principal_id": "prn_00000000000000000000000000000000",
+            },
+        )
+    assert create.value in names
+    assert Capability.SOURCES_ENROLL.value not in names
+    assert created.is_error is False
+    body = json.loads(created.content[0].text)
+    assert body["result"]["name"] == "MCP Write Acceptance Test"
+    listed_body = json.loads(listed.content[0].text)
+    assert "MCP Write Acceptance Test" in [row["name"] for row in listed_body["result"]["projects"]]
+    assert forged.is_error is True
+    assert json.loads(forged.content[0].text)["code"] == "invalid_request"
 
 
 @pytest.mark.anyio

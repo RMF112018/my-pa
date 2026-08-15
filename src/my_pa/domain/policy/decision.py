@@ -190,6 +190,12 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.DOCUMENTS_LIST,
         Capability.DOCUMENTS_ARCHIVE,
         Capability.DOCUMENTS_RESTORE,
+        # `context.prepare` names a query, not a source. The package it returns
+        # may later cite enrolled source evidence, but the request itself does
+        # not name a grant — naming one would turn a cross-plane assembly into
+        # a search of one enrollment, which is `knowledge.search`. Until WP-KC-02
+        # searches a plane, the requested scope is empty as a measurement.
+        Capability.CONTEXT_PREPARE,
     }
 )
 

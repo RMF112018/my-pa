@@ -77,6 +77,7 @@ from my_pa.application.commands import (
     ListReviewCases,
     ListSituations,
     ListSources,
+    PrepareContext,
     ReadCapture,
     ReadKnowledge,
     ReadManagedDocument,
@@ -92,6 +93,7 @@ from my_pa.application.errors import InvalidRequestError, SafeDetail, Unsupporte
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureKind
+from my_pa.domain.context import ContextPlane
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 
@@ -338,6 +340,33 @@ def _get_corpus_coverage(payload: Mapping[str, Any]) -> Command:
     return GetCorpusCoverage(**payload)
 
 
+def _prepare_context(payload: Mapping[str, Any]) -> Command:
+    """`context.prepare`, with JSON arrays converted to the tuples the command holds.
+
+    Shape conversion, like `_enroll_source`: JSON has no tuple and no enum, so a
+    caller's `["knowledge"]` would otherwise be rejected for being a list of
+    strings rather than for naming a plane. An unresolvable string is refused
+    with the same token the command uses.
+    """
+    converted = dict(payload)
+    if "subject_hints" in converted:
+        converted["subject_hints"] = _strings(converted["subject_hints"], SafeDetail.SUBJECT_HINTS)
+    if "requested_planes" in converted:
+        named = converted["requested_planes"]
+        if not isinstance(named, list):
+            raise InvalidRequestError(SafeDetail.REQUESTED_PLANES)
+        planes: list[ContextPlane] = []
+        for item in named:
+            if not isinstance(item, str):
+                raise InvalidRequestError(SafeDetail.REQUESTED_PLANES)
+            try:
+                planes.append(ContextPlane(item))
+            except ValueError:
+                raise InvalidRequestError(SafeDetail.REQUESTED_PLANES) from None
+        converted["requested_planes"] = tuple(planes)
+    return PrepareContext(**converted)
+
+
 def _managed_content(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Decode a managed write's base64 `content` into the bytes the command holds.
 
@@ -441,6 +470,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.DOCUMENTS_LIST: _list_managed_documents,
         Capability.DOCUMENTS_ARCHIVE: _archive_managed_document,
         Capability.DOCUMENTS_RESTORE: _restore_managed_document,
+        Capability.CONTEXT_PREPARE: _prepare_context,
     }
 )
 
@@ -450,7 +480,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the twenty-nine names nothing.
+    not one of the thirty names nothing.
     """
     try:
         return Capability(capability)

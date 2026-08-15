@@ -209,6 +209,24 @@ class Capability(StrEnum):
     DOCUMENTS_LIST = "documents.list"
     DOCUMENTS_ARCHIVE = "documents.archive"
     DOCUMENTS_RESTORE = "documents.restore"
+    # A capability rather than a widening of `knowledge.search`. **A new purpose
+    # rather than `knowledge_search`.** `D-91`'s test is whether reuse would
+    # widen the grant, and here it would: `knowledge.search` is scoped by one
+    # enrollment on the extraction plane, while `context.prepare` is the
+    # assembly that will (WP-KC-02) cite capture and continuity rows that
+    # search cannot reach. One grant covering both would let a request issued
+    # to search one enrollment also pack user-authored notes and accepted
+    # continuity — the silent escalation `purpose.py` exists to refuse.
+    #
+    # Not operator-only: it grants nothing, writes nothing, and returns a
+    # bounded package of the acting Principal's own authorized evidence.
+    # Remotely grantable for the same reason `knowledge.search` is: a ChatLLM
+    # needs this before answering questions that depend on personal context.
+    #
+    # No Alembic `ALTER` in this work package; WP-KC-05 admits the live
+    # vocabulary. Until then a stored `capability_is_known` constraint will
+    # refuse the name. FAST tests do not exercise that store.
+    CONTEXT_PREPARE = "context.prepare"
 
 
 class NativeSourceCapability(StrEnum):
@@ -386,6 +404,10 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.DOCUMENTS_RESTORE: frozenset({Purpose.DOCUMENT_AUTHORING}),
         Capability.DOCUMENTS_READ: frozenset({Purpose.DOCUMENT_READ}),
         Capability.DOCUMENTS_LIST: frozenset({Purpose.DOCUMENT_READ}),
+        # A purpose of its own, not a reuse of `KNOWLEDGE_SEARCH`. The mapping
+        # comment sits with the member: `knowledge.search` is one enrollment's
+        # extraction plane, and this capability is a cross-plane assembly.
+        Capability.CONTEXT_PREPARE: frozenset({Purpose.CONTEXT_PREPARATION}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

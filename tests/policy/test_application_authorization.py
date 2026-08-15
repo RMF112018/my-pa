@@ -72,6 +72,7 @@ from my_pa.application.commands import (
     ListReviewCases,
     ListSituations,
     ListSources,
+    PrepareContext,
     ReadCapture,
     ReadKnowledge,
     ReadManagedDocument,
@@ -194,6 +195,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.DOCUMENTS_RESTORE: RestoreManagedDocument(
             document_id=issue_identifier(IdKind.MANAGED_DOCUMENT)
         ),
+        Capability.CONTEXT_PREPARE: PrepareContext(query="revenue"),
     }
 
 
@@ -385,6 +387,7 @@ SCOPED_CAPABILITIES = [
         Capability.DOCUMENTS_LIST,
         Capability.DOCUMENTS_ARCHIVE,
         Capability.DOCUMENTS_RESTORE,
+        Capability.CONTEXT_PREPARE,
     }
 ]
 
@@ -463,6 +466,7 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.DOCUMENTS_LIST,
         Capability.DOCUMENTS_ARCHIVE,
         Capability.DOCUMENTS_RESTORE,
+        Capability.CONTEXT_PREPARE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

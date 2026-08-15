@@ -70,6 +70,7 @@ from my_pa.application.commands import (
     ListReviewCases,
     ListSituations,
     ListSources,
+    PrepareContext,
     ReadCapture,
     ReadKnowledge,
     ReadManagedDocument,
@@ -210,6 +211,10 @@ def _requested_scope(
             | ListManagedDocuments()
             | ArchiveManagedDocument()
             | RestoreManagedDocument()
+            # `context.prepare` names a query, not a source. The requested scope
+            # is empty as a measurement: the request does not name a grant, and
+            # `_SCOPELESS` is where that empty set is read that way.
+            | PrepareContext()
         ):
             return frozenset()
         case CreateCapture():

@@ -76,7 +76,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all twenty-nine capabilities.
+`tests/contract/test_transport_parity.py` holds it over all thirty capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -163,7 +163,7 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build implements twenty-nine, one per
+same as the tools this build implements. The build implements thirty, one per
 capability name. A default process publishes **twenty**.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
@@ -171,7 +171,7 @@ configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same child publishes all twenty-nine. An operator who expects `documents.create`
+same child publishes all thirty. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -182,7 +182,7 @@ apps/gateway.py mcp` — by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
 (unset: twenty, none beginning `documents.`) and
 `::test_a_child_with_a_managed_root_publishes_every_capability` (set:
-twenty-nine).
+thirty).
 
 **Re-executed 2026-08-03** — a real `stdio_client` spawning
 `.venv/bin/python apps/gateway.py mcp` as a child process, against a disposable
@@ -219,7 +219,7 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-12):** the tool list is derived from all
-**twenty-nine** current capabilities, and the schema has **thirty-nine** revisions
+**thirty** current capabilities, and the schema has **thirty-nine** revisions
 at head `7c2e9b4a1d80`. `capabilities.get` also reports content-free
 `worker_planes`. The dated transcript below remains historical evidence for its
 stated head.

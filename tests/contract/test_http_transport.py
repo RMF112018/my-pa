@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the twenty-nine capabilities is addressable over HTTP
+**Reachability.** Every one of the thirty capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a thirtieth capability added to the domain arrives as a failing row instead
+here, so a thirty-first capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -77,6 +77,7 @@ from my_pa.application.commands import (
     ListReviewCases,
     ListSituations,
     ListSources,
+    PrepareContext,
     ReadCapture,
     ReadKnowledge,
     ReadManagedDocument,
@@ -232,6 +233,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.DOCUMENTS_LIST: {"limit": 10, "include_archived": True},
         Capability.DOCUMENTS_ARCHIVE: {"document_id": document.document_id},
         Capability.DOCUMENTS_RESTORE: {"document_id": document.document_id},
+        Capability.CONTEXT_PREPARE: {"query": "revenue"},
     }
 
 
@@ -330,6 +332,7 @@ def commands_for(
         Capability.DOCUMENTS_LIST: ListManagedDocuments(limit=10, include_archived=True),
         Capability.DOCUMENTS_ARCHIVE: ArchiveManagedDocument(document_id=document.document_id),
         Capability.DOCUMENTS_RESTORE: RestoreManagedDocument(document_id=document.document_id),
+        Capability.CONTEXT_PREPARE: PrepareContext(query="revenue"),
     }
 
 

@@ -213,6 +213,10 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # The runtime receives the authenticated local operator Principal from the
     # CLI and compares a stored retry receipt to that same admitted plan.
     "bootstrap/goodnotes.py": (("prior", "principal_id"),),
+    # Evidence items carry the Principal they were packed for. Construction
+    # compares each item against the package owner and refuses a cross-principal
+    # mix; the value is not a request-body field.
+    "domain/context/prepared.py": (("item", "principal_id"),),
     "domain/modeling/gate.py": (("item", "principal_id"),),
     "infrastructure/goodnotes/fixture.py": (("page", "principal_id"),),
     # The admitted manifest's owner is untrusted source metadata. The source

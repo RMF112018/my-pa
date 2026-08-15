@@ -149,6 +149,14 @@ class IdKind(StrEnum):
     MANAGED_RECEIPT = "mdrcpt"
     MANAGED_SUBMISSION = "mdsub"
     MANAGED_LIFECYCLE = "mdlce"
+    #: A prepared context package (`context.prepare`). Its own prefix rather than
+    #: a reuse of `COVERAGE_SNAPSHOT` or `KNOWLEDGE`: a stored reference or an
+    #: audit row has to say which record it names, and `cov` already names an
+    #: extraction-plane coverage snapshot. `ctxm` names the retrieval contract's
+    #: assembled package, which may cite capture and continuity evidence that
+    #: a coverage snapshot cannot. WP-KC-01 issues these in memory; persistence
+    #: of context runs is WP-KC-04.
+    CONTEXT_MANIFEST = "ctxm"
 
 
 class InvalidIdentifierError(ValueError):

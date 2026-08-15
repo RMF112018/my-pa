@@ -932,7 +932,7 @@ class ContinuityAuthoringRepository(ABC):
         """The prior receipt for this key, or None if the key is unused."""
 
     @abstractmethod
-    def record(
+    def reserve(
         self,
         *,
         principal_id: str,
@@ -940,21 +940,49 @@ class ContinuityAuthoringRepository(ABC):
         capability: str,
         payload_digest: str,
         object_id: str,
-    ) -> None:
-        """Remember the object this key created. Raises AuthoringConflictError on clash."""
+    ) -> bool:
+        """Claim the key before any continuity row is written.
+
+        Returns True when this transaction now owns `object_id` for the key.
+        Returns False when the key already exists with the same digest.
+        Raises AuthoringConflictError when the key is bound to different content.
+        """
+
+    @abstractmethod
+    def author_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        name: str,
+        description: str | None,
+    ) -> Project:
+        """Create one Project under a key this transaction already reserved."""
+
+    @abstractmethod
+    def author_situation(
+        self,
+        *,
+        principal_id: str,
+        situation_id: str,
+        title: str,
+        description: str | None,
+    ) -> Situation:
+        """Open one Situation under a key this transaction already reserved."""
 
     @abstractmethod
     def author_task(
         self,
         *,
         principal_id: str,
+        task_id: str,
         title: str,
         origin_evidence_ref: str,
         project_id: str | None = None,
         situation_id: str | None = None,
         due_at: datetime | None = None,
     ) -> Task:
-        """Create one accepted Task from an explicit Principal instruction."""
+        """Create one accepted Task under a key this transaction already reserved."""
 
 
 class UnitOfWork(ABC):

@@ -1468,7 +1468,7 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
     def recall(self, principal_id: str, idempotency_key: str) -> AuthoringReceipt | None:
         return self._world.authoring_keys.get((principal_id, idempotency_key))
 
-    def record(
+    def reserve(
         self,
         *,
         principal_id: str,
@@ -1476,22 +1476,68 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
         capability: str,
         payload_digest: str,
         object_id: str,
-    ) -> None:
+    ) -> bool:
         prior = self.recall(principal_id, idempotency_key)
         if prior is not None:
             if prior.payload_digest != payload_digest or prior.capability != capability:
                 raise AuthoringConflictError
-            return
+            return False
         self._world.authoring_keys[(principal_id, idempotency_key)] = AuthoringReceipt(
             capability=capability,
             object_id=object_id,
             payload_digest=payload_digest,
         )
+        return True
+
+    def author_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        name: str,
+        description: str | None,
+    ) -> Project:
+        now = utc_now()
+        project = Project(
+            project_id=project_id,
+            principal_id=principal_id,
+            name=name,
+            state=ProjectState.ACTIVE,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            description=description,
+        )
+        self._world.projects.append(project)
+        return project
+
+    def author_situation(
+        self,
+        *,
+        principal_id: str,
+        situation_id: str,
+        title: str,
+        description: str | None,
+    ) -> Situation:
+        now = utc_now()
+        situation = Situation(
+            situation_id=situation_id,
+            principal_id=principal_id,
+            title=title,
+            state=SituationState.OPEN,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            description=description,
+        )
+        self._world.situations.append(situation)
+        return situation
 
     def author_task(
         self,
         *,
         principal_id: str,
+        task_id: str,
         title: str,
         origin_evidence_ref: str,
         project_id: str | None = None,
@@ -1500,7 +1546,7 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
     ) -> ContinuityTask:
         now = utc_now()
         task = ContinuityTask(
-            task_id=issue_identifier(IdKind.TASK),
+            task_id=task_id,
             principal_id=principal_id,
             title=title,
             state=TaskState.OPEN,

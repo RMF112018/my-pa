@@ -1,10 +1,17 @@
-"""User-directed continuity writes and their idempotency receipts."""
+"""User-directed continuity writes and their idempotency receipts.
+
+The unique key is reserved first. Creating the Project, Situation, or Task
+before that insert is the defect capture already forbids: two in-flight retries
+would both see an unused key, both write an object, and the later insert would
+treat the same digest as success while leaving the extra row committed.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import insert, select
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
 from my_pa.contracts.ports import (
@@ -12,7 +19,6 @@ from my_pa.contracts.ports import (
     AuthoringReceipt,
     ContinuityAuthoringRepository,
 )
-from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -23,9 +29,14 @@ from my_pa.domain.situation.continuity import (
     Task,
     TaskState,
 )
-from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.situation.situation import Project, ProjectState, Situation, SituationState
 from my_pa.infrastructure.persistence.situation_repository import _append_lifecycle_event
-from my_pa.infrastructure.persistence.tables import continuity_authoring_submissions, tasks
+from my_pa.infrastructure.persistence.tables import (
+    continuity_authoring_submissions,
+    projects,
+    situations,
+    tasks,
+)
 
 
 class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
@@ -49,7 +60,7 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
             payload_digest=row.payload_digest,
         )
 
-    def record(
+    def reserve(
         self,
         *,
         principal_id: str,
@@ -57,14 +68,10 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
         capability: str,
         payload_digest: str,
         object_id: str,
-    ) -> None:
-        prior = self.recall(principal_id, idempotency_key)
-        if prior is not None:
-            if prior.payload_digest != payload_digest or prior.capability != capability:
-                raise AuthoringConflictError
-            return
-        self._connection.execute(
-            insert(continuity_authoring_submissions).values(
+    ) -> bool:
+        admitted = self._connection.execute(
+            pg_insert(continuity_authoring_submissions)
+            .values(
                 principal_id=principal_id,
                 idempotency_key=idempotency_key,
                 capability=capability,
@@ -72,22 +79,101 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
                 object_id=object_id,
                 created_at=utc_now(),
             )
+            .on_conflict_do_nothing(constraint="one_authoring_key_per_principal")
+            .returning(continuity_authoring_submissions.c.object_id)
+        ).one_or_none()
+        if admitted is not None:
+            return True
+        prior = self.recall(principal_id, idempotency_key)
+        if prior is None:
+            raise AuthoringConflictError
+        if prior.payload_digest != payload_digest or prior.capability != capability:
+            raise AuthoringConflictError
+        return False
+
+    def author_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        name: str,
+        description: str | None,
+    ) -> Project:
+        now = utc_now()
+        self._connection.execute(
+            projects.insert().values(
+                project_id=project_id,
+                principal_id=principal_id,
+                name=name,
+                description=description,
+                state=ProjectState.ACTIVE.value,
+                participants=[],
+                opened_at=now,
+                closed_at=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        return Project(
+            project_id=project_id,
+            principal_id=principal_id,
+            name=name,
+            state=ProjectState.ACTIVE,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            description=description,
+        )
+
+    def author_situation(
+        self,
+        *,
+        principal_id: str,
+        situation_id: str,
+        title: str,
+        description: str | None,
+    ) -> Situation:
+        now = utc_now()
+        self._connection.execute(
+            situations.insert().values(
+                situation_id=situation_id,
+                principal_id=principal_id,
+                title=title,
+                description=description,
+                state=SituationState.OPEN.value,
+                object_refs=[],
+                opened_at=now,
+                closed_at=None,
+                outcome=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        return Situation(
+            situation_id=situation_id,
+            principal_id=principal_id,
+            title=title,
+            state=SituationState.OPEN,
+            opened_at=now,
+            created_at=now,
+            updated_at=now,
+            description=description,
         )
 
     def author_task(
         self,
         *,
         principal_id: str,
+        task_id: str,
         title: str,
         origin_evidence_ref: str,
         project_id: str | None = None,
         situation_id: str | None = None,
         due_at: datetime | None = None,
     ) -> Task:
-        task_id = issue_identifier(IdKind.TASK)
         now = utc_now()
         self._connection.execute(
-            insert(tasks).values(
+            tasks.insert().values(
                 task_id=task_id,
                 principal_id=principal_id,
                 title=title,

@@ -132,15 +132,10 @@ def main(argv: list[str] | None = None) -> int:
                     parser.error("remote grant not found")
                 print("remote MCP grant revoked")
             elif args.command == "set-client-writes":
-                result = connection.execute(
-                    remote_clients.update()
-                    .where(
-                        remote_clients.c.oauth_client_id == args.oauth_client_id,
-                        remote_clients.c.revoked_at.is_(None),
-                    )
-                    .values(writes_enabled=args.writes_enabled)
-                )
-                if result.rowcount != 1:
+                if not repository.set_client_writes(
+                    oauth_client_id=args.oauth_client_id,
+                    writes_enabled=args.writes_enabled,
+                ):
                     parser.error("remote client not found")
                 print(
                     "remote MCP client writes " + ("enabled" if args.writes_enabled else "disabled")

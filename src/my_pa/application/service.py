@@ -117,7 +117,6 @@ from typing import Any, Final, assert_never
 from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.commands import (
-    AddProjectCommand,
     ArchiveManagedDocument,
     ArchiveManagedDocumentCommand,
     Command,
@@ -142,7 +141,6 @@ from my_pa.application.commands import (
     ListReviewCases,
     ListSituations,
     ListSources,
-    OpenSituationCommand,
     ReadCapture,
     ReadKnowledge,
     ReadManagedDocument,
@@ -181,7 +179,6 @@ from my_pa.application.errors import (
 )
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.model_gate import BoundedModelGate
-from my_pa.application.situation_service import SituationService
 from my_pa.contracts.ports import (
     Acceptance,
     AuthoringConflictError,
@@ -1953,34 +1950,33 @@ class ApplicationService:
             command.capability.value,
             {"name": command.name, "description": command.description},
         )
+        object_id = issue_identifier(IdKind.PROJECT)
         with _translated():
             authoring = unit_of_work.continuity_authoring
-            prior = authoring.recall(principal_id, command.idempotency_key)
-            if prior is not None:
-                if prior.capability != command.capability.value or prior.payload_digest != digest:
-                    raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
-                project = unit_of_work.projects.get_project(principal_id, prior.object_id)
-                if project is None:
-                    raise InternalError()
-                return self._project_authoring_result(authorization, project, replayed=True)
             try:
-                project = SituationService().add_project(
-                    unit_of_work.projects,
-                    AddProjectCommand(
-                        principal_id=authorization.principal.principal_id,
-                        name=command.name,
-                        description=command.description,
-                    ),
-                )
-                authoring.record(
+                owned = authoring.reserve(
                     principal_id=principal_id,
                     idempotency_key=command.idempotency_key,
                     capability=command.capability.value,
                     payload_digest=digest,
-                    object_id=project.project_id,
+                    object_id=object_id,
                 )
             except AuthoringConflictError:
                 raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+            if not owned:
+                prior = authoring.recall(principal_id, command.idempotency_key)
+                if prior is None:
+                    raise InternalError()
+                project = unit_of_work.projects.get_project(principal_id, prior.object_id)
+                if project is None:
+                    raise InternalError()
+                return self._project_authoring_result(authorization, project, replayed=True)
+            project = authoring.author_project(
+                principal_id=authorization.principal.principal_id,
+                project_id=object_id,
+                name=command.name,
+                description=command.description,
+            )
         return self._project_authoring_result(authorization, project, replayed=False)
 
     def _continuity_situations_create(
@@ -1992,34 +1988,33 @@ class ApplicationService:
             command.capability.value,
             {"title": command.title, "description": command.description},
         )
+        object_id = issue_identifier(IdKind.SITUATION)
         with _translated():
             authoring = unit_of_work.continuity_authoring
-            prior = authoring.recall(principal_id, command.idempotency_key)
-            if prior is not None:
-                if prior.capability != command.capability.value or prior.payload_digest != digest:
-                    raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
-                situation = unit_of_work.situations.get_situation(principal_id, prior.object_id)
-                if situation is None:
-                    raise InternalError()
-                return self._situation_authoring_result(authorization, situation, replayed=True)
             try:
-                situation = SituationService().open_situation(
-                    unit_of_work.situations,
-                    OpenSituationCommand(
-                        principal_id=authorization.principal.principal_id,
-                        title=command.title,
-                        description=command.description,
-                    ),
-                )
-                authoring.record(
+                owned = authoring.reserve(
                     principal_id=principal_id,
                     idempotency_key=command.idempotency_key,
                     capability=command.capability.value,
                     payload_digest=digest,
-                    object_id=situation.situation_id,
+                    object_id=object_id,
                 )
             except AuthoringConflictError:
                 raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+            if not owned:
+                prior = authoring.recall(principal_id, command.idempotency_key)
+                if prior is None:
+                    raise InternalError()
+                situation = unit_of_work.situations.get_situation(principal_id, prior.object_id)
+                if situation is None:
+                    raise InternalError()
+                return self._situation_authoring_result(authorization, situation, replayed=True)
+            situation = authoring.author_situation(
+                principal_id=authorization.principal.principal_id,
+                situation_id=object_id,
+                title=command.title,
+                description=command.description,
+            )
         return self._situation_authoring_result(authorization, situation, replayed=False)
 
     def _continuity_tasks_create(
@@ -2046,10 +2041,21 @@ class ApplicationService:
             ):
                 raise NotFoundError(SafeDetail.SITUATION_ID)
             authoring = unit_of_work.continuity_authoring
-            prior = authoring.recall(principal_id, command.idempotency_key)
-            if prior is not None:
-                if prior.capability != command.capability.value or prior.payload_digest != digest:
-                    raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+            object_id = issue_identifier(IdKind.TASK)
+            try:
+                owned = authoring.reserve(
+                    principal_id=principal_id,
+                    idempotency_key=command.idempotency_key,
+                    capability=command.capability.value,
+                    payload_digest=digest,
+                    object_id=object_id,
+                )
+            except AuthoringConflictError:
+                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+            if not owned:
+                prior = authoring.recall(principal_id, command.idempotency_key)
+                if prior is None:
+                    raise InternalError()
                 return _Result(
                     payload={
                         "task_id": prior.object_id,
@@ -2068,24 +2074,15 @@ class ApplicationService:
                         authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS
                     ),
                 )
-            try:
-                task = authoring.author_task(
-                    principal_id=principal_id,
-                    title=command.title,
-                    origin_evidence_ref=authorization.request_id,
-                    project_id=command.project_id,
-                    situation_id=command.situation_id,
-                    due_at=command.due_at,
-                )
-                authoring.record(
-                    principal_id=principal_id,
-                    idempotency_key=command.idempotency_key,
-                    capability=command.capability.value,
-                    payload_digest=digest,
-                    object_id=task.task_id,
-                )
-            except AuthoringConflictError:
-                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+            task = authoring.author_task(
+                principal_id=principal_id,
+                task_id=object_id,
+                title=command.title,
+                origin_evidence_ref=authorization.request_id,
+                project_id=command.project_id,
+                situation_id=command.situation_id,
+                due_at=command.due_at,
+            )
         return _Result(
             payload={
                 "task_id": task.task_id,

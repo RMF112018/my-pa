@@ -242,6 +242,7 @@ from my_pa.domain.extraction.text import ExtractionStatus, extract_text
 from my_pa.domain.goodnotes.models import GoodNotesReviewCase
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
+from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
@@ -648,6 +649,7 @@ class ApplicationService:
         *,
         principal: Principal,
         transport: CaptureTransport = CaptureTransport.LOCAL,
+        capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
     ) -> ResponseEnvelope:
         """Execute one request and return the envelope describing what happened.
 
@@ -665,6 +667,13 @@ class ApplicationService:
         through this method is that it takes the *same* path as a local one, and
         a transport that could change what a request is permitted to do would be
         a second capture path wearing the first one's name.
+
+        `capability_grants` is the third server-derived input. `None` means
+        local composition and does not restrict searchable planes.
+        A non-`None` set is the authenticated remote grant set and is never
+        read from the request payload. `context.prepare` intersects it with
+        per-plane read capabilities so a `context.prepare` grant does not
+        implicitly search every plane the Principal can read.
 
         **No exception leaves this method.** The first two handlers classify what
         this layer already understands. The third is a terminal catch, and it is
@@ -701,6 +710,7 @@ class ApplicationService:
                 correlation_id=correlation_id,
                 at=started_at,
                 transport=transport,
+                capability_grants=capability_grants,
             )
         except ApplicationError as error:
             failure = error
@@ -741,6 +751,7 @@ class ApplicationService:
         correlation_id: str,
         at: datetime,
         transport: CaptureTransport = CaptureTransport.LOCAL,
+        capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
     ) -> _Result:
         """Authorize, then execute, then commit — or refuse and still commit.
 
@@ -791,6 +802,7 @@ class ApplicationService:
                     request_id=metadata.request_id,
                     at=at,
                     transport=transport,
+                    capability_grants=capability_grants,
                 )
                 if authorization.allowed:
                     return _HANDLERS[command.capability](self, unit_of_work, authorization, command)

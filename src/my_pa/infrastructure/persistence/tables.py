@@ -134,6 +134,14 @@ from my_pa.domain.capture.version import (
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
+from my_pa.domain.context.prepared import (
+    MAX_METADATA_CHARACTERS,
+    ContextPlane,
+    EvidenceLifecycle,
+    RetrievalMode,
+    SourceAuthorityClass,
+)
+from my_pa.domain.context.run import CONTEXT_RUN_OUTCOME_SUCCESS
 from my_pa.domain.conversation.event import ConversationChannel, ConversationState
 from my_pa.domain.documents.managed import (
     MANAGED_MEDIA_TYPES,
@@ -4395,4 +4403,149 @@ goodnotes_reconciliation_receipts = Table(
     Column("page_version_ids", JSON, nullable=False),
     Column("created_regions", Integer, nullable=False),
     CheckConstraint("created_regions >= 0", name="goodnotes_created_regions_is_nonnegative"),
+)
+
+#: One row per `context.prepare` disclosure. Insert only. Reconstructs which
+#: evidence references were returned without storing the query, conversation
+#: context, or excerpt text. `remote_client_id` is omitted rather than stored
+#: from a caller-supplied value: transport is already server-derived provenance.
+#: Rollback of the capability is revoke (AC-KC-037), not a DELETE of these rows.
+context_runs = Table(
+    "context_runs",
+    METADATA,
+    Column("context_manifest_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("request_id", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text),
+    Column("transport", Text, nullable=False),
+    Column("purpose", Text, nullable=False),
+    Column("query_fingerprint", Text, nullable=False),
+    Column("retrieval_mode", Text, nullable=False),
+    Column("ranking_version", Text, nullable=False),
+    Column("policy_version", Text, nullable=False),
+    Column("generated_at", DateTime(timezone=True), nullable=False),
+    Column("total_items", Integer, nullable=False),
+    Column("total_bytes", Integer, nullable=False),
+    Column("duration_ms", Integer),
+    Column("outcome", Text, nullable=False),
+    Column("truncated", Boolean, nullable=False),
+    Column("truncation_reason", Text),
+    _is_identifier("context_manifest_id", IdKind.CONTEXT_MANIFEST),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    CheckConstraint(
+        f"audit_id IS NULL OR audit_id ~ '^{IdKind.AUDIT.value}_{_IDENTIFIER_SUFFIX}$'",
+        name="context_run_audit_id_is_an_opaque_identifier",
+    ),
+    _one_of("transport", CaptureTransport, name="context_run_transport_is_known"),
+    CheckConstraint(
+        "purpose = 'context_preparation'",
+        name="context_run_purpose_is_context_preparation",
+    ),
+    _matches(
+        "query_fingerprint",
+        DIGEST_PATTERN.pattern,
+        name="context_run_query_fingerprint_is_a_digest",
+    ),
+    _one_of("retrieval_mode", RetrievalMode, name="context_run_retrieval_mode_is_known"),
+    CheckConstraint(
+        f"length(ranking_version) BETWEEN 1 AND {MAX_METADATA_CHARACTERS}",
+        name="context_run_ranking_version_is_bounded",
+    ),
+    CheckConstraint(
+        f"length(policy_version) BETWEEN 1 AND {MAX_METADATA_CHARACTERS}",
+        name="context_run_policy_version_is_bounded",
+    ),
+    CheckConstraint("total_items >= 0", name="context_run_item_count_is_nonnegative"),
+    CheckConstraint("total_bytes >= 0", name="context_run_byte_count_is_nonnegative"),
+    CheckConstraint(
+        "duration_ms IS NULL OR duration_ms >= 0",
+        name="context_run_duration_is_nonnegative",
+    ),
+    CheckConstraint(
+        f"outcome = '{CONTEXT_RUN_OUTCOME_SUCCESS}'",
+        name="context_run_outcome_is_known",
+    ),
+    CheckConstraint(
+        f"length(request_id) BETWEEN 1 AND {MAX_REQUEST_ID_CHARACTERS}",
+        name="context_run_request_id_is_bounded",
+    ),
+    CheckConstraint(
+        "truncation_reason IS NULL OR "
+        f"(length(truncation_reason) BETWEEN 1 AND {MAX_METADATA_CHARACTERS})",
+        name="context_run_truncation_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "(truncated = false AND truncation_reason IS NULL) OR "
+        "(truncated = true AND truncation_reason IS NOT NULL)",
+        name="context_run_truncation_reason_matches_flag",
+    ),
+    Index("context_runs_by_principal", "principal_id", "generated_at"),
+)
+
+#: One disclosed evidence reference per packed item. The excerpt itself is not
+#: stored; `excerpt_sha256` is the UTF-8 digest of the text that was returned.
+context_run_items = Table(
+    "context_run_items",
+    METADATA,
+    Column("context_manifest_id", Text, nullable=False),
+    Column("position", Integer, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("reference_id", Text, nullable=False),
+    Column("plane", Text, nullable=False),
+    Column("authority_class", Text, nullable=False),
+    Column("lifecycle", Text, nullable=False),
+    Column("classification", Text, nullable=False),
+    Column("excerpt_sha256", Text, nullable=False),
+    Column("reason_codes", Text, nullable=False),
+    Column("source_id", Text),
+    Column("source_object_id", Text),
+    Column("source_version_id", Text),
+    Column("knowledge_id", Text),
+    Column("capture_id", Text),
+    Column("capture_version_id", Text),
+    Column("product_id", Text),
+    Column("managed_document_id", Text),
+    Column("managed_document_version_id", Text),
+    Column("span_start", Integer),
+    Column("span_end", Integer),
+    PrimaryKeyConstraint(
+        "context_manifest_id", "position", name="one_item_per_context_run_position"
+    ),
+    ForeignKeyConstraint(
+        ["context_manifest_id"],
+        [f"{SCHEMA}.context_runs.context_manifest_id"],
+        ondelete="CASCADE",
+        name="context_run_items_belong_to_a_run",
+    ),
+    _is_identifier("context_manifest_id", IdKind.CONTEXT_MANIFEST),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("position >= 0", name="context_run_item_position_is_nonnegative"),
+    CheckConstraint(
+        "length(reference_id) BETWEEN 1 AND 80",
+        name="context_run_item_reference_is_bounded",
+    ),
+    _one_of("plane", ContextPlane, name="context_run_item_plane_is_known"),
+    _one_of(
+        "authority_class",
+        SourceAuthorityClass,
+        name="context_run_item_authority_is_known",
+    ),
+    _one_of("lifecycle", EvidenceLifecycle, name="context_run_item_lifecycle_is_known"),
+    _one_of("classification", Classification, name="context_run_item_classification_is_known"),
+    _matches(
+        "excerpt_sha256",
+        DIGEST_PATTERN.pattern,
+        name="context_run_item_excerpt_digest_is_a_sha256",
+    ),
+    CheckConstraint(
+        "length(reason_codes) <= 512",
+        name="context_run_item_reason_codes_are_bounded",
+    ),
+    CheckConstraint(
+        "(span_start IS NULL) = (span_end IS NULL)",
+        name="context_run_item_span_has_both_ends",
+    ),
+    Index("context_run_items_by_principal", "principal_id"),
 )

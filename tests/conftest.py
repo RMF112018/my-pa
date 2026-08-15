@@ -58,6 +58,7 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
     CaptureSummary,
+    ContextRunRepository,
     ContinuityAuthoringRepository,
     EnrollmentRepository,
     KnowledgeRecord,
@@ -120,6 +121,7 @@ from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.context.run import ContextRunRecord
 from my_pa.domain.documents.managed import (
     DocumentState,
     LifecycleTransition,
@@ -321,6 +323,10 @@ class World:
     framed_obligations: list[FramedObligation] = field(default_factory=list)
     dismissed_pulse_ids: set[str] = field(default_factory=set)
     audit: list[AuditEvent] = field(default_factory=list)
+    #: Insert-only context-run metadata. The fake cannot prove the server
+    #: trigger; that belongs to the schema tier. What it can prove is that the
+    #: application wrote identifiers and digests and never the query or excerpt.
+    context_runs: list[ContextRunRecord] = field(default_factory=list)
     commits: int = 0
     rollbacks: int = 0
     #: Port failures a test wants raised, keyed by the method that should raise.
@@ -1058,6 +1064,17 @@ class _Audit(AuditSink):
         self._world.audit.append(event)
 
 
+class _ContextRuns(ContextRunRepository):
+    """Insert-only context-run metadata over a `World`."""
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def record(self, run: ContextRunRecord) -> None:
+        self._world.fail("context_runs")
+        self._world.context_runs.append(run)
+
+
 class RecordingAudit(AuditSink):
     """An audit sink that keeps its events, for a test to read.
 
@@ -1682,6 +1699,11 @@ class FakeUnitOfWork(UnitOfWork):
     def managed_documents(self) -> ManagedDocumentRepository:
         """The managed-document plane over this `World` (WP-28)."""
         return _ManagedDocuments(self._world)
+
+    @property
+    def context_runs(self) -> ContextRunRepository:
+        """Insert-only context-run metadata over this `World`."""
+        return _ContextRuns(self._world)
 
     @property
     def audit(self) -> AuditSink:

@@ -165,6 +165,11 @@ QUARANTINED: Final = {
         "the policy decision produced. An audit sink that filtered by Principal "
         "would be an audit trail the subject could shape; reads are operator-only."
     ),
+    "infrastructure/persistence/context_runs.py": (
+        "insert-only context-run metadata. `principal_id` is stamped from the "
+        "Authorization already decided for `context.prepare`; there is no read, "
+        "and a caller cannot name the partition."
+    ),
     "infrastructure/persistence/enrollment.py": (
         "scopes `enrollments` by a hand-written `principal_id` comparison "
         "registered in HAND_WRITTEN_COMPARISONS below. Not a hole, but not the "

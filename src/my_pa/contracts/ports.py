@@ -60,6 +60,7 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.context.run import ContextRunRecord
 from my_pa.domain.documents.managed import (
     DocumentState,
     LifecycleTransition,
@@ -119,6 +120,7 @@ __all__ = [
     "CaptureSearchOutcome",
     "CaptureSearchRequest",
     "CaptureSummary",
+    "ContextRunRepository",
     "ContinuityAuthoringRepository",
     "ContinuityReadRepository",
     "ContinuityRepository",
@@ -878,6 +880,20 @@ class AuditSink(ABC):
         """Persist one redacted audit event."""
 
 
+class ContextRunRepository(ABC):
+    """Insert-only persistence of a prepared-context disclosure.
+
+    The record holds identifiers, digests, fingerprints, and policy versions.
+    It does not hold the query, conversation_context, or excerpt text. There is
+    no read method on this port yet: reconstruction of disclosed references is
+    a later reader, and YAGNI keeps this to `record`.
+    """
+
+    @abstractmethod
+    def record(self, run: ContextRunRecord) -> None:
+        """Persist one context run and its items, filtered by `run.principal_id`."""
+
+
 class SourceProviders(ABC):
     """The lookup from a configured source's identity to its read-only adapter.
 
@@ -1151,6 +1167,17 @@ class UnitOfWork(ABC):
 
         `principal_id` remains a parameter on every method of the port and is
         the authenticated caller's partition, never a caller-supplied field.
+        """
+
+    @property
+    @abstractmethod
+    def context_runs(self) -> ContextRunRepository:
+        """Insert-only context-run metadata, inside this transaction.
+
+        Written after packing, in the same unit of work as `context.prepare`, so
+        a handler failure rolls the disclosure record back with the request.
+        The port has no update or delete: rollback of the capability is revoke
+        (AC-KC-037), not a row mutation. Every write is principal-partitioned.
         """
 
     @property

@@ -235,6 +235,8 @@ def test_readme_derives_the_current_alembic_count_and_head() -> None:
         37: "Thirty-seven",
         38: "Thirty-eight",
         39: "Thirty-nine",
+        40: "Forty",
+        41: "Forty-one",
     }
     count, head = _alembic_identity()
     assert count in words, "extend the readable README count vocabulary"
@@ -320,8 +322,8 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
         assert "thirty capabilit" in text.lower().replace(" public ", " "), (
             f"{label} lost the current capability count"
         )
-        assert "thirty-nine" in text, f"{label} lost the current revision count"
-        assert "7c2e9b4a1d80" in text, f"{label} lost the current Alembic head"
+        assert "forty-one" in text, f"{label} lost the current revision count"
+        assert "9b2d5f8c3e01" in text, f"{label} lost the current Alembic head"
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

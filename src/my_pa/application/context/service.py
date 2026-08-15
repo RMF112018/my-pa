@@ -2,14 +2,18 @@
 
 The handler is a thin adapter: it normalizes the query and returns the
 canonical payload. Enrollments are discovered from `Authorization.enrollments`;
-the caller does not supply them.
+the caller does not supply them. Remote grant intersection is applied here so a
+`context.prepare` grant does not search every plane the Principal can read.
+Context-run metadata is persisted after packing, in the same unit of work.
 """
 
 from __future__ import annotations
 
+import time
+
 from my_pa.application.authorization import Authorization
 from my_pa.application.commands import PrepareContext
-from my_pa.application.context.providers import eligible_planes, search_plane
+from my_pa.application.context.providers import search_plane, searchable_planes
 from my_pa.application.context.ranking import rank_and_pack
 from my_pa.application.errors import InternalError
 from my_pa.contracts.ports import UnitOfWork
@@ -23,11 +27,16 @@ from my_pa.domain.context.prepared import (
     MAX_EVIDENCE_ITEMS,
     ContextCoverage,
     ContextLimitationCode,
-    ContextPlane,
     CoverageState,
     PreparedContext,
     PreparedContextEvidence,
     RetrievalMode,
+)
+from my_pa.domain.context.run import (
+    CONTEXT_RUN_OUTCOME_SUCCESS,
+    ContextRunItemRecord,
+    ContextRunRecord,
+    excerpt_sha256,
 )
 from my_pa.domain.search.query import SearchQuery
 from my_pa.domain.source.registry import issue_identifier
@@ -57,10 +66,13 @@ class ContextPreparationService:
         command: PrepareContext,
         query: SearchQuery,
     ) -> PreparedContext:
+        started = time.monotonic()
         extra_terms = _conversation_terms(command.conversation_context)
         requested = command.requested_planes
-        eligible = eligible_planes(managed_documents_composed=self._managed_documents_composed)
-        considered = (*eligible, ContextPlane.RELATIONSHIP)
+        considered = searchable_planes(
+            managed_documents_composed=self._managed_documents_composed,
+            capability_grants=authorization.capability_grants,
+        )
         selected = tuple(plane for plane in considered if not requested or plane in requested)
 
         gathers = [
@@ -102,7 +114,7 @@ class ContextPreparationService:
             for hint in command.subject_hints
             if any(_hint_applied(hint, item) for item in packed.items)
         )
-        return PreparedContext(
+        prepared = PreparedContext(
             context_manifest_id=issue_identifier(IdKind.CONTEXT_MANIFEST),
             principal_id=authorization.principal.principal_id,
             retrieval_mode=RetrievalMode.LEXICAL_STRUCTURED,
@@ -118,6 +130,65 @@ class ContextPreparationService:
             truncation=packed.truncation,
             applied_subjects=applied,
         )
+        duration_ms = max(0, round((time.monotonic() - started) * 1000))
+        unit_of_work.context_runs.record(
+            _run_record(prepared, authorization, duration_ms=duration_ms)
+        )
+        return prepared
+
+
+def _run_record(
+    prepared: PreparedContext,
+    authorization: Authorization,
+    *,
+    duration_ms: int,
+) -> ContextRunRecord:
+    """Identifiers and digests of one disclosure. Never the query or excerpt text."""
+    return ContextRunRecord(
+        context_manifest_id=prepared.context_manifest_id,
+        principal_id=prepared.principal_id,
+        request_id=authorization.request_id,
+        correlation_id=authorization.correlation_id,
+        transport=authorization.transport.value,
+        purpose=authorization.purpose.value,
+        query_fingerprint=prepared.query_fingerprint,
+        retrieval_mode=prepared.retrieval_mode,
+        ranking_version=prepared.ranking_version,
+        policy_version=prepared.policy_version,
+        generated_at=prepared.generated_at,
+        total_items=prepared.total_items,
+        total_bytes=prepared.total_bytes,
+        outcome=CONTEXT_RUN_OUTCOME_SUCCESS,
+        truncated=prepared.truncation.is_truncated,
+        items=tuple(
+            ContextRunItemRecord(
+                position=position,
+                reference_id=item.reference_id,
+                principal_id=item.principal_id,
+                plane=item.plane,
+                authority_class=item.authority_class,
+                lifecycle=item.lifecycle,
+                classification=item.classification,
+                excerpt_sha256=excerpt_sha256(item.text),
+                reason_codes=",".join(code.value for code in item.reason_codes),
+                source_id=item.source_id,
+                source_object_id=item.source_object_id,
+                source_version_id=item.source_version_id,
+                knowledge_id=item.knowledge_id,
+                capture_id=item.capture_id,
+                capture_version_id=item.capture_version_id,
+                product_id=item.product_id,
+                managed_document_id=item.managed_document_id,
+                managed_document_version_id=item.managed_document_version_id,
+                span_start=item.span_start,
+                span_end=item.span_end,
+            )
+            for position, item in enumerate(prepared.evidence)
+        ),
+        audit_id=authorization.audit_id,
+        duration_ms=duration_ms,
+        truncation_reason=prepared.truncation.reason,
+    )
 
 
 def _conversation_terms(conversation_context: str | None) -> tuple[str, ...]:

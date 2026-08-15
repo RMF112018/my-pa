@@ -223,9 +223,8 @@ class Capability(StrEnum):
     # Remotely grantable for the same reason `knowledge.search` is: a ChatLLM
     # needs this before answering questions that depend on personal context.
     #
-    # No Alembic `ALTER` in this work package; WP-KC-05 admits the live
-    # vocabulary. Until then a stored `capability_is_known` constraint will
-    # refuse the name. FAST tests do not exercise that store.
+    # Alembic revision `8a1c4e7b2d90` admits the live vocabulary. A stored
+    # `capability_is_known` constraint before that revision refuses the name.
     CONTEXT_PREPARE = "context.prepare"
 
 

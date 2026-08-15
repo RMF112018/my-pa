@@ -15,6 +15,8 @@ from tests.conftest import (
 )
 from tests.contract.test_application_capabilities import run, succeeded
 
+from my_pa.adapters.mcp.tools import input_schema_for, payload_schema_for
+from my_pa.adapters.remote_request import remote_tool_schema
 from my_pa.application.commands import PrepareContext
 from my_pa.application.errors import SafeDetail
 from my_pa.contracts.ports import RepositoryFailureError, SearchOutcome
@@ -38,6 +40,7 @@ from my_pa.domain.context.prepared import (
     ContextPlane,
     CoverageState,
 )
+from my_pa.domain.context.run import excerpt_sha256
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchQuery
@@ -331,3 +334,139 @@ def test_subject_hint_is_applied_when_it_matches(scene: Scene) -> None:
     capture_item = next(item for item in result["evidence"] if item["plane"] == "capture")
     assert "explicit_subject" in capture_item["reason_codes"]
     assert "exact_identifier" in capture_item["reason_codes"]
+
+
+def _grants(*capabilities: Capability) -> frozenset[tuple[Capability, Purpose | None]]:
+    return frozenset((capability, None) for capability in capabilities)
+
+
+def _prepare_with_grants(
+    scene: Scene,
+    command: PrepareContext,
+    grants: frozenset[tuple[Capability, Purpose | None]] | None,
+) -> ResponseEnvelope:
+    return build_service(scene.world, scene.providers).invoke(
+        metadata_for(Capability.CONTEXT_PREPARE, Purpose.CONTEXT_PREPARATION, scene.principal),
+        command,
+        principal=scene.principal,
+        capability_grants=grants,
+    )
+
+
+def _named_planes(result: dict[str, object]) -> set[str]:
+    evidence = result["evidence"]
+    coverage = result["coverage"]
+    unavailable = result["unavailable_planes"]
+    assert isinstance(evidence, list)
+    assert isinstance(coverage, list)
+    assert isinstance(unavailable, list)
+    names = {item["plane"] for item in evidence if isinstance(item, dict)}
+    names |= {row["plane"] for row in coverage if isinstance(row, dict)}
+    names |= {plane for plane in unavailable if isinstance(plane, str)}
+    return names
+
+
+def test_remote_grants_intersect_to_knowledge_only(scene: Scene) -> None:
+    _stage_search(scene, staged_search(scene))
+    staged_capture(scene, text="quarterly revenue from the dock")
+    staged_situation(scene, title="quarterly planning")
+    result = succeeded(
+        _prepare_with_grants(
+            scene,
+            PrepareContext(query="quarterly"),
+            _grants(Capability.CONTEXT_PREPARE, Capability.KNOWLEDGE_SEARCH),
+        )
+    )
+    assert _named_planes(result) == {ContextPlane.KNOWLEDGE.value}
+    assert all(item["plane"] == "knowledge" for item in result["evidence"])
+    encoded = json.dumps(result)
+    assert '"plane": "capture"' not in encoded
+    assert '"plane": "continuity"' not in encoded
+    assert '"plane": "relationship"' not in encoded
+    assert "permission_denied" not in encoded
+
+
+def test_context_prepare_only_grant_names_no_plane(scene: Scene) -> None:
+    _stage_search(scene, staged_search(scene))
+    staged_capture(scene, text="quarterly revenue from the dock")
+    staged_situation(scene, title="quarterly planning")
+    result = succeeded(
+        _prepare_with_grants(
+            scene,
+            PrepareContext(query="quarterly"),
+            _grants(Capability.CONTEXT_PREPARE),
+        )
+    )
+    assert result["evidence"] == []
+    assert result["coverage"] == []
+    assert result["unavailable_planes"] == []
+    encoded = json.dumps(result)
+    for plane in ContextPlane:
+        assert f'"plane": "{plane.value}"' not in encoded
+    assert "permission_denied" not in encoded
+
+
+def test_local_grants_none_keeps_the_mixed_packet(scene: Scene) -> None:
+    _stage_search(scene, staged_search(scene))
+    staged_capture(scene, text="quarterly revenue from the dock")
+    staged_situation(scene, title="quarterly planning")
+    result = succeeded(_prepare_with_grants(scene, PrepareContext(query="quarterly"), None))
+    planes = {item["plane"] for item in result["evidence"]}
+    assert ContextPlane.KNOWLEDGE.value in planes
+    assert ContextPlane.CAPTURE.value in planes
+    assert ContextPlane.CONTINUITY.value in planes
+
+
+def test_persisted_run_holds_fingerprint_and_digest_not_text(scene: Scene) -> None:
+    marker = "quarterly"
+    excerpt = "quarterly revenue from the dock"
+    _stage_search(scene, staged_search(scene))
+    staged_capture(scene, text=excerpt)
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.CONTEXT_PREPARE,
+            Purpose.CONTEXT_PREPARATION,
+            PrepareContext(query=marker),
+        )
+    )
+    stored = scene.world.context_runs
+    assert len(stored) == 1
+    run_row = stored[0]
+    assert run_row.query_fingerprint == SearchQuery(marker).fingerprint
+    assert marker not in repr(run_row)
+    assert run_row.outcome == "success"
+    assert run_row.total_items == len(result["evidence"])
+    capture_item = next(item for item in result["evidence"] if item["plane"] == "capture")
+    stored_item = next(item for item in run_row.items if item.plane is ContextPlane.CAPTURE)
+    assert stored_item.excerpt_sha256 == excerpt_sha256(str(capture_item["text"]))
+    assert excerpt not in stored_item.excerpt_sha256
+    assert excerpt not in repr(run_row)
+
+
+def test_persist_failure_fails_the_request(scene: Scene) -> None:
+    _stage_search(scene, staged_search(scene))
+    scene.world.failures["context_runs"] = RepositoryFailureError()
+    envelope = run(
+        build_service(scene.world, scene.providers),
+        scene,
+        Capability.CONTEXT_PREPARE,
+        Purpose.CONTEXT_PREPARATION,
+        PrepareContext(query="quarterly"),
+    )
+    assert envelope.error is not None
+    assert envelope.error.code is ErrorCode.INTERNAL_ERROR
+    assert scene.world.rollbacks == 1
+
+
+def test_mcp_schema_for_context_prepare_has_no_principal_or_grants() -> None:
+    payload = payload_schema_for(PrepareContext)
+    names = set(payload.get("properties", {}))
+    assert "principal_id" not in names
+    assert "grants" not in names
+    assert "capability_grants" not in names
+    remote = json.dumps(remote_tool_schema(input_schema_for(PrepareContext)))
+    assert "grants" not in remote
+    assert "capability_grants" not in remote
+    assert '"principal_id"' not in remote

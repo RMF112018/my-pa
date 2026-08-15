@@ -227,7 +227,13 @@ def _answer(
     ):
         return _problem(UnsupportedError()).to_canonical_json(), True
     try:
-        envelope = service.invoke(metadata, command, principal=principal, transport=transport)
+        envelope = service.invoke(
+            metadata,
+            command,
+            principal=principal,
+            transport=transport,
+            capability_grants=allowed_capability_purposes,
+        )
     except Exception:
         return _problem(InternalError()).to_canonical_json(), True
     return envelope.to_canonical_json(), envelope.error is not None

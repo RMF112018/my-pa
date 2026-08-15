@@ -25,14 +25,6 @@ CAPABILITIES_ADDED: Final[frozenset[str]] = frozenset(
 )
 PURPOSES_ADDED: Final[frozenset[str]] = frozenset({"continuity_authoring"})
 
-#: Domain members admitted after this revision without a forward `ALTER`.
-#: WP-KC-01 added `context.prepare` / `context_preparation` to the live enums;
-#: WP-KC-05 is the revision that will admit them to the stored vocabulary.
-#: Until then this file must not claim the frozen SQL literals *are* the
-#: domain at head, and must not rewrite the historical tuple.
-CAPABILITIES_ADMITTED_AFTER: Final[frozenset[str]] = frozenset({"context.prepare"})
-PURPOSES_ADMITTED_AFTER: Final[frozenset[str]] = frozenset({"context_preparation"})
-
 
 def _frozen_literals(constant: str) -> frozenset[str]:
     matches = [
@@ -45,21 +37,22 @@ def _frozen_literals(constant: str) -> frozenset[str]:
     return frozenset(re.findall(r"'([^']+)'", source[start:end]))
 
 
-def test_this_revision_is_the_head() -> None:
+def test_this_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert list(script.get_heads()) == [REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 39
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 41
 
 
-def test_the_frozen_literals_are_the_domain_at_head() -> None:
+def test_the_frozen_literals_are_this_revision_s_vocabulary() -> None:
     admitted = _frozen_literals("_CAPABILITIES_AT_THIS_REVISION")
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
-    assert admitted | CAPABILITIES_ADMITTED_AFTER == declared
+    assert admitted <= declared
     purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
-    assert purposes | PURPOSES_ADMITTED_AFTER == {member.value for member in Purpose}
+    assert purposes <= {member.value for member in Purpose}
     assert admitted - _frozen_literals("_CAPABILITIES_BEFORE_THIS_REVISION") == CAPABILITIES_ADDED
     assert purposes - _frozen_literals("_PURPOSES_BEFORE_THIS_REVISION") == PURPOSES_ADDED
 

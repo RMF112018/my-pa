@@ -217,7 +217,18 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # compares each item against the package owner and refuses a cross-principal
     # mix; the value is not a request-body field.
     "domain/context/prepared.py": (("item", "principal_id"),),
+    "domain/context/run.py": (("item", "principal_id"),),
     "domain/modeling/gate.py": (("item", "principal_id"),),
+    # Persist copies the packed package's partition, already confined to
+    # `authorization.principal`. Not a request-body field.
+    "application/context/service.py": (
+        ("item", "principal_id"),
+        ("prepared", "principal_id"),
+    ),
+    "infrastructure/persistence/context_runs.py": (
+        ("item", "principal_id"),
+        ("run", "principal_id"),
+    ),
     "infrastructure/goodnotes/fixture.py": (("page", "principal_id"),),
     # The admitted manifest's owner is untrusted source metadata. The source
     # receives the authenticated Principal from the application and selects only

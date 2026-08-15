@@ -154,8 +154,8 @@ class IdKind(StrEnum):
     #: audit row has to say which record it names, and `cov` already names an
     #: extraction-plane coverage snapshot. `ctxm` names the retrieval contract's
     #: assembled package, which may cite capture and continuity evidence that
-    #: a coverage snapshot cannot. WP-KC-01 issues these in memory; persistence
-    #: of context runs is WP-KC-04.
+    #: a coverage snapshot cannot. Persistence of context runs is insert-only
+    #: metadata: identifiers and digests, never the query or excerpt text.
     CONTEXT_MANIFEST = "ctxm"
 
 

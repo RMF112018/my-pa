@@ -73,7 +73,7 @@ hash.
 The repository is an executable local candidate, not a documentation scaffold.
 The `my_pa` application exposes thirty capabilities through HTTP, MCP, and
 CLI composition, with PostgreSQL Principal partitioning and two worker planes.
-Alembic owns thirty-nine revisions at head `7c2e9b4a1d80`, including the merge of
+Alembic owns forty-one revisions at head `9b2d5f8c3e01`, including the merge of
 the retained native-baseline and managed-document histories. The web BFF calls
 those capabilities, supports a server-side Entra authorization-code + PKCE
 session path without exposing its bearer, and publishes content-free worker

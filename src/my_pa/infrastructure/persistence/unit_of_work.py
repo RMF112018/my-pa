@@ -63,6 +63,7 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
     CaptureSummary,
+    ContextRunRepository,
     ContinuityAuthoringRepository,
     ContinuityReadRepository,
     EnrollmentRepository,
@@ -104,6 +105,7 @@ from my_pa.infrastructure.persistence.capture import (
     capture_version,
 )
 from my_pa.infrastructure.persistence.capture_search import search_captures
+from my_pa.infrastructure.persistence.context_runs import SqlContextRunRepository
 from my_pa.infrastructure.persistence.continuity_authoring import (
     SqlContinuityAuthoringRepository,
 )
@@ -708,6 +710,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def managed_documents(self) -> ManagedDocumentRepository:
         """The managed-document rows, on this transaction's connection (WP-28)."""
         return SqlManagedDocumentRepository(self._open)
+
+    @property
+    def context_runs(self) -> ContextRunRepository:
+        """Insert-only context-run metadata, on this transaction's connection."""
+        return SqlContextRunRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

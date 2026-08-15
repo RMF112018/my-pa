@@ -9,6 +9,7 @@ the fake raises `KeyError` when an enrollment was not staged.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Final
 
 from my_pa.application.authorization import Authorization
 from my_pa.contracts.ports import (
@@ -33,6 +34,8 @@ from my_pa.domain.context.prepared import (
     SelectionReasonCode,
     SourceAuthorityClass,
 )
+from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.search.query import (
     RankCategory,
     SearchQuery,
@@ -42,7 +45,26 @@ from my_pa.domain.search.query import (
 )
 from my_pa.domain.situation.situation import Project, Situation
 
-__all__ = ["PlaneGather", "eligible_planes", "search_plane"]
+__all__ = ["PlaneGather", "eligible_planes", "search_plane", "searchable_planes"]
+
+#: Remote grant intersection. A `context.prepare` grant does not imply these.
+#: Relationship has no read capability in this work package and stays omitted
+#: under a remote grant set rather than reported as denied.
+_PLANE_GRANT_CAPABILITIES: Final[dict[ContextPlane, frozenset[Capability]]] = {
+    ContextPlane.KNOWLEDGE: frozenset({Capability.KNOWLEDGE_SEARCH}),
+    ContextPlane.CAPTURE: frozenset({Capability.CAPTURE_SEARCH}),
+    ContextPlane.CONTINUITY: frozenset(
+        {
+            Capability.CONTINUITY_PULSE,
+            Capability.CONTINUITY_SITUATIONS,
+            Capability.CONTINUITY_PROJECTS,
+        }
+    ),
+    ContextPlane.MANAGED_DOCUMENT: frozenset(
+        {Capability.DOCUMENTS_LIST, Capability.DOCUMENTS_READ}
+    ),
+    ContextPlane.RELATIONSHIP: frozenset(),
+}
 
 _INTERNAL_TYPE_NAMES = frozenset(
     {
@@ -94,6 +116,24 @@ def eligible_planes(*, managed_documents_composed: bool) -> tuple[ContextPlane, 
     if managed_documents_composed:
         planes.append(ContextPlane.MANAGED_DOCUMENT)
     return tuple(planes)
+
+
+def searchable_planes(
+    *,
+    managed_documents_composed: bool,
+    capability_grants: frozenset[tuple[Capability, Purpose | None]] | None,
+) -> tuple[ContextPlane, ...]:
+    """Planes this request may search after composition and remote grant intersection.
+
+    `None` grants are local composition: every eligible plane, plus relationship
+    reported as not admitted. A non-`None` set is the authenticated remote grant
+    set; ungranted planes are omitted entirely rather than named as denied.
+    """
+    eligible = eligible_planes(managed_documents_composed=managed_documents_composed)
+    if capability_grants is None:
+        return (*eligible, ContextPlane.RELATIONSHIP)
+    granted = {capability for capability, _purpose in capability_grants}
+    return tuple(plane for plane in eligible if granted & _PLANE_GRANT_CAPABILITIES[plane])
 
 
 def search_plane(

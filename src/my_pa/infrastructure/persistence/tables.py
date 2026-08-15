@@ -4177,7 +4177,7 @@ continuity_authoring_submissions = Table(
     CheckConstraint("length(trim(idempotency_key)) > 0", name="an_authoring_key_is_not_blank"),
     CheckConstraint("length(trim(payload_digest)) > 0", name="an_authoring_digest_is_not_blank"),
     CheckConstraint("length(trim(object_id)) > 0", name="an_authoring_object_is_not_blank"),
-
+)
 
 #: `commitment_history`: one append-only mutation receipt per Commitment write
 #: (WP-TM-05), the identical shape `task_history` establishes above for the

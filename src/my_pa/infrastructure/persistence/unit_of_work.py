@@ -63,6 +63,7 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
     CaptureSummary,
+    ContextPreferenceRepository,
     ContextRunRepository,
     ContinuityAuthoringRepository,
     ContinuityReadRepository,
@@ -105,6 +106,9 @@ from my_pa.infrastructure.persistence.capture import (
     capture_version,
 )
 from my_pa.infrastructure.persistence.capture_search import search_captures
+from my_pa.infrastructure.persistence.context_preferences import (
+    SqlContextPreferenceRepository,
+)
 from my_pa.infrastructure.persistence.context_runs import SqlContextRunRepository
 from my_pa.infrastructure.persistence.continuity_authoring import (
     SqlContinuityAuthoringRepository,
@@ -715,6 +719,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def context_runs(self) -> ContextRunRepository:
         """Insert-only context-run metadata, on this transaction's connection."""
         return SqlContextRunRepository(self._open)
+
+    @property
+    def context_preferences(self) -> ContextPreferenceRepository:
+        """Append-only retrieval preferences, on this transaction's connection."""
+        return SqlContextPreferenceRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

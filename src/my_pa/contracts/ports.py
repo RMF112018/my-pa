@@ -1,4 +1,4 @@
-"""The ports the thirty capability use cases call, and nothing else.
+"""The ports the thirty-one capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -60,6 +60,10 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.context.preference import (
+    ContextPreferenceAdmission,
+    ContextPreferenceCurrent,
+)
 from my_pa.domain.context.run import ContextRunRecord
 from my_pa.domain.documents.managed import (
     DocumentState,
@@ -894,6 +898,39 @@ class ContextRunRepository(ABC):
         """Persist one context run and its items, filtered by `run.principal_id`."""
 
 
+class PreferenceConflictError(Exception):
+    """The same idempotency key was reused with a different preference payload."""
+
+
+class ContextPreferenceRepository(ABC):
+    """Append-only preference events plus the current projection fold.
+
+    Events are never deleted. Reversal appends an opposing event and updates
+    the projection in the same transaction. Every method is principal-partitioned.
+    """
+
+    @abstractmethod
+    def record(
+        self,
+        *,
+        principal_id: str,
+        action: str,
+        target_id: str,
+        idempotency_key: str,
+        alias: str | None,
+        source_id: str | None,
+        correlation_id: str,
+        request_id: str,
+        audit_id: str | None,
+        created_at: datetime,
+    ) -> ContextPreferenceAdmission:
+        """Append one event, fold the projection, or replay/conflict on the key."""
+
+    @abstractmethod
+    def current_for(self, principal_id: str) -> tuple[ContextPreferenceCurrent, ...]:
+        """The acting Principal's current projection. Empty when none are set."""
+
+
 class SourceProviders(ABC):
     """The lookup from a configured source's identity to its read-only adapter.
 
@@ -1178,6 +1215,17 @@ class UnitOfWork(ABC):
         a handler failure rolls the disclosure record back with the request.
         The port has no update or delete: rollback of the capability is revoke
         (AC-KC-037), not a row mutation. Every write is principal-partitioned.
+        """
+
+    @property
+    @abstractmethod
+    def context_preferences(self) -> ContextPreferenceRepository:
+        """Append-only retrieval preferences, inside this transaction.
+
+        Written by `context.feedback` and read by `context.prepare`. Events are
+        never deleted; the current projection is folded in the same transaction.
+        `principal_id` is a parameter on every method and is the authenticated
+        caller's partition, never a caller-supplied field.
         """
 
     @property

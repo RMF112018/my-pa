@@ -76,6 +76,7 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadKnowledge,
     ReadManagedDocument,
+    RecordContextFeedback,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
@@ -89,6 +90,7 @@ from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
@@ -196,6 +198,11 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             document_id=issue_identifier(IdKind.MANAGED_DOCUMENT)
         ),
         Capability.CONTEXT_PREPARE: PrepareContext(query="revenue"),
+        Capability.CONTEXT_FEEDBACK: RecordContextFeedback(
+            action=ContextPreferenceAction.PIN,
+            target_id=issue_identifier(IdKind.PROJECT),
+            idempotency_key="denial-feedback-0001",
+        ),
     }
 
 
@@ -388,6 +395,7 @@ SCOPED_CAPABILITIES = [
         Capability.DOCUMENTS_ARCHIVE,
         Capability.DOCUMENTS_RESTORE,
         Capability.CONTEXT_PREPARE,
+        Capability.CONTEXT_FEEDBACK,
     }
 ]
 
@@ -467,6 +475,7 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.DOCUMENTS_ARCHIVE,
         Capability.DOCUMENTS_RESTORE,
         Capability.CONTEXT_PREPARE,
+        Capability.CONTEXT_FEEDBACK,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

@@ -146,6 +146,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     ReadManagedDocument,
     ReadManagedDocumentCommand,
+    RecordContextFeedback,
     Representation,
     RestoreManagedDocument,
     RestoreManagedDocumentCommand,
@@ -191,6 +192,7 @@ from my_pa.contracts.ports import (
     EvidenceUnavailableError,
     ManagedByteStore,
     PortError,
+    PreferenceConflictError,
     ReviewDecisionRequest,
     SearchOutcome,
     UnitOfWork,
@@ -2455,6 +2457,60 @@ class ApplicationService:
             ),
         )
 
+    def _context_feedback(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RecordContextFeedback,
+    ) -> _Result:
+        """Record one reversible retrieval preference for the acting Principal.
+
+        The Principal is `authorization.principal.principal_id`. The command
+        carries no principal_id. Canonical capture text and continuity titles
+        are not in this write path.
+        """
+        admission = None
+        conflict: ApplicationError | None = None
+        with _translated():
+            try:
+                admission = unit_of_work.context_preferences.record(
+                    principal_id=authorization.principal.principal_id,
+                    action=command.action.value,
+                    target_id=command.target_id,
+                    idempotency_key=command.idempotency_key,
+                    alias=command.alias,
+                    source_id=command.source_id,
+                    correlation_id=authorization.correlation_id,
+                    request_id=authorization.request_id,
+                    audit_id=authorization.audit_id,
+                    created_at=authorization.at,
+                )
+            except PreferenceConflictError:
+                conflict = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        if conflict is not None:
+            raise conflict
+        if admission is None:
+            raise InternalError()
+        current = [
+            {
+                "action": row.action.value,
+                "target_id": row.target_id,
+                "alias": row.alias,
+                "source_id": row.source_id,
+            }
+            for row in admission.current
+        ]
+        return _Result(
+            payload={
+                "accepted": True,
+                "event_id": admission.event.event_id,
+                "action": admission.event.action.value,
+                "target_id": admission.event.target_id,
+                "current": current,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("context_policy",)),
+        )
+
     def _admit(
         self,
         unit_of_work: UnitOfWork,
@@ -2892,6 +2948,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.DOCUMENTS_ARCHIVE: ApplicationService._documents_archive,
         Capability.DOCUMENTS_RESTORE: ApplicationService._documents_restore,
         Capability.CONTEXT_PREPARE: ApplicationService._context_prepare,
+        Capability.CONTEXT_FEEDBACK: ApplicationService._context_feedback,
     }
 )
 

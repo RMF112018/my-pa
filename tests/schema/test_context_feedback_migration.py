@@ -1,8 +1,8 @@
-"""WP-KC-04/05: admit `context.prepare` and create insert-only context-run tables.
+"""WP-KC-06: admit `context.feedback` and create preference event/projection tables.
 
-Two revisions. `8a1c4e7b2d90` widens the audited vocabulary; `9b2d5f8c3e01`
-creates `knowledge.context_runs` / `context_run_items`. Neither is the head.
-Neither imports a domain enum (`D-69`) or `tables.py` (`D-48`).
+`c6f1a8d3e204` is the current head. It widens the audited vocabulary and
+creates `knowledge.context_preference_events` / `context_preference_current`.
+It imports neither a domain enum (`D-69`) nor `tables.py` (`D-48`).
 """
 
 from __future__ import annotations
@@ -24,29 +24,22 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
-from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
-from my_pa.domain.context.prepared import (
-    ContextPlane,
-    EvidenceLifecycle,
-    RetrievalMode,
-    SourceAuthorityClass,
-)
+from my_pa.domain.context.preference import ContextPreferenceAction, ContextPreferenceClass
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-DISPOSABLE_DATABASE: Final = "my_pa_context_prepare_migration_test"
+DISPOSABLE_DATABASE: Final = "my_pa_context_feedback_migration_test"
 SCHEMA: Final = "knowledge"
 
-VOCABULARY_REVISION: Final = "8a1c4e7b2d90"
-TABLE_REVISION: Final = "9b2d5f8c3e01"
-PREVIOUS: Final = "7c2e9b4a1d80"
+HEAD_REVISION: Final = "c6f1a8d3e204"
+PREVIOUS: Final = "9b2d5f8c3e01"
 
-CAPABILITIES_ADDED: Final[frozenset[str]] = frozenset({"context.prepare"})
-PURPOSES_ADDED: Final[frozenset[str]] = frozenset({"context_preparation"})
+CAPABILITIES_ADDED: Final[frozenset[str]] = frozenset({"context.feedback"})
+PURPOSES_ADDED: Final[frozenset[str]] = frozenset({"context_preference"})
 
 WHEN: Final = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
 
@@ -83,8 +76,8 @@ def _revision_source(revision: str) -> str:
     return matches[0].read_text(encoding="utf-8")
 
 
-def _frozen_literals(constant: str, *, revision: str = VOCABULARY_REVISION) -> frozenset[str]:
-    source = _revision_source(revision)
+def _frozen_literals(constant: str) -> frozenset[str]:
+    source = _revision_source(HEAD_REVISION)
     start = source.index(f"{constant}: Final = (")
     end = source.index("\n)", start)
     return frozenset(re.findall(r"'([^']+)'", source[start:end]))
@@ -128,8 +121,8 @@ def _record(engine: Engine, capability: str, purpose: str) -> None:
 
 @pytest.fixture
 def disposable_database() -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
+    settings = load_settings()
+    configured = make_url(settings.database_url)
     maintenance = create_database_engine(
         configured.set(database="postgres").render_as_string(hide_password=False)
     )
@@ -150,13 +143,10 @@ def disposable_database() -> Iterator[str]:
         maintenance.dispose()
 
 
-def test_the_chain_has_one_head_and_these_revisions_are_in_order() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert len(list(script.get_heads())) == 1
-    assert VOCABULARY_REVISION in {entry.revision for entry in script.walk_revisions()}
-    assert TABLE_REVISION in {entry.revision for entry in script.walk_revisions()}
-    assert script.get_revision(VOCABULARY_REVISION).down_revision == PREVIOUS
-    assert script.get_revision(TABLE_REVISION).down_revision == VOCABULARY_REVISION
+    assert list(script.get_heads()) == [HEAD_REVISION]
+    assert script.get_revision(HEAD_REVISION).down_revision == PREVIOUS
     assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 42
 
 
@@ -165,12 +155,12 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
-    assert admitted <= declared
+    assert admitted == declared
     purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
-    assert purposes <= {member.value for member in Purpose}
+    assert purposes == {member.value for member in Purpose}
     assert admitted - _frozen_literals("_CAPABILITIES_BEFORE_THIS_REVISION") == CAPABILITIES_ADDED
     assert purposes - _frozen_literals("_PURPOSES_BEFORE_THIS_REVISION") == PURPOSES_ADDED
-    source = _revision_source(VOCABULARY_REVISION)
+    source = _revision_source(HEAD_REVISION)
     for constant in (
         "_CAPABILITIES_AT_THIS_REVISION",
         "_CAPABILITIES_BEFORE_THIS_REVISION",
@@ -183,41 +173,22 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
         assert names == sorted(names), f"{constant} is not in sorted order"
 
 
-def test_the_table_revision_freezes_transport_and_plane_literals() -> None:
-    source = _revision_source(TABLE_REVISION)
-    assert "CHECK (transport IN ('local', 'remote_client'))" in source
-    members = (
-        *CaptureTransport,
-        *ContextPlane,
-        *RetrievalMode,
-        *SourceAuthorityClass,
-        *EvidenceLifecycle,
-    )
-    for member in members:
+def test_the_revision_freezes_action_and_class_literals() -> None:
+    source = _revision_source(HEAD_REVISION)
+    for member in (*ContextPreferenceAction, *ContextPreferenceClass):
         assert f"'{member.value}'" in source
 
 
-def test_the_revisions_read_no_enum_and_no_tables_module() -> None:
-    for revision in (VOCABULARY_REVISION, TABLE_REVISION):
-        source = _revision_source(revision)
-        assert "my_pa.domain" not in source
-        assert "infrastructure.persistence.tables" not in source
-        for forbidden in ("Capability", "Purpose"):
-            assert f"import {forbidden}" not in source
-
-
-def test_context_run_ddl_stores_no_query_or_excerpt_text() -> None:
-    source = _revision_source(TABLE_REVISION)
-    assert "query_fingerprint" in source
-    assert "excerpt_sha256" in source
-    assert "conversation_context" not in source
-    assert "query text" not in source
-    assert "excerpt text" not in source
+def test_the_revision_reads_no_enum_and_no_tables_module() -> None:
+    source = _revision_source(HEAD_REVISION)
+    assert "my_pa.domain" not in source
+    assert "infrastructure.persistence.tables" not in source
+    for forbidden in ("Capability", "Purpose"):
+        assert f"import {forbidden}" not in source
 
 
 @pytest.mark.database
-def test_the_revisions_run_empty_to_head_and_prior_to_head(disposable_database: str) -> None:
-    """Empty to head, and the previous head to this pair and back."""
+def test_the_revision_runs_empty_to_head_and_prior_to_head(disposable_database: str) -> None:
     engine = create_database_engine(disposable_database)
     try:
         command.upgrade(_config(), "head")
@@ -226,22 +197,18 @@ def test_the_revisions_run_empty_to_head_and_prior_to_head(disposable_database: 
         }
         assert _admitted(engine, "capability_is_known") == declared
         assert _admitted(engine, "purpose_is_known") == {member.value for member in Purpose}
-        assert {"context_runs", "context_run_items"} <= _tables(engine)
+        assert {"context_preference_events", "context_preference_current"} <= _tables(engine)
 
         command.downgrade(_config(), PREVIOUS)
-        assert "context_runs" not in _tables(engine)
-        assert "context_run_items" not in _tables(engine)
+        assert "context_preference_events" not in _tables(engine)
+        assert "context_preference_current" not in _tables(engine)
         with pytest.raises(IntegrityError):
-            _record(engine, "context.prepare", "capture_review")
+            _record(engine, "context.feedback", "context_preparation")
         with pytest.raises(IntegrityError):
-            _record(engine, "capture.create", "context_preparation")
-
-        command.upgrade(_config(), VOCABULARY_REVISION)
-        assert "context_runs" not in _tables(engine)
-        _record(engine, "context.prepare", "context_preparation")
+            _record(engine, "context.prepare", "context_preference")
 
         command.upgrade(_config(), "head")
-        assert {"context_runs", "context_run_items"} <= _tables(engine)
-        _record(engine, "context.prepare", "context_preparation")
+        assert {"context_preference_events", "context_preference_current"} <= _tables(engine)
+        _record(engine, "context.feedback", "context_preference")
     finally:
         engine.dispose()

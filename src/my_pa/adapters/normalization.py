@@ -81,6 +81,7 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadKnowledge,
     ReadManagedDocument,
+    RecordContextFeedback,
     Representation,
     RestoreManagedDocument,
     RevealSubject,
@@ -94,6 +95,7 @@ from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.context import ContextPlane
+from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 
@@ -367,6 +369,19 @@ def _prepare_context(payload: Mapping[str, Any]) -> Command:
     return PrepareContext(**converted)
 
 
+def _record_context_feedback(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    if "action" in converted:
+        named = converted["action"]
+        if not isinstance(named, str):
+            raise InvalidRequestError(SafeDetail.ACTION)
+        try:
+            converted["action"] = ContextPreferenceAction(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.ACTION) from None
+    return RecordContextFeedback(**converted)
+
+
 def _managed_content(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Decode a managed write's base64 `content` into the bytes the command holds.
 
@@ -471,6 +486,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.DOCUMENTS_ARCHIVE: _archive_managed_document,
         Capability.DOCUMENTS_RESTORE: _restore_managed_document,
         Capability.CONTEXT_PREPARE: _prepare_context,
+        Capability.CONTEXT_FEEDBACK: _record_context_feedback,
     }
 )
 
@@ -480,7 +496,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the thirty names nothing.
+    not one of the thirty-one names nothing.
     """
     try:
         return Capability(capability)

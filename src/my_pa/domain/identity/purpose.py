@@ -78,3 +78,12 @@ class Purpose(StrEnum):
     # assembly act, and a further split would map one-to-one for a distinction
     # no authority in this build can enforce until those planes are searched.
     CONTEXT_PREPARATION = "context_preparation"
+    # Retrieval personalization is a purpose of its own rather than a reuse of
+    # `capture_authoring`, `continuity_authoring`, or `review_disposition`.
+    # `D-91`'s test: would reuse widen the grant? Yes. Those three write notes,
+    # projects, and promotions. Admitting a ranking preference under any of
+    # them would let a grant issued to store a note or start a project also
+    # mutate retrieval ranking. One purpose rather than one-per-action: the
+    # capability is one reversible preference write, and a further split would
+    # map one-to-one for a distinction no authority in this build can enforce.
+    CONTEXT_PREFERENCE = "context_preference"

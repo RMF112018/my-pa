@@ -74,6 +74,7 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadKnowledge,
     ReadManagedDocument,
+    RecordContextFeedback,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
@@ -221,6 +222,7 @@ def _requested_scope(
             # is empty as a measurement: the request does not name a grant, and
             # `_SCOPELESS` is where that empty set is read that way.
             | PrepareContext()
+            | RecordContextFeedback()
         ):
             return frozenset()
         case CreateCapture():

@@ -134,6 +134,11 @@ from my_pa.domain.capture.version import (
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
+from my_pa.domain.context.preference import (
+    MAX_CONTEXT_ALIAS_CHARACTERS,
+    ContextPreferenceAction,
+    ContextPreferenceClass,
+)
 from my_pa.domain.context.prepared import (
     MAX_METADATA_CHARACTERS,
     ContextPlane,
@@ -4548,4 +4553,106 @@ context_run_items = Table(
         name="context_run_item_span_has_both_ends",
     ),
     Index("context_run_items_by_principal", "principal_id"),
+)
+
+#: Append-only retrieval-preference events. Reversal appends; nothing deletes.
+#: `superseded_at` is the only column a later event may update, and it records
+#: which predecessor the fold replaced. Unique `(principal_id, idempotency_key)`
+#: is the idempotency mechanism, scoped per Principal.
+context_preference_events = Table(
+    "context_preference_events",
+    METADATA,
+    Column("event_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("target_id", Text, nullable=False),
+    Column("alias", Text),
+    Column("source_id", Text),
+    Column("idempotency_key", Text, nullable=False),
+    Column("event_number", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("superseded_at", DateTime(timezone=True)),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text),
+    Column("request_id", Text, nullable=False),
+    _is_identifier("event_id", IdKind.CONTEXT_PREFERENCE_EVENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("action", ContextPreferenceAction, name="context_preference_action_is_known"),
+    CheckConstraint(
+        f"target_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="context_preference_target_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        f"alias IS NULL OR length(alias) BETWEEN 1 AND {MAX_CONTEXT_ALIAS_CHARACTERS}",
+        name="context_preference_alias_is_bounded",
+    ),
+    CheckConstraint(
+        f"source_id IS NULL OR source_id ~ '^{IdKind.SOURCE.value}_{_IDENTIFIER_SUFFIX}$'",
+        name="context_preference_source_id_is_a_source",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="context_preference_idempotency_key_is_bounded",
+    ),
+    CheckConstraint("event_number >= 1", name="context_preference_event_number_is_positive"),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    CheckConstraint(
+        f"audit_id IS NULL OR audit_id ~ '^{IdKind.AUDIT.value}_{_IDENTIFIER_SUFFIX}$'",
+        name="context_preference_audit_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        f"length(request_id) BETWEEN 1 AND {MAX_REQUEST_ID_CHARACTERS}",
+        name="context_preference_request_id_is_bounded",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "idempotency_key",
+        name="one_preference_key_per_principal",
+    ),
+    Index("context_preference_events_by_principal", "principal_id", "event_number"),
+)
+
+#: Current fold of preference events. Updated in the same transaction as the
+#: append. Reversal replaces or removes the row; events stay.
+context_preference_current = Table(
+    "context_preference_current",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("target_id", Text, nullable=False),
+    Column("preference_class", Text, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("event_id", Text, nullable=False),
+    Column("alias", Text),
+    Column("source_id", Text),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "target_id",
+        "preference_class",
+        name="one_current_preference_per_target_class",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        f"target_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="context_preference_current_target_id_is_an_opaque_identifier",
+    ),
+    _one_of(
+        "preference_class",
+        ContextPreferenceClass,
+        name="context_preference_class_is_known",
+    ),
+    _one_of("action", ContextPreferenceAction, name="context_preference_current_action_is_known"),
+    _is_identifier("event_id", IdKind.CONTEXT_PREFERENCE_EVENT),
+    CheckConstraint(
+        f"alias IS NULL OR length(alias) BETWEEN 1 AND {MAX_CONTEXT_ALIAS_CHARACTERS}",
+        name="context_preference_current_alias_is_bounded",
+    ),
+    CheckConstraint(
+        f"source_id IS NULL OR source_id ~ '^{IdKind.SOURCE.value}_{_IDENTIFIER_SUFFIX}$'",
+        name="context_preference_current_source_id_is_a_source",
+    ),
+    ForeignKeyConstraint(
+        ["event_id"],
+        [f"{SCHEMA}.context_preference_events.event_id"],
+        name="context_preference_current_cites_an_event",
+    ),
 )

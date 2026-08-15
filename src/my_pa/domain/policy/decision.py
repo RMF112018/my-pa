@@ -196,6 +196,10 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # a search of one enrollment, which is `knowledge.search`. Until WP-KC-02
         # searches a plane, the requested scope is empty as a measurement.
         Capability.CONTEXT_PREPARE,
+        # `context.feedback` names a ranking preference, not a source. The rows
+        # it writes belong to the acting Principal's partition and carry no
+        # `enrollment_id` and no grant a scope could be compared against.
+        Capability.CONTEXT_FEEDBACK,
     }
 )
 

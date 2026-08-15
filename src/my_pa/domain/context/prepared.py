@@ -190,6 +190,7 @@ class ContextLimitationCode(StrEnum):
     PLANES_NOT_SEARCHED = "planes_not_searched"
     NO_MATCHING_EVIDENCE = "no_matching_evidence"
     RESULT_TRUNCATED = "result_truncated"
+    PREFERENCE_FILTERED = "preference_filtered"
 
 
 class ContradictionCode(StrEnum):

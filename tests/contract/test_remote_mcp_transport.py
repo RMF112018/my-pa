@@ -39,11 +39,13 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert first == remote_tool_names(service, writes_enabled=False)
     assert Capability.KNOWLEDGE_SEARCH.value in first
     assert Capability.CAPTURE_CREATE.value not in first
+    assert Capability.CONTEXT_FEEDBACK.value not in first
     assert Capability.CONTINUITY_PROJECTS_CREATE.value not in first
     assert Capability.SOURCES_ENROLL.value not in first
     assert Capability.DOCUMENTS_CREATE.value not in first
     enabled = remote_tool_names(service, writes_enabled=True)
     assert Capability.CAPTURE_CREATE.value in enabled
+    assert Capability.CONTEXT_FEEDBACK.value in enabled
     assert Capability.CONTINUITY_PROJECTS_CREATE.value in enabled
     assert Capability.CONTINUITY_SITUATIONS_CREATE.value in enabled
     assert Capability.CONTINUITY_TASKS_CREATE.value in enabled

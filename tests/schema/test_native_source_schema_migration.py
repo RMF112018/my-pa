@@ -53,7 +53,7 @@ from my_pa.infrastructure.persistence.tables import (
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "8c4d1e7a2b90"
 PRIOR_REVISION = "7f2a9d6c4e18"
-HEAD_REVISION = "9b2d5f8c3e01"
+HEAD_REVISION = "c6f1a8d3e204"
 WP12E_PRIOR_REVISION = "9d5e2f7b4c61"
 DATABASE = "my_pa_native_sources_test"
 WHEN = datetime(2026, 8, 4, 12, tzinfo=UTC)

@@ -226,6 +226,17 @@ class Capability(StrEnum):
     # Alembic revision `8a1c4e7b2d90` admits the live vocabulary. A stored
     # `capability_is_known` constraint before that revision refuses the name.
     CONTEXT_PREPARE = "context.prepare"
+    # A capability rather than a widening of `context.prepare`. Prepare is a
+    # read of authorized evidence; feedback writes a reversible ranking
+    # preference. One grant covering both would let a request issued to assemble
+    # a packet also mutate later ranking — the silent escalation `purpose.py`
+    # exists to refuse. Not operator-only: it writes the acting Principal's own
+    # partition and grants nothing. It cannot change canonical facts, authority,
+    # source scope, or lifecycle.
+    #
+    # Alembic revision `c6f1a8d3e204` admits the live vocabulary. A stored
+    # `capability_is_known` constraint before that revision refuses the name.
+    CONTEXT_FEEDBACK = "context.feedback"
 
 
 class NativeSourceCapability(StrEnum):
@@ -407,6 +418,10 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # comment sits with the member: `knowledge.search` is one enrollment's
         # extraction plane, and this capability is a cross-plane assembly.
         Capability.CONTEXT_PREPARE: frozenset({Purpose.CONTEXT_PREPARATION}),
+        # A purpose of its own, not a reuse of `CAPTURE_AUTHORING`,
+        # `CONTINUITY_AUTHORING`, or `REVIEW_DISPOSITION`. The mapping comment
+        # sits with the member: those write notes, projects, and promotions.
+        Capability.CONTEXT_FEEDBACK: frozenset({Purpose.CONTEXT_PREFERENCE}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

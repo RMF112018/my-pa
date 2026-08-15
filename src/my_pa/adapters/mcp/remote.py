@@ -49,6 +49,7 @@ _WRITE_PURPOSES: Final = frozenset(
         Purpose.REVIEW_DISPOSITION,
         Purpose.DOCUMENT_AUTHORING,
         Purpose.CONTINUITY_AUTHORING,
+        Purpose.CONTEXT_PREFERENCE,
     }
 )
 

@@ -229,6 +229,12 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("item", "principal_id"),
         ("run", "principal_id"),
     ),
+    "infrastructure/persistence/context_preferences.py": (
+        ("event", "principal_id"),
+        ("event", "principal_id"),
+        ("event", "principal_id"),
+        ("event", "principal_id"),
+    ),
     "infrastructure/goodnotes/fixture.py": (("page", "principal_id"),),
     # The admitted manifest's owner is untrusted source metadata. The source
     # receives the authenticated Principal from the application and selects only

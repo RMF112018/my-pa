@@ -170,6 +170,12 @@ QUARANTINED: Final = {
         "Authorization already decided for `context.prepare`; there is no read, "
         "and a caller cannot name the partition."
     ),
+    "infrastructure/persistence/context_preferences.py": (
+        "append-only retrieval preferences. `principal_id` is stamped from the "
+        "Authorization already decided for `context.feedback`; reads and folds "
+        "are the same partition, and a caller cannot name it. Registered in "
+        "HAND_WRITTEN_COMPARISONS below."
+    ),
     "infrastructure/persistence/enrollment.py": (
         "scopes `enrollments` by a hand-written `principal_id` comparison "
         "registered in HAND_WRITTEN_COMPARISONS below. Not a hole, but not the "
@@ -337,6 +343,15 @@ UNPARTITIONED_JOB_STATEMENTS: Final = {
 #: appear silently — which is exactly how the relationship plane ended up with
 #: three hand-written predicates and twenty-odd statements with none.
 HAND_WRITTEN_COMPARISONS: Final = {
+    "infrastructure/persistence/context_preferences.py": (
+        ("context_preference_current", "principal_id"),
+        ("context_preference_current", "principal_id"),
+        ("context_preference_current", "principal_id"),
+        ("context_preference_current", "principal_id"),
+        ("context_preference_events", "principal_id"),
+        ("context_preference_events", "principal_id"),
+        ("context_preference_events", "principal_id"),
+    ),
     "infrastructure/persistence/continuity_authoring.py": (
         ("continuity_authoring_submissions", "principal_id"),
     ),

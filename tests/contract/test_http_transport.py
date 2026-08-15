@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the thirty capabilities is addressable over HTTP
+**Reachability.** Every one of the thirty-one capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a thirty-first capability added to the domain arrives as a failing row instead
+here, so a thirty-second capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -81,6 +81,7 @@ from my_pa.application.commands import (
     ReadCapture,
     ReadKnowledge,
     ReadManagedDocument,
+    RecordContextFeedback,
     Representation,
     RestoreManagedDocument,
     RevealSubject,
@@ -96,6 +97,7 @@ from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import Provenance
+from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
@@ -234,11 +236,16 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.DOCUMENTS_ARCHIVE: {"document_id": document.document_id},
         Capability.DOCUMENTS_RESTORE: {"document_id": document.document_id},
         Capability.CONTEXT_PREPARE: {"query": "revenue"},
+        Capability.CONTEXT_FEEDBACK: {
+            "action": "pin",
+            "target_id": issue_identifier(IdKind.PROJECT),
+            "idempotency_key": "http-feedback-0001",
+        },
     }
 
 
 def commands_for(
-    scene: Scene, record: KnowledgeRecord, capture_id: str
+    scene: Scene, record: KnowledgeRecord, capture_id: str, feedback_target_id: str
 ) -> dict[Capability, Command]:
     """The same requests, written as commands rather than as JSON.
 
@@ -333,6 +340,11 @@ def commands_for(
         Capability.DOCUMENTS_ARCHIVE: ArchiveManagedDocument(document_id=document.document_id),
         Capability.DOCUMENTS_RESTORE: RestoreManagedDocument(document_id=document.document_id),
         Capability.CONTEXT_PREPARE: PrepareContext(query="revenue"),
+        Capability.CONTEXT_FEEDBACK: RecordContextFeedback(
+            action=ContextPreferenceAction.PIN,
+            target_id=feedback_target_id,
+            idempotency_key="http-feedback-0001",
+        ),
     }
 
 
@@ -450,8 +462,9 @@ def test_normalisation_builds_the_pair_a_hand_written_request_builds(
     payloads = payloads_for(scene, record)
     document = document_for(capability, scene, payloads[capability])
     capture_id = str(payloads[Capability.CAPTURE_READ]["capture_id"])
+    feedback_target_id = str(payloads[Capability.CONTEXT_FEEDBACK]["target_id"])
     metadata, command = normalize(capability.value, document)
-    assert command == commands_for(scene, record, capture_id)[capability]
+    assert command == commands_for(scene, record, capture_id, feedback_target_id)[capability]
     assert metadata == metadata_for(capability, a_permitted_purpose(capability), scene.principal)
     assert metadata.requested_at == WHEN
 

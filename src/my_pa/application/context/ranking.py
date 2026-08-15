@@ -1,18 +1,22 @@
 """Deterministic ranking, dedup, diversity, packing, and contradiction flags.
 
 Public contract is reason codes plus ordering. Nothing here publishes a float
-relevance score. PINNED_FOCUS and SEMANTIC_MATCH are never assigned in this
-work package.
+relevance score. SEMANTIC_MATCH is never assigned in this work package.
+PINNED_FOCUS and CONFIRMED_ALIAS are assigned only from explicit preferences.
 """
 
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from math import ceil
 from typing import Final
 
+from my_pa.domain.context.preference import (
+    ContextPreferenceAction,
+    ContextPreferenceCurrent,
+)
 from my_pa.domain.context.prepared import (
     ContextLimitationCode,
     ContextPlane,
@@ -24,6 +28,7 @@ from my_pa.domain.context.prepared import (
 
 __all__ = [
     "PackedEvidence",
+    "apply_preferences",
     "identity_key",
     "rank_and_pack",
 ]
@@ -37,6 +42,8 @@ _PLANE_ORDER: Final[dict[ContextPlane, int]] = {
 }
 
 #: Lower is better. EXPLICIT_SUBJECT and EXACT_IDENTIFIER share first place.
+#: PINNED_FOCUS ranks with CONFIRMED_ALIAS: above ordinary lexical, never
+#: above EXPLICIT_SUBJECT, and never a substitute for authorization.
 _REASON_PRIORITY: Final[dict[SelectionReasonCode, int]] = {
     SelectionReasonCode.EXPLICIT_SUBJECT: 0,
     SelectionReasonCode.EXACT_IDENTIFIER: 0,
@@ -44,12 +51,12 @@ _REASON_PRIORITY: Final[dict[SelectionReasonCode, int]] = {
     SelectionReasonCode.PROJECT_LINK: 1,
     SelectionReasonCode.SITUATION_LINK: 1,
     SelectionReasonCode.RELATIONSHIP_LINK: 1,
+    SelectionReasonCode.PINNED_FOCUS: 1,
     SelectionReasonCode.ACCEPTED_RECORD: 2,
     SelectionReasonCode.LEXICAL_STRONG: 3,
     SelectionReasonCode.LEXICAL_MODERATE: 4,
     SelectionReasonCode.RECENT_EVIDENCE: 5,
-    SelectionReasonCode.PINNED_FOCUS: 6,
-    SelectionReasonCode.SEMANTIC_MATCH: 7,
+    SelectionReasonCode.SEMANTIC_MATCH: 6,
 }
 
 _MISSING_FRESHNESS: Final = datetime.min.replace(tzinfo=UTC)
@@ -196,3 +203,98 @@ def rank_and_pack(
         contradictions=contradictions,
         limitations=limitations,
     )
+
+
+def _item_identities(item: PreparedContextEvidence) -> frozenset[str]:
+    return frozenset(
+        value
+        for value in (
+            item.reference_id,
+            item.knowledge_id,
+            item.source_id,
+            item.source_object_id,
+            item.source_version_id,
+            item.capture_id,
+            item.capture_version_id,
+            item.product_id,
+            item.managed_document_id,
+            item.managed_document_version_id,
+            item.reveal_subject_id,
+        )
+        if value is not None
+    )
+
+
+def _with_reasons(
+    item: PreparedContextEvidence, *codes: SelectionReasonCode
+) -> PreparedContextEvidence:
+    seen: dict[SelectionReasonCode, None] = dict.fromkeys((*item.reason_codes, *codes))
+    return replace(item, reason_codes=tuple(seen))
+
+
+def _folded_query(query: str, conversation_context: str | None) -> str:
+    parts = [query]
+    if conversation_context:
+        parts.append(conversation_context)
+    return " ".join(parts).casefold()
+
+
+def apply_preferences(
+    items: tuple[PreparedContextEvidence, ...],
+    preferences: tuple[ContextPreferenceCurrent, ...],
+    *,
+    query: str,
+    conversation_context: str | None,
+) -> tuple[tuple[PreparedContextEvidence, ...], tuple[str, ...], tuple[ContextLimitationCode, ...]]:
+    """Apply the current projection. Never invents evidence or widens authorization."""
+    if not preferences:
+        return items, (), ()
+    folded_query = _folded_query(query, conversation_context)
+    dropped = False
+    applied: list[str] = []
+    adjusted: list[PreparedContextEvidence] = []
+    for item in items:
+        identities = _item_identities(item)
+        codes: list[SelectionReasonCode] = []
+        exclude = False
+        for preference in preferences:
+            matches_identity = preference.target_id in identities
+            matches_source = (
+                preference.source_id is not None and item.source_id == preference.source_id
+            )
+            if preference.action is ContextPreferenceAction.MARK_IRRELEVANT and matches_identity:
+                exclude = True
+                applied.append(preference.target_id)
+                break
+            if _boosts_focus(preference.action, matches_identity, matches_source):
+                codes.append(SelectionReasonCode.PINNED_FOCUS)
+                applied.append(preference.target_id)
+            elif (
+                preference.action is ContextPreferenceAction.CONFIRM_ALIAS
+                and preference.alias is not None
+                and preference.alias.casefold() in folded_query
+                and matches_identity
+            ):
+                codes.extend(
+                    (SelectionReasonCode.EXPLICIT_SUBJECT, SelectionReasonCode.CONFIRMED_ALIAS)
+                )
+                applied.append(preference.target_id)
+        if exclude:
+            dropped = True
+            continue
+        adjusted.append(_with_reasons(item, *codes) if codes else item)
+    limitations: tuple[ContextLimitationCode, ...] = ()
+    if dropped:
+        limitations = (ContextLimitationCode.PREFERENCE_FILTERED,)
+    seen_applied: dict[str, None] = dict.fromkeys(applied)
+    return tuple(adjusted), tuple(seen_applied), limitations
+
+
+def _boosts_focus(
+    action: ContextPreferenceAction, matches_identity: bool, matches_source: bool
+) -> bool:
+    if action is ContextPreferenceAction.PIN and matches_identity:
+        return True
+    if action is ContextPreferenceAction.MARK_RELEVANT and matches_identity:
+        return True
+    return action is ContextPreferenceAction.PREFER_SOURCE and (matches_source or matches_identity)

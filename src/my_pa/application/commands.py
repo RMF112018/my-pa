@@ -41,13 +41,23 @@ from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureKind
-from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
+from my_pa.domain.common.identifiers import (
+    IdKind,
+    InvalidIdentifierError,
+    parse_identifier,
+    validate_identifier,
+)
 from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
 from my_pa.domain.context import (
     MAX_SUBJECT_HINTS,
     ContextPlane,
     ConversationContextError,
     validate_conversation_context,
+)
+from my_pa.domain.context.preference import (
+    ContextPreferenceAction,
+    ContextPreferenceError,
+    validate_context_alias,
 )
 from my_pa.domain.documents.managed import (
     ManagedDocumentError,
@@ -93,6 +103,7 @@ __all__ = [
     "ReadKnowledge",
     "ReadManagedDocument",
     "ReadManagedDocumentCommand",
+    "RecordContextFeedback",
     "RecordRelationshipEventCommand",
     "Representation",
     "RestoreManagedDocument",
@@ -1021,6 +1032,99 @@ class RestoreManagedDocument:
         _identifier(self.document_id, IdKind.MANAGED_DOCUMENT, SafeDetail.DOCUMENT_ID)
 
 
+#: Continuity and relationship identities a pin can resolve to. Shape is checked
+#: first; kind is the additional pin/unpin bound so a capture version cannot be
+#: pinned as if it were a Project.
+_PIN_KINDS: frozenset[IdKind] = frozenset(
+    {
+        IdKind.PROJECT,
+        IdKind.SITUATION,
+        IdKind.PERSON,
+        IdKind.ORGANIZATION,
+        IdKind.COMMITMENT,
+        IdKind.CONTINUITY_DECISION,
+        IdKind.TASK,
+    }
+)
+
+
+def _alias(value: str | None) -> str | None:
+    """Validate an optional retrieval nickname without echoing it."""
+    if value is None:
+        return None
+    accepted = False
+    try:
+        validate_context_alias(value)
+        accepted = True
+    except ContextPreferenceError:
+        pass
+    if not accepted:
+        raise InvalidRequestError(SafeDetail.ALIAS)
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class RecordContextFeedback:
+    capability: ClassVar[Capability] = Capability.CONTEXT_FEEDBACK
+
+    action: ContextPreferenceAction
+    target_id: str
+    idempotency_key: str
+    alias: str | None = field(default=None, repr=False)
+    source_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action, ContextPreferenceAction):
+            raise InvalidRequestError(SafeDetail.ACTION)
+        _identifier(self.target_id, None, SafeDetail.TARGET_ID)
+        if not isinstance(self.idempotency_key, str):
+            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
+        _alias(self.alias)
+        if self.source_id is not None:
+            _identifier(self.source_id, IdKind.SOURCE, SafeDetail.SOURCE_ID)
+        self._check_action_fields()
+
+    def _check_action_fields(self) -> None:
+        if self.action is ContextPreferenceAction.CONFIRM_ALIAS:
+            if self.alias is None:
+                raise InvalidRequestError(SafeDetail.ALIAS)
+            if self.source_id is not None:
+                raise InvalidRequestError(SafeDetail.SOURCE_ID)
+            return
+        if self.action in {
+            ContextPreferenceAction.PREFER_SOURCE,
+            ContextPreferenceAction.DEPREFER_SOURCE,
+        }:
+            if self.source_id is None:
+                raise InvalidRequestError(SafeDetail.SOURCE_ID)
+            if self.alias is not None:
+                raise InvalidRequestError(SafeDetail.ALIAS)
+            return
+        if self.alias is not None:
+            raise InvalidRequestError(SafeDetail.ALIAS)
+        if self.source_id is not None:
+            raise InvalidRequestError(SafeDetail.SOURCE_ID)
+        if self.action in {ContextPreferenceAction.PIN, ContextPreferenceAction.UNPIN}:
+            try:
+                kind, _suffix = parse_identifier(self.target_id)
+            except InvalidIdentifierError:
+                raise InvalidRequestError(SafeDetail.TARGET_ID) from None
+            if kind not in _PIN_KINDS:
+                raise InvalidRequestError(SafeDetail.TARGET_ID)
+
+
+RecordContextFeedback.__doc__ = (
+    "`context.feedback`: record one explicit, reversible retrieval preference. "
+    "Pin, filter, alias, or prefer a source inside already-authorized ranking. "
+    "This cannot change canonical facts, authority, source scope, or lifecycle.\n"
+    "\n"
+    "The principal is not here. Authority comes from authenticated context. "
+    "idempotency_key is required. alias is a retrieval nickname, repr=False, "
+    "and refused by field token rather than echoed."
+)
+
+
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
 type Command = (
@@ -1054,6 +1158,7 @@ type Command = (
     | ArchiveManagedDocument
     | RestoreManagedDocument
     | PrepareContext
+    | RecordContextFeedback
 )
 
 

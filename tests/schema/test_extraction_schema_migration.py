@@ -223,6 +223,7 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "a9e4c7b2d610": frozenset({"native_apple_bridge_credentials", "native_apple_read_grants"}),
     "7c2e9b4a1d80": frozenset({"continuity_authoring_submissions"}),
     "9b2d5f8c3e01": frozenset({"context_runs", "context_run_items"}),
+    "c6f1a8d3e204": frozenset({"context_preference_events", "context_preference_current"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

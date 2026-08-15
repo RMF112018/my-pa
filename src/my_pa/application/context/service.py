@@ -14,10 +14,11 @@ import time
 from my_pa.application.authorization import Authorization
 from my_pa.application.commands import PrepareContext
 from my_pa.application.context.providers import search_plane, searchable_planes
-from my_pa.application.context.ranking import rank_and_pack
+from my_pa.application.context.ranking import apply_preferences, rank_and_pack
 from my_pa.application.errors import InternalError
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.context.preference import ContextPreferenceAction, ContextPreferenceCurrent
 from my_pa.domain.context.prepared import (
     CONTEXT_POLICY_VERSION,
     CONTEXT_RANKING_VERSION,
@@ -68,6 +69,15 @@ class ContextPreparationService:
     ) -> PreparedContext:
         started = time.monotonic()
         extra_terms = _conversation_terms(command.conversation_context)
+        preferences = unit_of_work.context_preferences.current_for(
+            authorization.principal.principal_id
+        )
+        subject_hints = _hints_with_aliases(
+            command.subject_hints,
+            preferences,
+            query=command.query,
+            conversation_context=command.conversation_context,
+        )
         requested = command.requested_planes
         considered = searchable_planes(
             managed_documents_composed=self._managed_documents_composed,
@@ -82,7 +92,7 @@ class ContextPreparationService:
                 authorization=authorization,
                 query=query,
                 extra_terms=extra_terms,
-                subject_hints=command.subject_hints,
+                subject_hints=subject_hints,
                 managed_documents_composed=self._managed_documents_composed,
             )
             for plane in selected
@@ -92,6 +102,12 @@ class ContextPreparationService:
             raise InternalError()
 
         evidence = tuple(item for gather in gathers for item in gather.evidence)
+        evidence, applied_preferences, preference_limitations = apply_preferences(
+            evidence,
+            preferences,
+            query=command.query,
+            conversation_context=command.conversation_context,
+        )
         packed = rank_and_pack(
             evidence,
             max_items=min(DEFAULT_EVIDENCE_ITEMS, MAX_EVIDENCE_ITEMS),
@@ -106,7 +122,7 @@ class ContextPreparationService:
             )
             unavailable = tuple(dict.fromkeys((*unavailable, *skipped)))
 
-        limitations = packed.limitations
+        limitations = packed.limitations + preference_limitations
         if _no_matching_evidence(packed.items, coverage):
             limitations = (*limitations, ContextLimitationCode.NO_MATCHING_EVIDENCE)
         applied = tuple(
@@ -129,6 +145,7 @@ class ContextPreparationService:
             contradictions_or_conflicts=packed.contradictions,
             truncation=packed.truncation,
             applied_subjects=applied,
+            applied_preferences=applied_preferences,
         )
         duration_ms = max(0, round((time.monotonic() - started) * 1000))
         unit_of_work.context_runs.record(
@@ -200,6 +217,32 @@ def _conversation_terms(conversation_context: str | None) -> tuple[str, ...]:
         if lowered and lowered not in seen:
             seen.append(lowered)
     return tuple(seen)
+
+
+def _hints_with_aliases(
+    subject_hints: tuple[str, ...],
+    preferences: tuple[ContextPreferenceCurrent, ...],
+    *,
+    query: str,
+    conversation_context: str | None,
+) -> tuple[str, ...]:
+    """Add confirmed-alias targets when the query names the alias.
+
+    This does not invent evidence or widen enrollments: it treats an already
+    owned identity as an explicit subject the same way `subject_hints` does.
+    """
+    folded_query = query.casefold()
+    if conversation_context:
+        folded_query = f"{folded_query} {conversation_context.casefold()}"
+    extras: list[str] = []
+    for preference in preferences:
+        if preference.action is not ContextPreferenceAction.CONFIRM_ALIAS:
+            continue
+        if preference.alias is None or preference.alias.casefold() not in folded_query:
+            continue
+        if preference.target_id not in subject_hints and preference.target_id not in extras:
+            extras.append(preference.target_id)
+    return (*subject_hints, *extras)
 
 
 def _hint_applied(hint: str, item: PreparedContextEvidence) -> bool:

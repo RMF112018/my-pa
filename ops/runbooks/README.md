@@ -13,6 +13,7 @@ Operational procedures for running `my-pa` locally.
 | [`remote-mcp-cloudflare.md`](remote-mcp-cloudflare.md) | Separately enabled remote MCP on the NAS: private-origin Compose, outbound-only Cloudflare Tunnel, client checks, rollback, and loopback fallback. |
 | [`nas-lifecycle.md`](nas-lifecycle.md) | Fail-closed NAS lifecycle commands, smoke restart policy, and the exact NAS-10 plus operator gates for the restart-only pilot overlay. |
 | [`nas-acceptance.md`](nas-acceptance.md) | Inert NAS-10 synthetic matrix, independently signed exact-head review, and unsigned PASS-candidate gate. |
+| [`context-semantic-retrieval.md`](context-semantic-retrieval.md) | Semantic retrieval gate: currently `SEMANTIC_GATE_FAIL`, lexical `context.prepare` is the active path, and how to re-run the SPECIALIZED evaluation. |
 
 Related, outside this directory:
 

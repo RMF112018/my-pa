@@ -1,4 +1,4 @@
-"""All twenty-nine capabilities execute real behaviour, and disclose what they did.
+"""All thirty-one capabilities execute real behaviour, and disclose what they did.
 
 Each test below runs one capability through `ApplicationService.invoke` — the
 only public entry point there is — against the real fixture source provider and
@@ -46,7 +46,9 @@ from my_pa.application.commands import (
     GetSourceMetadata,
     GetSourceStatus,
     ListSources,
+    PrepareContext,
     ReadKnowledge,
+    RecordContextFeedback,
     Representation,
     SearchKnowledge,
 )
@@ -60,6 +62,7 @@ from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import Provenance, TrustLevel
+from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.extraction.coverage import AggregateLimitation, LimitationReason
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.identity.operation import Capability
@@ -1169,3 +1172,46 @@ def test_a_configured_page_size_cannot_exceed_the_bound_search_enforces(
     limits = published_limits(service, scene)
     assert limits["max_page_size"] == 100
     assert limits["default_page_size"] == 100
+
+
+def test_context_prepare_returns_empty_evidence_without_an_enrollment(scene: Scene) -> None:
+    """No staged search: knowledge is unavailable rather than a complete no-match."""
+    service = build_service(scene.world, scene.providers)
+    result = succeeded(
+        run(
+            service,
+            scene,
+            Capability.CONTEXT_PREPARE,
+            Purpose.CONTEXT_PREPARATION,
+            PrepareContext(query="quarterly"),
+        )
+    )
+    assert result["evidence"] == []
+    assert result["total_items"] == 0
+    assert result["instruction_authority"] is False
+    assert "quarterly" not in result["query_fingerprint"]
+    assert "planes_not_searched" not in result["limitations"]
+    knowledge = next(row for row in result["coverage"] if row["plane"] == "knowledge")
+    assert knowledge["state"] == "unavailable"
+
+
+def test_context_feedback_records_a_pin(scene: Scene) -> None:
+    """`context.feedback` writes a preference and does not invent a fact."""
+    target_id = issue_identifier(IdKind.PROJECT)
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.CONTEXT_FEEDBACK,
+            Purpose.CONTEXT_PREFERENCE,
+            RecordContextFeedback(
+                action=ContextPreferenceAction.PIN,
+                target_id=target_id,
+                idempotency_key="capability-feedback-0001",
+            ),
+        )
+    )
+    assert result["accepted"] is True
+    assert result["action"] == "pin"
+    assert result["target_id"] == target_id
+    assert result["current"][0]["action"] == "pin"

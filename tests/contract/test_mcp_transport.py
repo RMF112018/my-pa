@@ -438,7 +438,7 @@ def test_a_real_child_process_publishes_only_what_it_was_composed_with() -> None
 
     Both children keep the unreachable database URL this module uses
     deliberately: neither composition reads a row. The *third* case — a process
-    with a managed root, publishing all twenty-nine — does read one, because the
+    with a managed root, publishing all thirty — does read one, because the
     store is constructed with the configured source roots to refuse an
     overlapping root, so it is proved in
     `test_a_child_with_a_managed_root_publishes_every_capability` against a real

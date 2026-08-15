@@ -156,6 +156,7 @@ _ORDINAL_UNITS = (
     "twenty-ninth",
     "thirtieth",
     "thirty-first",
+    "thirty-second",
 )
 
 

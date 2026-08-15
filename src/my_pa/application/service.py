@@ -141,10 +141,12 @@ from my_pa.application.commands import (
     ListReviewCases,
     ListSituations,
     ListSources,
+    PrepareContext,
     ReadCapture,
     ReadKnowledge,
     ReadManagedDocument,
     ReadManagedDocumentCommand,
+    RecordContextFeedback,
     Representation,
     RestoreManagedDocument,
     RestoreManagedDocumentCommand,
@@ -155,6 +157,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchKnowledge,
 )
+from my_pa.application.context import ContextPreparationService
 from my_pa.application.disclosure import (
     Limitation,
     corpus_disclosure,
@@ -189,6 +192,7 @@ from my_pa.contracts.ports import (
     EvidenceUnavailableError,
     ManagedByteStore,
     PortError,
+    PreferenceConflictError,
     ReviewDecisionRequest,
     SearchOutcome,
     UnitOfWork,
@@ -240,6 +244,7 @@ from my_pa.domain.extraction.text import ExtractionStatus, extract_text
 from my_pa.domain.goodnotes.models import GoodNotesReviewCase
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
+from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
@@ -646,6 +651,7 @@ class ApplicationService:
         *,
         principal: Principal,
         transport: CaptureTransport = CaptureTransport.LOCAL,
+        capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
     ) -> ResponseEnvelope:
         """Execute one request and return the envelope describing what happened.
 
@@ -663,6 +669,13 @@ class ApplicationService:
         through this method is that it takes the *same* path as a local one, and
         a transport that could change what a request is permitted to do would be
         a second capture path wearing the first one's name.
+
+        `capability_grants` is the third server-derived input. `None` means
+        local composition and does not restrict searchable planes.
+        A non-`None` set is the authenticated remote grant set and is never
+        read from the request payload. `context.prepare` intersects it with
+        per-plane read capabilities so a `context.prepare` grant does not
+        implicitly search every plane the Principal can read.
 
         **No exception leaves this method.** The first two handlers classify what
         this layer already understands. The third is a terminal catch, and it is
@@ -699,6 +712,7 @@ class ApplicationService:
                 correlation_id=correlation_id,
                 at=started_at,
                 transport=transport,
+                capability_grants=capability_grants,
             )
         except ApplicationError as error:
             failure = error
@@ -739,6 +753,7 @@ class ApplicationService:
         correlation_id: str,
         at: datetime,
         transport: CaptureTransport = CaptureTransport.LOCAL,
+        capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
     ) -> _Result:
         """Authorize, then execute, then commit — or refuse and still commit.
 
@@ -789,6 +804,7 @@ class ApplicationService:
                     request_id=metadata.request_id,
                     at=at,
                     transport=transport,
+                    capability_grants=capability_grants,
                 )
                 if authorization.allowed:
                     return _HANDLERS[command.capability](self, unit_of_work, authorization, command)
@@ -2401,6 +2417,100 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MANAGED_TRUST_BASIS),
         )
 
+    def _context_prepare(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: PrepareContext
+    ) -> _Result:
+        """Assemble a bounded context package from authorized planes.
+
+        The Principal is `authorization.principal.principal_id` — the one the
+        gateway established — and never anything the request carried. Enrollments
+        are discovered from `authorization.enrollments`; the command does not
+        name them. The query is normalized here as a `SearchQuery`, the same way
+        `knowledge.search` does it, so a malformed or empty query is
+        `invalid_request` with the field token and never the text. Empty evidence
+        remains valid: a complete no-match and an unavailable plane are distinct
+        coverage answers, not a missing-evidence error.
+        """
+        query: SearchQuery | None = None
+        failure: ApplicationError | None = None
+        try:
+            query = SearchQuery(command.query)
+        except SearchQueryError:
+            failure = InvalidRequestError(SafeDetail.QUERY)
+        if failure is not None:
+            raise failure
+        if query is None:
+            raise InternalError()
+        prepared = ContextPreparationService(
+            managed_documents_composed=self._managed_store_or_none is not None,
+        ).prepare(unit_of_work, authorization, command, query)
+        truncation = Truncation(
+            is_truncated=prepared.truncation.is_truncated,
+            reason=prepared.truncation.reason,
+        )
+        return _Result(
+            payload=prepared.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=("context_policy",),
+                truncation=truncation,
+            ),
+        )
+
+    def _context_feedback(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RecordContextFeedback,
+    ) -> _Result:
+        """Record one reversible retrieval preference for the acting Principal.
+
+        The Principal is `authorization.principal.principal_id`. The command
+        carries no principal_id. Canonical capture text and continuity titles
+        are not in this write path.
+        """
+        admission = None
+        conflict: ApplicationError | None = None
+        with _translated():
+            try:
+                admission = unit_of_work.context_preferences.record(
+                    principal_id=authorization.principal.principal_id,
+                    action=command.action.value,
+                    target_id=command.target_id,
+                    idempotency_key=command.idempotency_key,
+                    alias=command.alias,
+                    source_id=command.source_id,
+                    correlation_id=authorization.correlation_id,
+                    request_id=authorization.request_id,
+                    audit_id=authorization.audit_id,
+                    created_at=authorization.at,
+                )
+            except PreferenceConflictError:
+                conflict = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+        if conflict is not None:
+            raise conflict
+        if admission is None:
+            raise InternalError()
+        current = [
+            {
+                "action": row.action.value,
+                "target_id": row.target_id,
+                "alias": row.alias,
+                "source_id": row.source_id,
+            }
+            for row in admission.current
+        ]
+        return _Result(
+            payload={
+                "accepted": True,
+                "event_id": admission.event.event_id,
+                "action": admission.event.action.value,
+                "target_id": admission.event.target_id,
+                "current": current,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=("context_policy",)),
+        )
+
     def _admit(
         self,
         unit_of_work: UnitOfWork,
@@ -2837,6 +2947,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.DOCUMENTS_LIST: ApplicationService._documents_list,
         Capability.DOCUMENTS_ARCHIVE: ApplicationService._documents_archive,
         Capability.DOCUMENTS_RESTORE: ApplicationService._documents_restore,
+        Capability.CONTEXT_PREPARE: ApplicationService._context_prepare,
+        Capability.CONTEXT_FEEDBACK: ApplicationService._context_feedback,
     }
 )
 

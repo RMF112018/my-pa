@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with twenty-nine capabilities and thirteen
+emits what it emitted on the day it merged, with thirty-one capabilities and fifteen
 purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -208,6 +208,10 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "continuity.projects.create",
         "continuity.situations.create",
         "continuity.tasks.create",
+        # `8a1c4e7b2d90` is the forward `ALTER` that admits it.
+        "context.prepare",
+        # `c6f1a8d3e204` is the forward `ALTER` that admits it.
+        "context.feedback",
     }
 )
 
@@ -388,6 +392,17 @@ NATIVE_SOURCE_TRIGGERS: Final[frozenset[str]] = frozenset(
 MANAGED_DOCUMENT_TRIGGERS: Final = (
     "managed_document_versions_are_append_only",
     "managed_document_lifecycle_is_append_only",
+)
+
+#: The two append-only triggers `9b2d5f8c3e01` installs on the context-run
+#: tables. `c6f1a8d3e204` creates the preference tables without additional
+#: triggers: events are append-only in application code, and the current
+#: projection is folded in place. Neither trigger is deferred.
+CONTEXT_TRIGGERS: Final[frozenset[str]] = frozenset(
+    {
+        "context_runs_are_append_only",
+        "context_run_items_are_append_only",
+    }
 )
 
 _CONSTRAINT = text(
@@ -922,6 +937,7 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             *RELATIONSHIP_TRIGGERS,
             *NATIVE_SOURCE_TRIGGERS,
             *MANAGED_DOCUMENT_TRIGGERS,
+            *CONTEXT_TRIGGERS,
             "goodnotes_page_versions_are_immutable",
             "goodnotes_region_proposals_are_immutable",
         }

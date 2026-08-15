@@ -83,6 +83,8 @@ from my_pa.bootstrap.settings import ENV_PREFIX, Settings, load_settings
 from my_pa.contracts.ports import (
     AuditSink,
     CaptureRepository,
+    ContextPreferenceRepository,
+    ContextRunRepository,
     EnrollmentRepository,
     KnowledgeRepository,
     ManagedDocumentRepository,
@@ -223,6 +225,14 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def managed_documents(self) -> ManagedDocumentRepository:
         return self._inner.managed_documents
+
+    @property
+    def context_runs(self) -> ContextRunRepository:
+        return self._inner.context_runs
+
+    @property
+    def context_preferences(self) -> ContextPreferenceRepository:
+        return self._inner.context_preferences
 
     @property
     def audit(self) -> AuditSink:

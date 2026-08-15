@@ -71,10 +71,13 @@ hash.
 
 
 The repository is an executable local candidate, not a documentation scaffold.
-The `my_pa` application exposes twenty-nine capabilities through HTTP, MCP, and
+The `my_pa` application exposes thirty-one capabilities through HTTP, MCP, and
 CLI composition, with PostgreSQL Principal partitioning and two worker planes.
-Alembic owns thirty-nine revisions at head `7c2e9b4a1d80`, including the merge of
-the retained native-baseline and managed-document histories. The web BFF calls
+Alembic owns forty-two revisions at head `c6f1a8d3e204`, including the merge of
+the retained native-baseline and managed-document histories. `context.prepare`
+returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the
+semantic-retrieval gate remains `SEMANTIC_GATE_FAIL` and production semantic
+retrieval is not authorized. The web BFF calls
 those capabilities, supports a server-side Entra authorization-code + PKCE
 session path without exposing its bearer, and publishes content-free worker
 backlog/liveness states through `capabilities.get` and System. Apple personal

@@ -15,7 +15,7 @@ An explicitly enabled synthetic provider remains available for development and
 is refused when `NODE_ENV=production`. It does not silently replace an
 unconfigured or unavailable backend.
 
-The Python contract contains twenty-nine capability names. The System route reads
+The Python contract contains thirty-one capability names. The System route reads
 the live `capabilities.get` manifest, including each capability's runtime
 availability, instead of restating an availability count in this tier. Six of
 those names are the managed-document lifecycle (`documents.create`,

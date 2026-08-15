@@ -7,12 +7,15 @@ Operational procedures for running `my-pa` locally.
 | [`end-to-end-operations.md`](end-to-end-operations.md) | **Start here.** The ordered sequence: probe the database, migrate, register, enroll, run the worker, search and read, and stop both processes — and the limitation that sequence walked into. |
 | [`postgres-operations.md`](postgres-operations.md) | The canonical `my_pa` PostgreSQL database: start, stop, health check, connect, back up, restore. |
 | [`worker-operations.md`](worker-operations.md) | The worker process: running it bounded or until signalled, stopping it cleanly, and how a crashed worker's job is recovered. |
-| [`gateway-operations.md`](gateway-operations.md) | The HTTP gateway process: running it on loopback, calling the twenty-nine capabilities, the status each error code takes, its two connection pools, and stopping it. |
+| [`gateway-operations.md`](gateway-operations.md) | The HTTP gateway process: running it on loopback, calling the thirty-one capabilities, the status each error code takes, its two connection pools, and stopping it. |
 | [`managed-document-operations.md`](managed-document-operations.md) | The managed-document write plane: configuring its root, checking that its rows and its bytes agree, the metadata/bytes failure window and what it can leave behind, and backing the plane up and restoring it. |
 | [`mcp-and-cli-operations.md`](mcp-and-cli-operations.md) | The other two transports: the MCP server on stdio and the operator CLI. What is identical to HTTP and why, the handshake and derived tool list, the CLI's options and exit status, and what a bad command line does. |
 | [`remote-mcp-cloudflare.md`](remote-mcp-cloudflare.md) | Separately enabled remote MCP on the NAS: private-origin Compose, outbound-only Cloudflare Tunnel, client checks, rollback, and loopback fallback. |
 | [`nas-lifecycle.md`](nas-lifecycle.md) | Fail-closed NAS lifecycle commands, smoke restart policy, and the exact NAS-10 plus operator gates for the restart-only pilot overlay. |
 | [`nas-acceptance.md`](nas-acceptance.md) | Inert NAS-10 synthetic matrix, independently signed exact-head review, and unsigned PASS-candidate gate. |
+| [`context-semantic-retrieval.md`](context-semantic-retrieval.md) | Semantic retrieval gate: currently `SEMANTIC_GATE_FAIL`, lexical `context.prepare` is the active path, and how to re-run the SPECIALIZED evaluation. |
+| [`managed-knowledge-context.md`](managed-knowledge-context.md) | ChatLLM operating contract, recommended grants, activation sequence, and rollback for `context.prepare`. Production is not activated. |
+| [`context-personal-knowledge-pilot.md`](context-personal-knowledge-pilot.md) | Operator-authorized personal-knowledge pilot checklist. Does not access live personal data; queries and evidence must not be committed. |
 
 Related, outside this directory:
 

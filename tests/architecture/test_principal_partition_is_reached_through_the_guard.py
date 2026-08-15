@@ -223,7 +223,6 @@ QUARANTINED: Final = {
         "quarantined for above. WP-TM-05 wires this into "
         "`application.commitments.CommitmentManagementService`."
     ),
-    ),
 }
 
 #: The guarded modules whose *statements* are checked one by one, rather than

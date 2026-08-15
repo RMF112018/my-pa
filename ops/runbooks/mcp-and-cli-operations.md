@@ -434,5 +434,10 @@ machine, service supervision, deployment, and production activation. All
 operator-gated (`AGENTS.md` §5); the first three are `P00-OD-010`, which is
 open. Nothing here issues, reads, or requires a credential.
 
+`context.prepare` / `context.feedback` ChatLLM operating contract, recommended
+grants, activation, and rollback are
+[`managed-knowledge-context.md`](managed-knowledge-context.md). Production is
+not activated. Live Abacus OAuth remains operator-gated.
+
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy
 identities may appear only in explicit compatibility or evidence records.

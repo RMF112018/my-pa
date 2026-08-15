@@ -38,3 +38,7 @@ candidate, or the frozen thresholds is a new measurement and must update that
 file and `CONTEXT_SEMANTIC_GATE_DISPOSITION` together.
 
 This procedure does not open a database, call a network, or read live sources.
+
+Activation, rollback, and the ChatLLM operating contract for lexical
+`context.prepare` are [`managed-knowledge-context.md`](managed-knowledge-context.md).
+Production is not activated.

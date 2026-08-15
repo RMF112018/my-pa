@@ -14,6 +14,8 @@ Operational procedures for running `my-pa` locally.
 | [`nas-lifecycle.md`](nas-lifecycle.md) | Fail-closed NAS lifecycle commands, smoke restart policy, and the exact NAS-10 plus operator gates for the restart-only pilot overlay. |
 | [`nas-acceptance.md`](nas-acceptance.md) | Inert NAS-10 synthetic matrix, independently signed exact-head review, and unsigned PASS-candidate gate. |
 | [`context-semantic-retrieval.md`](context-semantic-retrieval.md) | Semantic retrieval gate: currently `SEMANTIC_GATE_FAIL`, lexical `context.prepare` is the active path, and how to re-run the SPECIALIZED evaluation. |
+| [`managed-knowledge-context.md`](managed-knowledge-context.md) | ChatLLM operating contract, recommended grants, activation sequence, and rollback for `context.prepare`. Production is not activated. |
+| [`context-personal-knowledge-pilot.md`](context-personal-knowledge-pilot.md) | Operator-authorized personal-knowledge pilot checklist. Does not access live personal data; queries and evidence must not be committed. |
 
 Related, outside this directory:
 

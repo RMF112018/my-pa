@@ -39,6 +39,7 @@ from my_pa.domain.context.prepared import (
     ContextLimitationCode,
     ContextPlane,
     CoverageState,
+    RetrievalMode,
 )
 from my_pa.domain.context.run import excerpt_sha256
 from my_pa.domain.identity.operation import Capability
@@ -222,14 +223,26 @@ def test_principal_b_cannot_see_principal_a(scene: Scene) -> None:
     _stage_search(scene, staged_search(scene))
     staged_capture(scene, text="quarterly revenue from the dock")
     staged_situation(scene, title="quarterly planning")
+    holder = succeeded(_prepare(scene, PrepareContext(query="quarterly")))
+    assert holder["total_items"] > 0
     other = operator()
     envelope = _prepare(scene, PrepareContext(query="quarterly"), principal=other)
     result = succeeded(envelope)
     assert result["evidence"] == []
+    assert result["total_items"] == 0
+    assert result["total_bytes"] == 0
     knowledge = next(row for row in result["coverage"] if row["plane"] == "knowledge")
     assert knowledge["state"] == CoverageState.NOT_ENROLLED.value
     capture_ids = {item["capture_id"] for item in result["evidence"] if item["plane"] == "capture"}
     assert capture_ids == set()
+    encoded = json.dumps(result)
+    assert scene.enrollment.enrollment_id not in encoded
+    assert scene.principal.principal_id not in encoded
+    assert holder["total_items"] != result["total_items"]
+    for row in result["coverage"]:
+        assert row.get("enrollment_id") in {None, ""}
+    assert ContextLimitationCode.PREFERENCE_FILTERED.value not in result["limitations"]
+    assert ContextLimitationCode.RESULT_TRUNCATED.value not in result["limitations"]
 
 
 def test_prompt_like_capture_has_no_instruction_authority(scene: Scene) -> None:
@@ -297,6 +310,17 @@ def test_isolated_knowledge_fault_does_not_drop_capture(scene: Scene) -> None:
 
 
 def test_all_attempted_internal_faults_fail_closed(scene: Scene) -> None:
+    """Every attempted plane internally faulted: InternalError, not empty success.
+
+    Mixed faults are isolated rather than fail-closed: see
+    `test_isolated_knowledge_fault_does_not_drop_capture`, which keeps capture
+    evidence when only knowledge search raises `RepositoryFailureError`.
+    """
+    scene.world.add_enrollment(
+        source_id=scene.source.source_id,
+        principal_id=scene.principal.principal_id,
+        object_ids=(scene.plain.source_object_id,),
+    )
     scene.world.failures["search"] = RepositoryFailureError()
     scene.world.failures["capture_search"] = RepositoryFailureError()
     scene.world.failures["list_situations"] = RepositoryFailureError()
@@ -316,6 +340,7 @@ def test_all_attempted_internal_faults_fail_closed(scene: Scene) -> None:
     )
     assert envelope.error is not None
     assert envelope.error.code is ErrorCode.INTERNAL_ERROR
+    assert envelope.result is None
 
 
 def test_subject_hint_is_applied_when_it_matches(scene: Scene) -> None:
@@ -470,3 +495,43 @@ def test_mcp_schema_for_context_prepare_has_no_principal_or_grants() -> None:
     assert "grants" not in remote
     assert "capability_grants" not in remote
     assert '"principal_id"' not in remote
+
+
+def test_lexical_mode_is_returned_while_semantic_gate_is_fail(scene: Scene) -> None:
+    _stage_search(scene, _empty_search(scene))
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.CONTEXT_PREPARE,
+            Purpose.CONTEXT_PREPARATION,
+            PrepareContext(query="quarterly"),
+        )
+    )
+    assert result["retrieval_mode"] == RetrievalMode.LEXICAL_STRUCTURED.value
+    assert result["ranking_version"] == CONTEXT_RANKING_VERSION
+    assert result["retrieval_mode"] != RetrievalMode.HYBRID_SEMANTIC.value
+
+
+def test_recorded_runs_remain_after_a_second_unit_of_work(scene: Scene) -> None:
+    """FAST stand-in for recovery: a second FakeUnitOfWork still sees recorded runs.
+
+    The context-run port is insert-only and has no read method. Survival is the
+    World list both units of work share. A database-marked reconnect test is
+    deferred: it would need a disposable SQL knowledge index this WP does not add.
+    """
+    _stage_search(scene, staged_search(scene))
+    first = succeeded(_prepare(scene, PrepareContext(query="quarterly")))
+    assert len(scene.world.context_runs) == 1
+    first_id = scene.world.context_runs[0].context_manifest_id
+    assert first_id == first["context_manifest_id"]
+    second_service = build_service(scene.world, scene.providers)
+    succeeded(
+        second_service.invoke(
+            metadata_for(Capability.CONTEXT_PREPARE, Purpose.CONTEXT_PREPARATION, scene.principal),
+            PrepareContext(query="quarterly"),
+            principal=scene.principal,
+        )
+    )
+    assert len(scene.world.context_runs) == 2
+    assert scene.world.context_runs[0].context_manifest_id == first_id

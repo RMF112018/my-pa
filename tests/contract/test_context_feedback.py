@@ -282,10 +282,50 @@ def test_principal_a_preferences_do_not_affect_principal_b(scene: Scene) -> None
     other = operator()
     result = succeeded(_prepare(scene, PrepareContext(query="quarterly"), principal=other))
     assert result["applied_preferences"] == []
+    assert result["total_items"] == 0
     assert all(
         SelectionReasonCode.PINNED_FOCUS.value not in item["reason_codes"]
         for item in result["evidence"]
     )
+    encoded = json.dumps(result)
+    assert situation.situation_id not in encoded
+    assert scene.principal.principal_id not in encoded
+    assert ContextLimitationCode.PREFERENCE_FILTERED.value not in result["limitations"]
+
+
+def test_principal_b_feedback_does_not_leak_principal_a_current(scene: Scene) -> None:
+    situation = staged_situation(scene, title="quarterly planning")
+    holder = succeeded(
+        _feedback(
+            scene,
+            RecordContextFeedback(
+                action=ContextPreferenceAction.PIN,
+                target_id=situation.situation_id,
+                idempotency_key="feedback-isolation-a-current-0001",
+            ),
+        )
+    )
+    assert any(row["target_id"] == situation.situation_id for row in holder["current"])
+    other = operator()
+    other_target = issue_identifier(IdKind.PROJECT)
+    stranger = succeeded(
+        _feedback(
+            scene,
+            RecordContextFeedback(
+                action=ContextPreferenceAction.PIN,
+                target_id=other_target,
+                idempotency_key="feedback-isolation-b-current-0001",
+            ),
+            principal=other,
+        )
+    )
+    current_ids = {row["target_id"] for row in stranger["current"]}
+    assert situation.situation_id not in current_ids
+    assert other_target in current_ids
+    assert len(stranger["current"]) == 1
+    encoded = json.dumps(stranger)
+    assert scene.principal.principal_id not in encoded
+    assert situation.situation_id not in encoded
 
 
 def test_mcp_schema_has_no_principal_or_grants() -> None:

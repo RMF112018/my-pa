@@ -56,9 +56,11 @@ from tests.conftest import (
     build_service,
     operator,
     staged_capture,
+    staged_commitment,
     staged_managed_document,
     staged_review_case,
     staged_search,
+    staged_task,
 )
 from tests.wire import Reply, Wire, serve
 
@@ -215,6 +217,8 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     capture = staged_capture(marked, text=MARKER_CONTENT)
     review_case = staged_review_case(marked, capture)
     document = staged_managed_document(marked, body=MARKER_CONTENT.encode())
+    task = staged_task(marked)
+    commitment = staged_commitment(marked)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -302,6 +306,65 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.DOCUMENTS_LIST: {},
         Capability.DOCUMENTS_ARCHIVE: {"document_id": document.document_id},
         Capability.DOCUMENTS_RESTORE: {"document_id": document.document_id},
+        Capability.TASKS_READ: {"task_id": task.task_id},
+        Capability.TASKS_LIST: {},
+        Capability.TASKS_SEARCH: {"query": "synthetic"},
+        Capability.TASKS_HISTORY: {"task_id": task.task_id},
+        Capability.TASKS_CREATE: {
+            "title": "Marked task-plane task",
+            "origin_evidence_ref": "cap_origin0001origin0001",
+            "idempotency_key": "wire-task-create-0001",
+        },
+        Capability.TASKS_UPDATE: {
+            "task_id": task.task_id,
+            "expected_version": task.version,
+            "idempotency_key": "wire-task-update-0001",
+            "title": "Marked task-plane task, revised",
+        },
+        Capability.TASKS_TRANSITION: {
+            "task_id": task.task_id,
+            "to_state": "in_progress",
+            # `tasks.update` above and this both act on `task` in the sweeps
+            # that drive every capability against one staged world in sequence
+            # (`test_no_capability_over_the_wire_calls_anything_but_a_read` and
+            # its neighbours): the update already advanced the stored version
+            # by one, so this is the version *after* that mutation rather than
+            # `task.version` itself.
+            "expected_version": task.version + 1,
+            "idempotency_key": "wire-task-transition-0001",
+        },
+        Capability.TASKS_BULK_PREVIEW: {
+            "mutations": [
+                {
+                    "capability": "tasks.update",
+                    "task_id": task.task_id,
+                    "expected_version": task.version,
+                    "idempotency_key": "wire-task-bulk-preview-0001",
+                    "title": "Marked task-plane task, bulk-previewed",
+                }
+            ],
+            "idempotency_key": "wire-task-bulk-preview-op-0001",
+        },
+        Capability.TASKS_BULK_CONFIRM: {
+            "bulk_operation_id": issue_identifier(IdKind.BULK_OPERATION),
+            "idempotency_key": "wire-task-bulk-confirm-0001",
+        },
+        Capability.COMMITMENTS_READ: {"commitment_id": commitment.commitment_id},
+        Capability.COMMITMENTS_LIST: {},
+        Capability.COMMITMENTS_WAITING_ON: {},
+        Capability.COMMITMENTS_CREATE: {
+            "counterparty_person_id": issue_identifier(IdKind.PERSON),
+            "direction": "owed_by_principal",
+            "summary": "Marked commitment-plane commitment",
+            "origin_evidence_ref": "cap_origin0001origin0001",
+            "idempotency_key": "wire-commitment-create-0001",
+        },
+        Capability.COMMITMENTS_CLOSE: {
+            "commitment_id": commitment.commitment_id,
+            "expected_version": commitment.version,
+            "closure_evidence_ref": "cap_origin0001origin0001",
+            "idempotency_key": "wire-commitment-close-0001",
+        },
     }
 
 
@@ -449,6 +512,25 @@ SCOPED_CAPABILITIES = [
         Capability.DOCUMENTS_LIST,
         Capability.DOCUMENTS_ARCHIVE,
         Capability.DOCUMENTS_RESTORE,
+        # The task-management plane (WP-TM-01..05) joins the managed-document
+        # plane on the scopeless side for the identical reason: a task or a
+        # commitment names a principal, not a source, and carries no
+        # `source_id`/`enrollment_id` for a request to name. `tests/policy`
+        # re-derives this partition from `evaluate` rather than from a list.
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_PREVIEW,
+        Capability.TASKS_BULK_CONFIRM,
+        Capability.COMMITMENTS_READ,
+        Capability.COMMITMENTS_LIST,
+        Capability.COMMITMENTS_WAITING_ON,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_CLOSE,
     }
 ]
 
@@ -502,6 +584,16 @@ def test_every_capability_refuses_a_purpose_it_does_not_permit_over_the_wire(
 # ---- source mutation ---------------------------------------------------------
 
 
+#: `tasks.bulk_preview` and `tasks.bulk_confirm` are wired all the way through
+#: `normalize`, but `ApplicationService._tasks_bulk_preview`/`_tasks_bulk_confirm`
+#: are documented placeholders that answer `unsupported` unconditionally. The
+#: redaction and no-mutating-method sweeps below still drive them — a
+#: placeholder's refusal is exactly the kind of answer those sweeps must also
+#: hold clean — they just do not expect a `200` for the two of them.
+_UNIMPLEMENTED_CAPABILITIES = frozenset(
+    {Capability.TASKS_BULK_PREVIEW, Capability.TASKS_BULK_CONFIRM}
+)
+
 MUTATING_NAMES = ("write", "create", "update", "delete", "remove", "rename", "move", "put")
 
 #: The capabilities the name check above does *not* apply to, and the reason it
@@ -547,6 +639,18 @@ CONTINUITY_AUTHORING_EXEMPTION = frozenset(
     }
 )
 
+#: The task-management exemption (WP-TM-01..05), for the same reason
+#: `CONTINUITY_AUTHORING_EXEMPTION` exists: a task and a commitment are
+#: product-owned records under `ADR-003`, not source-system writes, so the name
+#: check's proxy for "no source mutation" refuses names it was never meant to
+#: cover. `tasks.transition`, `tasks.bulk_preview`, `tasks.bulk_confirm`, and
+#: `commitments.close` are not exempt because they pass the name check on their
+#: own; widening the exemption to them would hide nothing and cover more than
+#: the property needs.
+TASK_MANAGEMENT_EXEMPTION = frozenset(
+    {Capability.TASKS_CREATE, Capability.TASKS_UPDATE, Capability.COMMITMENTS_CREATE}
+)
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -578,7 +682,12 @@ def test_the_transport_routes_no_mutating_capability() -> None:
 
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over HTTP"
     assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
-    exempt = CAPTURE_CAPABILITIES | MANAGED_DOCUMENT_EXEMPTION | CONTINUITY_AUTHORING_EXEMPTION
+    exempt = (
+        CAPTURE_CAPABILITIES
+        | MANAGED_DOCUMENT_EXEMPTION
+        | CONTINUITY_AUTHORING_EXEMPTION
+        | TASK_MANAGEMENT_EXEMPTION
+    )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)
     for capability in checked:
@@ -624,14 +733,18 @@ def test_no_capability_over_the_wire_calls_anything_but_a_read(
     """
     record = staged_record(marked)
     marked.world.searches[marked.enrollment.enrollment_id] = staged_search(marked)
+    payloads = payloads_for(marked, record)
     replies = [
         wire.send(
             capability.value,
             document(capability, marked.principal, payload),
         )
-        for capability, payload in payloads_for(marked, record).items()
+        for capability, payload in payloads.items()
     ]
-    assert all(reply.status == 200 for reply in replies), [r.status for r in replies]
+    expected = [
+        501 if capability in _UNIMPLEMENTED_CAPABILITIES else 200 for capability in payloads
+    ]
+    assert [reply.status for reply in replies] == expected
     assert set(marked.provider.calls) <= {"list_children", "metadata", "fetch"}
     assert marked.provider.calls, "no capability touched the provider at all"
     for reply in replies:
@@ -795,7 +908,8 @@ def test_no_header_of_any_answer_names_anything(
     marked.world.searches[marked.enrollment.enrollment_id] = staged_search(marked)
     for capability, payload in payloads_for(marked, record).items():
         reply = wire.send(capability.value, document(capability, marked.principal, payload))
-        assert reply.status == 200, f"{capability.value} answered {reply.status}: {reply.body}"
+        expected_status = 501 if capability in _UNIMPLEMENTED_CAPABILITIES else 200
+        assert reply.status == expected_status, f"{capability.value} answered {reply.status}"
         rendered = " ".join(f"{name}: {value}" for name, value in reply.headers.items())
         assert_clean(rendered, marked_root, f"{capability.value} headers")
         assert "server" not in reply.headers
@@ -825,7 +939,8 @@ def test_a_running_gateway_writes_nothing_sensitive_to_a_log(
             # The control for the scan below. "Nothing sensitive is in the log"
             # is satisfied for free by requests that never ran, and by a log
             # capture that captured nothing. Both are asserted against.
-            assert answer.status == 200, f"{capability.value} answered {answer.status}"
+            expected_status = 501 if capability in _UNIMPLEMENTED_CAPABILITIES else 200
+            assert answer.status == expected_status, f"{capability.value} answered {answer.status}"
         client.send(
             Capability.KNOWLEDGE_SEARCH.value,
             document(

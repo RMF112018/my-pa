@@ -20,7 +20,7 @@ from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
 
-from my_pa.application.commands import Command, CreateProject, CreateTask, GetPulse, ListProjects
+from my_pa.application.commands import Command, CreateProject, RecordTask, GetPulse, ListProjects
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import AuthoringConflictError, UnitOfWork
@@ -148,7 +148,7 @@ def test_a_direct_project_and_task_are_visible_on_sql_list_and_pulse(runtime: _R
     project_id = created.result["project_id"]
     due = datetime.now(UTC) + timedelta(hours=24)
     task = runtime.invoke(
-        CreateTask(
+        RecordTask(
             title="Verify ChatLLM write behavior",
             idempotency_key="author-db-task-0001",
             project_id=project_id,

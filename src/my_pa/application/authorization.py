@@ -82,6 +82,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     ReadManagedDocument,
     ReadTask,
+    RecordTask,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
@@ -203,7 +204,7 @@ def _requested_scope(
             | ListProjects()
             | CreateProject()
             | CreateSituation()
-            | CreateTask()
+            | RecordTask()
             # A corpus answer names a Principal and no source. The scope it
             # reports is read from `enrollments.principal_id` inside the
             # repository, so there is nothing here for a caller to state and

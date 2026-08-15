@@ -57,8 +57,12 @@ from typing import Any, Final
 
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    BulkConfirmTasks,
+    BulkPreviewTasks,
+    CloseCommitment,
     Command,
     CreateCapture,
+    CreateCommitment,
     CreateManagedDocument,
     CreateProject,
     CreateSituation,
@@ -71,15 +75,21 @@ from my_pa.application.commands import (
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
+    GetTaskHistory,
     ListCaptures,
+    ListCommitments,
     ListManagedDocuments,
     ListProjects,
     ListReviewCases,
     ListSituations,
     ListSources,
+    ListTasks,
     ReadCapture,
+    ReadCommitment,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadTask,
+    RecordTask,
     Representation,
     RestoreManagedDocument,
     RevealSubject,
@@ -87,13 +97,20 @@ from my_pa.application.commands import (
     ReviseManagedDocument,
     SearchCaptures,
     SearchKnowledge,
+    SearchTasks,
+    TransitionTask,
+    UpdateTask,
+    WaitingOn,
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail, UnsupportedError
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
+from my_pa.domain.situation.continuity import CommitmentDirection, CommitmentState
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
+from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.role import TaskRole
 
 __all__ = ["MAX_REQUEST_BYTES", "PAYLOAD_KEY", "normalize"]
 
@@ -323,7 +340,7 @@ def _create_situation(payload: Mapping[str, Any]) -> Command:
     return CreateSituation(**payload)
 
 
-def _create_task(payload: Mapping[str, Any]) -> Command:
+def _record_task(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     supplied = converted.get("due_at")
     if isinstance(supplied, str):
@@ -331,11 +348,177 @@ def _create_task(payload: Mapping[str, Any]) -> Command:
             converted["due_at"] = datetime.fromisoformat(supplied)
         except ValueError:
             raise InvalidRequestError(SafeDetail.DUE_AT) from None
-    return CreateTask(**converted)
+    return RecordTask(**converted)
 
 
 def _get_corpus_coverage(payload: Mapping[str, Any]) -> Command:
     return GetCorpusCoverage(**payload)
+
+
+def _read_task(payload: Mapping[str, Any]) -> Command:
+    return ReadTask(**payload)
+
+
+def _list_tasks(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    named = converted.get("lifecycle_state")
+    if isinstance(named, str):
+        try:
+            converted["lifecycle_state"] = TaskLifecycleState(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE) from None
+    named = converted.get("priority")
+    if isinstance(named, str):
+        try:
+            converted["priority"] = TaskPriority(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.PRIORITY) from None
+    return ListTasks(**converted)
+
+
+def _search_tasks(payload: Mapping[str, Any]) -> Command:
+    return SearchTasks(**payload)
+
+
+def _get_task_history(payload: Mapping[str, Any]) -> Command:
+    return GetTaskHistory(**payload)
+
+
+def _task_moment(converted: dict[str, Any], field_name: str, detail: SafeDetail) -> None:
+    """Resolve one of a task command's optional RFC 3339 fields in place.
+
+    The same shape conversion `_moments` performs for a capture's two moments,
+    generalised over a field name because the task-write plane has three of
+    them (`due_at`, `scheduled_at`, `deferred_until`) spread across two
+    commands rather than one fixed pair on one command.
+    """
+    supplied = converted.get(field_name)
+    if not isinstance(supplied, str):
+        return
+    try:
+        converted[field_name] = datetime.fromisoformat(supplied)
+    except ValueError:
+        raise InvalidRequestError(detail) from None
+
+
+def _create_task(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    _task_moment(converted, "due_at", SafeDetail.DUE_AT)
+    named = converted.get("priority")
+    if isinstance(named, str):
+        try:
+            converted["priority"] = TaskPriority(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.PRIORITY) from None
+    named = converted.get("role")
+    if isinstance(named, str):
+        try:
+            converted["role"] = TaskRole(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    return CreateTask(**converted)
+
+
+def _update_task(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    _task_moment(converted, "due_at", SafeDetail.DUE_AT)
+    _task_moment(converted, "scheduled_at", SafeDetail.SCHEDULED_AT)
+    _task_moment(converted, "deferred_until", SafeDetail.DEFERRED_UNTIL)
+    named = converted.get("priority")
+    if isinstance(named, str):
+        try:
+            converted["priority"] = TaskPriority(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.PRIORITY) from None
+    named = converted.get("role")
+    if isinstance(named, str):
+        try:
+            converted["role"] = TaskRole(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    return UpdateTask(**converted)
+
+
+def _transition_task(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    named = converted.get("to_state")
+    if isinstance(named, str):
+        try:
+            converted["to_state"] = TaskLifecycleState(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE) from None
+    return TransitionTask(**converted)
+
+
+def _mutations(value: object) -> tuple[dict[str, object], ...]:
+    """A JSON array of objects as the tuple of mappings `BulkPreviewTasks` holds.
+
+    Each entry stays an opaque `dict` — the same shape the command declares —
+    because a bulk mutation names one of `CreateTask`, `UpdateTask`, or
+    `TransitionTask`'s own fields, and re-validating that shape here would be a
+    second copy of each command's own `__post_init__` rather than the one this
+    module's docstring promises.
+    """
+    if not isinstance(value, list):
+        raise InvalidRequestError(SafeDetail.MUTATIONS)
+    mutations: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise InvalidRequestError(SafeDetail.MUTATIONS)
+        mutations.append(item)
+    return tuple(mutations)
+
+
+def _bulk_preview_tasks(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    if "mutations" in converted:
+        converted["mutations"] = _mutations(converted["mutations"])
+    return BulkPreviewTasks(**converted)
+
+
+def _bulk_confirm_tasks(payload: Mapping[str, Any]) -> Command:
+    return BulkConfirmTasks(**payload)
+
+
+def _read_commitment(payload: Mapping[str, Any]) -> Command:
+    return ReadCommitment(**payload)
+
+
+def _list_commitments(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    named = converted.get("direction")
+    if isinstance(named, str):
+        try:
+            converted["direction"] = CommitmentDirection(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    named = converted.get("state")
+    if isinstance(named, str):
+        try:
+            converted["state"] = CommitmentState(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    return ListCommitments(**converted)
+
+
+def _waiting_on(payload: Mapping[str, Any]) -> Command:
+    return WaitingOn(**payload)
+
+
+def _create_commitment(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    _task_moment(converted, "due_at", SafeDetail.DUE_AT)
+    named = converted.get("direction")
+    if isinstance(named, str):
+        try:
+            converted["direction"] = CommitmentDirection(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    return CreateCommitment(**converted)
+
+
+def _close_commitment(payload: Mapping[str, Any]) -> Command:
+    return CloseCommitment(**payload)
 
 
 def _managed_content(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -433,7 +616,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CONTINUITY_PROJECTS: _list_projects,
         Capability.CONTINUITY_PROJECTS_CREATE: _create_project,
         Capability.CONTINUITY_SITUATIONS_CREATE: _create_situation,
-        Capability.CONTINUITY_TASKS_CREATE: _create_task,
+        Capability.CONTINUITY_TASKS_CREATE: _record_task,
         Capability.KNOWLEDGE_COVERAGE: _get_corpus_coverage,
         Capability.DOCUMENTS_CREATE: _create_managed_document,
         Capability.DOCUMENTS_REVISE: _revise_managed_document,
@@ -441,6 +624,20 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.DOCUMENTS_LIST: _list_managed_documents,
         Capability.DOCUMENTS_ARCHIVE: _archive_managed_document,
         Capability.DOCUMENTS_RESTORE: _restore_managed_document,
+        Capability.TASKS_READ: _read_task,
+        Capability.TASKS_LIST: _list_tasks,
+        Capability.TASKS_SEARCH: _search_tasks,
+        Capability.TASKS_HISTORY: _get_task_history,
+        Capability.TASKS_CREATE: _create_task,
+        Capability.TASKS_UPDATE: _update_task,
+        Capability.TASKS_TRANSITION: _transition_task,
+        Capability.TASKS_BULK_PREVIEW: _bulk_preview_tasks,
+        Capability.TASKS_BULK_CONFIRM: _bulk_confirm_tasks,
+        Capability.COMMITMENTS_READ: _read_commitment,
+        Capability.COMMITMENTS_LIST: _list_commitments,
+        Capability.COMMITMENTS_WAITING_ON: _waiting_on,
+        Capability.COMMITMENTS_CREATE: _create_commitment,
+        Capability.COMMITMENTS_CLOSE: _close_commitment,
     }
 )
 

@@ -53,50 +53,58 @@ depends_on: str | None = None
 #: the declarative helper produces so the two texts can be compared directly.
 _CAPABILITIES_AT_THIS_REVISION: Final = (
     "capability IN ('capabilities.get', 'capture.create', 'capture.list', "
-    "'capture.read', 'capture.revise', 'capture.search', 'continuity.projects', "
-    "'continuity.pulse', 'continuity.situations', 'documents.archive', "
-    "'documents.create', 'documents.list', 'documents.read', 'documents.restore', "
-    "'documents.revise', 'knowledge.coverage', 'knowledge.read', "
-    "'knowledge.reveal', 'knowledge.search', 'native_sources.backfill', "
-    "'native_sources.configure', 'native_sources.disable', "
-    "'native_sources.discover', 'native_sources.pause', "
+    "'capture.read', 'capture.revise', 'capture.search', 'commitments.close', "
+    "'commitments.create', 'commitments.list', 'commitments.read', "
+    "'commitments.waiting_on', 'continuity.projects', 'continuity.projects.create', "
+    "'continuity.pulse', 'continuity.situations', 'continuity.situations.create', "
+    "'continuity.tasks.create', 'documents.archive', 'documents.create', "
+    "'documents.list', 'documents.read', 'documents.restore', 'documents.revise', "
+    "'knowledge.coverage', 'knowledge.read', 'knowledge.reveal', "
+    "'knowledge.search', 'native_sources.backfill', 'native_sources.configure', "
+    "'native_sources.disable', 'native_sources.discover', 'native_sources.pause', "
     "'native_sources.preflight', 'native_sources.reconcile', "
     "'native_sources.resume', 'native_sources.retry', 'native_sources.status', "
     "'native_sources.sync', 'review.decide', 'review.list', 'sources.enroll', "
     "'sources.fetch', 'sources.list', 'sources.metadata', 'sources.status', "
-    "'tasks.history', 'tasks.list', 'tasks.read', 'tasks.search')"
+    "'tasks.bulk_confirm', 'tasks.bulk_preview', 'tasks.create', 'tasks.history', "
+    "'tasks.list', 'tasks.read', 'tasks.search', 'tasks.transition', 'tasks.update')"
 )
 
 #: What the revision below denotes, restated rather than derived.
 _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "capability IN ('capabilities.get', 'capture.create', 'capture.list', "
     "'capture.read', 'capture.revise', 'capture.search', 'continuity.projects', "
-    "'continuity.pulse', 'continuity.situations', 'documents.archive', "
-    "'documents.create', 'documents.list', 'documents.read', 'documents.restore', "
-    "'documents.revise', 'knowledge.coverage', 'knowledge.read', "
-    "'knowledge.reveal', 'knowledge.search', 'native_sources.backfill', "
-    "'native_sources.configure', 'native_sources.disable', "
-    "'native_sources.discover', 'native_sources.pause', "
+    "'continuity.projects.create', 'continuity.pulse', 'continuity.situations', "
+    "'continuity.situations.create', 'continuity.tasks.create', "
+    "'documents.archive', 'documents.create', 'documents.list', "
+    "'documents.read', 'documents.restore', 'documents.revise', "
+    "'knowledge.coverage', 'knowledge.read', 'knowledge.reveal', "
+    "'knowledge.search', 'native_sources.backfill', 'native_sources.configure', "
+    "'native_sources.disable', 'native_sources.discover', 'native_sources.pause', "
     "'native_sources.preflight', 'native_sources.reconcile', "
     "'native_sources.resume', 'native_sources.retry', 'native_sources.status', "
     "'native_sources.sync', 'review.decide', 'review.list', 'sources.enroll', "
     "'sources.fetch', 'sources.list', 'sources.metadata', 'sources.status')"
 )
 
-#: The purpose vocabulary as of this revision: the twelve `6b3d9a2f8c14` left and
-#: the one the task-read plane declares, sorted.
+#: The purpose vocabulary as of this revision: the twelve `6b3d9a2f8c14` left,
+#: the one the task-read plane declares, the three the task-management plane
+#: (WP-TM-04 and WP-TM-05) declares, and the one continuity-authoring declares,
+#: sorted.
 _PURPOSES_AT_THIS_REVISION: Final = (
     "purpose IN ('bounded_enrollment', 'capture_authoring', 'capture_review', "
-    "'content_extraction', 'document_authoring', 'document_read', "
+    "'commitment_authoring', 'commitment_read', 'content_extraction', "
+    "'continuity_authoring', 'document_authoring', 'document_read', "
     "'knowledge_read', 'knowledge_search', 'review_disposition', "
-    "'security_validation', 'source_inspection', 'status_observation', 'task_read')"
+    "'security_validation', 'source_inspection', 'status_observation', "
+    "'task_authoring', 'task_read')"
 )
 
 #: What the revision below denotes, restated rather than derived.
 _PURPOSES_BEFORE_THIS_REVISION: Final = (
     "purpose IN ('bounded_enrollment', 'capture_authoring', 'capture_review', "
-    "'content_extraction', 'document_authoring', 'document_read', "
-    "'knowledge_read', 'knowledge_search', 'review_disposition', "
+    "'content_extraction', 'continuity_authoring', 'document_authoring', "
+    "'document_read', 'knowledge_read', 'knowledge_search', 'review_disposition', "
     "'security_validation', 'source_inspection', 'status_observation')"
 )
 

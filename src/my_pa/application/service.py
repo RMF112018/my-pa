@@ -154,6 +154,7 @@ from my_pa.application.commands import (
     ReadManagedDocument,
     ReadManagedDocumentCommand,
     ReadTask,
+    RecordTask,
     Representation,
     RestoreManagedDocument,
     RestoreManagedDocumentCommand,
@@ -2156,7 +2157,7 @@ class ApplicationService:
         return self._situation_authoring_result(authorization, situation, replayed=False)
 
     def _continuity_tasks_create(
-        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateTask
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: RecordTask
     ) -> _Result:
         """Record one accepted Task from an explicit user instruction."""
         principal_id = authorization.principal.principal_id
@@ -2637,6 +2638,7 @@ class ApplicationService:
         if self._tasks is None:
             raise InternalError()
         principal_id = authorization.principal.principal_id
+        from my_pa.application.tasks import TaskVersionConflictError
         from my_pa.domain.task.history import TaskMutationActor
 
         # Read the current task to determine which fields changed
@@ -2650,57 +2652,63 @@ class ApplicationService:
         receipt = None
 
         # Apply mutations in order
-        with _translated():
-            if command.title is not None and command.title != current.title:
-                receipt = self._tasks.update_title(
-                    principal_id=principal_id,
-                    task_id=command.task_id,
-                    title=command.title,
-                    expected_version=current_version,
-                    actor=TaskMutationActor.PRINCIPAL,
-                    idempotency_key=command.idempotency_key,
-                    client_context=command.client_context,
-                )
-                current_version = receipt.task.version
+        try:
+            with _translated():
+                if command.title is not None and command.title != current.title:
+                    receipt = self._tasks.update_title(
+                        principal_id=principal_id,
+                        task_id=command.task_id,
+                        title=command.title,
+                        expected_version=current_version,
+                        actor=TaskMutationActor.PRINCIPAL,
+                        idempotency_key=command.idempotency_key,
+                        client_context=command.client_context,
+                    )
+                    current_version = receipt.task.version
 
-            if command.priority is not None and command.priority != current.priority:
-                receipt = self._tasks.set_priority(
-                    principal_id=principal_id,
-                    task_id=command.task_id,
-                    priority=command.priority,
-                    expected_version=current_version,
-                    actor=TaskMutationActor.PRINCIPAL,
-                    idempotency_key=command.idempotency_key,
-                    client_context=command.client_context,
-                )
-                current_version = receipt.task.version
+                if command.priority is not None and command.priority != current.priority:
+                    receipt = self._tasks.set_priority(
+                        principal_id=principal_id,
+                        task_id=command.task_id,
+                        priority=command.priority,
+                        expected_version=current_version,
+                        actor=TaskMutationActor.PRINCIPAL,
+                        idempotency_key=command.idempotency_key,
+                        client_context=command.client_context,
+                    )
+                    current_version = receipt.task.version
 
-            if command.scheduled_at is not None and command.scheduled_at != current.scheduled_at:
-                receipt = self._tasks.schedule(
-                    principal_id=principal_id,
-                    task_id=command.task_id,
-                    scheduled_at=command.scheduled_at,
-                    expected_version=current_version,
-                    actor=TaskMutationActor.PRINCIPAL,
-                    idempotency_key=command.idempotency_key,
-                    client_context=command.client_context,
-                )
-                current_version = receipt.task.version
+                if (
+                    command.scheduled_at is not None
+                    and command.scheduled_at != current.scheduled_at
+                ):
+                    receipt = self._tasks.schedule(
+                        principal_id=principal_id,
+                        task_id=command.task_id,
+                        scheduled_at=command.scheduled_at,
+                        expected_version=current_version,
+                        actor=TaskMutationActor.PRINCIPAL,
+                        idempotency_key=command.idempotency_key,
+                        client_context=command.client_context,
+                    )
+                    current_version = receipt.task.version
 
-            if (
-                command.deferred_until is not None
-                and command.deferred_until != current.deferred_until
-            ):
-                receipt = self._tasks.defer(
-                    principal_id=principal_id,
-                    task_id=command.task_id,
-                    deferred_until=command.deferred_until,
-                    expected_version=current_version,
-                    actor=TaskMutationActor.PRINCIPAL,
-                    idempotency_key=command.idempotency_key,
-                    client_context=command.client_context,
-                )
-                current_version = receipt.task.version
+                if (
+                    command.deferred_until is not None
+                    and command.deferred_until != current.deferred_until
+                ):
+                    receipt = self._tasks.defer(
+                        principal_id=principal_id,
+                        task_id=command.task_id,
+                        deferred_until=command.deferred_until,
+                        expected_version=current_version,
+                        actor=TaskMutationActor.PRINCIPAL,
+                        idempotency_key=command.idempotency_key,
+                        client_context=command.client_context,
+                    )
+                    current_version = receipt.task.version
+        except TaskVersionConflictError:
+            raise ConflictError(SafeDetail.TASK_ID) from None
 
         # If no mutations were applied, return the current task
         if receipt is None:
@@ -2749,7 +2757,11 @@ class ApplicationService:
         if self._tasks is None:
             raise InternalError()
         principal_id = authorization.principal.principal_id
-        from my_pa.application.tasks import IllegalTaskTransitionError
+        from my_pa.application.tasks import (
+            IllegalTaskTransitionError,
+            TaskNotFoundError,
+            TaskVersionConflictError,
+        )
         from my_pa.domain.task.history import TaskMutationActor
 
         try:
@@ -2766,6 +2778,10 @@ class ApplicationService:
                 )
         except IllegalTaskTransitionError as e:
             raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE) from e
+        except TaskNotFoundError:
+            raise NotFoundError(SafeDetail.TASK_ID) from None
+        except TaskVersionConflictError:
+            raise ConflictError(SafeDetail.TASK_ID) from None
 
         return _Result(
             payload={

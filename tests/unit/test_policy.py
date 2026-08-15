@@ -284,9 +284,9 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # and 2 purposes (commitment_read, commitment_authoring); 3 reads paired with
     # commitment_read and 2 writes paired with commitment_authoring = 5 new permitted
     # pairs, so PERMITTED_PAIRS grew by 5 and MISMATCHED_PAIRS by
-    # (40*16 - 35*14) - 5 = 145.
-    assert len(PERMITTED_PAIRS) == 42
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 42 == 598
+    # (43*17 - 40*16) - 5 = 126.
+    assert len(PERMITTED_PAIRS) == 45
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 45 == 686
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

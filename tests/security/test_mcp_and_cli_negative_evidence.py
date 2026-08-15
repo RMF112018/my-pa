@@ -307,6 +307,25 @@ SCOPED_CAPABILITIES = [
         Capability.DOCUMENTS_LIST,
         Capability.DOCUMENTS_ARCHIVE,
         Capability.DOCUMENTS_RESTORE,
+        # The task-management plane (WP-TM-01..05) joins the managed-document
+        # plane on the scopeless side for the identical reason: a task or a
+        # commitment names a principal, not a source, and carries no
+        # `source_id`/`enrollment_id` for a request to name. `tests/policy`
+        # re-derives this partition from `evaluate` rather than from a list.
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_PREVIEW,
+        Capability.TASKS_BULK_CONFIRM,
+        Capability.COMMITMENTS_READ,
+        Capability.COMMITMENTS_LIST,
+        Capability.COMMITMENTS_WAITING_ON,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_CLOSE,
     }
 ]
 
@@ -499,6 +518,16 @@ CONTINUITY_AUTHORING_EXEMPTION = frozenset(
     }
 )
 
+#: The task-management exemption (WP-TM-01..05), for the same reason
+#: `CONTINUITY_AUTHORING_EXEMPTION` exists: a task and a commitment are
+#: product-owned records under `ADR-003`, not source-system writes. `tasks.
+#: transition`, `tasks.bulk_preview`, `tasks.bulk_confirm`, and
+#: `commitments.close` are not exempt because they pass the name check on
+#: their own.
+TASK_MANAGEMENT_EXEMPTION = frozenset(
+    {Capability.TASKS_CREATE, Capability.TASKS_UPDATE, Capability.COMMITMENTS_CREATE}
+)
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
@@ -513,7 +542,12 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
     assert {tool.name for tool in TOOLS} == {c.value for c in Capability}
     assert set(_BUILDERS) == set(Capability), "a capability is unreachable over a transport"
     assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
-    exempt = CAPTURE_CAPABILITIES | MANAGED_DOCUMENT_EXEMPTION | CONTINUITY_AUTHORING_EXEMPTION
+    exempt = (
+        CAPTURE_CAPABILITIES
+        | MANAGED_DOCUMENT_EXEMPTION
+        | CONTINUITY_AUTHORING_EXEMPTION
+        | TASK_MANAGEMENT_EXEMPTION
+    )
     checked = [c for c in Capability if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)
     for capability in checked:

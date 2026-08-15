@@ -44,8 +44,10 @@ from typing import Final
 import pytest
 
 from my_pa.application.commands import CreateManagedDocumentCommand
+from my_pa.application.commitments import CommitmentManagementService
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.service import ApplicationService
+from my_pa.application.tasks import TaskManagementService
 from my_pa.contracts.ports import (
     Acceptance,
     AuditSink,
@@ -59,6 +61,7 @@ from my_pa.contracts.ports import (
     CaptureSearchRequest,
     CaptureSummary,
     CommitmentManagementRepository,
+    CommitmentManagementUnitOfWork,
     ContinuityAuthoringRepository,
     EnrollmentRepository,
     KnowledgeRecord,
@@ -79,6 +82,7 @@ from my_pa.contracts.ports import (
     SourceProviders,
     SourceRepository,
     TaskManagementRepository,
+    TaskManagementUnitOfWork,
     UnitOfWork,
     UnknownScopeError,
 )
@@ -173,7 +177,7 @@ from my_pa.domain.source.provider import (
 from my_pa.domain.source.registry import ConfiguredSource, SourceProviderKind, issue_identifier
 from my_pa.domain.task.commitment import Commitment as CommitmentV2
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
-from my_pa.domain.task.history import TaskHistoryEntry
+from my_pa.domain.task.history import TaskHistoryEntry, TaskMutationActor
 from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
 from my_pa.domain.task.task import Task as TaskV2
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
@@ -1492,6 +1496,187 @@ class _CommitmentsRead(CommitmentManagementRepository):
         return tuple(ordered[:limit])
 
 
+class _TasksWrite(TaskManagementRepository):
+    """The WP-TM-04 write plane over `World.tasks_v2`/`task_history_v2`.
+
+    A second repository over the same lists `_TasksRead` reads, rather than one
+    repository serving both: `TaskManagementUnitOfWork.tasks` and
+    `UnitOfWork.tasks` are two different ports with two different contracts —
+    the write plane's own optimistic-concurrency and idempotency methods versus
+    the read plane's list/search/history methods — and a class that implemented
+    both would be answering to two callers who never call the same method.
+    Sharing the world rather than sharing the class is what makes a task
+    `TaskManagementService` creates visible to `UnitOfWork.tasks` afterwards.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def get_for_update(self, principal_id: str, task_id: str) -> TaskV2 | None:
+        return next(
+            (
+                task
+                for task in self._world.tasks_v2
+                if task.principal_id == principal_id and task.task_id == task_id
+            ),
+            None,
+        )
+
+    def get(self, principal_id: str, task_id: str) -> TaskV2 | None:
+        return self.get_for_update(principal_id, task_id)
+
+    def insert_task(self, task: TaskV2) -> None:
+        self._world.tasks_v2.append(task)
+
+    def update_task(self, task: TaskV2) -> None:
+        self._world.tasks_v2[:] = [
+            task if existing.task_id == task.task_id else existing
+            for existing in self._world.tasks_v2
+        ]
+
+    def find_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskHistoryEntry | None:
+        return next(
+            (
+                entry
+                for entry in self._world.task_history_v2
+                if entry.principal_id == principal_id
+                and entry.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def insert_history(self, entry: TaskHistoryEntry) -> None:
+        self._world.task_history_v2.append(entry)
+
+    def list_tasks(
+        self,
+        principal_id: str,
+        *,
+        lifecycle_state: TaskLifecycleState | None = None,
+        priority: TaskPriority | None = None,
+        include_archived: bool = False,
+        limit: int,
+    ) -> tuple[TaskV2, ...]:
+        raise NotImplementedError("the write plane's fake does not serve list reads")
+
+    def search(self, principal_id: str, query: str, limit: int) -> tuple[TaskV2, ...]:
+        raise NotImplementedError("the write plane's fake does not serve search")
+
+    def list_history(
+        self, principal_id: str, task_id: str, limit: int
+    ) -> tuple[TaskHistoryEntry, ...]:
+        raise NotImplementedError("the write plane's fake does not serve history reads")
+
+
+class FakeTaskManagementUnitOfWork(TaskManagementUnitOfWork):
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def __enter__(self) -> TaskManagementUnitOfWork:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        pass
+
+    @property
+    def tasks(self) -> TaskManagementRepository:
+        return _TasksWrite(self._world)
+
+
+class _CommitmentsWrite(CommitmentManagementRepository):
+    """The WP-TM-05 write plane over `World.commitments_v2`/`commitment_history_v2`.
+
+    The identical split from the read plane that `_TasksWrite` gives, and for
+    the identical reason: `CommitmentManagementUnitOfWork.commitments` is a
+    different port from `UnitOfWork.commitments`, sharing the world rather than
+    the class.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def get_for_update(self, principal_id: str, commitment_id: str) -> CommitmentV2 | None:
+        return next(
+            (
+                commitment
+                for commitment in self._world.commitments_v2
+                if commitment.principal_id == principal_id
+                and commitment.commitment_id == commitment_id
+            ),
+            None,
+        )
+
+    def get(self, principal_id: str, commitment_id: str) -> CommitmentV2 | None:
+        return self.get_for_update(principal_id, commitment_id)
+
+    def list_commitments(
+        self,
+        principal_id: str,
+        *,
+        direction: CommitmentDirection | None = None,
+        state: CommitmentState | None = None,
+        limit: int,
+    ) -> tuple[CommitmentV2, ...]:
+        raise NotImplementedError("the write plane's fake does not serve list reads")
+
+    def insert_commitment(self, commitment: CommitmentV2) -> None:
+        self._world.commitments_v2.append(commitment)
+
+    def update_commitment(self, commitment: CommitmentV2) -> None:
+        self._world.commitments_v2[:] = [
+            commitment if existing.commitment_id == commitment.commitment_id else existing
+            for existing in self._world.commitments_v2
+        ]
+
+    def find_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> CommitmentHistoryEntry | None:
+        return next(
+            (
+                entry
+                for entry in self._world.commitment_history_v2
+                if entry.principal_id == principal_id
+                and entry.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def insert_history(self, entry: CommitmentHistoryEntry) -> None:
+        self._world.commitment_history_v2.append(entry)
+
+    def list_history(
+        self, principal_id: str, commitment_id: str, limit: int
+    ) -> tuple[CommitmentHistoryEntry, ...]:
+        raise NotImplementedError("the write plane's fake does not serve history reads")
+
+
+class FakeCommitmentManagementUnitOfWork(CommitmentManagementUnitOfWork):
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def __enter__(self) -> CommitmentManagementUnitOfWork:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        pass
+
+    @property
+    def commitments(self) -> CommitmentManagementRepository:
+        return _CommitmentsWrite(self._world)
+
+
 class _Situations(SituationRepository):
     """Situations over the `World`, with the partition predicate written out.
 
@@ -2034,6 +2219,12 @@ def build_service(
         # would then be quantifying over names its own service refuses. A test
         # about the unconfigured build passes `None` explicitly and says so.
         managed_store=world.managed_store if managed_store is None else managed_store,
+        # Wired by the same default reasoning: an `ApplicationService` composed
+        # without these publishes no task/commitment mutation capability, and a
+        # suite that quantifies over `Capability` would be quantifying over
+        # names its own service refuses.
+        task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
+        commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
     )
 
 
@@ -2186,6 +2377,70 @@ def staged_review_case(scene: Scene, capture: CaptureVersion | None = None) -> R
     )
     scene.world.review_cases.append(case)
     return case
+
+
+def staged_task(scene: Scene, *, title: str = "a synthetic task") -> TaskV2:
+    """One stored task inside `scene`'s world, so `tasks.read` and its siblings answer.
+
+    Written through `TaskManagementService`, the same reasoning `staged_capture`
+    gives: the version number and the history entry are then the ones a real
+    creation produces, and a test cannot stage a state the service cannot reach.
+
+    One per Principal per scene, like `staged_managed_document`: a payload table
+    and a command table that each staged their own would be naming two different
+    tasks, and the comparison between them would then be measuring the staging
+    rather than the request.
+    """
+    existing = next(
+        (t for t in scene.world.tasks_v2 if t.principal_id == scene.principal.principal_id),
+        None,
+    )
+    if existing is not None:
+        return existing
+    service = TaskManagementService(unit_of_work=lambda: FakeTaskManagementUnitOfWork(scene.world))
+    receipt = service.create_task(
+        principal_id=scene.principal.principal_id,
+        title=title,
+        origin_evidence_ref="cap_origin0001origin0001",
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=f"staged-task-{len(scene.world.tasks_v2)}",
+    )
+    return receipt.task
+
+
+def staged_commitment(
+    scene: Scene,
+    *,
+    counterparty_person_id: str | None = None,
+    summary: str = "a synthetic commitment",
+) -> CommitmentV2:
+    """One stored commitment inside `scene`'s world, so the reads have an answer.
+
+    Written through `CommitmentManagementService`, for the identical reason
+    `staged_task` is, including the one-per-Principal-per-scene caching.
+    """
+    existing = next(
+        (
+            c
+            for c in scene.world.commitments_v2
+            if c.principal_id == scene.principal.principal_id
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing
+    receipt = CommitmentManagementService(
+        unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(scene.world)
+    ).create_commitment(
+        principal_id=scene.principal.principal_id,
+        counterparty_person_id=counterparty_person_id or issue_identifier(IdKind.PERSON),
+        direction=CommitmentDirection.OWED_BY_PRINCIPAL,
+        summary=summary,
+        origin_evidence_ref="cap_origin0001origin0001",
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=f"staged-commitment-{len(scene.world.commitments_v2)}",
+    )
+    return receipt.commitment
 
 
 @pytest.fixture

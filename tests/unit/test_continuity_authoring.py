@@ -9,7 +9,7 @@ from my_pa.application.commands import (
     CreateCapture,
     CreateProject,
     CreateSituation,
-    CreateTask,
+    RecordTask,
     GetPulse,
     ListProjects,
     ListSituations,
@@ -96,7 +96,7 @@ def test_explicit_task_create_with_due_date_reaches_the_pulse(scene: Scene) -> N
         scene.principal,
         Capability.CONTINUITY_TASKS_CREATE,
         Purpose.CONTINUITY_AUTHORING,
-        CreateTask(
+        RecordTask(
             title="Verify ChatLLM write behavior",
             idempotency_key="author-task-0001",
             due_at=due,
@@ -182,7 +182,7 @@ def test_a_foreign_project_id_cannot_attach_a_task(scene: Scene) -> None:
         scene.principal,
         Capability.CONTINUITY_TASKS_CREATE,
         Purpose.CONTINUITY_AUTHORING,
-        CreateTask(
+        RecordTask(
             title="Should not attach",
             idempotency_key="author-foreign-task-0001",
             project_id=foreign.result["project_id"],
@@ -246,7 +246,7 @@ def test_unknown_project_id_is_not_found_rather_than_attached() -> None:
         principal,
         Capability.CONTINUITY_TASKS_CREATE,
         Purpose.CONTINUITY_AUTHORING,
-        CreateTask(
+        RecordTask(
             title="Missing project",
             idempotency_key="author-missing-0001",
             project_id=issue_identifier(IdKind.PROJECT),

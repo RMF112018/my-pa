@@ -102,6 +102,7 @@ __all__ = [
     "ReadManagedDocumentCommand",
     "ReadTask",
     "RecordRelationshipEventCommand",
+    "RecordTask",
     "Representation",
     "RestoreManagedDocument",
     "RestoreManagedDocumentCommand",
@@ -774,7 +775,7 @@ class CreateSituation:
 
 
 @dataclass(frozen=True, slots=True)
-class CreateTask:
+class RecordTask:
     """Create a task the user explicitly asked to record. Requires title.
 
     This is Principal authoring, not a model-inferred proposal. The resulting
@@ -1472,7 +1473,7 @@ type Command = (
     | ListProjects
     | CreateProject
     | CreateSituation
-    | CreateTask
+    | RecordTask
     | GetCorpusCoverage
     | CreateManagedDocument
     | ReviseManagedDocument

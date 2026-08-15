@@ -110,6 +110,16 @@ def _schema_for(annotation: Any) -> dict[str, Any] | None:  # noqa: ANN401 - a t
             item = _schema_for(arguments[0])
             return None if item is None else {"type": "array", "items": item}
         return None
+    if origin is dict and get_args(annotation) == (str, object):
+        # `dict[str, object]` is a bulk mutation: itself a request document for
+        # one of the single-task commands (`CreateTask`, `UpdateTask`,
+        # `TransitionTask`), each with its own fields and its own schema
+        # published elsewhere in this same module. Restating that shape here
+        # would be a second copy able to disagree with the first, so this
+        # publishes only what every mutation is regardless of which command it
+        # names: a JSON object. A narrower value type, such as `dict[str, int]`,
+        # is a different shape this module still does not describe.
+        return {"type": "object"}
     if isinstance(annotation, type) and issubclass(annotation, StrEnum):
         return {"type": "string", "enum": [member.value for member in annotation]}
     return None

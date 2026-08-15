@@ -38,7 +38,9 @@ import pytest
 from tests.conftest import (
     DEFAULT_LIMITS,
     WHEN,
+    FakeCommitmentManagementUnitOfWork,
     FakeProviders,
+    FakeTaskManagementUnitOfWork,
     FakeUnitOfWork,
     Scene,
     World,
@@ -46,9 +48,11 @@ from tests.conftest import (
     metadata_for,
     operator,
     staged_capture,
+    staged_commitment,
     staged_managed_document,
     staged_review_case,
     staged_search,
+    staged_task,
 )
 from tests.wire import Wire, serve
 
@@ -57,8 +61,12 @@ from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    BulkConfirmTasks,
+    BulkPreviewTasks,
+    CloseCommitment,
     Command,
     CreateCapture,
+    CreateCommitment,
     CreateManagedDocument,
     CreateProject,
     CreateSituation,
@@ -71,15 +79,21 @@ from my_pa.application.commands import (
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
+    GetTaskHistory,
     ListCaptures,
+    ListCommitments,
     ListManagedDocuments,
     ListProjects,
     ListReviewCases,
     ListSituations,
     ListSources,
+    ListTasks,
     ReadCapture,
+    ReadCommitment,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadTask,
+    RecordTask,
     Representation,
     RestoreManagedDocument,
     RevealSubject,
@@ -87,6 +101,10 @@ from my_pa.application.commands import (
     ReviseManagedDocument,
     SearchCaptures,
     SearchKnowledge,
+    SearchTasks,
+    TransitionTask,
+    UpdateTask,
+    WaitingOn,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import KnowledgeRecord
@@ -98,9 +116,21 @@ from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.lifecycle import TaskLifecycleState
 
 ALL_CAPABILITIES = list(Capability)
+
+#: `tasks.bulk_preview` and `tasks.bulk_confirm` are wired all the way through
+#: `normalize`, but `ApplicationService._tasks_bulk_preview`/`_tasks_bulk_confirm`
+#: are documented placeholders that answer `unsupported` unconditionally — the
+#: mutation-simulation and atomic-apply logic they would need is its own work
+#: package, not a transport concern. Reachability for these two means exactly
+#: that: a well-formed `501 unsupported` envelope, never a silent success.
+_UNIMPLEMENTED_CAPABILITIES = frozenset(
+    {Capability.TASKS_BULK_PREVIEW, Capability.TASKS_BULK_CONFIRM}
+)
 
 
 def a_permitted_purpose(capability: Capability) -> Purpose:
@@ -140,6 +170,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     capture = staged_capture(scene)
     review_case = staged_review_case(scene, capture)
     document = staged_managed_document(scene)
+    task = staged_task(scene)
+    commitment = staged_commitment(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id},
@@ -232,24 +264,87 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.DOCUMENTS_LIST: {"limit": 10, "include_archived": True},
         Capability.DOCUMENTS_ARCHIVE: {"document_id": document.document_id},
         Capability.DOCUMENTS_RESTORE: {"document_id": document.document_id},
+        # The task-management plane (WP-TM-01..05). `task`/`commitment` are
+        # staged before the world is copied per transport, so all three see the
+        # same stored rows and a read is the same read everywhere.
+        Capability.TASKS_READ: {"task_id": task.task_id},
+        Capability.TASKS_LIST: {},
+        Capability.TASKS_SEARCH: {"query": "synthetic"},
+        Capability.TASKS_HISTORY: {"task_id": task.task_id},
+        Capability.TASKS_CREATE: {
+            "title": "HTTP task-plane task",
+            "origin_evidence_ref": "cap_origin0001origin0001",
+            "idempotency_key": "http-task-create-0001",
+        },
+        Capability.TASKS_UPDATE: {
+            "task_id": task.task_id,
+            "expected_version": task.version,
+            "idempotency_key": "http-task-update-0001",
+            "title": "HTTP task-plane task, revised",
+        },
+        Capability.TASKS_TRANSITION: {
+            "task_id": task.task_id,
+            "to_state": "in_progress",
+            "expected_version": task.version,
+            "idempotency_key": "http-task-transition-0001",
+        },
+        Capability.TASKS_BULK_PREVIEW: {
+            "mutations": [
+                {
+                    "capability": "tasks.update",
+                    "task_id": task.task_id,
+                    "expected_version": task.version,
+                    "idempotency_key": "http-task-bulk-preview-0001",
+                    "title": "HTTP task-plane task, bulk-previewed",
+                }
+            ],
+            "idempotency_key": "http-task-bulk-preview-op-0001",
+        },
+        Capability.TASKS_BULK_CONFIRM: {
+            "bulk_operation_id": issue_identifier(IdKind.BULK_OPERATION),
+            "idempotency_key": "http-task-bulk-confirm-0001",
+        },
+        Capability.COMMITMENTS_READ: {"commitment_id": commitment.commitment_id},
+        Capability.COMMITMENTS_LIST: {},
+        Capability.COMMITMENTS_WAITING_ON: {},
+        Capability.COMMITMENTS_CREATE: {
+            "counterparty_person_id": issue_identifier(IdKind.PERSON),
+            "direction": "owed_by_principal",
+            "summary": "HTTP commitment-plane commitment",
+            "origin_evidence_ref": "cap_origin0001origin0001",
+            "idempotency_key": "http-commitment-create-0001",
+        },
+        Capability.COMMITMENTS_CLOSE: {
+            "commitment_id": commitment.commitment_id,
+            "expected_version": commitment.version,
+            "closure_evidence_ref": "cap_origin0001origin0001",
+            "idempotency_key": "http-commitment-close-0001",
+        },
     }
 
 
 def commands_for(
-    scene: Scene, record: KnowledgeRecord, capture_id: str
+    scene: Scene,
+    record: KnowledgeRecord,
+    capture_id: str,
+    bulk_operation_id: str,
+    counterparty_person_id: str,
 ) -> dict[Capability, Command]:
     """The same requests, written as commands rather than as JSON.
 
-    `capture_id` is a parameter rather than staged here: the payload table and
-    this table have to name the *same* capture or the comparison below would be
-    between two different requests, and each staging its own would guarantee
-    they were.
+    `capture_id`, `bulk_operation_id`, and `counterparty_person_id` are
+    parameters rather than staged or minted here: the payload table and this
+    table have to name the *same* capture, bulk operation, and counterparty or
+    the comparison below would be between two different requests, and each
+    minting its own would guarantee they were.
 
     Written by hand rather than produced by `normalize`, which is the point: the
     normalisation test below compares the two, and a comparison against the
     function under test would prove only that it agrees with itself.
     """
     document = staged_managed_document(scene)
+    task = staged_task(scene)
+    commitment = staged_commitment(scene)
     return {
         Capability.CAPABILITIES_GET: GetCapabilities(),
         Capability.SOURCES_LIST: ListSources(source_id=scene.source.source_id),
@@ -299,7 +394,7 @@ def commands_for(
         Capability.CONTINUITY_SITUATIONS_CREATE: CreateSituation(
             title="HTTP authoring situation", idempotency_key="http-situation-0001"
         ),
-        Capability.CONTINUITY_TASKS_CREATE: CreateTask(
+        Capability.CONTINUITY_TASKS_CREATE: RecordTask(
             title="HTTP authoring task", idempotency_key="http-task-0001"
         ),
         Capability.KNOWLEDGE_COVERAGE: GetCorpusCoverage(),
@@ -330,6 +425,59 @@ def commands_for(
         Capability.DOCUMENTS_LIST: ListManagedDocuments(limit=10, include_archived=True),
         Capability.DOCUMENTS_ARCHIVE: ArchiveManagedDocument(document_id=document.document_id),
         Capability.DOCUMENTS_RESTORE: RestoreManagedDocument(document_id=document.document_id),
+        Capability.TASKS_READ: ReadTask(task_id=task.task_id),
+        Capability.TASKS_LIST: ListTasks(),
+        Capability.TASKS_SEARCH: SearchTasks(query="synthetic"),
+        Capability.TASKS_HISTORY: GetTaskHistory(task_id=task.task_id),
+        Capability.TASKS_CREATE: CreateTask(
+            title="HTTP task-plane task",
+            origin_evidence_ref="cap_origin0001origin0001",
+            idempotency_key="http-task-create-0001",
+        ),
+        Capability.TASKS_UPDATE: UpdateTask(
+            task_id=task.task_id,
+            expected_version=task.version,
+            idempotency_key="http-task-update-0001",
+            title="HTTP task-plane task, revised",
+        ),
+        Capability.TASKS_TRANSITION: TransitionTask(
+            task_id=task.task_id,
+            to_state=TaskLifecycleState.IN_PROGRESS,
+            expected_version=task.version,
+            idempotency_key="http-task-transition-0001",
+        ),
+        Capability.TASKS_BULK_PREVIEW: BulkPreviewTasks(
+            mutations=(
+                {
+                    "capability": "tasks.update",
+                    "task_id": task.task_id,
+                    "expected_version": task.version,
+                    "idempotency_key": "http-task-bulk-preview-0001",
+                    "title": "HTTP task-plane task, bulk-previewed",
+                },
+            ),
+            idempotency_key="http-task-bulk-preview-op-0001",
+        ),
+        Capability.TASKS_BULK_CONFIRM: BulkConfirmTasks(
+            bulk_operation_id=bulk_operation_id,
+            idempotency_key="http-task-bulk-confirm-0001",
+        ),
+        Capability.COMMITMENTS_READ: ReadCommitment(commitment_id=commitment.commitment_id),
+        Capability.COMMITMENTS_LIST: ListCommitments(),
+        Capability.COMMITMENTS_WAITING_ON: WaitingOn(),
+        Capability.COMMITMENTS_CREATE: CreateCommitment(
+            counterparty_person_id=counterparty_person_id,
+            direction=CommitmentDirection.OWED_BY_PRINCIPAL,
+            summary="HTTP commitment-plane commitment",
+            origin_evidence_ref="cap_origin0001origin0001",
+            idempotency_key="http-commitment-create-0001",
+        ),
+        Capability.COMMITMENTS_CLOSE: CloseCommitment(
+            commitment_id=commitment.commitment_id,
+            expected_version=commitment.version,
+            closure_evidence_ref="cap_origin0001origin0001",
+            idempotency_key="http-commitment-close-0001",
+        ),
     }
 
 
@@ -364,6 +512,8 @@ class RecordingService(ApplicationService):
             # The same store the `World` holds, so a document staged into the
             # world and one written through this service are the same bytes.
             managed_store=world.managed_store,
+            task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
+            commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
         )
         self.envelopes: list[ResponseEnvelope] = []
 
@@ -406,8 +556,14 @@ def test_every_capability_is_reachable_over_http(
     scene, record = staged
     payload = payloads_for(scene, record)[capability]
     reply = wire.send(capability.value, document_for(capability, scene, payload))
-    assert reply.status == 200, reply.body
     envelope = reply.document()
+    if capability in _UNIMPLEMENTED_CAPABILITIES:
+        assert reply.status == 501, reply.body
+        assert envelope["error"]["code"] == "unsupported"
+        assert envelope["request_id"] == f"req-{capability.value}"
+        assert envelope["contract_version"] == "v1"
+        return
+    assert reply.status == 200, reply.body
     assert envelope["error"] is None
     assert envelope["disclosure"] is not None
     assert envelope["request_id"] == f"req-{capability.value}"
@@ -434,7 +590,7 @@ def test_the_body_is_the_envelope_the_application_produced(
     assert len(service.envelopes) == 1, "one request reached the application once"
     produced = service.envelopes[0]
     assert reply.body == produced.to_canonical_json()
-    assert reply.status == 200
+    assert reply.status == (501 if capability in _UNIMPLEMENTED_CAPABILITIES else 200)
     assert produced.correlation_id in reply.body
 
 
@@ -447,8 +603,15 @@ def test_normalisation_builds_the_pair_a_hand_written_request_builds(
     payloads = payloads_for(scene, record)
     document = document_for(capability, scene, payloads[capability])
     capture_id = str(payloads[Capability.CAPTURE_READ]["capture_id"])
+    bulk_operation_id = str(payloads[Capability.TASKS_BULK_CONFIRM]["bulk_operation_id"])
+    counterparty_person_id = str(payloads[Capability.COMMITMENTS_CREATE]["counterparty_person_id"])
     metadata, command = normalize(capability.value, document)
-    assert command == commands_for(scene, record, capture_id)[capability]
+    assert (
+        command
+        == commands_for(scene, record, capture_id, bulk_operation_id, counterparty_person_id)[
+            capability
+        ]
+    )
     assert metadata == metadata_for(capability, a_permitted_purpose(capability), scene.principal)
     assert metadata.requested_at == WHEN
 

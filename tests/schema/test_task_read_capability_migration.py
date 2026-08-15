@@ -69,11 +69,32 @@ SCHEMA: Final = "knowledge"
 TASK_READ_REVISION: Final = "d15c0dc14d09"
 PREVIOUS_REVISION: Final = "3d7a2a3e8277"
 
-#: The names this revision admits, and the purpose beside them.
+#: The names this revision admits, and the purposes beside them. WP-TM-03 added
+#: the four task-read capabilities and the task_read purpose. WP-TM-04 added five
+#: task-write capabilities and the task_authoring purpose. WP-TM-05 added five
+#: commitment capabilities and two commitment purposes. All are admitted by this
+#: revision, which is the head of the task-management chain.
 CAPABILITIES_ADDED: Final[frozenset[str]] = frozenset(
-    {"tasks.history", "tasks.list", "tasks.read", "tasks.search"}
+    {
+        "commitments.close",
+        "commitments.create",
+        "commitments.list",
+        "commitments.read",
+        "commitments.waiting_on",
+        "tasks.bulk_confirm",
+        "tasks.bulk_preview",
+        "tasks.create",
+        "tasks.history",
+        "tasks.list",
+        "tasks.read",
+        "tasks.search",
+        "tasks.transition",
+        "tasks.update",
+    }
 )
-PURPOSES_ADDED: Final[frozenset[str]] = frozenset({"task_read"})
+PURPOSES_ADDED: Final[frozenset[str]] = frozenset(
+    {"commitment_authoring", "commitment_read", "task_authoring", "task_read"}
+)
 
 #: What each constraint admitted before this revision. Written out here as well
 #: as in the revision, and the duplication is the point: a test that imported the
@@ -88,8 +109,11 @@ CAPABILITIES_BEFORE: Final[frozenset[str]] = frozenset(
         "capture.revise",
         "capture.search",
         "continuity.projects",
+        "continuity.projects.create",
         "continuity.pulse",
         "continuity.situations",
+        "continuity.situations.create",
+        "continuity.tasks.create",
         "documents.archive",
         "documents.create",
         "documents.list",
@@ -126,6 +150,7 @@ PURPOSES_BEFORE: Final[frozenset[str]] = frozenset(
         "capture_authoring",
         "capture_review",
         "content_extraction",
+        "continuity_authoring",
         "document_authoring",
         "document_read",
         "knowledge_read",
@@ -258,8 +283,11 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_task_read_plane() 
     assert TASK_READ_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(TASK_READ_REVISION).down_revision == PREVIOUS_REVISION
     # The revision count, so a chain that lost a file is not read as a chain that
-    # never had one. Derived from the directory rather than restated.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 40
+    # never had one. Derived from the directory rather than restated. WP-TM-03
+    # added 1 revision (task-read plane), WP-TM-04 added 1 revision (task-write
+    # plane), WP-TM-05 added 1 revision (commitment plane), so the count grew
+    # from 40 to 43.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 43
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:
@@ -312,15 +340,30 @@ def test_the_widening_is_exactly_the_task_read_plane() -> None:
     before = _frozen_literals("_CAPABILITIES_BEFORE_THIS_REVISION")
     assert before == CAPABILITIES_BEFORE
     assert admitted - before == CAPABILITIES_ADDED
-    assert len(before) == 37
-    assert len(admitted) == 41
+    # The "before" set includes the three continuity-authoring capabilities
+    # (continuity.projects.create, continuity.situations.create,
+    # continuity.tasks.create) that were admitted by the continuity-authoring
+    # migration (WP-06 R5), so the count is 40 (37 from the task-read plane's
+    # predecessor + 3 from continuity-authoring).
+    assert len(before) == 40
+    # WP-TM-03 added 4 capabilities (tasks.read/list/search/history), WP-TM-04
+    # added 5 (tasks.create/update/transition/bulk_preview/bulk_confirm), WP-TM-05
+    # added 5 (commitments.read/list/waiting_on/create/close), so the count grew
+    # from 40 to 54.
+    assert len(admitted) == 54
 
     purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
     purposes_before = _frozen_literals("_PURPOSES_BEFORE_THIS_REVISION")
     assert purposes_before == PURPOSES_BEFORE
     assert purposes - purposes_before == PURPOSES_ADDED
-    assert len(purposes_before) == 12
-    assert len(purposes) == 13
+    # The "before" set includes continuity_authoring (admitted by the
+    # continuity-authoring migration, WP-06 R5), so the count is 13 (12 from the
+    # task-read plane's predecessor + 1 from continuity-authoring).
+    assert len(purposes_before) == 13
+    # WP-TM-03 added 1 purpose (task_read), WP-TM-04 added 1 (task_authoring),
+    # WP-TM-05 added 2 (commitment_read, commitment_authoring), so the count grew
+    # from 13 to 17.
+    assert len(purposes) == 17
 
 
 def test_the_revision_reads_no_enum() -> None:

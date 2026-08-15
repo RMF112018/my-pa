@@ -60,10 +60,12 @@ from tests.conftest import (
     Scene,
     build_service,
     staged_capture,
+    staged_commitment,
     staged_managed_document,
     staged_record,
     staged_review_case,
     staged_search,
+    staged_task,
 )
 from tests.transports import CLI_OPTIONS, CLI_SCOPE_OPTIONS, TRANSPORTS, Answer
 
@@ -99,6 +101,16 @@ NORMALIZE_SITES = (cli_module, http_module, mcp_module)
 
 TRANSPORT_NAMES = frozenset({"http", "mcp", "cli"})
 CORRECTED_VALUE_MARKER = "PRIVATE-CORRECTED-VALUE-MARKER"
+
+#: `tasks.bulk_preview` and `tasks.bulk_confirm` are wired all the way through
+#: `normalize`, but `ApplicationService._tasks_bulk_preview`/`_tasks_bulk_confirm`
+#: are documented placeholders that answer `unsupported` unconditionally — the
+#: mutation-simulation and atomic-apply logic they would need is its own work
+#: package, not a transport-parity concern. Parity for these two means exactly
+#: that: the same `unsupported` refusal, identically, over all three transports.
+_UNIMPLEMENTED_CAPABILITIES = frozenset(
+    {Capability.TASKS_BULK_PREVIEW, Capability.TASKS_BULK_CONFIRM}
+)
 
 
 def a_permitted_purpose(capability: Capability) -> Purpose:
@@ -139,6 +151,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     capture = staged_capture(scene)
     review_case = staged_review_case(scene, capture)
     document = staged_managed_document(scene)
+    task = staged_task(scene)
+    commitment = staged_commitment(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -250,6 +264,62 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.DOCUMENTS_LIST: {"limit": 10, "include_archived": True},
         Capability.DOCUMENTS_ARCHIVE: {"document_id": document.document_id},
         Capability.DOCUMENTS_RESTORE: {"document_id": document.document_id},
+        # The task-management plane (WP-TM-01..05). `task`/`commitment` are
+        # staged before the world is copied per transport, so all three see the
+        # same stored rows and a read is the same read everywhere.
+        Capability.TASKS_READ: {"task_id": task.task_id},
+        Capability.TASKS_LIST: {},
+        Capability.TASKS_SEARCH: {"query": "synthetic"},
+        Capability.TASKS_HISTORY: {"task_id": task.task_id},
+        Capability.TASKS_CREATE: {
+            "title": "Parity task-plane task",
+            "origin_evidence_ref": "cap_origin0001origin0001",
+            "idempotency_key": "parity-task-create-0001",
+        },
+        Capability.TASKS_UPDATE: {
+            "task_id": task.task_id,
+            "expected_version": task.version,
+            "idempotency_key": "parity-task-update-0001",
+            "title": "Parity task-plane task, revised",
+        },
+        Capability.TASKS_TRANSITION: {
+            "task_id": task.task_id,
+            "to_state": "in_progress",
+            "expected_version": task.version,
+            "idempotency_key": "parity-task-transition-0001",
+        },
+        Capability.TASKS_BULK_PREVIEW: {
+            "mutations": [
+                {
+                    "capability": "tasks.update",
+                    "task_id": task.task_id,
+                    "expected_version": task.version,
+                    "idempotency_key": "parity-task-bulk-preview-0001",
+                    "title": "Parity task-plane task, bulk-previewed",
+                }
+            ],
+            "idempotency_key": "parity-task-bulk-preview-op-0001",
+        },
+        Capability.TASKS_BULK_CONFIRM: {
+            "bulk_operation_id": issue_identifier(IdKind.BULK_OPERATION),
+            "idempotency_key": "parity-task-bulk-confirm-0001",
+        },
+        Capability.COMMITMENTS_READ: {"commitment_id": commitment.commitment_id},
+        Capability.COMMITMENTS_LIST: {},
+        Capability.COMMITMENTS_WAITING_ON: {},
+        Capability.COMMITMENTS_CREATE: {
+            "counterparty_person_id": issue_identifier(IdKind.PERSON),
+            "direction": "owed_by_principal",
+            "summary": "Parity commitment-plane commitment",
+            "origin_evidence_ref": "cap_origin0001origin0001",
+            "idempotency_key": "parity-commitment-create-0001",
+        },
+        Capability.COMMITMENTS_CLOSE: {
+            "commitment_id": commitment.commitment_id,
+            "expected_version": commitment.version,
+            "closure_evidence_ref": "cap_origin0001origin0001",
+            "idempotency_key": "parity-commitment-close-0001",
+        },
     }
 
 
@@ -373,7 +443,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 30, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 44, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -690,6 +760,13 @@ def test_every_capability_answers_identically_over_all_three_transports(
         capability, scene.principal.principal_id, payloads_for(scene, record)[capability]
     )
     answers = answers_for(scene, capability.value, request)
+    if capability in _UNIMPLEMENTED_CAPABILITIES:
+        assert all(answer.failed for answer in answers.values()), answers
+        for name, answer in answers.items():
+            assert answer.document["error"]["code"] == "unsupported", f"{name} did not refuse"
+            assert answer.document["request_id"] == request["request_id"]
+        assert_same_answer(answers, request, capability.value)
+        return
     assert not any(answer.failed for answer in answers.values()), answers
     for name, answer in answers.items():
         assert answer.document["error"] is None, f"{name} refused {capability.value}"

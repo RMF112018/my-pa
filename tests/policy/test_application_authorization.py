@@ -52,8 +52,12 @@ from tests.conftest import (
 
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    BulkConfirmTasks,
+    BulkPreviewTasks,
+    CloseCommitment,
     Command,
     CreateCapture,
+    CreateCommitment,
     CreateManagedDocument,
     CreateProject,
     CreateSituation,
@@ -68,6 +72,7 @@ from my_pa.application.commands import (
     GetSourceStatus,
     GetTaskHistory,
     ListCaptures,
+    ListCommitments,
     ListManagedDocuments,
     ListProjects,
     ListReviewCases,
@@ -75,9 +80,11 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ReadCapture,
+    ReadCommitment,
     ReadKnowledge,
     ReadManagedDocument,
     ReadTask,
+    RecordTask,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
@@ -85,6 +92,9 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchKnowledge,
     SearchTasks,
+    TransitionTask,
+    UpdateTask,
+    WaitingOn,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -96,8 +106,10 @@ from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import DenialReason
+from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.provider import SourceProvider
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.lifecycle import TaskLifecycleState
 
 
 def commands_for(scene: Scene) -> dict[Capability, Command]:
@@ -161,7 +173,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.CONTINUITY_SITUATIONS_CREATE: CreateSituation(
             title="Denial-path situation", idempotency_key="denial-situation-0001"
         ),
-        Capability.CONTINUITY_TASKS_CREATE: CreateTask(
+        Capability.CONTINUITY_TASKS_CREATE: RecordTask(
             title="Denial-path task", idempotency_key="denial-task-0001"
         ),
         Capability.KNOWLEDGE_COVERAGE: GetCorpusCoverage(),
@@ -206,6 +218,53 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.TASKS_LIST: ListTasks(),
         Capability.TASKS_SEARCH: SearchTasks(query="synthetic"),
         Capability.TASKS_HISTORY: GetTaskHistory(task_id=issue_identifier(IdKind.TASK)),
+        # The task-write plane (WP-TM-04) and the commitment plane (WP-TM-05).
+        # Every identifier is minted rather than staged, for the identical
+        # reason the task-read plane above is: a denial test must fail on the
+        # authority and on nothing else.
+        Capability.TASKS_CREATE: CreateTask(
+            title="Denial-path task",
+            origin_evidence_ref=issue_identifier(IdKind.CAPTURE),
+            idempotency_key="denial-tasks-create-0001",
+        ),
+        Capability.TASKS_UPDATE: UpdateTask(
+            task_id=issue_identifier(IdKind.TASK),
+            expected_version=1,
+            idempotency_key="denial-tasks-update-0001",
+            title="Denial-path task, revised",
+        ),
+        Capability.TASKS_TRANSITION: TransitionTask(
+            task_id=issue_identifier(IdKind.TASK),
+            to_state=TaskLifecycleState.IN_PROGRESS,
+            expected_version=1,
+            idempotency_key="denial-tasks-transition-0001",
+        ),
+        Capability.TASKS_BULK_PREVIEW: BulkPreviewTasks(
+            mutations=({"task_id": issue_identifier(IdKind.TASK), "title": "Revised"},),
+            idempotency_key="denial-tasks-bulk-preview-0001",
+        ),
+        Capability.TASKS_BULK_CONFIRM: BulkConfirmTasks(
+            bulk_operation_id=issue_identifier(IdKind.BULK_OPERATION),
+            idempotency_key="denial-tasks-bulk-confirm-0001",
+        ),
+        Capability.COMMITMENTS_READ: ReadCommitment(
+            commitment_id=issue_identifier(IdKind.COMMITMENT)
+        ),
+        Capability.COMMITMENTS_LIST: ListCommitments(),
+        Capability.COMMITMENTS_WAITING_ON: WaitingOn(),
+        Capability.COMMITMENTS_CREATE: CreateCommitment(
+            counterparty_person_id=issue_identifier(IdKind.PERSON),
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            summary="Denial-path commitment",
+            origin_evidence_ref=issue_identifier(IdKind.CAPTURE),
+            idempotency_key="denial-commitments-create-0001",
+        ),
+        Capability.COMMITMENTS_CLOSE: CloseCommitment(
+            commitment_id=issue_identifier(IdKind.COMMITMENT),
+            expected_version=1,
+            closure_evidence_ref=issue_identifier(IdKind.CAPTURE),
+            idempotency_key="denial-commitments-close-0001",
+        ),
     }
 
 
@@ -405,6 +464,19 @@ SCOPED_CAPABILITIES = [
         Capability.TASKS_LIST,
         Capability.TASKS_SEARCH,
         Capability.TASKS_HISTORY,
+        # The task-write plane (WP-TM-04) and the commitment plane (WP-TM-05)
+        # name a task or a commitment, not a source, for the identical reason
+        # the task-read plane above does not.
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_PREVIEW,
+        Capability.TASKS_BULK_CONFIRM,
+        Capability.COMMITMENTS_READ,
+        Capability.COMMITMENTS_LIST,
+        Capability.COMMITMENTS_WAITING_ON,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_CLOSE,
     }
 ]
 
@@ -487,6 +559,16 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.TASKS_LIST,
         Capability.TASKS_SEARCH,
         Capability.TASKS_HISTORY,
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_PREVIEW,
+        Capability.TASKS_BULK_CONFIRM,
+        Capability.COMMITMENTS_READ,
+        Capability.COMMITMENTS_LIST,
+        Capability.COMMITMENTS_WAITING_ON,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_CLOSE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

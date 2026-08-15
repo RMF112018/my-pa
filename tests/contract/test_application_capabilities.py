@@ -1173,7 +1173,7 @@ def test_a_configured_page_size_cannot_exceed_the_bound_search_enforces(
 
 
 def test_context_prepare_returns_empty_evidence_without_an_enrollment(scene: Scene) -> None:
-    """WP-KC-01: the stub assembles a valid no-match package and searches nothing."""
+    """No staged search: knowledge is unavailable rather than a complete no-match."""
     service = build_service(scene.world, scene.providers)
     result = succeeded(
         run(
@@ -1188,4 +1188,6 @@ def test_context_prepare_returns_empty_evidence_without_an_enrollment(scene: Sce
     assert result["total_items"] == 0
     assert result["instruction_authority"] is False
     assert "quarterly" not in result["query_fingerprint"]
-    assert "planes_not_searched" in result["limitations"]
+    assert "planes_not_searched" not in result["limitations"]
+    knowledge = next(row for row in result["coverage"] if row["plane"] == "knowledge")
+    assert knowledge["state"] == "unavailable"

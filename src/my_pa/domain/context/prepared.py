@@ -86,8 +86,8 @@ MAX_CONVERSATION_CONTEXT_CHARACTERS: Final = 2048
 #: Opaque subject hints, validated for identifier shape only.
 MAX_SUBJECT_HINTS: Final = 8
 
-#: Stub ranking identity until WP-KC-02 searches a plane.
-CONTEXT_RANKING_VERSION: Final = "lexical_structured.v0"
+#: Lexical/structured ranking identity. Semantic retrieval is WP-KC-07/08.
+CONTEXT_RANKING_VERSION: Final = "lexical_structured.v1"
 
 #: Stub policy identity for the context-preparation contract itself.
 CONTEXT_POLICY_VERSION: Final = "context-prepare-v1"

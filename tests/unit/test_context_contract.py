@@ -328,7 +328,7 @@ def test_canonical_payload_is_json_stable_and_contains_no_raw_query() -> None:
     assert "documents.create" in payload["evidence"][0]["text"]
 
 
-def test_handler_returns_empty_evidence_and_unavailable_planes(scene: Scene) -> None:
+def test_handler_returns_empty_evidence_when_nothing_matches(scene: Scene) -> None:
     service = build_service(scene.world, scene.providers)
     marker = "UNIQUE_HANDLER_QUERY_MARKER"
     envelope = service.invoke(
@@ -346,11 +346,12 @@ def test_handler_returns_empty_evidence_and_unavailable_planes(scene: Scene) -> 
     assert result["policy_version"] == CONTEXT_POLICY_VERSION
     assert result["query_fingerprint"] == SearchQuery(marker).fingerprint
     assert marker not in json.dumps(result)
-    assert set(result["unavailable_planes"]) == {plane.value for plane in ContextPlane}
-    assert ContextLimitationCode.PLANES_NOT_SEARCHED.value in result["limitations"]
     assert result["instruction_authority"] is False
+    knowledge = next(row for row in result["coverage"] if row["plane"] == "knowledge")
+    assert knowledge["state"] == CoverageState.UNAVAILABLE.value
+    assert ContextLimitationCode.PLANES_NOT_SEARCHED.value not in result["limitations"]
     assert envelope.disclosure is not None
-    assert envelope.disclosure.limitations == ("evidence_scope_was_not_searched",)
+    assert "evidence_scope_was_not_searched" not in envelope.disclosure.limitations
 
 
 def test_handler_maps_an_empty_query_without_echoing_it(scene: Scene) -> None:

@@ -156,6 +156,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchKnowledge,
 )
+from my_pa.application.context import ContextPreparationService
 from my_pa.application.disclosure import (
     Limitation,
     corpus_disclosure,
@@ -227,18 +228,6 @@ from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.common.time import format_rfc3339, utc_now
-from my_pa.domain.context import (
-    CONTEXT_POLICY_VERSION,
-    CONTEXT_RANKING_VERSION,
-    ContextCoverage,
-    ContextLimitationCode,
-    ContextPlane,
-    PreparedContext,
-    RetrievalMode,
-)
-from my_pa.domain.context import (
-    CoverageState as ContextCoverageState,
-)
 from my_pa.domain.documents.managed import (
     DocumentState,
     ManagedDocumentConflictError,
@@ -2417,21 +2406,17 @@ class ApplicationService:
     def _context_prepare(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: PrepareContext
     ) -> _Result:
-        """Assemble a bounded context package. WP-KC-01 does not search yet.
+        """Assemble a bounded context package from authorized planes.
 
         The Principal is `authorization.principal.principal_id` — the one the
-        gateway established — and never anything the request carried. The query
-        is normalized here as a `SearchQuery`, the same way `knowledge.search`
-        does it, so a malformed or empty query is `invalid_request` with the
-        field token and never the text. The package is valid with empty evidence:
-        no plane was searched, and the coverage and limitation say so rather
-        than presenting a no-match as a complete search.
-
-        `unit_of_work` is accepted because every handler is, and is unused
-        because persistence of context runs is WP-KC-04 and plane search is
-        WP-KC-02.
+        gateway established — and never anything the request carried. Enrollments
+        are discovered from `authorization.enrollments`; the command does not
+        name them. The query is normalized here as a `SearchQuery`, the same way
+        `knowledge.search` does it, so a malformed or empty query is
+        `invalid_request` with the field token and never the text. Empty evidence
+        remains valid: a complete no-match and an unavailable plane are distinct
+        coverage answers, not a missing-evidence error.
         """
-        del unit_of_work
         query: SearchQuery | None = None
         failure: ApplicationError | None = None
         try:
@@ -2442,27 +2427,19 @@ class ApplicationService:
             raise failure
         if query is None:
             raise InternalError()
-        prepared = PreparedContext(
-            context_manifest_id=issue_identifier(IdKind.CONTEXT_MANIFEST),
-            principal_id=authorization.principal.principal_id,
-            retrieval_mode=RetrievalMode.LEXICAL_STRUCTURED,
-            ranking_version=CONTEXT_RANKING_VERSION,
-            policy_version=CONTEXT_POLICY_VERSION,
-            generated_at=authorization.at,
-            query_fingerprint=query.fingerprint,
-            coverage=tuple(
-                ContextCoverage(plane=plane, state=ContextCoverageState.UNAVAILABLE)
-                for plane in ContextPlane
-            ),
-            unavailable_planes=tuple(ContextPlane),
-            limitations=(ContextLimitationCode.PLANES_NOT_SEARCHED,),
+        prepared = ContextPreparationService(
+            managed_documents_composed=self._managed_store_or_none is not None,
+        ).prepare(unit_of_work, authorization, command, query)
+        truncation = Truncation(
+            is_truncated=prepared.truncation.is_truncated,
+            reason=prepared.truncation.reason,
         )
         return _Result(
             payload=prepared.to_canonical_dict(),
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=("context_policy",),
-                extra_limitations=(Limitation.EVIDENCE_SCOPE_WAS_NOT_SEARCHED,),
+                truncation=truncation,
             ),
         )
 

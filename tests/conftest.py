@@ -1384,6 +1384,7 @@ class _Situations(SituationRepository):
     def list_situations(
         self, principal_id: str, state_filter: SituationState | None = None
     ) -> tuple[Situation, ...]:
+        self._world.fail("list_situations")
         rows = [row for row in self._world.situations if row.principal_id == principal_id]
         if state_filter is not None:
             rows = [row for row in rows if row.state is state_filter]
@@ -1932,6 +1933,32 @@ def staged_capture(scene: Scene, *, text: str = "a synthetic note") -> CaptureVe
     )
     assert stored is not None
     return stored
+
+
+def staged_situation(
+    scene: Scene, *, title: str = "quarterly planning", description: str | None = None
+) -> Situation:
+    """One stored Situation inside `scene`'s world, written through the port."""
+    unit_of_work = FakeUnitOfWork(scene.world)
+    return unit_of_work.situations.open_situation(
+        principal_id=scene.principal.principal_id,
+        title=title,
+        description=description,
+        object_refs=(),
+    )
+
+
+def staged_project(
+    scene: Scene, *, name: str = "quarterly program", description: str | None = None
+) -> Project:
+    """One stored Project inside `scene`'s world, written through the port."""
+    unit_of_work = FakeUnitOfWork(scene.world)
+    return unit_of_work.projects.add_project(
+        principal_id=scene.principal.principal_id,
+        name=name,
+        description=description,
+        participants=(),
+    )
 
 
 def staged_managed_document(

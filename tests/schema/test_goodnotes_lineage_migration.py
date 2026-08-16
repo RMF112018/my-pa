@@ -23,6 +23,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "f8c3a1e6b247"
+HEAD_REVISION: Final = "c9e2b6a4d813"
 PRIOR: Final = "d4a8c1e7b930"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_f8c3a1e6b247_add_goodnotes_notebook_lineage_logical_.py"
@@ -120,11 +121,12 @@ def disposable_database() -> Iterator[str]:
         maintenance.dispose()
 
 
-def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [REVISION]
+    assert list(script.get_heads()) == [HEAD_REVISION]
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 50
+    assert script.get_revision(HEAD_REVISION).down_revision == REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 51
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -172,7 +174,7 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == REVISION
+            assert revision == HEAD_REVISION
         assert _tables(engine) >= NEW_TABLES | LEGACY_TABLES
         assert _columns(engine, "goodnotes_page_versions") >= NEW_VERSION_COLUMNS
     finally:
@@ -228,7 +230,7 @@ def test_prior_head_to_new_head_preserves_ordinal_pages(disposable_database: str
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == REVISION
+            assert revision == HEAD_REVISION
         assert _tables(engine) >= NEW_TABLES
     finally:
         engine.dispose()

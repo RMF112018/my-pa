@@ -66,3 +66,11 @@ Live GoodNotes root admission, OCR engine selection/licensing, background
 watcher activation, personal-data eligibility, and production database use
 remain operator-gated. Repository tests use synthetic temporary PDF-shaped
 bytes and a deterministic local test command only.
+
+Additive knowledge-schema tables persist NOTE_UNIT identity, physical
+occurrences, append-only revisions, structural note links, and exact per-run
+change-state rows. A PDF is not a note and a page is not a note; printed or
+typed agenda text is SOURCE_CONTEXT. Occurrence identity is aligned visual
+geometry plus crop/context anchors, not transcription. Agent, MCP, and
+deterministic occurrence reconciliation remain later slices; this persistence
+stores a supplied change-state and does not decide NEW versus REVISED.

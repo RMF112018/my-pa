@@ -458,10 +458,20 @@ def test_issue_stable_id_accepts_lineage_prefixes() -> None:
     snapshot = issue_stable_id("gnsnap", "synthetic", "snapshot")
     logical = issue_stable_id("gnlp", "synthetic", "page")
     run = issue_stable_id("gnrun", "synthetic", "run")
+    note = issue_stable_id("gnnt", "synthetic", "note")
+    occurrence = issue_stable_id("gnocc", "synthetic", "occurrence")
+    revision = issue_stable_id("gnrev", "synthetic", "revision")
+    link = issue_stable_id("gnlink", "synthetic", "link")
+    change = issue_stable_id("gnchg", "synthetic", "change")
     assert notebook.startswith("gnnb_") and len(notebook) == 29
     assert snapshot.startswith("gnsnap_") and len(snapshot) == 31
     assert logical.startswith("gnlp_") and len(logical) == 29
     assert run.startswith("gnrun_") and len(run) == 30
+    assert note.startswith("gnnt_") and len(note) == 29
+    assert occurrence.startswith("gnocc_") and len(occurrence) == 30
+    assert revision.startswith("gnrev_") and len(revision) == 30
+    assert link.startswith("gnlink_") and len(link) == 31
+    assert change.startswith("gnchg_") and len(change) == 30
     assert issue_stable_id("gnpg", "page") != notebook
     with pytest.raises(ValueError, match="unknown GoodNotes identity prefix"):
         issue_stable_id("gnxx", "synthetic")

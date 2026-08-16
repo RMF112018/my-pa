@@ -89,6 +89,12 @@ class SafeDetail(StrEnum):
     SELECTOR = "selector"
     REPRESENTATION = "representation"
     SUBJECT = "subject"
+    CONVERSATION_CONTEXT = "conversation_context"
+    SUBJECT_HINTS = "subject_hints"
+    REQUESTED_PLANES = "requested_planes"
+    TARGET_ID = "target_id"
+    ACTION = "action"
+    ALIAS = "alias"
     #: The managed-document plane's own fields (WP-28). Each names a field and
     #: never its value, exactly as every member above does — `TITLE` says the
     #: title was refused and never what it said, and `CONTENT` says the bytes

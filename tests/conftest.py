@@ -62,6 +62,8 @@ from my_pa.contracts.ports import (
     CaptureSummary,
     CommitmentManagementRepository,
     CommitmentManagementUnitOfWork,
+    ContextPreferenceRepository,
+    ContextRunRepository,
     ContinuityAuthoringRepository,
     EnrollmentRepository,
     KnowledgeRecord,
@@ -73,6 +75,7 @@ from my_pa.contracts.ports import (
     Operation,
     OperationQueue,
     PortError,
+    PreferenceConflictError,
     ProjectRepository,
     PulseRepository,
     ReviewDecisionRequest,
@@ -126,6 +129,14 @@ from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.context.preference import (
+    ContextPreferenceAction,
+    ContextPreferenceAdmission,
+    ContextPreferenceCurrent,
+    ContextPreferenceEvent,
+    preference_class_for,
+)
+from my_pa.domain.context.run import ContextRunRecord
 from my_pa.domain.documents.managed import (
     DocumentState,
     LifecycleTransition,
@@ -349,6 +360,15 @@ class World:
     commitment_history_v2: list[CommitmentHistoryEntry] = field(default_factory=list)
     dismissed_pulse_ids: set[str] = field(default_factory=set)
     audit: list[AuditEvent] = field(default_factory=list)
+    #: Insert-only context-run metadata. The fake cannot prove the server
+    #: trigger; that belongs to the schema tier. What it can prove is that the
+    #: application wrote identifiers and digests and never the query or excerpt.
+    context_runs: list[ContextRunRecord] = field(default_factory=list)
+    preference_events: list[ContextPreferenceEvent] = field(default_factory=list)
+    preference_current: dict[tuple[str, str, str], ContextPreferenceCurrent] = field(
+        default_factory=dict
+    )
+    preference_keys: dict[tuple[str, str], str] = field(default_factory=dict)
     commits: int = 0
     rollbacks: int = 0
     #: Port failures a test wants raised, keyed by the method that should raise.
@@ -1086,6 +1106,125 @@ class _Audit(AuditSink):
         self._world.audit.append(event)
 
 
+class _ContextRuns(ContextRunRepository):
+    """Insert-only context-run metadata over a `World`."""
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def record(self, run: ContextRunRecord) -> None:
+        self._world.fail("context_runs")
+        self._world.context_runs.append(run)
+
+
+class _ContextPreferences(ContextPreferenceRepository):
+    """Append-only preference events and current projection over a `World`."""
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def current_for(self, principal_id: str) -> tuple[ContextPreferenceCurrent, ...]:
+        self._world.fail("context_preferences")
+        found = [
+            row for key, row in self._world.preference_current.items() if key[0] == principal_id
+        ]
+        return tuple(sorted(found, key=lambda row: (row.target_id, row.preference_class.value)))
+
+    def record(
+        self,
+        *,
+        principal_id: str,
+        action: str,
+        target_id: str,
+        idempotency_key: str,
+        alias: str | None,
+        source_id: str | None,
+        correlation_id: str,
+        request_id: str,
+        audit_id: str | None,
+        created_at: object,
+    ) -> ContextPreferenceAdmission:
+        self._world.fail("context_preferences")
+        held = self._world.preference_keys.get((principal_id, idempotency_key))
+        if held is not None:
+            prior = next(event for event in self._world.preference_events if event.event_id == held)
+            if (
+                prior.action.value != action
+                or prior.target_id != target_id
+                or prior.alias != alias
+                or prior.source_id != source_id
+            ):
+                raise PreferenceConflictError("the idempotency key is bound to a different request")
+            return ContextPreferenceAdmission(
+                event=prior,
+                current=self._current_for_target(principal_id, target_id),
+                created=False,
+            )
+        event = ContextPreferenceEvent(
+            event_id=issue_identifier(IdKind.CONTEXT_PREFERENCE_EVENT),
+            principal_id=principal_id,
+            action=ContextPreferenceAction(action),
+            target_id=target_id,
+            idempotency_key=idempotency_key,
+            event_number=sum(
+                1 for item in self._world.preference_events if item.principal_id == principal_id
+            )
+            + 1,
+            created_at=created_at,  # type: ignore[arg-type]
+            correlation_id=correlation_id,
+            request_id=request_id,
+            alias=alias,
+            source_id=source_id,
+            audit_id=audit_id,
+        )
+        self._world.preference_events.append(event)
+        self._world.preference_keys[(principal_id, idempotency_key)] = event.event_id
+        self._fold(event)
+        return ContextPreferenceAdmission(
+            event=event,
+            current=self._current_for_target(principal_id, target_id),
+            created=True,
+        )
+
+    def _current_for_target(
+        self, principal_id: str, target_id: str
+    ) -> tuple[ContextPreferenceCurrent, ...]:
+        found = [
+            row
+            for (owner, target, _slot), row in self._world.preference_current.items()
+            if owner == principal_id and target == target_id
+        ]
+        return tuple(sorted(found, key=lambda row: row.preference_class.value))
+
+    def _fold(self, event: ContextPreferenceEvent) -> None:
+        slot = preference_class_for(event.action)
+        if event.action is ContextPreferenceAction.CLEAR or slot is None:
+            for key in [
+                key
+                for key in self._world.preference_current
+                if key[0] == event.principal_id and key[1] == event.target_id
+            ]:
+                del self._world.preference_current[key]
+            return
+        key = (event.principal_id, event.target_id, slot.value)
+        if event.action in {
+            ContextPreferenceAction.UNPIN,
+            ContextPreferenceAction.REMOVE_ALIAS,
+            ContextPreferenceAction.DEPREFER_SOURCE,
+        }:
+            self._world.preference_current.pop(key, None)
+            return
+        self._world.preference_current[key] = ContextPreferenceCurrent(
+            principal_id=event.principal_id,
+            target_id=event.target_id,
+            preference_class=slot,
+            action=event.action,
+            event_id=event.event_id,
+            alias=event.alias,
+            source_id=event.source_id,
+        )
+
+
 class RecordingAudit(AuditSink):
     """An audit sink that keeps its events, for a test to read.
 
@@ -1541,8 +1680,7 @@ class _TasksWrite(TaskManagementRepository):
             (
                 entry
                 for entry in self._world.task_history_v2
-                if entry.principal_id == principal_id
-                and entry.idempotency_key == idempotency_key
+                if entry.principal_id == principal_id and entry.idempotency_key == idempotency_key
             ),
             None,
         )
@@ -1642,8 +1780,7 @@ class _CommitmentsWrite(CommitmentManagementRepository):
             (
                 entry
                 for entry in self._world.commitment_history_v2
-                if entry.principal_id == principal_id
-                and entry.idempotency_key == idempotency_key
+                if entry.principal_id == principal_id and entry.idempotency_key == idempotency_key
             ),
             None,
         )
@@ -1754,6 +1891,7 @@ class _Situations(SituationRepository):
     def list_situations(
         self, principal_id: str, state_filter: SituationState | None = None
     ) -> tuple[Situation, ...]:
+        self._world.fail("list_situations")
         rows = [row for row in self._world.situations if row.principal_id == principal_id]
         if state_filter is not None:
             rows = [row for row in rows if row.state is state_filter]
@@ -2063,6 +2201,16 @@ class FakeUnitOfWork(UnitOfWork):
         return _CommitmentsRead(self._world)
 
     @property
+    def context_runs(self) -> ContextRunRepository:
+        """Insert-only context-run metadata over this `World`."""
+        return _ContextRuns(self._world)
+
+    @property
+    def context_preferences(self) -> ContextPreferenceRepository:
+        """Append-only retrieval preferences over this `World`."""
+        return _ContextPreferences(self._world)
+
+    @property
     def audit(self) -> AuditSink:
         return _Audit(self._world)
 
@@ -2320,6 +2468,32 @@ def staged_capture(scene: Scene, *, text: str = "a synthetic note") -> CaptureVe
     return stored
 
 
+def staged_situation(
+    scene: Scene, *, title: str = "quarterly planning", description: str | None = None
+) -> Situation:
+    """One stored Situation inside `scene`'s world, written through the port."""
+    unit_of_work = FakeUnitOfWork(scene.world)
+    return unit_of_work.situations.open_situation(
+        principal_id=scene.principal.principal_id,
+        title=title,
+        description=description,
+        object_refs=(),
+    )
+
+
+def staged_project(
+    scene: Scene, *, name: str = "quarterly program", description: str | None = None
+) -> Project:
+    """One stored Project inside `scene`'s world, written through the port."""
+    unit_of_work = FakeUnitOfWork(scene.world)
+    return unit_of_work.projects.add_project(
+        principal_id=scene.principal.principal_id,
+        name=name,
+        description=description,
+        participants=(),
+    )
+
+
 def staged_managed_document(
     scene: Scene,
     *,
@@ -2420,11 +2594,7 @@ def staged_commitment(
     `staged_task` is, including the one-per-Principal-per-scene caching.
     """
     existing = next(
-        (
-            c
-            for c in scene.world.commitments_v2
-            if c.principal_id == scene.principal.principal_id
-        ),
+        (c for c in scene.world.commitments_v2 if c.principal_id == scene.principal.principal_id),
         None,
     )
     if existing is not None:

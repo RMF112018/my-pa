@@ -63,6 +63,7 @@ from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
+from my_pa.domain.identity.purpose import Purpose
 
 #: The instruction planted in every body this module reads back. Uppercase and
 #: unmistakable, so a test that found it in an answer would be finding *this*
@@ -117,9 +118,16 @@ class CountingService(ApplicationService):
         *,
         principal: Principal,
         transport: CaptureTransport = CaptureTransport.LOCAL,
+        capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
     ) -> ResponseEnvelope:
         self.calls.append(command.capability)
-        return super().invoke(metadata, command, principal=principal, transport=transport)
+        return super().invoke(
+            metadata,
+            command,
+            principal=principal,
+            transport=transport,
+            capability_grants=capability_grants,
+        )
 
 
 def _document(

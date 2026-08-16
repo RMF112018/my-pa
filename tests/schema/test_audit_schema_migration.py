@@ -184,6 +184,12 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "native_apple_bridge_credentials",
         "native_apple_read_grants",
         "continuity_authoring_submissions",
+        # Context-prepare run tables (`9b2d5f8c3e01`) and preference tables
+        # (`c6f1a8d3e204`).
+        "context_runs",
+        "context_run_items",
+        "context_preference_events",
+        "context_preference_current",
     }
 )
 

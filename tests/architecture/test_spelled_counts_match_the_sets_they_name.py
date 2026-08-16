@@ -156,6 +156,23 @@ _ORDINAL_UNITS = (
     "twenty-ninth",
     "thirtieth",
     "thirty-first",
+    "thirty-second",
+    # The thirties/forties, added when local task-management and origin
+    # context.prepare were merged and the public set reached forty-five.
+    "thirty-third",
+    "thirty-fourth",
+    "thirty-fifth",
+    "thirty-sixth",
+    "thirty-seventh",
+    "thirty-eighth",
+    "thirty-ninth",
+    "fortieth",
+    "forty-first",
+    "forty-second",
+    "forty-third",
+    "forty-fourth",
+    "forty-fifth",
+    "forty-sixth",
 )
 
 
@@ -394,6 +411,24 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "all three",
         "would answer identically in all three.",
         "the three scenarios the docstring just listed, not the capability set",
+    ),
+    (
+        "tests/schema/test_managed_document_capability_migration.py",
+        "two purposes",
+        "two purposes more than the revision below it",
+        "the two purposes that widening added, not the size of `Purpose`",
+    ),
+    (
+        "tests/unit/test_policy.py",
+        "four capabilities",
+        "All four capabilities share the single",
+        "the four task-read names sharing one purpose, not the size of `Capability`",
+    ),
+    (
+        "tests/unit/test_policy.py",
+        "five capabilities",
+        "All five capabilities share the single",
+        "the five task-write names sharing one purpose, not the size of `Capability`",
     ),
 )
 

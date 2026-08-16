@@ -266,9 +266,9 @@ NETWORK_MODULES: Final[frozenset[str]] = frozenset(
 )
 
 
-#: The one property the vocabulary above matches that is **not** a location, with
-#: the reason it is not — an exemption list of exactly one, in the `D-81` shape,
-#: so a second one is a decision somebody writes down beside this sentence.
+#: The properties the vocabulary above matches that are **not** a location, with
+#: the reason they are not — an exemption list in the `D-81` shape, so a further
+#: one is a decision somebody writes down beside this sentence.
 #:
 #: `sources.enroll`'s `root_object_id` is an opaque `obj_…` source-object
 #: identifier: it names a node in a source's own object graph, is minted by this
@@ -277,11 +277,17 @@ NETWORK_MODULES: Final[frozenset[str]] = frozenset(
 #: the vocabulary because it is the word `managed_root` and `native_root` are
 #: spelled with — removing it to silence this one entry would blind the scan to
 #: the two names that would actually matter.
+#:
+#: `context.feedback`'s `target_id` is an opaque identifier of the same shape
+#: as `knowledge.reveal`'s `subject_id`. It is matched only because "target" is
+#: in the vocabulary; it names no filesystem path and is validated for shape
+#: only.
 EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
     {
         ("sources.enroll", "root_object_id"),
         ("commitments.list", "direction"),
         ("commitments.create", "direction"),
+        ("context.feedback", "target_id"),
     }
 )
 
@@ -572,10 +578,10 @@ def test_the_location_scan_would_catch_one() -> None:
         assert any(word in spelling.lower() for word in LOCATION_WORDS), spelling
     for benign in ("title", "media_type", "document_id", "idempotency_key", "content"):
         assert not any(word in benign.lower() for word in LOCATION_WORDS), benign
-    # The exemption is exactly one entry, it names a tool that exists, and the
-    # property it names is really published — so it cannot rot into a permission
-    # for a property that has since changed meaning or disappeared.
-    assert len(EXEMPT_PROPERTIES) == 3
+    # The exemption names tools that exist, and the properties they name are
+    # really published — so it cannot rot into a permission for a property that
+    # has since changed meaning or disappeared.
+    assert len(EXEMPT_PROPERTIES) == 4
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

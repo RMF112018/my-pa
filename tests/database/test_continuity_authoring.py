@@ -20,7 +20,7 @@ from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
 
-from my_pa.application.commands import Command, CreateProject, RecordTask, GetPulse, ListProjects
+from my_pa.application.commands import Command, CreateProject, GetPulse, ListProjects, RecordTask
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import AuthoringConflictError, UnitOfWork

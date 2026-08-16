@@ -9,10 +9,10 @@ from my_pa.application.commands import (
     CreateCapture,
     CreateProject,
     CreateSituation,
-    RecordTask,
     GetPulse,
     ListProjects,
     ListSituations,
+    RecordTask,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope

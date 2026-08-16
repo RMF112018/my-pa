@@ -54,6 +54,9 @@ from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import (
     AuditSink,
     CaptureRepository,
+    CommitmentManagementRepository,
+    ContextPreferenceRepository,
+    ContextRunRepository,
     EnrollmentRepository,
     EvidenceUnavailableError,
     KnowledgeRecord,
@@ -276,6 +279,18 @@ class _FailsAfterTheWork(UnitOfWork):
     @property
     def tasks(self) -> TaskManagementRepository:
         return self._inner.tasks
+
+    @property
+    def commitments(self) -> CommitmentManagementRepository:
+        return self._inner.commitments
+
+    @property
+    def context_runs(self) -> ContextRunRepository:
+        return self._inner.context_runs
+
+    @property
+    def context_preferences(self) -> ContextPreferenceRepository:
+        return self._inner.context_preferences
 
     @property
     def audit(self) -> AuditSink:

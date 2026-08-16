@@ -15,8 +15,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from alembic import op
-
 revision: str = "7504585e3ca5"
 down_revision: str | tuple[str, ...] | None = ("7c2e9b4a1d80", "a1c9e6f2b834")
 branch_labels: str | Sequence[str] | None = None

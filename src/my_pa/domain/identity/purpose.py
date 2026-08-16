@@ -112,3 +112,24 @@ class Purpose(StrEnum):
     # wider authority than the two reads it is assembled from.
     COMMITMENT_READ = "commitment_read"
     COMMITMENT_AUTHORING = "commitment_authoring"
+    # Context preparation is a purpose of its own rather than a reuse of
+    # `knowledge_search`. `D-91`'s test: would reuse widen the grant? Yes.
+    # `knowledge_search` is scoped by one enrollment on the extraction plane.
+    # `context.prepare` assembles evidence that will, from WP-KC-02, cross
+    # capture and continuity — planes a grant issued to search extracted text
+    # does not reach. Admitting that assembly under `knowledge_search` would let
+    # a request issued to search one enrollment also pack user-authored notes
+    # and accepted continuity, which is the silent escalation this module exists
+    # to refuse. One purpose rather than one-per-plane: the capability is one
+    # assembly act, and a further split would map one-to-one for a distinction
+    # no authority in this build can enforce until those planes are searched.
+    CONTEXT_PREPARATION = "context_preparation"
+    # Retrieval personalization is a purpose of its own rather than a reuse of
+    # `capture_authoring`, `continuity_authoring`, or `review_disposition`.
+    # `D-91`'s test: would reuse widen the grant? Yes. Those three write notes,
+    # projects, and promotions. Admitting a ranking preference under any of
+    # them would let a grant issued to store a note or start a project also
+    # mutate retrieval ranking. One purpose rather than one-per-action: the
+    # capability is one reversible preference write, and a further split would
+    # map one-to-one for a distinction no authority in this build can enforce.
+    CONTEXT_PREFERENCE = "context_preference"

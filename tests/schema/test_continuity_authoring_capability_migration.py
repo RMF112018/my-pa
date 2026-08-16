@@ -37,21 +37,22 @@ def _frozen_literals(constant: str) -> frozenset[str]:
     return frozenset(re.findall(r"'([^']+)'", source[start:end]))
 
 
-def test_this_revision_is_the_head() -> None:
+def test_this_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert list(script.get_heads()) == [REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 39
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 47
 
 
-def test_the_frozen_literals_are_the_domain_at_head() -> None:
+def test_the_frozen_literals_are_this_revision_s_vocabulary() -> None:
     admitted = _frozen_literals("_CAPABILITIES_AT_THIS_REVISION")
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
-    assert admitted == declared
+    assert admitted <= declared
     purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
-    assert purposes == {member.value for member in Purpose}
+    assert purposes <= {member.value for member in Purpose}
     assert admitted - _frozen_literals("_CAPABILITIES_BEFORE_THIS_REVISION") == CAPABILITIES_ADDED
     assert purposes - _frozen_literals("_PURPOSES_BEFORE_THIS_REVISION") == PURPOSES_ADDED
 

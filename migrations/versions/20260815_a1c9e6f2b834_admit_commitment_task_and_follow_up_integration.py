@@ -143,9 +143,7 @@ def _extend_tasks() -> None:
 
 
 def _extend_task_history_actions() -> None:
-    op.execute(
-        f"ALTER TABLE {SCHEMA}.task_history DROP CONSTRAINT a_task_history_action_is_known"
-    )
+    op.execute(f"ALTER TABLE {SCHEMA}.task_history DROP CONSTRAINT a_task_history_action_is_known")
     op.execute(
         f"ALTER TABLE {SCHEMA}.task_history ADD CONSTRAINT a_task_history_action_is_known "
         "CHECK (action IN ('archive', 'cancel_recurrence', 'create', 'defer', 'link_commitment', "
@@ -163,9 +161,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Reverse every change; every legacy `commitments`/`tasks` column and row survives intact."""
-    op.execute(
-        f"ALTER TABLE {SCHEMA}.task_history DROP CONSTRAINT a_task_history_action_is_known"
-    )
+    op.execute(f"ALTER TABLE {SCHEMA}.task_history DROP CONSTRAINT a_task_history_action_is_known")
     op.execute(
         f"ALTER TABLE {SCHEMA}.task_history ADD CONSTRAINT a_task_history_action_is_known "
         "CHECK (action IN ('archive', 'cancel_recurrence', 'create', 'defer', 'schedule', "
@@ -183,7 +179,5 @@ def downgrade() -> None:
 
     op.execute(f"DROP TABLE {SCHEMA}.commitment_history")
 
-    op.execute(
-        f"ALTER TABLE {SCHEMA}.commitments DROP CONSTRAINT a_commitment_version_is_positive"
-    )
+    op.execute(f"ALTER TABLE {SCHEMA}.commitments DROP CONSTRAINT a_commitment_version_is_positive")
     op.execute(f"ALTER TABLE {SCHEMA}.commitments DROP COLUMN version")

@@ -236,6 +236,16 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.COMMITMENTS_WAITING_ON,
         Capability.COMMITMENTS_CREATE,
         Capability.COMMITMENTS_CLOSE,
+        # `context.prepare` names a query, not a source. The package it returns
+        # may later cite enrolled source evidence, but the request itself does
+        # not name a grant — naming one would turn a cross-plane assembly into
+        # a search of one enrollment, which is `knowledge.search`. Until WP-KC-02
+        # searches a plane, the requested scope is empty as a measurement.
+        Capability.CONTEXT_PREPARE,
+        # `context.feedback` names a ranking preference, not a source. The rows
+        # it writes belong to the acting Principal's partition and carry no
+        # `enrollment_id` and no grant a scope could be compared against.
+        Capability.CONTEXT_FEEDBACK,
     }
 )
 

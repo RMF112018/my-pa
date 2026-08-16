@@ -77,11 +77,13 @@ from my_pa.application.commands import (
     ListSituations,
     ListSources,
     ListTasks,
+    PrepareContext,
     ReadCapture,
     ReadCommitment,
     ReadKnowledge,
     ReadManagedDocument,
     ReadTask,
+    RecordContextFeedback,
     RecordTask,
     RestoreManagedDocument,
     RevealSubject,
@@ -151,6 +153,12 @@ class Authorization:
     #: *did* decide on it would be a policy about transports, and it would
     #: belong in `domain.policy.decision` with the rest of them.
     transport: CaptureTransport = CaptureTransport.LOCAL
+    #: Server-derived remote grant set, or `None` for local/unrestricted
+    #: composition (CLI, stdio MCP, HTTP loopback). Never taken from the
+    #: request payload. When present, `context.prepare` searches only planes
+    #: whose underlying read capability is in this set; ungranted planes are
+    #: omitted entirely rather than reported as denied.
+    capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None
 
     @property
     def allowed(self) -> bool:
@@ -245,6 +253,11 @@ def _requested_scope(
             | WaitingOn()
             | CreateCommitment()
             | CloseCommitment()
+            # `context.prepare` names a query, not a source. The requested scope
+            # is empty as a measurement: the request does not name a grant, and
+            # `_SCOPELESS` is where that empty set is read that way.
+            | PrepareContext()
+            | RecordContextFeedback()
         ):
             return frozenset()
         case CreateCapture():
@@ -320,6 +333,7 @@ def authorize(
     at: datetime,
     classification: Classification = Classification.PRIVATE_LOCAL,
     transport: CaptureTransport = CaptureTransport.LOCAL,
+    capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
 ) -> Authorization:
     """Decide one request, record the decision, and return what was decided.
 
@@ -344,6 +358,11 @@ def authorize(
     `transport` is carried through onto the `Authorization` and is read by
     nothing in this module. See the field's own comment: it is provenance, not
     authority, and the policy decision is computed without it.
+
+    `capability_grants` is the same shape of server-derived context. `evaluate`
+    never sees it. Handlers that search across planes — today `context.prepare`
+    — intersect it with per-plane read capabilities. `None` means local
+    composition and does not restrict planes.
     """
     validate_identifier(correlation_id, IdKind.CORRELATION)
     enrollments = unit_of_work.enrollments.for_principal(principal.principal_id)
@@ -389,4 +408,5 @@ def authorize(
         requested_source_ids=requested,
         enrollments=enrollments,
         transport=transport,
+        capability_grants=capability_grants,
     )

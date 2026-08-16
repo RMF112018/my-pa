@@ -239,5 +239,5 @@ def test_current_docs_name_the_inert_handoff_and_deferred_goodnotes_model_route(
     module_boundaries = (ROOT / "docs" / "architecture" / "module-boundaries.md").read_text(
         encoding="utf-8"
     )
-    assert "twenty-nine" in cli_source and "twelve since WP-6" not in cli_source
-    assert "twenty-nine capabilities" in module_boundaries
+    assert "set is thirty" in cli_source and "twelve since WP-6" not in cli_source
+    assert "forty-five capabilities" in module_boundaries

@@ -251,6 +251,8 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.COMMITMENTS_WAITING_ON, Purpose.COMMITMENT_READ),
         (Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING),
         (Capability.COMMITMENTS_CLOSE, Purpose.COMMITMENT_AUTHORING),
+        (Capability.CONTEXT_PREPARE, Purpose.CONTEXT_PREPARATION),
+        (Capability.CONTEXT_FEEDBACK, Purpose.CONTEXT_PREFERENCE),
     }
 )
 
@@ -274,19 +276,11 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # empty the table below. The three numbers are written out rather than
     # derived from each other: the arithmetic is what makes the second a check on
     # the enums, and the literals are what make it a check on the arithmetic.
-    # WP-TM-03 added 4 capabilities (tasks.read/list/search/history) and 1
-    # purpose (task_read), all four capabilities paired with the one purpose,
-    # so PERMITTED_PAIRS grew by 4 and MISMATCHED_PAIRS by (30*13 - 28*12) - 4 = 78.
-    # WP-TM-04 added 5 capabilities (tasks.create/update/transition/bulk_preview/bulk_confirm)
-    # and 1 purpose (task_authoring), all five capabilities paired with the one purpose,
-    # so PERMITTED_PAIRS grew by 5 and MISMATCHED_PAIRS by (35*14 - 32*13) - 5 = 99.
-    # WP-TM-05 added 5 capabilities (commitments.read/list/waiting_on/create/close)
-    # and 2 purposes (commitment_read, commitment_authoring); 3 reads paired with
-    # commitment_read and 2 writes paired with commitment_authoring = 5 new permitted
-    # pairs, so PERMITTED_PAIRS grew by 5 and MISMATCHED_PAIRS by
-    # (43*17 - 40*16) - 5 = 126.
-    assert len(PERMITTED_PAIRS) == 45
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 45 == 686
+    # WP-TM-03 added 4 capabilities and 1 purpose; WP-TM-04 added 5 and 1;
+    # WP-TM-05 added 5 and 2; context.prepare/feedback added 2 capabilities and
+    # 2 purposes. Unioned: 45 capabilities, 19 purposes, 47 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 47
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 47 == 808
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

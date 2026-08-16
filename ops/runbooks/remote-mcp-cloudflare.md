@@ -206,7 +206,10 @@ operator acceptance step because no account or client build was available here;
 record its exact version and OAuth profile before production routing. A later
 adapter correction made remote `tools/call` accept domain arguments without
 internal envelope fields; reconnect ChatLLM after deploying that image so it
-reloads `tools/list`.
+reloads `tools/list`. `context.prepare` grants, ChatLLM operating contract, and
+rollback of those grants are
+[`managed-knowledge-context.md`](managed-knowledge-context.md); production is
+not activated and live Abacus OAuth remains operator-gated.
 
 Start only the origin for private diagnostics with `--profile remote-mcp up -d
 my-pa-mcp-remote`; this does not start the tunnel. The origin-only profile may

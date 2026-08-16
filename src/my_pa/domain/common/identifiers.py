@@ -172,6 +172,19 @@ class IdKind(StrEnum):
     MANAGED_RECEIPT = "mdrcpt"
     MANAGED_SUBMISSION = "mdsub"
     MANAGED_LIFECYCLE = "mdlce"
+    #: A prepared context package (`context.prepare`). Its own prefix rather than
+    #: a reuse of `COVERAGE_SNAPSHOT` or `KNOWLEDGE`: a stored reference or an
+    #: audit row has to say which record it names, and `cov` already names an
+    #: extraction-plane coverage snapshot. `ctxm` names the retrieval contract's
+    #: assembled package, which may cite capture and continuity evidence that
+    #: a coverage snapshot cannot. Persistence of context runs is insert-only
+    #: metadata: identifiers and digests, never the query or excerpt text.
+    CONTEXT_MANIFEST = "ctxm"
+    #: One append-only retrieval-preference event. Its own prefix rather than a
+    #: reuse of `CONTEXT_MANIFEST`: a stored reference has to say whether it
+    #: names a prepared package or a preference that ranked one, and `ctxm`
+    #: already names the assembled packet.
+    CONTEXT_PREFERENCE_EVENT = "cpref"
 
 
 class InvalidIdentifierError(ValueError):

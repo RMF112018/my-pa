@@ -114,7 +114,7 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
             }),
         )
         assert not create_answer.failed, f"tasks.create failed: {create_answer.document}"
-        create_payload = create_answer.document["payload"]
+        create_payload = create_answer.document["result"]
         task = create_payload["task"]
         task_id = task["task_id"]
         version_0 = task["version"]
@@ -128,7 +128,7 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
             _task_doc(scene, Capability.TASKS_READ, {"task_id": task_id}),
         )
         assert not read_answer.failed, f"tasks.read failed: {read_answer.document}"
-        read_task = read_answer.document["payload"]["task"]
+        read_task = read_answer.document["result"]["task"]
         assert read_task["task_id"] == task_id
         assert read_task["version"] == version_0
         assert read_task["title"] == "Harness lifecycle task"
@@ -144,7 +144,7 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
             }),
         )
         assert not update_answer.failed, f"tasks.update failed: {update_answer.document}"
-        update_payload = update_answer.document["payload"]
+        update_payload = update_answer.document["result"]
         updated_task = update_payload["task"]
         version_1 = updated_task["version"]
         assert version_1 != version_0, "version must advance after update"
@@ -156,7 +156,7 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
             _task_doc(scene, Capability.TASKS_READ, {"task_id": task_id}),
         )
         assert not read2_answer.failed
-        read2_task = read2_answer.document["payload"]["task"]
+        read2_task = read2_answer.document["result"]["task"]
         assert read2_task["version"] == version_1
         assert read2_task["title"] == "Harness lifecycle task, revised"
 
@@ -174,7 +174,7 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
         assert not transition_answer.failed, (
             f"tasks.transition failed: {transition_answer.document}"
         )
-        transitioned = transition_answer.document["payload"]["task"]
+        transitioned = transition_answer.document["result"]["task"]
         assert transitioned["lifecycle_state"] == "completed"
         version_2 = transitioned["version"]
 
@@ -184,7 +184,7 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
             _task_doc(scene, Capability.TASKS_LIST, {}),
         )
         assert not list_answer.failed, f"tasks.list failed: {list_answer.document}"
-        tasks_listed = list_answer.document["payload"]["tasks"]
+        tasks_listed = list_answer.document["result"]["tasks"]
         listed_ids = [t["task_id"] for t in tasks_listed]
         assert task_id in listed_ids, "completed task must appear in tasks.list"
 
@@ -210,7 +210,7 @@ def test_stale_version_produces_conflict_error(scene: Scene) -> None:
             }),
         )
         assert not create_answer.failed
-        task = create_answer.document["payload"]["task"]
+        task = create_answer.document["result"]["task"]
         task_id = task["task_id"]
         version_0 = task["version"]
 
@@ -282,8 +282,8 @@ def test_pulse_items_for_tasks_carry_subject_title(scene: Scene) -> None:
     # Stage a continuity-plane task with an overdue due_at so the pulse derivation fires.
     from my_pa.domain.common.identifiers import IdKind
     from my_pa.domain.source.registry import issue_identifier
+    from tests.conftest import WHEN
 
-    now = datetime.now(tz=timezone.utc)
     overdue_task = ContinuityTask(
         task_id=issue_identifier(IdKind.TASK),
         principal_id=scene.principal.principal_id,
@@ -291,10 +291,10 @@ def test_pulse_items_for_tasks_carry_subject_title(scene: Scene) -> None:
         state=TaskState.OPEN,
         evidence_state=ContinuityEvidenceState.ACCEPTED,
         origin_evidence_ref="cap_origin0001origin0001",
-        opened_at=now - timedelta(days=3),
-        created_at=now - timedelta(days=3),
-        updated_at=now - timedelta(days=3),
-        due_at=now - timedelta(days=1),
+        opened_at=WHEN - timedelta(days=3),
+        created_at=WHEN - timedelta(days=3),
+        updated_at=WHEN - timedelta(days=3),
+        due_at=WHEN - timedelta(days=1),
         acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
     )
     scene.world.continuity_tasks.append(overdue_task)
@@ -307,7 +307,7 @@ def test_pulse_items_for_tasks_carry_subject_title(scene: Scene) -> None:
             _task_doc(scene, Capability.CONTINUITY_PULSE, {}),
         )
     assert not pulse_answer.failed, f"continuity.pulse failed: {pulse_answer.document}"
-    items = pulse_answer.document["payload"]["pulse_items"]
+    items = pulse_answer.document["result"]["pulse_items"]
     task_items = [item for item in items if item.get("item_type") == "task"]
     assert task_items, "an overdue task must produce at least one Pulse item"
     for item in task_items:

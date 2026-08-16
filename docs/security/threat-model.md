@@ -384,6 +384,19 @@ No longer excluded, and the conditions this section set are met rather than waiv
 - No composite relationship score and no protected-trait field exists in any schema or contract, enforced by a static test rather than by review attention.
 
 
+### 10.15 Remote OAuth refresh-token families
+
+
+Origin OAuth issues one-hour opaque access tokens. Refresh tokens are optional,
+rotating, digest-only, and bound to one client, resource, and scope ceiling.
+`refresh_enabled` defaults false. Replay of a consumed generation revokes the
+family and linked live access tokens. Capability grants, write kill switches,
+and global remote enablement are re-evaluated at refresh and on every request;
+they are not frozen into refresh state. Logs and telemetry never carry token
+values, digests, codes, or secrets. See
+[`ADR-009`](../decisions/ADR-009-oauth-refresh-token-families.md).
+
+
 ## 11. Fail-closed and safe errors
 
 

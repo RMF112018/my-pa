@@ -13,10 +13,14 @@ from sqlalchemy import (
     Connection,
     DateTime,
     ForeignKey,
+    Index,
+    Integer,
     String,
     Table,
     Text,
+    UniqueConstraint,
     Uuid,
+    func,
     select,
     update,
 )
@@ -27,18 +31,24 @@ from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.persistence.user_accounts import IDENTITY_METADATA
 
 __all__ = [
+    "REFRESH_REVOKE_REASONS",
     "REMOTE_IDENTITY_METADATA",
     "RemoteGrantResolution",
     "RemoteIdentityRepository",
     "oauth_access_tokens",
     "oauth_authorization_codes",
+    "oauth_refresh_token_families",
+    "oauth_refresh_tokens",
     "remote_capability_grants",
     "remote_clients",
     "remote_security_controls",
 ]
 
-# One canonical registry for every table in the durable identity plane.
 REMOTE_IDENTITY_METADATA = IDENTITY_METADATA
+
+REFRESH_REVOKE_REASONS: frozenset[str] = frozenset(
+    {"replay_detected", "client_revoked", "operator_revoked", "refresh_disabled"}
+)
 
 remote_clients = Table(
     "remote_clients",
@@ -51,6 +61,7 @@ remote_clients = Table(
     Column("registered_scopes", String(256), nullable=False),
     Column("enabled", Boolean, nullable=False),
     Column("writes_enabled", Boolean, nullable=False),
+    Column("refresh_enabled", Boolean, nullable=False, default=False),
     Column("expires_at", DateTime(timezone=True)),
     Column("revoked_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False),
@@ -79,6 +90,47 @@ oauth_authorization_codes = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
+oauth_refresh_token_families = Table(
+    "oauth_refresh_token_families",
+    REMOTE_IDENTITY_METADATA,
+    Column("id", Uuid(as_uuid=True), primary_key=True),
+    Column(
+        "remote_client_id",
+        Uuid(as_uuid=True),
+        ForeignKey("identity.remote_clients.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("scope", String(256), nullable=False),
+    Column("resource", String(512), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("absolute_expires_at", DateTime(timezone=True), nullable=False),
+    Column("last_rotated_at", DateTime(timezone=True), nullable=False),
+    Column("revoked_at", DateTime(timezone=True)),
+    Column("revoke_reason", String(64)),
+    Column("replay_detected_at", DateTime(timezone=True)),
+    Index("oauth_refresh_families_by_client_expiry", "remote_client_id", "absolute_expires_at"),
+)
+
+oauth_refresh_tokens = Table(
+    "oauth_refresh_tokens",
+    REMOTE_IDENTITY_METADATA,
+    Column("id", Uuid(as_uuid=True), primary_key=True),
+    Column(
+        "family_id",
+        Uuid(as_uuid=True),
+        ForeignKey("identity.oauth_refresh_token_families.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("token_hash", String(64), nullable=False, unique=True),
+    Column("generation", Integer, nullable=False),
+    Column("issued_at", DateTime(timezone=True), nullable=False),
+    Column("idle_expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True)),
+    Column("revoked_at", DateTime(timezone=True)),
+    UniqueConstraint("family_id", "generation", name="oauth_refresh_family_generation_unique"),
+    Index("oauth_refresh_tokens_by_family_idle", "family_id", "idle_expires_at"),
+)
+
 oauth_access_tokens = Table(
     "oauth_access_tokens",
     REMOTE_IDENTITY_METADATA,
@@ -94,6 +146,12 @@ oauth_access_tokens = Table(
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("revoked_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    Column(
+        "refresh_family_id",
+        Uuid(as_uuid=True),
+        ForeignKey("identity.oauth_refresh_token_families.id", ondelete="SET NULL"),
+    ),
+    Index("oauth_access_tokens_by_refresh_family", "refresh_family_id"),
 )
 
 remote_capability_grants = Table(
@@ -226,6 +284,7 @@ class RemoteIdentityRepository:
         now: datetime,
         expires_at: datetime | None = None,
         writes_enabled: bool = False,
+        refresh_enabled: bool = False,
     ) -> UUID:
         """Operator-side registration; the request path never calls this."""
         identifier = uuid4()
@@ -239,6 +298,7 @@ class RemoteIdentityRepository:
                 registered_scopes=registered_scopes,
                 enabled=True,
                 writes_enabled=writes_enabled,
+                refresh_enabled=refresh_enabled,
                 expires_at=expires_at,
                 revoked_at=None,
                 created_at=now,
@@ -257,6 +317,115 @@ class RemoteIdentityRepository:
             .values(writes_enabled=writes_enabled)
         )
         return result.rowcount == 1
+
+    def set_client_refresh(self, *, oauth_client_id: str, refresh_enabled: bool) -> bool:
+        """Toggle refresh on one unrevoked client. Does not change client identity."""
+        result = self._connection.execute(
+            update(remote_clients)
+            .where(
+                remote_clients.c.oauth_client_id == oauth_client_id,
+                remote_clients.c.revoked_at.is_(None),
+            )
+            .values(refresh_enabled=refresh_enabled)
+        )
+        return result.rowcount == 1
+
+    def revoke_client(self, *, oauth_client_id: str, now: datetime) -> bool:
+        """Disable a client, writes, and refresh, and revoke active families."""
+        row = self._connection.execute(
+            select(remote_clients.c.id).where(remote_clients.c.oauth_client_id == oauth_client_id)
+        ).one_or_none()
+        if row is None:
+            return False
+        self._connection.execute(
+            update(remote_clients)
+            .where(remote_clients.c.id == row.id)
+            .values(
+                enabled=False,
+                writes_enabled=False,
+                refresh_enabled=False,
+                revoked_at=now,
+            )
+        )
+        families = self._connection.execute(
+            select(oauth_refresh_token_families.c.id).where(
+                oauth_refresh_token_families.c.remote_client_id == row.id,
+                oauth_refresh_token_families.c.revoked_at.is_(None),
+            )
+        ).scalars()
+        for family_id in families:
+            self.revoke_refresh_family(family_id=family_id, now=now, reason="client_revoked")
+        return True
+
+    def revoke_refresh_family(
+        self,
+        *,
+        family_id: UUID,
+        now: datetime,
+        reason: str,
+        replay: bool = False,
+    ) -> None:
+        if reason not in REFRESH_REVOKE_REASONS:
+            raise ValueError("refresh revoke reason is not recognized")
+        values: dict[str, object] = {"revoked_at": now, "revoke_reason": reason}
+        if replay:
+            values["replay_detected_at"] = now
+        self._connection.execute(
+            update(oauth_refresh_token_families)
+            .where(oauth_refresh_token_families.c.id == family_id)
+            .values(**values)
+        )
+        self._connection.execute(
+            update(oauth_refresh_tokens)
+            .where(
+                oauth_refresh_tokens.c.family_id == family_id,
+                oauth_refresh_tokens.c.revoked_at.is_(None),
+            )
+            .values(revoked_at=now)
+        )
+        self._connection.execute(
+            update(oauth_access_tokens)
+            .where(
+                oauth_access_tokens.c.refresh_family_id == family_id,
+                oauth_access_tokens.c.revoked_at.is_(None),
+            )
+            .values(revoked_at=now)
+        )
+
+    def remote_access_enabled(self) -> bool:
+        row = self._connection.execute(
+            select(remote_security_controls.c.remote_enabled).where(
+                remote_security_controls.c.singleton.is_(True)
+            )
+        ).one_or_none()
+        return bool(row is not None and row.remote_enabled)
+
+    def has_active_capability_grant(
+        self,
+        *,
+        remote_client_id: UUID,
+        token_scopes: frozenset[str],
+        resource: str,
+        now: datetime,
+    ) -> bool:
+        if not token_scopes:
+            return False
+        count = self._connection.execute(
+            select(func.count())
+            .select_from(remote_capability_grants)
+            .where(
+                remote_capability_grants.c.remote_client_id == remote_client_id,
+                remote_capability_grants.c.capability_version == "v1",
+                remote_capability_grants.c.external_scope.in_(token_scopes),
+                remote_capability_grants.c.resource == resource,
+                remote_capability_grants.c.revoked_at.is_(None),
+                (
+                    remote_capability_grants.c.expires_at.is_(None)
+                    | (remote_capability_grants.c.expires_at > now)
+                ),
+            )
+        ).scalar_one()
+        return int(count) > 0
 
     def grant(
         self,

@@ -22,6 +22,7 @@
 | [`../security/threat-model.md`](../security/threat-model.md) | Present — proposed for repository review |
 | [`../decisions/ADR-003-product-owned-user-authored-source-records.md`](../decisions/ADR-003-product-owned-user-authored-source-records.md) | Accepted — the third authority class |
 | [`../decisions/ADR-008-nas-runtime-topology.md`](../decisions/ADR-008-nas-runtime-topology.md) | Accepted — staged NAS target topology; not deployed |
+| [`../decisions/ADR-009-oauth-refresh-token-families.md`](../decisions/ADR-009-oauth-refresh-token-families.md) | Accepted — rotating refresh tokens for remote MCP |
 
 ## Specification
 

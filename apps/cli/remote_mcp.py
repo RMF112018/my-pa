@@ -64,6 +64,13 @@ def main(argv: list[str] | None = None) -> int:
         action=argparse.BooleanOptionalAction,
         required=True,
     )
+    set_refresh = sub.add_parser("set-client-refresh")
+    set_refresh.add_argument("--oauth-client-id", required=True)
+    set_refresh.add_argument(
+        "--refresh-enabled",
+        action=argparse.BooleanOptionalAction,
+        required=True,
+    )
     args = parser.parse_args(argv)
 
     settings = load_settings()
@@ -114,12 +121,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(identifier)
             elif args.command == "revoke":
-                result = connection.execute(
-                    remote_clients.update()
-                    .where(remote_clients.c.oauth_client_id == args.oauth_client_id)
-                    .values(enabled=False, writes_enabled=False, revoked_at=now)
-                )
-                if result.rowcount != 1:
+                if not repository.revoke_client(
+                    oauth_client_id=args.oauth_client_id,
+                    now=now,
+                ):
                     parser.error("remote client not found")
                 print("remote MCP client revoked")
             elif args.command == "revoke-grant":
@@ -139,6 +144,16 @@ def main(argv: list[str] | None = None) -> int:
                     parser.error("remote client not found")
                 print(
                     "remote MCP client writes " + ("enabled" if args.writes_enabled else "disabled")
+                )
+            elif args.command == "set-client-refresh":
+                if not repository.set_client_refresh(
+                    oauth_client_id=args.oauth_client_id,
+                    refresh_enabled=args.refresh_enabled,
+                ):
+                    parser.error("remote client not found")
+                print(
+                    "remote MCP client refresh "
+                    + ("enabled" if args.refresh_enabled else "disabled")
                 )
     finally:
         engine.dispose()

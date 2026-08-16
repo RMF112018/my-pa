@@ -75,6 +75,29 @@ create only the required grants with `--write` and an exact `--purpose`, and
 run `control --remote-enabled --writes-enabled`. The process setting
 `MY_PA_REMOTE_WRITES_ENABLED` remains a further, default-off ceiling.
 
+Refresh tokens are optional and off by default. Merging refresh-capable code
+does not change existing clients. After an additive migration and image
+deploy, enable refresh for one exact client only:
+
+```bash
+python apps/cli/remote_mcp.py set-client-refresh \
+  --oauth-client-id "$OAUTH_CLIENT_ID" --refresh-enabled
+```
+
+Then complete one interactive authorization-code flow to seed a refresh family.
+Ordinary access tokens remain one hour. Isolated tests may inject a shorter
+access lifetime through the authorization-server constructor; production
+settings do not. Production activation, live Abacus proof, and burn-in remain
+operator-gated.
+
+To roll refresh back without dropping tables: `set-client-refresh
+--no-refresh-enabled` for the affected client, then revert the application
+image if needed. Do not use Alembic downgrade as the first rollback; dropping
+refresh tables destroys stored authorization.
+
+Revoke a refresh family by presenting the refresh token to `/oauth/revoke` or
+by revoking the client. Both are non-oracular. Never log tokens or digests.
+
 ## Prepare and validate
 
 ```bash

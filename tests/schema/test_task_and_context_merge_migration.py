@@ -28,11 +28,12 @@ def _frozen_literals(constant: str) -> frozenset[str]:
     return frozenset(re.findall(r"'([^']+)'", source[start:end]))
 
 
-def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert list(script.get_heads()) == [REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PARENTS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 47
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 48
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

@@ -191,6 +191,12 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "context_run_items",
         "context_preference_events",
         "context_preference_current",
+        "goodnotes_notebooks",
+        "goodnotes_notebook_paths",
+        "goodnotes_source_snapshots",
+        "goodnotes_logical_pages",
+        "goodnotes_page_positions",
+        "goodnotes_ingestion_runs",
     }
 )
 

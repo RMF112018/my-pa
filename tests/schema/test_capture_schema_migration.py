@@ -960,6 +960,8 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             *CONTEXT_TRIGGERS,
             "goodnotes_page_versions_are_immutable",
             "goodnotes_region_proposals_are_immutable",
+            "goodnotes_source_snapshots_are_immutable",
+            "goodnotes_page_positions_are_immutable",
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

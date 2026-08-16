@@ -231,6 +231,16 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "a1c9e6f2b834": frozenset({"commitment_history"}),
     "9b2d5f8c3e01": frozenset({"context_runs", "context_run_items"}),
     "c6f1a8d3e204": frozenset({"context_preference_events", "context_preference_current"}),
+    "f8c3a1e6b247": frozenset(
+        {
+            "goodnotes_notebooks",
+            "goodnotes_notebook_paths",
+            "goodnotes_source_snapshots",
+            "goodnotes_logical_pages",
+            "goodnotes_page_positions",
+            "goodnotes_ingestion_runs",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

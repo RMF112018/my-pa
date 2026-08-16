@@ -53,6 +53,15 @@ provider, and has no executable router. GoodNotes model enrichment remains
 explicitly deferred; a future implementation must route proposals durably into
 the existing canonical Review plane.
 
+A sibling local observer can settle explicit relative PDF or image paths under
+the same admitted root. It does not crawl, refuses links, path escape,
+non-regular files, oversize, and unsupported media, and fail-closes on digest
+drift or mid-read mutation. Path, size, SHA-256, and `mtime_ns` are observation
+metadata; `source_root_id` is an opaque alias. Logical-page identity is matched
+from a versioned renderer (default `raw-representation-v1` hashes admitted page
+bytes) rather than page number or transcription. PDF visual rasterization and
+live GoodNotes activation remain deferred.
+
 Live GoodNotes root admission, OCR engine selection/licensing, background
 watcher activation, personal-data eligibility, and production database use
 remain operator-gated. Repository tests use synthetic temporary PDF-shaped

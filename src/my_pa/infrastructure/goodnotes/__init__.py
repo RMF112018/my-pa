@@ -5,8 +5,11 @@ from my_pa.infrastructure.goodnotes.local import (
     BoundedLocalOCRTranscriber,
     GoodNotesLocalSourceError,
     GoodNotesTranscriptionError,
+    LocalGoodNotesObserver,
     ManifestGoodNotesSource,
+    NotebookFileObservation,
 )
+from my_pa.infrastructure.goodnotes.render import MappedPageRenderer, RawRepresentationRenderer
 
 __all__ = [
     "BoundedLocalOCRTranscriber",
@@ -14,5 +17,9 @@ __all__ = [
     "FixturePageTranscriber",
     "GoodNotesLocalSourceError",
     "GoodNotesTranscriptionError",
+    "LocalGoodNotesObserver",
     "ManifestGoodNotesSource",
+    "MappedPageRenderer",
+    "NotebookFileObservation",
+    "RawRepresentationRenderer",
 ]

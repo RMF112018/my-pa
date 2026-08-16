@@ -37,6 +37,12 @@ _MAX_PAGE_BYTES: Final = 25 * 1_048_576
 _MAX_OCR_OUTPUT_BYTES: Final = 2 * 1_048_576
 _MAX_REGIONS: Final = 250
 _SUPPORTED_MEDIA_TYPES: Final = frozenset({"application/pdf", "image/jpeg", "image/png"})
+_SUFFIX_MEDIA_TYPES: Final = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
 _NOFOLLOW: Final = getattr(os, "O_NOFOLLOW", 0)
 
 
@@ -148,63 +154,194 @@ class ManifestGoodNotesSource:
             raise GoodNotesLocalSourceError("the GoodNotes manifest page is invalid") from error
 
     def _read(self, relative_path: PurePosixPath, maximum_bytes: int) -> bytes:
+        return _read_admitted(
+            self.root, self._root_device, self._root_inode, relative_path, maximum_bytes
+        ).content
+
+
+@dataclass(frozen=True, slots=True)
+class NotebookFileObservation:
+    """Settled notebook-file metadata. Path is history, not identity."""
+
+    relative_path: str
+    size_bytes: int
+    sha256: str
+    mtime_ns: int
+    media_type: str
+    content: bytes = field(repr=False)
+    page_count: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LocalGoodNotesObserver:
+    """Bounded notebook-file observer on the same allowlisted root as the manifest source.
+
+    It does not crawl. Callers name explicit relative PDF/image paths, or settle
+    the relative paths already admitted by ``ManifestGoodNotesSource``.
+    """
+
+    root: Path
+    source_root_id: str
+    maximum_file_bytes: int = _MAX_PAGE_BYTES
+    _root_device: int = field(init=False, repr=False)
+    _root_inode: int = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        _validate_root_alias(self.source_root_id)
+        configured = Path(self.root)
+        if configured.is_symlink():
+            raise GoodNotesLocalSourceError("the GoodNotes source root cannot be a link")
         try:
-            root_descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW)
+            resolved = configured.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise GoodNotesLocalSourceError("the GoodNotes source root is unavailable") from error
+        if not resolved.is_dir():
+            raise GoodNotesLocalSourceError("the GoodNotes source root must be a directory")
+        if not 1 <= self.maximum_file_bytes <= _MAX_PAGE_BYTES:
+            raise GoodNotesLocalSourceError("the GoodNotes page bound is invalid")
+        object.__setattr__(self, "root", resolved)
+        try:
+            descriptor = os.open(resolved, os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW)
         except OSError as error:
             raise GoodNotesLocalSourceError("the GoodNotes source root is unavailable") from error
         try:
-            root_metadata = os.fstat(root_descriptor)
-            if (root_metadata.st_dev, root_metadata.st_ino) != (
-                self._root_device,
-                self._root_inode,
-            ):
-                raise GoodNotesLocalSourceError("the GoodNotes source root identity changed")
-            parent_descriptor = root_descriptor
-            opened_parents: list[int] = []
-            try:
-                for component in relative_path.parts[:-1]:
-                    parent_descriptor = os.open(
-                        component,
-                        os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW,
-                        dir_fd=parent_descriptor,
-                    )
-                    opened_parents.append(parent_descriptor)
-                descriptor = os.open(
-                    relative_path.parts[-1],
-                    os.O_RDONLY | os.O_NONBLOCK | _NOFOLLOW,
+            metadata = os.fstat(descriptor)
+            object.__setattr__(self, "_root_device", metadata.st_dev)
+            object.__setattr__(self, "_root_inode", metadata.st_ino)
+        finally:
+            os.close(descriptor)
+
+    def settle(
+        self, relative_path: PurePosixPath, *, page_count: int | None = None
+    ) -> NotebookFileObservation:
+        """Read twice; fail closed on digest drift or mid-read mutation."""
+        _validate_relative_path(relative_path)
+        media_type = _SUFFIX_MEDIA_TYPES.get(relative_path.suffix.lower())
+        if media_type is None:
+            raise GoodNotesLocalSourceError("the GoodNotes representation type is unsupported")
+        first = _read_admitted(
+            self.root, self._root_device, self._root_inode, relative_path, self.maximum_file_bytes
+        )
+        second = _read_admitted(
+            self.root, self._root_device, self._root_inode, relative_path, self.maximum_file_bytes
+        )
+        if (
+            first.sha256 != second.sha256
+            or first.size_bytes != second.size_bytes
+            or first.mtime_ns != second.mtime_ns
+        ):
+            raise GoodNotesLocalSourceError("the GoodNotes representation digest changed")
+        return NotebookFileObservation(
+            relative_path=str(relative_path),
+            size_bytes=second.size_bytes,
+            sha256=second.sha256,
+            mtime_ns=second.mtime_ns,
+            media_type=media_type,
+            page_count=page_count,
+            content=second.content,
+        )
+
+    def observe(
+        self,
+        relative_paths: tuple[PurePosixPath, ...],
+        *,
+        page_count: int | None = None,
+    ) -> tuple[NotebookFileObservation, ...]:
+        if not relative_paths:
+            raise GoodNotesLocalSourceError("an explicit GoodNotes path is required")
+        return tuple(self.settle(path, page_count=page_count) for path in relative_paths)
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmittedRead:
+    content: bytes
+    size_bytes: int
+    mtime_ns: int
+    sha256: str
+
+
+def _read_admitted(
+    root: Path,
+    root_device: int,
+    root_inode: int,
+    relative_path: PurePosixPath,
+    maximum_bytes: int,
+) -> _AdmittedRead:
+    try:
+        root_descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW)
+    except OSError as error:
+        raise GoodNotesLocalSourceError("the GoodNotes source root is unavailable") from error
+    try:
+        root_metadata = os.fstat(root_descriptor)
+        if (root_metadata.st_dev, root_metadata.st_ino) != (root_device, root_inode):
+            raise GoodNotesLocalSourceError("the GoodNotes source root identity changed")
+        parent_descriptor = root_descriptor
+        opened_parents: list[int] = []
+        try:
+            for component in relative_path.parts[:-1]:
+                parent_descriptor = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW,
                     dir_fd=parent_descriptor,
                 )
-                try:
-                    metadata = os.fstat(descriptor)
-                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum_bytes:
-                        raise GoodNotesLocalSourceError(
-                            "the GoodNotes source file is not a bounded file"
-                        )
-                    content = bytearray()
-                    while len(content) <= maximum_bytes:
-                        chunk = os.read(descriptor, min(65_536, maximum_bytes + 1 - len(content)))
-                        if not chunk:
-                            break
-                        content.extend(chunk)
-                    if len(content) > maximum_bytes:
-                        raise GoodNotesLocalSourceError(
-                            "the GoodNotes source file exceeds its bound"
-                        )
-                    return bytes(content)
-                finally:
-                    os.close(descriptor)
+                opened_parents.append(parent_descriptor)
+            descriptor = os.open(
+                relative_path.parts[-1],
+                os.O_RDONLY | os.O_NONBLOCK | _NOFOLLOW,
+                dir_fd=parent_descriptor,
+            )
+            try:
+                before = os.fstat(descriptor)
+                if not stat.S_ISREG(before.st_mode) or before.st_size > maximum_bytes:
+                    raise GoodNotesLocalSourceError(
+                        "the GoodNotes source file is not a bounded file"
+                    )
+                content = bytearray()
+                while len(content) <= maximum_bytes:
+                    chunk = os.read(descriptor, min(65_536, maximum_bytes + 1 - len(content)))
+                    if not chunk:
+                        break
+                    content.extend(chunk)
+                if len(content) > maximum_bytes:
+                    raise GoodNotesLocalSourceError("the GoodNotes source file exceeds its bound")
+                after = os.fstat(descriptor)
+                if (after.st_size, _mtime_ns(after), after.st_dev, after.st_ino) != (
+                    before.st_size,
+                    _mtime_ns(before),
+                    before.st_dev,
+                    before.st_ino,
+                ):
+                    raise GoodNotesLocalSourceError("the GoodNotes representation digest changed")
+                payload = bytes(content)
+                return _AdmittedRead(
+                    content=payload,
+                    size_bytes=len(payload),
+                    mtime_ns=_mtime_ns(after),
+                    sha256=hashlib.sha256(payload).hexdigest(),
+                )
             finally:
-                for opened in reversed(opened_parents):
-                    os.close(opened)
-        except OSError as error:
-            raise GoodNotesLocalSourceError("the GoodNotes source file is unavailable") from error
+                os.close(descriptor)
         finally:
-            os.close(root_descriptor)
+            for opened in reversed(opened_parents):
+                os.close(opened)
+    except OSError as error:
+        raise GoodNotesLocalSourceError("the GoodNotes source file is unavailable") from error
+    finally:
+        os.close(root_descriptor)
+
+
+def _mtime_ns(metadata: os.stat_result) -> int:
+    return int(getattr(metadata, "st_mtime_ns", int(metadata.st_mtime * 1_000_000_000)))
 
 
 def _validate_relative_path(path: PurePosixPath) -> None:
     if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
         raise GoodNotesLocalSourceError("a bounded relative GoodNotes path is required")
+
+
+def _validate_root_alias(value: str) -> None:
+    if not 1 <= len(value) <= 128 or "\x00" in value or "/" in value:
+        raise GoodNotesLocalSourceError("source_root_id is an opaque alias, not a filesystem path")
 
 
 @dataclass(frozen=True, slots=True)

@@ -447,6 +447,90 @@ class GoodNotesRenderFingerprint:
 
 
 @dataclass(frozen=True, slots=True)
+class PageRender:
+    """Versioned page render. PDF rasterization is deferred; bytes may be hashed as-is."""
+
+    exact_render_sha256: str
+    normalized_render_sha256: str
+    renderer_name: str
+    renderer_version: str
+    render_profile_version: str
+    perceptual_hash: str | None = None
+    perceptual_algorithm: str = "none-v0"
+    perceptual_algorithm_version: str = "0"
+    width: int | None = None
+    height: int | None = None
+
+    def __post_init__(self) -> None:
+        _sha256(self.exact_render_sha256, what="exact render digest")
+        _sha256(self.normalized_render_sha256, what="normalized render digest")
+        _bounded_text(self.renderer_name, what="renderer name", maximum=100)
+        _bounded_text(self.renderer_version, what="renderer version", maximum=100)
+        _bounded_text(self.render_profile_version, what="render profile version", maximum=100)
+        _bounded_text(self.perceptual_algorithm, what="perceptual algorithm", maximum=100)
+        _bounded_text(
+            self.perceptual_algorithm_version, what="perceptual algorithm version", maximum=100
+        )
+        if self.perceptual_hash is not None:
+            _bounded_text(self.perceptual_hash, what="perceptual hash", maximum=128)
+        if self.width is not None and self.width < 1:
+            raise ValueError("render width must be positive")
+        if self.height is not None and self.height < 1:
+            raise ValueError("render height must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPriorPageEvidence:
+    """Last known render evidence for one logical page. Page number is position only."""
+
+    logical_page_id: str
+    last_page_number: int
+    last_page_version_id: str | None = None
+    exact_render_sha256: str | None = None
+    normalized_render_sha256: str | None = None
+    perceptual_hash: str | None = None
+    render_width: int | None = None
+    render_height: int | None = None
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.logical_page_id, "gnlp")
+        if self.last_page_number < 1:
+            raise ValueError("page numbers start at one")
+        if self.last_page_version_id is not None:
+            _goodnotes_id(self.last_page_version_id, "gnver")
+        if self.exact_render_sha256 is not None:
+            _sha256(self.exact_render_sha256, what="exact render digest")
+        if self.normalized_render_sha256 is not None:
+            _sha256(self.normalized_render_sha256, what="normalized render digest")
+        if self.perceptual_hash is not None:
+            _bounded_text(self.perceptual_hash, what="perceptual hash", maximum=128)
+        if self.render_width is not None and self.render_width < 1:
+            raise ValueError("render width must be positive")
+        if self.render_height is not None and self.render_height < 1:
+            raise ValueError("render height must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesLogicalPageMatch:
+    page_number: int
+    logical_page_id: str
+    is_new: bool
+    identity_status: GoodNotesIdentityStatus
+    match_method: GoodNotesMatchMethod
+    match_confidence: float | None = None
+    prior_page_version_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.page_number < 1:
+            raise ValueError("page numbers start at one")
+        _goodnotes_id(self.logical_page_id, "gnlp")
+        if self.match_confidence is not None and not 0 <= self.match_confidence <= 1:
+            raise ValueError("confidence must be between zero and one")
+        if self.prior_page_version_id is not None:
+            _goodnotes_id(self.prior_page_version_id, "gnver")
+
+
+@dataclass(frozen=True, slots=True)
 class GoodNotesIngestionRun:
     run_id: str
     principal_id: str

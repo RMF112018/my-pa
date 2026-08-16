@@ -10,7 +10,7 @@ from alembic.script import ScriptDirectory
 
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "d7a4c9e2f165"
-HEAD_REVISION = "d4a8c1e7b930"
+HEAD_REVISION = "f8c3a1e6b247"
 PRIOR = "b4e8d2c7a613"
 NATIVE_OWNED_TABLES: Final = frozenset(
     {

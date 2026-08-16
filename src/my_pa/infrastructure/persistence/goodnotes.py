@@ -12,6 +12,7 @@ from sqlalchemy import (
     insert,
     literal,
     select,
+    update,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
@@ -27,11 +28,21 @@ from my_pa.domain.capture.review import (
 )
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.goodnotes.models import (
+    GoodNotesIdentityStatus,
+    GoodNotesIngestionRun,
+    GoodNotesIngestionStatus,
+    GoodNotesIngestionTrigger,
+    GoodNotesLogicalPage,
+    GoodNotesMatchMethod,
+    GoodNotesNotebook,
+    GoodNotesNotebookPath,
     GoodNotesPage,
+    GoodNotesPagePosition,
     GoodNotesPageVersion,
     GoodNotesRegionProposal,
     GoodNotesReviewCase,
     GoodNotesSourceBinding,
+    GoodNotesSourceSnapshot,
     ReconciliationReceipt,
 )
 from my_pa.domain.source.registry import issue_identifier
@@ -43,11 +54,17 @@ from my_pa.infrastructure.persistence.principal_scope import (
 from my_pa.infrastructure.persistence.tables import (
     enrollment_objects,
     enrollments,
+    goodnotes_ingestion_runs,
+    goodnotes_logical_pages,
+    goodnotes_notebook_paths,
+    goodnotes_notebooks,
+    goodnotes_page_positions,
     goodnotes_page_versions,
     goodnotes_pages,
     goodnotes_reconciliation_receipts,
     goodnotes_region_proposals,
     goodnotes_review_decisions,
+    goodnotes_source_snapshots,
     source_object_versions,
     source_objects,
     sources,
@@ -248,6 +265,419 @@ class PostgresGoodNotesRepository:
             raise ValueError("the idempotency key is bound to another reconciliation")
         return stored
 
+    def store_notebook(self, notebook: GoodNotesNotebook) -> GoodNotesNotebook:
+        expected = _bound(
+            goodnotes_notebooks,
+            notebook.principal_id,
+            {
+                "notebook_id": notebook.notebook_id,
+                "source_root_id": notebook.source_root_id,
+                "label": notebook.label,
+                "identity_status": notebook.identity_status.value,
+                "created_at": notebook.created_at,
+                "last_observed_at": notebook.last_observed_at,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_notebooks).values(expected).on_conflict_do_nothing()
+        )
+        stored = self.notebook(notebook.principal_id, notebook.notebook_id)
+        if stored is None:
+            raise ValueError("the GoodNotes notebook could not be stored")
+        if stored.source_root_id != notebook.source_root_id:
+            raise ValueError("the stable GoodNotes notebook identity collided with other content")
+        if (
+            stored.last_observed_at != notebook.last_observed_at
+            or stored.label != notebook.label
+            or stored.identity_status != notebook.identity_status
+        ):
+            self.connection.execute(
+                update(goodnotes_notebooks)
+                .where(
+                    _mine(goodnotes_notebooks, notebook.principal_id),
+                    goodnotes_notebooks.c.notebook_id == notebook.notebook_id,
+                )
+                .values(
+                    last_observed_at=notebook.last_observed_at,
+                    label=notebook.label,
+                    identity_status=notebook.identity_status.value,
+                )
+            )
+            stored = self.notebook(notebook.principal_id, notebook.notebook_id)
+            if stored is None:
+                raise ValueError("the GoodNotes notebook could not be stored")
+        return stored
+
+    def notebook(self, principal_id: str, notebook_id: str) -> GoodNotesNotebook | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_notebooks).where(
+                    _mine(goodnotes_notebooks, principal_id),
+                    goodnotes_notebooks.c.notebook_id == notebook_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _notebook(row)
+
+    def record_notebook_path(self, observed: GoodNotesNotebookPath) -> GoodNotesNotebookPath:
+        if observed.is_current:
+            self.connection.execute(
+                update(goodnotes_notebook_paths)
+                .where(
+                    _mine(goodnotes_notebook_paths, observed.principal_id),
+                    goodnotes_notebook_paths.c.notebook_id == observed.notebook_id,
+                    goodnotes_notebook_paths.c.is_current.is_(True),
+                    goodnotes_notebook_paths.c.path != observed.path,
+                )
+                .values(is_current=False)
+            )
+        expected = _bound(
+            goodnotes_notebook_paths,
+            observed.principal_id,
+            {
+                "notebook_id": observed.notebook_id,
+                "path": observed.path,
+                "first_seen_at": observed.first_seen_at,
+                "last_seen_at": observed.last_seen_at,
+                "first_snapshot_id": observed.first_snapshot_id,
+                "last_snapshot_id": observed.last_snapshot_id,
+                "is_current": observed.is_current,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_notebook_paths)
+            .values(expected)
+            .on_conflict_do_update(
+                index_elements=["principal_id", "notebook_id", "path"],
+                set_={
+                    "last_seen_at": observed.last_seen_at,
+                    "last_snapshot_id": observed.last_snapshot_id,
+                    "is_current": observed.is_current,
+                },
+            )
+        )
+        stored = self.notebook_path(observed.principal_id, observed.notebook_id, observed.path)
+        if stored is None:
+            raise ValueError("the GoodNotes notebook path could not be stored")
+        return stored
+
+    def notebook_path(
+        self, principal_id: str, notebook_id: str, path: str
+    ) -> GoodNotesNotebookPath | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_notebook_paths).where(
+                    _mine(goodnotes_notebook_paths, principal_id),
+                    goodnotes_notebook_paths.c.notebook_id == notebook_id,
+                    goodnotes_notebook_paths.c.path == path,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _notebook_path(row)
+
+    def notebook_paths(
+        self, principal_id: str, notebook_id: str
+    ) -> tuple[GoodNotesNotebookPath, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_notebook_paths)
+                .where(
+                    _mine(goodnotes_notebook_paths, principal_id),
+                    goodnotes_notebook_paths.c.notebook_id == notebook_id,
+                )
+                .order_by(goodnotes_notebook_paths.c.first_seen_at, goodnotes_notebook_paths.c.path)
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_notebook_path(row) for row in rows)
+
+    def store_snapshot(self, snapshot: GoodNotesSourceSnapshot) -> GoodNotesSourceSnapshot:
+        expected = _bound(
+            goodnotes_source_snapshots,
+            snapshot.principal_id,
+            {
+                "snapshot_id": snapshot.snapshot_id,
+                "notebook_id": snapshot.notebook_id,
+                "source_object_id": snapshot.source_object_id,
+                "observed_path": snapshot.observed_path,
+                "raw_sha256": snapshot.raw_sha256,
+                "size_bytes": snapshot.size_bytes,
+                "mtime_ns": snapshot.mtime_ns,
+                "page_count": snapshot.page_count,
+                "observed_at": snapshot.observed_at,
+                "settled_at": snapshot.settled_at,
+                "run_id": snapshot.run_id,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_source_snapshots).values(expected).on_conflict_do_nothing()
+        )
+        replayed = self.snapshot_by_bytes(
+            snapshot.principal_id, snapshot.notebook_id, snapshot.raw_sha256
+        )
+        if replayed is not None:
+            return replayed
+        stored = self.snapshot(snapshot.principal_id, snapshot.snapshot_id)
+        if stored is None:
+            raise ValueError("the GoodNotes snapshot could not be stored")
+        _require_identical(
+            self.connection,
+            goodnotes_source_snapshots,
+            snapshot.principal_id,
+            goodnotes_source_snapshots.c.snapshot_id == snapshot.snapshot_id,
+            expected,
+            "snapshot",
+        )
+        return stored
+
+    def snapshot(self, principal_id: str, snapshot_id: str) -> GoodNotesSourceSnapshot | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_source_snapshots).where(
+                    _mine(goodnotes_source_snapshots, principal_id),
+                    goodnotes_source_snapshots.c.snapshot_id == snapshot_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _snapshot(row)
+
+    def snapshot_by_bytes(
+        self, principal_id: str, notebook_id: str, raw_sha256: str
+    ) -> GoodNotesSourceSnapshot | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_source_snapshots).where(
+                    _mine(goodnotes_source_snapshots, principal_id),
+                    goodnotes_source_snapshots.c.notebook_id == notebook_id,
+                    goodnotes_source_snapshots.c.raw_sha256 == raw_sha256,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _snapshot(row)
+
+    def store_logical_page(self, page: GoodNotesLogicalPage) -> GoodNotesLogicalPage:
+        expected = _bound(
+            goodnotes_logical_pages,
+            page.principal_id,
+            {
+                "logical_page_id": page.logical_page_id,
+                "notebook_id": page.notebook_id,
+                "created_at": page.created_at,
+                "last_seen_at": page.last_seen_at,
+                "identity_status": page.identity_status.value,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_logical_pages).values(expected).on_conflict_do_nothing()
+        )
+        stored = self.logical_page(page.principal_id, page.logical_page_id)
+        if stored is None:
+            raise ValueError("the GoodNotes logical page could not be stored")
+        if stored.notebook_id != page.notebook_id:
+            raise ValueError(
+                "the stable GoodNotes logical page identity collided with other content"
+            )
+        if (
+            stored.last_seen_at != page.last_seen_at
+            or stored.identity_status != page.identity_status
+        ):
+            self.connection.execute(
+                update(goodnotes_logical_pages)
+                .where(
+                    _mine(goodnotes_logical_pages, page.principal_id),
+                    goodnotes_logical_pages.c.logical_page_id == page.logical_page_id,
+                )
+                .values(
+                    last_seen_at=page.last_seen_at,
+                    identity_status=page.identity_status.value,
+                )
+            )
+            stored = self.logical_page(page.principal_id, page.logical_page_id)
+            if stored is None:
+                raise ValueError("the GoodNotes logical page could not be stored")
+        return stored
+
+    def logical_page(self, principal_id: str, logical_page_id: str) -> GoodNotesLogicalPage | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_logical_pages).where(
+                    _mine(goodnotes_logical_pages, principal_id),
+                    goodnotes_logical_pages.c.logical_page_id == logical_page_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _logical_page(row)
+
+    def store_page_position(self, position: GoodNotesPagePosition) -> GoodNotesPagePosition:
+        expected = _bound(
+            goodnotes_page_positions,
+            position.principal_id,
+            {
+                "snapshot_id": position.snapshot_id,
+                "page_number": position.page_number,
+                "logical_page_id": position.logical_page_id,
+                "page_version_id": position.page_version_id,
+                "match_method": position.match_method.value,
+                "match_confidence": position.match_confidence,
+                "prior_page_version_id": position.prior_page_version_id,
+                "created_at": position.created_at,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_page_positions).values(expected).on_conflict_do_nothing()
+        )
+        _require_identical(
+            self.connection,
+            goodnotes_page_positions,
+            position.principal_id,
+            (goodnotes_page_positions.c.snapshot_id == position.snapshot_id)
+            & (goodnotes_page_positions.c.page_number == position.page_number),
+            expected,
+            "page position",
+        )
+        stored = self.page_position(
+            position.principal_id, position.snapshot_id, position.page_number
+        )
+        if stored is None:
+            raise ValueError("the GoodNotes page position could not be stored")
+        return stored
+
+    def page_position(
+        self, principal_id: str, snapshot_id: str, page_number: int
+    ) -> GoodNotesPagePosition | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_page_positions).where(
+                    _mine(goodnotes_page_positions, principal_id),
+                    goodnotes_page_positions.c.snapshot_id == snapshot_id,
+                    goodnotes_page_positions.c.page_number == page_number,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _page_position(row)
+
+    def page_positions(
+        self, principal_id: str, snapshot_id: str
+    ) -> tuple[GoodNotesPagePosition, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_page_positions)
+                .where(
+                    _mine(goodnotes_page_positions, principal_id),
+                    goodnotes_page_positions.c.snapshot_id == snapshot_id,
+                )
+                .order_by(goodnotes_page_positions.c.page_number)
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_page_position(row) for row in rows)
+
+    def create_run(self, run: GoodNotesIngestionRun) -> GoodNotesIngestionRun:
+        expected = _bound(
+            goodnotes_ingestion_runs,
+            run.principal_id,
+            {
+                "run_id": run.run_id,
+                "source_root_id": run.source_root_id,
+                "trigger_type": run.trigger_type.value,
+                "request_id": run.request_id,
+                "idempotency_key": run.idempotency_key,
+                "request_fingerprint": run.request_fingerprint,
+                "started_at": run.started_at,
+                "ended_at": run.ended_at,
+                "status": run.status.value,
+                "lease_owner": run.lease_owner,
+                "lease_expires_at": run.lease_expires_at,
+                "snapshot_count": run.snapshot_count,
+                "page_count": run.page_count,
+                "new_logical_page_count": run.new_logical_page_count,
+                "changed_page_count": run.changed_page_count,
+                "ambiguous_page_count": run.ambiguous_page_count,
+                "error_code": run.error_code,
+                "error_class": run.error_class,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_ingestion_runs).values(expected).on_conflict_do_nothing()
+        )
+        stored = self.run_by_request(run.principal_id, run.request_id)
+        if stored is None:
+            raise ValueError("the GoodNotes ingestion run could not be stored")
+        if stored.request_fingerprint != run.request_fingerprint:
+            raise ValueError("the request id is bound to another ingestion")
+        return stored
+
+    def run(self, principal_id: str, run_id: str) -> GoodNotesIngestionRun | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_ingestion_runs).where(
+                    _mine(goodnotes_ingestion_runs, principal_id),
+                    goodnotes_ingestion_runs.c.run_id == run_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _run(row)
+
+    def run_by_request(self, principal_id: str, request_id: str) -> GoodNotesIngestionRun | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_ingestion_runs).where(
+                    _mine(goodnotes_ingestion_runs, principal_id),
+                    goodnotes_ingestion_runs.c.request_id == request_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _run(row)
+
+    def update_run(self, run: GoodNotesIngestionRun) -> GoodNotesIngestionRun:
+        stored = self.run(run.principal_id, run.run_id)
+        if stored is None:
+            raise ValueError("the request names no stored GoodNotes ingestion run")
+        if stored.request_fingerprint != run.request_fingerprint:
+            raise ValueError("the request id is bound to another ingestion")
+        self.connection.execute(
+            update(goodnotes_ingestion_runs)
+            .where(
+                _mine(goodnotes_ingestion_runs, run.principal_id),
+                goodnotes_ingestion_runs.c.run_id == run.run_id,
+            )
+            .values(
+                ended_at=run.ended_at,
+                status=run.status.value,
+                lease_owner=run.lease_owner,
+                lease_expires_at=run.lease_expires_at,
+                snapshot_count=run.snapshot_count,
+                page_count=run.page_count,
+                new_logical_page_count=run.new_logical_page_count,
+                changed_page_count=run.changed_page_count,
+                ambiguous_page_count=run.ambiguous_page_count,
+                error_code=run.error_code,
+                error_class=run.error_class,
+            )
+        )
+        updated = self.run(run.principal_id, run.run_id)
+        if updated is None:
+            raise ValueError("the GoodNotes ingestion run could not be updated")
+        return updated
+
 
 def _require_identical(
     connection: Connection,
@@ -275,6 +705,104 @@ def _receipt(row: object) -> ReconciliationReceipt:
         request_fingerprint=values["request_fingerprint"],  # type: ignore[index]
         page_version_ids=tuple(values["page_version_ids"]),  # type: ignore[index]
         created_regions=values["created_regions"],  # type: ignore[index]
+    )
+
+
+def _notebook(row: object) -> GoodNotesNotebook:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesNotebook(
+        notebook_id=values["notebook_id"],  # type: ignore[index]
+        principal_id=values["principal_id"],  # type: ignore[index]
+        source_root_id=values["source_root_id"],  # type: ignore[index]
+        identity_status=GoodNotesIdentityStatus(values["identity_status"]),  # type: ignore[index]
+        created_at=values["created_at"],  # type: ignore[index]
+        last_observed_at=values["last_observed_at"],  # type: ignore[index]
+        label=values["label"],  # type: ignore[index]
+    )
+
+
+def _notebook_path(row: object) -> GoodNotesNotebookPath:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesNotebookPath(
+        principal_id=values["principal_id"],  # type: ignore[index]
+        notebook_id=values["notebook_id"],  # type: ignore[index]
+        path=values["path"],  # type: ignore[index]
+        first_seen_at=values["first_seen_at"],  # type: ignore[index]
+        last_seen_at=values["last_seen_at"],  # type: ignore[index]
+        is_current=bool(values["is_current"]),  # type: ignore[index]
+        first_snapshot_id=values["first_snapshot_id"],  # type: ignore[index]
+        last_snapshot_id=values["last_snapshot_id"],  # type: ignore[index]
+    )
+
+
+def _snapshot(row: object) -> GoodNotesSourceSnapshot:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesSourceSnapshot(
+        snapshot_id=values["snapshot_id"],  # type: ignore[index]
+        principal_id=values["principal_id"],  # type: ignore[index]
+        notebook_id=values["notebook_id"],  # type: ignore[index]
+        source_object_id=values["source_object_id"],  # type: ignore[index]
+        observed_path=values["observed_path"],  # type: ignore[index]
+        raw_sha256=values["raw_sha256"],  # type: ignore[index]
+        size_bytes=int(values["size_bytes"]),  # type: ignore[index]
+        page_count=int(values["page_count"]),  # type: ignore[index]
+        observed_at=values["observed_at"],  # type: ignore[index]
+        settled_at=values["settled_at"],  # type: ignore[index]
+        run_id=values["run_id"],  # type: ignore[index]
+        mtime_ns=values["mtime_ns"],  # type: ignore[index]
+    )
+
+
+def _logical_page(row: object) -> GoodNotesLogicalPage:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesLogicalPage(
+        logical_page_id=values["logical_page_id"],  # type: ignore[index]
+        principal_id=values["principal_id"],  # type: ignore[index]
+        notebook_id=values["notebook_id"],  # type: ignore[index]
+        created_at=values["created_at"],  # type: ignore[index]
+        last_seen_at=values["last_seen_at"],  # type: ignore[index]
+        identity_status=GoodNotesIdentityStatus(values["identity_status"]),  # type: ignore[index]
+    )
+
+
+def _page_position(row: object) -> GoodNotesPagePosition:
+    values = row  # mapping-like SQLAlchemy row
+    confidence = values["match_confidence"]  # type: ignore[index]
+    return GoodNotesPagePosition(
+        principal_id=values["principal_id"],  # type: ignore[index]
+        snapshot_id=values["snapshot_id"],  # type: ignore[index]
+        page_number=int(values["page_number"]),  # type: ignore[index]
+        logical_page_id=values["logical_page_id"],  # type: ignore[index]
+        created_at=values["created_at"],  # type: ignore[index]
+        match_method=GoodNotesMatchMethod(values["match_method"]),  # type: ignore[index]
+        page_version_id=values["page_version_id"],  # type: ignore[index]
+        match_confidence=None if confidence is None else float(confidence),
+        prior_page_version_id=values["prior_page_version_id"],  # type: ignore[index]
+    )
+
+
+def _run(row: object) -> GoodNotesIngestionRun:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesIngestionRun(
+        run_id=values["run_id"],  # type: ignore[index]
+        principal_id=values["principal_id"],  # type: ignore[index]
+        source_root_id=values["source_root_id"],  # type: ignore[index]
+        trigger_type=GoodNotesIngestionTrigger(values["trigger_type"]),  # type: ignore[index]
+        request_id=values["request_id"],  # type: ignore[index]
+        idempotency_key=values["idempotency_key"],  # type: ignore[index]
+        request_fingerprint=values["request_fingerprint"],  # type: ignore[index]
+        started_at=values["started_at"],  # type: ignore[index]
+        status=GoodNotesIngestionStatus(values["status"]),  # type: ignore[index]
+        ended_at=values["ended_at"],  # type: ignore[index]
+        lease_owner=values["lease_owner"],  # type: ignore[index]
+        lease_expires_at=values["lease_expires_at"],  # type: ignore[index]
+        snapshot_count=int(values["snapshot_count"]),  # type: ignore[index]
+        page_count=int(values["page_count"]),  # type: ignore[index]
+        new_logical_page_count=int(values["new_logical_page_count"]),  # type: ignore[index]
+        changed_page_count=int(values["changed_page_count"]),  # type: ignore[index]
+        ambiguous_page_count=int(values["ambiguous_page_count"]),  # type: ignore[index]
+        error_code=values["error_code"],  # type: ignore[index]
+        error_class=values["error_class"],  # type: ignore[index]
     )
 
 

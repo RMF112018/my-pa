@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import ClassVar
@@ -20,9 +20,21 @@ from my_pa.application.goodnotes import (
 )
 from my_pa.bootstrap.goodnotes import compose_local_goodnotes_runtime
 from my_pa.domain.goodnotes.models import (
+    GoodNotesIdentityStatus,
+    GoodNotesIngestionRun,
+    GoodNotesIngestionStatus,
+    GoodNotesIngestionTrigger,
+    GoodNotesLogicalPage,
+    GoodNotesMatchEvidence,
+    GoodNotesMatchMethod,
+    GoodNotesNotebook,
+    GoodNotesNotebookPath,
     GoodNotesPage,
+    GoodNotesPagePosition,
     GoodNotesPageVersion,
     GoodNotesRegionProposal,
+    GoodNotesRenderFingerprint,
+    issue_stable_id,
 )
 from my_pa.infrastructure.goodnotes.fixture import FixtureGoodNotesSource, FixturePageTranscriber
 from my_pa.infrastructure.goodnotes.local import (
@@ -439,3 +451,139 @@ def test_goodnotes_operator_cli_accepts_only_the_partition_binding_argument() ->
     parser = build_parser()
     arguments = parser.parse_args(["reconcile", "--idempotency-key", "x", "--principal-id", A])
     assert arguments.principal_id == A
+
+
+def test_issue_stable_id_accepts_lineage_prefixes() -> None:
+    notebook = issue_stable_id("gnnb", "synthetic", "notebook")
+    snapshot = issue_stable_id("gnsnap", "synthetic", "snapshot")
+    logical = issue_stable_id("gnlp", "synthetic", "page")
+    run = issue_stable_id("gnrun", "synthetic", "run")
+    assert notebook.startswith("gnnb_") and len(notebook) == 29
+    assert snapshot.startswith("gnsnap_") and len(snapshot) == 31
+    assert logical.startswith("gnlp_") and len(logical) == 29
+    assert run.startswith("gnrun_") and len(run) == 30
+    assert issue_stable_id("gnpg", "page") != notebook
+    with pytest.raises(ValueError, match="unknown GoodNotes identity prefix"):
+        issue_stable_id("gnxx", "synthetic")
+
+
+def test_notebook_identity_is_not_a_path() -> None:
+    notebook = GoodNotesNotebook(
+        notebook_id=issue_stable_id("gnnb", "alpha"),
+        principal_id=A,
+        source_root_id="icloud-goodnotes",
+        identity_status=GoodNotesIdentityStatus.ACTIVE,
+        created_at=WHEN,
+        last_observed_at=WHEN,
+        label="Alpha",
+    )
+    assert "path" not in {item.name for item in fields(GoodNotesNotebook)}
+    with pytest.raises(ValueError, match="not a filesystem path"):
+        GoodNotesNotebook(
+            notebook_id=notebook.notebook_id,
+            principal_id=A,
+            source_root_id="/Users/synthetic/GoodNotes",
+            identity_status=GoodNotesIdentityStatus.ACTIVE,
+            created_at=WHEN,
+            last_observed_at=WHEN,
+        )
+    observed = GoodNotesNotebookPath(
+        principal_id=A,
+        notebook_id=notebook.notebook_id,
+        path="Inbox/alpha.pdf",
+        first_seen_at=WHEN,
+        last_seen_at=WHEN,
+        is_current=True,
+    )
+    assert observed.path != notebook.notebook_id
+    with pytest.raises(ValueError, match="invalid gnnb identifier"):
+        GoodNotesNotebook(
+            notebook_id=issue_stable_id("gnpg", "not-a-notebook"),
+            principal_id=A,
+            source_root_id="icloud-goodnotes",
+            identity_status=GoodNotesIdentityStatus.ACTIVE,
+            created_at=WHEN,
+            last_observed_at=WHEN,
+        )
+
+
+def test_logical_page_identity_has_no_page_number() -> None:
+    page = GoodNotesLogicalPage(
+        logical_page_id=issue_stable_id("gnlp", "alpha"),
+        principal_id=A,
+        notebook_id=issue_stable_id("gnnb", "alpha"),
+        created_at=WHEN,
+        last_seen_at=WHEN,
+        identity_status=GoodNotesIdentityStatus.AMBIGUOUS,
+    )
+    assert "page_number" not in {item.name for item in fields(GoodNotesLogicalPage)}
+    assert page.logical_page_id.startswith("gnlp_")
+    position = GoodNotesPagePosition(
+        principal_id=A,
+        snapshot_id=issue_stable_id("gnsnap", "one"),
+        page_number=3,
+        logical_page_id=page.logical_page_id,
+        created_at=WHEN,
+        match_method=GoodNotesMatchMethod.UNRESOLVED,
+    )
+    assert position.page_number == 3
+    later = GoodNotesPagePosition(
+        principal_id=A,
+        snapshot_id=issue_stable_id("gnsnap", "two"),
+        page_number=1,
+        logical_page_id=page.logical_page_id,
+        created_at=WHEN,
+        match_method=GoodNotesMatchMethod.EXACT_NORMALIZED_RENDER,
+        match_confidence=1.0,
+    )
+    assert later.logical_page_id == position.logical_page_id
+    assert later.page_number != position.page_number
+
+
+def test_lineage_enums_and_optional_version_fingerprint_defaults() -> None:
+    assert {member.value for member in GoodNotesIdentityStatus} == {
+        "ACTIVE",
+        "AMBIGUOUS",
+        "RETIRED",
+    }
+    assert GoodNotesMatchMethod.ORDINAL_WEAK.value == "ORDINAL_WEAK"
+    assert GoodNotesIngestionStatus.BUSY.value == "BUSY"
+    assert GoodNotesIngestionTrigger.REPLAY.value == "REPLAY"
+    version = GoodNotesPageVersion(
+        page_version_id=issue_stable_id("gnver", "page"),
+        page_id=issue_stable_id("gnpg", "page"),
+        source_version_id="ver_aaaaaaaaaaaaaaaaaaaaaaaa",
+        content_sha256="a" * 64,
+        observed_at=WHEN,
+    )
+    assert version.logical_page_id is None
+    assert version.normalized_render_sha256 is None
+    fingerprint = GoodNotesRenderFingerprint(
+        normalized_render_sha256="b" * 64,
+        perceptual_hash="phash-synthetic",
+        render_width=1200,
+        render_height=1600,
+        renderer_name="synthetic",
+        renderer_version="1",
+        render_profile_version="v1",
+    )
+    assert fingerprint.render_width == 1200
+    evidence = GoodNotesMatchEvidence(
+        match_method=GoodNotesMatchMethod.SEQUENCE_TIEBREAK,
+        confidence=0.5,
+        prior_page_version_id=version.page_version_id,
+    )
+    assert evidence.prior_page_version_id == version.page_version_id
+    run = GoodNotesIngestionRun(
+        run_id=issue_stable_id("gnrun", "manual"),
+        principal_id=A,
+        source_root_id="icloud-goodnotes",
+        trigger_type=GoodNotesIngestionTrigger.MANUAL,
+        request_id="req-1",
+        idempotency_key="req-1",
+        request_fingerprint="c" * 64,
+        started_at=WHEN,
+        status=GoodNotesIngestionStatus.PENDING,
+    )
+    assert run.snapshot_count == 0
+    assert run.ended_at is None

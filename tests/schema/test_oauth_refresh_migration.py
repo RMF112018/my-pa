@@ -37,7 +37,8 @@ ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "migrations/versions/20260816_d4a8c1e7b930_add_oauth_refresh_token_families.py"
 DISPOSABLE_DATABASE = "my_pa_oauth_refresh_migration_test"
 PRIOR_REVISION = "a8a1272aaa0a"
-HEAD_REVISION = "d4a8c1e7b930"
+OAUTH_REVISION = "d4a8c1e7b930"
+HEAD_REVISION = "f8c3a1e6b247"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -107,8 +108,9 @@ def test_refresh_tables_share_the_canonical_identity_metadata() -> None:
 def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert list(script.get_heads()) == [HEAD_REVISION]
-    assert script.get_revision(HEAD_REVISION).down_revision == PRIOR_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 49
+    assert script.get_revision(OAUTH_REVISION).down_revision == PRIOR_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == OAUTH_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 50
 
 
 @pytest.mark.database
@@ -121,6 +123,14 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
             assert revision == HEAD_REVISION
+            assert "oauth_refresh_token_families" in set(
+                connection.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'identity'"
+                    )
+                ).scalars()
+            )
             columns = set(
                 connection.execute(
                     text(
@@ -140,6 +150,39 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
             )
             assert "oauth_refresh_token_families" in tables
             assert "oauth_refresh_tokens" in tables
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.database
+def test_the_oauth_revision_is_still_reachable(disposable_database: str) -> None:
+    command.upgrade(_config(), OAUTH_REVISION)
+    engine = create_database_engine(disposable_database)
+    try:
+        with engine.connect() as connection:
+            revision = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            assert revision == OAUTH_REVISION
+            tables = set(
+                connection.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'identity'"
+                    )
+                ).scalars()
+            )
+            assert "oauth_refresh_token_families" in tables
+            assert "oauth_refresh_tokens" in tables
+            knowledge = set(
+                connection.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'knowledge' AND table_name = 'goodnotes_notebooks'"
+                    )
+                ).scalars()
+            )
+            assert knowledge == set()
     finally:
         engine.dispose()
 
@@ -182,7 +225,7 @@ def test_prior_head_to_new_head_preserves_clients_and_disables_refresh(
                     " now())"
                 )
             )
-        command.upgrade(_config(), HEAD_REVISION)
+        command.upgrade(_config(), OAUTH_REVISION)
         with engine.connect() as connection:
             row = connection.execute(
                 text(

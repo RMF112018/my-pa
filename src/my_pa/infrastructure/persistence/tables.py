@@ -4563,12 +4563,40 @@ goodnotes_page_versions = Table(
     Column("source_version_id", String(72), nullable=False),
     Column("content_sha256", String(64), nullable=False),
     Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("logical_page_id", String(36)),
+    Column("normalized_render_sha256", String(64)),
+    Column("perceptual_hash", String(128)),
+    Column("render_width", Integer),
+    Column("render_height", Integer),
+    Column("renderer_name", String(100)),
+    Column("renderer_version", String(100)),
+    Column("render_profile_version", String(100)),
     ForeignKeyConstraint(
         ["principal_id", "page_id"],
         [f"{SCHEMA}.goodnotes_pages.principal_id", f"{SCHEMA}.goodnotes_pages.page_id"],
     ),
     UniqueConstraint(
         "principal_id", "page_id", "source_version_id", name="one_goodnotes_observed_version"
+    ),
+    CheckConstraint(
+        "logical_page_id IS NULL OR logical_page_id ~ '^gnlp_[a-f0-9]{24}$'",
+        name="goodnotes_version_logical_page_id_shape",
+    ),
+    CheckConstraint(
+        "normalized_render_sha256 IS NULL OR normalized_render_sha256 ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_version_normalized_render_sha256_shape",
+    ),
+    CheckConstraint(
+        "perceptual_hash IS NULL OR char_length(perceptual_hash) BETWEEN 1 AND 128",
+        name="goodnotes_version_perceptual_hash_is_bounded",
+    ),
+    CheckConstraint(
+        "render_width IS NULL OR render_width > 0",
+        name="goodnotes_version_render_width_is_positive",
+    ),
+    CheckConstraint(
+        "render_height IS NULL OR render_height > 0",
+        name="goodnotes_version_render_height_is_positive",
     ),
 )
 
@@ -4664,6 +4692,319 @@ goodnotes_reconciliation_receipts = Table(
     Column("page_version_ids", JSON, nullable=False),
     Column("created_regions", Integer, nullable=False),
     CheckConstraint("created_regions >= 0", name="goodnotes_created_regions_is_nonnegative"),
+)
+
+# Additive GoodNotes lineage plane. These tables do not replace ordinal
+# `goodnotes_pages` identity (`source_object_id` + `page_number`). Path is
+# history on `goodnotes_notebook_paths`; page number is position on
+# `goodnotes_page_positions`. Snapshots and positions are immutable. No FK
+# CASCADE from a source table can erase this history.
+goodnotes_notebooks = Table(
+    "goodnotes_notebooks",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("notebook_id", String(36), primary_key=True),
+    Column("source_root_id", String(128), nullable=False),
+    Column("label", String(200)),
+    Column("identity_status", String(16), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("last_observed_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "notebook_id ~ '^gnnb_[a-f0-9]{24}$'",
+        name="goodnotes_notebook_id_shape",
+    ),
+    CheckConstraint(
+        "char_length(source_root_id) BETWEEN 1 AND 128 AND position('/' in source_root_id) = 0",
+        name="goodnotes_notebook_source_root_is_alias",
+    ),
+    CheckConstraint(
+        "label IS NULL OR char_length(label) BETWEEN 1 AND 200",
+        name="goodnotes_notebook_label_is_bounded",
+    ),
+    CheckConstraint(
+        "identity_status IN ('ACTIVE', 'AMBIGUOUS', 'RETIRED')",
+        name="goodnotes_notebook_identity_status_is_known",
+    ),
+    CheckConstraint(
+        "last_observed_at >= created_at",
+        name="goodnotes_notebook_observed_after_creation",
+    ),
+)
+
+goodnotes_ingestion_runs = Table(
+    "goodnotes_ingestion_runs",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("run_id", String(36), primary_key=True),
+    Column("source_root_id", String(128), nullable=False),
+    Column("trigger_type", String(16), nullable=False),
+    Column("request_id", String(200), nullable=False),
+    Column("idempotency_key", String(200), nullable=False),
+    Column("request_fingerprint", String(64), nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("ended_at", DateTime(timezone=True)),
+    Column("status", String(16), nullable=False),
+    Column("lease_owner", String(200)),
+    Column("lease_expires_at", DateTime(timezone=True)),
+    Column("snapshot_count", Integer, nullable=False, server_default="0"),
+    Column("page_count", Integer, nullable=False, server_default="0"),
+    Column("new_logical_page_count", Integer, nullable=False, server_default="0"),
+    Column("changed_page_count", Integer, nullable=False, server_default="0"),
+    Column("ambiguous_page_count", Integer, nullable=False, server_default="0"),
+    Column("error_code", String(64)),
+    Column("error_class", String(64)),
+    CheckConstraint("run_id ~ '^gnrun_[a-f0-9]{24}$'", name="goodnotes_run_id_shape"),
+    CheckConstraint(
+        "char_length(source_root_id) BETWEEN 1 AND 128 AND position('/' in source_root_id) = 0",
+        name="goodnotes_run_source_root_is_alias",
+    ),
+    CheckConstraint(
+        "trigger_type IN ('MANUAL', 'SCHEDULED', 'REPLAY')",
+        name="goodnotes_run_trigger_type_is_known",
+    ),
+    CheckConstraint(
+        "char_length(request_id) BETWEEN 1 AND 200",
+        name="goodnotes_run_request_id_is_bounded",
+    ),
+    CheckConstraint(
+        "char_length(idempotency_key) BETWEEN 1 AND 200",
+        name="goodnotes_run_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_fingerprint ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_run_request_fingerprint_shape",
+    ),
+    CheckConstraint(
+        "status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'BUSY', 'REPLAYED')",
+        name="goodnotes_run_status_is_known",
+    ),
+    CheckConstraint(
+        "lease_owner IS NULL OR char_length(lease_owner) BETWEEN 1 AND 200",
+        name="goodnotes_run_lease_owner_is_bounded",
+    ),
+    CheckConstraint("snapshot_count >= 0", name="goodnotes_run_snapshot_count_is_nonnegative"),
+    CheckConstraint("page_count >= 0", name="goodnotes_run_page_count_is_nonnegative"),
+    CheckConstraint(
+        "new_logical_page_count >= 0",
+        name="goodnotes_run_new_logical_page_count_is_nonnegative",
+    ),
+    CheckConstraint(
+        "changed_page_count >= 0",
+        name="goodnotes_run_changed_page_count_is_nonnegative",
+    ),
+    CheckConstraint(
+        "ambiguous_page_count >= 0",
+        name="goodnotes_run_ambiguous_page_count_is_nonnegative",
+    ),
+    CheckConstraint(
+        "error_code IS NULL OR char_length(error_code) BETWEEN 1 AND 64",
+        name="goodnotes_run_error_code_is_bounded",
+    ),
+    CheckConstraint(
+        "error_class IS NULL OR char_length(error_class) BETWEEN 1 AND 64",
+        name="goodnotes_run_error_class_is_bounded",
+    ),
+    CheckConstraint(
+        "ended_at IS NULL OR ended_at >= started_at",
+        name="goodnotes_ingestion_ended_after_start",
+    ),
+    UniqueConstraint("principal_id", "request_id", name="one_goodnotes_ingestion_request"),
+)
+
+goodnotes_notebook_paths = Table(
+    "goodnotes_notebook_paths",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("notebook_id", String(36), primary_key=True),
+    Column("path", String(1024), primary_key=True),
+    Column("first_seen_at", DateTime(timezone=True), nullable=False),
+    Column("last_seen_at", DateTime(timezone=True), nullable=False),
+    Column("first_snapshot_id", String(36)),
+    Column("last_snapshot_id", String(36)),
+    Column("is_current", Boolean, nullable=False),
+    CheckConstraint(
+        "char_length(path) BETWEEN 1 AND 1024",
+        name="goodnotes_notebook_path_is_bounded",
+    ),
+    CheckConstraint(
+        "first_snapshot_id IS NULL OR first_snapshot_id ~ '^gnsnap_[a-f0-9]{24}$'",
+        name="goodnotes_notebook_path_first_snapshot_shape",
+    ),
+    CheckConstraint(
+        "last_snapshot_id IS NULL OR last_snapshot_id ~ '^gnsnap_[a-f0-9]{24}$'",
+        name="goodnotes_notebook_path_last_snapshot_shape",
+    ),
+    CheckConstraint(
+        "last_seen_at >= first_seen_at",
+        name="goodnotes_notebook_path_seen_order",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "notebook_id"],
+        [
+            f"{SCHEMA}.goodnotes_notebooks.principal_id",
+            f"{SCHEMA}.goodnotes_notebooks.notebook_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_notebook_paths_notebook_fk",
+    ),
+    Index(
+        "one_current_goodnotes_notebook_path",
+        "principal_id",
+        "notebook_id",
+        unique=True,
+        postgresql_where=text("is_current"),
+    ),
+)
+
+goodnotes_source_snapshots = Table(
+    "goodnotes_source_snapshots",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("snapshot_id", String(36), primary_key=True),
+    Column("notebook_id", String(36), nullable=False),
+    Column("source_object_id", String(72), nullable=False),
+    Column("observed_path", String(1024), nullable=False),
+    Column("raw_sha256", String(64), nullable=False),
+    Column("size_bytes", BigInteger, nullable=False),
+    Column("mtime_ns", BigInteger),
+    Column("page_count", Integer, nullable=False),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("settled_at", DateTime(timezone=True), nullable=False),
+    Column("run_id", String(36), nullable=False),
+    CheckConstraint(
+        "snapshot_id ~ '^gnsnap_[a-f0-9]{24}$'",
+        name="goodnotes_snapshot_id_shape",
+    ),
+    CheckConstraint(
+        "char_length(observed_path) BETWEEN 1 AND 1024",
+        name="goodnotes_snapshot_observed_path_is_bounded",
+    ),
+    CheckConstraint(
+        "raw_sha256 ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_snapshot_raw_sha256_shape",
+    ),
+    CheckConstraint("size_bytes > 0", name="goodnotes_snapshot_size_is_positive"),
+    CheckConstraint(
+        "mtime_ns IS NULL OR mtime_ns >= 0",
+        name="goodnotes_snapshot_mtime_is_nonnegative",
+    ),
+    CheckConstraint("page_count >= 0", name="goodnotes_snapshot_page_count_is_nonnegative"),
+    CheckConstraint(
+        "settled_at >= observed_at",
+        name="goodnotes_snapshot_settled_after_observation",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "notebook_id",
+        "raw_sha256",
+        name="one_goodnotes_snapshot_per_notebook_bytes",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "notebook_id"],
+        [
+            f"{SCHEMA}.goodnotes_notebooks.principal_id",
+            f"{SCHEMA}.goodnotes_notebooks.notebook_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_source_snapshots_notebook_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_source_snapshots_run_fk",
+    ),
+)
+
+goodnotes_logical_pages = Table(
+    "goodnotes_logical_pages",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("logical_page_id", String(36), primary_key=True),
+    Column("notebook_id", String(36), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("last_seen_at", DateTime(timezone=True), nullable=False),
+    Column("identity_status", String(16), nullable=False),
+    CheckConstraint(
+        "logical_page_id ~ '^gnlp_[a-f0-9]{24}$'",
+        name="goodnotes_logical_page_id_shape",
+    ),
+    CheckConstraint(
+        "identity_status IN ('ACTIVE', 'AMBIGUOUS', 'RETIRED')",
+        name="goodnotes_logical_page_identity_status_is_known",
+    ),
+    CheckConstraint(
+        "last_seen_at >= created_at",
+        name="goodnotes_logical_page_seen_after_creation",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "notebook_id"],
+        [
+            f"{SCHEMA}.goodnotes_notebooks.principal_id",
+            f"{SCHEMA}.goodnotes_notebooks.notebook_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_logical_pages_notebook_fk",
+    ),
+)
+
+goodnotes_page_positions = Table(
+    "goodnotes_page_positions",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("snapshot_id", String(36), primary_key=True),
+    Column("page_number", Integer, primary_key=True),
+    Column("logical_page_id", String(36), nullable=False),
+    Column("page_version_id", String(30)),
+    Column("match_method", String(40), nullable=False),
+    Column("match_confidence", Float),
+    Column("prior_page_version_id", String(30)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("page_number >= 1", name="goodnotes_position_page_number_is_positive"),
+    CheckConstraint(
+        "page_version_id IS NULL OR page_version_id ~ '^gnver_[a-f0-9]{24}$'",
+        name="goodnotes_position_page_version_id_shape",
+    ),
+    CheckConstraint(
+        "match_method IN ("
+        "'EXACT_NORMALIZED_RENDER', "
+        "'EXACT_CANONICAL_RENDER', "
+        "'STRONG_VISUAL_FINGERPRINT', "
+        "'PERCEPTUAL_STRUCTURAL', "
+        "'SEQUENCE_TIEBREAK', "
+        "'ORDINAL_WEAK', "
+        "'UNRESOLVED')",
+        name="goodnotes_position_match_method_is_known",
+    ),
+    CheckConstraint(
+        "match_confidence IS NULL OR (match_confidence >= 0 AND match_confidence <= 1)",
+        name="goodnotes_position_match_confidence_is_bounded",
+    ),
+    CheckConstraint(
+        "prior_page_version_id IS NULL OR prior_page_version_id ~ '^gnver_[a-f0-9]{24}$'",
+        name="goodnotes_position_prior_page_version_id_shape",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "snapshot_id"],
+        [
+            f"{SCHEMA}.goodnotes_source_snapshots.principal_id",
+            f"{SCHEMA}.goodnotes_source_snapshots.snapshot_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_page_positions_snapshot_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "logical_page_id"],
+        [
+            f"{SCHEMA}.goodnotes_logical_pages.principal_id",
+            f"{SCHEMA}.goodnotes_logical_pages.logical_page_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_page_positions_logical_page_fk",
+    ),
 )
 
 #: One row per `context.prepare` disclosure. Insert only. Reconstructs which

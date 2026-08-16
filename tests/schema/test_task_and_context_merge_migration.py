@@ -1,8 +1,8 @@
 """Revision `b7c4e9a2d518`: merge task-management and context-prepare heads.
 
-Note: This test is now superseded by the new head `a8a1272aaa0a` which adds
-Task description and renames pulse_items.priority to attention_rank. The test
-remains to verify the merge revision's structure and frozen literals.
+Note: This revision is no longer the head. Current head `d4a8c1e7b930` revises
+`a8a1272aaa0a`. The test remains to verify the merge revision's structure and
+frozen literals.
 """
 
 from __future__ import annotations
@@ -33,12 +33,12 @@ def _frozen_literals(constant: str) -> frozenset[str]:
     return frozenset(re.findall(r"'([^']+)'", source[start:end]))
 
 
-def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    # This revision is no longer the head; the new head is a8a1272aaa0a.
-    # Verify this revision exists and has the correct parents.
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PARENTS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 48
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 49
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

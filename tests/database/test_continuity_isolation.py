@@ -723,7 +723,7 @@ def test_the_server_refuses_a_pulse_row_with_no_evidentiary_basis(
     """An activity-feed row is not discouraged here. It is unstorable."""
     statement = text(
         f"INSERT INTO {SCHEMA}.pulse_items (pulse_id, principal_id, item_type, item_ref, "  # noqa: S608
-        "reason, reason_code, basis_refs, priority, accepted_only, generated_at) VALUES "
+        "reason, reason_code, basis_refs, attention_rank, accepted_only, generated_at) VALUES "
         "(:pulse_id, :principal_id, 'commitment', 'cmt_feed00001feed00001aa', "
         ":reason, :reason_code, :basis, 5, true, now())"
     )
@@ -768,7 +768,7 @@ def test_the_server_refuses_a_pulse_reason_code_outside_the_vocabulary(
         connection.execute(
             text(
                 f"INSERT INTO {SCHEMA}.pulse_items (pulse_id, principal_id, item_type, "  # noqa: S608
-                "item_ref, reason, reason_code, basis_refs, priority, accepted_only, "
+                "item_ref, reason, reason_code, basis_refs, attention_rank, accepted_only, "
                 "generated_at) VALUES ('puls_recent001recent001a', :principal_id, "
                 "'commitment', 'cmt_feed00001feed00001aa', 'it changed', 'recently_updated', "
                 "'[\"cmt_feed00001feed00001aa\"]', 5, true, now())"

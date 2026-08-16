@@ -1,6 +1,6 @@
-"""Admit Task description column and rename pulse_items.priority to attention_rank.
+"""Admit Task description, rename pulse attention_rank, and record that write.
 
-Two additive schema changes in one revision:
+Three additive schema changes in one revision:
 
 1. ``knowledge.tasks.description`` — nullable ``text``, the one MCV long-form
    Task text field the remediation plan's ``TaskDetail`` contract requires.
@@ -12,6 +12,16 @@ Two additive schema changes in one revision:
    The rename resolves F-013: the domain field is now ``attention_rank`` on
    ``PulseItem`` and ``priority`` on ``Task`` (a ``TaskPriority`` enum), and the
    two can no longer be confused at the wire level.
+
+   The parent CHECK is the server-generated name ``pulse_items_priority_check``
+   from ``d2e3f4a5b6c7``'s inline ``CHECK (priority BETWEEN 1 AND 10)``. There
+   is no ``a_pulse_priority_is_bounded`` to drop. Renaming that constraint to
+   ``a_pulse_attention_rank_is_bounded`` keeps the expression the server already
+   holds and matches the live table declaration.
+
+3. ``knowledge.task_history.a_task_history_action_is_known`` admits
+   ``update_description``, the history action the description column requires.
+   Parent ``a1c9e6f2b834``'s closed set is otherwise unchanged.
 
 Revision ID: a8a1272aaa0a
 Revises: b7c4e9a2d518
@@ -35,33 +45,33 @@ SCHEMA: Final = "knowledge"
 
 def upgrade() -> None:
     op.execute(f"ALTER TABLE {SCHEMA}.tasks ADD COLUMN description text")
+    op.execute(f"ALTER TABLE {SCHEMA}.pulse_items RENAME COLUMN priority TO attention_rank")
     op.execute(
         f"ALTER TABLE {SCHEMA}.pulse_items "
-        "RENAME COLUMN priority TO attention_rank"
+        "RENAME CONSTRAINT pulse_items_priority_check "
+        "TO a_pulse_attention_rank_is_bounded"
     )
+    op.execute(f"ALTER TABLE {SCHEMA}.task_history DROP CONSTRAINT a_task_history_action_is_known")
     op.execute(
-        f'ALTER TABLE {SCHEMA}.pulse_items '
-        'DROP CONSTRAINT "a_pulse_priority_is_bounded"'
-    )
-    op.execute(
-        f"ALTER TABLE {SCHEMA}.pulse_items "
-        "ADD CONSTRAINT a_pulse_attention_rank_is_bounded "
-        "CHECK (attention_rank >= 1 AND attention_rank <= 10)"
+        f"ALTER TABLE {SCHEMA}.task_history ADD CONSTRAINT a_task_history_action_is_known "
+        "CHECK (action IN ('archive', 'cancel_recurrence', 'create', 'defer', 'link_commitment', "
+        "'schedule', 'set_priority', 'set_recurrence', 'set_role', 'transition_lifecycle', "
+        "'unarchive', 'update_description', 'update_title'))"
     )
 
 
 def downgrade() -> None:
+    op.execute(f"ALTER TABLE {SCHEMA}.task_history DROP CONSTRAINT a_task_history_action_is_known")
+    op.execute(
+        f"ALTER TABLE {SCHEMA}.task_history ADD CONSTRAINT a_task_history_action_is_known "
+        "CHECK (action IN ('archive', 'cancel_recurrence', 'create', 'defer', 'link_commitment', "
+        "'schedule', 'set_priority', 'set_recurrence', 'set_role', 'transition_lifecycle', "
+        "'unarchive', 'update_title'))"
+    )
+    op.execute(
+        f"ALTER TABLE {SCHEMA}.pulse_items "
+        "RENAME CONSTRAINT a_pulse_attention_rank_is_bounded "
+        "TO pulse_items_priority_check"
+    )
+    op.execute(f"ALTER TABLE {SCHEMA}.pulse_items RENAME COLUMN attention_rank TO priority")
     op.execute(f"ALTER TABLE {SCHEMA}.tasks DROP COLUMN description")
-    op.execute(
-        f"ALTER TABLE {SCHEMA}.pulse_items "
-        "RENAME COLUMN attention_rank TO priority"
-    )
-    op.execute(
-        f'ALTER TABLE {SCHEMA}.pulse_items '
-        'DROP CONSTRAINT "a_pulse_attention_rank_is_bounded"'
-    )
-    op.execute(
-        f"ALTER TABLE {SCHEMA}.pulse_items "
-        "ADD CONSTRAINT a_pulse_priority_is_bounded "
-        "CHECK (priority >= 1 AND priority <= 10)"
-    )

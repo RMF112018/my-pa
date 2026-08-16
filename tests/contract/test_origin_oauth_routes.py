@@ -38,7 +38,7 @@ class FakeAuthorizationServer:
         self.issued += 1
         return "raw-code"
 
-    def exchange_code(self, _values: Mapping[str, str]) -> dict[str, object]:
+    def issue_token(self, _values: Mapping[str, str]) -> dict[str, object]:
         return {"access_token": "raw-token", "token_type": "Bearer"}
 
     def revoke(self, _raw_token: str) -> None:

@@ -38,6 +38,9 @@ ORIGIN_MIGRATION = (
     ROOT
     / "migrations/versions/20260814_4f6a9c2d8e17_replace_entra_remote_identity_with_origin_oauth.py"
 )
+REFRESH_MIGRATION = (
+    ROOT / "migrations/versions/20260816_d4a8c1e7b930_add_oauth_refresh_token_families.py"
+)
 DISPOSABLE_DATABASE = "my_pa_origin_oauth_migration_test"
 PRIOR_REVISION = "e3b7a1d5c942"
 
@@ -76,7 +79,7 @@ def disposable_database() -> Iterator[str]:
 
 
 def test_runtime_remote_identity_tables_match_the_frozen_migration() -> None:
-    text = MIGRATION.read_text() + ORIGIN_MIGRATION.read_text()
+    text = MIGRATION.read_text() + ORIGIN_MIGRATION.read_text() + REFRESH_MIGRATION.read_text()
     assert {
         table.name for table in (remote_clients, remote_capability_grants, remote_security_controls)
     } == {"remote_clients", "remote_capability_grants", "remote_security_controls"}
@@ -106,6 +109,8 @@ def test_remote_tables_share_the_canonical_identity_metadata() -> None:
         "remote_security_controls",
         "oauth_authorization_codes",
         "oauth_access_tokens",
+        "oauth_refresh_token_families",
+        "oauth_refresh_tokens",
     }.issubset({table.name for table in IDENTITY_METADATA.tables.values()})
 
 

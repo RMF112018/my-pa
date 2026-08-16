@@ -414,5 +414,8 @@ def derive_pulse(
         candidate for candidate in candidates if candidate.item.pulse_id not in dismissed_pulse_ids
     ]
     kept.sort(key=lambda candidate: candidate.item.item_ref)
-    kept.sort(key=lambda candidate: (candidate.item.attention_rank, candidate.magnitude), reverse=True)
+    kept.sort(
+        key=lambda candidate: (candidate.item.attention_rank, candidate.magnitude),
+        reverse=True,
+    )
     return tuple(candidate.item for candidate in kept)

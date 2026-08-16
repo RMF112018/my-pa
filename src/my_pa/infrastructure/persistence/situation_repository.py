@@ -769,7 +769,7 @@ class SqlPulseRepository(PulseRepository):
                 )
             )
             .order_by(
-                pulse_items.c.priority.desc(),
+                pulse_items.c.attention_rank.desc(),
                 pulse_items.c.generated_at.desc(),
             )
         ).all()
@@ -904,7 +904,7 @@ class SqlPulseRepository(PulseRepository):
             generated_at=mapping["generated_at"],
             consequence=mapping["consequence"],
             next_step=mapping["next_step"],
-            priority=mapping["priority"],
+            attention_rank=mapping["attention_rank"],
             accepted_only=mapping["accepted_only"],
             dismissed_at=mapping["dismissed_at"],
         )

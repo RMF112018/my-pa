@@ -43,11 +43,12 @@ denied one, which is asserted directly in
   holding `accept`/`defer`/`reject`. It is a human review outcome, which is the
   governance this package exists to require, not a personality disposition.
   Denying the stem would redden the surface it protects.
-* **`priority`** is denied *here* but `pulse_items.priority` is untouched: that
-  column is a bounded 1..10 ordering of attention items on the Pulse plane, not
-  a durable attribute of a person. This module scans `relationship_*` only, so
-  the two do not collide — and a `priority` on a *person* would be people
-  ranking, which is why the stem is denied on this surface.
+* **`priority`** is denied *here* but `pulse_items.attention_rank` (the domain
+  field `PulseItem.attention_rank`) is untouched: that column is a bounded 1..10
+  ordering of attention items on the Pulse plane, not a durable attribute of a
+  person. This module scans `relationship_*` only, so the two do not collide —
+  and a `priority` on a *person* would be people ranking, which is why the stem
+  is denied on this surface.
 * **`index`**, **`fit`**, **`condition`**, **`spouse`**, **`urgency`** — each
   names a composite judgement in one reading and something ordinary in another
   (`index` an ordinal position, `condition` a state, `spouse` a

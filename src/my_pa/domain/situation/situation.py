@@ -297,7 +297,7 @@ class PulseItem:
     is merely recent has no reason code to write and no basis to cite, so it
     cannot be constructed and cannot be stored.
 
-    `priority` is a bounded urgency rank on the *item*. Nothing here ranks,
+    `attention_rank` is a bounded urgency rank on the *item*. Nothing here ranks,
     scores, or characterises a person: `§22` forbids it, and there is no field
     one could go in.
     """
@@ -312,9 +312,13 @@ class PulseItem:
     generated_at: datetime
     consequence: str | None = None
     next_step: str | None = None
-    priority: int = 5
+    attention_rank: int = 5
     accepted_only: bool = field(default=True)
     dismissed_at: datetime | None = None
+    subject_title: str | None = None
+    subject_state: str | None = None
+    subject_version: int | None = None
+    subject_priority: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.pulse_id, IdKind.PULSE)
@@ -329,12 +333,14 @@ class PulseItem:
             raise ValueError("a pulse item names one why-now reason code")
         if not self.basis_refs or any(not str(ref).strip() for ref in self.basis_refs):
             raise ValueError("a pulse item cites at least one non-blank evidentiary basis")
-        if isinstance(self.priority, bool) or not isinstance(self.priority, int):
-            raise ValueError("priority is an integer")
-        if not 1 <= self.priority <= 10:
-            raise ValueError("priority is between one and ten")
+        if isinstance(self.attention_rank, bool) or not isinstance(self.attention_rank, int):
+            raise ValueError("attention_rank is an integer")
+        if not 1 <= self.attention_rank <= 10:
+            raise ValueError("attention_rank is between one and ten")
         if self.accepted_only is not True:
             raise ValueError("a pulse item reads only accepted records")
         ensure_utc(self.generated_at)
         if self.dismissed_at is not None:
             ensure_utc(self.dismissed_at)
+        if self.subject_version is not None and self.subject_version < 1:
+            raise ValueError("subject_version must be >= 1 when set")

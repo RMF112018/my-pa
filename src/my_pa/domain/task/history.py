@@ -66,6 +66,7 @@ class TaskMutationAction(StrEnum):
 
     CREATE = "create"
     UPDATE_TITLE = "update_title"
+    UPDATE_DESCRIPTION = "update_description"
     TRANSITION_LIFECYCLE = "transition_lifecycle"
     SET_PRIORITY = "set_priority"
     SCHEDULE = "schedule"

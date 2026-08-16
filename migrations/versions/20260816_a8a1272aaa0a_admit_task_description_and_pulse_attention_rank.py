@@ -1,6 +1,6 @@
-"""Admit Task description column and rename pulse_items.priority to attention_rank.
+"""Admit Task description, rename pulse attention_rank, and record that write.
 
-Two additive schema changes in one revision:
+Three additive schema changes in one revision:
 
 1. ``knowledge.tasks.description`` — nullable ``text``, the one MCV long-form
    Task text field the remediation plan's ``TaskDetail`` contract requires.
@@ -18,6 +18,10 @@ Two additive schema changes in one revision:
    is no ``a_pulse_priority_is_bounded`` to drop. Renaming that constraint to
    ``a_pulse_attention_rank_is_bounded`` keeps the expression the server already
    holds and matches the live table declaration.
+
+3. ``knowledge.task_history.a_task_history_action_is_known`` admits
+   ``update_description``, the history action the description column requires.
+   Parent ``a1c9e6f2b834``'s closed set is otherwise unchanged.
 
 Revision ID: a8a1272aaa0a
 Revises: b7c4e9a2d518
@@ -47,9 +51,23 @@ def upgrade() -> None:
         "RENAME CONSTRAINT pulse_items_priority_check "
         "TO a_pulse_attention_rank_is_bounded"
     )
+    op.execute(f"ALTER TABLE {SCHEMA}.task_history DROP CONSTRAINT a_task_history_action_is_known")
+    op.execute(
+        f"ALTER TABLE {SCHEMA}.task_history ADD CONSTRAINT a_task_history_action_is_known "
+        "CHECK (action IN ('archive', 'cancel_recurrence', 'create', 'defer', 'link_commitment', "
+        "'schedule', 'set_priority', 'set_recurrence', 'set_role', 'transition_lifecycle', "
+        "'unarchive', 'update_description', 'update_title'))"
+    )
 
 
 def downgrade() -> None:
+    op.execute(f"ALTER TABLE {SCHEMA}.task_history DROP CONSTRAINT a_task_history_action_is_known")
+    op.execute(
+        f"ALTER TABLE {SCHEMA}.task_history ADD CONSTRAINT a_task_history_action_is_known "
+        "CHECK (action IN ('archive', 'cancel_recurrence', 'create', 'defer', 'link_commitment', "
+        "'schedule', 'set_priority', 'set_recurrence', 'set_role', 'transition_lifecycle', "
+        "'unarchive', 'update_title'))"
+    )
     op.execute(
         f"ALTER TABLE {SCHEMA}.pulse_items "
         "RENAME CONSTRAINT a_pulse_attention_rank_is_bounded "

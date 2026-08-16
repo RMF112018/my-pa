@@ -387,7 +387,7 @@ class InMemoryPulseRepository(PulseRepository):
         reason: str,
         reason_code: PulseReasonCode = PulseReasonCode.COMMITMENT_OVERDUE,
         basis_refs: tuple[str, ...] = ("cmt_basis0001basis0001",),
-        priority: int = 5,
+        attention_rank: int = 5,
     ) -> PulseItem:
         item = PulseItem(
             pulse_id=_issue(IdKind.PULSE),
@@ -398,7 +398,7 @@ class InMemoryPulseRepository(PulseRepository):
             reason_code=reason_code,
             basis_refs=basis_refs,
             generated_at=utc_now(),
-            priority=priority,
+            attention_rank=attention_rank,
         )
         self._rows[item.pulse_id] = item
         return item
@@ -411,7 +411,7 @@ class InMemoryPulseRepository(PulseRepository):
             and row.accepted_only is True
             and row.dismissed_at is None
         ]
-        rows.sort(key=lambda row: (row.priority, row.generated_at), reverse=True)
+        rows.sort(key=lambda row: (row.attention_rank, row.generated_at), reverse=True)
         return tuple(rows)
 
     def derive_pulse(self, principal_id: str, now: datetime) -> tuple[PulseItem, ...]:
@@ -438,7 +438,7 @@ class InMemoryPulseRepository(PulseRepository):
             generated_at=current.generated_at,
             consequence=current.consequence,
             next_step=current.next_step,
-            priority=current.priority,
+            attention_rank=current.attention_rank,
             dismissed_at=utc_now(),
         )
 

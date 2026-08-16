@@ -233,6 +233,77 @@ def test_update_title_with_the_same_title_is_recorded_no_op() -> None:
     assert world.update_task_calls == 0
 
 
+# --- description ---------------------------------------------------------------
+
+
+def test_create_task_with_description_roundtrips() -> None:
+    world = _World()
+    receipt = _service(world).create_task(
+        principal_id=PRINCIPAL_A,
+        title="Draft the synthetic summary",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        description="A longer explanation of what to draft and why.",
+    )
+    assert receipt.task.description == "A longer explanation of what to draft and why."
+    stored = world.tasks[(PRINCIPAL_A, receipt.task.task_id)]
+    assert stored.description == receipt.task.description
+
+
+def test_create_task_without_description_defaults_to_none() -> None:
+    world = _World()
+    receipt = _service(world).create_task(
+        principal_id=PRINCIPAL_A,
+        title="Draft the synthetic summary",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    )
+    assert receipt.task.description is None
+
+
+def test_update_description_applies_a_real_change_and_advances_the_version() -> None:
+    world = _World()
+    service = _service(world)
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Original title",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    )
+    receipt = service.update_description(
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        description="Now it has a description.",
+        expected_version=created.task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+    )
+    assert receipt.history.outcome is TaskMutationOutcome.APPLIED
+    assert receipt.task.description == "Now it has a description."
+    assert receipt.task.version == created.task.version + 1
+
+
+def test_update_description_with_same_value_is_no_op() -> None:
+    world = _World()
+    service = _service(world)
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Original title",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        description="Existing description.",
+    )
+    receipt = service.update_description(
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        description="Existing description.",
+        expected_version=created.task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+    )
+    assert receipt.history.outcome is TaskMutationOutcome.NO_OP
+    assert receipt.task.version == created.task.version
+    assert world.update_task_calls == 0
+
+
 # --- set_priority, schedule, defer ---------------------------------------------
 
 

@@ -149,6 +149,7 @@ class TaskManagementService:
         title: str,
         origin_evidence_ref: str,
         actor: TaskMutationActor,
+        description: str | None = None,
         priority: TaskPriority | None = None,
         due_at: datetime | None = None,
         project_id: str | None = None,
@@ -185,6 +186,7 @@ class TaskManagementService:
                 opened_at=now,
                 created_at=now,
                 updated_at=now,
+                description=description,
                 priority=priority,
                 due_at=due_at,
                 project_id=project_id,
@@ -224,6 +226,29 @@ class TaskManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             change=lambda current: dataclasses.replace(current, title=title),
+        )
+
+    def update_description(
+        self,
+        *,
+        principal_id: str,
+        task_id: str,
+        description: str | None,
+        expected_version: int,
+        actor: TaskMutationActor,
+        idempotency_key: str | None = None,
+        client_context: str | None = None,
+    ) -> TaskMutationReceipt:
+        """Set or clear a task's description. Equal to current is `NO_OP`."""
+        return self._mutate(
+            principal_id=principal_id,
+            task_id=task_id,
+            expected_version=expected_version,
+            action=TaskMutationAction.UPDATE_DESCRIPTION,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            client_context=client_context,
+            change=lambda current: dataclasses.replace(current, description=description),
         )
 
     def set_priority(

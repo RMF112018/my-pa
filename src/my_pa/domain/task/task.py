@@ -56,6 +56,7 @@ class Task:
     created_at: datetime
     updated_at: datetime
     version: int = 1
+    description: str | None = None
     priority: TaskPriority | None = None
     due_at: datetime | None = None
     scheduled_at: datetime | None = None

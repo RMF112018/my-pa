@@ -12,8 +12,9 @@ runs against each other rather than each against a constant.
 a property of a running PostgreSQL server — what `public.alembic_version` holds
 against what this repository's Alembic chain ends at — and the state the canonical
 `my_pa` database is actually in on this machine. A fake would test this file's
-opinion of that state. `command.downgrade(-1)` produces the real one, on a
-disposable database, and puts it back.
+opinion of that state. Downgrading to the unique predecessor of head produces
+the real one, on a disposable database, and puts it back. Relative `-1` is
+undefined at a merge revision.
 
 **Nothing here touches the canonical database.** `MY_PA_DATABASE_URL` is
 repointed at `my_pa_health_probe_test` for the module's lifetime — the probe
@@ -35,6 +36,7 @@ import apps.cli.health as probe
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
 
@@ -66,6 +68,24 @@ def _administer(maintenance: Engine, *statements: object) -> None:
 
 def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO())
+
+
+def _revision_immediately_behind_head() -> str:
+    """A unique Alembic target one step below the single head.
+
+    Relative `-1` raises `Ambiguous walk` when head is a merge revision.
+    Naming the first parent undoes only that merge, leaving both parents in
+    `alembic_version` — which is one step behind head. On a linear head the
+    named parent is the same revision `-1` would have chosen.
+    """
+    script = ScriptDirectory.from_config(_config())
+    heads = script.get_heads()
+    assert len(heads) == 1, f"the Alembic chain reports {len(heads)} heads, not one"
+    parent = script.get_revision(heads[0]).down_revision
+    if isinstance(parent, tuple):
+        return parent[0]
+    assert isinstance(parent, str), f"head {heads[0]} has no parent to stand behind"
+    return parent
 
 
 @pytest.fixture(scope="module")
@@ -140,9 +160,9 @@ def at_head(
 def behind_head(
     disposable_database: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> tuple[int, str]:
-    """The same database, one revision back, and put back afterwards."""
+    """The same database, one unique step back, and put back afterwards."""
     _point_at(monkeypatch, disposable_database)
-    command.downgrade(_config(), "-1")
+    command.downgrade(_config(), _revision_immediately_behind_head())
     try:
         return _run(capsys)
     finally:
@@ -200,7 +220,10 @@ def test_a_database_one_revision_behind_names_what_it_is_and_what_head_is(
     assert _field(printed, "state") == probe.STATE_NOT_AT_HEAD
 
     current, head = _field(printed, "revision"), _field(printed, "head")
-    assert current is not None and REVISION.match(current), f"revision was {current!r}"
+    assert current is not None, "revision was missing"
+    for part in current.split(","):
+        token = part.strip()
+        assert REVISION.match(token), f"revision was {current!r}"
     assert head == probe.migration_heads()[0]
     assert current != head, "the probe reported the same revision for the database and for head"
 

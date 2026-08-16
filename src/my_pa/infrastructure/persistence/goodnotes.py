@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal
 
 from sqlalchemy import (
     ColumnElement,
@@ -34,14 +35,22 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesIngestionTrigger,
     GoodNotesLogicalPage,
     GoodNotesMatchMethod,
+    GoodNotesNote,
     GoodNotesNotebook,
     GoodNotesNotebookPath,
+    GoodNotesNoteChangeState,
+    GoodNotesNoteClass,
+    GoodNotesNoteLink,
+    GoodNotesNoteLinkKind,
+    GoodNotesNoteOccurrence,
+    GoodNotesNoteRevision,
     GoodNotesPage,
     GoodNotesPagePosition,
     GoodNotesPageVersion,
     GoodNotesPriorPageEvidence,
     GoodNotesRegionProposal,
     GoodNotesReviewCase,
+    GoodNotesRunNoteChange,
     GoodNotesSourceBinding,
     GoodNotesSourceSnapshot,
     ReconciliationReceipt,
@@ -57,14 +66,19 @@ from my_pa.infrastructure.persistence.tables import (
     enrollments,
     goodnotes_ingestion_runs,
     goodnotes_logical_pages,
+    goodnotes_note_links,
+    goodnotes_note_occurrences,
+    goodnotes_note_revisions,
     goodnotes_notebook_paths,
     goodnotes_notebooks,
+    goodnotes_notes,
     goodnotes_page_positions,
     goodnotes_page_versions,
     goodnotes_pages,
     goodnotes_reconciliation_receipts,
     goodnotes_region_proposals,
     goodnotes_review_decisions,
+    goodnotes_run_note_changes,
     goodnotes_source_snapshots,
     source_object_versions,
     source_objects,
@@ -872,6 +886,296 @@ class PostgresGoodNotesRepository:
             raise ValueError("the GoodNotes ingestion run could not be updated")
         return updated
 
+    def store_note(self, note: GoodNotesNote) -> GoodNotesNote:
+        expected = _bound(
+            goodnotes_notes,
+            note.principal_id,
+            {
+                "note_id": note.note_id,
+                "notebook_id": note.notebook_id,
+                "identity_status": note.identity_status.value,
+                "primary_class": None if note.primary_class is None else note.primary_class.value,
+                "created_at": note.created_at,
+                "last_seen_at": note.last_seen_at,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_notes).values(expected).on_conflict_do_nothing()
+        )
+        stored = self.note(note.principal_id, note.note_id)
+        if stored is None:
+            raise ValueError("the GoodNotes note could not be stored")
+        if stored.notebook_id != note.notebook_id:
+            raise ValueError("the stable GoodNotes note identity collided with other content")
+        if (
+            stored.last_seen_at != note.last_seen_at
+            or stored.identity_status != note.identity_status
+            or stored.primary_class != note.primary_class
+        ):
+            self.connection.execute(
+                update(goodnotes_notes)
+                .where(
+                    _mine(goodnotes_notes, note.principal_id),
+                    goodnotes_notes.c.note_id == note.note_id,
+                )
+                .values(
+                    last_seen_at=note.last_seen_at,
+                    identity_status=note.identity_status.value,
+                    primary_class=(
+                        None if note.primary_class is None else note.primary_class.value
+                    ),
+                )
+            )
+            stored = self.note(note.principal_id, note.note_id)
+            if stored is None:
+                raise ValueError("the GoodNotes note could not be stored")
+        return stored
+
+    def note(self, principal_id: str, note_id: str) -> GoodNotesNote | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_notes).where(
+                    _mine(goodnotes_notes, principal_id),
+                    goodnotes_notes.c.note_id == note_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _note(row)
+
+    def store_occurrence(self, occurrence: GoodNotesNoteOccurrence) -> GoodNotesNoteOccurrence:
+        expected = _bound(
+            goodnotes_note_occurrences,
+            occurrence.principal_id,
+            {
+                "occurrence_id": occurrence.occurrence_id,
+                "note_id": occurrence.note_id,
+                "logical_page_id": occurrence.logical_page_id,
+                "page_version_id": occurrence.page_version_id,
+                "snapshot_id": occurrence.snapshot_id,
+                "run_id": occurrence.run_id,
+                "x_min": _quantized_unit(occurrence.x_min),
+                "y_min": _quantized_unit(occurrence.y_min),
+                "width": _quantized_unit(occurrence.width),
+                "height": _quantized_unit(occurrence.height),
+                "geometry_key": occurrence.geometry_key,
+                "crop_sha256": occurrence.crop_sha256,
+                "context_anchor_sha256": occurrence.context_anchor_sha256,
+                "identity_status": occurrence.identity_status.value,
+                "created_at": occurrence.created_at,
+                "last_seen_at": occurrence.last_seen_at,
+            },
+        )
+        identity_fields: dict[str, object] = {
+            "occurrence_id": occurrence.occurrence_id,
+            "note_id": occurrence.note_id,
+            "logical_page_id": occurrence.logical_page_id,
+            "geometry_key": occurrence.geometry_key,
+            "crop_sha256": occurrence.crop_sha256,
+            "x_min": _quantized_unit(occurrence.x_min),
+            "y_min": _quantized_unit(occurrence.y_min),
+            "width": _quantized_unit(occurrence.width),
+            "height": _quantized_unit(occurrence.height),
+        }
+        self.connection.execute(
+            pg_insert(goodnotes_note_occurrences)
+            .values(expected)
+            .on_conflict_do_nothing(index_elements=["principal_id", "occurrence_id"])
+        )
+        stored = self.occurrence(occurrence.principal_id, occurrence.occurrence_id)
+        if stored is None:
+            raise ValueError("the GoodNotes note occurrence could not be stored")
+        _require_identical(
+            self.connection,
+            goodnotes_note_occurrences,
+            occurrence.principal_id,
+            goodnotes_note_occurrences.c.occurrence_id == occurrence.occurrence_id,
+            _bound(goodnotes_note_occurrences, occurrence.principal_id, identity_fields),
+            "note occurrence",
+        )
+        if (
+            stored.last_seen_at != occurrence.last_seen_at
+            or stored.identity_status != occurrence.identity_status
+            or stored.page_version_id != occurrence.page_version_id
+            or stored.snapshot_id != occurrence.snapshot_id
+            or stored.run_id != occurrence.run_id
+            or stored.context_anchor_sha256 != occurrence.context_anchor_sha256
+        ):
+            self.connection.execute(
+                update(goodnotes_note_occurrences)
+                .where(
+                    _mine(goodnotes_note_occurrences, occurrence.principal_id),
+                    goodnotes_note_occurrences.c.occurrence_id == occurrence.occurrence_id,
+                )
+                .values(
+                    last_seen_at=occurrence.last_seen_at,
+                    identity_status=occurrence.identity_status.value,
+                    page_version_id=occurrence.page_version_id,
+                    snapshot_id=occurrence.snapshot_id,
+                    run_id=occurrence.run_id,
+                    context_anchor_sha256=occurrence.context_anchor_sha256,
+                )
+            )
+            stored = self.occurrence(occurrence.principal_id, occurrence.occurrence_id)
+            if stored is None:
+                raise ValueError("the GoodNotes note occurrence could not be stored")
+        return stored
+
+    def occurrence(self, principal_id: str, occurrence_id: str) -> GoodNotesNoteOccurrence | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_note_occurrences).where(
+                    _mine(goodnotes_note_occurrences, principal_id),
+                    goodnotes_note_occurrences.c.occurrence_id == occurrence_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _occurrence(row)
+
+    def store_revision(self, revision: GoodNotesNoteRevision) -> GoodNotesNoteRevision:
+        expected = _bound(
+            goodnotes_note_revisions,
+            revision.principal_id,
+            {
+                "revision_id": revision.revision_id,
+                "note_id": revision.note_id,
+                "occurrence_id": revision.occurrence_id,
+                "supersedes_revision_id": revision.supersedes_revision_id,
+                "schema_version": revision.schema_version,
+                "analyzer_name": revision.analyzer_name,
+                "analyzer_version": revision.analyzer_version,
+                "transcription": revision.transcription,
+                "primary_class": (
+                    None if revision.primary_class is None else revision.primary_class.value
+                ),
+                "created_at": revision.created_at,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_note_revisions)
+            .values(expected)
+            .on_conflict_do_nothing(index_elements=["principal_id", "revision_id"])
+        )
+        _require_identical(
+            self.connection,
+            goodnotes_note_revisions,
+            revision.principal_id,
+            goodnotes_note_revisions.c.revision_id == revision.revision_id,
+            expected,
+            "note revision",
+        )
+        stored = self.revision(revision.principal_id, revision.revision_id)
+        if stored is None:
+            raise ValueError("the GoodNotes note revision could not be stored")
+        return stored
+
+    def revision(self, principal_id: str, revision_id: str) -> GoodNotesNoteRevision | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_note_revisions).where(
+                    _mine(goodnotes_note_revisions, principal_id),
+                    goodnotes_note_revisions.c.revision_id == revision_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _revision(row)
+
+    def store_note_link(self, link: GoodNotesNoteLink) -> GoodNotesNoteLink:
+        expected = _bound(
+            goodnotes_note_links,
+            link.principal_id,
+            {
+                "link_id": link.link_id,
+                "note_id": link.note_id,
+                "link_kind": link.link_kind.value,
+                "target_note_id": link.target_note_id,
+                "target_logical_page_id": link.target_logical_page_id,
+                "target_occurrence_id": link.target_occurrence_id,
+                "target_context_anchor_sha256": link.target_context_anchor_sha256,
+                "target_key": link.target_key,
+                "created_at": link.created_at,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_note_links)
+            .values(expected)
+            .on_conflict_do_nothing(index_elements=["principal_id", "link_id"])
+        )
+        _require_identical(
+            self.connection,
+            goodnotes_note_links,
+            link.principal_id,
+            goodnotes_note_links.c.link_id == link.link_id,
+            expected,
+            "note link",
+        )
+        stored = self.note_link(link.principal_id, link.link_id)
+        if stored is None:
+            raise ValueError("the GoodNotes note link could not be stored")
+        return stored
+
+    def note_link(self, principal_id: str, link_id: str) -> GoodNotesNoteLink | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_note_links).where(
+                    _mine(goodnotes_note_links, principal_id),
+                    goodnotes_note_links.c.link_id == link_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _note_link(row)
+
+    def store_run_note_change(self, change: GoodNotesRunNoteChange) -> GoodNotesRunNoteChange:
+        expected = _bound(
+            goodnotes_run_note_changes,
+            change.principal_id,
+            {
+                "change_id": change.change_id,
+                "run_id": change.run_id,
+                "note_id": change.note_id,
+                "occurrence_id": change.occurrence_id,
+                "change_state": change.change_state.value,
+                "created_at": change.created_at,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_run_note_changes)
+            .values(expected)
+            .on_conflict_do_nothing(index_elements=["principal_id", "change_id"])
+        )
+        _require_identical(
+            self.connection,
+            goodnotes_run_note_changes,
+            change.principal_id,
+            goodnotes_run_note_changes.c.change_id == change.change_id,
+            expected,
+            "run note change",
+        )
+        stored = self.run_note_change(change.principal_id, change.change_id)
+        if stored is None:
+            raise ValueError("the GoodNotes run note change could not be stored")
+        return stored
+
+    def run_note_change(self, principal_id: str, change_id: str) -> GoodNotesRunNoteChange | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_run_note_changes).where(
+                    _mine(goodnotes_run_note_changes, principal_id),
+                    goodnotes_run_note_changes.c.change_id == change_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _run_note_change(row)
+
 
 def _require_identical(
     connection: Connection,
@@ -1016,6 +1320,94 @@ def _run(row: object) -> GoodNotesIngestionRun:
         ambiguous_page_count=int(values["ambiguous_page_count"]),  # type: ignore[index]
         error_code=values["error_code"],  # type: ignore[index]
         error_class=values["error_class"],  # type: ignore[index]
+    )
+
+
+def _quantized_unit(value: float) -> Decimal:
+    return Decimal(f"{value:.4f}")
+
+
+def _optional_class(value: object) -> GoodNotesNoteClass | None:
+    return None if value is None else GoodNotesNoteClass(str(value))
+
+
+def _note(row: object) -> GoodNotesNote:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesNote(
+        note_id=values["note_id"],  # type: ignore[index]
+        principal_id=values["principal_id"],  # type: ignore[index]
+        notebook_id=values["notebook_id"],  # type: ignore[index]
+        identity_status=GoodNotesIdentityStatus(values["identity_status"]),  # type: ignore[index]
+        created_at=values["created_at"],  # type: ignore[index]
+        last_seen_at=values["last_seen_at"],  # type: ignore[index]
+        primary_class=_optional_class(values["primary_class"]),  # type: ignore[index]
+    )
+
+
+def _occurrence(row: object) -> GoodNotesNoteOccurrence:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesNoteOccurrence(
+        occurrence_id=values["occurrence_id"],  # type: ignore[index]
+        principal_id=values["principal_id"],  # type: ignore[index]
+        note_id=values["note_id"],  # type: ignore[index]
+        logical_page_id=values["logical_page_id"],  # type: ignore[index]
+        x_min=float(values["x_min"]),  # type: ignore[index]
+        y_min=float(values["y_min"]),  # type: ignore[index]
+        width=float(values["width"]),  # type: ignore[index]
+        height=float(values["height"]),  # type: ignore[index]
+        identity_status=GoodNotesIdentityStatus(values["identity_status"]),  # type: ignore[index]
+        created_at=values["created_at"],  # type: ignore[index]
+        last_seen_at=values["last_seen_at"],  # type: ignore[index]
+        page_version_id=values["page_version_id"],  # type: ignore[index]
+        snapshot_id=values["snapshot_id"],  # type: ignore[index]
+        run_id=values["run_id"],  # type: ignore[index]
+        crop_sha256=values["crop_sha256"],  # type: ignore[index]
+        context_anchor_sha256=values["context_anchor_sha256"],  # type: ignore[index]
+    )
+
+
+def _revision(row: object) -> GoodNotesNoteRevision:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesNoteRevision(
+        revision_id=values["revision_id"],  # type: ignore[index]
+        principal_id=values["principal_id"],  # type: ignore[index]
+        note_id=values["note_id"],  # type: ignore[index]
+        schema_version=values["schema_version"],  # type: ignore[index]
+        analyzer_name=values["analyzer_name"],  # type: ignore[index]
+        analyzer_version=values["analyzer_version"],  # type: ignore[index]
+        transcription=values["transcription"],  # type: ignore[index]
+        created_at=values["created_at"],  # type: ignore[index]
+        occurrence_id=values["occurrence_id"],  # type: ignore[index]
+        supersedes_revision_id=values["supersedes_revision_id"],  # type: ignore[index]
+        primary_class=_optional_class(values["primary_class"]),  # type: ignore[index]
+    )
+
+
+def _note_link(row: object) -> GoodNotesNoteLink:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesNoteLink(
+        link_id=values["link_id"],  # type: ignore[index]
+        principal_id=values["principal_id"],  # type: ignore[index]
+        note_id=values["note_id"],  # type: ignore[index]
+        link_kind=GoodNotesNoteLinkKind(values["link_kind"]),  # type: ignore[index]
+        created_at=values["created_at"],  # type: ignore[index]
+        target_note_id=values["target_note_id"],  # type: ignore[index]
+        target_logical_page_id=values["target_logical_page_id"],  # type: ignore[index]
+        target_occurrence_id=values["target_occurrence_id"],  # type: ignore[index]
+        target_context_anchor_sha256=values["target_context_anchor_sha256"],  # type: ignore[index]
+    )
+
+
+def _run_note_change(row: object) -> GoodNotesRunNoteChange:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesRunNoteChange(
+        change_id=values["change_id"],  # type: ignore[index]
+        principal_id=values["principal_id"],  # type: ignore[index]
+        run_id=values["run_id"],  # type: ignore[index]
+        note_id=values["note_id"],  # type: ignore[index]
+        occurrence_id=values["occurrence_id"],  # type: ignore[index]
+        change_state=GoodNotesNoteChangeState(values["change_state"]),  # type: ignore[index]
+        created_at=values["created_at"],  # type: ignore[index]
     )
 
 

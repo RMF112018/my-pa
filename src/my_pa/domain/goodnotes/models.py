@@ -13,9 +13,37 @@ from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 
-_ID_PREFIXES = frozenset({"gnpg", "gnver", "gnreg", "gnrec", "gnnb", "gnsnap", "gnlp", "gnrun"})
-_ID = re.compile(r"\A(?:gnpg|gnver|gnreg|gnrec|gnnb|gnsnap|gnlp|gnrun)_[a-f0-9]{24}\Z")
+_ID_PREFIXES = frozenset(
+    {
+        "gnpg",
+        "gnver",
+        "gnreg",
+        "gnrec",
+        "gnnb",
+        "gnsnap",
+        "gnlp",
+        "gnrun",
+        "gnnt",
+        "gnocc",
+        "gnrev",
+        "gnlink",
+        "gnchg",
+    }
+)
+_ID = re.compile(
+    r"\A(?:gnpg|gnver|gnreg|gnrec|gnnb|gnsnap|gnlp|gnrun|"
+    r"gnnt|gnocc|gnrev|gnlink|gnchg)_[a-f0-9]{24}\Z"
+)
 _SHA256 = re.compile(r"\A[a-f0-9]{64}\Z")
+_GEOMETRY_KEY = re.compile(
+    r"\A[0-9]\.[0-9]{4},[0-9]\.[0-9]{4},[0-9]\.[0-9]{4},[0-9]\.[0-9]{4}"
+    r":(?:none|[a-f0-9]{64})\Z"
+)
+_NOTE_TRANSCRIPTION_MAX = 20_000
+_ANALYZER_TEXT_MAX = 100
+_SCHEMA_VERSION_MAX = 40
+_GEOMETRY_KEY_MAX = 96
+_TARGET_KEY_MAX = 80
 
 
 def issue_stable_id(prefix: str, *parts: str) -> str:
@@ -75,6 +103,68 @@ class GoodNotesIngestionTrigger(StrEnum):
     MANUAL = "MANUAL"
     SCHEDULED = "SCHEDULED"
     REPLAY = "REPLAY"
+
+
+class GoodNotesNoteClass(StrEnum):
+    MEETING = "MEETING"
+    PROJECT = "PROJECT"
+    RELATIONSHIP = "RELATIONSHIP"
+    GENERAL = "GENERAL"
+
+
+class GoodNotesNoteLinkKind(StrEnum):
+    NOTE_TO_NOTE = "NOTE_TO_NOTE"
+    NOTE_TO_LOGICAL_PAGE = "NOTE_TO_LOGICAL_PAGE"
+    NOTE_TO_SOURCE_CONTEXT = "NOTE_TO_SOURCE_CONTEXT"
+    OCCURRENCE_TO_OCCURRENCE = "OCCURRENCE_TO_OCCURRENCE"
+
+
+class GoodNotesNoteChangeState(StrEnum):
+    NEW = "NEW"
+    UNCHANGED = "UNCHANGED"
+    REVISED = "REVISED"
+    REMOVED_OR_NO_LONGER_PRESENT = "REMOVED_OR_NO_LONGER_PRESENT"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
+def occurrence_geometry_key(
+    x_min: float,
+    y_min: float,
+    width: float,
+    height: float,
+    crop_sha256: str | None,
+) -> str:
+    """Canonical occurrence identity. Floats are not the unique key."""
+    crop = "none" if crop_sha256 is None else crop_sha256
+    return f"{x_min:.4f},{y_min:.4f},{width:.4f},{height:.4f}:{crop}"
+
+
+def note_link_target_key(
+    *,
+    link_kind: GoodNotesNoteLinkKind,
+    target_note_id: str | None,
+    target_logical_page_id: str | None,
+    target_occurrence_id: str | None,
+    target_context_anchor_sha256: str | None,
+) -> str:
+    if link_kind is GoodNotesNoteLinkKind.NOTE_TO_NOTE and target_note_id is not None:
+        return f"note:{target_note_id}"
+    if (
+        link_kind is GoodNotesNoteLinkKind.NOTE_TO_LOGICAL_PAGE
+        and target_logical_page_id is not None
+    ):
+        return f"page:{target_logical_page_id}"
+    if (
+        link_kind is GoodNotesNoteLinkKind.OCCURRENCE_TO_OCCURRENCE
+        and target_occurrence_id is not None
+    ):
+        return f"occ:{target_occurrence_id}"
+    if (
+        link_kind is GoodNotesNoteLinkKind.NOTE_TO_SOURCE_CONTEXT
+        and target_context_anchor_sha256 is not None
+    ):
+        return f"ctx:{target_context_anchor_sha256}"
+    raise ValueError("a note link target must match its kind")
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,3 +671,211 @@ class GoodNotesIngestionRun:
             _bounded_text(self.error_code, what="error code", maximum=64)
         if self.error_class is not None:
             _bounded_text(self.error_class, what="error class", maximum=64)
+
+
+def _unit_interval(value: float, *, what: str, positive: bool = False) -> None:
+    if positive:
+        if not 0 < value <= 1:
+            raise ValueError(f"{what} must be in (0, 1]")
+        return
+    if not 0 <= value <= 1:
+        raise ValueError(f"{what} must be in [0, 1]")
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesNote:
+    """Durable NOTE_UNIT identity. A PDF is not a note; a page is not a note."""
+
+    note_id: str
+    principal_id: str
+    notebook_id: str
+    identity_status: GoodNotesIdentityStatus
+    created_at: datetime
+    last_seen_at: datetime
+    primary_class: GoodNotesNoteClass | None = None
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.note_id, "gnnt")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _goodnotes_id(self.notebook_id, "gnnb")
+        ensure_utc(self.created_at)
+        ensure_utc(self.last_seen_at)
+        if self.last_seen_at < self.created_at:
+            raise ValueError("a note cannot be seen before it was created")
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesNoteOccurrence:
+    """One physical appearance. Transcription is not part of occurrence identity."""
+
+    occurrence_id: str
+    principal_id: str
+    note_id: str
+    logical_page_id: str
+    x_min: float
+    y_min: float
+    width: float
+    height: float
+    identity_status: GoodNotesIdentityStatus
+    created_at: datetime
+    last_seen_at: datetime
+    page_version_id: str | None = None
+    snapshot_id: str | None = None
+    run_id: str | None = None
+    crop_sha256: str | None = None
+    context_anchor_sha256: str | None = None
+    geometry_key: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.occurrence_id, "gnocc")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _goodnotes_id(self.note_id, "gnnt")
+        _goodnotes_id(self.logical_page_id, "gnlp")
+        _unit_interval(self.x_min, what="x_min")
+        _unit_interval(self.y_min, what="y_min")
+        _unit_interval(self.width, what="width", positive=True)
+        _unit_interval(self.height, what="height", positive=True)
+        if self.x_min + self.width > 1 or self.y_min + self.height > 1:
+            raise ValueError("occurrence coordinates are normalized to the page")
+        ensure_utc(self.created_at)
+        ensure_utc(self.last_seen_at)
+        if self.last_seen_at < self.created_at:
+            raise ValueError("an occurrence cannot be seen before it was created")
+        if self.page_version_id is not None:
+            _goodnotes_id(self.page_version_id, "gnver")
+        if self.snapshot_id is not None:
+            _goodnotes_id(self.snapshot_id, "gnsnap")
+        if self.run_id is not None:
+            _goodnotes_id(self.run_id, "gnrun")
+        if self.crop_sha256 is not None:
+            _sha256(self.crop_sha256, what="crop digest")
+        if self.context_anchor_sha256 is not None:
+            _sha256(self.context_anchor_sha256, what="context anchor digest")
+        key = occurrence_geometry_key(
+            self.x_min, self.y_min, self.width, self.height, self.crop_sha256
+        )
+        if not _GEOMETRY_KEY.fullmatch(key) or len(key) > _GEOMETRY_KEY_MAX:
+            raise ValueError("geometry_key must be the canonical 4-decimal box")
+        object.__setattr__(self, "geometry_key", key)
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesNoteRevision:
+    """Append-only semantic interpretation. Corrections supersede; they do not erase."""
+
+    revision_id: str
+    principal_id: str
+    note_id: str
+    schema_version: str
+    analyzer_name: str
+    analyzer_version: str
+    transcription: str = field(repr=False)
+    created_at: datetime
+    occurrence_id: str | None = None
+    supersedes_revision_id: str | None = None
+    primary_class: GoodNotesNoteClass | None = None
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.revision_id, "gnrev")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _goodnotes_id(self.note_id, "gnnt")
+        _bounded_text(self.schema_version, what="schema version", maximum=_SCHEMA_VERSION_MAX)
+        _bounded_text(self.analyzer_name, what="analyzer name", maximum=_ANALYZER_TEXT_MAX)
+        _bounded_text(self.analyzer_version, what="analyzer version", maximum=_ANALYZER_TEXT_MAX)
+        _bounded_text(self.transcription, what="transcription", maximum=_NOTE_TRANSCRIPTION_MAX)
+        ensure_utc(self.created_at)
+        if self.occurrence_id is not None:
+            _goodnotes_id(self.occurrence_id, "gnocc")
+        if self.supersedes_revision_id is not None:
+            _goodnotes_id(self.supersedes_revision_id, "gnrev")
+            if self.supersedes_revision_id == self.revision_id:
+                raise ValueError("a revision cannot supersede itself")
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesNoteLink:
+    """Structural link only. Entity resolution is a later slice."""
+
+    link_id: str
+    principal_id: str
+    note_id: str
+    link_kind: GoodNotesNoteLinkKind
+    created_at: datetime
+    target_note_id: str | None = None
+    target_logical_page_id: str | None = None
+    target_occurrence_id: str | None = None
+    target_context_anchor_sha256: str | None = None
+    target_key: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.link_id, "gnlink")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _goodnotes_id(self.note_id, "gnnt")
+        ensure_utc(self.created_at)
+        if self.target_note_id is not None:
+            _goodnotes_id(self.target_note_id, "gnnt")
+        if self.target_logical_page_id is not None:
+            _goodnotes_id(self.target_logical_page_id, "gnlp")
+        if self.target_occurrence_id is not None:
+            _goodnotes_id(self.target_occurrence_id, "gnocc")
+        if self.target_context_anchor_sha256 is not None:
+            _sha256(self.target_context_anchor_sha256, what="context anchor digest")
+        expected = {
+            GoodNotesNoteLinkKind.NOTE_TO_NOTE: (
+                self.target_note_id is not None,
+                self.target_logical_page_id is None,
+                self.target_occurrence_id is None,
+                self.target_context_anchor_sha256 is None,
+            ),
+            GoodNotesNoteLinkKind.NOTE_TO_LOGICAL_PAGE: (
+                self.target_note_id is None,
+                self.target_logical_page_id is not None,
+                self.target_occurrence_id is None,
+                self.target_context_anchor_sha256 is None,
+            ),
+            GoodNotesNoteLinkKind.NOTE_TO_SOURCE_CONTEXT: (
+                self.target_note_id is None,
+                self.target_logical_page_id is None,
+                self.target_occurrence_id is None,
+                self.target_context_anchor_sha256 is not None,
+            ),
+            GoodNotesNoteLinkKind.OCCURRENCE_TO_OCCURRENCE: (
+                self.target_note_id is None,
+                self.target_logical_page_id is None,
+                self.target_occurrence_id is not None,
+                self.target_context_anchor_sha256 is None,
+            ),
+        }[self.link_kind]
+        if expected != (True, True, True, True):
+            raise ValueError("a note link target must match its kind")
+        key = note_link_target_key(
+            link_kind=self.link_kind,
+            target_note_id=self.target_note_id,
+            target_logical_page_id=self.target_logical_page_id,
+            target_occurrence_id=self.target_occurrence_id,
+            target_context_anchor_sha256=self.target_context_anchor_sha256,
+        )
+        if len(key) > _TARGET_KEY_MAX:
+            raise ValueError("target_key must be a bounded canonical string")
+        object.__setattr__(self, "target_key", key)
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesRunNoteChange:
+    """Exact per-run change ledger. The caller supplies the state; this does not decide it."""
+
+    change_id: str
+    principal_id: str
+    run_id: str
+    note_id: str
+    occurrence_id: str
+    change_state: GoodNotesNoteChangeState
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.change_id, "gnchg")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _goodnotes_id(self.run_id, "gnrun")
+        _goodnotes_id(self.note_id, "gnnt")
+        _goodnotes_id(self.occurrence_id, "gnocc")
+        ensure_utc(self.created_at)

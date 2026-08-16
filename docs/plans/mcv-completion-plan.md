@@ -39,7 +39,7 @@ Drive mirrors are review surfaces rather than a competing ledger.
 | Database container | `my-pa-postgres`, `postgres:17.10`, healthy | `docker ps` |
 | Database binding | `127.0.0.1:5433 -> 5432`, loopback only | `docker ps` port map |
 | Logical database | `my_pa` | `select current_database()` |
-| Alembic head | `f8c3a1e6b247` in the repository, fifty revisions; local validation targets disposable databases only | `migrations/versions/*.py`, `alembic heads` |
+| Alembic head | `c9e2b6a4d813` in the repository, fifty-one revisions; local validation targets disposable databases only | `migrations/versions/*.py`, `alembic heads` |
 | Extensions | `pg_trgm`, `unaccent`, `plpgsql` | `select extname from pg_extension` |
 
 ## 2. Verified corpus claim
@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Two hundred and nine Python modules under `src/my_pa` and two hundred and forty-four test modules —
+Two hundred and nine Python modules under `src/my_pa` and two hundred and forty-seven test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -89,7 +89,7 @@ section disagrees with the tree.
 | `domain/source`, `domain/extraction`, `domain/search` — registry, bounded enrollment, provider port, extraction outcomes, quarantine, coverage, search query | Implemented and tested |
 | `infrastructure/persistence` — registry, enrollment, jobs, extraction, quarantine, coverage, lexical search | Implemented; covered by the database tier |
 | `infrastructure/providers/fixture.py` — read-only fixture source provider | Implemented and tested |
-| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes, operations, task management, context prepare/feedback, OAuth refresh-token families, and GoodNotes notebook lineage | Implemented, fifty revisions, head `f8c3a1e6b247` |
+| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes, operations, task management, context prepare/feedback, OAuth refresh-token families, GoodNotes notebook lineage, and GoodNotes NOTE_UNIT occurrence persistence | Implemented, fifty-one revisions, head `c9e2b6a4d813` |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
 All forty-five capability names, their operator-only flags, and their permitted

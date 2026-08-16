@@ -241,6 +241,15 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "goodnotes_ingestion_runs",
         }
     ),
+    "c9e2b6a4d813": frozenset(
+        {
+            "goodnotes_notes",
+            "goodnotes_note_occurrences",
+            "goodnotes_note_revisions",
+            "goodnotes_note_links",
+            "goodnotes_run_note_changes",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

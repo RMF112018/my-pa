@@ -42,7 +42,7 @@ def test_this_revision_is_in_the_chain() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 50
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 51
 
 
 def test_the_frozen_literals_are_this_revision_s_vocabulary() -> None:

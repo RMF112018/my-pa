@@ -38,7 +38,8 @@ MIGRATION = ROOT / "migrations/versions/20260816_d4a8c1e7b930_add_oauth_refresh_
 DISPOSABLE_DATABASE = "my_pa_oauth_refresh_migration_test"
 PRIOR_REVISION = "a8a1272aaa0a"
 OAUTH_REVISION = "d4a8c1e7b930"
-HEAD_REVISION = "f8c3a1e6b247"
+LINEAGE_REVISION = "f8c3a1e6b247"
+HEAD_REVISION = "c9e2b6a4d813"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -109,8 +110,9 @@ def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert list(script.get_heads()) == [HEAD_REVISION]
     assert script.get_revision(OAUTH_REVISION).down_revision == PRIOR_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == OAUTH_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 50
+    assert script.get_revision(LINEAGE_REVISION).down_revision == OAUTH_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == LINEAGE_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 51
 
 
 @pytest.mark.database

@@ -182,6 +182,11 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "goodnotes_logical_pages",
         "goodnotes_page_positions",
         "goodnotes_ingestion_runs",
+        "goodnotes_notes",
+        "goodnotes_note_occurrences",
+        "goodnotes_note_revisions",
+        "goodnotes_note_links",
+        "goodnotes_run_note_changes",
     }
 )
 

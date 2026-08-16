@@ -71,6 +71,7 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     MetaData,
+    Numeric,
     PrimaryKeyConstraint,
     String,
     Table,
@@ -5004,6 +5005,402 @@ goodnotes_page_positions = Table(
         ],
         ondelete="RESTRICT",
         name="goodnotes_page_positions_logical_page_fk",
+    ),
+)
+
+# Additive GoodNotes NOTE_UNIT plane. A PDF is not a note and a page is not a
+# note. Occurrence identity is `geometry_key` (canonical 4-decimal box plus
+# crop digest or `none`); transcription is not the unique key. Revisions and
+# run-change rows are immutable. No FK CASCADE from a source table.
+goodnotes_notes = Table(
+    "goodnotes_notes",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("note_id", String(36), primary_key=True),
+    Column("notebook_id", String(36), nullable=False),
+    Column("identity_status", String(16), nullable=False),
+    Column("primary_class", String(16)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("last_seen_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "note_id ~ '^gnnt_[a-f0-9]{24}$'",
+        name="goodnotes_note_id_shape",
+    ),
+    CheckConstraint(
+        "identity_status IN ('ACTIVE', 'AMBIGUOUS', 'RETIRED')",
+        name="goodnotes_note_identity_status_is_known",
+    ),
+    CheckConstraint(
+        "primary_class IS NULL OR primary_class IN "
+        "('MEETING', 'PROJECT', 'RELATIONSHIP', 'GENERAL')",
+        name="goodnotes_note_primary_class_is_known",
+    ),
+    CheckConstraint(
+        "last_seen_at >= created_at",
+        name="goodnotes_note_seen_after_creation",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "notebook_id"],
+        [
+            f"{SCHEMA}.goodnotes_notebooks.principal_id",
+            f"{SCHEMA}.goodnotes_notebooks.notebook_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_notes_notebook_fk",
+    ),
+)
+
+goodnotes_note_occurrences = Table(
+    "goodnotes_note_occurrences",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("occurrence_id", String(36), primary_key=True),
+    Column("note_id", String(36), nullable=False),
+    Column("logical_page_id", String(36), nullable=False),
+    Column("page_version_id", String(30)),
+    Column("snapshot_id", String(36)),
+    Column("run_id", String(36)),
+    Column("x_min", Numeric(5, 4), nullable=False),
+    Column("y_min", Numeric(5, 4), nullable=False),
+    Column("width", Numeric(5, 4), nullable=False),
+    Column("height", Numeric(5, 4), nullable=False),
+    Column("geometry_key", String(96), nullable=False),
+    Column("crop_sha256", String(64)),
+    Column("context_anchor_sha256", String(64)),
+    Column("identity_status", String(16), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("last_seen_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "occurrence_id ~ '^gnocc_[a-f0-9]{24}$'",
+        name="goodnotes_occurrence_id_shape",
+    ),
+    CheckConstraint(
+        "page_version_id IS NULL OR page_version_id ~ '^gnver_[a-f0-9]{24}$'",
+        name="goodnotes_occurrence_page_version_id_shape",
+    ),
+    CheckConstraint(
+        "snapshot_id IS NULL OR snapshot_id ~ '^gnsnap_[a-f0-9]{24}$'",
+        name="goodnotes_occurrence_snapshot_id_shape",
+    ),
+    CheckConstraint(
+        "run_id IS NULL OR run_id ~ '^gnrun_[a-f0-9]{24}$'",
+        name="goodnotes_occurrence_run_id_shape",
+    ),
+    CheckConstraint(
+        "char_length(geometry_key) BETWEEN 1 AND 96 AND geometry_key ~ "
+        "'^[0-9]\\.[0-9]{4},[0-9]\\.[0-9]{4},[0-9]\\.[0-9]{4},"
+        "[0-9]\\.[0-9]{4}:(none|[a-f0-9]{64})$'",
+        name="goodnotes_occurrence_geometry_key_shape",
+    ),
+    CheckConstraint(
+        "crop_sha256 IS NULL OR crop_sha256 ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_occurrence_crop_sha256_shape",
+    ),
+    CheckConstraint(
+        "context_anchor_sha256 IS NULL OR context_anchor_sha256 ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_occurrence_context_anchor_sha256_shape",
+    ),
+    CheckConstraint(
+        "identity_status IN ('ACTIVE', 'AMBIGUOUS', 'RETIRED')",
+        name="goodnotes_occurrence_identity_status_is_known",
+    ),
+    CheckConstraint(
+        "x_min >= 0 AND x_min <= 1 AND y_min >= 0 AND y_min <= 1 "
+        "AND width > 0 AND width <= 1 AND height > 0 AND height <= 1 "
+        "AND x_min + width <= 1 AND y_min + height <= 1",
+        name="goodnotes_occurrence_geometry_is_normalized",
+    ),
+    CheckConstraint(
+        "last_seen_at >= created_at",
+        name="goodnotes_occurrence_seen_after_creation",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "logical_page_id",
+        "geometry_key",
+        name="one_goodnotes_occurrence_geometry",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "note_id"],
+        [
+            f"{SCHEMA}.goodnotes_notes.principal_id",
+            f"{SCHEMA}.goodnotes_notes.note_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_occurrences_note_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "logical_page_id"],
+        [
+            f"{SCHEMA}.goodnotes_logical_pages.principal_id",
+            f"{SCHEMA}.goodnotes_logical_pages.logical_page_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_occurrences_logical_page_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "snapshot_id"],
+        [
+            f"{SCHEMA}.goodnotes_source_snapshots.principal_id",
+            f"{SCHEMA}.goodnotes_source_snapshots.snapshot_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_occurrences_snapshot_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_occurrences_run_fk",
+    ),
+)
+
+goodnotes_note_revisions = Table(
+    "goodnotes_note_revisions",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("revision_id", String(36), primary_key=True),
+    Column("note_id", String(36), nullable=False),
+    Column("occurrence_id", String(36)),
+    Column("supersedes_revision_id", String(36)),
+    Column("schema_version", String(40), nullable=False),
+    Column("analyzer_name", String(100), nullable=False),
+    Column("analyzer_version", String(100), nullable=False),
+    Column("transcription", Text, nullable=False),
+    Column("primary_class", String(16)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "revision_id ~ '^gnrev_[a-f0-9]{24}$'",
+        name="goodnotes_revision_id_shape",
+    ),
+    CheckConstraint(
+        "occurrence_id IS NULL OR occurrence_id ~ '^gnocc_[a-f0-9]{24}$'",
+        name="goodnotes_revision_occurrence_id_shape",
+    ),
+    CheckConstraint(
+        "supersedes_revision_id IS NULL OR supersedes_revision_id ~ '^gnrev_[a-f0-9]{24}$'",
+        name="goodnotes_revision_supersedes_id_shape",
+    ),
+    CheckConstraint(
+        "char_length(schema_version) BETWEEN 1 AND 40",
+        name="goodnotes_revision_schema_version_is_bounded",
+    ),
+    CheckConstraint(
+        "char_length(analyzer_name) BETWEEN 1 AND 100",
+        name="goodnotes_revision_analyzer_name_is_bounded",
+    ),
+    CheckConstraint(
+        "char_length(analyzer_version) BETWEEN 1 AND 100",
+        name="goodnotes_revision_analyzer_version_is_bounded",
+    ),
+    CheckConstraint(
+        "char_length(transcription) BETWEEN 1 AND 20000",
+        name="goodnotes_revision_transcription_is_bounded",
+    ),
+    CheckConstraint(
+        "primary_class IS NULL OR primary_class IN "
+        "('MEETING', 'PROJECT', 'RELATIONSHIP', 'GENERAL')",
+        name="goodnotes_revision_primary_class_is_known",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "note_id"],
+        [
+            f"{SCHEMA}.goodnotes_notes.principal_id",
+            f"{SCHEMA}.goodnotes_notes.note_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_revisions_note_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "occurrence_id"],
+        [
+            f"{SCHEMA}.goodnotes_note_occurrences.principal_id",
+            f"{SCHEMA}.goodnotes_note_occurrences.occurrence_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_revisions_occurrence_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "supersedes_revision_id"],
+        [
+            f"{SCHEMA}.goodnotes_note_revisions.principal_id",
+            f"{SCHEMA}.goodnotes_note_revisions.revision_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_revisions_supersedes_fk",
+    ),
+)
+
+goodnotes_note_links = Table(
+    "goodnotes_note_links",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("link_id", String(36), primary_key=True),
+    Column("note_id", String(36), nullable=False),
+    Column("link_kind", String(32), nullable=False),
+    Column("target_note_id", String(36)),
+    Column("target_logical_page_id", String(36)),
+    Column("target_occurrence_id", String(36)),
+    Column("target_context_anchor_sha256", String(64)),
+    Column("target_key", String(80), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "link_id ~ '^gnlink_[a-f0-9]{24}$'",
+        name="goodnotes_link_id_shape",
+    ),
+    CheckConstraint(
+        "link_kind IN ("
+        "'NOTE_TO_NOTE', "
+        "'NOTE_TO_LOGICAL_PAGE', "
+        "'NOTE_TO_SOURCE_CONTEXT', "
+        "'OCCURRENCE_TO_OCCURRENCE')",
+        name="goodnotes_link_kind_is_known",
+    ),
+    CheckConstraint(
+        "target_note_id IS NULL OR target_note_id ~ '^gnnt_[a-f0-9]{24}$'",
+        name="goodnotes_link_target_note_id_shape",
+    ),
+    CheckConstraint(
+        "target_logical_page_id IS NULL OR target_logical_page_id ~ '^gnlp_[a-f0-9]{24}$'",
+        name="goodnotes_link_target_logical_page_id_shape",
+    ),
+    CheckConstraint(
+        "target_occurrence_id IS NULL OR target_occurrence_id ~ '^gnocc_[a-f0-9]{24}$'",
+        name="goodnotes_link_target_occurrence_id_shape",
+    ),
+    CheckConstraint(
+        "target_context_anchor_sha256 IS NULL OR target_context_anchor_sha256 ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_link_target_context_anchor_shape",
+    ),
+    CheckConstraint(
+        "char_length(target_key) BETWEEN 1 AND 80 AND target_key ~ "
+        "'^(note:gnnt_[a-f0-9]{24}|page:gnlp_[a-f0-9]{24}|"
+        "occ:gnocc_[a-f0-9]{24}|ctx:[a-f0-9]{64})$'",
+        name="goodnotes_link_target_key_shape",
+    ),
+    CheckConstraint(
+        "("
+        "link_kind = 'NOTE_TO_NOTE' AND target_note_id IS NOT NULL "
+        "AND target_logical_page_id IS NULL AND target_occurrence_id IS NULL "
+        "AND target_context_anchor_sha256 IS NULL"
+        ") OR ("
+        "link_kind = 'NOTE_TO_LOGICAL_PAGE' AND target_note_id IS NULL "
+        "AND target_logical_page_id IS NOT NULL AND target_occurrence_id IS NULL "
+        "AND target_context_anchor_sha256 IS NULL"
+        ") OR ("
+        "link_kind = 'NOTE_TO_SOURCE_CONTEXT' AND target_note_id IS NULL "
+        "AND target_logical_page_id IS NULL AND target_occurrence_id IS NULL "
+        "AND target_context_anchor_sha256 IS NOT NULL"
+        ") OR ("
+        "link_kind = 'OCCURRENCE_TO_OCCURRENCE' AND target_note_id IS NULL "
+        "AND target_logical_page_id IS NULL AND target_occurrence_id IS NOT NULL "
+        "AND target_context_anchor_sha256 IS NULL"
+        ")",
+        name="goodnotes_note_link_target_matches_kind",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "note_id",
+        "link_kind",
+        "target_key",
+        name="one_goodnotes_note_link_target",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "note_id"],
+        [
+            f"{SCHEMA}.goodnotes_notes.principal_id",
+            f"{SCHEMA}.goodnotes_notes.note_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_links_note_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "target_note_id"],
+        [
+            f"{SCHEMA}.goodnotes_notes.principal_id",
+            f"{SCHEMA}.goodnotes_notes.note_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_links_target_note_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "target_logical_page_id"],
+        [
+            f"{SCHEMA}.goodnotes_logical_pages.principal_id",
+            f"{SCHEMA}.goodnotes_logical_pages.logical_page_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_links_target_logical_page_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "target_occurrence_id"],
+        [
+            f"{SCHEMA}.goodnotes_note_occurrences.principal_id",
+            f"{SCHEMA}.goodnotes_note_occurrences.occurrence_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_links_target_occurrence_fk",
+    ),
+)
+
+goodnotes_run_note_changes = Table(
+    "goodnotes_run_note_changes",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("change_id", String(36), primary_key=True),
+    Column("run_id", String(36), nullable=False),
+    Column("note_id", String(36), nullable=False),
+    Column("occurrence_id", String(36), nullable=False),
+    Column("change_state", String(32), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "change_id ~ '^gnchg_[a-f0-9]{24}$'",
+        name="goodnotes_change_id_shape",
+    ),
+    CheckConstraint(
+        "change_state IN ("
+        "'NEW', "
+        "'UNCHANGED', "
+        "'REVISED', "
+        "'REMOVED_OR_NO_LONGER_PRESENT', "
+        "'AMBIGUOUS')",
+        name="goodnotes_change_state_is_known",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "run_id",
+        "occurrence_id",
+        name="one_goodnotes_run_occurrence_change",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_run_note_changes_run_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "note_id"],
+        [
+            f"{SCHEMA}.goodnotes_notes.principal_id",
+            f"{SCHEMA}.goodnotes_notes.note_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_run_note_changes_note_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "occurrence_id"],
+        [
+            f"{SCHEMA}.goodnotes_note_occurrences.principal_id",
+            f"{SCHEMA}.goodnotes_note_occurrences.occurrence_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_run_note_changes_occurrence_fk",
     ),
 )
 

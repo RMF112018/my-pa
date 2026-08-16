@@ -39,6 +39,7 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesPage,
     GoodNotesPagePosition,
     GoodNotesPageVersion,
+    GoodNotesPriorPageEvidence,
     GoodNotesRegionProposal,
     GoodNotesReviewCase,
     GoodNotesSourceBinding,
@@ -519,6 +520,199 @@ class PostgresGoodNotesRepository:
         )
         return None if row is None else _logical_page(row)
 
+    def logical_pages(
+        self, principal_id: str, notebook_id: str
+    ) -> tuple[GoodNotesLogicalPage, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_logical_pages)
+                .where(
+                    _mine(goodnotes_logical_pages, principal_id),
+                    goodnotes_logical_pages.c.notebook_id == notebook_id,
+                )
+                .order_by(
+                    goodnotes_logical_pages.c.created_at,
+                    goodnotes_logical_pages.c.logical_page_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_logical_page(row) for row in rows)
+
+    def snapshots(self, principal_id: str, notebook_id: str) -> tuple[GoodNotesSourceSnapshot, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_source_snapshots)
+                .where(
+                    _mine(goodnotes_source_snapshots, principal_id),
+                    goodnotes_source_snapshots.c.notebook_id == notebook_id,
+                )
+                .order_by(
+                    goodnotes_source_snapshots.c.observed_at,
+                    goodnotes_source_snapshots.c.snapshot_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_snapshot(row) for row in rows)
+
+    def page_version(self, principal_id: str, page_version_id: str) -> GoodNotesPageVersion | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_page_versions).where(
+                    _mine(goodnotes_page_versions, principal_id),
+                    goodnotes_page_versions.c.page_version_id == page_version_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _page_version_row(row)
+
+    def prior_page_evidence(
+        self, principal_id: str, notebook_id: str
+    ) -> tuple[GoodNotesPriorPageEvidence, ...]:
+        pages = self.logical_pages(principal_id, notebook_id)
+        if not pages:
+            return ()
+        snapshots = self.snapshots(principal_id, notebook_id)
+        rank = {item.snapshot_id: index for index, item in enumerate(snapshots)}
+        latest: dict[str, GoodNotesPagePosition] = {}
+        for snapshot in snapshots:
+            for position in self.page_positions(principal_id, snapshot.snapshot_id):
+                current = latest.get(position.logical_page_id)
+                if current is None or rank[position.snapshot_id] >= rank[current.snapshot_id]:
+                    latest[position.logical_page_id] = position
+        evidence: list[GoodNotesPriorPageEvidence] = []
+        for page in pages:
+            latest_position = latest.get(page.logical_page_id)
+            if latest_position is None:
+                continue
+            version = (
+                None
+                if latest_position.page_version_id is None
+                else self.page_version(principal_id, latest_position.page_version_id)
+            )
+            evidence.append(
+                GoodNotesPriorPageEvidence(
+                    logical_page_id=page.logical_page_id,
+                    last_page_number=latest_position.page_number,
+                    last_page_version_id=latest_position.page_version_id,
+                    exact_render_sha256=None if version is None else version.content_sha256,
+                    normalized_render_sha256=(
+                        None if version is None else version.normalized_render_sha256
+                    ),
+                    perceptual_hash=None if version is None else version.perceptual_hash,
+                    render_width=None if version is None else version.render_width,
+                    render_height=None if version is None else version.render_height,
+                )
+            )
+        return tuple(evidence)
+
+    def store_page_version_render(
+        self, *, page: GoodNotesPage, version: GoodNotesPageVersion
+    ) -> GoodNotesPageVersion:
+        principal_id = page.principal_id
+        expected_page = _bound(
+            goodnotes_pages,
+            principal_id,
+            {
+                "page_id": page.page_id,
+                "source_id": page.source_id,
+                "source_object_id": page.source_object_id,
+                "page_number": page.page_number,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_pages).values(expected_page).on_conflict_do_nothing()
+        )
+        _require_identical(
+            self.connection,
+            goodnotes_pages,
+            principal_id,
+            goodnotes_pages.c.page_id == page.page_id,
+            expected_page,
+            "page",
+        )
+        expected_version = _bound(
+            goodnotes_page_versions,
+            principal_id,
+            {
+                "page_version_id": version.page_version_id,
+                "page_id": version.page_id,
+                "source_version_id": version.source_version_id,
+                "content_sha256": version.content_sha256,
+                "observed_at": version.observed_at,
+                "logical_page_id": version.logical_page_id,
+                "normalized_render_sha256": version.normalized_render_sha256,
+                "perceptual_hash": version.perceptual_hash,
+                "render_width": version.render_width,
+                "render_height": version.render_height,
+                "renderer_name": version.renderer_name,
+                "renderer_version": version.renderer_version,
+                "render_profile_version": version.render_profile_version,
+            },
+        )
+        identity_fields = {
+            "page_version_id": version.page_version_id,
+            "page_id": version.page_id,
+            "source_version_id": version.source_version_id,
+            "content_sha256": version.content_sha256,
+            "observed_at": version.observed_at,
+        }
+        self.connection.execute(
+            pg_insert(goodnotes_page_versions).values(expected_version).on_conflict_do_nothing()
+        )
+        stored = self.page_version(principal_id, version.page_version_id)
+        if stored is None:
+            raise ValueError("the GoodNotes page version could not be stored")
+        bound_identity = _bound(goodnotes_page_versions, principal_id, identity_fields)
+        _require_identical(
+            self.connection,
+            goodnotes_page_versions,
+            principal_id,
+            goodnotes_page_versions.c.page_version_id == version.page_version_id,
+            bound_identity,
+            "page version",
+        )
+        if (
+            stored.logical_page_id != version.logical_page_id
+            or stored.normalized_render_sha256 != version.normalized_render_sha256
+            or stored.perceptual_hash != version.perceptual_hash
+            or stored.render_width != version.render_width
+            or stored.render_height != version.render_height
+            or stored.renderer_name != version.renderer_name
+            or stored.renderer_version != version.renderer_version
+            or stored.render_profile_version != version.render_profile_version
+        ):
+            if stored.logical_page_id not in {None, version.logical_page_id}:
+                raise ValueError(
+                    "the stable GoodNotes page version identity collided with other content"
+                )
+            self.connection.execute(
+                update(goodnotes_page_versions)
+                .where(
+                    _mine(goodnotes_page_versions, principal_id),
+                    goodnotes_page_versions.c.page_version_id == version.page_version_id,
+                )
+                .values(
+                    logical_page_id=version.logical_page_id,
+                    normalized_render_sha256=version.normalized_render_sha256,
+                    perceptual_hash=version.perceptual_hash,
+                    render_width=version.render_width,
+                    render_height=version.render_height,
+                    renderer_name=version.renderer_name,
+                    renderer_version=version.renderer_version,
+                    render_profile_version=version.render_profile_version,
+                )
+            )
+            stored = self.page_version(principal_id, version.page_version_id)
+            if stored is None:
+                raise ValueError("the GoodNotes page version could not be stored")
+        return stored
+
     def store_page_position(self, position: GoodNotesPagePosition) -> GoodNotesPagePosition:
         expected = _bound(
             goodnotes_page_positions,
@@ -750,6 +944,25 @@ def _snapshot(row: object) -> GoodNotesSourceSnapshot:
         settled_at=values["settled_at"],  # type: ignore[index]
         run_id=values["run_id"],  # type: ignore[index]
         mtime_ns=values["mtime_ns"],  # type: ignore[index]
+    )
+
+
+def _page_version_row(row: object) -> GoodNotesPageVersion:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesPageVersion(
+        page_version_id=values["page_version_id"],  # type: ignore[index]
+        page_id=values["page_id"],  # type: ignore[index]
+        source_version_id=values["source_version_id"],  # type: ignore[index]
+        content_sha256=values["content_sha256"],  # type: ignore[index]
+        observed_at=values["observed_at"],  # type: ignore[index]
+        logical_page_id=values["logical_page_id"],  # type: ignore[index]
+        normalized_render_sha256=values["normalized_render_sha256"],  # type: ignore[index]
+        perceptual_hash=values["perceptual_hash"],  # type: ignore[index]
+        render_width=values["render_width"],  # type: ignore[index]
+        render_height=values["render_height"],  # type: ignore[index]
+        renderer_name=values["renderer_name"],  # type: ignore[index]
+        renderer_version=values["renderer_version"],  # type: ignore[index]
+        render_profile_version=values["render_profile_version"],  # type: ignore[index]
     )
 
 

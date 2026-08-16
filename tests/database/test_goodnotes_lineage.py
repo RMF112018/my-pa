@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 from collections.abc import Iterator
@@ -15,6 +16,11 @@ from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.sql import Executable
 
+from my_pa.application.goodnotes_lineage import (
+    GoodNotesLineageService,
+    LineageReconcileRequest,
+    ObservedNotebookFile,
+)
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.goodnotes.models import (
     GoodNotesIdentityStatus,
@@ -27,9 +33,11 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesNotebookPath,
     GoodNotesPagePosition,
     GoodNotesSourceSnapshot,
+    SourcePage,
     issue_stable_id,
 )
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.goodnotes.render import MappedPageRenderer, RawRepresentationRenderer
 from my_pa.infrastructure.persistence.goodnotes import PostgresGoodNotesRepository
 
 pytestmark = pytest.mark.database
@@ -312,3 +320,299 @@ def test_request_id_replay_and_fingerprint_conflict(engine: Engine) -> None:
         assert finished.status is GoodNotesIngestionStatus.SUCCEEDED
         assert finished.snapshot_count == 1
         assert repository.run(B, stored.run_id) is None
+
+
+def _sha(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _source_page(
+    *,
+    principal_id: str,
+    source_id: str,
+    object_id: str,
+    version_id: str,
+    page_number: int,
+    content: bytes,
+    observed_at: datetime = WHEN,
+) -> SourcePage:
+    return SourcePage(
+        principal_id=principal_id,
+        source_id=source_id,
+        source_object_id=object_id,
+        source_version_id=version_id,
+        page_number=page_number,
+        observed_at=observed_at,
+        content=content,
+    )
+
+
+def _observation(path: str, payload: bytes, page_count: int) -> ObservedNotebookFile:
+    return ObservedNotebookFile(
+        relative_path=path,
+        size_bytes=len(payload),
+        sha256=_sha(payload),
+        mtime_ns=1_000_000_000,
+        page_count=page_count,
+    )
+
+
+def test_lineage_reconcile_twice_on_identical_bytes_replays_snapshot(engine: Engine) -> None:
+    cover = b"synthetic-cover-page"
+    body = b"synthetic-body-page"
+    notebook_bytes = cover + b"\x1f" + body
+    object_id = "obj_cccccccccccccccccccccccc"
+    pages = (
+        _source_page(
+            principal_id=A,
+            source_id="src_cccccccccccccccccccccccc",
+            object_id=object_id,
+            version_id="ver_cccccccccccccccccccccccc",
+            page_number=1,
+            content=cover,
+        ),
+        _source_page(
+            principal_id=A,
+            source_id="src_cccccccccccccccccccccccc",
+            object_id=object_id,
+            version_id="ver_cccccccccccccccccccccccc",
+            page_number=2,
+            content=body,
+        ),
+    )
+    notebook_id = issue_stable_id("gnnb", A, "service-replay")
+    request = LineageReconcileRequest(
+        principal_id=A,
+        request_id="lineage-replay-1",
+        source_root_id="icloud-goodnotes",
+        source_object_id=object_id,
+        observation=_observation("Inbox/replay.pdf", notebook_bytes, 2),
+        pages=pages,
+        notebook_id=notebook_id,
+        observed_at=WHEN,
+    )
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        service = GoodNotesLineageService()
+        first = service.reconcile(
+            request, renderer=RawRepresentationRenderer(), repository=repository, clock=lambda: WHEN
+        )
+        second = service.reconcile(
+            LineageReconcileRequest(
+                principal_id=A,
+                request_id="lineage-replay-2",
+                source_root_id="icloud-goodnotes",
+                source_object_id=object_id,
+                observation=request.observation,
+                pages=pages,
+                notebook_id=notebook_id,
+                observed_at=LATER,
+            ),
+            renderer=RawRepresentationRenderer(),
+            repository=repository,
+            clock=lambda: LATER,
+        )
+        assert second.replayed_snapshot is True
+        assert second.snapshot.snapshot_id == first.snapshot.snapshot_id
+        assert len(repository.snapshots(A, notebook_id)) == 1
+        assert len(repository.logical_pages(A, notebook_id)) == 2
+        assert first.run.new_logical_page_count == 2
+        assert second.run.new_logical_page_count == 0
+
+
+def test_lineage_reorder_across_two_snapshots(engine: Engine) -> None:
+    cover = b"reorder-cover-page"
+    body = b"reorder-body-page"
+    object_id = "obj_dddddddddddddddddddddddd"
+    notebook_id = issue_stable_id("gnnb", A, "service-reorder")
+    first_pages = (
+        _source_page(
+            principal_id=A,
+            source_id="src_dddddddddddddddddddddddd",
+            object_id=object_id,
+            version_id="ver_dddddddddddddddddddddddd",
+            page_number=1,
+            content=cover,
+        ),
+        _source_page(
+            principal_id=A,
+            source_id="src_dddddddddddddddddddddddd",
+            object_id=object_id,
+            version_id="ver_dddddddddddddddddddddddd",
+            page_number=2,
+            content=body,
+        ),
+    )
+    reordered_pages = (
+        _source_page(
+            principal_id=A,
+            source_id="src_dddddddddddddddddddddddd",
+            object_id=object_id,
+            version_id="ver_eeeeeeeeeeeeeeeeeeeeeeee",
+            page_number=1,
+            content=body,
+            observed_at=LATER,
+        ),
+        _source_page(
+            principal_id=A,
+            source_id="src_dddddddddddddddddddddddd",
+            object_id=object_id,
+            version_id="ver_eeeeeeeeeeeeeeeeeeeeeeee",
+            page_number=2,
+            content=cover,
+            observed_at=LATER,
+        ),
+    )
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        service = GoodNotesLineageService()
+        first = service.reconcile(
+            LineageReconcileRequest(
+                principal_id=A,
+                request_id="lineage-reorder-1",
+                source_root_id="icloud-goodnotes",
+                source_object_id=object_id,
+                observation=_observation("Inbox/reorder.pdf", cover + b"\x1f" + body, 2),
+                pages=first_pages,
+                notebook_id=notebook_id,
+                observed_at=WHEN,
+            ),
+            renderer=RawRepresentationRenderer(),
+            repository=repository,
+            clock=lambda: WHEN,
+        )
+        second = service.reconcile(
+            LineageReconcileRequest(
+                principal_id=A,
+                request_id="lineage-reorder-2",
+                source_root_id="icloud-goodnotes",
+                source_object_id=object_id,
+                observation=_observation("Inbox/reorder.pdf", body + b"\x1f" + cover, 2),
+                pages=reordered_pages,
+                notebook_id=notebook_id,
+                observed_at=LATER,
+            ),
+            renderer=RawRepresentationRenderer(),
+            repository=repository,
+            clock=lambda: LATER,
+        )
+        assert second.replayed_snapshot is False
+        assert second.snapshot.snapshot_id != first.snapshot.snapshot_id
+        assert len(repository.snapshots(A, notebook_id)) == 2
+        assert len(repository.logical_pages(A, notebook_id)) == 2
+        assert second.run.new_logical_page_count == 0
+        first_ids = [item.logical_page_id for item in first.positions]
+        second_ids = [item.logical_page_id for item in second.positions]
+        assert set(first_ids) == set(second_ids)
+        assert second_ids == list(reversed(first_ids))
+
+
+def test_lineage_cross_principal_isolation_holds(engine: Engine) -> None:
+    payload = b"isolated-cover"
+    object_id = "obj_ffffffffffffffffffffffff"
+    notebook_id = issue_stable_id("gnnb", "shared", "service-isolation")
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        service = GoodNotesLineageService()
+        result = service.reconcile(
+            LineageReconcileRequest(
+                principal_id=A,
+                request_id="lineage-isolation-a",
+                source_root_id="icloud-goodnotes",
+                source_object_id=object_id,
+                observation=_observation("Inbox/isolated.pdf", payload, 1),
+                pages=(
+                    _source_page(
+                        principal_id=A,
+                        source_id="src_ffffffffffffffffffffffff",
+                        object_id=object_id,
+                        version_id="ver_ffffffffffffffffffffffff",
+                        page_number=1,
+                        content=payload,
+                    ),
+                ),
+                notebook_id=notebook_id,
+                observed_at=WHEN,
+            ),
+            renderer=RawRepresentationRenderer(),
+            repository=repository,
+            clock=lambda: WHEN,
+        )
+        assert repository.snapshots(B, notebook_id) == ()
+        assert repository.logical_pages(B, notebook_id) == ()
+        assert repository.snapshot(B, result.snapshot.snapshot_id) is None
+        for page in repository.logical_pages(A, notebook_id):
+            assert repository.logical_page(B, page.logical_page_id) is None
+
+
+def test_mapped_renderer_regenerated_unchanged_persists_zero_new_logical_pages(
+    engine: Engine,
+) -> None:
+    original = b"raw-cover-v1"
+    regenerated = b"raw-cover-v2"
+    shared = hashlib.sha256(b"normalized-cover").hexdigest()
+    object_id = "obj_abababababababababababab"
+    notebook_id = issue_stable_id("gnnb", A, "service-regen")
+    renderer = MappedPageRenderer(
+        mapping={
+            _sha(original): (shared, None, None),
+            _sha(regenerated): (shared, None, None),
+        }
+    )
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        service = GoodNotesLineageService()
+        first = service.reconcile(
+            LineageReconcileRequest(
+                principal_id=A,
+                request_id="lineage-regen-1",
+                source_root_id="icloud-goodnotes",
+                source_object_id=object_id,
+                observation=_observation("Inbox/regen.pdf", original, 1),
+                pages=(
+                    _source_page(
+                        principal_id=A,
+                        source_id="src_abababababababababababab",
+                        object_id=object_id,
+                        version_id="ver_abababababababababababab",
+                        page_number=1,
+                        content=original,
+                    ),
+                ),
+                notebook_id=notebook_id,
+                observed_at=WHEN,
+            ),
+            renderer=renderer,
+            repository=repository,
+            clock=lambda: WHEN,
+        )
+        second = service.reconcile(
+            LineageReconcileRequest(
+                principal_id=A,
+                request_id="lineage-regen-2",
+                source_root_id="icloud-goodnotes",
+                source_object_id=object_id,
+                observation=_observation("Inbox/regen.pdf", regenerated, 1),
+                pages=(
+                    _source_page(
+                        principal_id=A,
+                        source_id="src_abababababababababababab",
+                        object_id=object_id,
+                        version_id="ver_cdcdcdcdcdcdcdcdcdcdcdcd",
+                        page_number=1,
+                        content=regenerated,
+                        observed_at=LATER,
+                    ),
+                ),
+                notebook_id=notebook_id,
+                observed_at=LATER,
+            ),
+            renderer=renderer,
+            repository=repository,
+            clock=lambda: LATER,
+        )
+        assert second.replayed_snapshot is False
+        assert len(repository.logical_pages(A, notebook_id)) == 1
+        assert second.run.new_logical_page_count == 0
+        assert second.positions[0].logical_page_id == first.positions[0].logical_page_id
+        assert second.positions[0].match_method is GoodNotesMatchMethod.EXACT_NORMALIZED_RENDER

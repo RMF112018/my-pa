@@ -210,6 +210,12 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("plan", "principal_id"),
         ("prior", "principal_id"),
     ),
+    # Lineage reconcile receives the authenticated Principal as an explicit
+    # argument and rechecks every admitted SourcePage before writing identity.
+    "application/goodnotes_lineage.py": (
+        ("page", "principal_id"),
+        ("request", "principal_id"),
+    ),
     # The runtime receives the authenticated local operator Principal from the
     # CLI and compares a stored retry receipt to that same admitted plan.
     "bootstrap/goodnotes.py": (("prior", "principal_id"),),
@@ -252,6 +258,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("observed", "principal_id"),
         ("observed", "principal_id"),
         ("observed", "principal_id"),
+        ("page", "principal_id"),
         ("page", "principal_id"),
         ("page", "principal_id"),
         ("page", "principal_id"),

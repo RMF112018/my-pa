@@ -178,6 +178,10 @@ def _item(
     next_step: str,
     basis_refs: Sequence[str],
     priority: int,
+    subject_title: str | None = None,
+    subject_state: str | None = None,
+    subject_version: int | None = None,
+    subject_priority: str | None = None,
 ) -> PulseItem:
     return PulseItem(
         pulse_id=_derived_pulse_id(principal_id, reason_code, subject_id),
@@ -190,7 +194,11 @@ def _item(
         generated_at=now,
         consequence=consequence,
         next_step=next_step,
-        priority=priority,
+        attention_rank=priority,
+        subject_title=subject_title,
+        subject_state=subject_state,
+        subject_version=subject_version,
+        subject_priority=subject_priority,
     )
 
 
@@ -280,6 +288,8 @@ def _from_task(task: ContinuityTask, *, principal_id: str, now: datetime) -> _Ca
                 next_step="Close it with the evidence that completed it, or move the date.",
                 basis_refs=basis,
                 priority=_overdue_priority(_BASE_PRIORITY[PulseReasonCode.TASK_OVERDUE], overdue),
+                subject_title=task.title,
+                subject_state=task.state.value,
             ),
             magnitude=overdue.total_seconds(),
         )
@@ -298,6 +308,8 @@ def _from_task(task: ContinuityTask, *, principal_id: str, now: datetime) -> _Ca
             next_step="Start it, or move the date deliberately.",
             basis_refs=basis,
             priority=_BASE_PRIORITY[PulseReasonCode.TASK_DUE_SOON],
+            subject_title=task.title,
+            subject_state=task.state.value,
         ),
         magnitude=DUE_SOON_WINDOW.total_seconds() - remaining.total_seconds(),
     )
@@ -402,5 +414,8 @@ def derive_pulse(
         candidate for candidate in candidates if candidate.item.pulse_id not in dismissed_pulse_ids
     ]
     kept.sort(key=lambda candidate: candidate.item.item_ref)
-    kept.sort(key=lambda candidate: (candidate.item.priority, candidate.magnitude), reverse=True)
+    kept.sort(
+        key=lambda candidate: (candidate.item.attention_rank, candidate.magnitude),
+        reverse=True,
+    )
     return tuple(candidate.item for candidate in kept)

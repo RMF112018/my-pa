@@ -1191,6 +1191,7 @@ class CreateTask:
     title: str
     origin_evidence_ref: str
     idempotency_key: str
+    description: str | None = None
     priority: TaskPriority | None = None
     due_at: datetime | None = None
     project_id: str | None = None
@@ -1260,6 +1261,7 @@ class UpdateTask:
     expected_version: int
     idempotency_key: str
     title: str | None = None
+    description: str | None = None
     priority: TaskPriority | None = None
     due_at: datetime | None = None
     scheduled_at: datetime | None = None

@@ -244,6 +244,7 @@ def test_readme_derives_the_current_alembic_count_and_head() -> None:
         46: "Forty-six",
         47: "Forty-seven",
         48: "Forty-eight",
+        49: "Forty-nine",
     }
     count, head = _alembic_identity()
     assert count in words, "extend the readable README count vocabulary"
@@ -329,7 +330,7 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
         assert "forty-five capabilit" in text.lower().replace(" public ", " "), (
             f"{label} lost the current capability count"
         )
-        assert "forty-eight" in text, f"{label} lost the current revision count"
+        assert "forty-nine" in text, f"{label} lost the current revision count"
         assert "d4a8c1e7b930" in text, f"{label} lost the current Alembic head"
 
 

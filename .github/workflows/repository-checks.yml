@@ -318,10 +318,12 @@ jobs:
     # instead of acting on it. No new marker is introduced — one would need
     # `pyproject.toml` and both `-m` expressions above as well.
     runs-on: ubuntu-latest
-    # The FULL-tier target remains 15 minutes of test execution. Allow five
-    # additional minutes for checkout, dependency installation, service startup,
-    # and teardown so the job-level timeout does not pre-empt an in-budget suite.
-    timeout-minutes: 20
+    # Measured on run 31949638484 at head fc39292: the job-level 20-minute
+    # timeout cancelled pytest at 20m17s while it was still executing, at 61%
+    # of the suite. Linear extrapolation of that in-progress run is ~33 minutes
+    # of wall time. Allow forty so checkout, install, and teardown still sit
+    # outside an in-budget suite rather than pre-empting it.
+    timeout-minutes: 40
 
     services:
       postgres:

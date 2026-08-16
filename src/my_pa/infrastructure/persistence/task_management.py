@@ -68,6 +68,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
                 task_id=task.task_id,
                 principal_id=task.principal_id,
                 title=task.title,
+                description=task.description,
                 state=legacy_state_for(task.lifecycle_state),
                 evidence_state=task.evidence_state.value,
                 origin_evidence_ref=task.origin_evidence_ref,
@@ -96,6 +97,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
             .where(and_(tasks.c.task_id == task.task_id, tasks.c.principal_id == task.principal_id))
             .values(
                 title=task.title,
+                description=task.description,
                 state=legacy_state_for(task.lifecycle_state),
                 evidence_state=task.evidence_state.value,
                 project_id=task.project_id,
@@ -231,6 +233,7 @@ def _to_task(row: Row[Any]) -> Task:
         task_id=mapping["task_id"],
         principal_id=mapping["principal_id"],
         title=mapping["title"],
+        description=mapping["description"],
         lifecycle_state=TaskLifecycleState(mapping["lifecycle_state"]),
         evidence_state=ContinuityEvidenceState(mapping["evidence_state"]),
         origin_evidence_ref=mapping["origin_evidence_ref"],

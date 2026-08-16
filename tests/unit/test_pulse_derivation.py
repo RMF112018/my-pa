@@ -185,7 +185,7 @@ def test_a_further_passed_moment_outranks_a_recently_passed_one() -> None:
     )
     items = derive_pulse(principal_id=PRINCIPAL_A, now=NOW, commitments=[slightly, badly])
     assert [item.item_ref for item in items] == [badly.commitment_id, slightly.commitment_id]
-    assert items[0].priority > items[1].priority
+    assert items[0].attention_rank > items[1].attention_rank
 
 
 def test_generated_at_is_identical_on_every_item_so_it_cannot_order_them() -> None:
@@ -314,7 +314,7 @@ def test_the_counterparty_does_not_change_the_rank() -> None:
     )
     items = derive_pulse(principal_id=PRINCIPAL_A, now=NOW, commitments=[one, two])
     assert len(items) == 2
-    assert items[0].priority == items[1].priority
+    assert items[0].attention_rank == items[1].attention_rank
     assert [item.item_ref for item in items] == [one.commitment_id, two.commitment_id]
 
 
@@ -353,6 +353,38 @@ def test_the_derivation_returns_one_principals_items_only() -> None:
         ],
     )
     assert {item.principal_id for item in items} == {PRINCIPAL_A}
+
+
+def test_task_backed_pulse_items_carry_subject_title_and_state() -> None:
+    """F-001: Task-derived PulseItems carry subject_title and subject_state."""
+    task = _task(
+        "tsk_enrich001enrich0001",
+        due_at=NOW - timedelta(days=1),
+        created_at=NOW - timedelta(days=3),
+    )
+    items = derive_pulse(principal_id=PRINCIPAL_A, now=NOW, tasks=[task])
+    assert len(items) == 1
+    item = items[0]
+    assert item.subject_title == "Draft the synthetic summary"
+    assert item.subject_state == "open"
+    assert item.subject_version is None
+    assert item.subject_priority is None
+
+
+def test_non_task_pulse_items_have_no_subject_fields() -> None:
+    """Non-Task PulseItems leave subject fields as None."""
+    commitment = _commitment(
+        "cmt_nosubj001nosubj0001",
+        due_at=NOW - timedelta(days=1),
+        created_at=NOW - timedelta(days=3),
+    )
+    items = derive_pulse(principal_id=PRINCIPAL_A, now=NOW, commitments=[commitment])
+    assert len(items) == 1
+    item = items[0]
+    assert item.subject_title is None
+    assert item.subject_state is None
+    assert item.subject_version is None
+    assert item.subject_priority is None
 
 
 def test_a_framed_obligation_must_stand_for_at_least_one_obligation() -> None:

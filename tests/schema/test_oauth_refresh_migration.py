@@ -36,7 +36,7 @@ from my_pa.infrastructure.security.origin_authorization import OriginOAuthServer
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATION = ROOT / "migrations/versions/20260816_d4a8c1e7b930_add_oauth_refresh_token_families.py"
 DISPOSABLE_DATABASE = "my_pa_oauth_refresh_migration_test"
-PRIOR_REVISION = "b7c4e9a2d518"
+PRIOR_REVISION = "a8a1272aaa0a"
 HEAD_REVISION = "d4a8c1e7b930"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
@@ -108,7 +108,7 @@ def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert list(script.get_heads()) == [HEAD_REVISION]
     assert script.get_revision(HEAD_REVISION).down_revision == PRIOR_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 48
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 49
 
 
 @pytest.mark.database

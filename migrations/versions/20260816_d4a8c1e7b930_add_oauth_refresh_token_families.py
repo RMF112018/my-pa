@@ -1,7 +1,7 @@
 """Add OAuth refresh-token families and per-client refresh control.
 
 Revision ID: d4a8c1e7b930
-Revises: b7c4e9a2d518
+Revises: a8a1272aaa0a
 Create Date: 2026-08-16
 
 Additive identity-plane DDL. Existing remote clients, grants, authorization
@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "d4a8c1e7b930"
-down_revision: str | tuple[str, ...] | None = "b7c4e9a2d518"
+down_revision: str | tuple[str, ...] | None = "a8a1272aaa0a"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

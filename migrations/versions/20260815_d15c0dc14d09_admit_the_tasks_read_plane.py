@@ -48,16 +48,17 @@ down_revision: str | None = "3d7a2a3e8277"
 branch_labels: str | None = None
 depends_on: str | None = None
 
-#: The capability vocabulary as of this revision: the thirty-seven names
-#: `6b3d9a2f8c14` left plus the four `tasks.` names, sorted, which is the order
-#: the declarative helper produces so the two texts can be compared directly.
+#: The capability vocabulary as of this revision: the names `6b3d9a2f8c14`
+#: left on this branch, plus the task/commitment names this TM lineage admits,
+#: sorted. Continuity-authoring create names belong to sibling `7c2e9b4a1d80`,
+#: not to parent `3d7a2a3e8277`, and must not appear here.
 _CAPABILITIES_AT_THIS_REVISION: Final = (
     "capability IN ('capabilities.get', 'capture.create', 'capture.list', "
     "'capture.read', 'capture.revise', 'capture.search', 'commitments.close', "
     "'commitments.create', 'commitments.list', 'commitments.read', "
-    "'commitments.waiting_on', 'continuity.projects', 'continuity.projects.create', "
-    "'continuity.pulse', 'continuity.situations', 'continuity.situations.create', "
-    "'continuity.tasks.create', 'documents.archive', 'documents.create', "
+    "'commitments.waiting_on', 'continuity.projects', "
+    "'continuity.pulse', 'continuity.situations', "
+    "'documents.archive', 'documents.create', "
     "'documents.list', 'documents.read', 'documents.restore', 'documents.revise', "
     "'knowledge.coverage', 'knowledge.read', 'knowledge.reveal', "
     "'knowledge.search', 'native_sources.backfill', 'native_sources.configure', "
@@ -70,12 +71,13 @@ _CAPABILITIES_AT_THIS_REVISION: Final = (
     "'tasks.list', 'tasks.read', 'tasks.search', 'tasks.transition', 'tasks.update')"
 )
 
-#: What the revision below denotes, restated rather than derived.
+#: What parent `3d7a2a3e8277` denotes: the `6b3d9a2f8c14` vocabulary, because
+#: neither `4f6a9c2d8e17` nor `3d7a2a3e8277` restates these CHECKs. Sibling
+#: `7c2e9b4a1d80` is not an ancestor.
 _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "capability IN ('capabilities.get', 'capture.create', 'capture.list', "
     "'capture.read', 'capture.revise', 'capture.search', 'continuity.projects', "
-    "'continuity.projects.create', 'continuity.pulse', 'continuity.situations', "
-    "'continuity.situations.create', 'continuity.tasks.create', "
+    "'continuity.pulse', 'continuity.situations', "
     "'documents.archive', 'documents.create', 'documents.list', "
     "'documents.read', 'documents.restore', 'documents.revise', "
     "'knowledge.coverage', 'knowledge.read', 'knowledge.reveal', "
@@ -87,23 +89,23 @@ _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "'sources.fetch', 'sources.list', 'sources.metadata', 'sources.status')"
 )
 
-#: The purpose vocabulary as of this revision: the twelve `6b3d9a2f8c14` left,
-#: the one the task-read plane declares, the three the task-management plane
-#: (WP-TM-04 and WP-TM-05) declares, and the one continuity-authoring declares,
-#: sorted.
+#: The purpose vocabulary as of this revision: the names `6b3d9a2f8c14` left,
+#: the one the task-read plane declares, and the three the task-management plane
+#: (WP-TM-04 and WP-TM-05) declares, sorted. `continuity_authoring` is the
+#: sibling branch's purpose, not this parent's.
 _PURPOSES_AT_THIS_REVISION: Final = (
     "purpose IN ('bounded_enrollment', 'capture_authoring', 'capture_review', "
     "'commitment_authoring', 'commitment_read', 'content_extraction', "
-    "'continuity_authoring', 'document_authoring', 'document_read', "
+    "'document_authoring', 'document_read', "
     "'knowledge_read', 'knowledge_search', 'review_disposition', "
     "'security_validation', 'source_inspection', 'status_observation', "
     "'task_authoring', 'task_read')"
 )
 
-#: What the revision below denotes, restated rather than derived.
+#: What parent `3d7a2a3e8277` denotes, restated rather than derived.
 _PURPOSES_BEFORE_THIS_REVISION: Final = (
     "purpose IN ('bounded_enrollment', 'capture_authoring', 'capture_review', "
-    "'content_extraction', 'continuity_authoring', 'document_authoring', "
+    "'content_extraction', 'document_authoring', "
     "'document_read', 'knowledge_read', 'knowledge_search', 'review_disposition', "
     "'security_validation', 'source_inspection', 'status_observation')"
 )

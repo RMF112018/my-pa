@@ -2752,7 +2752,7 @@ relationship_events = Table(
 #: `pulse_reads_only_accepted_records` CHECK pins it TRUE, encoding the WP-06
 #: acceptance criterion "Today/Pulse read only accepted records": a Pulse item
 #: is generated only from accepted state, and the schema refuses to store one
-#: that claims otherwise. `priority` is a bounded 1..10 rank.
+#: that claims otherwise. `attention_rank` is a bounded 1..10 rank.
 pulse_items = Table(
     "pulse_items",
     METADATA,
@@ -2772,7 +2772,7 @@ pulse_items = Table(
     Column("basis_refs", JSONB, nullable=False),
     Column("consequence", Text),
     Column("next_step", Text),
-    Column("priority", Integer, nullable=False, server_default=text("5")),
+    Column("attention_rank", Integer, nullable=False, server_default=text("5")),
     Column("accepted_only", Boolean, nullable=False, server_default=text("true")),
     Column("generated_at", DateTime(timezone=True), nullable=False),
     Column("dismissed_at", DateTime(timezone=True)),
@@ -2786,7 +2786,7 @@ pulse_items = Table(
         "jsonb_typeof(basis_refs) = 'array' AND jsonb_array_length(basis_refs) > 0",
         name="a_pulse_item_carries_an_evidentiary_basis",
     ),
-    CheckConstraint("priority BETWEEN 1 AND 10", name="a_pulse_priority_is_bounded"),
+    CheckConstraint("attention_rank BETWEEN 1 AND 10", name="a_pulse_attention_rank_is_bounded"),
     CheckConstraint("accepted_only IS TRUE", name="pulse_reads_only_accepted_records"),
     Index("pulse_items_by_principal", "principal_id"),
     Index("pulse_items_by_principal_dismissed", "principal_id", "dismissed_at"),
@@ -3961,6 +3961,7 @@ tasks = Table(
     Column("task_id", Text, primary_key=True),
     Column("principal_id", Text, nullable=False),
     Column("title", Text, nullable=False),
+    Column("description", Text),
     Column("state", Text, nullable=False, server_default=text("'open'")),
     Column("evidence_state", Text, nullable=False, server_default=text("'proposed'")),
     Column("origin_evidence_ref", Text, nullable=False),

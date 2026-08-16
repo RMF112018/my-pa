@@ -47,6 +47,7 @@ class TaskView(StrictModel):
 
     task_id: str
     title: str = Field(min_length=1)
+    description: str | None = None
     lifecycle_state: TaskLifecycleState
     evidence_state: ContinuityEvidenceState
     version: int = Field(ge=1)

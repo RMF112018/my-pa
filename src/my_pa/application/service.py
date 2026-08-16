@@ -543,6 +543,7 @@ def _task_view(task: TaskManagementTask) -> TaskView:
     return TaskView(
         task_id=task.task_id,
         title=task.title,
+        description=task.description,
         lifecycle_state=task.lifecycle_state,
         evidence_state=task.evidence_state,
         version=task.version,
@@ -1933,8 +1934,28 @@ class ApplicationService:
                         "basis_refs": list(item.basis_refs),
                         "consequence": item.consequence,
                         "next_step": item.next_step,
-                        "priority": item.priority,
+                        "attention_rank": item.attention_rank,
                         "generated_at": format_rfc3339(item.generated_at),
+                        **(
+                            {"subject_title": item.subject_title}
+                            if item.subject_title is not None
+                            else {}
+                        ),
+                        **(
+                            {"subject_state": item.subject_state}
+                            if item.subject_state is not None
+                            else {}
+                        ),
+                        **(
+                            {"subject_version": item.subject_version}
+                            if item.subject_version is not None
+                            else {}
+                        ),
+                        **(
+                            {"subject_priority": item.subject_priority}
+                            if item.subject_priority is not None
+                            else {}
+                        ),
                     }
                     for item in items
                 ]
@@ -2618,6 +2639,7 @@ class ApplicationService:
                 title=command.title,
                 origin_evidence_ref=command.origin_evidence_ref,
                 actor=TaskMutationActor.PRINCIPAL,
+                description=command.description,
                 priority=command.priority,
                 due_at=command.due_at,
                 project_id=command.project_id,
@@ -2675,6 +2697,18 @@ class ApplicationService:
                         principal_id=principal_id,
                         task_id=command.task_id,
                         title=command.title,
+                        expected_version=current_version,
+                        actor=TaskMutationActor.PRINCIPAL,
+                        idempotency_key=command.idempotency_key,
+                        client_context=command.client_context,
+                    )
+                    current_version = receipt.task.version
+
+                if command.description is not None and command.description != current.description:
+                    receipt = self._tasks.update_description(
+                        principal_id=principal_id,
+                        task_id=command.task_id,
+                        description=command.description,
                         expected_version=current_version,
                         actor=TaskMutationActor.PRINCIPAL,
                         idempotency_key=command.idempotency_key,

@@ -1936,10 +1936,26 @@ class ApplicationService:
                         "next_step": item.next_step,
                         "attention_rank": item.attention_rank,
                         "generated_at": format_rfc3339(item.generated_at),
-                        **({"subject_title": item.subject_title} if item.subject_title is not None else {}),
-                        **({"subject_state": item.subject_state} if item.subject_state is not None else {}),
-                        **({"subject_version": item.subject_version} if item.subject_version is not None else {}),
-                        **({"subject_priority": item.subject_priority} if item.subject_priority is not None else {}),
+                        **(
+                            {"subject_title": item.subject_title}
+                            if item.subject_title is not None
+                            else {}
+                        ),
+                        **(
+                            {"subject_state": item.subject_state}
+                            if item.subject_state is not None
+                            else {}
+                        ),
+                        **(
+                            {"subject_version": item.subject_version}
+                            if item.subject_version is not None
+                            else {}
+                        ),
+                        **(
+                            {"subject_priority": item.subject_priority}
+                            if item.subject_priority is not None
+                            else {}
+                        ),
                     }
                     for item in items
                 ]

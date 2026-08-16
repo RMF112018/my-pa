@@ -13,6 +13,12 @@ Two additive schema changes in one revision:
    ``PulseItem`` and ``priority`` on ``Task`` (a ``TaskPriority`` enum), and the
    two can no longer be confused at the wire level.
 
+   The parent CHECK is the server-generated name ``pulse_items_priority_check``
+   from ``d2e3f4a5b6c7``'s inline ``CHECK (priority BETWEEN 1 AND 10)``. There
+   is no ``a_pulse_priority_is_bounded`` to drop. Renaming that constraint to
+   ``a_pulse_attention_rank_is_bounded`` keeps the expression the server already
+   holds and matches the live table declaration.
+
 Revision ID: a8a1272aaa0a
 Revises: b7c4e9a2d518
 Create Date: 2026-08-16
@@ -35,33 +41,19 @@ SCHEMA: Final = "knowledge"
 
 def upgrade() -> None:
     op.execute(f"ALTER TABLE {SCHEMA}.tasks ADD COLUMN description text")
+    op.execute(f"ALTER TABLE {SCHEMA}.pulse_items RENAME COLUMN priority TO attention_rank")
     op.execute(
         f"ALTER TABLE {SCHEMA}.pulse_items "
-        "RENAME COLUMN priority TO attention_rank"
-    )
-    op.execute(
-        f'ALTER TABLE {SCHEMA}.pulse_items '
-        'DROP CONSTRAINT "a_pulse_priority_is_bounded"'
-    )
-    op.execute(
-        f"ALTER TABLE {SCHEMA}.pulse_items "
-        "ADD CONSTRAINT a_pulse_attention_rank_is_bounded "
-        "CHECK (attention_rank >= 1 AND attention_rank <= 10)"
+        "RENAME CONSTRAINT pulse_items_priority_check "
+        "TO a_pulse_attention_rank_is_bounded"
     )
 
 
 def downgrade() -> None:
+    op.execute(
+        f"ALTER TABLE {SCHEMA}.pulse_items "
+        "RENAME CONSTRAINT a_pulse_attention_rank_is_bounded "
+        "TO pulse_items_priority_check"
+    )
+    op.execute(f"ALTER TABLE {SCHEMA}.pulse_items RENAME COLUMN attention_rank TO priority")
     op.execute(f"ALTER TABLE {SCHEMA}.tasks DROP COLUMN description")
-    op.execute(
-        f"ALTER TABLE {SCHEMA}.pulse_items "
-        "RENAME COLUMN attention_rank TO priority"
-    )
-    op.execute(
-        f'ALTER TABLE {SCHEMA}.pulse_items '
-        'DROP CONSTRAINT "a_pulse_attention_rank_is_bounded"'
-    )
-    op.execute(
-        f"ALTER TABLE {SCHEMA}.pulse_items "
-        "ADD CONSTRAINT a_pulse_priority_is_bounded "
-        "CHECK (priority >= 1 AND priority <= 10)"
-    )

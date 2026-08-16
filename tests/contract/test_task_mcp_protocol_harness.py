@@ -20,7 +20,7 @@ already cover.
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import pytest
 from tests.conftest import (
@@ -29,9 +29,10 @@ from tests.conftest import (
     staged_record,
     staged_search,
 )
-from tests.contract.test_transport_parity import a_permitted_purpose, document
+from tests.contract.test_transport_parity import document
 from tests.transports import McpTransport, mcp_transport
 
+from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.situation.continuity import (
     ContinuityAcceptanceKind,
@@ -39,7 +40,6 @@ from my_pa.domain.situation.continuity import (
     TaskState,
 )
 from my_pa.domain.situation.continuity import Task as ContinuityTask
-from my_pa.contracts.v1.errors import ErrorCode
 
 type Served = AbstractContextManager[McpTransport]
 
@@ -88,14 +88,14 @@ def test_tools_list_publishes_task_capabilities_with_descriptions(
         assert published[cap_name].description, f"{cap_name} has no description"
 
 
-# ---- 2–7. The happy-path lifecycle: create → read → update → read → transition → list
+# ---- 2-7. The happy-path lifecycle: create -> read -> update -> read -> transition -> list
 
 
 @pytest.mark.slow
 def test_task_lifecycle_over_mcp(scene: Scene) -> None:
     """Walk a Task from creation through update and transition to a terminal state.
 
-    Covers scenarios 2–7 in a single sequential exchange on one MCP session,
+    Covers scenarios 2-7 in a single sequential exchange on one MCP session,
     because each step depends on identifiers and versions returned by the
     previous one.
     """
@@ -107,11 +107,15 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
         # -- 2. tasks.create → returns task_id + version --
         create_answer = session.send(
             "tasks.create",
-            _task_doc(scene, Capability.TASKS_CREATE, {
-                "title": "Harness lifecycle task",
-                "origin_evidence_ref": "cap_origin0001origin0001",
-                "idempotency_key": "harness-lifecycle-create-001",
-            }),
+            _task_doc(
+                scene,
+                Capability.TASKS_CREATE,
+                {
+                    "title": "Harness lifecycle task",
+                    "origin_evidence_ref": "cap_origin0001origin0001",
+                    "idempotency_key": "harness-lifecycle-create-001",
+                },
+            ),
         )
         assert not create_answer.failed, f"tasks.create failed: {create_answer.document}"
         create_payload = create_answer.document["result"]
@@ -136,12 +140,16 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
         # -- 4. tasks.update with expected_version → returns new version --
         update_answer = session.send(
             "tasks.update",
-            _task_doc(scene, Capability.TASKS_UPDATE, {
-                "task_id": task_id,
-                "expected_version": version_0,
-                "idempotency_key": "harness-lifecycle-update-001",
-                "title": "Harness lifecycle task, revised",
-            }),
+            _task_doc(
+                scene,
+                Capability.TASKS_UPDATE,
+                {
+                    "task_id": task_id,
+                    "expected_version": version_0,
+                    "idempotency_key": "harness-lifecycle-update-001",
+                    "title": "Harness lifecycle task, revised",
+                },
+            ),
         )
         assert not update_answer.failed, f"tasks.update failed: {update_answer.document}"
         update_payload = update_answer.document["result"]
@@ -163,20 +171,23 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
         # -- 6. tasks.transition with new version → terminal state --
         transition_answer = session.send(
             "tasks.transition",
-            _task_doc(scene, Capability.TASKS_TRANSITION, {
-                "task_id": task_id,
-                "to_state": "completed",
-                "expected_version": version_1,
-                "idempotency_key": "harness-lifecycle-transition-001",
-                "closure_evidence_ref": "cap_origin0001origin0001",
-            }),
+            _task_doc(
+                scene,
+                Capability.TASKS_TRANSITION,
+                {
+                    "task_id": task_id,
+                    "to_state": "completed",
+                    "expected_version": version_1,
+                    "idempotency_key": "harness-lifecycle-transition-001",
+                    "closure_evidence_ref": "cap_origin0001origin0001",
+                },
+            ),
         )
         assert not transition_answer.failed, (
             f"tasks.transition failed: {transition_answer.document}"
         )
         transitioned = transition_answer.document["result"]["task"]
         assert transitioned["lifecycle_state"] == "completed"
-        version_2 = transitioned["version"]
 
         # -- 7. tasks.list shows the terminal task --
         list_answer = session.send(
@@ -203,11 +214,15 @@ def test_stale_version_produces_conflict_error(scene: Scene) -> None:
         # Create a task
         create_answer = session.send(
             "tasks.create",
-            _task_doc(scene, Capability.TASKS_CREATE, {
-                "title": "Conflict test task",
-                "origin_evidence_ref": "cap_origin0001origin0001",
-                "idempotency_key": "harness-conflict-create-001",
-            }),
+            _task_doc(
+                scene,
+                Capability.TASKS_CREATE,
+                {
+                    "title": "Conflict test task",
+                    "origin_evidence_ref": "cap_origin0001origin0001",
+                    "idempotency_key": "harness-conflict-create-001",
+                },
+            ),
         )
         assert not create_answer.failed
         task = create_answer.document["result"]["task"]
@@ -217,24 +232,32 @@ def test_stale_version_produces_conflict_error(scene: Scene) -> None:
         # Update once to advance the version
         update_answer = session.send(
             "tasks.update",
-            _task_doc(scene, Capability.TASKS_UPDATE, {
-                "task_id": task_id,
-                "expected_version": version_0,
-                "idempotency_key": "harness-conflict-update-001",
-                "title": "Conflict test task, first update",
-            }),
+            _task_doc(
+                scene,
+                Capability.TASKS_UPDATE,
+                {
+                    "task_id": task_id,
+                    "expected_version": version_0,
+                    "idempotency_key": "harness-conflict-update-001",
+                    "title": "Conflict test task, first update",
+                },
+            ),
         )
         assert not update_answer.failed
 
         # Now try to update with the stale version_0
         stale_answer = session.send(
             "tasks.update",
-            _task_doc(scene, Capability.TASKS_UPDATE, {
-                "task_id": task_id,
-                "expected_version": version_0,
-                "idempotency_key": "harness-conflict-update-002",
-                "title": "Conflict test task, stale update",
-            }),
+            _task_doc(
+                scene,
+                Capability.TASKS_UPDATE,
+                {
+                    "task_id": task_id,
+                    "expected_version": version_0,
+                    "idempotency_key": "harness-conflict-update-002",
+                    "title": "Conflict test task, stale update",
+                },
+            ),
         )
         assert stale_answer.failed, "stale version must cause a failure"
         error = stale_answer.document.get("error") or stale_answer.document
@@ -247,16 +270,18 @@ def test_stale_version_produces_conflict_error(scene: Scene) -> None:
 
 
 @pytest.mark.slow
-def test_nonexistent_task_id_produces_not_found(
-    served: Served[McpTransport], scene: Scene
-) -> None:
+def test_nonexistent_task_id_produces_not_found(served: Served[McpTransport], scene: Scene) -> None:
     """tasks.read with a fabricated task_id → not_found error code."""
     with served as session:
         answer = session.send(
             "tasks.read",
-            _task_doc(scene, Capability.TASKS_READ, {
-                "task_id": "tsk_0000000000000000000000000000",
-            }),
+            _task_doc(
+                scene,
+                Capability.TASKS_READ,
+                {
+                    "task_id": "tsk_0000000000000000000000000000",
+                },
+            ),
         )
     assert answer.failed, "nonexistent task_id must cause a failure"
     error = answer.document.get("error") or answer.document
@@ -280,9 +305,10 @@ def test_pulse_items_for_tasks_carry_subject_title(scene: Scene) -> None:
     scene.world.searches[scene.enrollment.enrollment_id] = staged_search(scene)
 
     # Stage a continuity-plane task with an overdue due_at so the pulse derivation fires.
+    from tests.conftest import WHEN
+
     from my_pa.domain.common.identifiers import IdKind
     from my_pa.domain.source.registry import issue_identifier
-    from tests.conftest import WHEN
 
     overdue_task = ContinuityTask(
         task_id=issue_identifier(IdKind.TASK),

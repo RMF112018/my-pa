@@ -109,11 +109,8 @@ CAPABILITIES_BEFORE: Final[frozenset[str]] = frozenset(
         "capture.revise",
         "capture.search",
         "continuity.projects",
-        "continuity.projects.create",
         "continuity.pulse",
         "continuity.situations",
-        "continuity.situations.create",
-        "continuity.tasks.create",
         "documents.archive",
         "documents.create",
         "documents.list",
@@ -150,7 +147,6 @@ PURPOSES_BEFORE: Final[frozenset[str]] = frozenset(
         "capture_authoring",
         "capture_review",
         "content_extraction",
-        "continuity_authoring",
         "document_authoring",
         "document_read",
         "knowledge_read",
@@ -340,30 +336,27 @@ def test_the_widening_is_exactly_the_task_read_plane() -> None:
     before = _frozen_literals("_CAPABILITIES_BEFORE_THIS_REVISION")
     assert before == CAPABILITIES_BEFORE
     assert admitted - before == CAPABILITIES_ADDED
-    # The "before" set includes the three continuity-authoring capabilities
-    # (continuity.projects.create, continuity.situations.create,
-    # continuity.tasks.create) that were admitted by the continuity-authoring
-    # migration (WP-06 R5), so the count is 40 (37 from the task-read plane's
-    # predecessor + 3 from continuity-authoring).
-    assert len(before) == 40
+    # Parent `3d7a2a3e8277` still holds the `6b3d9a2f8c14` capability CHECK.
+    # Sibling `7c2e9b4a1d80` is not an ancestor, so the three continuity-authoring
+    # create names are not in "before".
+    assert len(before) == 37
     # WP-TM-03 added 4 capabilities (tasks.read/list/search/history), WP-TM-04
     # added 5 (tasks.create/update/transition/bulk_preview/bulk_confirm), WP-TM-05
     # added 5 (commitments.read/list/waiting_on/create/close), so the count grew
-    # from 40 to 54.
-    assert len(admitted) == 54
+    # from 37 to 51.
+    assert len(admitted) == 51
 
     purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
     purposes_before = _frozen_literals("_PURPOSES_BEFORE_THIS_REVISION")
     assert purposes_before == PURPOSES_BEFORE
     assert purposes - purposes_before == PURPOSES_ADDED
-    # The "before" set includes continuity_authoring (admitted by the
-    # continuity-authoring migration, WP-06 R5), so the count is 13 (12 from the
-    # task-read plane's predecessor + 1 from continuity-authoring).
-    assert len(purposes_before) == 13
+    # Parent still holds the `6b3d9a2f8c14` purpose CHECK. `continuity_authoring`
+    # is the sibling branch's purpose, not this parent's.
+    assert len(purposes_before) == 12
     # WP-TM-03 added 1 purpose (task_read), WP-TM-04 added 1 (task_authoring),
     # WP-TM-05 added 2 (commitment_read, commitment_authoring), so the count grew
-    # from 13 to 17.
-    assert len(purposes) == 17
+    # from 12 to 16.
+    assert len(purposes) == 16
 
 
 def test_the_revision_reads_no_enum() -> None:
@@ -408,27 +401,28 @@ def test_the_revision_runs_empty_to_head_and_head_to_empty(disposable_database: 
 def test_downgrading_this_revision_restores_exactly_the_previous_vocabularies(
     disposable_database: str,
 ) -> None:
-    """Head to the previous head and back, for both constraints.
+    """This revision's own upgrade/downgrade pair, for both constraints.
 
-    At head each constraint admits exactly what its enum declares; one revision
-    down each admits exactly what `3d7a2a3e8277` denotes — **not** whatever the
-    domain declares on the day the downgrade runs, which is the whole of what
-    `D-69` means by a frozen vocabulary. A downgrade that left the four new
-    names standing would make "the database is at `3d7a2a3e8277`" name two
-    different schemas.
+    Standing at `d15c0dc14d09` then returning to `3d7a2a3e8277` must restore
+    exactly what a fresh build of that parent denotes — **not** the sibling
+    continuity-authoring vocabulary, and not whatever the domain declares on
+    the day the downgrade runs. A downgrade that left the new names standing
+    would make "the database is at `3d7a2a3e8277`" name two different schemas.
 
     The round trip rather than a one-way observation: a downgrade that dropped
     both constraints entirely would satisfy "the new name is gone" and would be a
-    database with no closed set at all.
+    database with no closed set at all. Head vocabulary is checked by
+    `test_the_revision_runs_empty_to_head_and_head_to_empty`.
     """
     engine = create_database_engine(disposable_database)
     try:
-        command.upgrade(_config(), "head")
-        declared = {member.value for member in Capability} | {
-            member.value for member in NativeSourceCapability
-        }
-        assert _admitted(engine, "capability_is_known") == declared
-        assert _admitted(engine, "purpose_is_known") == {member.value for member in Purpose}
+        command.upgrade(_config(), TASK_READ_REVISION)
+        assert _admitted(engine, "capability_is_known") == _frozen_literals(
+            "_CAPABILITIES_AT_THIS_REVISION"
+        )
+        assert _admitted(engine, "purpose_is_known") == _frozen_literals(
+            "_PURPOSES_AT_THIS_REVISION"
+        )
 
         command.downgrade(_config(), PREVIOUS_REVISION)
         assert _admitted(engine, "capability_is_known") == CAPABILITIES_BEFORE
@@ -437,9 +431,13 @@ def test_downgrading_this_revision_restores_exactly_the_previous_vocabularies(
         # what makes the downgrade a vocabulary change and not a schema loss.
         assert "task_history" in _tables(engine)
 
-        command.upgrade(_config(), "head")
-        assert _admitted(engine, "capability_is_known") == declared
-        assert _admitted(engine, "purpose_is_known") == {member.value for member in Purpose}
+        command.upgrade(_config(), TASK_READ_REVISION)
+        assert _admitted(engine, "capability_is_known") == _frozen_literals(
+            "_CAPABILITIES_AT_THIS_REVISION"
+        )
+        assert _admitted(engine, "purpose_is_known") == _frozen_literals(
+            "_PURPOSES_AT_THIS_REVISION"
+        )
     finally:
         engine.dispose()
 

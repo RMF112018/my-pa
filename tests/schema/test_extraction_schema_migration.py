@@ -226,6 +226,9 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     # created, so it stays out of this dict; these two satellite tables are what
     # `3d7a2a3e8277` creates.
     "3d7a2a3e8277": frozenset({"task_recurrences", "task_history"}),
+    # WP-TM-05's commitment-history satellite: `commitments` itself is extended,
+    # not created, so it stays out of this dict.
+    "a1c9e6f2b834": frozenset({"commitment_history"}),
     "9b2d5f8c3e01": frozenset({"context_runs", "context_run_items"}),
     "c6f1a8d3e204": frozenset({"context_preference_events", "context_preference_current"}),
 }

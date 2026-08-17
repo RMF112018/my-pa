@@ -216,6 +216,16 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("page", "principal_id"),
         ("request", "principal_id"),
     ),
+    "application/goodnotes_delivery.py": (("existing", "principal_id"),),
+    "infrastructure/persistence/goodnotes_delivery.py": (
+        ("association", "principal_id"),
+        ("association", "principal_id"),
+        ("receipt", "principal_id"),
+        ("receipt", "principal_id"),
+        ("receipt", "principal_id"),
+        ("values", "principal_id"),
+        ("values", "principal_id"),
+    ),
     # The runtime receives the authenticated local operator Principal from the
     # CLI and compares a stored retry receipt to that same admitted plan.
     "bootstrap/goodnotes.py": (("prior", "principal_id"),),

@@ -64,7 +64,8 @@ Abacus account, or live personal data.
 
 None of these steps turns production on by existing in this document. Marked
 steps require a separate operator decision. GN-09 TBR live bridge and WP-15
-production activation are out of scope here.
+production activation are out of scope here; see
+[`goodnotes-tbr-preservation.md`](goodnotes-tbr-preservation.md).
 
 1. Merge the reviewed pull request.
 2. Local canary: FAST synthetic suite, including

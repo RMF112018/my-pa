@@ -297,13 +297,19 @@ class Settings(StrictModel):
     mcp_surface_disabled: bool = False
     remote_mcp_enabled: bool = False
     remote_writes_enabled: bool = False
-    #: Process-local gate for the proposed regular Abacus Agent Task
-    #: **GoodNotes Durable Note Intelligence**. Default off. Turning it on does
-    #: not create, edit, enable, or disable a live Abacus Task, does not call
-    #: Abacus APIs, and does not change bounded GoodNotes OCR/review composition.
-    #: `bootstrap.goodnotes_durable_note` is what reads it; `bootstrap.goodnotes`
-    #: does not.
+    #: Process-local gates for GoodNotes Durable Note Ingestion rollout (WP-15).
+    #: All default off. True does not ingest, write canonical notes, deliver,
+    #: call Abacus, mutate NAS, or change the existing TBR Task.
+    #: `bootstrap.goodnotes_rollout` reads all six; `bootstrap.goodnotes_durable_note`
+    #: still reads the intelligence gate. `bootstrap.goodnotes` (bounded
+    #: OCR/review) and `bootstrap.goodnotes_tbr` (GN-09 contract) do not.
+    #: Semantic Agent work dispatch reuses the existing intelligence gate.
+    goodnotes_durable_note_ingestion_enabled: bool = False
     goodnotes_durable_note_intelligence_enabled: bool = False
+    goodnotes_canonical_semantic_writes_enabled: bool = False
+    goodnotes_user_facing_summary_delivery_enabled: bool = False
+    goodnotes_tbr_bridge_enabled: bool = False
+    goodnotes_self_improving_optimizer_enabled: bool = False
     remote_mcp_public_host: str = ""
     #: Legacy Entra verifier inputs remain available only to the dormant
     #: `auth_mode=entra` path. Remote MCP never reads them.

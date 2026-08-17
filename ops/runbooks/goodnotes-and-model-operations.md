@@ -89,7 +89,9 @@ synthetic fixture; they do not call a model or run an optimizer. The proposed
 regular Agent Task **GoodNotes Durable Note Intelligence** is a separate dormant
 repository contract
 ([`goodnotes-durable-note-intelligence.md`](goodnotes-durable-note-intelligence.md));
-it does not authorize a live Abacus Task. The GN-09 TBR Staff Meeting contract
+it does not authorize a live Abacus Task. WP-15 rollout gates
+([`goodnotes-durable-note-rollout.md`](goodnotes-durable-note-rollout.md))
+default off and are not read by this composition. The GN-09 TBR Staff Meeting contract
 ([`goodnotes-tbr-preservation.md`](goodnotes-tbr-preservation.md)) is a
 separate dormant regression freeze. General GoodNotes must not merge TBR
 red/black/blue ink rules, SharePoint archival, or Teams/email. The existing

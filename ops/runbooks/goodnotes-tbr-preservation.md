@@ -18,6 +18,9 @@ Related:
 - [`goodnotes-durable-note-intelligence.md`](goodnotes-durable-note-intelligence.md)
   — dormant Durable Note Intelligence Task contract. Its GN-09 live-bridge
   exclusion still holds.
+- [`goodnotes-durable-note-rollout.md`](goodnotes-durable-note-rollout.md) —
+  WP-15 dormant flags and activation sequence. Production remains off; the
+  optional-bridge flag does not implement or authorize a live TBR bridge.
 - [`../goodnotes/tbr-staff-meeting-regression.json`](../goodnotes/tbr-staff-meeting-regression.json)
   — frozen regression artifact marked `GN-09_EXTERNAL_TASK_GATE_PENDING`.
 

@@ -224,6 +224,7 @@ class GoodNotesPageVersion:
     content_sha256: str
     observed_at: datetime
     logical_page_id: str | None = None
+    exact_render_sha256: str | None = None
     normalized_render_sha256: str | None = None
     perceptual_hash: str | None = None
     render_width: int | None = None
@@ -240,6 +241,8 @@ class GoodNotesPageVersion:
         ensure_utc(self.observed_at)
         if self.logical_page_id is not None:
             _goodnotes_id(self.logical_page_id, "gnlp")
+        if self.exact_render_sha256 is not None:
+            _sha256(self.exact_render_sha256, what="exact render digest")
         if self.normalized_render_sha256 is not None:
             _sha256(self.normalized_render_sha256, what="normalized render digest")
         if self.perceptual_hash is not None:
@@ -556,7 +559,7 @@ class GoodNotesRenderFingerprint:
 
 @dataclass(frozen=True, slots=True)
 class PageRender:
-    """Versioned page render. PDF rasterization is deferred; bytes may be hashed as-is."""
+    """Versioned page render. Production identity is the pinned visual raster, not raw bytes."""
 
     exact_render_sha256: str
     normalized_render_sha256: str

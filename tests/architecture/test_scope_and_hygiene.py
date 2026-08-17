@@ -250,6 +250,9 @@ CONFINED_IMPORT_ROOTS = {
     # decode, inspect, or re-verify one, which is what keeps "the token was
     # checked here" a fact about the wiring rather than a convention.
     "jwt": "infrastructure/security",
+    # pypdfium2 rasterizes admitted GoodNotes pages. Application code must not
+    # import it; identity matching consumes PageRender values instead.
+    "pypdfium2": "infrastructure/goodnotes",
 }
 
 
@@ -344,9 +347,15 @@ def test_the_derivation_prohibits_nothing_the_package_legitimately_uses() -> Non
         f"the package imports {sorted(unaccounted)}, which the derivation prohibits; "
         "either the import is wrong or the root belongs in SDK_EXEMPT_ROOTS with a reason"
     )
-    assert third_party == {"jwt", "mcp", "psycopg", "pydantic", "sqlalchemy", "starlette"}, (
-        f"the package's third-party surface changed to {sorted(third_party)}"
-    )
+    assert third_party == {
+        "jwt",
+        "mcp",
+        "psycopg",
+        "pydantic",
+        "pypdfium2",
+        "sqlalchemy",
+        "starlette",
+    }, f"the package's third-party surface changed to {sorted(third_party)}"
 
 
 def test_every_exemption_is_actually_used() -> None:
@@ -400,6 +409,7 @@ def test_declared_runtime_dependencies_are_the_agreed_set() -> None:
         "uvicorn",
         "mcp",
         "pyjwt",
+        "pypdfium2",
     }
 
 

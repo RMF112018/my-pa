@@ -58,14 +58,18 @@ the same admitted root. It does not crawl, refuses links, path escape,
 non-regular files, oversize, and unsupported media, and fail-closes on digest
 drift or mid-read mutation. Path, size, SHA-256, and `mtime_ns` are observation
 metadata; `source_root_id` is an opaque alias. Logical-page identity is matched
-from a versioned renderer (default `raw-representation-v1` hashes admitted page
-bytes) rather than page number or transcription. PDF visual rasterization and
-live GoodNotes activation remain deferred.
+from a versioned renderer. The production durable-note profile is
+`pdfium-normalized-v1`: a pinned pypdfium2/pdfium raster, grayscale normalize,
+and dHash. Raw snapshot SHA-256 and per-page `content_sha256` remain hashes of
+admitted bytes and are never used as visual identity. `raw-representation-v1`
+and mapped test doubles remain explicit non-default profiles. Live GoodNotes
+activation remains deferred.
 
 Live GoodNotes root admission, OCR engine selection/licensing, background
 watcher activation, personal-data eligibility, and production database use
-remain operator-gated. Repository tests use synthetic temporary PDF-shaped
-bytes and a deterministic local test command only.
+remain operator-gated. Repository tests use synthetic vector PDFs (byte-different, visually
+equivalent), in-memory fixtures, and a deterministic local test command only.
+No live personal GoodNotes pages are admitted.
 
 Additive knowledge-schema tables persist NOTE_UNIT identity, physical
 occurrences, append-only revisions, structural note links, and exact per-run

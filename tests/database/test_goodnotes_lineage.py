@@ -37,8 +37,14 @@ from my_pa.domain.goodnotes.models import (
     issue_stable_id,
 )
 from my_pa.infrastructure.database.engine import create_database_engine
-from my_pa.infrastructure.goodnotes.render import MappedPageRenderer, RawRepresentationRenderer
+from my_pa.infrastructure.goodnotes.pdf import split_admitted_pdf
+from my_pa.infrastructure.goodnotes.render import (
+    MappedPageRenderer,
+    RawRepresentationRenderer,
+    production_page_renderer,
+)
 from my_pa.infrastructure.persistence.goodnotes import PostgresGoodNotesRepository
+from tests.unit.vector_pdf import Rect, vector_pdf
 
 pytestmark = pytest.mark.database
 ROOT = Path(__file__).resolve().parents[2]
@@ -616,3 +622,79 @@ def test_mapped_renderer_regenerated_unchanged_persists_zero_new_logical_pages(
         assert second.run.new_logical_page_count == 0
         assert second.positions[0].logical_page_id == first.positions[0].logical_page_id
         assert second.positions[0].match_method is GoodNotesMatchMethod.EXACT_NORMALIZED_RENDER
+
+
+def test_visual_renderer_regenerated_pdf_persists_zero_new_logical_pages(engine: Engine) -> None:
+    cover = (Rect(72, 400, 220, 220, 0.15),)
+    body = (Rect(80, 80, 420, 520, 0.45),)
+    original = vector_pdf((cover, body), producer="db-visual-a")
+    regenerated = vector_pdf(
+        (cover, body), producer="db-visual-b", comment="regenerated", dummy_objects=5
+    )
+    assert original != regenerated
+    object_id = "obj_919191919191919191919191"
+    notebook_id = issue_stable_id("gnnb", A, "service-visual-regen")
+    renderer = production_page_renderer()
+
+    def pages(pdf: bytes, version_id: str, observed_at: datetime) -> tuple[SourcePage, ...]:
+        return tuple(
+            _source_page(
+                principal_id=A,
+                source_id="src_919191919191919191919191",
+                object_id=object_id,
+                version_id=version_id,
+                page_number=index,
+                content=part,
+                observed_at=observed_at,
+            )
+            for index, part in enumerate(split_admitted_pdf(pdf), start=1)
+        )
+
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        service = GoodNotesLineageService()
+        first = service.reconcile(
+            LineageReconcileRequest(
+                principal_id=A,
+                request_id="lineage-visual-1",
+                source_root_id="icloud-goodnotes",
+                source_object_id=object_id,
+                observation=_observation("Inbox/visual.pdf", original, 2),
+                pages=pages(original, "ver_919191919191919191919191", WHEN),
+                notebook_id=notebook_id,
+                observed_at=WHEN,
+            ),
+            renderer=renderer,
+            repository=repository,
+            clock=lambda: WHEN,
+        )
+        second = service.reconcile(
+            LineageReconcileRequest(
+                principal_id=A,
+                request_id="lineage-visual-2",
+                source_root_id="icloud-goodnotes",
+                source_object_id=object_id,
+                observation=_observation("Inbox/visual.pdf", regenerated, 2),
+                pages=pages(regenerated, "ver_929292929292929292929292", LATER),
+                notebook_id=notebook_id,
+                observed_at=LATER,
+            ),
+            renderer=renderer,
+            repository=repository,
+            clock=lambda: LATER,
+        )
+        stored = repository.page_version(A, second.positions[0].page_version_id)
+        assert stored is not None
+        assert stored.exact_render_sha256 is not None
+        assert stored.exact_render_sha256 != stored.content_sha256
+        assert stored.normalized_render_sha256 is not None
+        assert stored.normalized_render_sha256 != stored.content_sha256
+        assert second.replayed_snapshot is False
+        assert second.run.new_logical_page_count == 0
+        assert {item.logical_page_id for item in first.positions} == {
+            item.logical_page_id for item in second.positions
+        }
+        assert all(
+            item.match_method is GoodNotesMatchMethod.EXACT_NORMALIZED_RENDER
+            for item in second.positions
+        )

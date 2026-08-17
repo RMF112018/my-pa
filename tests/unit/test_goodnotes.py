@@ -567,6 +567,7 @@ def test_lineage_enums_and_optional_version_fingerprint_defaults() -> None:
         observed_at=WHEN,
     )
     assert version.logical_page_id is None
+    assert version.exact_render_sha256 is None
     assert version.normalized_render_sha256 is None
     fingerprint = GoodNotesRenderFingerprint(
         normalized_render_sha256="b" * 64,

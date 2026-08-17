@@ -35,7 +35,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 DISPOSABLE_DATABASE: Final = "my_pa_goodnotes_semantic_proposal_migration_test"
 SCHEMA: Final = "knowledge"
 REVISION: Final = "d7e1a4c8b926"
-HEAD_REVISION: Final = "e8c1b5a7d204"
+DELIVERY_REVISION: Final = "e8c1b5a7d204"
+HEAD_REVISION: Final = "c3e9a7f1b204"
 PREVIOUS: Final = "c9e2b6a4d813"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_d7e1a4c8b926_admit_goodnotes_work_and_propose.py"
@@ -139,8 +140,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     script = ScriptDirectory.from_config(_config())
     assert list(script.get_heads()) == [HEAD_REVISION]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_revision(HEAD_REVISION).down_revision == REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 53
+    assert script.get_revision(DELIVERY_REVISION).down_revision == REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == DELIVERY_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 54
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

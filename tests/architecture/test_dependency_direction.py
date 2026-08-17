@@ -296,7 +296,7 @@ TRANSPORT_ROOTS = frozenset(
 #: Modules whose names mean "a concrete implementation of a port". An application
 #: module that imports one has taken the composition root's decision.
 PROVIDER_AND_PARSER_ROOTS = frozenset(
-    {"boto3", "fitz", "paramiko", "pdfminer", "pypdf", "smbclient"}
+    {"boto3", "fitz", "paramiko", "pdfminer", "pypdf", "pypdfium2", "smbclient"}
 )
 
 
@@ -657,6 +657,7 @@ PLANTED_IMPORTS = [
     ("from psycopg import connect", "DATABASE_AND_FRAMEWORK_ROOTS"),
     ("import alembic", "DATABASE_AND_FRAMEWORK_ROOTS"),
     ("import pypdf", "PROVIDER_AND_PARSER_ROOTS"),
+    ("import pypdfium2", "PROVIDER_AND_PARSER_ROOTS"),
     ("import paramiko", "PROVIDER_AND_PARSER_ROOTS"),
 ]
 

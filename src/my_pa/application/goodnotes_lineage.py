@@ -89,6 +89,21 @@ class GoodNotesLineageRepository(Protocol):
         self, principal_id: str, notebook_id: str
     ) -> tuple[GoodNotesPriorPageEvidence, ...]: ...
 
+    def notebooks_for_source_object(
+        self, principal_id: str, source_root_id: str, source_object_id: str
+    ) -> tuple[GoodNotesNotebook, ...]: ...
+
+    def notebooks_for_snapshot_digest(
+        self, principal_id: str, source_root_id: str, raw_sha256: str
+    ) -> tuple[GoodNotesNotebook, ...]: ...
+
+    def notebooks_for_visual_page_set(
+        self,
+        principal_id: str,
+        source_root_id: str,
+        normalized_render_sha256s: tuple[str, ...],
+    ) -> tuple[GoodNotesNotebook, ...]: ...
+
     def store_page_version_render(
         self, *, page: GoodNotesPage, version: GoodNotesPageVersion
     ) -> GoodNotesPageVersion: ...
@@ -320,8 +335,16 @@ class GoodNotesLineageService:
             if page.principal_id != principal_id:
                 raise ValueError("source inventory crossed its Principal boundary")
         observed_at = request.observed_at or clock()
-        notebook_id = request.notebook_id or issue_stable_id(
-            "gnnb", principal_id, request.source_root_id, request.source_object_id
+        rendered = tuple(
+            (page.page_number, renderer.render(page.content)) for page in request.pages
+        )
+        notebook_id, identity_status = resolve_notebook_identity(
+            request,
+            principal_id=principal_id,
+            repository=repository,
+            normalized_render_sha256s=tuple(
+                render.normalized_render_sha256 for _, render in rendered
+            ),
         )
         fingerprint = _request_fingerprint(request, renderer, principal_id)
         run = repository.create_run(
@@ -342,7 +365,7 @@ class GoodNotesLineageService:
                 notebook_id=notebook_id,
                 principal_id=principal_id,
                 source_root_id=request.source_root_id,
-                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                identity_status=identity_status,
                 created_at=observed_at,
                 last_observed_at=observed_at,
                 label=request.label,
@@ -403,9 +426,6 @@ class GoodNotesLineageService:
                 positions=existing_positions,
             )
 
-        rendered = tuple(
-            (page.page_number, renderer.render(page.content)) for page in request.pages
-        )
         prior = repository.prior_page_evidence(principal_id, notebook.notebook_id)
         matches = match_logical_pages(
             notebook_id=notebook.notebook_id, current=rendered, prior=prior
@@ -507,6 +527,7 @@ def _page_version(
         content_sha256=digest,
         observed_at=page.observed_at,
         logical_page_id=logical_page_id,
+        exact_render_sha256=render.exact_render_sha256,
         normalized_render_sha256=render.normalized_render_sha256,
         perceptual_hash=render.perceptual_hash,
         render_width=render.width,
@@ -532,3 +553,49 @@ def _request_fingerprint(
         )
         digest.update(hashlib.sha256(page.content).digest())
     return digest.hexdigest()
+
+
+def resolve_notebook_identity(
+    request: LineageReconcileRequest,
+    *,
+    principal_id: str,
+    repository: GoodNotesLineageRepository,
+    normalized_render_sha256s: tuple[str, ...],
+) -> tuple[str, GoodNotesIdentityStatus]:
+    """Resolve notebook identity without path. Path is recorded as history elsewhere.
+
+    Order: caller id, unique source object, unique prior snapshot digest, unique
+    visual page-set. Multiple candidates stay AMBIGUOUS. None issues today's id.
+    """
+    issued = issue_stable_id("gnnb", principal_id, request.source_root_id, request.source_object_id)
+    if request.notebook_id is not None:
+        return request.notebook_id, GoodNotesIdentityStatus.ACTIVE
+    by_object = repository.notebooks_for_source_object(
+        principal_id, request.source_root_id, request.source_object_id
+    )
+    decided = _unique_notebook(by_object, issued)
+    if decided is not None:
+        return decided
+    by_digest = repository.notebooks_for_snapshot_digest(
+        principal_id, request.source_root_id, request.observation.sha256
+    )
+    decided = _unique_notebook(by_digest, issued)
+    if decided is not None:
+        return decided
+    by_visual = repository.notebooks_for_visual_page_set(
+        principal_id, request.source_root_id, normalized_render_sha256s
+    )
+    decided = _unique_notebook(by_visual, issued)
+    if decided is not None:
+        return decided
+    return issued, GoodNotesIdentityStatus.ACTIVE
+
+
+def _unique_notebook(
+    candidates: tuple[GoodNotesNotebook, ...], issued: str
+) -> tuple[str, GoodNotesIdentityStatus] | None:
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0].notebook_id, GoodNotesIdentityStatus.ACTIVE
+    return issued, GoodNotesIdentityStatus.AMBIGUOUS

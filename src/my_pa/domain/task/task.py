@@ -24,7 +24,11 @@ from datetime import datetime
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
-from my_pa.domain.situation.continuity import ContinuityEvidenceState
+from my_pa.domain.situation.continuity import (
+    ContinuityAcceptanceKind,
+    ContinuityEvidenceState,
+    _require_acceptance_pairing,
+)
 from my_pa.domain.task.lifecycle import (
     TERMINAL_TASK_LIFECYCLE_STATES,
     TaskLifecycleState,
@@ -68,6 +72,7 @@ class Task:
     closed_at: datetime | None = None
     closure_evidence_ref: str | None = None
     accepted_by_review_decision_id: str | None = None
+    acceptance_kind: ContinuityAcceptanceKind | None = None
     #: WP-TM-05: the `Commitment` this Task is linked to, if any, and the role
     #: it serves. Neither field turns a Task into a Commitment or vice versa —
     #: `Task` and `Commitment` remain distinct canonical objects, and a linked
@@ -103,7 +108,12 @@ class Task:
             raise ValueError("a task role, when set, is one known value")
         if self.accepted_by_review_decision_id is not None:
             validate_identifier(self.accepted_by_review_decision_id, IdKind.REVIEW_DECISION)
-        _require_acceptance_pairing(self.evidence_state, self.accepted_by_review_decision_id)
+        _require_acceptance_pairing(
+            self.evidence_state,
+            self.accepted_by_review_decision_id,
+            "task",
+            self.acceptance_kind,
+        )
 
         ensure_utc(self.opened_at)
         ensure_utc(self.created_at)
@@ -123,10 +133,3 @@ class Task:
             raise ValueError("a terminal task records when it closed, and only then")
         if is_terminal and not (self.closure_evidence_ref or "").strip():
             raise ValueError("a terminal task carries the evidence that closed it")
-
-
-def _require_acceptance_pairing(
-    evidence_state: ContinuityEvidenceState, review_decision_id: str | None
-) -> None:
-    if (evidence_state is ContinuityEvidenceState.ACCEPTED) is not (review_decision_id is not None):
-        raise ValueError("an accepted task names the review decision that accepted it")

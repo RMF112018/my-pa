@@ -229,8 +229,8 @@ operator acceptance step because no account or client build was available here;
 record its exact version and OAuth profile before production routing. A later
 adapter correction made remote `tools/call` accept domain arguments without
 internal envelope fields; reconnect ChatLLM after deploying that image so it
-reloads `tools/list`. `context.prepare` grants, ChatLLM operating contract, and
-rollback of those grants are
+reloads `tools/list`. `context.prepare` grants, ChatLLM operating contract, the
+task-management grant profile, and rollback of those grants are
 [`managed-knowledge-context.md`](managed-knowledge-context.md); production is
 not activated and live Abacus OAuth remains operator-gated.
 

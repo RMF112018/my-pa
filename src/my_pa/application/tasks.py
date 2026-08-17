@@ -72,7 +72,7 @@ from datetime import datetime
 from my_pa.contracts.ports import TaskManagementUnitOfWork
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
-from my_pa.domain.situation.continuity import ContinuityEvidenceState
+from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.history import (
     TaskHistoryEntry,
@@ -171,10 +171,9 @@ class TaskManagementService:
         def change(current: Task | None) -> Task:
             del current  # a creation attempt never reads an existing row
             now = self._clock()
+            accepted = accepted_by_review_decision_id is not None
             evidence_state = (
-                ContinuityEvidenceState.ACCEPTED
-                if accepted_by_review_decision_id is not None
-                else ContinuityEvidenceState.PROPOSED
+                ContinuityEvidenceState.ACCEPTED if accepted else ContinuityEvidenceState.PROPOSED
             )
             return Task(
                 task_id=issue_identifier(IdKind.TASK),
@@ -192,6 +191,9 @@ class TaskManagementService:
                 project_id=project_id,
                 situation_id=situation_id,
                 accepted_by_review_decision_id=accepted_by_review_decision_id,
+                acceptance_kind=(
+                    ContinuityAcceptanceKind.REVIEW if accepted else ContinuityAcceptanceKind.NONE
+                ),
             )
 
         return self._mutate(

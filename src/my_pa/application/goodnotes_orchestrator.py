@@ -14,14 +14,21 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Protocol
 
-from my_pa.application.goodnotes_delivery import GoodNotesNewOnlyDelivery
+from my_pa.application.goodnotes_delivery import (
+    GoodNotesDeliveryRepository,
+    GoodNotesNewOnlyDelivery,
+)
 from my_pa.application.goodnotes_lineage import (
+    GoodNotesLineageRepository,
     GoodNotesLineageService,
     LineageReconcileRequest,
     ObservedNotebookFile,
     PageRenderer,
 )
-from my_pa.application.goodnotes_occurrences import GoodNotesOccurrenceReconciler
+from my_pa.application.goodnotes_occurrences import (
+    GoodNotesOccurrenceReconciler,
+    GoodNotesOccurrenceRepository,
+)
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.goodnotes.models import (
@@ -59,7 +66,12 @@ class PageRasterizer(PageRenderer, Protocol):
     def render_png(self, page_bytes: bytes) -> tuple[PageRender, bytes]: ...
 
 
-class GoodNotesDurableNoteStore(Protocol):
+class GoodNotesDurableNoteStore(
+    GoodNotesLineageRepository,
+    GoodNotesOccurrenceRepository,
+    GoodNotesDeliveryRepository,
+    Protocol,
+):
     """Lineage, stage ledger, rasters, proposals, occurrences, and preview."""
 
     def create_run(self, run: GoodNotesIngestionRun) -> GoodNotesIngestionRun: ...
@@ -193,7 +205,7 @@ class GoodNotesDurableNoteOrchestrator:
                     observed_at=observed_at,
                 ),
                 renderer=renderer,
-                repository=store,  # type: ignore[arg-type]
+                repository=store,
                 clock=clock,
                 finalize_run=False,
             )
@@ -227,7 +239,7 @@ class GoodNotesDurableNoteOrchestrator:
                     request.principal_id,
                     run.run_id,
                     repository=store,
-                    clock=clock,  # type: ignore[arg-type]
+                    clock=clock,
                 )
                 self._complete_stage(
                     store, run, GoodNotesPipelineStage.RECONCILE, observed_at, clock
@@ -237,7 +249,7 @@ class GoodNotesDurableNoteOrchestrator:
                 request.principal_id,
                 run.run_id,
                 destination,
-                repository=store,  # type: ignore[arg-type]
+                repository=store,
                 clock=clock,
             )
             if GoodNotesPipelineStage.PREVIEW not in completed:

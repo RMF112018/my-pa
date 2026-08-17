@@ -1,6 +1,11 @@
 """Source-first GoodNotes page and region records."""
 
 from my_pa.domain.goodnotes.models import (
+    GoodNotesDeliveryReceipt,
+    GoodNotesEntityAssociation,
+    GoodNotesEntityDirectoryRecord,
+    GoodNotesEntityKind,
+    GoodNotesEntityResolution,
     GoodNotesIdentityStatus,
     GoodNotesIngestionRun,
     GoodNotesIngestionStatus,
@@ -43,6 +48,11 @@ from my_pa.domain.goodnotes.models import (
 )
 
 __all__ = [
+    "GoodNotesDeliveryReceipt",
+    "GoodNotesEntityAssociation",
+    "GoodNotesEntityDirectoryRecord",
+    "GoodNotesEntityKind",
+    "GoodNotesEntityResolution",
     "GoodNotesIdentityStatus",
     "GoodNotesIngestionRun",
     "GoodNotesIngestionStatus",

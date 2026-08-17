@@ -75,5 +75,11 @@ geometry plus crop/context anchors, not transcription. `GoodNotesOccurrenceRecon
 reads Principal-bound semantic proposals, re-reads committed occurrence state,
 and writes those rows atomically with supplied-as-computed change states.
 Uncertainty is `AMBIGUOUS`; identity is never reused from a silent pick.
-The service does not build a user-facing NEW-only summary and does not deliver.
+`GoodNotesNewOnlyDelivery.deliver` then reads committed `NEW` run-note-changes
+only, associates ranked GN-04 candidate strings against existing
+Principal-partitioned Projects/people/notes or stores unresolved literals, and
+writes an immutable delivery receipt. A run with zero NEW changes writes an
+internal suppressed receipt and has no user-facing body. Destination is an
+explicit string such as `operator-local`; this path does not send to Teams,
+email, or Abacus and does not create Projects, people, or Tasks.
 Agent and MCP exposure of reconciliation remain later slices.

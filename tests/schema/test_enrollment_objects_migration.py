@@ -188,6 +188,8 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "goodnotes_note_links",
         "goodnotes_run_note_changes",
         "goodnotes_semantic_proposals",
+        "goodnotes_entity_associations",
+        "goodnotes_delivery_receipts",
     }
 )
 

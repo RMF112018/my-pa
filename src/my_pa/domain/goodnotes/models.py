@@ -29,11 +29,13 @@ _ID_PREFIXES = frozenset(
         "gnlink",
         "gnchg",
         "gnprp",
+        "gndlv",
+        "gnent",
     }
 )
 _ID = re.compile(
     r"\A(?:gnpg|gnver|gnreg|gnrec|gnnb|gnsnap|gnlp|gnrun|"
-    r"gnnt|gnocc|gnrev|gnlink|gnchg|gnprp)_[a-f0-9]{24}\Z"
+    r"gnnt|gnocc|gnrev|gnlink|gnchg|gnprp|gndlv|gnent)_[a-f0-9]{24}\Z"
 )
 _SHA256 = re.compile(r"\A[a-f0-9]{64}\Z")
 _GEOMETRY_KEY = re.compile(
@@ -45,6 +47,10 @@ _ANALYZER_TEXT_MAX = 100
 _SCHEMA_VERSION_MAX = 40
 _GEOMETRY_KEY_MAX = 96
 _TARGET_KEY_MAX = 80
+_DESTINATION_MAX = 64
+_CANDIDATE_MAX = 200
+_DELIVERY_BODY_MAX = 200_000
+_DESTINATION = re.compile(r"\A[a-z][a-z0-9-]{0,62}\Z")
 
 
 def issue_stable_id(prefix: str, *parts: str) -> str:
@@ -126,6 +132,17 @@ class GoodNotesNoteChangeState(StrEnum):
     REVISED = "REVISED"
     REMOVED_OR_NO_LONGER_PRESENT = "REMOVED_OR_NO_LONGER_PRESENT"
     AMBIGUOUS = "AMBIGUOUS"
+
+
+class GoodNotesEntityResolution(StrEnum):
+    ASSOCIATED = "ASSOCIATED"
+    UNRESOLVED = "UNRESOLVED"
+
+
+class GoodNotesEntityKind(StrEnum):
+    PROJECT = "PROJECT"
+    PERSON = "PERSON"
+    NOTE = "NOTE"
 
 
 def occurrence_geometry_key(
@@ -947,3 +964,82 @@ class GoodNotesSemanticProposal:
         _sha256(self.request_fingerprint, what="request fingerprint")
         _sha256(self.payload_sha256, what="payload digest")
         ensure_utc(self.created_at)
+
+
+def _destination(value: str) -> None:
+    if not _DESTINATION.fullmatch(value) or len(value) > _DESTINATION_MAX:
+        raise ValueError("destination must be a bounded explicit token")
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesEntityDirectoryRecord:
+    """Existing Principal-partitioned Project, person, or note a candidate may match."""
+
+    entity_id: str
+    kind: GoodNotesEntityKind
+    normalized_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesEntityAssociation:
+    """Principal-bound candidate association or unresolved literal. Not a note link."""
+
+    association_id: str
+    principal_id: str
+    run_id: str
+    note_id: str
+    candidate: str
+    rank: int
+    resolution: GoodNotesEntityResolution
+    created_at: datetime
+    entity_kind: GoodNotesEntityKind | None = None
+    resolved_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.association_id, "gnent")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _goodnotes_id(self.run_id, "gnrun")
+        _goodnotes_id(self.note_id, "gnnt")
+        _bounded_text(self.candidate, what="candidate", maximum=_CANDIDATE_MAX)
+        if type(self.rank) is not int or self.rank < 1:
+            raise ValueError("rank must be a positive integer")
+        ensure_utc(self.created_at)
+        associated = self.resolution is GoodNotesEntityResolution.ASSOCIATED
+        if associated != (self.entity_kind is not None) or associated != (
+            self.resolved_id is not None
+        ):
+            raise ValueError(
+                "an association must carry a resolved identity exactly when associated"
+            )
+        if self.resolved_id is not None:
+            _bounded_text(self.resolved_id, what="resolved identity", maximum=72)
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesDeliveryReceipt:
+    """Immutable NEW-only delivery receipt. Replay is the same row, not a send."""
+
+    receipt_id: str
+    principal_id: str
+    run_id: str
+    destination: str
+    summary_hash: str
+    suppressed: bool
+    created_at: datetime
+    body: str | None = field(default=None, repr=False)
+    replayed: bool = False
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.receipt_id, "gndlv")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _goodnotes_id(self.run_id, "gnrun")
+        _destination(self.destination)
+        _sha256(self.summary_hash, what="summary digest")
+        ensure_utc(self.created_at)
+        if self.suppressed:
+            if self.body is not None:
+                raise ValueError("a suppressed delivery has no user-facing body")
+            return
+        if self.body is None:
+            raise ValueError("an unsuppressed delivery requires a user-facing body")
+        _bounded_text(self.body, what="delivery body", maximum=_DELIVERY_BODY_MAX)

@@ -5491,6 +5491,145 @@ goodnotes_semantic_proposals = Table(
     ),
 )
 
+#: Principal-bound associations from ranked GN-04 candidate strings. Does not
+#: reuse `goodnotes_note_links` kinds. Unresolved literals stay unresolved;
+#: nothing here creates a Project, person, or Task.
+goodnotes_entity_associations = Table(
+    "goodnotes_entity_associations",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("association_id", String(36), primary_key=True),
+    Column("run_id", String(36), nullable=False),
+    Column("note_id", String(36), nullable=False),
+    Column("candidate", String(200), nullable=False),
+    Column("rank", Integer, nullable=False),
+    Column("resolution", String(16), nullable=False),
+    Column("entity_kind", String(16)),
+    Column("resolved_id", String(72)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "association_id ~ '^gnent_[a-f0-9]{24}$'",
+        name="goodnotes_entity_association_id_shape",
+    ),
+    CheckConstraint(
+        "run_id ~ '^gnrun_[a-f0-9]{24}$'",
+        name="goodnotes_entity_association_run_id_shape",
+    ),
+    CheckConstraint(
+        "note_id ~ '^gnnt_[a-f0-9]{24}$'",
+        name="goodnotes_entity_association_note_id_shape",
+    ),
+    CheckConstraint(
+        "char_length(candidate) BETWEEN 1 AND 200",
+        name="goodnotes_entity_association_candidate_is_bounded",
+    ),
+    CheckConstraint(
+        "rank >= 1",
+        name="goodnotes_entity_association_rank_is_positive",
+    ),
+    CheckConstraint(
+        "resolution IN ('ASSOCIATED', 'UNRESOLVED')",
+        name="goodnotes_entity_association_resolution_is_known",
+    ),
+    CheckConstraint(
+        "entity_kind IS NULL OR entity_kind IN ('PROJECT', 'PERSON', 'NOTE')",
+        name="goodnotes_entity_association_kind_is_known",
+    ),
+    CheckConstraint(
+        "resolved_id IS NULL OR char_length(resolved_id) BETWEEN 1 AND 72",
+        name="goodnotes_entity_association_resolved_id_is_bounded",
+    ),
+    CheckConstraint(
+        "("
+        "resolution = 'ASSOCIATED' AND entity_kind IS NOT NULL "
+        "AND resolved_id IS NOT NULL"
+        ") OR ("
+        "resolution = 'UNRESOLVED' AND entity_kind IS NULL "
+        "AND resolved_id IS NULL"
+        ")",
+        name="goodnotes_entity_association_resolution_matches",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "run_id",
+        "note_id",
+        "rank",
+        "candidate",
+        name="one_goodnotes_entity_association_candidate",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_entity_associations_run_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "note_id"],
+        [
+            f"{SCHEMA}.goodnotes_notes.principal_id",
+            f"{SCHEMA}.goodnotes_notes.note_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_entity_associations_note_fk",
+    ),
+)
+
+#: Immutable NEW-only delivery receipts. Unique over
+#: (principal_id, run_id, destination, summary_hash). Same key replays.
+goodnotes_delivery_receipts = Table(
+    "goodnotes_delivery_receipts",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("receipt_id", String(36), primary_key=True),
+    Column("run_id", String(36), nullable=False),
+    Column("destination", String(64), nullable=False),
+    Column("summary_hash", String(64), nullable=False),
+    Column("suppressed", Boolean, nullable=False),
+    Column("body", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "receipt_id ~ '^gndlv_[a-f0-9]{24}$'",
+        name="goodnotes_delivery_receipt_id_shape",
+    ),
+    CheckConstraint(
+        "run_id ~ '^gnrun_[a-f0-9]{24}$'",
+        name="goodnotes_delivery_receipt_run_id_shape",
+    ),
+    CheckConstraint(
+        "char_length(destination) BETWEEN 1 AND 64 AND destination ~ '^[a-z][a-z0-9-]{0,62}$'",
+        name="goodnotes_delivery_destination_shape",
+    ),
+    CheckConstraint(
+        "summary_hash ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_delivery_summary_hash_shape",
+    ),
+    CheckConstraint(
+        "(suppressed AND body IS NULL) OR "
+        "(NOT suppressed AND body IS NOT NULL "
+        "AND char_length(body) BETWEEN 1 AND 200000)",
+        name="goodnotes_delivery_body_matches_suppression",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "run_id",
+        "destination",
+        "summary_hash",
+        name="one_goodnotes_delivery_summary",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_delivery_receipts_run_fk",
+    ),
+)
+
 #: One row per `context.prepare` disclosure. Insert only. Reconstructs which
 #: evidence references were returned without storing the query, conversation
 #: context, or excerpt text. `remote_client_id` is omitted rather than stored

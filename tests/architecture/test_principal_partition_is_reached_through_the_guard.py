@@ -111,6 +111,7 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         "infrastructure/persistence/continuity_read.py",
         "infrastructure/persistence/goodnotes.py",
         "infrastructure/persistence/goodnotes_semantics.py",
+        "infrastructure/persistence/goodnotes_delivery.py",
         # Both job queues gained `principal_id` at revision `4f1a8b6d92e3`; the
         # dequeue and the reap carry the partition and the enqueue stamps it
         # from the subject's stored owner. It also names `enrollments` and
@@ -272,6 +273,11 @@ PER_MODULE_ONLY: Final = {
     "infrastructure/persistence/goodnotes_semantics.py": (
         "all reads use the shared partition criterion and proposal inserts use "
         "principal_bound_values; helper-built joins consume those predicates."
+    ),
+    "infrastructure/persistence/goodnotes_delivery.py": (
+        "all reads use the shared partition criterion and receipt/association "
+        "inserts use principal_bound_values; helper-built predicates consume "
+        "those calls."
     ),
     "infrastructure/persistence/continuity_read.py": (
         "one helper applies partition_criterion to every read-model table; the "

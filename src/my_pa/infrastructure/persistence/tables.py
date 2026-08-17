@@ -5135,9 +5135,10 @@ goodnotes_page_positions = Table(
 )
 
 # Additive GoodNotes NOTE_UNIT plane. A PDF is not a note and a page is not a
-# note. Occurrence identity is `geometry_key` (canonical 4-decimal box plus
-# crop digest or `none`); transcription is not the unique key. Revisions and
-# run-change rows are immutable. No FK CASCADE from a source table.
+# note. Occurrence identity is the occurrence id; `geometry_key` is the current
+# locator (canonical 4-decimal box plus server crop digest or `none`).
+# Transcription is not the unique key. Historical page/snapshot meaning lives
+# on revisions and run-change rows. No FK CASCADE from a source table.
 goodnotes_notes = Table(
     "goodnotes_notes",
     METADATA,
@@ -5246,6 +5247,12 @@ goodnotes_note_occurrences = Table(
         "geometry_key",
         name="one_goodnotes_occurrence_geometry",
     ),
+    UniqueConstraint(
+        "principal_id",
+        "occurrence_id",
+        "note_id",
+        name="one_goodnotes_occurrence_note_pair",
+    ),
     ForeignKeyConstraint(
         ["principal_id", "note_id"],
         [
@@ -5263,6 +5270,15 @@ goodnotes_note_occurrences = Table(
         ],
         ondelete="RESTRICT",
         name="goodnotes_note_occurrences_logical_page_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "page_version_id"],
+        [
+            f"{SCHEMA}.goodnotes_page_versions.principal_id",
+            f"{SCHEMA}.goodnotes_page_versions.page_version_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_occurrences_page_version_fk",
     ),
     ForeignKeyConstraint(
         ["principal_id", "snapshot_id"],
@@ -5298,6 +5314,8 @@ goodnotes_note_revisions = Table(
     Column("transcription", Text, nullable=False),
     Column("primary_class", String(16)),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("page_version_id", String(30)),
+    Column("snapshot_id", String(36)),
     CheckConstraint(
         "revision_id ~ '^gnrev_[a-f0-9]{24}$'",
         name="goodnotes_revision_id_shape",
@@ -5331,6 +5349,14 @@ goodnotes_note_revisions = Table(
         "('MEETING', 'PROJECT', 'RELATIONSHIP', 'GENERAL')",
         name="goodnotes_revision_primary_class_is_known",
     ),
+    CheckConstraint(
+        "page_version_id IS NULL OR page_version_id ~ '^gnver_[a-f0-9]{24}$'",
+        name="goodnotes_revision_page_version_id_shape",
+    ),
+    CheckConstraint(
+        "snapshot_id IS NULL OR snapshot_id ~ '^gnsnap_[a-f0-9]{24}$'",
+        name="goodnotes_revision_snapshot_id_shape",
+    ),
     ForeignKeyConstraint(
         ["principal_id", "note_id"],
         [
@@ -5341,13 +5367,14 @@ goodnotes_note_revisions = Table(
         name="goodnotes_note_revisions_note_fk",
     ),
     ForeignKeyConstraint(
-        ["principal_id", "occurrence_id"],
+        ["principal_id", "occurrence_id", "note_id"],
         [
             f"{SCHEMA}.goodnotes_note_occurrences.principal_id",
             f"{SCHEMA}.goodnotes_note_occurrences.occurrence_id",
+            f"{SCHEMA}.goodnotes_note_occurrences.note_id",
         ],
         ondelete="RESTRICT",
-        name="goodnotes_note_revisions_occurrence_fk",
+        name="goodnotes_note_revisions_occurrence_note_fk",
     ),
     ForeignKeyConstraint(
         ["principal_id", "supersedes_revision_id"],
@@ -5357,6 +5384,24 @@ goodnotes_note_revisions = Table(
         ],
         ondelete="RESTRICT",
         name="goodnotes_note_revisions_supersedes_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "page_version_id"],
+        [
+            f"{SCHEMA}.goodnotes_page_versions.principal_id",
+            f"{SCHEMA}.goodnotes_page_versions.page_version_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_revisions_page_version_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "snapshot_id"],
+        [
+            f"{SCHEMA}.goodnotes_source_snapshots.principal_id",
+            f"{SCHEMA}.goodnotes_source_snapshots.snapshot_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_note_revisions_snapshot_fk",
     ),
 )
 
@@ -5478,10 +5523,14 @@ goodnotes_run_note_changes = Table(
     Column("principal_id", String(72), primary_key=True),
     Column("change_id", String(36), primary_key=True),
     Column("run_id", String(36), nullable=False),
-    Column("note_id", String(36), nullable=False),
-    Column("occurrence_id", String(36), nullable=False),
+    Column("note_id", String(36)),
+    Column("occurrence_id", String(36)),
     Column("change_state", String(32), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("page_version_id", String(30)),
+    Column("geometry_key", String(96)),
+    Column("reason", String(64)),
+    Column("revision_id", String(36)),
     CheckConstraint(
         "change_id ~ '^gnchg_[a-f0-9]{24}$'",
         name="goodnotes_change_id_shape",
@@ -5495,11 +5544,57 @@ goodnotes_run_note_changes = Table(
         "'AMBIGUOUS')",
         name="goodnotes_change_state_is_known",
     ),
-    UniqueConstraint(
+    CheckConstraint(
+        "("
+        "change_state IN ("
+        "'NEW', 'UNCHANGED', 'REVISED', 'REMOVED_OR_NO_LONGER_PRESENT'"
+        ") AND note_id IS NOT NULL AND occurrence_id IS NOT NULL"
+        ") OR ("
+        "change_state = 'AMBIGUOUS' AND ("
+        "(note_id IS NOT NULL AND occurrence_id IS NOT NULL) OR ("
+        "note_id IS NULL AND occurrence_id IS NULL "
+        "AND page_version_id IS NOT NULL AND geometry_key IS NOT NULL"
+        ")"
+        ")"
+        ")",
+        name="goodnotes_change_identity_matches_state",
+    ),
+    CheckConstraint(
+        "page_version_id IS NULL OR page_version_id ~ '^gnver_[a-f0-9]{24}$'",
+        name="goodnotes_change_page_version_id_shape",
+    ),
+    CheckConstraint(
+        "geometry_key IS NULL OR ("
+        "char_length(geometry_key) BETWEEN 1 AND 96 AND geometry_key ~ "
+        "'^[0-9]\\.[0-9]{4},[0-9]\\.[0-9]{4},[0-9]\\.[0-9]{4},"
+        "[0-9]\\.[0-9]{4}:(none|[a-f0-9]{64})$'"
+        ")",
+        name="goodnotes_change_geometry_key_shape",
+    ),
+    CheckConstraint(
+        "reason IS NULL OR char_length(reason) BETWEEN 1 AND 64",
+        name="goodnotes_change_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "revision_id IS NULL OR revision_id ~ '^gnrev_[a-f0-9]{24}$'",
+        name="goodnotes_change_revision_id_shape",
+    ),
+    Index(
+        "one_goodnotes_run_occurrence_change",
         "principal_id",
         "run_id",
         "occurrence_id",
-        name="one_goodnotes_run_occurrence_change",
+        unique=True,
+        postgresql_where=text("occurrence_id IS NOT NULL"),
+    ),
+    Index(
+        "one_goodnotes_run_current_ambiguous_change",
+        "principal_id",
+        "run_id",
+        "page_version_id",
+        "geometry_key",
+        unique=True,
+        postgresql_where=text("occurrence_id IS NULL"),
     ),
     ForeignKeyConstraint(
         ["principal_id", "run_id"],
@@ -5520,13 +5615,32 @@ goodnotes_run_note_changes = Table(
         name="goodnotes_run_note_changes_note_fk",
     ),
     ForeignKeyConstraint(
-        ["principal_id", "occurrence_id"],
+        ["principal_id", "occurrence_id", "note_id"],
         [
             f"{SCHEMA}.goodnotes_note_occurrences.principal_id",
             f"{SCHEMA}.goodnotes_note_occurrences.occurrence_id",
+            f"{SCHEMA}.goodnotes_note_occurrences.note_id",
         ],
         ondelete="RESTRICT",
-        name="goodnotes_run_note_changes_occurrence_fk",
+        name="goodnotes_run_note_changes_occurrence_note_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "revision_id"],
+        [
+            f"{SCHEMA}.goodnotes_note_revisions.principal_id",
+            f"{SCHEMA}.goodnotes_note_revisions.revision_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_run_note_changes_revision_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "page_version_id"],
+        [
+            f"{SCHEMA}.goodnotes_page_versions.principal_id",
+            f"{SCHEMA}.goodnotes_page_versions.page_version_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_run_note_changes_page_version_fk",
     ),
 )
 

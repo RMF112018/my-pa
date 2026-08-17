@@ -39,7 +39,7 @@ Drive mirrors are review surfaces rather than a competing ledger.
 | Database container | `my-pa-postgres`, `postgres:17.10`, healthy | `docker ps` |
 | Database binding | `127.0.0.1:5433 -> 5432`, loopback only | `docker ps` port map |
 | Logical database | `my_pa` | `select current_database()` |
-| Alembic head | `a4d9c2e7b815` in the repository, fifty-five revisions; local validation targets disposable databases only | `migrations/versions/*.py`, `alembic heads` |
+| Alembic head | `b7f2c9e4a618` in the repository, fifty-six revisions; local validation targets disposable databases only | `migrations/versions/*.py`, `alembic heads` |
 | Extensions | `pg_trgm`, `unaccent`, `plpgsql` | `select extname from pg_extension` |
 
 ## 2. Verified corpus claim
@@ -89,7 +89,7 @@ section disagrees with the tree.
 | `domain/source`, `domain/extraction`, `domain/search` — registry, bounded enrollment, provider port, extraction outcomes, quarantine, coverage, search query | Implemented and tested |
 | `infrastructure/persistence` — registry, enrollment, jobs, extraction, quarantine, coverage, lexical search | Implemented; covered by the database tier |
 | `infrastructure/providers/fixture.py` — read-only fixture source provider | Implemented and tested |
-| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes, operations, task management, context prepare/feedback, OAuth refresh-token families, GoodNotes notebook lineage, GoodNotes NOTE_UNIT occurrence persistence, GoodNotes semantic work/proposal receipts, GoodNotes entity associations with NEW-only delivery receipts, and additive GoodNotes exact visual render digests, additive `goodnotes.content` vocabulary, and additive durable-note stage ledger and Principal-bound page rasters | Implemented, fifty-five revisions, head `a4d9c2e7b815` |
+| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes, operations, task management, context prepare/feedback, OAuth refresh-token families, GoodNotes notebook lineage, GoodNotes NOTE_UNIT occurrence persistence, GoodNotes semantic work/proposal receipts, GoodNotes entity associations with NEW-only delivery receipts, and additive GoodNotes exact visual render digests, additive `goodnotes.content` vocabulary, additive durable-note stage ledger and Principal-bound page rasters, and additive GoodNotes server-grounded NOTE_UNIT crop identity with immutable revision provenance | Implemented, fifty-six revisions, head `b7f2c9e4a618` |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
 All forty-eight capability names, their operator-only flags, and their permitted

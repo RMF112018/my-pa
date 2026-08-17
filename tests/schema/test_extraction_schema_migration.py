@@ -254,6 +254,7 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "e8c1b5a7d204": frozenset({"goodnotes_entity_associations", "goodnotes_delivery_receipts"}),
     "c3e9a7f1b204": frozenset(),
     "a4d9c2e7b815": frozenset({"goodnotes_ingestion_run_stages", "goodnotes_page_rasters"}),
+    "b7f2c9e4a618": frozenset(),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

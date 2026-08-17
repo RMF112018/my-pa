@@ -144,3 +144,9 @@ class Purpose(StrEnum):
     # purpose that grants both.
     GOODNOTES_WORK = "goodnotes_work"
     GOODNOTES_PROPOSAL = "goodnotes_proposal"
+    # Page-version visual content is a purpose of its own rather than a reuse of
+    # `goodnotes_work` or `knowledge_read`. `goodnotes_work` is the metadata
+    # handle. `knowledge_read` is extracted text inside one enrollment. A purpose
+    # wide enough to cover both the handle and the handwriting raster is a
+    # purpose that grants both.
+    GOODNOTES_CONTENT = "goodnotes_content"

@@ -308,7 +308,7 @@ def test_the_ingress_address_carries_no_placeholder() -> None:
     """A remote client addresses one capability and cannot name another.
 
     `PATH_TEMPLATE` has a `{capability}` segment because a local caller reaches
-    forty-seven capabilities. The ingress has none, so there is no segment a remote
+    forty-eight capabilities. The ingress has none, so there is no segment a remote
     client could put a different name in — and nothing to enforce, because there
     is nothing to enforce it against.
     """

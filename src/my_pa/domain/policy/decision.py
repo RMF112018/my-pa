@@ -252,6 +252,7 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # compared against. Requiring one would make both permanently unusable.
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GOODNOTES_CONTENT,
     }
 )
 

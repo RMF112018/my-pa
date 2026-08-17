@@ -254,6 +254,7 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.CONTEXT_PREPARE, Purpose.CONTEXT_PREPARATION),
         (Capability.CONTEXT_FEEDBACK, Purpose.CONTEXT_PREFERENCE),
         (Capability.GOODNOTES_WORK, Purpose.GOODNOTES_WORK),
+        (Capability.GOODNOTES_CONTENT, Purpose.GOODNOTES_CONTENT),
         (Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL),
     }
 )
@@ -280,10 +281,11 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # the enums, and the literals are what make it a check on the arithmetic.
     # WP-TM-03 added 4 capabilities and 1 purpose; WP-TM-04 added 5 and 1;
     # WP-TM-05 added 5 and 2; context.prepare/feedback added 2 capabilities and
-    # 2 purposes; goodnotes.work/propose added 2 capabilities and 2 purposes.
-    # Unioned: 47 capabilities, 21 purposes, 49 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 49
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 49 == 938
+    # 2 purposes; goodnotes.work/propose added 2 capabilities and 2 purposes;
+    # goodnotes.content added 1 capability and 1 purpose.
+    # Unioned: 48 capabilities, 22 purposes, 50 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 50
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 50 == 1006
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)
@@ -320,6 +322,7 @@ def test_every_capability_has_at_least_one_permitted_purpose() -> None:
 
 def test_goodnotes_capabilities_are_not_operator_only() -> None:
     assert not is_operator_only(Capability.GOODNOTES_WORK)
+    assert not is_operator_only(Capability.GOODNOTES_CONTENT)
     assert not is_operator_only(Capability.GOODNOTES_PROPOSE)
 
 

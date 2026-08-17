@@ -28,12 +28,26 @@ class MemoryLineageRepository:
         self._versions: dict[tuple[str, str], GoodNotesPageVersion] = {}
 
     def create_run(self, run: GoodNotesIngestionRun) -> GoodNotesIngestionRun:
+        held = self.run_by_request(run.principal_id, run.request_id)
+        if held is not None:
+            if held.request_fingerprint != run.request_fingerprint:
+                raise ValueError("the request id is bound to another ingestion")
+            return held
         self.runs[(run.principal_id, run.run_id)] = run
         return run
+
+    def run_by_request(self, principal_id: str, request_id: str) -> GoodNotesIngestionRun | None:
+        for stored in self.runs.values():
+            if stored.principal_id == principal_id and stored.request_id == request_id:
+                return stored
+        return None
 
     def update_run(self, run: GoodNotesIngestionRun) -> GoodNotesIngestionRun:
         self.runs[(run.principal_id, run.run_id)] = run
         return run
+
+    def run(self, principal_id: str, run_id: str) -> GoodNotesIngestionRun | None:
+        return self.runs.get((principal_id, run_id))
 
     def store_notebook(self, notebook: GoodNotesNotebook) -> GoodNotesNotebook:
         key = (notebook.principal_id, notebook.notebook_id)

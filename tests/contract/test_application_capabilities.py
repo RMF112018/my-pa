@@ -1,4 +1,4 @@
-"""All forty-seven capabilities execute real behaviour, and disclose what they did.
+"""All forty-eight capabilities execute real behaviour, and disclose what they did.
 
 Each test below runs one capability through `ApplicationService.invoke` — the
 only public entry point there is — against the real fixture source provider and
@@ -36,6 +36,7 @@ from tests.conftest import (
     build_service,
     metadata_for,
     operator,
+    staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_search,
 )
@@ -44,6 +45,7 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetGoodNotesContent,
     GetGoodNotesWork,
     GetSourceMetadata,
     GetSourceStatus,
@@ -1234,6 +1236,29 @@ def test_goodnotes_work_returns_the_staged_digest(scene: Scene) -> None:
     assert result["content_sha256"] == work.content_sha256
     assert result["run_id"] == work.run_id
     assert "transcription" not in result
+
+
+def test_goodnotes_content_returns_the_pinned_png(scene: Scene) -> None:
+    raster = staged_goodnotes_raster(scene)
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.GOODNOTES_CONTENT,
+            Purpose.GOODNOTES_CONTENT,
+            GetGoodNotesContent(
+                run_id=raster.run_id,
+                page_version_id=raster.page_version_id,
+                content_sha256=raster.exact_render_sha256,
+            ),
+        )
+    )
+    assert result["content_sha256"] == raster.exact_render_sha256
+    assert result["media_type"] == "image/png"
+    assert result["byte_length"] == raster.byte_length
+    assert result["digest"] == raster.png_sha256
+    assert result["content_base64"]
+    assert "path" not in result
 
 
 def test_goodnotes_propose_admits_a_receipt_without_reconciling(scene: Scene) -> None:

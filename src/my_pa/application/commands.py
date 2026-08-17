@@ -97,6 +97,7 @@ __all__ = [
     "FetchSource",
     "GetCapabilities",
     "GetCorpusCoverage",
+    "GetGoodNotesContent",
     "GetGoodNotesWork",
     "GetPulse",
     "GetSourceMetadata",
@@ -1846,6 +1847,33 @@ GetGoodNotesWork.__doc__ = (
 
 
 @dataclass(frozen=True, slots=True)
+class GetGoodNotesContent:
+    capability: ClassVar[Capability] = Capability.GOODNOTES_CONTENT
+
+    run_id: str
+    page_version_id: str
+    content_sha256: str
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.run_id, "gnrun", SafeDetail.RUN_ID)
+        _goodnotes_id(self.page_version_id, "gnver", SafeDetail.PAGE_VERSION_ID)
+        _sha256_digest(self.content_sha256, SafeDetail.CONTENT_SHA256)
+
+
+GetGoodNotesContent.__doc__ = (
+    "`goodnotes.content`: return the bounded PNG bytes of the pinned visual "
+    "raster used for one page-version identity. Call this to inspect handwriting "
+    "after `goodnotes.work`. This does not return a filesystem path, a raw PDF, "
+    "or live personal transcription, and it does not route through "
+    "knowledge.search or knowledge.read.\n"
+    "\n"
+    "The principal is not here. Authority comes from authenticated context. "
+    "There is no path field. A caller-supplied path or principal_id is refused "
+    "because the command cannot carry one."
+)
+
+
+@dataclass(frozen=True, slots=True)
 class SubmitGoodNotesProposal:
     capability: ClassVar[Capability] = Capability.GOODNOTES_PROPOSE
 
@@ -1952,6 +1980,7 @@ type Command = (
     | RecordContextFeedback
     | GetGoodNotesWork
     | SubmitGoodNotesProposal
+    | GetGoodNotesContent
 )
 
 

@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the forty-seven capabilities is addressable over HTTP
+**Reachability.** Every one of the forty-eight capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a forty-eighth capability added to the domain arrives as a failing row instead
+here, so a forty-ninth capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -49,6 +49,7 @@ from tests.conftest import (
     operator,
     staged_capture,
     staged_commitment,
+    staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
     staged_review_case,
@@ -77,6 +78,7 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetGoodNotesContent,
     GetGoodNotesWork,
     GetPulse,
     GetSourceMetadata,
@@ -179,6 +181,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     task = staged_task(scene)
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
+    raster = staged_goodnotes_raster(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id},
@@ -337,6 +340,11 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "run_id": work.run_id,
             "page_version_id": work.page_version_id,
         },
+        Capability.GOODNOTES_CONTENT: {
+            "run_id": raster.run_id,
+            "page_version_id": raster.page_version_id,
+            "content_sha256": raster.exact_render_sha256,
+        },
         Capability.GOODNOTES_PROPOSE: {
             "run_id": work.run_id,
             "page_version_id": work.page_version_id,
@@ -386,6 +394,7 @@ def commands_for(
     task = staged_task(scene)
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
+    raster = staged_goodnotes_raster(scene)
     return {
         Capability.CAPABILITIES_GET: GetCapabilities(),
         Capability.SOURCES_LIST: ListSources(source_id=scene.source.source_id),
@@ -528,6 +537,11 @@ def commands_for(
         Capability.GOODNOTES_WORK: GetGoodNotesWork(
             run_id=work.run_id,
             page_version_id=work.page_version_id,
+        ),
+        Capability.GOODNOTES_CONTENT: GetGoodNotesContent(
+            run_id=raster.run_id,
+            page_version_id=raster.page_version_id,
+            content_sha256=raster.exact_render_sha256,
         ),
         Capability.GOODNOTES_PROPOSE: SubmitGoodNotesProposal(
             run_id=work.run_id,

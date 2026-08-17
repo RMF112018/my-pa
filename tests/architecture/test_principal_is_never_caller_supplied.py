@@ -216,6 +216,31 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("page", "principal_id"),
         ("request", "principal_id"),
     ),
+    # Durable-note orchestration receives the same authenticated Principal as
+    # an explicit DurableNoteRequest field, not a public Command or envelope
+    # value, and threads it into lineage, occurrence, and preview stores.
+    "application/goodnotes_orchestrator.py": (
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+    ),
     "application/goodnotes_delivery.py": (("existing", "principal_id"),),
     # The dormant integrity metric groups already-persisted occurrence rows by
     # their stored partition. It does not read a request-body Principal.

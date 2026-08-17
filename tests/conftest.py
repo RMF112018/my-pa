@@ -154,6 +154,7 @@ from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.goodnotes.models import (
+    GoodNotesPageRaster,
     GoodNotesPageWork,
     GoodNotesSemanticProposal,
     issue_stable_id,
@@ -382,6 +383,7 @@ class World:
     goodnotes_proposals: dict[tuple[str, str], GoodNotesSemanticProposal] = field(
         default_factory=dict
     )
+    goodnotes_rasters: dict[tuple[str, str], GoodNotesPageRaster] = field(default_factory=dict)
     commits: int = 0
     rollbacks: int = 0
     #: Port failures a test wants raised, keyed by the method that should raise.
@@ -1249,6 +1251,15 @@ class _GoodNotesSemantics(GoodNotesSemanticRepository):
     ) -> GoodNotesPageWork | None:
         self._world.fail("goodnotes_semantics")
         return self._world.goodnotes_work.get((principal_id, run_id, page_version_id))
+
+    def page_raster(
+        self, principal_id: str, run_id: str, page_version_id: str
+    ) -> GoodNotesPageRaster | None:
+        self._world.fail("goodnotes_semantics")
+        raster = self._world.goodnotes_rasters.get((principal_id, page_version_id))
+        if raster is None or raster.run_id != run_id:
+            return None
+        return raster
 
     def submit_proposal(
         self,
@@ -2725,6 +2736,47 @@ def staged_goodnotes_work(scene: Scene) -> GoodNotesPageWork:
     )
     scene.world.goodnotes_work[(principal_id, work.run_id, work.page_version_id)] = work
     return work
+
+
+def _staged_gray_png() -> bytes:
+    """One-pixel grayscale PNG. Synthetic, never live handwriting."""
+    import zlib
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return len(data).to_bytes(4, "big") + tag + data + crc.to_bytes(4, "big")
+
+    ihdr = (1).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes([8, 0, 0, 0, 0])
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(b"\x00\xff", 9))
+        + chunk(b"IEND", b"")
+    )
+
+
+def staged_goodnotes_raster(scene: Scene) -> GoodNotesPageRaster:
+    """One synthetic pinned raster so `goodnotes.content` answers."""
+    work = staged_goodnotes_work(scene)
+    existing = scene.world.goodnotes_rasters.get((work.principal_id, work.page_version_id))
+    if existing is not None:
+        return existing
+    png = _staged_gray_png()
+    raster = GoodNotesPageRaster(
+        principal_id=work.principal_id,
+        page_version_id=work.page_version_id,
+        run_id=work.run_id,
+        exact_render_sha256=hashlib.sha256(b"synthetic-goodnotes-raster").hexdigest(),
+        png_sha256=hashlib.sha256(png).hexdigest(),
+        byte_length=len(png),
+        png_bytes=png,
+        renderer_name="synthetic",
+        renderer_version="1",
+        render_profile_version="v1",
+        created_at=WHEN,
+    )
+    scene.world.goodnotes_rasters[(work.principal_id, work.page_version_id)] = raster
+    return raster
 
 
 @pytest.fixture

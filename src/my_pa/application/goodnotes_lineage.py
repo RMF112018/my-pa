@@ -108,6 +108,10 @@ class GoodNotesLineageRepository(Protocol):
         self, *, page: GoodNotesPage, version: GoodNotesPageVersion
     ) -> GoodNotesPageVersion: ...
 
+    def run_by_request(
+        self, principal_id: str, request_id: str
+    ) -> GoodNotesIngestionRun | None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ObservedNotebookFile:
@@ -325,6 +329,7 @@ class GoodNotesLineageService:
         renderer: PageRenderer,
         repository: GoodNotesLineageRepository,
         clock: Callable[[], datetime] = utc_now,
+        finalize_run: bool = True,
     ) -> LineageReconcileResult:
         principal_id = request.principal_id
         validate_identifier(principal_id, IdKind.PRINCIPAL)
@@ -347,19 +352,40 @@ class GoodNotesLineageService:
             ),
         )
         fingerprint = _request_fingerprint(request, renderer, principal_id)
-        run = repository.create_run(
-            GoodNotesIngestionRun(
-                run_id=issue_stable_id("gnrun", principal_id, request.request_id),
-                principal_id=principal_id,
-                source_root_id=request.source_root_id,
-                trigger_type=request.trigger_type,
-                request_id=request.request_id,
-                idempotency_key=request.request_id,
-                request_fingerprint=fingerprint,
-                started_at=observed_at,
-                status=GoodNotesIngestionStatus.RUNNING,
+        existing_run = repository.run_by_request(principal_id, request.request_id)
+        if existing_run is not None:
+            resumable = existing_run.status in {
+                GoodNotesIngestionStatus.PENDING,
+                GoodNotesIngestionStatus.RUNNING,
+                GoodNotesIngestionStatus.FAILED,
+            }
+            if existing_run.request_fingerprint != fingerprint and not resumable:
+                raise ValueError("the request id is bound to another ingestion")
+            run = existing_run
+            if existing_run.status is GoodNotesIngestionStatus.FAILED:
+                run = repository.update_run(
+                    replace(
+                        existing_run,
+                        status=GoodNotesIngestionStatus.RUNNING,
+                        ended_at=None,
+                        error_code=None,
+                        error_class=None,
+                    )
+                )
+        else:
+            run = repository.create_run(
+                GoodNotesIngestionRun(
+                    run_id=issue_stable_id("gnrun", principal_id, request.request_id),
+                    principal_id=principal_id,
+                    source_root_id=request.source_root_id,
+                    trigger_type=request.trigger_type,
+                    request_id=request.request_id,
+                    idempotency_key=request.request_id,
+                    request_fingerprint=fingerprint,
+                    started_at=observed_at,
+                    status=GoodNotesIngestionStatus.RUNNING,
+                )
             )
-        )
         notebook = repository.store_notebook(
             GoodNotesNotebook(
                 notebook_id=notebook_id,
@@ -408,8 +434,12 @@ class GoodNotesLineageService:
             finished = repository.update_run(
                 replace(
                     run,
-                    status=GoodNotesIngestionStatus.REPLAYED,
-                    ended_at=clock(),
+                    status=(
+                        GoodNotesIngestionStatus.REPLAYED
+                        if finalize_run
+                        else GoodNotesIngestionStatus.RUNNING
+                    ),
+                    ended_at=clock() if finalize_run else None,
                     snapshot_count=len(repository.snapshots(principal_id, notebook.notebook_id)),
                     page_count=len(existing_positions),
                     new_logical_page_count=0,
@@ -490,8 +520,12 @@ class GoodNotesLineageService:
         finished = repository.update_run(
             replace(
                 run,
-                status=GoodNotesIngestionStatus.SUCCEEDED,
-                ended_at=clock(),
+                status=(
+                    GoodNotesIngestionStatus.SUCCEEDED
+                    if finalize_run
+                    else GoodNotesIngestionStatus.RUNNING
+                ),
+                ended_at=clock() if finalize_run else None,
                 snapshot_count=len(repository.snapshots(principal_id, notebook.notebook_id)),
                 page_count=len(positions),
                 new_logical_page_count=new_logical,

@@ -72,6 +72,7 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetGoodNotesContent,
     GetGoodNotesWork,
     GetPulse,
     GetSourceMetadata,
@@ -571,6 +572,12 @@ def _get_goodnotes_work(payload: Mapping[str, Any]) -> Command:
     return GetGoodNotesWork(**payload)
 
 
+def _get_goodnotes_content(payload: Mapping[str, Any]) -> Command:
+    if "path" in payload or "principal_id" in payload:
+        raise InvalidRequestError(SafeDetail.RUN_ID)
+    return GetGoodNotesContent(**payload)
+
+
 def _submit_goodnotes_proposal(payload: Mapping[str, Any]) -> Command:
     """`goodnotes.propose`, with JSON arrays converted to the tuples the command holds."""
     converted = dict(payload)
@@ -711,6 +718,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CONTEXT_PREPARE: _prepare_context,
         Capability.CONTEXT_FEEDBACK: _record_context_feedback,
         Capability.GOODNOTES_WORK: _get_goodnotes_work,
+        Capability.GOODNOTES_CONTENT: _get_goodnotes_content,
         Capability.GOODNOTES_PROPOSE: _submit_goodnotes_proposal,
     }
 )
@@ -721,7 +729,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the forty-seven names nothing.
+    not one of the forty-eight names nothing.
     """
     try:
         return Capability(capability)

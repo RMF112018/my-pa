@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes forty-seven capability names and none of them mutates a source,
+  ends: the transport routes forty-eight capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -57,6 +57,7 @@ from tests.conftest import (
     operator,
     staged_capture,
     staged_commitment,
+    staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
     staged_review_case,
@@ -221,6 +222,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     task = staged_task(marked)
     commitment = staged_commitment(marked)
     work = staged_goodnotes_work(marked)
+    raster = staged_goodnotes_raster(marked)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -376,6 +378,11 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.GOODNOTES_WORK: {
             "run_id": work.run_id,
             "page_version_id": work.page_version_id,
+        },
+        Capability.GOODNOTES_CONTENT: {
+            "run_id": raster.run_id,
+            "page_version_id": raster.page_version_id,
+            "content_sha256": raster.exact_render_sha256,
         },
         Capability.GOODNOTES_PROPOSE: {
             "run_id": work.run_id,
@@ -568,6 +575,7 @@ SCOPED_CAPABILITIES = [
         Capability.CONTEXT_PREPARE,
         Capability.CONTEXT_FEEDBACK,
         Capability.GOODNOTES_WORK,
+        Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
     }
 ]

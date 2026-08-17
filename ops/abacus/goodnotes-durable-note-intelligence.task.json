@@ -5,6 +5,7 @@
   "mcp_surface": "my-pa",
   "allowed_capabilities": [
     "goodnotes.work",
+    "goodnotes.content",
     "goodnotes.propose"
   ],
   "constraints": {

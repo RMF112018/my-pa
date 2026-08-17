@@ -1,7 +1,7 @@
 """Revision `b7c4e9a2d518`: merge task-management and context-prepare heads.
 
-Note: This revision is no longer the head. Current head `c3e9a7f1b204` revises
-`e8c1b5a7d204`. The test remains to verify the merge revision's structure and
+Note: This revision is no longer the head. Current head `a4d9c2e7b815` revises
+`c3e9a7f1b204`. The test remains to verify the merge revision's structure and
 frozen literals.
 """
 
@@ -38,7 +38,7 @@ def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PARENTS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 54
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 55
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

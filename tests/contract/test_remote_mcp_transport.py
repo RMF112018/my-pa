@@ -42,6 +42,7 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.CONTEXT_FEEDBACK.value not in first
     assert Capability.GOODNOTES_PROPOSE.value not in first
     assert Capability.GOODNOTES_WORK.value in first
+    assert Capability.GOODNOTES_CONTENT.value in first
     assert Capability.CONTINUITY_PROJECTS_CREATE.value not in first
     assert Capability.SOURCES_ENROLL.value not in first
     assert Capability.DOCUMENTS_CREATE.value not in first

@@ -67,6 +67,7 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetGoodNotesContent,
     GetGoodNotesWork,
     GetPulse,
     GetSourceMetadata,
@@ -280,6 +281,11 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.GOODNOTES_WORK: GetGoodNotesWork(
             run_id=issue_stable_id("gnrun", "denial"),
             page_version_id=issue_stable_id("gnver", "denial"),
+        ),
+        Capability.GOODNOTES_CONTENT: GetGoodNotesContent(
+            run_id=issue_stable_id("gnrun", "denial"),
+            page_version_id=issue_stable_id("gnver", "denial"),
+            content_sha256="a" * 64,
         ),
         Capability.GOODNOTES_PROPOSE: SubmitGoodNotesProposal(
             run_id=issue_stable_id("gnrun", "denial"),
@@ -516,6 +522,7 @@ SCOPED_CAPABILITIES = [
         Capability.CONTEXT_PREPARE,
         Capability.CONTEXT_FEEDBACK,
         Capability.GOODNOTES_WORK,
+        Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
     }
 ]
@@ -612,6 +619,7 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CONTEXT_PREPARE,
         Capability.CONTEXT_FEEDBACK,
         Capability.GOODNOTES_WORK,
+        Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)

@@ -65,6 +65,7 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetGoodNotesContent,
     GetGoodNotesWork,
     GetPulse,
     GetSourceMetadata,
@@ -261,6 +262,7 @@ def _requested_scope(
             | PrepareContext()
             | RecordContextFeedback()
             | GetGoodNotesWork()
+            | GetGoodNotesContent()
             | SubmitGoodNotesProposal()
         ):
             return frozenset()

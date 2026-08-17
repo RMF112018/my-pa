@@ -42,7 +42,8 @@ LINEAGE_REVISION = "f8c3a1e6b247"
 NOTE_REVISION = "c9e2b6a4d813"
 PROPOSAL_REVISION = "d7e1a4c8b926"
 DELIVERY_REVISION = "e8c1b5a7d204"
-HEAD_REVISION = "c3e9a7f1b204"
+EXACT_RENDER_REVISION = "c3e9a7f1b204"
+HEAD_REVISION = "a4d9c2e7b815"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -117,8 +118,9 @@ def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
     assert script.get_revision(NOTE_REVISION).down_revision == LINEAGE_REVISION
     assert script.get_revision(PROPOSAL_REVISION).down_revision == NOTE_REVISION
     assert script.get_revision(DELIVERY_REVISION).down_revision == PROPOSAL_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == DELIVERY_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 54
+    assert script.get_revision(EXACT_RENDER_REVISION).down_revision == DELIVERY_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == EXACT_RENDER_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 55
 
 
 @pytest.mark.database

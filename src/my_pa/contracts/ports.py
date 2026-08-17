@@ -1,4 +1,4 @@
-"""The ports the forty-seven capability use cases call, and nothing else.
+"""The ports the forty-eight capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -78,6 +78,7 @@ from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.goodnotes.models import (
+    GoodNotesPageRaster,
     GoodNotesPageWork,
     GoodNotesReviewCase,
     GoodNotesSemanticProposal,
@@ -974,6 +975,16 @@ class GoodNotesSemanticRepository(ABC):
         """The page version belonging to `run_id` for this Principal, or `None`."""
 
     @abstractmethod
+    def page_raster(
+        self, principal_id: str, run_id: str, page_version_id: str
+    ) -> GoodNotesPageRaster | None:
+        """The pinned visual raster for this run and page version, or `None`.
+
+        The page version must appear in this run's positions. Bytes are the
+        admitted PNG, never a path.
+        """
+
+    @abstractmethod
     def submit_proposal(
         self,
         *,
@@ -1338,9 +1349,10 @@ class UnitOfWork(ABC):
     def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
         """Immutable GoodNotes page-version work and semantic proposal receipts.
 
-        Written by `goodnotes.propose` and read by `goodnotes.work`. Proposals
-        are insert-only. `principal_id` is a parameter on every method and is
-        the authenticated caller's partition, never a caller-supplied field.
+        Written by `goodnotes.propose` and read by `goodnotes.work` and
+        `goodnotes.content`. Proposals are insert-only. `principal_id` is a
+        parameter on every method and is the authenticated caller's partition,
+        never a caller-supplied field.
         """
 
     @property

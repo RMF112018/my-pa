@@ -33,6 +33,7 @@ A = "prn_aaaaaaaaaaaaaaaaaaaaaaaa"
 COVER = (Rect(72, 400, 220, 220, 0.15),)
 BODY = (Rect(80, 80, 420, 520, 0.45),)
 SMALL_MARK = (Rect(72, 400, 220, 220, 0.15), Rect(90, 600, 6, 6, 0.0))
+LARGE_MARK = (Rect(72, 400, 220, 220, 0.15), Rect(40, 40, 200, 280, 0.0))
 ROOT_ID = "icloud-goodnotes"
 
 
@@ -293,7 +294,7 @@ def test_two_identical_blank_pages_are_ambiguous() -> None:
     assert second.run.ambiguous_page_count == 2
 
 
-def test_small_added_mark_matches_by_perceptual_or_normalized_identity() -> None:
+def test_small_added_mark_keeps_logical_page_identity() -> None:
     original = vector_pdf((COVER,), producer="mark-a")
     marked = vector_pdf((SMALL_MARK,), producer="mark-b")
     renderer = production_page_renderer()
@@ -317,18 +318,71 @@ def test_small_added_mark_matches_by_perceptual_or_normalized_identity() -> None
         repository=repository,
     )
     match = second.matches[0]
-    if first_render.normalized_render_sha256 == marked_render.normalized_render_sha256:
-        assert match.match_method is GoodNotesMatchMethod.EXACT_NORMALIZED_RENDER
-        assert match.is_new is False
-        return
-    if first_render.perceptual_hash == marked_render.perceptual_hash:
-        assert match.match_method in {
-            GoodNotesMatchMethod.STRONG_VISUAL_FINGERPRINT,
-            GoodNotesMatchMethod.PERCEPTUAL_STRUCTURAL,
-        }
-        assert match.is_new is False
-        assert match.logical_page_id == first.matches[0].logical_page_id
-        return
-    # Designed tolerance: a mark large enough to change both normalized pixels
-    # and the 8x9 dHash is a new page. Documented rather than forced.
-    assert match.is_new is True
+    assert match.is_new is False
+    assert match.logical_page_id == first.matches[0].logical_page_id
+    assert first_render.normalized_render_sha256 != marked_render.normalized_render_sha256
+    assert first_render.perceptual_hash == marked_render.perceptual_hash
+    assert match.match_method in {
+        GoodNotesMatchMethod.STRONG_VISUAL_FINGERPRINT,
+        GoodNotesMatchMethod.PERCEPTUAL_STRUCTURAL,
+    }
+
+
+def test_large_added_mark_keeps_identity_by_sequence_tiebreak() -> None:
+    original = vector_pdf((COVER,), producer="large-a")
+    marked = vector_pdf((LARGE_MARK,), producer="large-b")
+    renderer = production_page_renderer()
+    first_render = renderer.render(split_admitted_pdf(original)[0])
+    marked_render = renderer.render(split_admitted_pdf(marked)[0])
+    assert first_render.normalized_render_sha256 != marked_render.normalized_render_sha256
+    assert first_render.perceptual_hash != marked_render.perceptual_hash
+    repository = MemoryLineageRepository()
+    first = _reconcile(
+        original,
+        object_id="obj_141414141414141414141414",
+        request_id="large-1",
+        path="Inbox/large.pdf",
+        version_id="ver_141414141414141414141414",
+        repository=repository,
+    )
+    second = _reconcile(
+        marked,
+        object_id="obj_141414141414141414141414",
+        request_id="large-2",
+        path="Inbox/large.pdf",
+        version_id="ver_151515151515151515151515",
+        repository=repository,
+    )
+    match = second.matches[0]
+    assert match.is_new is False
+    assert match.logical_page_id == first.matches[0].logical_page_id
+    assert match.match_method is GoodNotesMatchMethod.SEQUENCE_TIEBREAK
+
+
+def test_middle_page_mark_does_not_reallocate_neighbors() -> None:
+    original = vector_pdf((COVER, BODY, (Rect(300, 300, 40, 40, 0.8),)), producer="mid-a")
+    marked = vector_pdf((COVER, SMALL_MARK, (Rect(300, 300, 40, 40, 0.8),)), producer="mid-b")
+    repository = MemoryLineageRepository()
+    first = _reconcile(
+        original,
+        object_id="obj_161616161616161616161616",
+        request_id="mid-1",
+        path="Inbox/middle.pdf",
+        version_id="ver_161616161616161616161616",
+        repository=repository,
+    )
+    second = _reconcile(
+        marked,
+        object_id="obj_161616161616161616161616",
+        request_id="mid-2",
+        path="Inbox/middle.pdf",
+        version_id="ver_171717171717171717171717",
+        repository=repository,
+    )
+    first_ids = {item.page_number: item.logical_page_id for item in first.matches}
+    second_by_number = {item.page_number: item for item in second.matches}
+    assert second.run.new_logical_page_count == 0
+    assert second_by_number[1].logical_page_id == first_ids[1]
+    assert second_by_number[2].logical_page_id == first_ids[2]
+    assert second_by_number[3].logical_page_id == first_ids[3]
+    assert second_by_number[2].is_new is False

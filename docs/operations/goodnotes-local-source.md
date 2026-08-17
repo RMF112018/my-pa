@@ -67,8 +67,9 @@ activation remains deferred.
 
 Live GoodNotes root admission, OCR engine selection/licensing, background
 watcher activation, personal-data eligibility, and production database use
-remain operator-gated. Repository tests use synthetic temporary PDF-shaped
-bytes and a deterministic local test command only.
+remain operator-gated. Repository tests use synthetic vector PDFs (byte-different, visually
+equivalent), in-memory fixtures, and a deterministic local test command only.
+No live personal GoodNotes pages are admitted.
 
 Additive knowledge-schema tables persist NOTE_UNIT identity, physical
 occurrences, append-only revisions, structural note links, and exact per-run

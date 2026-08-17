@@ -75,6 +75,7 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.COMMITMENTS_CREATE,
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_FEEDBACK,
+        Capability.GOODNOTES_PROPOSE,
     }
 )
 

@@ -22,6 +22,7 @@ import pytest
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime, local_principal
 from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
 from my_pa.domain.identity.principal import PrincipalKind
+from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 A_URL = f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere"
@@ -129,6 +130,13 @@ def test_the_runtime_releases_both_pools() -> None:
     # `dispose` replaces the pool; a second call must stay safe, because a
     # failed start calls it on the way out too.
     built.close()
+
+
+def test_the_composition_wires_task_management_writes(runtime: GatewayRuntime) -> None:
+    """Task mutation over MCP needs the dedicated unit of work, not only `UnitOfWork.tasks`."""
+    assert runtime.service._tasks is not None
+    unit_of_work = runtime.service._task_management_unit_of_work()
+    assert isinstance(unit_of_work, SqlAlchemyTaskManagementUnitOfWork)
 
 
 def test_the_composition_reads_the_configured_limits() -> None:

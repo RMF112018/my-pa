@@ -344,6 +344,8 @@ def test_write_purpose_hides_the_remote_tool_unless_writes_enabled(scene: Scene)
     service = build_service(scene.world, scene.providers)
     disabled = remote_tool_names(service, writes_enabled=False)
     assert Capability.CONTEXT_FEEDBACK.value not in disabled
+    assert Capability.TASKS_CREATE.value not in disabled
     enabled = remote_tool_names(service, writes_enabled=True)
     assert Capability.CONTEXT_FEEDBACK.value in enabled
     assert Capability.CAPTURE_CREATE.value in enabled
+    assert Capability.TASKS_CREATE.value in enabled

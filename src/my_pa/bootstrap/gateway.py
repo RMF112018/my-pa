@@ -190,6 +190,7 @@ from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.capture_clients import authenticate_client, clients_of
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.registry import configured_source_roots
+from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
 from my_pa.infrastructure.security.principal_identity import PrincipalIdentityService
@@ -560,6 +561,9 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     def unit_of_work() -> UnitOfWork:
         return SqlAlchemyUnitOfWork(work_engine, audit=audit)
 
+    def task_management_unit_of_work() -> SqlAlchemyTaskManagementUnitOfWork:
+        return SqlAlchemyTaskManagementUnitOfWork(work_engine)
+
     entra = settings.auth_mode is AuthMode.ENTRA
     principal = None if entra else local_principal()
 
@@ -587,6 +591,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             unit_of_work=unit_of_work,
             limits=settings.effective_limits(),
             managed_store=managed_byte_store(settings, work_engine),
+            task_management_unit_of_work=task_management_unit_of_work,
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, work_engine) if entra else None,

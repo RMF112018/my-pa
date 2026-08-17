@@ -62,6 +62,9 @@ INSTRUCTION_PHRASES = (
     "partial, stale, unavailable, or contradictory",
     "knowledge.read",
     "knowledge.reveal",
+    "tasks.list",
+    "tasks.search",
+    "tasks.read",
     "Do not call context.feedback unless the user explicitly expresses",
     "Do not call it for purely general questions",
 )

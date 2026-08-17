@@ -31,7 +31,7 @@ from sqlalchemy import Engine, and_, asc, desc, insert, select, update
 from sqlalchemy.engine import Connection, Row
 
 from my_pa.contracts.ports import TaskManagementRepository, TaskManagementUnitOfWork
-from my_pa.domain.situation.continuity import ContinuityEvidenceState
+from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.task.history import TaskHistoryEntry, TaskMutationAction, TaskMutationActor
 from my_pa.domain.task.history import TaskMutationOutcome as _TaskMutationOutcome
 from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority, legacy_state_for
@@ -79,6 +79,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
                 closed_at=task.closed_at,
                 closure_evidence_ref=task.closure_evidence_ref,
                 accepted_by_review_decision_id=task.accepted_by_review_decision_id,
+                acceptance_kind=_acceptance_kind_value(task),
                 created_at=task.created_at,
                 updated_at=task.updated_at,
                 lifecycle_state=task.lifecycle_state.value,
@@ -106,6 +107,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
                 closed_at=task.closed_at,
                 closure_evidence_ref=task.closure_evidence_ref,
                 accepted_by_review_decision_id=task.accepted_by_review_decision_id,
+                acceptance_kind=_acceptance_kind_value(task),
                 updated_at=task.updated_at,
                 lifecycle_state=task.lifecycle_state.value,
                 priority=None if task.priority is None else task.priority.value,
@@ -227,6 +229,18 @@ class SqlTaskManagementRepository(TaskManagementRepository):
         )
 
 
+def _acceptance_kind_value(task: Task) -> str:
+    """Persist the same three-way pairing `tables.py` CHECKs on `knowledge.tasks`."""
+
+    if task.acceptance_kind is not None:
+        return task.acceptance_kind.value
+    if task.accepted_by_review_decision_id is not None:
+        return ContinuityAcceptanceKind.REVIEW.value
+    if task.evidence_state is ContinuityEvidenceState.ACCEPTED:
+        return ContinuityAcceptanceKind.DIRECT_PRINCIPAL.value
+    return ContinuityAcceptanceKind.NONE.value
+
+
 def _to_task(row: Row[Any]) -> Task:
     mapping = row._mapping
     return Task(
@@ -252,6 +266,11 @@ def _to_task(row: Row[Any]) -> Task:
         closed_at=mapping["closed_at"],
         closure_evidence_ref=mapping["closure_evidence_ref"],
         accepted_by_review_decision_id=mapping["accepted_by_review_decision_id"],
+        acceptance_kind=(
+            ContinuityAcceptanceKind(mapping["acceptance_kind"])
+            if mapping.get("acceptance_kind") is not None
+            else None
+        ),
     )
 
 

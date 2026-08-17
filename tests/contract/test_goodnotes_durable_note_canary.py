@@ -211,6 +211,8 @@ def test_gate_defaults_off_and_does_not_touch_ocr_composition() -> None:
 def test_work_then_content_then_propose_succeeds_on_synthetic_staged_data(scene: Scene) -> None:
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    assert raster.page_version_id == work.page_version_id
+    assert raster.exact_render_sha256 != work.content_sha256
     handle = succeeded(
         _work(scene, GetGoodNotesWork(run_id=work.run_id, page_version_id=work.page_version_id))
     )
@@ -221,9 +223,9 @@ def test_work_then_content_then_propose_succeeds_on_synthetic_staged_data(scene:
         _content(
             scene,
             GetGoodNotesContent(
-                run_id=raster.run_id,
-                page_version_id=raster.page_version_id,
-                content_sha256=raster.exact_render_sha256,
+                run_id=handle["run_id"],
+                page_version_id=handle["page_version_id"],
+                content_sha256=str(handle["content_sha256"]),
             ),
         )
     )

@@ -1249,11 +1249,11 @@ def test_goodnotes_content_returns_the_pinned_png(scene: Scene) -> None:
             GetGoodNotesContent(
                 run_id=raster.run_id,
                 page_version_id=raster.page_version_id,
-                content_sha256=raster.exact_render_sha256,
+                content_sha256=staged_goodnotes_work(scene).content_sha256,
             ),
         )
     )
-    assert result["content_sha256"] == raster.exact_render_sha256
+    assert result["content_sha256"] == staged_goodnotes_work(scene).content_sha256
     assert result["media_type"] == "image/png"
     assert result["byte_length"] == raster.byte_length
     assert result["digest"] == raster.png_sha256

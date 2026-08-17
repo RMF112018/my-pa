@@ -1862,10 +1862,11 @@ class GetGoodNotesContent:
 
 GetGoodNotesContent.__doc__ = (
     "`goodnotes.content`: return the bounded PNG bytes of the pinned visual "
-    "raster used for one page-version identity. Call this to inspect handwriting "
-    "after `goodnotes.work`. This does not return a filesystem path, a raw PDF, "
-    "or live personal transcription, and it does not route through "
-    "knowledge.search or knowledge.read.\n"
+    "raster used for one page-version identity. Call this after `goodnotes.work` "
+    "with the same `content_sha256` handle work returned (the admitted-page "
+    "digest). The visual raster digest is not the public handle. This does not "
+    "return a filesystem path, a raw PDF, or live personal transcription, and it "
+    "does not route through knowledge.search or knowledge.read.\n"
     "\n"
     "The principal is not here. Authority comes from authenticated context. "
     "There is no path field. A caller-supplied path or principal_id is refused "

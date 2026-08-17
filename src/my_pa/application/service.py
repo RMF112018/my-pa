@@ -3248,7 +3248,7 @@ class ApplicationService:
         carries no principal_id and no path.
         """
         with _translated():
-            raster = lookup_content(
+            work, raster = lookup_content(
                 unit_of_work,
                 authorization,
                 run_id=command.run_id,
@@ -3256,7 +3256,7 @@ class ApplicationService:
                 content_sha256=command.content_sha256,
             )
         return _Result(
-            payload=content_payload(raster),
+            payload=content_payload(work, raster),
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
         )
 

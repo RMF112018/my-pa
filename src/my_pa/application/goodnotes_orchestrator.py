@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Protocol
 
@@ -107,7 +107,7 @@ class DurableNoteRequest:
     source_id: str
     source_version_id: str
     observation: ObservedNotebookFile
-    pdf_bytes: bytes
+    pdf_bytes: bytes = field(repr=False)
     notebook_id: str | None = None
     label: str | None = None
     trigger_type: GoodNotesIngestionTrigger = GoodNotesIngestionTrigger.MANUAL

@@ -41,7 +41,9 @@ def test_command_has_no_path_or_principal_field() -> None:
 
 
 def test_same_handle_and_digest_returns_identical_png(scene: Scene) -> None:
+    work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    assert work.content_sha256 != raster.exact_render_sha256
     first = succeeded(
         run(
             build_service(scene.world, scene.providers),
@@ -49,9 +51,9 @@ def test_same_handle_and_digest_returns_identical_png(scene: Scene) -> None:
             Capability.GOODNOTES_CONTENT,
             Purpose.GOODNOTES_CONTENT,
             GetGoodNotesContent(
-                run_id=raster.run_id,
-                page_version_id=raster.page_version_id,
-                content_sha256=raster.exact_render_sha256,
+                run_id=work.run_id,
+                page_version_id=work.page_version_id,
+                content_sha256=work.content_sha256,
             ),
         )
     )
@@ -62,9 +64,9 @@ def test_same_handle_and_digest_returns_identical_png(scene: Scene) -> None:
             Capability.GOODNOTES_CONTENT,
             Purpose.GOODNOTES_CONTENT,
             GetGoodNotesContent(
-                run_id=raster.run_id,
-                page_version_id=raster.page_version_id,
-                content_sha256=raster.exact_render_sha256,
+                run_id=work.run_id,
+                page_version_id=work.page_version_id,
+                content_sha256=work.content_sha256,
             ),
         )
     )
@@ -72,8 +74,28 @@ def test_same_handle_and_digest_returns_identical_png(scene: Scene) -> None:
     assert first["digest"] == second["digest"]
     assert first["media_type"] == "image/png"
     assert first["byte_length"] == raster.byte_length
-    assert first["content_sha256"] == raster.exact_render_sha256
+    assert first["content_sha256"] == work.content_sha256
+    assert first["exact_render_sha256"] == raster.exact_render_sha256
     assert "path" not in first
+
+
+def test_visual_raster_digest_does_not_unlock_content(scene: Scene) -> None:
+    work = staged_goodnotes_work(scene)
+    raster = staged_goodnotes_raster(scene)
+    assert raster.exact_render_sha256 != work.content_sha256
+    refused = run(
+        build_service(scene.world, scene.providers),
+        scene,
+        Capability.GOODNOTES_CONTENT,
+        Purpose.GOODNOTES_CONTENT,
+        GetGoodNotesContent(
+            run_id=work.run_id,
+            page_version_id=work.page_version_id,
+            content_sha256=raster.exact_render_sha256,
+        ),
+    )
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.INVALID_REQUEST
 
 
 def test_wrong_principal_is_denied(scene: Scene) -> None:
@@ -84,7 +106,7 @@ def test_wrong_principal_is_denied(scene: Scene) -> None:
         GetGoodNotesContent(
             run_id=raster.run_id,
             page_version_id=raster.page_version_id,
-            content_sha256=raster.exact_render_sha256,
+            content_sha256=staged_goodnotes_work(scene).content_sha256,
         ),
         principal=stranger,
     )

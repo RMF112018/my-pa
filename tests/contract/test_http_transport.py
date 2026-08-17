@@ -343,7 +343,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.GOODNOTES_CONTENT: {
             "run_id": raster.run_id,
             "page_version_id": raster.page_version_id,
-            "content_sha256": raster.exact_render_sha256,
+            "content_sha256": work.content_sha256,
         },
         Capability.GOODNOTES_PROPOSE: {
             "run_id": work.run_id,
@@ -541,7 +541,7 @@ def commands_for(
         Capability.GOODNOTES_CONTENT: GetGoodNotesContent(
             run_id=raster.run_id,
             page_version_id=raster.page_version_id,
-            content_sha256=raster.exact_render_sha256,
+            content_sha256=work.content_sha256,
         ),
         Capability.GOODNOTES_PROPOSE: SubmitGoodNotesProposal(
             run_id=work.run_id,

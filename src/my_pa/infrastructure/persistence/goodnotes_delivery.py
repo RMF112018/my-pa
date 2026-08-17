@@ -7,6 +7,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
 from my_pa.domain.goodnotes.models import (
+    GoodNotesDeliveryAttempt,
+    GoodNotesDeliveryAttemptState,
     GoodNotesDeliveryReceipt,
     GoodNotesEntityAssociation,
     GoodNotesEntityDirectoryRecord,
@@ -24,6 +26,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
     principal_bound_values,
 )
 from my_pa.infrastructure.persistence.tables import (
+    goodnotes_delivery_attempts,
     goodnotes_delivery_receipts,
     goodnotes_entity_associations,
     goodnotes_notes,
@@ -56,10 +59,8 @@ class PostgresGoodNotesDeliveryRepository:
     def occurrence(self, principal_id: str, occurrence_id: str) -> GoodNotesNoteOccurrence | None:
         return self._notes.occurrence(principal_id, occurrence_id)
 
-    def latest_revision_for_occurrence(
-        self, principal_id: str, occurrence_id: str
-    ) -> GoodNotesNoteRevision | None:
-        return self._notes.latest_revision_for_occurrence(principal_id, occurrence_id)
+    def revision(self, principal_id: str, revision_id: str) -> GoodNotesNoteRevision | None:
+        return self._notes.revision(principal_id, revision_id)
 
     def semantic_proposals_for_run(
         self, principal_id: str, run_id: str
@@ -269,6 +270,103 @@ class PostgresGoodNotesDeliveryRepository:
         )
         return None if row is None else _delivery_receipt(row)
 
+    def store_delivery_attempt(self, attempt: GoodNotesDeliveryAttempt) -> GoodNotesDeliveryAttempt:
+        expected = _bound(
+            goodnotes_delivery_attempts,
+            attempt.principal_id,
+            {
+                "attempt_id": attempt.attempt_id,
+                "run_id": attempt.run_id,
+                "destination": attempt.destination,
+                "idempotency_token": attempt.idempotency_token,
+                "state": attempt.state.value,
+                "summary_hash": attempt.summary_hash,
+                "receipt_id": attempt.receipt_id,
+                "created_at": attempt.created_at,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_delivery_attempts)
+            .values(expected)
+            .on_conflict_do_nothing(index_elements=["principal_id", "attempt_id"])
+        )
+        stored = self.delivery_attempt(attempt.principal_id, attempt.attempt_id)
+        if stored is None:
+            by_window = self.delivery_attempt_by_window(
+                attempt.principal_id,
+                attempt.idempotency_token,
+                attempt.state,
+            )
+            if by_window is None:
+                raise ValueError("the GoodNotes delivery attempt could not be stored")
+            stored = by_window
+        if (
+            stored.run_id != attempt.run_id
+            or stored.destination != attempt.destination
+            or stored.idempotency_token != attempt.idempotency_token
+            or stored.state != attempt.state
+            or stored.summary_hash != attempt.summary_hash
+            or stored.receipt_id != attempt.receipt_id
+        ):
+            raise ValueError(
+                "the stable GoodNotes delivery attempt identity collided with other content"
+            )
+        return stored
+
+    def delivery_attempt(
+        self, principal_id: str, attempt_id: str
+    ) -> GoodNotesDeliveryAttempt | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_delivery_attempts).where(
+                    _mine(goodnotes_delivery_attempts, principal_id),
+                    goodnotes_delivery_attempts.c.attempt_id == attempt_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _delivery_attempt(row)
+
+    def delivery_attempt_by_window(
+        self,
+        principal_id: str,
+        idempotency_token: str,
+        state: GoodNotesDeliveryAttemptState,
+    ) -> GoodNotesDeliveryAttempt | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_delivery_attempts).where(
+                    _mine(goodnotes_delivery_attempts, principal_id),
+                    goodnotes_delivery_attempts.c.idempotency_token == idempotency_token,
+                    goodnotes_delivery_attempts.c.state == state.value,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _delivery_attempt(row)
+
+    def delivery_attempts_for_token(
+        self, principal_id: str, idempotency_token: str
+    ) -> tuple[GoodNotesDeliveryAttempt, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_delivery_attempts)
+                .where(
+                    _mine(goodnotes_delivery_attempts, principal_id),
+                    goodnotes_delivery_attempts.c.idempotency_token == idempotency_token,
+                )
+                .order_by(
+                    goodnotes_delivery_attempts.c.created_at,
+                    goodnotes_delivery_attempts.c.attempt_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_delivery_attempt(row) for row in rows)
+
 
 def _association(row: object) -> GoodNotesEntityAssociation:
     values = row
@@ -298,4 +396,19 @@ def _delivery_receipt(row: object) -> GoodNotesDeliveryReceipt:
         suppressed=bool(values["suppressed"]),  # type: ignore[index]
         created_at=values["created_at"],  # type: ignore[index]
         body=values["body"],  # type: ignore[index]
+    )
+
+
+def _delivery_attempt(row: object) -> GoodNotesDeliveryAttempt:
+    values = row
+    return GoodNotesDeliveryAttempt(
+        attempt_id=values["attempt_id"],  # type: ignore[index]
+        principal_id=values["principal_id"],  # type: ignore[index]
+        run_id=values["run_id"],  # type: ignore[index]
+        destination=values["destination"],  # type: ignore[index]
+        idempotency_token=values["idempotency_token"],  # type: ignore[index]
+        state=GoodNotesDeliveryAttemptState(values["state"]),  # type: ignore[index]
+        created_at=values["created_at"],  # type: ignore[index]
+        summary_hash=values["summary_hash"],  # type: ignore[index]
+        receipt_id=values["receipt_id"],  # type: ignore[index]
     )

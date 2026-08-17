@@ -3,6 +3,8 @@
 from my_pa.domain.goodnotes.models import (
     NOTE_UNIT_SCHEMA_V1,
     NOTE_UNIT_SCHEMA_V2,
+    GoodNotesDeliveryAttempt,
+    GoodNotesDeliveryAttemptState,
     GoodNotesDeliveryReceipt,
     GoodNotesEntityAssociation,
     GoodNotesEntityDirectoryRecord,
@@ -54,6 +56,8 @@ from my_pa.domain.goodnotes.models import (
 __all__ = [
     "NOTE_UNIT_SCHEMA_V1",
     "NOTE_UNIT_SCHEMA_V2",
+    "GoodNotesDeliveryAttempt",
+    "GoodNotesDeliveryAttemptState",
     "GoodNotesDeliveryReceipt",
     "GoodNotesEntityAssociation",
     "GoodNotesEntityDirectoryRecord",

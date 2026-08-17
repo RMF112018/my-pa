@@ -31,12 +31,13 @@ _ID_PREFIXES = frozenset(
         "gnchg",
         "gnprp",
         "gndlv",
+        "gndla",
         "gnent",
     }
 )
 _ID = re.compile(
     r"\A(?:gnpg|gnver|gnreg|gnrec|gnnb|gnsnap|gnlp|gnrun|"
-    r"gnnt|gnocc|gnrev|gnlink|gnchg|gnprp|gndlv|gnent)_[a-f0-9]{24}\Z"
+    r"gnnt|gnocc|gnrev|gnlink|gnchg|gnprp|gndlv|gndla|gnent)_[a-f0-9]{24}\Z"
 )
 _SHA256 = re.compile(r"\A[a-f0-9]{64}\Z")
 _GEOMETRY_KEY = re.compile(
@@ -52,6 +53,7 @@ _CHANGE_REASON_MAX = 64
 _DESTINATION_MAX = 64
 _CANDIDATE_MAX = 200
 _DELIVERY_BODY_MAX = 200_000
+_IDEMPOTENCY_TOKEN_MAX = 128
 _DESTINATION = re.compile(r"\A[a-z][a-z0-9-]{0,62}\Z")
 #: Fail-closed cap on persisted visual raster PNG bytes. Documented bound, ≤ 2 MiB.
 MAX_GOODNOTES_RASTER_BYTES = 2 * 1_048_576
@@ -173,6 +175,13 @@ class GoodNotesEntityKind(StrEnum):
     NOTE = "NOTE"
     MEETING = "MEETING"
     AGENDA = "AGENDA"
+
+
+class GoodNotesDeliveryAttemptState(StrEnum):
+    PREPARED = "PREPARED"
+    SENT = "SENT"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    FAILED = "FAILED"
 
 
 class GoodNotesTranscriptionStatus(StrEnum):
@@ -1143,6 +1152,40 @@ class GoodNotesDeliveryReceipt:
         if self.body is None:
             raise ValueError("an unsuppressed delivery requires a user-facing body")
         _bounded_text(self.body, what="delivery body", maximum=_DELIVERY_BODY_MAX)
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesDeliveryAttempt:
+    """Append-only delivery-attempt window. Independent of semantic note rows."""
+
+    attempt_id: str
+    principal_id: str
+    run_id: str
+    destination: str
+    idempotency_token: str
+    state: GoodNotesDeliveryAttemptState
+    created_at: datetime
+    summary_hash: str | None = None
+    receipt_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.attempt_id, "gndla")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _goodnotes_id(self.run_id, "gnrun")
+        _destination(self.destination)
+        _bounded_text(
+            self.idempotency_token,
+            what="idempotency token",
+            maximum=_IDEMPOTENCY_TOKEN_MAX,
+        )
+        ensure_utc(self.created_at)
+        if self.summary_hash is not None:
+            _sha256(self.summary_hash, what="summary digest")
+        acknowledged = self.state is GoodNotesDeliveryAttemptState.ACKNOWLEDGED
+        if acknowledged != (self.receipt_id is not None):
+            raise ValueError("an acknowledged attempt names a receipt exactly then")
+        if self.receipt_id is not None:
+            _goodnotes_id(self.receipt_id, "gndlv")
 
 
 @dataclass(frozen=True, slots=True)

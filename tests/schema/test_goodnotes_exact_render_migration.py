@@ -24,7 +24,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "c3e9a7f1b204"
 PRIOR: Final = "e8c1b5a7d204"
-HEAD_REVISION: Final = "d9c4e1a7b628"
+HEAD_REVISION: Final = "f4c1a8e6b205"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_c3e9a7f1b204_add_goodnotes_exact_render_digest.py"
 )
@@ -82,7 +82,7 @@ def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert list(script.get_heads()) == [HEAD_REVISION]
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 57
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 58
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

@@ -16,6 +16,7 @@ from my_pa.contracts.ports import (
     RepositoryFailureError,
 )
 from my_pa.domain.goodnotes.models import (
+    GoodNotesPageRaster,
     GoodNotesPageWork,
     GoodNotesSemanticProposal,
     issue_stable_id,
@@ -28,6 +29,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
 from my_pa.infrastructure.persistence.tables import (
     goodnotes_ingestion_runs,
     goodnotes_page_positions,
+    goodnotes_page_rasters,
     goodnotes_page_versions,
     goodnotes_semantic_proposals,
     goodnotes_source_snapshots,
@@ -82,6 +84,25 @@ def _proposal_from_row(row: object, *, replayed: bool) -> GoodNotesSemanticPropo
         payload_sha256=str(mapping["payload_sha256"]),
         created_at=mapping["created_at"],
         replayed=replayed,
+    )
+
+
+def _raster_from_row(row: object) -> GoodNotesPageRaster:
+    mapping = row._mapping  # type: ignore[attr-defined]
+    payload = bytes(mapping["png_bytes"])
+    return GoodNotesPageRaster(
+        principal_id=str(mapping["principal_id"]),
+        page_version_id=str(mapping["page_version_id"]),
+        run_id=str(mapping["run_id"]),
+        exact_render_sha256=str(mapping["exact_render_sha256"]),
+        png_sha256=str(mapping["png_sha256"]),
+        byte_length=int(mapping["byte_length"]),
+        png_bytes=payload,
+        renderer_name=str(mapping["renderer_name"]),
+        renderer_version=str(mapping["renderer_version"]),
+        render_profile_version=str(mapping["render_profile_version"]),
+        created_at=mapping["created_at"],
+        media_type=str(mapping["media_type"]),
     )
 
 
@@ -141,6 +162,49 @@ class SqlGoodNotesSemanticRepository(GoodNotesSemanticRepository):
             failure = RepositoryFailureError("the request could not be completed")
             raise failure from None
         return None if row is None else _work_from_row(row)
+
+    def page_raster(
+        self, principal_id: str, run_id: str, page_version_id: str
+    ) -> GoodNotesPageRaster | None:
+        try:
+            row = self._connection.execute(
+                select(goodnotes_page_rasters)
+                .select_from(
+                    goodnotes_page_rasters.join(
+                        goodnotes_ingestion_runs,
+                        (_mine(goodnotes_ingestion_runs, principal_id))
+                        & (goodnotes_ingestion_runs.c.run_id == goodnotes_page_rasters.c.run_id),
+                    )
+                    .join(
+                        goodnotes_source_snapshots,
+                        (_mine(goodnotes_source_snapshots, principal_id))
+                        & (
+                            goodnotes_source_snapshots.c.run_id == goodnotes_ingestion_runs.c.run_id
+                        ),
+                    )
+                    .join(
+                        goodnotes_page_positions,
+                        (_mine(goodnotes_page_positions, principal_id))
+                        & (
+                            goodnotes_page_positions.c.snapshot_id
+                            == goodnotes_source_snapshots.c.snapshot_id
+                        )
+                        & (
+                            goodnotes_page_positions.c.page_version_id
+                            == goodnotes_page_rasters.c.page_version_id
+                        ),
+                    )
+                )
+                .where(
+                    _mine(goodnotes_page_rasters, principal_id),
+                    goodnotes_page_rasters.c.run_id == run_id,
+                    goodnotes_page_rasters.c.page_version_id == page_version_id,
+                )
+            ).one_or_none()
+        except SQLAlchemyError:
+            failure = RepositoryFailureError("the request could not be completed")
+            raise failure from None
+        return None if row is None else _raster_from_row(row)
 
     def submit_proposal(
         self,

@@ -15,7 +15,7 @@ caller, and `AGENTS.md` section 2 rules them out until one exists.
 ruled out — a mirror duplicates rows another table already owns, and this is the
 only place an audit event is stored at all (`D-34`).
 
-**Four columns in the schema hold content, under three different authorities.**
+**Five columns in the schema hold content, under four different authorities.**
 `source_version_evidence.payload` is byte-exact, source-authoritative evidence
 bound to one immutable source version. `extractions.text` is derived text bound
 to the source version it was extracted from. `capture_versions.content` is the
@@ -25,8 +25,11 @@ authority class, not a source-system write and not a managed-document write.
 `capture_processing_text.normalized_text` is `P-02`'s conservative rewrite of
 that text for processing only; it is bound to the version it was derived from
 and to the mapping that carries its offsets back, and it never replaces the
-original. They are confined to those three places on purpose, so the question
-"where could a document body be" has an enumerable answer — and that is why
+original. `goodnotes_page_rasters.png_bytes` is the Principal-partitioned PNG
+of the pinned visual raster used for GoodNotes page identity, capped at 2 MiB,
+never a filesystem path and never a raw PDF. They are confined to those places
+on purpose, so the question "where could a document body be" has an enumerable
+answer — and that is why
 `capture_spans` stores a digest of the quoted text and not the quote, and why
 `capture_stage_results` stores a digest of a stage's output and not the output.
 `quarantine_records`,
@@ -4815,6 +4818,124 @@ goodnotes_ingestion_runs = Table(
         name="goodnotes_ingestion_ended_after_start",
     ),
     UniqueConstraint("principal_id", "request_id", name="one_goodnotes_ingestion_request"),
+)
+
+goodnotes_ingestion_run_stages = Table(
+    "goodnotes_ingestion_run_stages",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("run_id", String(36), primary_key=True),
+    Column("stage", String(32), primary_key=True),
+    Column("status", String(16), nullable=False),
+    Column("attempt", Integer, nullable=False, server_default="1"),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("ended_at", DateTime(timezone=True)),
+    Column("error_code", String(64)),
+    Column("error_class", String(64)),
+    CheckConstraint("run_id ~ '^gnrun_[a-f0-9]{24}$'", name="goodnotes_run_stage_run_id_shape"),
+    CheckConstraint(
+        "stage IN ('OBSERVE', 'SETTLE', 'SPLIT_RENDER', 'LINEAGE', "
+        "'CONTENT_READY', 'WAITING_PROPOSAL', 'RECONCILE', 'PREVIEW')",
+        name="goodnotes_run_stage_is_known",
+    ),
+    CheckConstraint(
+        "status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED')",
+        name="goodnotes_run_stage_status_is_known",
+    ),
+    CheckConstraint("attempt >= 1", name="goodnotes_run_stage_attempt_starts_at_one"),
+    CheckConstraint(
+        "error_code IS NULL OR char_length(error_code) BETWEEN 1 AND 64",
+        name="goodnotes_run_stage_error_code_is_bounded",
+    ),
+    CheckConstraint(
+        "error_class IS NULL OR char_length(error_class) BETWEEN 1 AND 64",
+        name="goodnotes_run_stage_error_class_is_bounded",
+    ),
+    CheckConstraint(
+        "ended_at IS NULL OR ended_at >= started_at",
+        name="goodnotes_run_stage_ended_after_start",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_run_stages_run_fk",
+    ),
+)
+
+goodnotes_page_rasters = Table(
+    "goodnotes_page_rasters",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("page_version_id", String(30), primary_key=True),
+    Column("run_id", String(36), nullable=False),
+    Column("exact_render_sha256", String(64), nullable=False),
+    Column("png_sha256", String(64), nullable=False),
+    Column("media_type", String(32), nullable=False),
+    Column("byte_length", Integer, nullable=False),
+    Column("png_bytes", LargeBinary, nullable=False),
+    Column("renderer_name", String(100), nullable=False),
+    Column("renderer_version", String(100), nullable=False),
+    Column("render_profile_version", String(100), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "page_version_id ~ '^gnver_[a-f0-9]{24}$'",
+        name="goodnotes_raster_page_version_id_shape",
+    ),
+    CheckConstraint("run_id ~ '^gnrun_[a-f0-9]{24}$'", name="goodnotes_raster_run_id_shape"),
+    CheckConstraint(
+        "exact_render_sha256 ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_raster_exact_render_sha256_shape",
+    ),
+    CheckConstraint("png_sha256 ~ '^[a-f0-9]{64}$'", name="goodnotes_raster_png_sha256_shape"),
+    CheckConstraint("media_type = 'image/png'", name="goodnotes_raster_media_type_is_png"),
+    CheckConstraint(
+        "byte_length BETWEEN 1 AND 2097152",
+        name="goodnotes_raster_byte_length_is_capped",
+    ),
+    CheckConstraint(
+        "octet_length(png_bytes) = byte_length",
+        name="goodnotes_raster_bytes_match_length",
+    ),
+    CheckConstraint(
+        "char_length(renderer_name) BETWEEN 1 AND 100",
+        name="goodnotes_raster_renderer_name_is_bounded",
+    ),
+    CheckConstraint(
+        "char_length(renderer_version) BETWEEN 1 AND 100",
+        name="goodnotes_raster_renderer_version_is_bounded",
+    ),
+    CheckConstraint(
+        "char_length(render_profile_version) BETWEEN 1 AND 100",
+        name="goodnotes_raster_render_profile_version_is_bounded",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "page_version_id",
+        "exact_render_sha256",
+        name="one_goodnotes_page_raster_digest",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_page_rasters_run_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "page_version_id"],
+        [
+            f"{SCHEMA}.goodnotes_page_versions.principal_id",
+            f"{SCHEMA}.goodnotes_page_versions.page_version_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_page_rasters_version_fk",
+    ),
 )
 
 goodnotes_notebook_paths = Table(

@@ -4,6 +4,15 @@ The proposed regular Agent Task **GoodNotes Durable Note Intelligence** is a
 repository contract only. This runbook records the operating constraints, the
 synthetic canary, and the activation steps that remain unauthorized.
 
+The repository-side durable-note pipeline is now runnable in tests and through
+a dormant composition helper: observe → settle → split/render → lineage →
+content-ready → waiting-proposal → reconcile → NEW-only preview/receipt.
+Lineage completion is not terminal success. Terminal `SUCCEEDED` is recorded
+only after repository-side reconcile and preview. Production persistence is
+`PostgresDurableNoteStore` on a caller-supplied connection; the composition
+helper does not open a connection or auto-wire the gateway. Live Teams/email
+delivery, live Abacus inference, and production activation remain unauthorized.
+
 **Production is not activated.** No step below was executed against a live
 Abacus account, a live Abacus Task, `abacus.ai`, or live personal data. Steps
 marked **operator-only** remain reserved to the operator (`AGENTS.md` §5 and
@@ -24,20 +33,24 @@ Related:
 
 ## Proposed Task contract
 
-The Task may call only the existing my-pa MCP tools `goodnotes.work` and
-`goodnotes.propose` (GN-04). Those names are Capability/Command-derived; this
-change does not add a public MCP tool and does not invent a second MCP surface.
+The Task may call only the my-pa MCP tools `goodnotes.work`,
+`goodnotes.content`, and `goodnotes.propose`. Those names are
+Capability/Command-derived. `goodnotes.content` is a pathless, Principal-bound
+read of the pinned visual PNG used for page identity. It does not return a
+filesystem path or a raw PDF, and it does not route through `knowledge.search`
+or `knowledge.read`. `goodnotes.work` remains metadata-only.
 
 The Task:
 
 - requests only bounded my-pa work (`goodnotes.work`);
-- analyzes immutable page-version content/context (digest and renderer
-  provenance; no page bytes on this path);
+- inspects handwriting through `goodnotes.content` when the Agent needs the
+  pinned raster;
+- analyzes immutable page-version content/context;
 - returns schema-valid proposals (`goodnotes.propose`);
 - has no direct database, source, or destination writes;
 - fail-closes when MCP, auth, or content transfer fails (no proposal write);
-- never produces a canonical NEW-only summary itself. Delivery is GN-06, not
-  this Task.
+- never produces a canonical NEW-only summary itself. Repository-side preview
+  is owned by the durable-note orchestrator, not this Task.
 
 Out of the allowlist, including as a substitute work plane: `knowledge.search`,
 `knowledge.read`, `context.prepare`, `review.decide`, Task/document authoring,
@@ -48,16 +61,22 @@ this Task.
 `MY_PA_GOODNOTES_DURABLE_NOTE_INTELLIGENCE_ENABLED` defaults to false. The
 process-local gate is read by `bootstrap.goodnotes_durable_note`. Bounded
 GoodNotes OCR/review composition does not read it. Setting the flag true does
-not create a live Abacus Task.
+not create a live Abacus Task. The orchestrator is not invoked from gateway
+startup.
 
 ## Synthetic canaries versus live Abacus
 
 The protocol harness is automated against `ApplicationService.invoke` and MCP
 tool descriptions in
-`tests/contract/test_goodnotes_durable_note_canary.py`. It uses synthetic
-fixtures only (`"synthetic note"`). Live Abacus OAuth, remote `tools/list`,
-actual ChatLLM/Agent Task invocation, and scheduled Task→remote MCP
-expiry/refresh proof are **not** in that suite and remain operator-gated.
+`tests/contract/test_goodnotes_durable_note_canary.py`. Pipeline stage
+advancement, including lineage-not-terminal and crash/resume, is covered by
+`tests/unit/test_goodnotes_orchestrator.py`. PostgreSQL stage/raster persistence
+through `PostgresDurableNoteStore` is covered by
+`tests/database/test_goodnotes_orchestrator.py`. Both use synthetic fixtures only
+(`"synthetic note"`, admitted vector PDFs). Live Abacus OAuth, remote
+`tools/list`, actual ChatLLM/Agent Task invocation, and scheduled Task→remote
+MCP expiry/refresh proof are **not** in that suite and remain operator-gated.
+This runbook does not claim Abacus inference is live.
 
 No command block in this runbook was executed against production, a live
 Abacus account, or live personal data.
@@ -72,9 +91,10 @@ production activation are out of scope here; see
 
 1. Merge the reviewed pull request.
 2. Local canary: FAST synthetic suite, including
-   `tests/contract/test_goodnotes_durable_note_canary.py`.
-3. Confirm the frozen artifact still reads `DRAFT_NOT_ACTIVATED` and names only
-   `goodnotes.work` / `goodnotes.propose`.
+   `tests/contract/test_goodnotes_durable_note_canary.py` and
+   `tests/unit/test_goodnotes_orchestrator.py`.
+3. Confirm the frozen artifact still reads `DRAFT_NOT_ACTIVATED` and names
+   `goodnotes.work` / `goodnotes.content` / `goodnotes.propose`.
 4. Live Abacus Task create, edit, enable, or disable — **operator-only**. Not
    authorized by this change.
 5. OAuth canary (`tools/list` against a registered client) — **operator-only**.
@@ -84,8 +104,8 @@ production activation are out of scope here; see
 ## Rollback
 
 1. Leave `MY_PA_GOODNOTES_DURABLE_NOTE_INTELLIGENCE_ENABLED` false (the
-   default). Canonical GoodNotes OCR/review, work, and propose paths stay;
-   this gate does not withdraw them.
+   default). Canonical GoodNotes OCR/review, work, content, and propose paths
+   stay; this gate does not withdraw them.
 2. Do not enable, edit, or delete a live Abacus Task from this runbook. Live
    Task mutation is **operator-only**.
 3. Emergency withdrawal of the remote surface remains

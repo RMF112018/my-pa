@@ -135,6 +135,7 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetGoodNotesContent,
     GetGoodNotesWork,
     GetPulse,
     GetSourceMetadata,
@@ -197,6 +198,7 @@ from my_pa.application.errors import (
     UnsupportedError,
     problem_detail,
 )
+from my_pa.application.goodnotes_content import content_payload, lookup_content
 from my_pa.application.goodnotes_semantics import (
     lookup_work,
     proposal_payload,
@@ -3234,6 +3236,30 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
         )
 
+    def _goodnotes_content(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetGoodNotesContent,
+    ) -> _Result:
+        """Return the pinned visual raster for the acting Principal.
+
+        The Principal is `authorization.principal.principal_id`. The command
+        carries no principal_id and no path.
+        """
+        with _translated():
+            work, raster = lookup_content(
+                unit_of_work,
+                authorization,
+                run_id=command.run_id,
+                page_version_id=command.page_version_id,
+                content_sha256=command.content_sha256,
+            )
+        return _Result(
+            payload=content_payload(work, raster),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
     def _goodnotes_propose(
         self,
         unit_of_work: UnitOfWork,
@@ -3705,6 +3731,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CONTEXT_PREPARE: ApplicationService._context_prepare,
         Capability.CONTEXT_FEEDBACK: ApplicationService._context_feedback,
         Capability.GOODNOTES_WORK: ApplicationService._goodnotes_work,
+        Capability.GOODNOTES_CONTENT: ApplicationService._goodnotes_content,
         Capability.GOODNOTES_PROPOSE: ApplicationService._goodnotes_propose,
     }
 )

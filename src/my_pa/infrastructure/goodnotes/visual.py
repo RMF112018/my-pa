@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import pypdfium2 as pdfium  # type: ignore[import-untyped]
 from pypdfium2 import PDFIUM_INFO, PYPDFIUM_INFO
 
-from my_pa.domain.goodnotes.models import PageRender
+from my_pa.domain.goodnotes.models import MAX_GOODNOTES_RASTER_BYTES, PageRender
 from my_pa.infrastructure.goodnotes.pdf import jpeg_as_single_page_pdf, open_admitted_pdf
 
 PDFIUM_NORMALIZED_NAME = "pypdfium2"
@@ -48,28 +48,58 @@ class PdfiumNormalizedRenderer:
         return _renderer_version()
 
     def render(self, page_bytes: bytes) -> PageRender:
+        render, _png = self.render_png(page_bytes)
+        return render
+
+    def render_png(self, page_bytes: bytes) -> tuple[PageRender, bytes]:
+        """Pinned visual identity plus the PNG encoding of that grayscale raster."""
         if not page_bytes:
             raise ValueError("a GoodNotes page render requires admitted bytes")
         pixels, width, height = _grayscale_raster(page_bytes)
         exact = _raster_digest(pixels, width, height)
         norm_pixels, norm_width, norm_height = _normalize(pixels, width, height)
         normalized = _raster_digest(norm_pixels, norm_width, norm_height)
-        return PageRender(
-            exact_render_sha256=exact,
-            normalized_render_sha256=normalized,
-            renderer_name=self.name,
-            renderer_version=self.version,
-            render_profile_version=self.profile_version,
-            perceptual_hash=_dhash_hex(pixels, width, height),
-            perceptual_algorithm=PERCEPTUAL_ALGORITHM,
-            perceptual_algorithm_version=PERCEPTUAL_ALGORITHM_VERSION,
-            width=width,
-            height=height,
+        png = grayscale_png(pixels, width, height)
+        if len(png) > MAX_GOODNOTES_RASTER_BYTES:
+            raise ValueError("GoodNotes visual raster exceeds the admitted size cap")
+        return (
+            PageRender(
+                exact_render_sha256=exact,
+                normalized_render_sha256=normalized,
+                renderer_name=self.name,
+                renderer_version=self.version,
+                render_profile_version=self.profile_version,
+                perceptual_hash=_dhash_hex(pixels, width, height),
+                perceptual_algorithm=PERCEPTUAL_ALGORITHM,
+                perceptual_algorithm_version=PERCEPTUAL_ALGORITHM_VERSION,
+                width=width,
+                height=height,
+            ),
+            png,
         )
 
 
 def production_page_renderer() -> PdfiumNormalizedRenderer:
     return PdfiumNormalizedRenderer()
+
+
+def grayscale_png(pixels: bytes, width: int, height: int) -> bytes:
+    """Encode packed 8-bit grayscale pixels as a deterministic non-interlaced PNG."""
+    if width < 1 or height < 1 or len(pixels) != width * height:
+        raise ValueError("grayscale raster size does not match dimensions")
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return len(data).to_bytes(4, "big") + tag + data + crc.to_bytes(4, "big")
+
+    ihdr = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes([8, 0, 0, 0, 0])
+    raw = b"".join(b"\x00" + pixels[row * width : (row + 1) * width] for row in range(height))
+    return (
+        _PNG_MAGIC
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw, 9))
+        + chunk(b"IEND", b"")
+    )
 
 
 def _renderer_version() -> str:

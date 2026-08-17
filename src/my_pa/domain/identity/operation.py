@@ -351,6 +351,15 @@ class Capability(StrEnum):
     # the live vocabulary.
     GOODNOTES_WORK = "goodnotes.work"
     GOODNOTES_PROPOSE = "goodnotes.propose"
+    # A capability rather than a widening of `goodnotes.work` or `knowledge.read`.
+    # `D-91`'s test: would reuse widen the grant? Yes. `goodnotes.work` returns a
+    # digest/handle and renderer provenance with no page bytes. `knowledge.read`
+    # is one enrollment's extraction plane. Admitting the pinned visual raster
+    # under either would let a grant issued to fetch metadata or search extracted
+    # text also retrieve handwriting pixels. Alembic revision `a4d9c2e7b815`
+    # admits the live vocabulary. Not operator-only: it reads the acting
+    # Principal's own partition and grants no authority.
+    GOODNOTES_CONTENT = "goodnotes.content"
 
 
 class NativeSourceCapability(StrEnum):
@@ -587,6 +596,7 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # `review_disposition`. The mapping comment sits with the members.
         Capability.GOODNOTES_WORK: frozenset({Purpose.GOODNOTES_WORK}),
         Capability.GOODNOTES_PROPOSE: frozenset({Purpose.GOODNOTES_PROPOSAL}),
+        Capability.GOODNOTES_CONTENT: frozenset({Purpose.GOODNOTES_CONTENT}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

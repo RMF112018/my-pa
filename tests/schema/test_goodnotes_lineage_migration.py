@@ -26,7 +26,8 @@ REVISION: Final = "f8c3a1e6b247"
 NOTE_REVISION: Final = "c9e2b6a4d813"
 PROPOSAL_REVISION: Final = "d7e1a4c8b926"
 DELIVERY_REVISION: Final = "e8c1b5a7d204"
-HEAD_REVISION: Final = "c3e9a7f1b204"
+EXACT_RENDER_REVISION: Final = "c3e9a7f1b204"
+HEAD_REVISION: Final = "a4d9c2e7b815"
 PRIOR: Final = "d4a8c1e7b930"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_f8c3a1e6b247_add_goodnotes_notebook_lineage_logical_.py"
@@ -131,8 +132,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(NOTE_REVISION).down_revision == REVISION
     assert script.get_revision(PROPOSAL_REVISION).down_revision == NOTE_REVISION
     assert script.get_revision(DELIVERY_REVISION).down_revision == PROPOSAL_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == DELIVERY_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 54
+    assert script.get_revision(EXACT_RENDER_REVISION).down_revision == DELIVERY_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == EXACT_RENDER_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 55
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

@@ -18,12 +18,18 @@ from tests.conftest import (
     build_service,
     metadata_for,
     operator,
+    staged_goodnotes_raster,
     staged_goodnotes_work,
 )
 from tests.contract.test_application_capabilities import run, succeeded
 
 from my_pa.adapters.mcp.tools import TOOLS
-from my_pa.application.commands import Command, GetGoodNotesWork, SubmitGoodNotesProposal
+from my_pa.application.commands import (
+    Command,
+    GetGoodNotesContent,
+    GetGoodNotesWork,
+    SubmitGoodNotesProposal,
+)
 from my_pa.bootstrap import goodnotes as goodnotes_bootstrap
 from my_pa.bootstrap.goodnotes import compose_local_goodnotes_runtime
 from my_pa.bootstrap.goodnotes_durable_note import (
@@ -48,6 +54,7 @@ ARTIFACT = ROOT / "ops" / "abacus" / "goodnotes-durable-note-intelligence.task.j
 DSN = "postgresql+psycopg://my_pa@localhost:5433/my_pa_settings_probe"
 
 WORK_TOOL = next(tool for tool in TOOLS if tool.name == Capability.GOODNOTES_WORK.value)
+CONTENT_TOOL = next(tool for tool in TOOLS if tool.name == Capability.GOODNOTES_CONTENT.value)
 PROPOSE_TOOL = next(tool for tool in TOOLS if tool.name == Capability.GOODNOTES_PROPOSE.value)
 _COMMANDS = {member.capability: member for member in get_args(Command.__value__)}
 PUBLISHED = frozenset(tool.name for tool in TOOLS)
@@ -74,6 +81,16 @@ def _work(scene: Scene, command: GetGoodNotesWork) -> ResponseEnvelope:
         scene,
         Capability.GOODNOTES_WORK,
         Purpose.GOODNOTES_WORK,
+        command,
+    )
+
+
+def _content(scene: Scene, command: GetGoodNotesContent) -> ResponseEnvelope:
+    return run(
+        build_service(scene.world, scene.providers),
+        scene,
+        Capability.GOODNOTES_CONTENT,
+        Purpose.GOODNOTES_CONTENT,
         command,
     )
 
@@ -112,22 +129,46 @@ def _proposal_for(work: object, *, digest: str | None = None) -> SubmitGoodNotes
 
 def test_mcp_tools_exist_and_are_command_derived() -> None:
     assert WORK_TOOL.name == Capability.GOODNOTES_WORK.value
+    assert CONTENT_TOOL.name == Capability.GOODNOTES_CONTENT.value
     assert PROPOSE_TOOL.name == Capability.GOODNOTES_PROPOSE.value
     assert _COMMANDS[Capability.GOODNOTES_WORK] is GetGoodNotesWork
+    assert _COMMANDS[Capability.GOODNOTES_CONTENT] is GetGoodNotesContent
     assert _COMMANDS[Capability.GOODNOTES_PROPOSE] is SubmitGoodNotesProposal
     assert GetGoodNotesWork.capability is Capability.GOODNOTES_WORK
+    assert GetGoodNotesContent.capability is Capability.GOODNOTES_CONTENT
     assert SubmitGoodNotesProposal.capability is Capability.GOODNOTES_PROPOSE
     assert WORK_TOOL.description
+    assert CONTENT_TOOL.description
     assert PROPOSE_TOOL.description
     assert "immutable" in (WORK_TOOL.description or "")
+    assert "pinned visual" in (CONTENT_TOOL.description or "")
     assert "Do not write canonical" in (PROPOSE_TOOL.description or "")
+    payload_fields = (CONTENT_TOOL.input_schema.get("properties") or {}).get("payload", {}).get(
+        "properties"
+    ) or {}
+    assert "path" not in payload_fields
+    assert "principal_id" not in payload_fields
+    assert {"run_id", "page_version_id", "content_sha256"} <= set(payload_fields)
 
 
-def test_task_profile_allowlist_is_only_work_and_propose() -> None:
+def test_task_profile_allowlist_is_work_content_and_propose() -> None:
     names = profile_tool_names()
-    assert names == frozenset({Capability.GOODNOTES_WORK.value, Capability.GOODNOTES_PROPOSE.value})
+    assert names == frozenset(
+        {
+            Capability.GOODNOTES_WORK.value,
+            Capability.GOODNOTES_CONTENT.value,
+            Capability.GOODNOTES_PROPOSE.value,
+        }
+    )
     assert (
-        frozenset({Capability.GOODNOTES_WORK, Capability.GOODNOTES_PROPOSE}) == ALLOWED_CAPABILITIES
+        frozenset(
+            {
+                Capability.GOODNOTES_WORK,
+                Capability.GOODNOTES_CONTENT,
+                Capability.GOODNOTES_PROPOSE,
+            }
+        )
+        == ALLOWED_CAPABILITIES
     )
     assert names.isdisjoint(FORBIDDEN_SUBSTITUTES)
     assert Capability.KNOWLEDGE_SEARCH.value not in names
@@ -167,14 +208,30 @@ def test_gate_defaults_off_and_does_not_touch_ocr_composition() -> None:
     )
 
 
-def test_work_then_propose_succeeds_on_synthetic_staged_data(scene: Scene) -> None:
+def test_work_then_content_then_propose_succeeds_on_synthetic_staged_data(scene: Scene) -> None:
     work = staged_goodnotes_work(scene)
+    raster = staged_goodnotes_raster(scene)
+    assert raster.page_version_id == work.page_version_id
+    assert raster.exact_render_sha256 != work.content_sha256
     handle = succeeded(
         _work(scene, GetGoodNotesWork(run_id=work.run_id, page_version_id=work.page_version_id))
     )
     assert handle["content_sha256"] == work.content_sha256
     assert "transcription" not in handle
     assert "body" not in handle
+    png = succeeded(
+        _content(
+            scene,
+            GetGoodNotesContent(
+                run_id=handle["run_id"],
+                page_version_id=handle["page_version_id"],
+                content_sha256=str(handle["content_sha256"]),
+            ),
+        )
+    )
+    assert png["media_type"] == "image/png"
+    assert png["content_base64"]
+    assert "path" not in png
     result = succeeded(_propose(scene, _proposal_for(work, digest=str(handle["content_sha256"]))))
     assert result["replayed"] is False
     assert str(result["proposal_id"]).startswith("gnprp_")
@@ -214,6 +271,7 @@ def test_mcp_and_content_transfer_failure_fail_closes(scene: Scene) -> None:
     assert mcp_profile_refuses(Capability.KNOWLEDGE_SEARCH.value, published=PUBLISHED)
     assert mcp_profile_refuses("goodnotes.deliver", published=PUBLISHED)
     assert not mcp_profile_refuses(Capability.GOODNOTES_WORK.value, published=PUBLISHED)
+    assert not mcp_profile_refuses(Capability.GOODNOTES_CONTENT.value, published=PUBLISHED)
     assert not mcp_profile_refuses(Capability.GOODNOTES_PROPOSE.value, published=PUBLISHED)
     assert not scene.world.goodnotes_proposals
     missing = _work(

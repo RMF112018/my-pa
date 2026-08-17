@@ -51,6 +51,9 @@ _DESTINATION_MAX = 64
 _CANDIDATE_MAX = 200
 _DELIVERY_BODY_MAX = 200_000
 _DESTINATION = re.compile(r"\A[a-z][a-z0-9-]{0,62}\Z")
+#: Fail-closed cap on persisted visual raster PNG bytes. Documented bound, ≤ 2 MiB.
+MAX_GOODNOTES_RASTER_BYTES = 2 * 1_048_576
+GOODNOTES_RASTER_MEDIA_TYPE = "image/png"
 
 
 def issue_stable_id(prefix: str, *parts: str) -> str:
@@ -110,6 +113,29 @@ class GoodNotesIngestionTrigger(StrEnum):
     MANUAL = "MANUAL"
     SCHEDULED = "SCHEDULED"
     REPLAY = "REPLAY"
+
+
+class GoodNotesPipelineStage(StrEnum):
+    """Repository-side durable-note stages. Terminal success lives on the run."""
+
+    OBSERVE = "OBSERVE"
+    SETTLE = "SETTLE"
+    SPLIT_RENDER = "SPLIT_RENDER"
+    LINEAGE = "LINEAGE"
+    CONTENT_READY = "CONTENT_READY"
+    WAITING_PROPOSAL = "WAITING_PROPOSAL"
+    RECONCILE = "RECONCILE"
+    PREVIEW = "PREVIEW"
+
+
+class GoodNotesStageStatus(StrEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+PIPELINE_STAGES: tuple[GoodNotesPipelineStage, ...] = tuple(GoodNotesPipelineStage)
 
 
 class GoodNotesNoteClass(StrEnum):
@@ -1046,3 +1072,75 @@ class GoodNotesDeliveryReceipt:
         if self.body is None:
             raise ValueError("an unsuppressed delivery requires a user-facing body")
         _bounded_text(self.body, what="delivery body", maximum=_DELIVERY_BODY_MAX)
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesRunStage:
+    """One additive stage row on an existing ingestion-run identity."""
+
+    principal_id: str
+    run_id: str
+    stage: GoodNotesPipelineStage
+    status: GoodNotesStageStatus
+    started_at: datetime
+    attempt: int = 1
+    ended_at: datetime | None = None
+    error_code: str | None = None
+    error_class: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _goodnotes_id(self.run_id, "gnrun")
+        ensure_utc(self.started_at)
+        if self.attempt < 1:
+            raise ValueError("stage attempts start at one")
+        if self.ended_at is not None:
+            ensure_utc(self.ended_at)
+            if self.ended_at < self.started_at:
+                raise ValueError("a stage cannot end before it started")
+        if self.error_code is not None:
+            _bounded_text(self.error_code, what="error code", maximum=64)
+        if self.error_class is not None:
+            _bounded_text(self.error_class, what="error class", maximum=64)
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPageRaster:
+    """Principal-bound pinned visual raster used for page identity.
+
+    Bytes are the PNG encoding of the grayscale raster whose digest is
+    `exact_render_sha256`. Paths are not stored. Size is fail-closed at
+    `MAX_GOODNOTES_RASTER_BYTES`.
+    """
+
+    principal_id: str
+    page_version_id: str
+    run_id: str
+    exact_render_sha256: str
+    png_sha256: str
+    byte_length: int
+    png_bytes: bytes = field(repr=False)
+    renderer_name: str
+    renderer_version: str
+    render_profile_version: str
+    created_at: datetime
+    media_type: str = GOODNOTES_RASTER_MEDIA_TYPE
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _goodnotes_id(self.page_version_id, "gnver")
+        _goodnotes_id(self.run_id, "gnrun")
+        _sha256(self.exact_render_sha256, what="exact render digest")
+        _sha256(self.png_sha256, what="png digest")
+        if self.media_type != GOODNOTES_RASTER_MEDIA_TYPE:
+            raise ValueError("GoodNotes content is a PNG raster")
+        if not 1 <= self.byte_length <= MAX_GOODNOTES_RASTER_BYTES:
+            raise ValueError("GoodNotes visual raster exceeds the admitted size cap")
+        if len(self.png_bytes) != self.byte_length:
+            raise ValueError("GoodNotes visual raster length does not match the stored bytes")
+        if hashlib.sha256(self.png_bytes).hexdigest() != self.png_sha256:
+            raise ValueError("GoodNotes visual raster digest does not match the stored bytes")
+        _bounded_text(self.renderer_name, what="renderer name", maximum=100)
+        _bounded_text(self.renderer_version, what="renderer version", maximum=100)
+        _bounded_text(self.render_profile_version, what="render profile version", maximum=100)
+        ensure_utc(self.created_at)

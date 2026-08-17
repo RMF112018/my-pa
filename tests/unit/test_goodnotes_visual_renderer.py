@@ -16,6 +16,7 @@ from my_pa.application.goodnotes_lineage import (
 )
 from my_pa.domain.goodnotes.models import (
     GoodNotesIdentityStatus,
+    GoodNotesIngestionStatus,
     GoodNotesMatchMethod,
     SourcePage,
 )
@@ -113,6 +114,7 @@ def _reconcile(
     version_id: str,
     repository: MemoryLineageRepository,
     notebook_id: str | None = None,
+    finalize_run: bool = True,
 ) -> LineageReconcileResult:
     return GoodNotesLineageService().reconcile(
         LineageReconcileRequest(
@@ -128,6 +130,7 @@ def _reconcile(
         renderer=production_page_renderer(),
         repository=repository,
         clock=lambda: WHEN,
+        finalize_run=finalize_run,
     )
 
 
@@ -152,6 +155,31 @@ def test_visual_renderer_fails_closed_on_empty_and_invalid_input() -> None:
     jpeg_render = production_page_renderer().render(jpeg)
     assert jpeg_render.normalized_render_sha256 != _sha(jpeg)
     assert jpeg_render.render_profile_version == PDFIUM_NORMALIZED_PROFILE
+
+
+def test_lineage_finalize_run_false_leaves_the_run_running() -> None:
+    pdf = vector_pdf((COVER,))
+    pending = _reconcile(
+        pdf,
+        object_id="obj_aaaaaaaaaaaaaaaaaaaaaaaa",
+        request_id="vis-finalize-false",
+        path="Inbox/finalize.pdf",
+        version_id="ver_aaaaaaaaaaaaaaaaaaaaaaaa",
+        repository=MemoryLineageRepository(),
+        finalize_run=False,
+    )
+    assert pending.run.status is GoodNotesIngestionStatus.RUNNING
+    assert pending.run.ended_at is None
+    finished = _reconcile(
+        pdf,
+        object_id="obj_bbbbbbbbbbbbbbbbbbbbbbbb",
+        request_id="vis-finalize-true",
+        path="Inbox/finalize-default.pdf",
+        version_id="ver_bbbbbbbbbbbbbbbbbbbbbbbb",
+        repository=MemoryLineageRepository(),
+    )
+    assert finished.run.status is GoodNotesIngestionStatus.SUCCEEDED
+    assert finished.run.ended_at is not None
 
 
 def test_png_page_bytes_render_without_equaling_the_raw_digest() -> None:

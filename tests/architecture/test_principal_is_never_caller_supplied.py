@@ -248,9 +248,13 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     "infrastructure/persistence/goodnotes_delivery.py": (
         ("association", "principal_id"),
         ("association", "principal_id"),
+        ("attempt", "principal_id"),
+        ("attempt", "principal_id"),
+        ("attempt", "principal_id"),
         ("receipt", "principal_id"),
         ("receipt", "principal_id"),
         ("receipt", "principal_id"),
+        ("values", "principal_id"),
         ("values", "principal_id"),
         ("values", "principal_id"),
     ),

@@ -4,7 +4,8 @@ Reads committed GN-05 run-note-changes. Does not re-reconcile, does not write
 notes/occurrences/revisions/run-change rows, and does not decide change state.
 Does not create Projects, people, Tasks, Meetings, or Agendas.
 Does not send to Teams, email, or Abacus. Destination is an explicit string such as
-`operator-local`. Page-level `note-unit.v1` candidates are not attached to notes.
+`operator-local`. A dormant attempt ledger may record crash windows; live send stays
+off. Page-level `note-unit.v1` candidates are not attached to notes.
 """
 
 from __future__ import annotations
@@ -20,6 +21,8 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.goodnotes.models import (
     NOTE_UNIT_SCHEMA_V2,
+    GoodNotesDeliveryAttempt,
+    GoodNotesDeliveryAttemptState,
     GoodNotesDeliveryReceipt,
     GoodNotesEntityAssociation,
     GoodNotesEntityDirectoryRecord,
@@ -76,9 +79,7 @@ class GoodNotesDeliveryRepository(Protocol):
         self, principal_id: str, occurrence_id: str
     ) -> GoodNotesNoteOccurrence | None: ...
 
-    def latest_revision_for_occurrence(
-        self, principal_id: str, occurrence_id: str
-    ) -> GoodNotesNoteRevision | None: ...
+    def revision(self, principal_id: str, revision_id: str) -> GoodNotesNoteRevision | None: ...
 
     def semantic_proposals_for_run(
         self, principal_id: str, run_id: str
@@ -105,6 +106,18 @@ class GoodNotesDeliveryRepository(Protocol):
         destination: str,
         summary_hash: str,
     ) -> GoodNotesDeliveryReceipt | None: ...
+
+    def store_delivery_attempt(
+        self, attempt: GoodNotesDeliveryAttempt
+    ) -> GoodNotesDeliveryAttempt: ...
+
+    def delivery_attempt(
+        self, principal_id: str, attempt_id: str
+    ) -> GoodNotesDeliveryAttempt | None: ...
+
+    def delivery_attempts_for_token(
+        self, principal_id: str, idempotency_token: str
+    ) -> tuple[GoodNotesDeliveryAttempt, ...]: ...
 
 
 def normalize_entity_name(value: str) -> str:
@@ -294,9 +307,11 @@ class GoodNotesNewOnlyDelivery:
             occurrence = repository.occurrence(principal_id, change.occurrence_id)
             if occurrence is None:
                 raise ValueError("the request names no stored GoodNotes ingestion run")
-            revision = repository.latest_revision_for_occurrence(principal_id, change.occurrence_id)
+            if change.revision_id is None:
+                raise ValueError("the request names no stored GoodNotes note revision")
+            revision = repository.revision(principal_id, change.revision_id)
             if revision is None:
-                raise ValueError("the request names no stored GoodNotes ingestion run")
+                raise ValueError("the request names no stored GoodNotes note revision")
             matched = _matching_note_unit(occurrence, proposals)
             schema_version = "" if matched is None else matched[0]
             segment: Mapping[str, object] = {} if matched is None else matched[1]
@@ -381,3 +396,45 @@ class GoodNotesNewOnlyDelivery:
             )
         )
         return GoodNotesDeliveryResult(receipt=receipt, associations=written)
+
+
+class GoodNotesDeliveryAttemptLedger:
+    """Record crash windows independently of semantic notes. Does not send."""
+
+    def record(
+        self,
+        principal_id: str,
+        run_id: str,
+        destination: str,
+        idempotency_token: str,
+        state: GoodNotesDeliveryAttemptState,
+        *,
+        repository: GoodNotesDeliveryRepository,
+        clock: Callable[[], datetime] = utc_now,
+        summary_hash: str | None = None,
+        receipt_id: str | None = None,
+    ) -> GoodNotesDeliveryAttempt:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        run = repository.run(principal_id, run_id)
+        if run is None:
+            raise ValueError("the request names no stored GoodNotes ingestion run")
+        return repository.store_delivery_attempt(
+            GoodNotesDeliveryAttempt(
+                attempt_id=issue_stable_id(
+                    "gndla",
+                    principal_id,
+                    run_id,
+                    destination,
+                    idempotency_token,
+                    state.value,
+                ),
+                principal_id=principal_id,
+                run_id=run_id,
+                destination=destination,
+                idempotency_token=idempotency_token,
+                state=state,
+                created_at=clock(),
+                summary_hash=summary_hash,
+                receipt_id=receipt_id,
+            )
+        )

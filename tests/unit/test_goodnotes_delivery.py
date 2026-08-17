@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from my_pa.application.goodnotes_delivery import (
+    GoodNotesDeliveryAttemptLedger,
     GoodNotesNewOnlyDelivery,
     NewOnlySummaryNote,
     build_new_only_summary,
@@ -15,6 +16,8 @@ from my_pa.application.goodnotes_delivery import (
     resolve_entity_candidate,
 )
 from my_pa.domain.goodnotes.models import (
+    GoodNotesDeliveryAttempt,
+    GoodNotesDeliveryAttemptState,
     GoodNotesDeliveryReceipt,
     GoodNotesEntityAssociation,
     GoodNotesEntityDirectoryRecord,
@@ -27,11 +30,13 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesNoteChangeState,
     GoodNotesNoteClass,
     GoodNotesNoteOccurrence,
+    GoodNotesNoteRevision,
     GoodNotesRunNoteChange,
     issue_stable_id,
 )
 
 WHEN = datetime(2026, 8, 16, 22, 0, tzinfo=UTC)
+LATER = WHEN + timedelta(hours=1)
 A = "prn_aaaaaaaaaaaaaaaaaaaaaaaa"
 RUN = issue_stable_id("gnrun", "summary")
 DESTINATION = "operator-local"
@@ -56,8 +61,10 @@ def _note(
 def test_issue_stable_id_accepts_delivery_prefixes() -> None:
     receipt = issue_stable_id("gndlv", "synthetic", "receipt")
     association = issue_stable_id("gnent", "synthetic", "association")
+    attempt = issue_stable_id("gndla", "synthetic", "attempt")
     assert receipt.startswith("gndlv_") and len(receipt) == 30
     assert association.startswith("gnent_") and len(association) == 30
+    assert attempt.startswith("gndla_") and len(attempt) == 30
     with pytest.raises(ValueError, match="unknown GoodNotes identity prefix"):
         issue_stable_id("gnrecx", "synthetic")
 
@@ -242,6 +249,7 @@ class _FakeDeliveryRepository:
     directory: tuple[GoodNotesEntityDirectoryRecord, ...] = ()
     receipts: list[GoodNotesDeliveryReceipt] = field(default_factory=list)
     associations: list[GoodNotesEntityAssociation] = field(default_factory=list)
+    attempts: list[GoodNotesDeliveryAttempt] = field(default_factory=list)
 
     def run(self, principal_id: str, run_id: str) -> GoodNotesIngestionRun | None:
         if principal_id != self.principal_id:
@@ -262,10 +270,10 @@ class _FakeDeliveryRepository:
             return None
         return self.occurrences.get(occurrence_id)
 
-    def latest_revision_for_occurrence(self, principal_id: str, occurrence_id: str) -> object:
+    def revision(self, principal_id: str, revision_id: str) -> object:
         if principal_id != self.principal_id:
             return None
-        return self.revisions.get(occurrence_id)
+        return self.revisions.get(revision_id)
 
     def semantic_proposals_for_run(
         self, principal_id: str, run_id: str
@@ -314,6 +322,35 @@ class _FakeDeliveryRepository:
                 return item
         return None
 
+    def store_delivery_attempt(self, attempt: GoodNotesDeliveryAttempt) -> GoodNotesDeliveryAttempt:
+        for existing in self.attempts:
+            if existing.attempt_id == attempt.attempt_id:
+                return existing
+            if (
+                existing.idempotency_token == attempt.idempotency_token
+                and existing.state is attempt.state
+            ):
+                return existing
+        self.attempts.append(attempt)
+        return attempt
+
+    def delivery_attempt(
+        self, principal_id: str, attempt_id: str
+    ) -> GoodNotesDeliveryAttempt | None:
+        if principal_id != self.principal_id:
+            return None
+        for item in self.attempts:
+            if item.attempt_id == attempt_id:
+                return item
+        return None
+
+    def delivery_attempts_for_token(
+        self, principal_id: str, idempotency_token: str
+    ) -> tuple[GoodNotesDeliveryAttempt, ...]:
+        if principal_id != self.principal_id:
+            return ()
+        return tuple(item for item in self.attempts if item.idempotency_token == idempotency_token)
+
 
 def _run() -> GoodNotesIngestionRun:
     return GoodNotesIngestionRun(
@@ -329,7 +366,12 @@ def _run() -> GoodNotesIngestionRun:
     )
 
 
-def _change(token: str, state: GoodNotesNoteChangeState) -> GoodNotesRunNoteChange:
+def _change(
+    token: str,
+    state: GoodNotesNoteChangeState,
+    *,
+    revision_id: str | None = None,
+) -> GoodNotesRunNoteChange:
     return GoodNotesRunNoteChange(
         change_id=issue_stable_id("gnchg", token),
         principal_id=A,
@@ -338,6 +380,7 @@ def _change(token: str, state: GoodNotesNoteChangeState) -> GoodNotesRunNoteChan
         occurrence_id=issue_stable_id("gnocc", token),
         change_state=state,
         created_at=WHEN,
+        revision_id=revision_id,
     )
 
 
@@ -359,31 +402,29 @@ def _occurrence(token: str, page_version_id: str) -> GoodNotesNoteOccurrence:
 
 
 def test_deliver_filters_non_new_changes_and_replays_the_same_receipt() -> None:
-    from my_pa.domain.goodnotes.models import GoodNotesNoteRevision
-
     page = issue_stable_id("gnver", "page")
-    new_change = _change("new", GoodNotesNoteChangeState.NEW)
-    revised = _change("revised", GoodNotesNoteChangeState.REVISED)
-    unchanged = _change("unchanged", GoodNotesNoteChangeState.UNCHANGED)
-    ambiguous = _change("ambiguous", GoodNotesNoteChangeState.AMBIGUOUS)
     revision = GoodNotesNoteRevision(
         revision_id=issue_stable_id("gnrev", "new"),
         principal_id=A,
-        note_id=new_change.note_id,
+        note_id=issue_stable_id("gnnt", "new"),
         schema_version="note-unit.v1",
         analyzer_name="synthetic",
         analyzer_version="1",
         transcription="synthetic note",
         created_at=WHEN,
-        occurrence_id=new_change.occurrence_id,
+        occurrence_id=issue_stable_id("gnocc", "new"),
         primary_class=GoodNotesNoteClass.MEETING,
     )
+    new_change = _change("new", GoodNotesNoteChangeState.NEW, revision_id=revision.revision_id)
+    revised = _change("revised", GoodNotesNoteChangeState.REVISED)
+    unchanged = _change("unchanged", GoodNotesNoteChangeState.UNCHANGED)
+    ambiguous = _change("ambiguous", GoodNotesNoteChangeState.AMBIGUOUS)
     repo = _FakeDeliveryRepository(
         principal_id=A,
         stored_run=_run(),
         changes=(new_change, revised, unchanged, ambiguous),
         occurrences={new_change.occurrence_id: _occurrence("new", page)},
-        revisions={new_change.occurrence_id: revision},
+        revisions={revision.revision_id: revision},
         proposals=(
             (
                 page,
@@ -489,36 +530,36 @@ def test_delivery_receipt_hides_transcription_from_repr() -> None:
 
 
 def test_v1_page_level_candidates_do_not_attach_to_two_note_units() -> None:
-    from my_pa.domain.goodnotes.models import GoodNotesNoteRevision
-
     page = issue_stable_id("gnver", "mixed-v1")
-    left = _change("left", GoodNotesNoteChangeState.NEW)
-    right = _change("right", GoodNotesNoteChangeState.NEW)
+    left_revision = GoodNotesNoteRevision(
+        revision_id=issue_stable_id("gnrev", "left"),
+        principal_id=A,
+        note_id=issue_stable_id("gnnt", "left"),
+        schema_version="note-unit.v1",
+        analyzer_name="synthetic",
+        analyzer_version="1",
+        transcription="synthetic left",
+        created_at=WHEN,
+        occurrence_id=issue_stable_id("gnocc", "left"),
+        primary_class=GoodNotesNoteClass.MEETING,
+    )
+    right_revision = GoodNotesNoteRevision(
+        revision_id=issue_stable_id("gnrev", "right"),
+        principal_id=A,
+        note_id=issue_stable_id("gnnt", "right"),
+        schema_version="note-unit.v1",
+        analyzer_name="synthetic",
+        analyzer_version="1",
+        transcription="synthetic right",
+        created_at=WHEN,
+        occurrence_id=issue_stable_id("gnocc", "right"),
+        primary_class=GoodNotesNoteClass.MEETING,
+    )
+    left = _change("left", GoodNotesNoteChangeState.NEW, revision_id=left_revision.revision_id)
+    right = _change("right", GoodNotesNoteChangeState.NEW, revision_id=right_revision.revision_id)
     revisions = {
-        left.occurrence_id: GoodNotesNoteRevision(
-            revision_id=issue_stable_id("gnrev", "left"),
-            principal_id=A,
-            note_id=left.note_id,
-            schema_version="note-unit.v1",
-            analyzer_name="synthetic",
-            analyzer_version="1",
-            transcription="synthetic left",
-            created_at=WHEN,
-            occurrence_id=left.occurrence_id,
-            primary_class=GoodNotesNoteClass.MEETING,
-        ),
-        right.occurrence_id: GoodNotesNoteRevision(
-            revision_id=issue_stable_id("gnrev", "right"),
-            principal_id=A,
-            note_id=right.note_id,
-            schema_version="note-unit.v1",
-            analyzer_name="synthetic",
-            analyzer_version="1",
-            transcription="synthetic right",
-            created_at=WHEN,
-            occurrence_id=right.occurrence_id,
-            primary_class=GoodNotesNoteClass.MEETING,
-        ),
+        left_revision.revision_id: left_revision,
+        right_revision.revision_id: right_revision,
     }
     repo = _FakeDeliveryRepository(
         principal_id=A,
@@ -577,36 +618,38 @@ def test_v1_page_level_candidates_do_not_attach_to_two_note_units() -> None:
 
 
 def test_v2_mixed_page_candidates_stay_on_the_note_unit_that_named_them() -> None:
-    from my_pa.domain.goodnotes.models import GoodNotesNoteRevision
-
     page = issue_stable_id("gnver", "mixed-v2")
-    left = _change("left-v2", GoodNotesNoteChangeState.NEW)
-    right = _change("right-v2", GoodNotesNoteChangeState.NEW)
+    left_revision = GoodNotesNoteRevision(
+        revision_id=issue_stable_id("gnrev", "left-v2"),
+        principal_id=A,
+        note_id=issue_stable_id("gnnt", "left-v2"),
+        schema_version="note-unit.v2",
+        analyzer_name="synthetic",
+        analyzer_version="1",
+        transcription="synthetic left",
+        created_at=WHEN,
+        occurrence_id=issue_stable_id("gnocc", "left-v2"),
+        primary_class=GoodNotesNoteClass.MEETING,
+    )
+    right_revision = GoodNotesNoteRevision(
+        revision_id=issue_stable_id("gnrev", "right-v2"),
+        principal_id=A,
+        note_id=issue_stable_id("gnnt", "right-v2"),
+        schema_version="note-unit.v2",
+        analyzer_name="synthetic",
+        analyzer_version="1",
+        transcription="synthetic right",
+        created_at=WHEN,
+        occurrence_id=issue_stable_id("gnocc", "right-v2"),
+        primary_class=GoodNotesNoteClass.MEETING,
+    )
+    left = _change("left-v2", GoodNotesNoteChangeState.NEW, revision_id=left_revision.revision_id)
+    right = _change(
+        "right-v2", GoodNotesNoteChangeState.NEW, revision_id=right_revision.revision_id
+    )
     revisions = {
-        left.occurrence_id: GoodNotesNoteRevision(
-            revision_id=issue_stable_id("gnrev", "left-v2"),
-            principal_id=A,
-            note_id=left.note_id,
-            schema_version="note-unit.v2",
-            analyzer_name="synthetic",
-            analyzer_version="1",
-            transcription="synthetic left",
-            created_at=WHEN,
-            occurrence_id=left.occurrence_id,
-            primary_class=GoodNotesNoteClass.MEETING,
-        ),
-        right.occurrence_id: GoodNotesNoteRevision(
-            revision_id=issue_stable_id("gnrev", "right-v2"),
-            principal_id=A,
-            note_id=right.note_id,
-            schema_version="note-unit.v2",
-            analyzer_name="synthetic",
-            analyzer_version="1",
-            transcription="synthetic right",
-            created_at=WHEN,
-            occurrence_id=right.occurrence_id,
-            primary_class=GoodNotesNoteClass.MEETING,
-        ),
+        left_revision.revision_id: left_revision,
+        right_revision.revision_id: right_revision,
     }
     repo = _FakeDeliveryRepository(
         principal_id=A,
@@ -673,3 +716,176 @@ def test_v2_mixed_page_candidates_stay_on_the_note_unit_that_named_them() -> Non
     assert by_note[left.note_id].resolved_id == "prj_aaaaaaaaaaaaaaaa"
     assert by_note[right.note_id].candidate == "Beta Project"
     assert by_note[right.note_id].resolved_id == "prj_bbbbbbbbbbbbbbbb"
+
+
+def _meeting_revision(token: str, transcription: str) -> GoodNotesNoteRevision:
+    return GoodNotesNoteRevision(
+        revision_id=issue_stable_id("gnrev", token),
+        principal_id=A,
+        note_id=issue_stable_id("gnnt", token),
+        schema_version="note-unit.v1",
+        analyzer_name="synthetic",
+        analyzer_version="1",
+        transcription=transcription,
+        created_at=WHEN,
+        occurrence_id=issue_stable_id("gnocc", token),
+        primary_class=GoodNotesNoteClass.MEETING,
+    )
+
+
+def test_historical_run_uses_the_bound_revision_not_a_later_correction() -> None:
+    page = issue_stable_id("gnver", "bound")
+    bound = _meeting_revision("bound", "synthetic original")
+    later = replace(
+        bound,
+        revision_id=issue_stable_id("gnrev", "later"),
+        transcription="synthetic corrected",
+        created_at=LATER,
+        supersedes_revision_id=bound.revision_id,
+    )
+    change = _change("bound", GoodNotesNoteChangeState.NEW, revision_id=bound.revision_id)
+    repo = _FakeDeliveryRepository(
+        principal_id=A,
+        stored_run=_run(),
+        changes=(change,),
+        occurrences={change.occurrence_id: _occurrence("bound", page)},
+        revisions={bound.revision_id: bound, later.revision_id: later},
+    )
+    first = GoodNotesNewOnlyDelivery().deliver(
+        A, RUN, DESTINATION, repository=repo, clock=lambda: WHEN
+    )
+    assert first.receipt.body is not None
+    assert "synthetic original" in first.receipt.body
+    assert "synthetic corrected" not in first.receipt.body
+    second = GoodNotesNewOnlyDelivery().deliver(
+        A, RUN, DESTINATION, repository=repo, clock=lambda: LATER
+    )
+    assert second.receipt.replayed is True
+    assert second.receipt.summary_hash == first.receipt.summary_hash
+    assert second.receipt.body == first.receipt.body
+
+
+def test_null_revision_id_does_not_reconstruct_from_latest() -> None:
+    page = issue_stable_id("gnver", "legacy")
+    latest = _meeting_revision("legacy", "synthetic latest")
+    change = _change("legacy", GoodNotesNoteChangeState.NEW)
+    repo = _FakeDeliveryRepository(
+        principal_id=A,
+        stored_run=_run(),
+        changes=(change,),
+        occurrences={change.occurrence_id: _occurrence("legacy", page)},
+        revisions={latest.revision_id: latest},
+    )
+    with pytest.raises(ValueError, match="no stored GoodNotes note revision"):
+        GoodNotesNewOnlyDelivery().deliver(A, RUN, DESTINATION, repository=repo, clock=lambda: WHEN)
+
+
+def test_missing_named_revision_fails_closed() -> None:
+    page = issue_stable_id("gnver", "missing-rev")
+    named = issue_stable_id("gnrev", "missing-rev")
+    other = _meeting_revision("other", "synthetic other")
+    change = _change("missing-rev", GoodNotesNoteChangeState.NEW, revision_id=named)
+    repo = _FakeDeliveryRepository(
+        principal_id=A,
+        stored_run=_run(),
+        changes=(change,),
+        occurrences={change.occurrence_id: _occurrence("missing-rev", page)},
+        revisions={other.revision_id: other},
+    )
+    with pytest.raises(ValueError, match="no stored GoodNotes note revision"):
+        GoodNotesNewOnlyDelivery().deliver(A, RUN, DESTINATION, repository=repo, clock=lambda: WHEN)
+
+
+def test_attempt_ledger_records_crash_windows_without_duplicate_receipts() -> None:
+    page = issue_stable_id("gnver", "crash")
+    bound = _meeting_revision("crash", "synthetic note")
+    change = _change("crash", GoodNotesNoteChangeState.NEW, revision_id=bound.revision_id)
+    repo = _FakeDeliveryRepository(
+        principal_id=A,
+        stored_run=_run(),
+        changes=(change,),
+        occurrences={change.occurrence_id: _occurrence("crash", page)},
+        revisions={bound.revision_id: bound},
+    )
+    ledger = GoodNotesDeliveryAttemptLedger()
+    window = "crash-window"
+    prepared = ledger.record(
+        A, RUN, DESTINATION, window, GoodNotesDeliveryAttemptState.PREPARED, repository=repo
+    )
+    sent = ledger.record(
+        A, RUN, DESTINATION, window, GoodNotesDeliveryAttemptState.SENT, repository=repo
+    )
+    assert {item.state for item in repo.attempts} == {
+        GoodNotesDeliveryAttemptState.PREPARED,
+        GoodNotesDeliveryAttemptState.SENT,
+    }
+    assert repo.receipts == []
+    result = GoodNotesNewOnlyDelivery().deliver(
+        A, RUN, DESTINATION, repository=repo, clock=lambda: WHEN
+    )
+    acknowledged = ledger.record(
+        A,
+        RUN,
+        DESTINATION,
+        window,
+        GoodNotesDeliveryAttemptState.ACKNOWLEDGED,
+        repository=repo,
+        summary_hash=result.receipt.summary_hash,
+        receipt_id=result.receipt.receipt_id,
+    )
+    replayed_prepared = ledger.record(
+        A, RUN, DESTINATION, window, GoodNotesDeliveryAttemptState.PREPARED, repository=repo
+    )
+    replay = GoodNotesNewOnlyDelivery().deliver(
+        A, RUN, DESTINATION, repository=repo, clock=lambda: LATER
+    )
+    replayed_ack = ledger.record(
+        A,
+        RUN,
+        DESTINATION,
+        window,
+        GoodNotesDeliveryAttemptState.ACKNOWLEDGED,
+        repository=repo,
+        summary_hash=result.receipt.summary_hash,
+        receipt_id=result.receipt.receipt_id,
+    )
+    assert replay.receipt.replayed is True
+    assert replay.receipt.receipt_id == result.receipt.receipt_id
+    assert len(repo.receipts) == 1
+    assert replayed_prepared.attempt_id == prepared.attempt_id
+    assert replayed_ack.attempt_id == acknowledged.attempt_id
+    assert sent.state is GoodNotesDeliveryAttemptState.SENT
+    states = [item.state for item in repo.delivery_attempts_for_token(A, window)]
+    assert states == [
+        GoodNotesDeliveryAttemptState.PREPARED,
+        GoodNotesDeliveryAttemptState.SENT,
+        GoodNotesDeliveryAttemptState.ACKNOWLEDGED,
+    ]
+
+
+def test_failed_attempt_does_not_invent_a_receipt() -> None:
+    page = issue_stable_id("gnver", "failed")
+    bound = _meeting_revision("failed", "synthetic note")
+    change = _change("failed", GoodNotesNoteChangeState.NEW, revision_id=bound.revision_id)
+    repo = _FakeDeliveryRepository(
+        principal_id=A,
+        stored_run=_run(),
+        changes=(change,),
+        occurrences={change.occurrence_id: _occurrence("failed", page)},
+        revisions={bound.revision_id: bound},
+    )
+    ledger = GoodNotesDeliveryAttemptLedger()
+    window = "failed-window"
+    ledger.record(
+        A, RUN, DESTINATION, window, GoodNotesDeliveryAttemptState.PREPARED, repository=repo
+    )
+    failed = ledger.record(
+        A, RUN, DESTINATION, window, GoodNotesDeliveryAttemptState.FAILED, repository=repo
+    )
+    assert failed.state is GoodNotesDeliveryAttemptState.FAILED
+    assert repo.receipts == []
+    result = GoodNotesNewOnlyDelivery().deliver(
+        A, RUN, DESTINATION, repository=repo, clock=lambda: WHEN
+    )
+    assert result.receipt.replayed is False
+    assert len(repo.receipts) == 1

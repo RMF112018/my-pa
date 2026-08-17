@@ -1,4 +1,4 @@
-"""Additive GoodNotes entity associations and NEW-only delivery receipts."""
+"""Additive dormant GoodNotes delivery-attempt ledger."""
 
 from __future__ import annotations
 
@@ -22,18 +22,16 @@ from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-REVISION: Final = "e8c1b5a7d204"
-EXACT_RENDER_REVISION: Final = "c3e9a7f1b204"
-CONTENT_REVISION: Final = "a4d9c2e7b815"
-GROUNDING_REVISION: Final = "b7f2c9e4a618"
-ENTITY_KIND_REVISION: Final = "d9c4e1a7b628"
+REVISION: Final = "f4c1a8e6b205"
+PRIOR: Final = "d9c4e1a7b628"
 HEAD_REVISION: Final = "f4c1a8e6b205"
-PRIOR: Final = "d7e1a4c8b926"
+GROUNDING_REVISION: Final = "b7f2c9e4a618"
 MIGRATION: Final = ROOT / (
-    "migrations/versions/20260816_e8c1b5a7d204_add_goodnotes_new_only_delivery_receipts.py"
+    "migrations/versions/20260817_f4c1a8e6b205_add_goodnotes_delivery_attempt_ledger.py"
 )
-DISPOSABLE_DATABASE: Final = "my_pa_goodnotes_delivery_migration_test"
-NEW_TABLES: Final = frozenset({"goodnotes_entity_associations", "goodnotes_delivery_receipts"})
+DISPOSABLE_DATABASE: Final = "my_pa_goodnotes_delivery_attempt_migration_test"
+NEW_TABLES: Final = frozenset({"goodnotes_delivery_attempts"})
+FROZEN_STATES: Final = ("PREPARED", "SENT", "ACKNOWLEDGED", "FAILED")
 
 
 def _administer(maintenance: Engine, *statements: Executable) -> None:
@@ -59,6 +57,21 @@ def _tables(engine: Engine, schema: str = "knowledge") -> set[str]:
         )
 
 
+def _state_check(engine: Engine) -> str | None:
+    with engine.connect() as connection:
+        return connection.execute(
+            text(
+                "SELECT pg_get_constraintdef(c.oid) "
+                "FROM pg_constraint c "
+                "JOIN pg_class t ON c.conrelid = t.oid "
+                "JOIN pg_namespace n ON t.relnamespace = n.oid "
+                "WHERE n.nspname = 'knowledge' "
+                "AND t.relname = 'goodnotes_delivery_attempts' "
+                "AND c.conname = 'goodnotes_delivery_attempt_state_is_known'"
+            )
+        ).scalar_one_or_none()
+
+
 @pytest.fixture
 def disposable_database() -> Iterator[str]:
     configured = make_url(load_settings().database_url)
@@ -82,15 +95,11 @@ def disposable_database() -> Iterator[str]:
         maintenance.dispose()
 
 
-def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert list(script.get_heads()) == [HEAD_REVISION]
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert script.get_revision(EXACT_RENDER_REVISION).down_revision == REVISION
-    assert script.get_revision(CONTENT_REVISION).down_revision == EXACT_RENDER_REVISION
-    assert script.get_revision(GROUNDING_REVISION).down_revision == CONTENT_REVISION
-    assert script.get_revision(ENTITY_KIND_REVISION).down_revision == GROUNDING_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ENTITY_KIND_REVISION
+    assert script.get_revision(PRIOR).down_revision == GROUNDING_REVISION
     assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 58
 
 
@@ -105,23 +114,22 @@ def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
     assert "my_pa.infrastructure.persistence.tables" not in imported
     assert not any(module.startswith("my_pa.domain") for module in imported)
     assert "from my_pa" not in source
-    assert "GoodNotesEntityResolution" not in source
-    assert "GoodNotesEntityKind" not in source
+    assert "GoodNotesDeliveryAttemptState" not in source
     assert "capability_is_known" not in source
 
 
-def test_the_frozen_sql_names_delivery_tables_and_immutability() -> None:
+def test_the_frozen_sql_names_attempt_windows_and_immutability() -> None:
     source = MIGRATION.read_text(encoding="utf-8")
-    for table in NEW_TABLES:
-        assert f"CREATE TABLE knowledge.{table}" in source
+    assert "CREATE TABLE knowledge.goodnotes_delivery_attempts" in source
     assert "ON DELETE CASCADE" not in source
     assert "ON DELETE RESTRICT" in source
-    assert "goodnotes_entity_associations_are_immutable" in source
-    assert "goodnotes_delivery_receipts_are_immutable" in source
-    assert "one_goodnotes_delivery_summary" in source
-    assert "gndlv_" in source
-    assert "gnent_" in source
-    assert "gnrec" not in source.split("CREATE TABLE")[1]
+    assert "goodnotes_delivery_attempts_are_immutable" in source
+    assert "one_goodnotes_delivery_attempt_window" in source
+    assert "gndla_" in source
+    assert "one_goodnotes_delivery_summary" not in source
+    for state in FROZEN_STATES:
+        assert f"'{state}'" in source
+    assert "ALTER TABLE knowledge.goodnotes_run_note_changes" not in source
 
 
 @pytest.mark.database
@@ -135,12 +143,16 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
             ).scalar_one()
             assert revision == HEAD_REVISION
         assert _tables(engine) >= NEW_TABLES
+        definition = _state_check(engine)
+        assert definition is not None
+        for state in FROZEN_STATES:
+            assert state in definition
     finally:
         engine.dispose()
 
 
 @pytest.mark.database
-def test_downgrade_removes_delivery_tables_and_leaves_proposals(
+def test_downgrade_removes_attempt_table_and_leaves_receipts(
     disposable_database: str,
 ) -> None:
     command.upgrade(_config(), "head")
@@ -149,7 +161,7 @@ def test_downgrade_removes_delivery_tables_and_leaves_proposals(
         command.downgrade(_config(), PRIOR)
         remaining = _tables(engine)
         assert NEW_TABLES.isdisjoint(remaining)
-        assert "goodnotes_semantic_proposals" in remaining
+        assert "goodnotes_delivery_receipts" in remaining
         with engine.connect() as connection:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
@@ -160,7 +172,9 @@ def test_downgrade_removes_delivery_tables_and_leaves_proposals(
 
 
 @pytest.mark.database
-def test_delivery_receipts_are_immutable(disposable_database: str) -> None:
+def test_attempt_windows_are_immutable_and_refuse_unknown_states(
+    disposable_database: str,
+) -> None:
     command.upgrade(_config(), "head")
     engine = create_database_engine(disposable_database)
     try:
@@ -173,7 +187,7 @@ def test_delivery_receipts_are_immutable(disposable_database: str) -> None:
                     " 'prn_aaaaaaaaaaaaaaaaaaaaaaaa',"
                     " 'gnnb_aaaaaaaaaaaaaaaaaaaaaaaa',"
                     " 'icloud-goodnotes', 'ACTIVE',"
-                    " '2026-08-16T12:00:00+00', '2026-08-16T12:00:00+00')"
+                    " '2026-08-17T12:00:00+00', '2026-08-17T12:00:00+00')"
                 )
             )
             connection.execute(
@@ -183,38 +197,52 @@ def test_delivery_receipts_are_immutable(disposable_database: str) -> None:
                     " idempotency_key, request_fingerprint, started_at, status) VALUES ("
                     " 'prn_aaaaaaaaaaaaaaaaaaaaaaaa',"
                     " 'gnrun_aaaaaaaaaaaaaaaaaaaaaaaa',"
-                    " 'icloud-goodnotes', 'MANUAL', 'req-delivery',"
-                    " 'req-delivery',"
+                    " 'icloud-goodnotes', 'MANUAL', 'req-attempt',"
+                    " 'req-attempt',"
                     " 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',"
-                    " '2026-08-16T12:00:00+00', 'RUNNING')"
+                    " '2026-08-17T12:00:00+00', 'RUNNING')"
                 )
             )
             connection.execute(
                 text(
-                    "INSERT INTO knowledge.goodnotes_delivery_receipts "
-                    "(principal_id, receipt_id, run_id, destination, summary_hash, "
-                    " suppressed, body, created_at) VALUES ("
+                    "INSERT INTO knowledge.goodnotes_delivery_attempts "
+                    "(principal_id, attempt_id, run_id, destination, idempotency_token, "
+                    " state, created_at) VALUES ("
                     " 'prn_aaaaaaaaaaaaaaaaaaaaaaaa',"
-                    " 'gndlv_aaaaaaaaaaaaaaaaaaaaaaaa',"
+                    " 'gndla_aaaaaaaaaaaaaaaaaaaaaaaa',"
                     " 'gnrun_aaaaaaaaaaaaaaaaaaaaaaaa',"
                     " 'operator-local',"
-                    " 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
-                    " true, NULL, '2026-08-16T12:00:00+00')"
+                    " 'token-prepared',"
+                    " 'PREPARED', '2026-08-17T12:00:00+00')"
                 )
             )
         with engine.begin() as connection, pytest.raises(IntegrityError, match="append only"):
             connection.execute(
                 text(
-                    "UPDATE knowledge.goodnotes_delivery_receipts "
-                    "SET suppressed = false "
-                    "WHERE receipt_id = 'gndlv_aaaaaaaaaaaaaaaaaaaaaaaa'"
+                    "UPDATE knowledge.goodnotes_delivery_attempts "
+                    "SET state = 'SENT' "
+                    "WHERE attempt_id = 'gndla_aaaaaaaaaaaaaaaaaaaaaaaa'"
                 )
             )
         with engine.begin() as connection, pytest.raises(IntegrityError, match="append only"):
             connection.execute(
                 text(
-                    "DELETE FROM knowledge.goodnotes_delivery_receipts "
-                    "WHERE receipt_id = 'gndlv_aaaaaaaaaaaaaaaaaaaaaaaa'"
+                    "DELETE FROM knowledge.goodnotes_delivery_attempts "
+                    "WHERE attempt_id = 'gndla_aaaaaaaaaaaaaaaaaaaaaaaa'"
+                )
+            )
+        with engine.begin() as connection, pytest.raises(IntegrityError):
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge.goodnotes_delivery_attempts "
+                    "(principal_id, attempt_id, run_id, destination, idempotency_token, "
+                    " state, created_at) VALUES ("
+                    " 'prn_aaaaaaaaaaaaaaaaaaaaaaaa',"
+                    " 'gndla_bbbbbbbbbbbbbbbbbbbbbbbb',"
+                    " 'gnrun_aaaaaaaaaaaaaaaaaaaaaaaa',"
+                    " 'operator-local',"
+                    " 'token-unknown',"
+                    " 'DELIVERED', '2026-08-17T12:00:00+00')"
                 )
             )
     finally:

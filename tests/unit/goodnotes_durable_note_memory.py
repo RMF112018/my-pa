@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from my_pa.domain.goodnotes.models import (
+    GoodNotesDeliveryAttempt,
     GoodNotesDeliveryReceipt,
     GoodNotesEntityAssociation,
     GoodNotesEntityDirectoryRecord,
@@ -30,6 +31,7 @@ class MemoryDurableNoteStore(MemoryLineageRepository):
         self._links: dict[tuple[str, str], GoodNotesNoteLink] = {}
         self._changes: dict[tuple[str, str], GoodNotesRunNoteChange] = {}
         self._receipts: dict[tuple[str, str, str, str], GoodNotesDeliveryReceipt] = {}
+        self._attempts: list[GoodNotesDeliveryAttempt] = []
         self._associations: list[GoodNotesEntityAssociation] = []
 
     def snapshots_for_run(
@@ -130,6 +132,9 @@ class MemoryDurableNoteStore(MemoryLineageRepository):
             return None
         return max(found, key=lambda item: item.created_at)
 
+    def revision(self, principal_id: str, revision_id: str) -> GoodNotesNoteRevision | None:
+        return self._revisions.get((principal_id, revision_id))
+
     def run_note_changes(
         self, principal_id: str, run_id: str
     ) -> tuple[GoodNotesRunNoteChange, ...]:
@@ -198,3 +203,32 @@ class MemoryDurableNoteStore(MemoryLineageRepository):
         summary_hash: str,
     ) -> GoodNotesDeliveryReceipt | None:
         return self._receipts.get((principal_id, run_id, destination, summary_hash))
+
+    def store_delivery_attempt(self, attempt: GoodNotesDeliveryAttempt) -> GoodNotesDeliveryAttempt:
+        for existing in self._attempts:
+            if existing.attempt_id == attempt.attempt_id:
+                return existing
+            if (
+                existing.idempotency_token == attempt.idempotency_token
+                and existing.state is attempt.state
+            ):
+                return existing
+        self._attempts.append(attempt)
+        return attempt
+
+    def delivery_attempt(
+        self, principal_id: str, attempt_id: str
+    ) -> GoodNotesDeliveryAttempt | None:
+        for item in self._attempts:
+            if item.principal_id == principal_id and item.attempt_id == attempt_id:
+                return item
+        return None
+
+    def delivery_attempts_for_token(
+        self, principal_id: str, idempotency_token: str
+    ) -> tuple[GoodNotesDeliveryAttempt, ...]:
+        return tuple(
+            item
+            for item in self._attempts
+            if item.principal_id == principal_id and item.idempotency_token == idempotency_token
+        )

@@ -17,12 +17,17 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.sql import Executable
 
 from my_pa.application.commands import SubmitGoodNotesProposal
-from my_pa.application.goodnotes_delivery import GoodNotesNewOnlyDelivery
+from my_pa.application.goodnotes_corrections import GoodNotesCorrectionService
+from my_pa.application.goodnotes_delivery import (
+    GoodNotesDeliveryAttemptLedger,
+    GoodNotesNewOnlyDelivery,
+)
 from my_pa.application.goodnotes_occurrences import GoodNotesOccurrenceReconciler
 from my_pa.application.goodnotes_semantics import fingerprint_proposal
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.goodnotes.models import (
+    GoodNotesDeliveryAttemptState,
     GoodNotesEntityKind,
     GoodNotesEntityResolution,
     GoodNotesIdentityStatus,
@@ -40,6 +45,7 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesPagePosition,
     GoodNotesPageRaster,
     GoodNotesPageVersion,
+    GoodNotesRunNoteChange,
     GoodNotesSourceSnapshot,
     issue_stable_id,
 )
@@ -57,6 +63,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DATABASE = "my_pa_goodnotes_delivery_test"
 WHEN = datetime(2026, 8, 16, 22, 0, tzinfo=UTC)
 LATER = WHEN + timedelta(hours=1)
+CORRECTED = LATER + timedelta(minutes=1)
 A = "prn_aaaaaaaaaaaaaaaaaaaaaaaa"
 B = "prn_bbbbbbbbbbbbbbbbbbbbbbbb"
 DIGEST = hashlib.sha256(b"synthetic-goodnotes-delivery-page").hexdigest()
@@ -684,3 +691,287 @@ def test_unreadable_does_not_become_fabricated_new_transcription(engine: Engine)
         )
         assert result.receipt.suppressed is True
         assert result.associations == ()
+
+
+def test_historical_summary_stays_bound_after_a_later_correction(engine: Engine) -> None:
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        semantics = SqlGoodNotesSemanticRepository(connection)
+        delivery = PostgresGoodNotesDeliveryRepository(connection)
+        run_id, page_id, _, _ = _plant(lineage, A, "bound-rev")
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="bound-rev",
+            segments=(_segment(x_min=0.1, transcription="synthetic original"),),
+        )
+        reconciled = GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: LATER
+        )
+        new_changes = tuple(
+            item for item in reconciled.changes if item.change_state is GoodNotesNoteChangeState.NEW
+        )
+        assert len(new_changes) == 1
+        assert new_changes[0].revision_id is not None
+        assert new_changes[0].occurrence_id is not None
+        first = GoodNotesNewOnlyDelivery().deliver(
+            A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
+        )
+        assert first.receipt.body is not None
+        assert "synthetic original" in first.receipt.body
+        corrected = GoodNotesCorrectionService().apply(
+            A,
+            new_changes[0].occurrence_id,
+            transcription="synthetic corrected",
+            repository=lineage,
+            clock=lambda: CORRECTED,
+        )
+        assert corrected.revision.transcription == "synthetic corrected"
+        latest = lineage.latest_revision_for_occurrence(A, new_changes[0].occurrence_id)
+        assert latest is not None
+        assert latest.transcription == "synthetic corrected"
+        assert latest.revision_id != new_changes[0].revision_id
+        second = GoodNotesNewOnlyDelivery().deliver(
+            A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
+        )
+        assert second.receipt.replayed is True
+        assert second.receipt.receipt_id == first.receipt.receipt_id
+        assert second.receipt.summary_hash == first.receipt.summary_hash
+        assert second.receipt.body == first.receipt.body
+        assert "synthetic corrected" not in (second.receipt.body or "")
+
+
+def test_null_revision_id_does_not_use_latest_at_delivery(engine: Engine) -> None:
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        delivery = PostgresGoodNotesDeliveryRepository(connection)
+        run_id, _, notebook_id, logical_id = _plant(lineage, A, "legacy-null")
+        note = lineage.store_note(
+            GoodNotesNote(
+                note_id=issue_stable_id("gnnt", A, "legacy-null"),
+                principal_id=A,
+                notebook_id=notebook_id,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=WHEN,
+                last_seen_at=WHEN,
+            )
+        )
+        occurrence = lineage.store_occurrence(
+            GoodNotesNoteOccurrence(
+                occurrence_id=issue_stable_id("gnocc", A, "legacy-null"),
+                principal_id=A,
+                note_id=note.note_id,
+                logical_page_id=logical_id,
+                x_min=0.1,
+                y_min=0.2,
+                width=0.2,
+                height=0.1,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=WHEN,
+                last_seen_at=WHEN,
+            )
+        )
+        first = lineage.store_revision(
+            GoodNotesNoteRevision(
+                revision_id=issue_stable_id("gnrev", A, "legacy-null-first"),
+                principal_id=A,
+                note_id=note.note_id,
+                schema_version="note-unit.v1",
+                analyzer_name="synthetic",
+                analyzer_version="1",
+                transcription="synthetic original",
+                created_at=WHEN,
+                occurrence_id=occurrence.occurrence_id,
+            )
+        )
+        lineage.store_revision(
+            GoodNotesNoteRevision(
+                revision_id=issue_stable_id("gnrev", A, "legacy-null-later"),
+                principal_id=A,
+                note_id=note.note_id,
+                schema_version="note-unit.v1",
+                analyzer_name="operator-correction",
+                analyzer_version="1",
+                transcription="synthetic corrected",
+                created_at=LATER,
+                occurrence_id=occurrence.occurrence_id,
+                supersedes_revision_id=first.revision_id,
+            )
+        )
+        lineage.store_run_note_change(
+            GoodNotesRunNoteChange(
+                change_id=issue_stable_id("gnchg", A, "legacy-null"),
+                principal_id=A,
+                run_id=run_id,
+                note_id=note.note_id,
+                occurrence_id=occurrence.occurrence_id,
+                change_state=GoodNotesNoteChangeState.NEW,
+                created_at=WHEN,
+            )
+        )
+        latest = lineage.latest_revision_for_occurrence(A, occurrence.occurrence_id)
+        assert latest is not None
+        assert latest.transcription == "synthetic corrected"
+        with pytest.raises(ValueError, match="no stored GoodNotes note revision"):
+            GoodNotesNewOnlyDelivery().deliver(
+                A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
+            )
+
+
+def test_attempt_crash_windows_do_not_duplicate_notes(engine: Engine) -> None:
+    window = "crash-window"
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        semantics = SqlGoodNotesSemanticRepository(connection)
+        run_id, page_id, _, _ = _plant(lineage, A, "crash-win")
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="crash-win",
+            segments=(_segment(x_min=0.1, transcription="synthetic note"),),
+        )
+        GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: LATER
+        )
+        notes = connection.execute(
+            text(
+                "SELECT count(DISTINCT note_id) FROM knowledge.goodnotes_run_note_changes "
+                "WHERE principal_id = :principal AND run_id = :run AND note_id IS NOT NULL"
+            ),
+            {"principal": A, "run": run_id},
+        ).scalar_one()
+        changes = connection.execute(
+            text(
+                "SELECT count(*) FROM knowledge.goodnotes_run_note_changes "
+                "WHERE principal_id = :principal AND run_id = :run"
+            ),
+            {"principal": A, "run": run_id},
+        ).scalar_one()
+        revisions = connection.execute(
+            text(
+                "SELECT count(*) FROM knowledge.goodnotes_note_revisions "
+                "WHERE principal_id = :principal AND occurrence_id IN ("
+                " SELECT occurrence_id FROM knowledge.goodnotes_run_note_changes"
+                " WHERE principal_id = :principal AND run_id = :run"
+                " AND occurrence_id IS NOT NULL)"
+            ),
+            {"principal": A, "run": run_id},
+        ).scalar_one()
+
+    ledger = GoodNotesDeliveryAttemptLedger()
+    with engine.begin() as connection:
+        delivery = PostgresGoodNotesDeliveryRepository(connection)
+        prepared = ledger.record(
+            A,
+            run_id,
+            DESTINATION,
+            window,
+            GoodNotesDeliveryAttemptState.PREPARED,
+            repository=delivery,
+            clock=lambda: LATER,
+        )
+        assert prepared.state is GoodNotesDeliveryAttemptState.PREPARED
+        assert delivery.delivery_receipt_by_key(A, run_id, DESTINATION, "0" * 64) is None
+
+    with engine.begin() as connection:
+        delivery = PostgresGoodNotesDeliveryRepository(connection)
+        sent = ledger.record(
+            A,
+            run_id,
+            DESTINATION,
+            window,
+            GoodNotesDeliveryAttemptState.SENT,
+            repository=delivery,
+            clock=lambda: LATER,
+        )
+        assert sent.state is GoodNotesDeliveryAttemptState.SENT
+        windows = {item.state for item in delivery.delivery_attempts_for_token(A, window)}
+        assert windows == {
+            GoodNotesDeliveryAttemptState.PREPARED,
+            GoodNotesDeliveryAttemptState.SENT,
+        }
+
+    with engine.begin() as connection:
+        delivery = PostgresGoodNotesDeliveryRepository(connection)
+        result = GoodNotesNewOnlyDelivery().deliver(
+            A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
+        )
+        acknowledged = ledger.record(
+            A,
+            run_id,
+            DESTINATION,
+            window,
+            GoodNotesDeliveryAttemptState.ACKNOWLEDGED,
+            repository=delivery,
+            clock=lambda: LATER,
+            summary_hash=result.receipt.summary_hash,
+            receipt_id=result.receipt.receipt_id,
+        )
+        replay = GoodNotesNewOnlyDelivery().deliver(
+            A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
+        )
+        replayed = ledger.record(
+            A,
+            run_id,
+            DESTINATION,
+            window,
+            GoodNotesDeliveryAttemptState.ACKNOWLEDGED,
+            repository=delivery,
+            clock=lambda: LATER,
+            summary_hash=result.receipt.summary_hash,
+            receipt_id=result.receipt.receipt_id,
+        )
+        assert replay.receipt.replayed is True
+        assert replay.receipt.receipt_id == result.receipt.receipt_id
+        assert replayed.attempt_id == acknowledged.attempt_id
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(DISTINCT note_id) FROM knowledge.goodnotes_run_note_changes "
+                    "WHERE principal_id = :principal AND run_id = :run AND note_id IS NOT NULL"
+                ),
+                {"principal": A, "run": run_id},
+            ).scalar_one()
+            == notes
+        )
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM knowledge.goodnotes_run_note_changes "
+                    "WHERE principal_id = :principal AND run_id = :run"
+                ),
+                {"principal": A, "run": run_id},
+            ).scalar_one()
+            == changes
+        )
+        assert (
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM knowledge.goodnotes_note_revisions "
+                    "WHERE principal_id = :principal AND occurrence_id IN ("
+                    " SELECT occurrence_id FROM knowledge.goodnotes_run_note_changes"
+                    " WHERE principal_id = :principal AND run_id = :run"
+                    " AND occurrence_id IS NOT NULL)"
+                ),
+                {"principal": A, "run": run_id},
+            ).scalar_one()
+            == revisions
+        )
+        receipts = connection.execute(
+            text(
+                "SELECT count(*) FROM knowledge.goodnotes_delivery_receipts "
+                "WHERE principal_id = :principal AND run_id = :run"
+            ),
+            {"principal": A, "run": run_id},
+        ).scalar_one()
+        assert int(receipts) == 1
+        windows = {item.state for item in delivery.delivery_attempts_for_token(A, window)}
+        assert windows == {
+            GoodNotesDeliveryAttemptState.PREPARED,
+            GoodNotesDeliveryAttemptState.SENT,
+            GoodNotesDeliveryAttemptState.ACKNOWLEDGED,
+        }

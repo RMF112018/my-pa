@@ -5870,6 +5870,79 @@ goodnotes_delivery_receipts = Table(
     ),
 )
 
+#: Append-only delivery-attempt windows. Independent of semantic note rows.
+#: Unique over (principal_id, idempotency_token, state). Same window replays.
+goodnotes_delivery_attempts = Table(
+    "goodnotes_delivery_attempts",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("attempt_id", String(36), primary_key=True),
+    Column("run_id", String(36), nullable=False),
+    Column("destination", String(64), nullable=False),
+    Column("idempotency_token", String(128), nullable=False),
+    Column("state", String(16), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("summary_hash", String(64)),
+    Column("receipt_id", String(36)),
+    CheckConstraint(
+        "attempt_id ~ '^gndla_[a-f0-9]{24}$'",
+        name="goodnotes_delivery_attempt_id_shape",
+    ),
+    CheckConstraint(
+        "run_id ~ '^gnrun_[a-f0-9]{24}$'",
+        name="goodnotes_delivery_attempt_run_id_shape",
+    ),
+    CheckConstraint(
+        "char_length(destination) BETWEEN 1 AND 64 AND destination ~ '^[a-z][a-z0-9-]{0,62}$'",
+        name="goodnotes_delivery_attempt_destination_shape",
+    ),
+    CheckConstraint(
+        "char_length(idempotency_token) BETWEEN 1 AND 128",
+        name="goodnotes_delivery_attempt_token_is_bounded",
+    ),
+    CheckConstraint(
+        "state IN ('PREPARED', 'SENT', 'ACKNOWLEDGED', 'FAILED')",
+        name="goodnotes_delivery_attempt_state_is_known",
+    ),
+    CheckConstraint(
+        "summary_hash IS NULL OR summary_hash ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_delivery_attempt_summary_hash_shape",
+    ),
+    CheckConstraint(
+        "receipt_id IS NULL OR receipt_id ~ '^gndlv_[a-f0-9]{24}$'",
+        name="goodnotes_delivery_attempt_receipt_id_shape",
+    ),
+    CheckConstraint(
+        "(state = 'ACKNOWLEDGED' AND receipt_id IS NOT NULL) OR "
+        "(state <> 'ACKNOWLEDGED' AND receipt_id IS NULL)",
+        name="goodnotes_delivery_attempt_receipt_matches_state",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "idempotency_token",
+        "state",
+        name="one_goodnotes_delivery_attempt_window",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_delivery_attempts_run_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "receipt_id"],
+        [
+            f"{SCHEMA}.goodnotes_delivery_receipts.principal_id",
+            f"{SCHEMA}.goodnotes_delivery_receipts.receipt_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_delivery_attempts_receipt_fk",
+    ),
+)
+
 #: One row per `context.prepare` disclosure. Insert only. Reconstructs which
 #: evidence references were returned without storing the query, conversation
 #: context, or excerpt text. `remote_client_id` is omitted rather than stored

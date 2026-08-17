@@ -13,6 +13,8 @@ Related:
 
 - [`goodnotes-and-model-operations.md`](goodnotes-and-model-operations.md) —
   bounded local OCR/review composition; inert until configured.
+- [`goodnotes-durable-note-rollout.md`](goodnotes-durable-note-rollout.md) —
+  WP-15 dormant rollout gates. Production and pilot remain off.
 - [`managed-knowledge-context.md`](managed-knowledge-context.md) — synthetic
   canary versus live Abacus for `context.prepare`.
 - [`remote-mcp-cloudflare.md`](remote-mcp-cloudflare.md) — separately enabled
@@ -65,7 +67,8 @@ Abacus account, or live personal data.
 None of these steps turns production on by existing in this document. Marked
 steps require a separate operator decision. GN-09 TBR live bridge and WP-15
 production activation are out of scope here; see
-[`goodnotes-tbr-preservation.md`](goodnotes-tbr-preservation.md).
+[`goodnotes-tbr-preservation.md`](goodnotes-tbr-preservation.md) and
+[`goodnotes-durable-note-rollout.md`](goodnotes-durable-note-rollout.md).
 
 1. Merge the reviewed pull request.
 2. Local canary: FAST synthetic suite, including

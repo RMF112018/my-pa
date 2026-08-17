@@ -232,6 +232,9 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "context.prepare",
         # `c6f1a8d3e204` is the forward `ALTER` that admits it.
         "context.feedback",
+        # GN-04. `d7e1a4c8b926` is the forward `ALTER` that admits the pair.
+        "goodnotes.propose",
+        "goodnotes.work",
     }
 )
 

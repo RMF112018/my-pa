@@ -37,11 +37,33 @@ holds every gate off. `bootstrap.goodnotes_rollout` is what reads them.
 | User-facing summary/delivery | `goodnotes_user_facing_summary_delivery_enabled` / `MY_PA_GOODNOTES_USER_FACING_SUMMARY_DELIVERY_ENABLED` | off |
 | Optional TBR bridge | `goodnotes_tbr_bridge_enabled` / `MY_PA_GOODNOTES_TBR_BRIDGE_ENABLED` | off |
 | Optional Self-Improving optimizer | `goodnotes_self_improving_optimizer_enabled` / `MY_PA_GOODNOTES_SELF_IMPROVING_OPTIMIZER_ENABLED` | off |
+| Current rollout stage | `goodnotes_rollout_stage` / `MY_PA_GOODNOTES_ROLLOUT_STAGE` | `observe-only` |
 
 Turning a flag true does not perform the named action. Setting the intelligence
 flag still does not create a live Abacus Task. Setting the TBR flag still does
 not mutate the existing TBR Task and does not implement a live bridge.
 Setting the optimizer flag still does not run an optimizer.
+
+## Ordered stage
+
+`MY_PA_GOODNOTES_ROLLOUT_STAGE` selects exactly one current stage. The default
+is `observe-only`. Unknown values fail closed at process start. The six boolean
+gates remain capability prerequisites and must be the consistent prefix for the
+selected stage; a later or out-of-order flag does not drop to a lower stage, it
+unlocks nothing. The durable-note orchestrator consumes this resolved stage
+before each effectful step. `compose_durable_note_orchestrator` is still not
+invoked from gateway startup.
+
+| Stage | Boolean prefix (ingestion / intelligence / writes / delivery / TBR) |
+| --- | --- |
+| `observe-only` | all off |
+| `page-identity-dry-run` | all off |
+| `semantic-proposals-without-canonical-note-writes` | intelligence on |
+| `canonical-writes-with-delivery-disabled` | intelligence and writes on |
+| `new-only-summary-preview` | same as canonical writes |
+| `operator-reviewed-delivery-canary` | intelligence, writes, and delivery on |
+| `bounded-scheduled-operation` | ingestion plus the canary prefix |
+| `optional-tbr-bridge` | all sequence flags including TBR — **unauthorized**; resolving or enabling this stage fails closed and does not mutate TBR |
 
 ## Activation sequence
 
@@ -49,23 +71,28 @@ None of these steps turns production on by existing in this document. Each live
 transition requires a separate operator decision. Do not skip ahead: later
 flags without their earlier prerequisites fail closed and unlock no live step.
 
-1. **Observe-only.** All sequence gates off. Bounded OCR/review composition and
-   the GN-09 TBR contract stay as they are.
-2. **Page-identity dry run.** Still no ingestion, canonical writes, delivery,
-   or Abacus. Identity/lineage observation only.
+1. **Observe-only.** Default. All sequence gates off. Bounded OCR/review
+   composition and the GN-09 TBR contract stay as they are. The orchestrator
+   observes/admits only.
+2. **Page-identity dry run.** Same flags as observe-only; the stage setting
+   selects this step. Split/render and lineage as a dry run. No semantic
+   proposals, canonical writes, or delivery.
 3. **Semantic proposals without canonical note writes.** Intelligence flag on;
    canonical writes, delivery, ingestion, and TBR remain off.
 4. **Canonical writes with delivery disabled.** Intelligence and canonical
    writes on; delivery, ingestion, and TBR remain off.
-5. **NEW-only summary preview.** Same flags as step 4. Preview is not delivery.
+5. **NEW-only summary preview.** Same flags as step 4; the stage setting
+   selects preview. Preview is not live delivery. No attempt auto-send.
 6. **Operator-reviewed delivery canary.** Intelligence, canonical writes, and
-   delivery on; ingestion and TBR remain off. A live canary is **operator-only**.
-7. **Bounded scheduled operation.** Ingestion plus the step-6 flags. Scheduling
-   against a live root is **operator-only**.
-8. **Optional TBR bridge.** All sequence flags including
-   `MY_PA_GOODNOTES_TBR_BRIDGE_ENABLED`. Live TBR Task mutation and a live
-   bridge remain **unauthorized** until a later exact authorization; GN-09 stays
-   dormant.
+   delivery on; ingestion and TBR remain off. May record dormant attempt-ledger
+   windows. Still does not send to Teams, email, OneDrive, or Abacus. A live
+   canary is **operator-only**.
+7. **Bounded scheduled operation.** Ingestion plus the step-6 flags. Same live
+   send posture as the canary: still off. This repository does not add a
+   scheduler. Scheduling against a live root is **operator-only**.
+8. **Optional TBR bridge.** Representing or enabling this stage fails closed.
+   Live TBR Task mutation and a live bridge remain **unauthorized** until a
+   later exact authorization; GN-09 stays `GN-09_EXTERNAL_TASK_GATE_PENDING`.
 
 The Self-Improving optimizer is optional and outside this sequence. It does not
 advance a step.
@@ -73,8 +100,9 @@ advance a step.
 ## Dry-run helper
 
 `my_pa.bootstrap.goodnotes_rollout.rollout_report` reads the current flags and
-returns which documented step they would permit. It does not ingest, write
-notes, deliver, or call Abacus. It is not a live canary.
+the selected stage and returns the one current step they would permit, or none
+when the combination fails closed. It does not ingest, write notes, deliver, or
+call Abacus. It is not a live canary.
 
 ```bash
 .venv/bin/python -c \
@@ -87,9 +115,8 @@ That command was not executed against production. It still requires
 `MY_PA_DATABASE_URL` because `load_settings` does; pointing it at an unknown or
 canonical physical database is **operator-only** and is not authorized here.
 
-With every gate at its default, the report names `observe-only` and
-`page-identity-dry-run` only. `production_activated` and `pilot_activated` stay
-false.
+With every gate at its default, the report names `observe-only` only.
+`production_activated` and `pilot_activated` stay false.
 
 ## Synthetic canaries versus live systems
 
@@ -98,6 +125,7 @@ Automated coverage is FAST/unit only:
 ```bash
 .venv/bin/python -m pytest -q \
   tests/unit/test_goodnotes_rollout.py \
+  tests/unit/test_goodnotes_orchestrator.py \
   tests/contract/test_goodnotes_durable_note_canary.py \
   tests/unit/test_goodnotes_tbr_preservation.py \
   tests/unit/test_goodnotes_evaluation.py
@@ -113,6 +141,7 @@ delivery, and a live TBR bridge remain **operator-only** and were not run.
 ## Rollback
 
 1. Leave every `MY_PA_GOODNOTES_*_ENABLED` flag unset or false (the default).
+   Leave `MY_PA_GOODNOTES_ROLLOUT_STAGE` unset or `observe-only`.
 2. Bounded GoodNotes OCR/review composition continues to ignore these flags.
 3. Leave the existing TBR Task unchanged. Do not enable, edit, or delete it
    from this runbook.

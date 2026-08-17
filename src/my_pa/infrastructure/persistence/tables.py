@@ -4565,6 +4565,7 @@ goodnotes_page_versions = Table(
     Column("content_sha256", String(64), nullable=False),
     Column("observed_at", DateTime(timezone=True), nullable=False),
     Column("logical_page_id", String(36)),
+    Column("exact_render_sha256", String(64)),
     Column("normalized_render_sha256", String(64)),
     Column("perceptual_hash", String(128)),
     Column("render_width", Integer),
@@ -4582,6 +4583,10 @@ goodnotes_page_versions = Table(
     CheckConstraint(
         "logical_page_id IS NULL OR logical_page_id ~ '^gnlp_[a-f0-9]{24}$'",
         name="goodnotes_version_logical_page_id_shape",
+    ),
+    CheckConstraint(
+        "exact_render_sha256 IS NULL OR exact_render_sha256 ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_version_exact_render_sha256_shape",
     ),
     CheckConstraint(
         "normalized_render_sha256 IS NULL OR normalized_render_sha256 ~ '^[a-f0-9]{64}$'",

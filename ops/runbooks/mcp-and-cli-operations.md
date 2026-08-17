@@ -219,8 +219,8 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-12):** the tool list is derived from all
-**forty-seven** current capabilities, and the schema has **fifty-three** revisions
-at head `e8c1b5a7d204`. `capabilities.get` also reports content-free
+**forty-seven** current capabilities, and the schema has **fifty-four** revisions
+at head `c3e9a7f1b204`. `capabilities.get` also reports content-free
 `worker_planes`. The dated transcript below remains historical evidence for its
 stated head.
 

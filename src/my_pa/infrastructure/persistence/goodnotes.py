@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -338,6 +339,86 @@ class PostgresGoodNotesRepository:
         )
         return None if row is None else _notebook(row)
 
+    def notebooks_for_source_object(
+        self, principal_id: str, source_root_id: str, source_object_id: str
+    ) -> tuple[GoodNotesNotebook, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_notebooks)
+                .where(
+                    _mine(goodnotes_notebooks, principal_id),
+                    goodnotes_notebooks.c.source_root_id == source_root_id,
+                    goodnotes_notebooks.c.notebook_id.in_(
+                        select(goodnotes_source_snapshots.c.notebook_id).where(
+                            _mine(goodnotes_source_snapshots, principal_id),
+                            goodnotes_source_snapshots.c.source_object_id == source_object_id,
+                        )
+                    ),
+                )
+                .order_by(goodnotes_notebooks.c.notebook_id)
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_notebook(row) for row in rows)
+
+    def notebooks_for_snapshot_digest(
+        self, principal_id: str, source_root_id: str, raw_sha256: str
+    ) -> tuple[GoodNotesNotebook, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_notebooks)
+                .where(
+                    _mine(goodnotes_notebooks, principal_id),
+                    goodnotes_notebooks.c.source_root_id == source_root_id,
+                    goodnotes_notebooks.c.notebook_id.in_(
+                        select(goodnotes_source_snapshots.c.notebook_id).where(
+                            _mine(goodnotes_source_snapshots, principal_id),
+                            goodnotes_source_snapshots.c.raw_sha256 == raw_sha256,
+                        )
+                    ),
+                )
+                .order_by(goodnotes_notebooks.c.notebook_id)
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_notebook(row) for row in rows)
+
+    def notebooks_for_visual_page_set(
+        self,
+        principal_id: str,
+        source_root_id: str,
+        normalized_render_sha256s: tuple[str, ...],
+    ) -> tuple[GoodNotesNotebook, ...]:
+        wanted = Counter(normalized_render_sha256s)
+        if not wanted:
+            return ()
+        candidates = (
+            self.connection.execute(
+                select(goodnotes_notebooks)
+                .where(
+                    _mine(goodnotes_notebooks, principal_id),
+                    goodnotes_notebooks.c.source_root_id == source_root_id,
+                )
+                .order_by(goodnotes_notebooks.c.notebook_id)
+            )
+            .mappings()
+            .all()
+        )
+        matched: list[GoodNotesNotebook] = []
+        for row in candidates:
+            notebook = _notebook(row)
+            evidence = self.prior_page_evidence(principal_id, notebook.notebook_id)
+            observed = Counter(
+                item.normalized_render_sha256
+                for item in evidence
+                if item.normalized_render_sha256 is not None
+            )
+            if observed == wanted:
+                matched.append(notebook)
+        return tuple(matched)
+
     def record_notebook_path(self, observed: GoodNotesNotebookPath) -> GoodNotesNotebookPath:
         if observed.is_current:
             self.connection.execute(
@@ -616,7 +697,7 @@ class PostgresGoodNotesRepository:
                     logical_page_id=page.logical_page_id,
                     last_page_number=latest_position.page_number,
                     last_page_version_id=latest_position.page_version_id,
-                    exact_render_sha256=None if version is None else version.content_sha256,
+                    exact_render_sha256=None if version is None else version.exact_render_sha256,
                     normalized_render_sha256=(
                         None if version is None else version.normalized_render_sha256
                     ),
@@ -662,6 +743,7 @@ class PostgresGoodNotesRepository:
                 "content_sha256": version.content_sha256,
                 "observed_at": version.observed_at,
                 "logical_page_id": version.logical_page_id,
+                "exact_render_sha256": version.exact_render_sha256,
                 "normalized_render_sha256": version.normalized_render_sha256,
                 "perceptual_hash": version.perceptual_hash,
                 "render_width": version.render_width,
@@ -695,6 +777,7 @@ class PostgresGoodNotesRepository:
         )
         if (
             stored.logical_page_id != version.logical_page_id
+            or stored.exact_render_sha256 != version.exact_render_sha256
             or stored.normalized_render_sha256 != version.normalized_render_sha256
             or stored.perceptual_hash != version.perceptual_hash
             or stored.render_width != version.render_width
@@ -715,6 +798,7 @@ class PostgresGoodNotesRepository:
                 )
                 .values(
                     logical_page_id=version.logical_page_id,
+                    exact_render_sha256=version.exact_render_sha256,
                     normalized_render_sha256=version.normalized_render_sha256,
                     perceptual_hash=version.perceptual_hash,
                     render_width=version.render_width,
@@ -1407,6 +1491,7 @@ def _page_version_row(row: object) -> GoodNotesPageVersion:
         content_sha256=values["content_sha256"],  # type: ignore[index]
         observed_at=values["observed_at"],  # type: ignore[index]
         logical_page_id=values["logical_page_id"],  # type: ignore[index]
+        exact_render_sha256=values["exact_render_sha256"],  # type: ignore[index]
         normalized_render_sha256=values["normalized_render_sha256"],  # type: ignore[index]
         perceptual_hash=values["perceptual_hash"],  # type: ignore[index]
         render_width=values["render_width"],  # type: ignore[index]

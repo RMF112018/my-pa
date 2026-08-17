@@ -171,6 +171,22 @@ classifiers = [
 #                     that would mean owning the algorithm allowlist, the key
 #                     selection, and the clock arithmetic, which is exactly where
 #                     this class of defect lives.
+#   pypdfium2         pinned pdfium rasterizer for GoodNotes visual page identity.
+#                     Current use: render admitted PDF (and JPEG-wrapped) pages
+#                     to grayscale bitmaps so durable-note lineage can hash
+#                     visible content instead of raw PDF object bytes. The
+#                     standard library cannot rasterize PDF. Not pypdf and not
+#                     fitz/PyMuPDF, which architecture tests prohibit. Pillow is
+#                     not used: grayscale normalize and dHash run over packed
+#                     pixel bytes in this repository. Floor 5.0 is the 5.x
+#                     `PYPDFIUM_INFO`/`PDFIUM_INFO` metadata this profile records
+#                     on `PageRender`; ceiling at the next major. Maintenance
+#                     cost: one wheel that vendors pdfium. Security surface: it
+#                     parses admitted local PDF/JPEG bytes already bounded by the
+#                     GoodNotes source reader; it opens no socket and reads no
+#                     credential. Removal path: another pdfium binding, or drop
+#                     visual identity and revert to the explicit legacy
+#                     raw-representation profile.
 dependencies = [
   "pydantic>=2.12,<3",
   "PyJWT[crypto]>=2.10.1,<3",
@@ -180,6 +196,7 @@ dependencies = [
   "starlette>=0.31,<1",
   "uvicorn>=0.31.1,<1",
   "mcp>=2.0,<3",
+  "pypdfium2>=5.0,<6",
 ]
 
 [project.optional-dependencies]

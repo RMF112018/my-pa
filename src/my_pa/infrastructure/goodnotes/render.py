@@ -1,9 +1,9 @@
-"""Versioned GoodNotes page renders. PDF visual rasterization is deferred.
+"""Versioned GoodNotes page renders.
 
-The production profile hashes admitted page-representation bytes and records
-renderer name, version, and profile. Tests inject a mapping from raw SHA-256
-onto a normalized SHA so regenerated-unchanged pages can be proven without a
-live PDF rasterizer.
+The production durable-note profile is `pdfium-normalized-v1`: visual identity
+from a pinned pdfium raster, independent of raw PDF object bytes. Raw snapshot
+and page-content SHA-256 stay on the admitted bytes. `RawRepresentationRenderer`
+and `MappedPageRenderer` remain explicit non-default test and legacy profiles.
 """
 
 from __future__ import annotations
@@ -13,15 +13,33 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from my_pa.domain.goodnotes.models import PageRender
+from my_pa.infrastructure.goodnotes.visual import (
+    PDFIUM_NORMALIZED_NAME,
+    PDFIUM_NORMALIZED_PROFILE,
+    PdfiumNormalizedRenderer,
+    production_page_renderer,
+)
 
 RAW_REPRESENTATION_NAME = "raw-representation"
 RAW_REPRESENTATION_VERSION = "1"
 RAW_REPRESENTATION_PROFILE = "raw-representation-v1"
 
+__all__ = [
+    "PDFIUM_NORMALIZED_NAME",
+    "PDFIUM_NORMALIZED_PROFILE",
+    "RAW_REPRESENTATION_NAME",
+    "RAW_REPRESENTATION_PROFILE",
+    "RAW_REPRESENTATION_VERSION",
+    "MappedPageRenderer",
+    "PdfiumNormalizedRenderer",
+    "RawRepresentationRenderer",
+    "production_page_renderer",
+]
+
 
 @dataclass(frozen=True, slots=True)
 class RawRepresentationRenderer:
-    """Default production profile: exact = normalized = SHA-256 of admitted bytes."""
+    """Non-default test/legacy profile: exact = normalized = SHA-256 of admitted bytes."""
 
     name: str = RAW_REPRESENTATION_NAME
     version: str = RAW_REPRESENTATION_VERSION

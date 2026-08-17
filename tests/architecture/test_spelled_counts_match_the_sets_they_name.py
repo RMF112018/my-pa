@@ -173,6 +173,8 @@ _ORDINAL_UNITS = (
     "forty-fourth",
     "forty-fifth",
     "forty-sixth",
+    "forty-seventh",
+    "forty-eighth",
 )
 
 

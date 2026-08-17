@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the forty-five capabilities is addressable over HTTP
+**Reachability.** Every one of the forty-seven capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a forty-sixth capability added to the domain arrives as a failing row instead
+here, so a forty-eighth capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -49,6 +49,7 @@ from tests.conftest import (
     operator,
     staged_capture,
     staged_commitment,
+    staged_goodnotes_work,
     staged_managed_document,
     staged_review_case,
     staged_search,
@@ -76,6 +77,7 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetGoodNotesWork,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
@@ -104,6 +106,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchKnowledge,
     SearchTasks,
+    SubmitGoodNotesProposal,
     TransitionTask,
     UpdateTask,
     WaitingOn,
@@ -175,6 +178,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     document = staged_managed_document(scene)
     task = staged_task(scene)
     commitment = staged_commitment(scene)
+    work = staged_goodnotes_work(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id},
@@ -329,6 +333,32 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "target_id": issue_identifier(IdKind.PROJECT),
             "idempotency_key": "http-feedback-0001",
         },
+        Capability.GOODNOTES_WORK: {
+            "run_id": work.run_id,
+            "page_version_id": work.page_version_id,
+        },
+        Capability.GOODNOTES_PROPOSE: {
+            "run_id": work.run_id,
+            "page_version_id": work.page_version_id,
+            "content_sha256": work.content_sha256,
+            "schema_version": "note-unit.v1",
+            "analyzer_name": "synthetic",
+            "analyzer_version": "1",
+            "idempotency_key": "http-goodnotes-propose-0001",
+            "segments": [
+                {
+                    "kind": "NOTE_UNIT",
+                    "geometry": {
+                        "x_min": 0.1,
+                        "y_min": 0.1,
+                        "width": 0.2,
+                        "height": 0.2,
+                    },
+                    "transcription": "synthetic note",
+                    "primary_class": "MEETING",
+                }
+            ],
+        },
     }
 
 
@@ -355,6 +385,7 @@ def commands_for(
     document = staged_managed_document(scene)
     task = staged_task(scene)
     commitment = staged_commitment(scene)
+    work = staged_goodnotes_work(scene)
     return {
         Capability.CAPABILITIES_GET: GetCapabilities(),
         Capability.SOURCES_LIST: ListSources(source_id=scene.source.source_id),
@@ -493,6 +524,32 @@ def commands_for(
             action=ContextPreferenceAction.PIN,
             target_id=feedback_target_id,
             idempotency_key="http-feedback-0001",
+        ),
+        Capability.GOODNOTES_WORK: GetGoodNotesWork(
+            run_id=work.run_id,
+            page_version_id=work.page_version_id,
+        ),
+        Capability.GOODNOTES_PROPOSE: SubmitGoodNotesProposal(
+            run_id=work.run_id,
+            page_version_id=work.page_version_id,
+            content_sha256=work.content_sha256,
+            schema_version="note-unit.v1",
+            analyzer_name="synthetic",
+            analyzer_version="1",
+            idempotency_key="http-goodnotes-propose-0001",
+            segments=(
+                {
+                    "kind": "NOTE_UNIT",
+                    "geometry": {
+                        "x_min": 0.1,
+                        "y_min": 0.1,
+                        "width": 0.2,
+                        "height": 0.2,
+                    },
+                    "transcription": "synthetic note",
+                    "primary_class": "MEETING",
+                },
+            ),
         ),
     }
 

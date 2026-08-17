@@ -104,11 +104,12 @@ def disposable_database() -> Iterator[str]:
         maintenance.dispose()
 
 
-def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 51
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 52
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

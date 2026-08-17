@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes forty-five capability names and none of them mutates a source,
+  ends: the transport routes forty-seven capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -57,6 +57,7 @@ from tests.conftest import (
     operator,
     staged_capture,
     staged_commitment,
+    staged_goodnotes_work,
     staged_managed_document,
     staged_review_case,
     staged_search,
@@ -219,6 +220,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     document = staged_managed_document(marked, body=MARKER_CONTENT.encode())
     task = staged_task(marked)
     commitment = staged_commitment(marked)
+    work = staged_goodnotes_work(marked)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -370,6 +372,32 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "action": "pin",
             "target_id": issue_identifier(IdKind.PROJECT),
             "idempotency_key": "wire-feedback-0001",
+        },
+        Capability.GOODNOTES_WORK: {
+            "run_id": work.run_id,
+            "page_version_id": work.page_version_id,
+        },
+        Capability.GOODNOTES_PROPOSE: {
+            "run_id": work.run_id,
+            "page_version_id": work.page_version_id,
+            "content_sha256": work.content_sha256,
+            "schema_version": "note-unit.v1",
+            "analyzer_name": "synthetic",
+            "analyzer_version": "1",
+            "idempotency_key": "wire-goodnotes-propose-0001",
+            "segments": [
+                {
+                    "kind": "NOTE_UNIT",
+                    "geometry": {
+                        "x_min": 0.1,
+                        "y_min": 0.1,
+                        "width": 0.2,
+                        "height": 0.2,
+                    },
+                    "transcription": MARKER_CONTENT,
+                    "primary_class": "MEETING",
+                }
+            ],
         },
     }
 
@@ -539,6 +567,8 @@ SCOPED_CAPABILITIES = [
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_PREPARE,
         Capability.CONTEXT_FEEDBACK,
+        Capability.GOODNOTES_WORK,
+        Capability.GOODNOTES_PROPOSE,
     }
 ]
 

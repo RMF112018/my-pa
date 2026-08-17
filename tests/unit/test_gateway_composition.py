@@ -68,7 +68,7 @@ def test_the_process_acts_as_one_authenticated_local_operator(runtime: GatewayRu
 
     `OPERATOR` rather than `GATEWAY` is load-bearing rather than incidental: a
     `GATEWAY` principal may not invoke `sources.enroll`, so the alternative is a
-    transport that cannot reach one of the forty-five capabilities.
+    transport that cannot reach one of the forty-seven capabilities.
     """
     assert runtime.principal.kind is PrincipalKind.OPERATOR
     assert runtime.principal.authenticated is True

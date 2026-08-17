@@ -133,3 +133,14 @@ class Purpose(StrEnum):
     # capability is one reversible preference write, and a further split would
     # map one-to-one for a distinction no authority in this build can enforce.
     CONTEXT_PREFERENCE = "context_preference"
+    # GoodNotes page-version work is a purpose of its own rather than a reuse of
+    # `knowledge_search` or `review_disposition`. `D-91`'s test: would reuse
+    # widen the grant? Yes. `knowledge_search` is one enrollment's extraction
+    # plane. `review_disposition` promotes a proposal to a canonical assertion.
+    # Admitting an immutable page-version lookup under either would let a grant
+    # issued to search extracted text or decide a review also fetch GoodNotes
+    # page-version handles. The matching write purpose is separate: a purpose
+    # wide enough to cover reading work and submitting a semantic proposal is a
+    # purpose that grants both.
+    GOODNOTES_WORK = "goodnotes_work"
+    GOODNOTES_PROPOSAL = "goodnotes_proposal"

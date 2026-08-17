@@ -135,6 +135,7 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetGoodNotesWork,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
@@ -167,6 +168,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchKnowledge,
     SearchTasks,
+    SubmitGoodNotesProposal,
     TransitionTask,
     UpdateTask,
     WaitingOn,
@@ -194,6 +196,12 @@ from my_pa.application.errors import (
     UnavailableError,
     UnsupportedError,
     problem_detail,
+)
+from my_pa.application.goodnotes_semantics import (
+    lookup_work,
+    proposal_payload,
+    submit_proposal,
+    work_payload,
 )
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.model_gate import BoundedModelGate
@@ -3202,6 +3210,48 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=("context_policy",)),
         )
 
+    def _goodnotes_work(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetGoodNotesWork,
+    ) -> _Result:
+        """Return immutable page-version work for the acting Principal.
+
+        The Principal is `authorization.principal.principal_id`. The command
+        carries no principal_id. Page bytes and live transcription are not in
+        this path.
+        """
+        with _translated():
+            work = lookup_work(
+                unit_of_work,
+                authorization,
+                run_id=command.run_id,
+                page_version_id=command.page_version_id,
+            )
+        return _Result(
+            payload=work_payload(work),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
+    def _goodnotes_propose(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SubmitGoodNotesProposal,
+    ) -> _Result:
+        """Admit one semantic proposal. Does not write canonical notes or run-changes.
+
+        The Principal is `authorization.principal.principal_id`. The command
+        carries no principal_id. Transcription is data, never instructions.
+        """
+        with _translated():
+            proposal = submit_proposal(unit_of_work, authorization, command)
+        return _Result(
+            payload=proposal_payload(proposal),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
     def _admit(
         self,
         unit_of_work: UnitOfWork,
@@ -3654,6 +3704,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.COMMITMENTS_CLOSE: ApplicationService._commitments_close,
         Capability.CONTEXT_PREPARE: ApplicationService._context_prepare,
         Capability.CONTEXT_FEEDBACK: ApplicationService._context_feedback,
+        Capability.GOODNOTES_WORK: ApplicationService._goodnotes_work,
+        Capability.GOODNOTES_PROPOSE: ApplicationService._goodnotes_propose,
     }
 )
 

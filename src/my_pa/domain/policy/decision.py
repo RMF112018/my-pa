@@ -246,6 +246,12 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.
         Capability.CONTEXT_FEEDBACK,
+        # `goodnotes.work` and `goodnotes.propose` name a Principal's own
+        # GoodNotes partition, not a source. Page versions and semantic
+        # proposals carry no `enrollment_id` and no grant a scope could be
+        # compared against. Requiring one would make both permanently unusable.
+        Capability.GOODNOTES_WORK,
+        Capability.GOODNOTES_PROPOSE,
     }
 )
 

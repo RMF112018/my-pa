@@ -33,6 +33,7 @@ Everything is synthetic: no real path, no real person, no live source.
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
@@ -66,6 +67,9 @@ from my_pa.contracts.ports import (
     ContextRunRepository,
     ContinuityAuthoringRepository,
     EnrollmentRepository,
+    GoodNotesProposalAdmission,
+    GoodNotesProposalConflictError,
+    GoodNotesSemanticRepository,
     KnowledgeRecord,
     KnowledgeRepository,
     ManagedAdmission,
@@ -149,6 +153,11 @@ from my_pa.domain.documents.managed import (
 from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
+from my_pa.domain.goodnotes.models import (
+    GoodNotesPageWork,
+    GoodNotesSemanticProposal,
+    issue_stable_id,
+)
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
@@ -369,6 +378,10 @@ class World:
         default_factory=dict
     )
     preference_keys: dict[tuple[str, str], str] = field(default_factory=dict)
+    goodnotes_work: dict[tuple[str, str, str], GoodNotesPageWork] = field(default_factory=dict)
+    goodnotes_proposals: dict[tuple[str, str], GoodNotesSemanticProposal] = field(
+        default_factory=dict
+    )
     commits: int = 0
     rollbacks: int = 0
     #: Port failures a test wants raised, keyed by the method that should raise.
@@ -1223,6 +1236,70 @@ class _ContextPreferences(ContextPreferenceRepository):
             alias=event.alias,
             source_id=event.source_id,
         )
+
+
+class _GoodNotesSemantics(GoodNotesSemanticRepository):
+    """Page-version work and insert-only proposal receipts over a `World`."""
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def page_work(
+        self, principal_id: str, run_id: str, page_version_id: str
+    ) -> GoodNotesPageWork | None:
+        self._world.fail("goodnotes_semantics")
+        return self._world.goodnotes_work.get((principal_id, run_id, page_version_id))
+
+    def submit_proposal(
+        self,
+        *,
+        principal_id: str,
+        run_id: str,
+        page_version_id: str,
+        content_sha256: str,
+        schema_version: str,
+        analyzer_name: str,
+        analyzer_version: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        payload_sha256: str,
+        payload: dict[str, object],
+        correlation_id: str,
+        request_id: str,
+        audit_id: str | None,
+        created_at: object,
+    ) -> GoodNotesProposalAdmission:
+        del payload, correlation_id, request_id, audit_id
+        self._world.fail("goodnotes_semantics")
+        held = self._world.goodnotes_proposals.get((principal_id, idempotency_key))
+        if held is not None:
+            if held.request_fingerprint != request_fingerprint:
+                raise GoodNotesProposalConflictError(
+                    "the idempotency key is bound to a different request"
+                )
+            return GoodNotesProposalAdmission(
+                proposal=replace(held, replayed=True),
+                created=False,
+            )
+        proposal = GoodNotesSemanticProposal(
+            proposal_id=issue_stable_id(
+                "gnprp", principal_id, idempotency_key, request_fingerprint
+            ),
+            principal_id=principal_id,
+            run_id=run_id,
+            page_version_id=page_version_id,
+            content_sha256=content_sha256,
+            schema_version=schema_version,
+            analyzer_name=analyzer_name,
+            analyzer_version=analyzer_version,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            payload_sha256=payload_sha256,
+            created_at=created_at,  # type: ignore[arg-type]
+            replayed=False,
+        )
+        self._world.goodnotes_proposals[(principal_id, idempotency_key)] = proposal
+        return GoodNotesProposalAdmission(proposal=proposal, created=True)
 
 
 class RecordingAudit(AuditSink):
@@ -2211,6 +2288,11 @@ class FakeUnitOfWork(UnitOfWork):
         return _ContextPreferences(self._world)
 
     @property
+    def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
+        """Immutable page-version work and semantic proposal receipts over this `World`."""
+        return _GoodNotesSemantics(self._world)
+
+    @property
     def audit(self) -> AuditSink:
         return _Audit(self._world)
 
@@ -2611,6 +2693,38 @@ def staged_commitment(
         idempotency_key=f"staged-commitment-{len(scene.world.commitments_v2)}",
     )
     return receipt.commitment
+
+
+def staged_goodnotes_work(scene: Scene) -> GoodNotesPageWork:
+    """One synthetic page-version handle so `goodnotes.work` and `.propose` answer.
+
+    One per Principal per scene, like `staged_task`: a payload table and a
+    command table that each staged their own would be naming two different
+    versions. The digest is of synthetic bytes, never live personal content.
+    """
+    existing = next(
+        (
+            work
+            for work in scene.world.goodnotes_work.values()
+            if work.principal_id == scene.principal.principal_id
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing
+    principal_id = scene.principal.principal_id
+    work = GoodNotesPageWork(
+        run_id=issue_stable_id("gnrun", principal_id, "staged-work"),
+        page_version_id=issue_stable_id("gnver", principal_id, "staged-work"),
+        principal_id=principal_id,
+        content_sha256=hashlib.sha256(b"synthetic-goodnotes-page").hexdigest(),
+        logical_page_id=issue_stable_id("gnlp", principal_id, "staged-work"),
+        renderer_name="synthetic",
+        renderer_version="1",
+        render_profile_version="v1",
+    )
+    scene.world.goodnotes_work[(principal_id, work.run_id, work.page_version_id)] = work
+    return work
 
 
 @pytest.fixture

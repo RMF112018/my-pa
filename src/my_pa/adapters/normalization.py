@@ -72,6 +72,7 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetGoodNotesWork,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
@@ -100,6 +101,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchKnowledge,
     SearchTasks,
+    SubmitGoodNotesProposal,
     TransitionTask,
     UpdateTask,
     WaitingOn,
@@ -565,6 +567,30 @@ def _record_context_feedback(payload: Mapping[str, Any]) -> Command:
     return RecordContextFeedback(**converted)
 
 
+def _get_goodnotes_work(payload: Mapping[str, Any]) -> Command:
+    return GetGoodNotesWork(**payload)
+
+
+def _submit_goodnotes_proposal(payload: Mapping[str, Any]) -> Command:
+    """`goodnotes.propose`, with JSON arrays converted to the tuples the command holds."""
+    converted = dict(payload)
+    if "segments" in converted:
+        named = converted["segments"]
+        if not isinstance(named, list):
+            raise InvalidRequestError(SafeDetail.SEGMENTS)
+        converted["segments"] = tuple(named)
+    if "candidate_tags" in converted:
+        converted["candidate_tags"] = _strings(
+            converted["candidate_tags"], SafeDetail.CANDIDATE_TAGS
+        )
+    if "ranked_candidates" in converted:
+        named = converted["ranked_candidates"]
+        if not isinstance(named, list):
+            raise InvalidRequestError(SafeDetail.RANKED_CANDIDATES)
+        converted["ranked_candidates"] = tuple(named)
+    return SubmitGoodNotesProposal(**converted)
+
+
 def _managed_content(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Decode a managed write's base64 `content` into the bytes the command holds.
 
@@ -684,6 +710,8 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.COMMITMENTS_CLOSE: _close_commitment,
         Capability.CONTEXT_PREPARE: _prepare_context,
         Capability.CONTEXT_FEEDBACK: _record_context_feedback,
+        Capability.GOODNOTES_WORK: _get_goodnotes_work,
+        Capability.GOODNOTES_PROPOSE: _submit_goodnotes_proposal,
     }
 )
 
@@ -693,7 +721,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the forty-five names nothing.
+    not one of the forty-seven names nothing.
     """
     try:
         return Capability(capability)

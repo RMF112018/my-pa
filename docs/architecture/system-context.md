@@ -71,9 +71,9 @@ hash.
 
 
 The repository is an executable local candidate, not a documentation scaffold.
-The `my_pa` application exposes forty-five capabilities through HTTP, MCP, and
+The `my_pa` application exposes forty-seven capabilities through HTTP, MCP, and
 CLI composition, with PostgreSQL Principal partitioning and two worker planes.
-Alembic owns fifty-one revisions at head `c9e2b6a4d813`, including the merge of
+Alembic owns fifty-two revisions at head `d7e1a4c8b926`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the
 semantic-retrieval gate remains `SEMANTIC_GATE_FAIL` and production semantic

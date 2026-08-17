@@ -1,4 +1,4 @@
-"""All forty-five capabilities execute real behaviour, and disclose what they did.
+"""All forty-seven capabilities execute real behaviour, and disclose what they did.
 
 Each test below runs one capability through `ApplicationService.invoke` — the
 only public entry point there is — against the real fixture source provider and
@@ -36,6 +36,7 @@ from tests.conftest import (
     build_service,
     metadata_for,
     operator,
+    staged_goodnotes_work,
     staged_search,
 )
 
@@ -43,6 +44,7 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetGoodNotesWork,
     GetSourceMetadata,
     GetSourceStatus,
     ListSources,
@@ -51,6 +53,7 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     Representation,
     SearchKnowledge,
+    SubmitGoodNotesProposal,
 )
 from my_pa.application.disclosure import Limitation
 from my_pa.application.service import ApplicationService
@@ -1215,3 +1218,57 @@ def test_context_feedback_records_a_pin(scene: Scene) -> None:
     assert result["action"] == "pin"
     assert result["target_id"] == target_id
     assert result["current"][0]["action"] == "pin"
+
+
+def test_goodnotes_work_returns_the_staged_digest(scene: Scene) -> None:
+    work = staged_goodnotes_work(scene)
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.GOODNOTES_WORK,
+            Purpose.GOODNOTES_WORK,
+            GetGoodNotesWork(run_id=work.run_id, page_version_id=work.page_version_id),
+        )
+    )
+    assert result["content_sha256"] == work.content_sha256
+    assert result["run_id"] == work.run_id
+    assert "transcription" not in result
+
+
+def test_goodnotes_propose_admits_a_receipt_without_reconciling(scene: Scene) -> None:
+    work = staged_goodnotes_work(scene)
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.GOODNOTES_PROPOSE,
+            Purpose.GOODNOTES_PROPOSAL,
+            SubmitGoodNotesProposal(
+                run_id=work.run_id,
+                page_version_id=work.page_version_id,
+                content_sha256=work.content_sha256,
+                schema_version="note-unit.v1",
+                analyzer_name="synthetic",
+                analyzer_version="1",
+                idempotency_key="capability-goodnotes-propose-0001",
+                segments=(
+                    {
+                        "kind": "NOTE_UNIT",
+                        "geometry": {
+                            "x_min": 0.1,
+                            "y_min": 0.1,
+                            "width": 0.2,
+                            "height": 0.2,
+                        },
+                        "transcription": "synthetic note",
+                        "primary_class": "MEETING",
+                    },
+                ),
+            ),
+        )
+    )
+    assert result["replayed"] is False
+    assert str(result["proposal_id"]).startswith("gnprp_")
+    assert "transcription" not in result
+    assert scene.world.goodnotes_proposals

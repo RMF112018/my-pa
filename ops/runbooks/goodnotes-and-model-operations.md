@@ -78,6 +78,15 @@ review decision; it does not overwrite the source-bound transcription. Search
 returns exact page/source-version provenance and is always filtered by
 `principal_id`.
 
+Operator correction of a canonical NOTE_UNIT is a source-agnostic application
+event (`GoodNotesCorrectionService.apply`): it appends a
+`goodnotes_note_revisions` row with `analyzer_name=operator-correction` and
+`supersedes_revision_id` set. Original occurrence geometry, crop, and prior
+transcription remain. It is not a new ingestion run, does not rewrite
+`goodnotes_run_note_changes`, and is not an MCP capability. Teams and email
+are not correction channels. Dormant evaluation helpers score a labeled
+synthetic fixture; they do not call a model or run an optimizer.
+
 ## Operator-only prerequisites
 
 Before any live pilot use, the operator must separately establish and authorize

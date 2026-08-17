@@ -2,8 +2,8 @@
 
 Reads committed GN-05 run-note-changes. Does not re-reconcile, does not write
 notes/occurrences/revisions/run-change rows, and does not decide change state.
-Does not create Projects, people, Tasks, Meetings, or Agendas. Does not send to
-Teams, email, or Abacus. Destination is an explicit string such as
+Does not create Projects, people, Tasks, Meetings, or Agendas.
+Does not send to Teams, email, or Abacus. Destination is an explicit string such as
 `operator-local`. Page-level `note-unit.v1` candidates are not attached to notes.
 """
 

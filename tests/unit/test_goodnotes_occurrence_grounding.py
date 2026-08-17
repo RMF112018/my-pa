@@ -294,6 +294,27 @@ def test_hallucinated_crop_without_raster_is_ambiguous_ledger_not_new() -> None:
     assert store._notes == {}
 
 
+def test_hallucinated_box_on_white_of_inked_page_is_ambiguous_not_new() -> None:
+    png = _ink_png(boxes=((0.1, 0.2, 0.2, 0.1),))
+    store = MemoryDurableNoteStore()
+    run_id, page_id, _, _ = _plant(store, "white-box", png=png)
+    store.store_semantic_proposal(
+        A,
+        run_id,
+        page_id,
+        "note-unit.v1",
+        "synthetic",
+        "1",
+        {"segments": [_segment(x_min=0.6, transcription="ghost on white", crop_sha256=AGENT_CROP)]},
+    )
+    result = GoodNotesOccurrenceReconciler().reconcile(
+        A, run_id, repository=store, clock=lambda: LATER
+    )
+    assert [item.change_state for item in result.changes] == [GoodNotesNoteChangeState.AMBIGUOUS]
+    assert result.changes[0].note_id is None
+    assert store._notes == {}
+
+
 def test_blank_crop_is_ambiguous_not_new() -> None:
     store = MemoryDurableNoteStore()
     run_id, page_id, _, _ = _plant(store, "blank", png=_blank_png())

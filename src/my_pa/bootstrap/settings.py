@@ -73,6 +73,7 @@ __all__ = [
     "AuthMode",
     "Environment",
     "GatewayBindMode",
+    "GoodNotesRolloutStage",
     "LogLevel",
     "Settings",
     "SettingsError",
@@ -148,6 +149,27 @@ class LogLevel(StrEnum):
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
+
+
+class GoodNotesRolloutStage(StrEnum):
+    """One current GoodNotes Durable Note rollout stage. Default is observe-only.
+
+    Unknown values fail closed at parse. The optional TBR bridge value is
+    representable so the combination can be named, and resolving or enabling it
+    still fails closed. Boolean capability gates must be a consistent prefix
+    for the selected stage; mismatch fails closed rather than dropping down.
+    """
+
+    OBSERVE_ONLY = "observe-only"
+    PAGE_IDENTITY_DRY_RUN = "page-identity-dry-run"
+    SEMANTIC_PROPOSALS_WITHOUT_CANONICAL_NOTE_WRITES = (
+        "semantic-proposals-without-canonical-note-writes"
+    )
+    CANONICAL_WRITES_WITH_DELIVERY_DISABLED = "canonical-writes-with-delivery-disabled"
+    NEW_ONLY_SUMMARY_PREVIEW = "new-only-summary-preview"
+    OPERATOR_REVIEWED_DELIVERY_CANARY = "operator-reviewed-delivery-canary"
+    BOUNDED_SCHEDULED_OPERATION = "bounded-scheduled-operation"
+    OPTIONAL_TBR_BRIDGE = "optional-tbr-bridge"
 
 
 class SettingsError(ValueError):
@@ -300,16 +322,20 @@ class Settings(StrictModel):
     #: Process-local gates for GoodNotes Durable Note Ingestion rollout (WP-15).
     #: All default off. True does not ingest, write canonical notes, deliver,
     #: call Abacus, mutate NAS, or change the existing TBR Task.
-    #: `bootstrap.goodnotes_rollout` reads all six; `bootstrap.goodnotes_durable_note`
-    #: still reads the intelligence gate. `bootstrap.goodnotes` (bounded
-    #: OCR/review) and `bootstrap.goodnotes_tbr` (GN-09 contract) do not.
-    #: Semantic Agent work dispatch reuses the existing intelligence gate.
+    #: `bootstrap.goodnotes_rollout` reads the six booleans and the ordered
+    #: stage; `bootstrap.goodnotes_durable_note` still reads the intelligence
+    #: gate and composes the orchestrator against the resolved stage.
+    #: `bootstrap.goodnotes` (bounded OCR/review) and `bootstrap.goodnotes_tbr`
+    #: (GN-09 contract) do not. Semantic Agent work dispatch reuses the
+    #: existing intelligence gate. The stage defaults to observe-only; unknown
+    #: values fail closed. Selecting the TBR bridge stage remains unauthorized.
     goodnotes_durable_note_ingestion_enabled: bool = False
     goodnotes_durable_note_intelligence_enabled: bool = False
     goodnotes_canonical_semantic_writes_enabled: bool = False
     goodnotes_user_facing_summary_delivery_enabled: bool = False
     goodnotes_tbr_bridge_enabled: bool = False
     goodnotes_self_improving_optimizer_enabled: bool = False
+    goodnotes_rollout_stage: GoodNotesRolloutStage = GoodNotesRolloutStage.OBSERVE_ONLY
     remote_mcp_public_host: str = ""
     #: Legacy Entra verifier inputs remain available only to the dormant
     #: `auth_mode=entra` path. Remote MCP never reads them.

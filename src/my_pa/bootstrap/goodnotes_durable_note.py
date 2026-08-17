@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Final
 
 from my_pa.application.goodnotes_orchestrator import GoodNotesDurableNoteOrchestrator
+from my_pa.bootstrap.goodnotes_rollout import current_rollout_stage
 from my_pa.bootstrap.settings import Settings
 from my_pa.domain.identity.operation import Capability
 
@@ -77,10 +78,15 @@ def mcp_profile_refuses(tool_name: str, *, published: frozenset[str]) -> bool:
     return tool_name not in published or tool_name not in profile_tool_names()
 
 
-def compose_durable_note_orchestrator() -> GoodNotesDurableNoteOrchestrator:
+def compose_durable_note_orchestrator(
+    settings: Settings,
+) -> GoodNotesDurableNoteOrchestrator:
     """Dormant composition helper. Not invoked from gateway startup.
 
     Production persistence is `PostgresDurableNoteStore` on a caller-supplied
     connection. This helper does not open a connection or auto-wire the store.
+    The resolved rollout stage is consumed before each effectful step.
+    Representing or enabling the optional TBR bridge fails closed here.
     """
-    return GoodNotesDurableNoteOrchestrator()
+    stage = current_rollout_stage(settings)
+    return GoodNotesDurableNoteOrchestrator(rollout_stage=stage.value)

@@ -234,6 +234,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("request", "principal_id"),
         ("run", "principal_id"),
         ("run", "principal_id"),
         ("run", "principal_id"),

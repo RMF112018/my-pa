@@ -1,9 +1,9 @@
 """Dormant GoodNotes Durable Note Ingestion rollout gates (WP-15).
 
-Process-local flags, all default off. This module **reads** them and reports
-which documented activation step the current combination would permit. It does
-not ingest, write notes, deliver, call Abacus, mutate NAS, or touch the TBR
-Task.
+Process-local flags, all default off, plus one explicit ordered stage. This
+module **reads** them and resolves the single current stage the durable-note
+orchestrator may consume. It does not ingest, write notes, deliver, call
+Abacus, mutate NAS, or touch the TBR Task.
 
 `bootstrap.goodnotes` (bounded OCR/review) and `bootstrap.goodnotes_tbr`
 (GN-09 contract) do not read these flags. Turning every gate off leaves those
@@ -16,14 +16,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from my_pa.bootstrap.settings import Settings
+from my_pa.bootstrap.settings import GoodNotesRolloutStage, Settings
 
 __all__ = [
     "ACTIVATION_STEPS",
     "PILOT_ACTIVATED",
     "PRODUCTION_ACTIVATED",
     "GoodNotesRolloutGates",
+    "RolloutStageError",
     "allowed_activation_steps",
+    "current_rollout_stage",
     "rollout_gates",
     "rollout_report",
 ]
@@ -31,16 +33,35 @@ __all__ = [
 PRODUCTION_ACTIVATED: Final = False
 PILOT_ACTIVATED: Final = False
 
-ACTIVATION_STEPS: Final[tuple[str, ...]] = (
-    "observe-only",
-    "page-identity-dry-run",
-    "semantic-proposals-without-canonical-note-writes",
-    "canonical-writes-with-delivery-disabled",
-    "new-only-summary-preview",
-    "operator-reviewed-delivery-canary",
-    "bounded-scheduled-operation",
-    "optional-tbr-bridge",
-)
+ACTIVATION_STEPS: Final[tuple[str, ...]] = tuple(member.value for member in GoodNotesRolloutStage)
+
+# ingestion, intelligence, canonical writes, user-facing delivery, TBR.
+_REQUIRED_PREFIX: Final[dict[GoodNotesRolloutStage, tuple[bool, bool, bool, bool, bool]]] = {
+    GoodNotesRolloutStage.OBSERVE_ONLY: (False, False, False, False, False),
+    GoodNotesRolloutStage.PAGE_IDENTITY_DRY_RUN: (False, False, False, False, False),
+    GoodNotesRolloutStage.SEMANTIC_PROPOSALS_WITHOUT_CANONICAL_NOTE_WRITES: (
+        False,
+        True,
+        False,
+        False,
+        False,
+    ),
+    GoodNotesRolloutStage.CANONICAL_WRITES_WITH_DELIVERY_DISABLED: (
+        False,
+        True,
+        True,
+        False,
+        False,
+    ),
+    GoodNotesRolloutStage.NEW_ONLY_SUMMARY_PREVIEW: (False, True, True, False, False),
+    GoodNotesRolloutStage.OPERATOR_REVIEWED_DELIVERY_CANARY: (False, True, True, True, False),
+    GoodNotesRolloutStage.BOUNDED_SCHEDULED_OPERATION: (True, True, True, True, False),
+    GoodNotesRolloutStage.OPTIONAL_TBR_BRIDGE: (True, True, True, True, True),
+}
+
+
+class RolloutStageError(ValueError):
+    """Impossible or unauthorized rollout combination. Nothing was activated."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,70 +88,44 @@ def rollout_gates(settings: Settings) -> GoodNotesRolloutGates:
     )
 
 
-def allowed_activation_steps(settings: Settings) -> tuple[str, ...]:
-    """Which documented steps the current flags would permit.
+def current_rollout_stage(settings: Settings) -> GoodNotesRolloutStage:
+    """The one current stage, or fail closed.
 
-    Out-of-order later flags fail closed: they do not unlock a live step.
-    The optional Self-Improving optimizer is reported separately and does not
-    advance this sequence. This function does not ingest, write, deliver, or
-    call Abacus.
+    Boolean gates must be the consistent prefix for the selected stage. A later
+    or out-of-order flag does not silently drop to a lower stage. Representing
+    or enabling the optional TBR bridge is unauthorized. This function does not
+    ingest, write, deliver, call Abacus, or mutate TBR.
     """
     if PRODUCTION_ACTIVATED or PILOT_ACTIVATED:
-        return ()
+        raise RolloutStageError("pilot and production stay off")
     gates = rollout_gates(settings)
-    sequence = (
+    stage = settings.goodnotes_rollout_stage
+    if stage is GoodNotesRolloutStage.OPTIONAL_TBR_BRIDGE or gates.optional_tbr_bridge:
+        raise RolloutStageError("optional TBR bridge is unauthorized")
+    actual = (
         gates.durable_note_ingestion,
         gates.semantic_agent_work_dispatch,
         gates.canonical_semantic_writes,
         gates.user_facing_summary_delivery,
         gates.optional_tbr_bridge,
     )
-    if not any(sequence):
-        return ("observe-only", "page-identity-dry-run")
-    if (
-        gates.semantic_agent_work_dispatch
-        and not gates.canonical_semantic_writes
-        and not gates.user_facing_summary_delivery
-        and not gates.durable_note_ingestion
-        and not gates.optional_tbr_bridge
-    ):
-        return ("semantic-proposals-without-canonical-note-writes",)
-    if (
-        gates.semantic_agent_work_dispatch
-        and gates.canonical_semantic_writes
-        and not gates.user_facing_summary_delivery
-        and not gates.durable_note_ingestion
-        and not gates.optional_tbr_bridge
-    ):
-        return (
-            "canonical-writes-with-delivery-disabled",
-            "new-only-summary-preview",
-        )
-    if (
-        gates.semantic_agent_work_dispatch
-        and gates.canonical_semantic_writes
-        and gates.user_facing_summary_delivery
-        and not gates.durable_note_ingestion
-        and not gates.optional_tbr_bridge
-    ):
-        return ("operator-reviewed-delivery-canary",)
-    if (
-        gates.durable_note_ingestion
-        and gates.semantic_agent_work_dispatch
-        and gates.canonical_semantic_writes
-        and gates.user_facing_summary_delivery
-        and not gates.optional_tbr_bridge
-    ):
-        return ("bounded-scheduled-operation",)
-    if (
-        gates.durable_note_ingestion
-        and gates.semantic_agent_work_dispatch
-        and gates.canonical_semantic_writes
-        and gates.user_facing_summary_delivery
-        and gates.optional_tbr_bridge
-    ):
-        return ("optional-tbr-bridge",)
-    return ()
+    if actual != _REQUIRED_PREFIX[stage]:
+        raise RolloutStageError("rollout flags are not a consistent prefix for the selected stage")
+    return stage
+
+
+def allowed_activation_steps(settings: Settings) -> tuple[str, ...]:
+    """The one current stage as a tuple, or empty when the combination fails closed.
+
+    Out-of-order later flags fail closed: they do not unlock a live step.
+    The optional Self-Improving optimizer is reported separately and does not
+    advance this sequence. This function does not ingest, write, deliver, or
+    call Abacus.
+    """
+    try:
+        return (current_rollout_stage(settings).value,)
+    except RolloutStageError:
+        return ()
 
 
 def rollout_report(settings: Settings) -> dict[str, object]:
@@ -140,6 +135,7 @@ def rollout_report(settings: Settings) -> dict[str, object]:
     deliver, or call Abacus. Live transitions remain operator-gated.
     """
     gates = rollout_gates(settings)
+    allowed = list(allowed_activation_steps(settings))
     return {
         "production_activated": PRODUCTION_ACTIVATED,
         "pilot_activated": PILOT_ACTIVATED,
@@ -152,7 +148,9 @@ def rollout_report(settings: Settings) -> dict[str, object]:
             "goodnotes_tbr_bridge_enabled": gates.optional_tbr_bridge,
             "goodnotes_self_improving_optimizer_enabled": gates.optional_self_improving_optimizer,
         },
-        "allowed_activation_steps": list(allowed_activation_steps(settings)),
+        "goodnotes_rollout_stage": settings.goodnotes_rollout_stage.value,
+        "current_stage": allowed[0] if allowed else None,
+        "allowed_activation_steps": allowed,
         "ingests": False,
         "writes_canonical_notes": False,
         "delivers": False,

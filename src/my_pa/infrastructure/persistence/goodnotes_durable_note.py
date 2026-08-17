@@ -14,6 +14,7 @@ from sqlalchemy.engine import Connection
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.goodnotes.models import (
+    GoodNotesDeliveryAttempt,
     GoodNotesDeliveryReceipt,
     GoodNotesEntityAssociation,
     GoodNotesEntityDirectoryRecord,
@@ -98,3 +99,16 @@ class PostgresDurableNoteStore(PostgresGoodNotesRepository):
         return self._delivery.delivery_receipt_by_key(
             principal_id, run_id, destination, summary_hash
         )
+
+    def store_delivery_attempt(self, attempt: GoodNotesDeliveryAttempt) -> GoodNotesDeliveryAttempt:
+        return self._delivery.store_delivery_attempt(attempt)
+
+    def delivery_attempt(
+        self, principal_id: str, attempt_id: str
+    ) -> GoodNotesDeliveryAttempt | None:
+        return self._delivery.delivery_attempt(principal_id, attempt_id)
+
+    def delivery_attempts_for_token(
+        self, principal_id: str, idempotency_token: str
+    ) -> tuple[GoodNotesDeliveryAttempt, ...]:
+        return self._delivery.delivery_attempts_for_token(principal_id, idempotency_token)

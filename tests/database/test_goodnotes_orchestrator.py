@@ -170,7 +170,7 @@ def _run(
     *,
     fail_after: GoodNotesPipelineStage | None = None,
 ) -> DurableNoteResult:
-    return GoodNotesDurableNoteOrchestrator().run(
+    return GoodNotesDurableNoteOrchestrator(rollout_stage="new-only-summary-preview").run(
         _request(pdf, request_id),
         renderer=production_page_renderer(),
         splitter=split_admitted_pdf,

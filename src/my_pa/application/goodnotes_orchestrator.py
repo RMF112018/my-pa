@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Protocol
 
 from my_pa.application.goodnotes_delivery import (
+    GoodNotesDeliveryAttemptLedger,
     GoodNotesDeliveryRepository,
     GoodNotesNewOnlyDelivery,
 )
@@ -34,6 +35,7 @@ from my_pa.domain.common.time import utc_now
 from my_pa.domain.goodnotes.models import (
     MAX_GOODNOTES_RASTER_BYTES,
     PIPELINE_STAGES,
+    GoodNotesDeliveryAttemptState,
     GoodNotesIngestionRun,
     GoodNotesIngestionStatus,
     GoodNotesIngestionTrigger,
@@ -47,6 +49,25 @@ from my_pa.domain.goodnotes.models import (
 )
 
 PREVIEW_DESTINATION = "operator-local"
+ROLLOUT_STAGE_ORDER: tuple[str, ...] = (
+    "observe-only",
+    "page-identity-dry-run",
+    "semantic-proposals-without-canonical-note-writes",
+    "canonical-writes-with-delivery-disabled",
+    "new-only-summary-preview",
+    "operator-reviewed-delivery-canary",
+    "bounded-scheduled-operation",
+    "optional-tbr-bridge",
+)
+_TBR_STAGE = "optional-tbr-bridge"
+_EFFECT_RANK: dict[str, int] = {
+    "observe": 0,
+    "split_render_lineage": 1,
+    "semantic_proposals": 2,
+    "canonical_writes": 3,
+    "preview": 4,
+    "attempt_ledger": 5,
+}
 
 
 class DurableNoteStageError(RuntimeError):
@@ -56,6 +77,10 @@ class DurableNoteStageError(RuntimeError):
         super().__init__(message)
         self.stage = stage
         self.run_id = run_id
+
+
+class RolloutGateError(RuntimeError):
+    """The selected rollout stage forbids this run. No pipeline side effects."""
 
 
 class AdmittedPageSplitter(Protocol):
@@ -132,6 +157,14 @@ class DurableNoteResult:
     stages: tuple[GoodNotesRunStage, ...]
     waiting_for_proposal: bool
     preview_receipt_id: str | None = None
+    rollout_stage: str = "observe-only"
+
+
+def rollout_stage_permits(stage: str, effect: str) -> bool:
+    """Whether the named orchestrator effect is in the selected stage's prefix."""
+    if stage not in ROLLOUT_STAGE_ORDER or stage == _TBR_STAGE:
+        return False
+    return ROLLOUT_STAGE_ORDER.index(stage) >= _EFFECT_RANK[effect]
 
 
 class GoodNotesDurableNoteOrchestrator:
@@ -143,10 +176,17 @@ class GoodNotesDurableNoteOrchestrator:
         lineage: GoodNotesLineageService | None = None,
         occurrences: GoodNotesOccurrenceReconciler | None = None,
         delivery: GoodNotesNewOnlyDelivery | None = None,
+        rollout_stage: str = "observe-only",
     ) -> None:
+        if rollout_stage not in ROLLOUT_STAGE_ORDER:
+            raise RolloutGateError("unknown GoodNotes rollout stage")
+        if rollout_stage == _TBR_STAGE:
+            raise RolloutGateError("optional TBR bridge is unauthorized")
         self._lineage = lineage or GoodNotesLineageService()
         self._occurrences = occurrences or GoodNotesOccurrenceReconciler()
         self._delivery = delivery or GoodNotesNewOnlyDelivery()
+        self._attempts = GoodNotesDeliveryAttemptLedger()
+        self._rollout_stage = rollout_stage
 
     def run(
         self,
@@ -160,6 +200,8 @@ class GoodNotesDurableNoteOrchestrator:
         destination: str = PREVIEW_DESTINATION,
     ) -> DurableNoteResult:
         validate_identifier(request.principal_id, IdKind.PRINCIPAL)
+        if self._rollout_stage == _TBR_STAGE:
+            raise RolloutGateError("optional TBR bridge is unauthorized")
         if not request.pdf_bytes:
             raise ValueError("a durable-note run requires admitted PDF bytes")
         observed_at = request.observed_at or clock()
@@ -176,6 +218,20 @@ class GoodNotesDurableNoteOrchestrator:
                     stage, run.run_id, f"injected failure after {stage.value}"
                 )
 
+        def snapshot(
+            current: GoodNotesIngestionRun,
+            *,
+            waiting: bool,
+            preview_id: str | None = None,
+        ) -> DurableNoteResult:
+            return DurableNoteResult(
+                run=current,
+                stages=store.stages(request.principal_id, current.run_id),
+                waiting_for_proposal=waiting,
+                preview_receipt_id=preview_id,
+                rollout_stage=self._rollout_stage,
+            )
+
         try:
             if GoodNotesPipelineStage.OBSERVE not in completed:
                 self._complete_stage(store, run, GoodNotesPipelineStage.OBSERVE, observed_at, clock)
@@ -183,6 +239,8 @@ class GoodNotesDurableNoteOrchestrator:
             if GoodNotesPipelineStage.SETTLE not in completed:
                 self._complete_stage(store, run, GoodNotesPipelineStage.SETTLE, observed_at, clock)
                 after(GoodNotesPipelineStage.SETTLE)
+            if not rollout_stage_permits(self._rollout_stage, "split_render_lineage"):
+                return snapshot(run, waiting=False)
             pages, rasters = self._split_render(
                 request, renderer=renderer, splitter=splitter, completed=completed
             )
@@ -214,6 +272,8 @@ class GoodNotesDurableNoteOrchestrator:
                 self._complete_stage(store, run, GoodNotesPipelineStage.LINEAGE, observed_at, clock)
                 after(GoodNotesPipelineStage.LINEAGE)
             self._persist_rasters(store, run, lineage.positions, rasters, observed_at)
+            if not rollout_stage_permits(self._rollout_stage, "semantic_proposals"):
+                return snapshot(run, waiting=False)
             if GoodNotesPipelineStage.CONTENT_READY not in completed:
                 self._complete_stage(
                     store, run, GoodNotesPipelineStage.CONTENT_READY, observed_at, clock
@@ -229,11 +289,9 @@ class GoodNotesDurableNoteOrchestrator:
                 run = store.update_run(
                     replace(run, status=GoodNotesIngestionStatus.RUNNING, ended_at=None)
                 )
-                return DurableNoteResult(
-                    run=run,
-                    stages=store.stages(request.principal_id, run.run_id),
-                    waiting_for_proposal=True,
-                )
+                return snapshot(run, waiting=True)
+            if not rollout_stage_permits(self._rollout_stage, "canonical_writes"):
+                return snapshot(run, waiting=False)
             if GoodNotesPipelineStage.RECONCILE not in completed:
                 self._occurrences.reconcile(
                     request.principal_id,
@@ -245,6 +303,19 @@ class GoodNotesDurableNoteOrchestrator:
                     store, run, GoodNotesPipelineStage.RECONCILE, observed_at, clock
                 )
                 after(GoodNotesPipelineStage.RECONCILE)
+            if not rollout_stage_permits(self._rollout_stage, "preview"):
+                return snapshot(run, waiting=False)
+            token = request.request_id
+            if rollout_stage_permits(self._rollout_stage, "attempt_ledger"):
+                self._attempts.record(
+                    request.principal_id,
+                    run.run_id,
+                    destination,
+                    token,
+                    GoodNotesDeliveryAttemptState.PREPARED,
+                    repository=store,
+                    clock=clock,
+                )
             preview = self._delivery.deliver(
                 request.principal_id,
                 run.run_id,
@@ -252,6 +323,18 @@ class GoodNotesDurableNoteOrchestrator:
                 repository=store,
                 clock=clock,
             )
+            if rollout_stage_permits(self._rollout_stage, "attempt_ledger"):
+                self._attempts.record(
+                    request.principal_id,
+                    run.run_id,
+                    destination,
+                    token,
+                    GoodNotesDeliveryAttemptState.ACKNOWLEDGED,
+                    repository=store,
+                    clock=clock,
+                    summary_hash=preview.receipt.summary_hash,
+                    receipt_id=preview.receipt.receipt_id,
+                )
             if GoodNotesPipelineStage.PREVIEW not in completed:
                 self._complete_stage(store, run, GoodNotesPipelineStage.PREVIEW, observed_at, clock)
                 after(GoodNotesPipelineStage.PREVIEW)
@@ -262,13 +345,10 @@ class GoodNotesDurableNoteOrchestrator:
                     ended_at=clock(),
                 )
             )
-            return DurableNoteResult(
-                run=run,
-                stages=store.stages(request.principal_id, run.run_id),
-                waiting_for_proposal=False,
-                preview_receipt_id=preview.receipt.receipt_id,
-            )
+            return snapshot(run, waiting=False, preview_id=preview.receipt.receipt_id)
         except DurableNoteStageError:
+            raise
+        except RolloutGateError:
             raise
         except Exception as error:
             failed = self._fail_run(store, run, clock, error)

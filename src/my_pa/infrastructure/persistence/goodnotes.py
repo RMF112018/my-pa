@@ -1303,6 +1303,26 @@ class PostgresGoodNotesRepository:
         )
         return tuple(_run_note_change(row) for row in rows)
 
+    def duplicate_active_occurrence_count(self, principal_id: str) -> int:
+        """DATABASE_INTEGRITY_METRIC for one Principal. Extra ACTIVE duplicates."""
+        grouped = (
+            select(func.count().label("n"))
+            .where(
+                _mine(goodnotes_note_occurrences, principal_id),
+                goodnotes_note_occurrences.c.identity_status
+                == GoodNotesIdentityStatus.ACTIVE.value,
+            )
+            .group_by(
+                goodnotes_note_occurrences.c.logical_page_id,
+                goodnotes_note_occurrences.c.geometry_key,
+            )
+            .having(func.count() > 1)
+            .subquery()
+        )
+        extra = func.coalesce(func.sum(grouped.c.n - 1), 0)
+        count = self.connection.execute(select(extra)).scalar()
+        return int(count or 0)
+
 
 def _require_identical(
     connection: Connection,

@@ -217,6 +217,9 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
     ),
     "application/goodnotes_delivery.py": (("existing", "principal_id"),),
+    # The dormant integrity metric groups already-persisted occurrence rows by
+    # their stored partition. It does not read a request-body Principal.
+    "application/goodnotes_evaluation.py": (("item", "principal_id"),),
     "infrastructure/persistence/goodnotes_delivery.py": (
         ("association", "principal_id"),
         ("association", "principal_id"),

@@ -228,6 +228,8 @@ class GoodNotesNewOnlyDelivery:
         summary_notes: list[NewOnlySummaryNote] = []
         associations: list[GoodNotesEntityAssociation] = []
         for change in new_changes:
+            if change.occurrence_id is None or change.note_id is None:
+                raise ValueError("the request names no stored GoodNotes ingestion run")
             occurrence = repository.occurrence(principal_id, change.occurrence_id)
             if occurrence is None:
                 raise ValueError("the request names no stored GoodNotes ingestion run")

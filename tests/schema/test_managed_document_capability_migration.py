@@ -264,7 +264,7 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_managed_plane() ->
     assert script.get_revision(MANAGED_REVISION).down_revision == PREVIOUS_REVISION
     # The revision count, so a chain that lost a file is not read as a chain that
     # never had one. Derived from the directory rather than restated.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 55
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 56
 
 
 def test_the_widening_is_exactly_the_managed_plane() -> None:

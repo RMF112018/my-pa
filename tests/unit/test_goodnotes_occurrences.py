@@ -40,6 +40,7 @@ def _current(
     crop_sha256: str | None = None,
     context_anchor_sha256: str | None = None,
     transcription: str = "follow up Tuesday",
+    visual_verified: bool = True,
 ) -> CurrentOccurrence:
     return CurrentOccurrence(
         logical_page_id=logical_page_id,
@@ -57,6 +58,7 @@ def _current(
         analyzer_name="synthetic",
         analyzer_version="1",
         geometry_key=occurrence_geometry_key(x_min, y_min, width, height, crop_sha256),
+        visual_verified=visual_verified,
     )
 
 
@@ -226,10 +228,36 @@ def test_unique_context_overlap_matches_when_box_shifts() -> None:
     assert matches[0].method is OccurrenceMatchMethod.CONTEXT_OVERLAP
 
 
-def test_different_crop_does_not_match_on_geometry_alone_when_keys_differ() -> None:
+def test_different_crop_same_box_pairs_by_iou() -> None:
     prior = _prior(COVER, "old-crop", x_min=0.1, crop_sha256=CROP)
     matches = match_occurrences(
         current=(_current(COVER, "new-crop", x_min=0.1, crop_sha256=OTHER_CROP),),
         prior=(prior,),
     )
-    assert all(item.kind is OccurrenceMatchKind.AMBIGUOUS for item in matches)
+    assert len(matches) == 1
+    assert matches[0].kind is OccurrenceMatchKind.PAIRED
+    assert matches[0].method is OccurrenceMatchMethod.GEOMETRY_IOU
+    assert matches[0].prior is not None
+    assert matches[0].prior.occurrence_id == prior.occurrence_id
+
+
+def test_geometry_drift_within_iou_pairs_instead_of_new() -> None:
+    prior = _prior(COVER, "drift", x_min=0.10)
+    matches = match_occurrences(
+        current=(_current(COVER, "drift", x_min=0.11),),
+        prior=(prior,),
+    )
+    assert len(matches) == 1
+    assert matches[0].kind is OccurrenceMatchKind.PAIRED
+    assert matches[0].method is OccurrenceMatchMethod.GEOMETRY_IOU
+    assert sum(item.kind is OccurrenceMatchKind.NEW for item in matches) == 0
+
+
+def test_unverified_unmatched_unit_is_ambiguous_not_new() -> None:
+    matches = match_occurrences(
+        current=(_current(COVER, "hallucinated", x_min=0.1, visual_verified=False),),
+        prior=(),
+    )
+    assert len(matches) == 1
+    assert matches[0].kind is OccurrenceMatchKind.AMBIGUOUS
+    assert sum(item.kind is OccurrenceMatchKind.NEW for item in matches) == 0

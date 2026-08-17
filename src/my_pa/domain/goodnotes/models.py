@@ -47,6 +47,7 @@ _ANALYZER_TEXT_MAX = 100
 _SCHEMA_VERSION_MAX = 40
 _GEOMETRY_KEY_MAX = 96
 _TARGET_KEY_MAX = 80
+_CHANGE_REASON_MAX = 64
 _DESTINATION_MAX = 64
 _CANDIDATE_MAX = 200
 _DELIVERY_BODY_MAX = 200_000
@@ -821,6 +822,8 @@ class GoodNotesNoteRevision:
     occurrence_id: str | None = None
     supersedes_revision_id: str | None = None
     primary_class: GoodNotesNoteClass | None = None
+    page_version_id: str | None = None
+    snapshot_id: str | None = None
 
     def __post_init__(self) -> None:
         _goodnotes_id(self.revision_id, "gnrev")
@@ -837,6 +840,10 @@ class GoodNotesNoteRevision:
             _goodnotes_id(self.supersedes_revision_id, "gnrev")
             if self.supersedes_revision_id == self.revision_id:
                 raise ValueError("a revision cannot supersede itself")
+        if self.page_version_id is not None:
+            _goodnotes_id(self.page_version_id, "gnver")
+        if self.snapshot_id is not None:
+            _goodnotes_id(self.snapshot_id, "gnsnap")
 
 
 @dataclass(frozen=True, slots=True)
@@ -914,18 +921,46 @@ class GoodNotesRunNoteChange:
     change_id: str
     principal_id: str
     run_id: str
-    note_id: str
-    occurrence_id: str
+    note_id: str | None
+    occurrence_id: str | None
     change_state: GoodNotesNoteChangeState
     created_at: datetime
+    page_version_id: str | None = None
+    geometry_key: str | None = None
+    reason: str | None = None
+    revision_id: str | None = None
 
     def __post_init__(self) -> None:
         _goodnotes_id(self.change_id, "gnchg")
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         _goodnotes_id(self.run_id, "gnrun")
-        _goodnotes_id(self.note_id, "gnnt")
-        _goodnotes_id(self.occurrence_id, "gnocc")
         ensure_utc(self.created_at)
+        note_id = self.note_id
+        occurrence_id = self.occurrence_id
+        identified = note_id is not None and occurrence_id is not None
+        anonymous = note_id is None and occurrence_id is None
+        if identified == anonymous:
+            raise ValueError("a run note change names both identities or neither")
+        if note_id is not None and occurrence_id is not None:
+            _goodnotes_id(note_id, "gnnt")
+            _goodnotes_id(occurrence_id, "gnocc")
+        elif self.change_state is not GoodNotesNoteChangeState.AMBIGUOUS:
+            raise ValueError("only an AMBIGUOUS run note change may omit occurrence identity")
+        elif self.page_version_id is None or self.geometry_key is None:
+            raise ValueError("a current-only AMBIGUOUS change requires page version and geometry")
+        if self.page_version_id is not None:
+            _goodnotes_id(self.page_version_id, "gnver")
+        if self.geometry_key is not None and (
+            not _GEOMETRY_KEY.fullmatch(self.geometry_key)
+            or len(self.geometry_key) > _GEOMETRY_KEY_MAX
+        ):
+            raise ValueError("geometry_key must be the canonical 4-decimal box")
+        if self.reason is not None:
+            _bounded_text(self.reason, what="change reason", maximum=_CHANGE_REASON_MAX)
+        if self.revision_id is not None:
+            _goodnotes_id(self.revision_id, "gnrev")
+        if self.revision_id is not None and anonymous:
+            raise ValueError("a current-only AMBIGUOUS change cannot name a revision")
 
 
 class GoodNotesSegmentKind(StrEnum):

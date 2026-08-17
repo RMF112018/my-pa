@@ -7,6 +7,7 @@ import io
 import os
 import threading
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import Executable
 
 from my_pa.application.commands import SubmitGoodNotesProposal
@@ -40,13 +42,16 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesNoteRevision,
     GoodNotesPage,
     GoodNotesPagePosition,
+    GoodNotesPageRaster,
     GoodNotesPageVersion,
     GoodNotesRunNoteChange,
     GoodNotesSourceSnapshot,
     issue_stable_id,
 )
+from my_pa.domain.goodnotes.page_crop import aligned_crop_box
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.goodnotes.visual import grayscale_png
 from my_pa.infrastructure.persistence.goodnotes import PostgresGoodNotesRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 
@@ -61,6 +66,22 @@ DIGEST = hashlib.sha256(b"synthetic-goodnotes-occurrence-page").hexdigest()
 FINGERPRINT = "c" * 64
 CROP = "d" * 64
 SHARED_RUN = issue_stable_id("gnrun", "shared-occurrence-run")
+
+
+def _ink_png(
+    *,
+    width: int = 80,
+    height: int = 80,
+    boxes: tuple[tuple[float, float, float, float], ...] | None = None,
+) -> bytes:
+    painted = boxes if boxes is not None else ((0.1, 0.2, 0.2, 0.1), (0.6, 0.2, 0.2, 0.1))
+    pixels = bytearray([255] * width * height)
+    for x_min, y_min, box_width, box_height in painted:
+        x0, y0, x1, y1 = aligned_crop_box(x_min, y_min, box_width, box_height, width, height)
+        for row in range(y0, y1):
+            for column in range(x0, x1):
+                pixels[row * width + column] = 10
+    return grayscale_png(bytes(pixels), width, height)
 
 
 def administer(engine: Engine, *statements: Executable) -> None:
@@ -190,6 +211,22 @@ def _plant(
             page_version_id=version.page_version_id,
         )
     )
+    png = _ink_png()
+    repository.store_page_raster(
+        GoodNotesPageRaster(
+            principal_id=principal_id,
+            page_version_id=version.page_version_id,
+            run_id=run.run_id,
+            exact_render_sha256=hashlib.sha256(png).hexdigest(),
+            png_sha256=hashlib.sha256(png).hexdigest(),
+            byte_length=len(png),
+            png_bytes=png,
+            renderer_name="synthetic",
+            renderer_version="1",
+            render_profile_version="v1",
+            created_at=WHEN,
+        )
+    )
     return run.run_id, version.page_version_id, notebook.notebook_id, logical.logical_page_id
 
 
@@ -297,10 +334,14 @@ def test_two_principals_same_run_id_string_do_not_leak(engine: Engine) -> None:
         result_b = reconciler.reconcile(B, run_b, repository=lineage, clock=lambda: LATER)
         assert result_a.changes[0].change_state is GoodNotesNoteChangeState.NEW
         assert result_b.changes[0].change_state is GoodNotesNoteChangeState.NEW
-        assert lineage.run_note_changes(B, run_a)[0].note_id != result_a.changes[0].note_id
-        assert lineage.note(B, result_a.changes[0].note_id) is None
-        assert lineage.note(A, result_b.changes[0].note_id) is None
-        assert lineage.occurrence(B, result_a.changes[0].occurrence_id) is None
+        note_a = result_a.changes[0].note_id
+        note_b = result_b.changes[0].note_id
+        occurrence_a = result_a.changes[0].occurrence_id
+        assert note_a is not None and note_b is not None and occurrence_a is not None
+        assert lineage.run_note_changes(B, run_a)[0].note_id != note_a
+        assert lineage.note(B, note_a) is None
+        assert lineage.note(A, note_b) is None
+        assert lineage.occurrence(B, occurrence_a) is None
         with pytest.raises(ValueError, match="no stored GoodNotes ingestion run"):
             reconciler.reconcile(
                 B, issue_stable_id("gnrun", "missing-run"), repository=lineage, clock=lambda: LATER
@@ -499,10 +540,11 @@ def test_ambiguous_does_not_insert_a_silent_new_pick(engine: Engine) -> None:
         states = {item.change_state for item in result.changes}
         assert GoodNotesNoteChangeState.NEW not in states
         assert states == {GoodNotesNoteChangeState.AMBIGUOUS}
-        assert {item.occurrence_id for item in result.changes} == {
-            first.occurrence_id,
-            second.occurrence_id,
+        identified = {
+            item.occurrence_id for item in result.changes if item.occurrence_id is not None
         }
+        assert identified == {first.occurrence_id, second.occurrence_id}
+        assert any(item.occurrence_id is None for item in result.changes)
         notes_after, _ = _counts(connection, A)
         assert notes_after == notes_before
         assert lineage.occurrence(A, first.occurrence_id) is not None
@@ -597,7 +639,9 @@ def test_unique_visual_match_with_new_transcription_is_revised(engine: Engine) -
         result = GoodNotesOccurrenceReconciler().reconcile(
             A, run_id, repository=lineage, clock=lambda: LATER
         )
-        assert [item.change_state for item in result.changes] == [GoodNotesNoteChangeState.REVISED]
+        assert [item.change_state for item in result.changes] == [
+            GoodNotesNoteChangeState.UNCHANGED
+        ]
         assert result.changes[0].occurrence_id == occurrence.occurrence_id
         latest = lineage.latest_revision_for_occurrence(A, occurrence.occurrence_id)
         assert latest is not None
@@ -670,12 +714,15 @@ def test_new_occurrence_does_not_reuse_note_by_page_wide_context_hash(engine: En
             item for item in result.changes if item.change_state is GoodNotesNoteChangeState.NEW
         ]
         assert len(new_changes) == 1
-        assert new_changes[0].note_id != note.note_id
-        assert new_changes[0].occurrence_id != existing.occurrence_id
-        stored = lineage.occurrence(A, new_changes[0].occurrence_id)
+        new_note_id = new_changes[0].note_id
+        new_occurrence_id = new_changes[0].occurrence_id
+        assert new_note_id is not None and new_occurrence_id is not None
+        assert new_note_id != note.note_id
+        assert new_occurrence_id != existing.occurrence_id
+        stored = lineage.occurrence(A, new_occurrence_id)
         assert stored is not None
         assert stored.note_id != note.note_id
-        assert stored.note_id == new_changes[0].note_id
+        assert stored.note_id == new_note_id
         paired = [item for item in result.changes if item.occurrence_id == existing.occurrence_id]
         assert len(paired) == 1
         assert paired[0].change_state in {
@@ -683,3 +730,220 @@ def test_new_occurrence_does_not_reuse_note_by_page_wide_context_hash(engine: En
             GoodNotesNoteChangeState.REVISED,
         }
         assert paired[0].note_id == note.note_id
+
+
+def test_revision_page_version_survives_occurrence_pointer_update(engine: Engine) -> None:
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        semantics = SqlGoodNotesSemanticRepository(connection)
+        run_id, page_id, _, _ = _plant(lineage, A, "pointer")
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="pointer",
+            segments=(_segment(x_min=0.1, transcription="first ink"),),
+        )
+        first = GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: LATER
+        )
+        assert first.changes[0].revision_id is not None
+        revision = lineage.revision(A, first.changes[0].revision_id)
+        assert revision is not None
+        assert revision.page_version_id == page_id
+        occurrence_id = first.changes[0].occurrence_id
+        assert occurrence_id is not None
+        occurrence = lineage.occurrence(A, occurrence_id)
+        assert occurrence is not None
+        lineage.store_occurrence(replace(occurrence, last_seen_at=LATER))
+        held = lineage.revision(A, revision.revision_id)
+        assert held is not None
+        assert held.page_version_id == page_id
+
+
+def test_mismatched_note_occurrence_pair_is_refused(engine: Engine) -> None:
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        run_id, _, notebook_id, logical_id = _plant(lineage, A, "mismatch")
+        first_note = lineage.store_note(
+            GoodNotesNote(
+                note_id=issue_stable_id("gnnt", A, "mismatch-one"),
+                principal_id=A,
+                notebook_id=notebook_id,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=WHEN,
+                last_seen_at=WHEN,
+            )
+        )
+        second_note = lineage.store_note(
+            GoodNotesNote(
+                note_id=issue_stable_id("gnnt", A, "mismatch-two"),
+                principal_id=A,
+                notebook_id=notebook_id,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=WHEN,
+                last_seen_at=WHEN,
+            )
+        )
+        occurrence = lineage.store_occurrence(
+            GoodNotesNoteOccurrence(
+                occurrence_id=issue_stable_id("gnocc", A, "mismatch"),
+                principal_id=A,
+                note_id=first_note.note_id,
+                logical_page_id=logical_id,
+                x_min=0.1,
+                y_min=0.2,
+                width=0.2,
+                height=0.1,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=WHEN,
+                last_seen_at=WHEN,
+            )
+        )
+        with pytest.raises(IntegrityError), connection.begin_nested():
+            lineage.store_run_note_change(
+                GoodNotesRunNoteChange(
+                    change_id=issue_stable_id("gnchg", A, "mismatch"),
+                    principal_id=A,
+                    run_id=run_id,
+                    note_id=second_note.note_id,
+                    occurrence_id=occurrence.occurrence_id,
+                    change_state=GoodNotesNoteChangeState.NEW,
+                    created_at=LATER,
+                )
+            )
+
+
+def test_current_only_ambiguous_insert_is_allowed_and_new_still_requires_fks(
+    engine: Engine,
+) -> None:
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        run_id, page_id, notebook_id, _ = _plant(lineage, A, "anon-amb")
+        note = lineage.store_note(
+            GoodNotesNote(
+                note_id=issue_stable_id("gnnt", A, "anon-amb"),
+                principal_id=A,
+                notebook_id=notebook_id,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=WHEN,
+                last_seen_at=WHEN,
+            )
+        )
+        stored = lineage.store_run_note_change(
+            GoodNotesRunNoteChange(
+                change_id=issue_stable_id("gnchg", A, "anon-amb"),
+                principal_id=A,
+                run_id=run_id,
+                note_id=None,
+                occurrence_id=None,
+                change_state=GoodNotesNoteChangeState.AMBIGUOUS,
+                created_at=LATER,
+                page_version_id=page_id,
+                geometry_key="0.1000,0.2000,0.2000,0.1000:none",
+                reason="UNVERIFIED_VISUAL",
+            )
+        )
+        assert stored.note_id is None
+        assert stored.occurrence_id is None
+        with pytest.raises(IntegrityError), connection.begin_nested():
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge.goodnotes_run_note_changes ("
+                    " principal_id, change_id, run_id, note_id, occurrence_id,"
+                    " change_state, created_at, page_version_id, geometry_key"
+                    ") VALUES ("
+                    " :principal, :change_id, :run_id, NULL, NULL, 'NEW', :created,"
+                    " :page, '0.1000,0.2000,0.2000,0.1000:none')"
+                ),
+                {
+                    "principal": A,
+                    "change_id": issue_stable_id("gnchg", A, "anon-new"),
+                    "run_id": run_id,
+                    "created": LATER,
+                    "page": page_id,
+                },
+            )
+        with pytest.raises(IntegrityError), connection.begin_nested():
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge.goodnotes_note_revisions ("
+                    " principal_id, revision_id, note_id, schema_version,"
+                    " analyzer_name, analyzer_version, transcription, created_at,"
+                    " page_version_id"
+                    ") VALUES ("
+                    " :principal, :revision, :note, 'note-unit.v1', 'synthetic', '1',"
+                    " 'orphan provenance', :created, 'gnver_ffffffffffffffffffffffff')"
+                ),
+                {
+                    "principal": A,
+                    "revision": issue_stable_id("gnrev", A, "bad-page"),
+                    "note": note.note_id,
+                    "created": LATER,
+                },
+            )
+
+
+def test_deleted_logical_page_emits_removed_for_prior_occurrences(engine: Engine) -> None:
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        semantics = SqlGoodNotesSemanticRepository(connection)
+        run_id, page_id, notebook_id, cover_id = _plant(lineage, A, "keep")
+        body = lineage.store_logical_page(
+            GoodNotesLogicalPage(
+                logical_page_id=issue_stable_id("gnlp", A, "gone"),
+                principal_id=A,
+                notebook_id=notebook_id,
+                created_at=WHEN,
+                last_seen_at=WHEN,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+            )
+        )
+        note = lineage.store_note(
+            GoodNotesNote(
+                note_id=issue_stable_id("gnnt", A, "gone"),
+                principal_id=A,
+                notebook_id=notebook_id,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=WHEN,
+                last_seen_at=WHEN,
+            )
+        )
+        gone = lineage.store_occurrence(
+            GoodNotesNoteOccurrence(
+                occurrence_id=issue_stable_id("gnocc", A, "gone"),
+                principal_id=A,
+                note_id=note.note_id,
+                logical_page_id=body.logical_page_id,
+                x_min=0.1,
+                y_min=0.2,
+                width=0.2,
+                height=0.1,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=WHEN,
+                last_seen_at=WHEN,
+            )
+        )
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="keep",
+            segments=(_segment(x_min=0.1, transcription="cover note"),),
+        )
+        result = GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: LATER
+        )
+        removed = [
+            item
+            for item in result.changes
+            if item.change_state is GoodNotesNoteChangeState.REMOVED_OR_NO_LONGER_PRESENT
+        ]
+        assert len(removed) == 1
+        assert removed[0].occurrence_id == gone.occurrence_id
+        assert cover_id != body.logical_page_id
+        stored = lineage.occurrence(A, gone.occurrence_id)
+        assert stored is not None
+        assert stored.identity_status is GoodNotesIdentityStatus.RETIRED

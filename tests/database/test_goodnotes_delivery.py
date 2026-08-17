@@ -38,12 +38,15 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesNoteRevision,
     GoodNotesPage,
     GoodNotesPagePosition,
+    GoodNotesPageRaster,
     GoodNotesPageVersion,
     GoodNotesSourceSnapshot,
     issue_stable_id,
 )
+from my_pa.domain.goodnotes.page_crop import aligned_crop_box
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.goodnotes.visual import grayscale_png
 from my_pa.infrastructure.persistence.goodnotes import PostgresGoodNotesRepository
 from my_pa.infrastructure.persistence.goodnotes_delivery import PostgresGoodNotesDeliveryRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
@@ -61,6 +64,22 @@ FINGERPRINT = "c" * 64
 CROP = "d" * 64
 SHARED_RUN = issue_stable_id("gnrun", "shared-delivery-run")
 DESTINATION = "operator-local"
+
+
+def _ink_png(
+    *,
+    width: int = 80,
+    height: int = 80,
+    boxes: tuple[tuple[float, float, float, float], ...] | None = None,
+) -> bytes:
+    painted = boxes if boxes is not None else ((0.1, 0.2, 0.2, 0.1), (0.6, 0.2, 0.2, 0.1))
+    pixels = bytearray([255] * width * height)
+    for x_min, y_min, box_width, box_height in painted:
+        x0, y0, x1, y1 = aligned_crop_box(x_min, y_min, box_width, box_height, width, height)
+        for row in range(y0, y1):
+            for column in range(x0, x1):
+                pixels[row * width + column] = 10
+    return grayscale_png(bytes(pixels), width, height)
 
 
 def administer(engine: Engine, *statements: Executable) -> None:
@@ -188,6 +207,22 @@ def _plant(
             created_at=WHEN,
             match_method=GoodNotesMatchMethod.ORDINAL_WEAK,
             page_version_id=version.page_version_id,
+        )
+    )
+    png = _ink_png()
+    repository.store_page_raster(
+        GoodNotesPageRaster(
+            principal_id=principal_id,
+            page_version_id=version.page_version_id,
+            run_id=run.run_id,
+            exact_render_sha256=hashlib.sha256(png).hexdigest(),
+            png_sha256=hashlib.sha256(png).hexdigest(),
+            byte_length=len(png),
+            png_bytes=png,
+            renderer_name="synthetic",
+            renderer_version="1",
+            render_profile_version="v1",
+            created_at=WHEN,
         )
     )
     return run.run_id, version.page_version_id, notebook.notebook_id, logical.logical_page_id
@@ -394,7 +429,8 @@ def test_new_plus_revised_receipt_membership_is_new_only(engine: Engine) -> None
         )
         states = {item.change_state for item in reconciled.changes}
         assert GoodNotesNoteChangeState.NEW in states
-        assert GoodNotesNoteChangeState.REVISED in states
+        assert GoodNotesNoteChangeState.UNCHANGED in states
+        assert GoodNotesNoteChangeState.REVISED not in states
         result = GoodNotesNewOnlyDelivery().deliver(
             A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
         )

@@ -104,6 +104,20 @@ class MemoryDurableNoteStore(MemoryLineageRepository):
             if item.principal_id == principal_id and item.logical_page_id in wanted
         )
 
+    def occurrences_for_notebook(
+        self, principal_id: str, notebook_id: str
+    ) -> tuple[GoodNotesNoteOccurrence, ...]:
+        pages = {
+            item.logical_page_id
+            for item in self._logical.values()
+            if item.principal_id == principal_id and item.notebook_id == notebook_id
+        }
+        return tuple(
+            item
+            for item in self._occurrences.values()
+            if item.principal_id == principal_id and item.logical_page_id in pages
+        )
+
     def latest_revision_for_occurrence(
         self, principal_id: str, occurrence_id: str
     ) -> GoodNotesNoteRevision | None:

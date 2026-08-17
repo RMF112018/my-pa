@@ -1183,12 +1183,6 @@ class PostgresGoodNotesRepository:
             "occurrence_id": occurrence.occurrence_id,
             "note_id": occurrence.note_id,
             "logical_page_id": occurrence.logical_page_id,
-            "geometry_key": occurrence.geometry_key,
-            "crop_sha256": occurrence.crop_sha256,
-            "x_min": _quantized_unit(occurrence.x_min),
-            "y_min": _quantized_unit(occurrence.y_min),
-            "width": _quantized_unit(occurrence.width),
-            "height": _quantized_unit(occurrence.height),
         }
         self.connection.execute(
             pg_insert(goodnotes_note_occurrences)
@@ -1213,6 +1207,12 @@ class PostgresGoodNotesRepository:
             or stored.snapshot_id != occurrence.snapshot_id
             or stored.run_id != occurrence.run_id
             or stored.context_anchor_sha256 != occurrence.context_anchor_sha256
+            or stored.x_min != occurrence.x_min
+            or stored.y_min != occurrence.y_min
+            or stored.width != occurrence.width
+            or stored.height != occurrence.height
+            or stored.crop_sha256 != occurrence.crop_sha256
+            or stored.geometry_key != occurrence.geometry_key
         ):
             self.connection.execute(
                 update(goodnotes_note_occurrences)
@@ -1227,6 +1227,12 @@ class PostgresGoodNotesRepository:
                     snapshot_id=occurrence.snapshot_id,
                     run_id=occurrence.run_id,
                     context_anchor_sha256=occurrence.context_anchor_sha256,
+                    x_min=_quantized_unit(occurrence.x_min),
+                    y_min=_quantized_unit(occurrence.y_min),
+                    width=_quantized_unit(occurrence.width),
+                    height=_quantized_unit(occurrence.height),
+                    geometry_key=occurrence.geometry_key,
+                    crop_sha256=occurrence.crop_sha256,
                 )
             )
             stored = self.occurrence(occurrence.principal_id, occurrence.occurrence_id)
@@ -1264,6 +1270,8 @@ class PostgresGoodNotesRepository:
                     None if revision.primary_class is None else revision.primary_class.value
                 ),
                 "created_at": revision.created_at,
+                "page_version_id": revision.page_version_id,
+                "snapshot_id": revision.snapshot_id,
             },
         )
         self.connection.execute(
@@ -1355,6 +1363,10 @@ class PostgresGoodNotesRepository:
                 "occurrence_id": change.occurrence_id,
                 "change_state": change.change_state.value,
                 "created_at": change.created_at,
+                "page_version_id": change.page_version_id,
+                "geometry_key": change.geometry_key,
+                "reason": change.reason,
+                "revision_id": change.revision_id,
             },
         )
         self.connection.execute(
@@ -1460,6 +1472,35 @@ class PostgresGoodNotesRepository:
                 .where(
                     _mine(goodnotes_note_occurrences, principal_id),
                     goodnotes_note_occurrences.c.logical_page_id.in_(logical_page_ids),
+                )
+                .order_by(
+                    goodnotes_note_occurrences.c.logical_page_id,
+                    goodnotes_note_occurrences.c.geometry_key,
+                    goodnotes_note_occurrences.c.occurrence_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_occurrence(row) for row in rows)
+
+    def occurrences_for_notebook(
+        self, principal_id: str, notebook_id: str
+    ) -> tuple[GoodNotesNoteOccurrence, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_note_occurrences)
+                .join(
+                    goodnotes_logical_pages,
+                    _mine(goodnotes_logical_pages, principal_id)
+                    & (
+                        goodnotes_logical_pages.c.logical_page_id
+                        == goodnotes_note_occurrences.c.logical_page_id
+                    ),
+                )
+                .where(
+                    _mine(goodnotes_note_occurrences, principal_id),
+                    goodnotes_logical_pages.c.notebook_id == notebook_id,
                 )
                 .order_by(
                     goodnotes_note_occurrences.c.logical_page_id,
@@ -1772,6 +1813,8 @@ def _revision(row: object) -> GoodNotesNoteRevision:
         occurrence_id=values["occurrence_id"],  # type: ignore[index]
         supersedes_revision_id=values["supersedes_revision_id"],  # type: ignore[index]
         primary_class=_optional_class(values["primary_class"]),  # type: ignore[index]
+        page_version_id=values["page_version_id"],  # type: ignore[index]
+        snapshot_id=values["snapshot_id"],  # type: ignore[index]
     )
 
 
@@ -1800,6 +1843,10 @@ def _run_note_change(row: object) -> GoodNotesRunNoteChange:
         occurrence_id=values["occurrence_id"],  # type: ignore[index]
         change_state=GoodNotesNoteChangeState(values["change_state"]),  # type: ignore[index]
         created_at=values["created_at"],  # type: ignore[index]
+        page_version_id=values["page_version_id"],  # type: ignore[index]
+        geometry_key=values["geometry_key"],  # type: ignore[index]
+        reason=values["reason"],  # type: ignore[index]
+        revision_id=values["revision_id"],  # type: ignore[index]
     )
 
 

@@ -30,6 +30,7 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesNoteOccurrence,
     GoodNotesNoteRevision,
     GoodNotesPagePosition,
+    GoodNotesPageRaster,
     GoodNotesPageVersion,
     GoodNotesRunNoteChange,
     GoodNotesSegmentKind,
@@ -37,10 +38,13 @@ from my_pa.domain.goodnotes.models import (
     issue_stable_id,
     occurrence_geometry_key,
 )
+from my_pa.domain.goodnotes.page_crop import GroundedPageCrop, crop_normalized_png
 
 _LEASE_TTL = timedelta(minutes=5)
 _LEASE_OWNER_DEFAULT = "occurrence-reconcile"
 _ACTIVE_PRIOR = frozenset({GoodNotesIdentityStatus.ACTIVE, GoodNotesIdentityStatus.AMBIGUOUS})
+_IOU_THRESHOLD = 0.85
+_UNVERIFIED_REASON = "UNVERIFIED_VISUAL"
 
 
 class OccurrenceReconcileBusyError(ValueError):
@@ -50,6 +54,7 @@ class OccurrenceReconcileBusyError(ValueError):
 class OccurrenceMatchMethod(StrEnum):
     EXACT_GEOMETRY_KEY = "EXACT_GEOMETRY_KEY"
     UNIQUE_CROP = "UNIQUE_CROP"
+    GEOMETRY_IOU = "GEOMETRY_IOU"
     CONTEXT_OVERLAP = "CONTEXT_OVERLAP"
     UNRESOLVED = "UNRESOLVED"
 
@@ -80,6 +85,8 @@ class CurrentOccurrence:
     analyzer_name: str
     analyzer_version: str
     geometry_key: str
+    visual_verified: bool = False
+    crop_dhash: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +131,14 @@ class GoodNotesOccurrenceRepository(Protocol):
     def occurrences_for_logical_pages(
         self, principal_id: str, logical_page_ids: tuple[str, ...]
     ) -> tuple[GoodNotesNoteOccurrence, ...]: ...
+
+    def occurrences_for_notebook(
+        self, principal_id: str, notebook_id: str
+    ) -> tuple[GoodNotesNoteOccurrence, ...]: ...
+
+    def page_raster(
+        self, principal_id: str, page_version_id: str
+    ) -> GoodNotesPageRaster | None: ...
 
     def latest_revision_for_occurrence(
         self, principal_id: str, occurrence_id: str
@@ -243,6 +258,7 @@ def _match_page(
         claim=claim,
         mark_ambiguous=mark_ambiguous,
     )
+    _assign_iou(remaining_current, remaining_prior, claim, mark_ambiguous)
     _assign_context_overlap(remaining_current, remaining_prior, claim, mark_ambiguous)
 
     if remaining_current and remaining_prior:
@@ -250,13 +266,22 @@ def _match_page(
     else:
         for item in tuple(remaining_current):
             remaining_current.remove(item)
-            claimed.append(
-                OccurrenceMatch(
-                    kind=OccurrenceMatchKind.NEW,
-                    method=OccurrenceMatchMethod.UNRESOLVED,
-                    current=item,
+            if item.visual_verified:
+                claimed.append(
+                    OccurrenceMatch(
+                        kind=OccurrenceMatchKind.NEW,
+                        method=OccurrenceMatchMethod.UNRESOLVED,
+                        current=item,
+                    )
                 )
-            )
+            else:
+                claimed.append(
+                    OccurrenceMatch(
+                        kind=OccurrenceMatchKind.AMBIGUOUS,
+                        method=OccurrenceMatchMethod.UNRESOLVED,
+                        current=item,
+                    )
+                )
         for evidence in tuple(remaining_prior):
             remaining_prior.remove(evidence)
             claimed.append(
@@ -308,6 +333,54 @@ def _assign_unique(
             seen.add(evidence.occurrence_id)
             unique_priors.append(evidence)
         mark_ambiguous(contested_current, unique_priors)
+
+
+def _assign_iou(
+    remaining_current: list[CurrentOccurrence],
+    remaining_prior: list[GoodNotesNoteOccurrence],
+    claim: Callable[[CurrentOccurrence, GoodNotesNoteOccurrence, OccurrenceMatchMethod], None],
+    mark_ambiguous: Callable[
+        [Iterable[CurrentOccurrence], Iterable[GoodNotesNoteOccurrence]], None
+    ],
+) -> None:
+    unique_pairs: list[tuple[CurrentOccurrence, GoodNotesNoteOccurrence]] = []
+    contested_current: list[CurrentOccurrence] = []
+    contested_prior: list[GoodNotesNoteOccurrence] = []
+    for item in remaining_current:
+        hits = [prior for prior in remaining_prior if _geometry_iou(item, prior) >= _IOU_THRESHOLD]
+        if len(hits) == 1:
+            unique_pairs.append((item, hits[0]))
+        elif len(hits) > 1:
+            contested_current.append(item)
+            contested_prior.extend(hits)
+    prior_claimed: dict[str, list[CurrentOccurrence]] = {}
+    for item, evidence in unique_pairs:
+        prior_claimed.setdefault(evidence.occurrence_id, []).append(item)
+    for evidence_id, currents in prior_claimed.items():
+        if len(currents) == 1:
+            item = currents[0]
+            evidence = next(
+                prior for prior in remaining_prior if prior.occurrence_id == evidence_id
+            )
+            if item in remaining_current and evidence in remaining_prior:
+                claim(item, evidence, OccurrenceMatchMethod.GEOMETRY_IOU)
+        else:
+            contested_current.extend(currents)
+            contested_prior.extend(
+                prior for prior in remaining_prior if prior.occurrence_id == evidence_id
+            )
+    if contested_current:
+        unique_priors: list[GoodNotesNoteOccurrence] = []
+        seen: set[str] = set()
+        for evidence in contested_prior:
+            if evidence.occurrence_id in seen or evidence not in remaining_prior:
+                continue
+            seen.add(evidence.occurrence_id)
+            unique_priors.append(evidence)
+        mark_ambiguous(
+            [item for item in contested_current if item in remaining_current],
+            unique_priors,
+        )
 
 
 def _assign_context_overlap(
@@ -390,6 +463,40 @@ def _boxes_overlap(
     return ax < bx + bw and bx < ax + aw and ay < by + bh and by < ay + ah
 
 
+def _geometry_iou(current: CurrentOccurrence, prior: GoodNotesNoteOccurrence) -> float:
+    return _box_iou(
+        current.x_min,
+        current.y_min,
+        current.width,
+        current.height,
+        prior.x_min,
+        prior.y_min,
+        prior.width,
+        prior.height,
+    )
+
+
+def _box_iou(
+    ax: float,
+    ay: float,
+    aw: float,
+    ah: float,
+    bx: float,
+    by: float,
+    bw: float,
+    bh: float,
+) -> float:
+    left = max(ax, bx)
+    top = max(ay, by)
+    right = min(ax + aw, bx + bw)
+    bottom = min(ay + ah, by + bh)
+    intersection = max(0.0, right - left) * max(0.0, bottom - top)
+    union = aw * ah + bw * bh - intersection
+    if union <= 0:
+        return 0.0
+    return intersection / union
+
+
 def _unique_index[T](items: Sequence[T], key_fn: Callable[[T], str | None]) -> dict[str, T]:
     grouped: dict[str, list[T]] = {}
     for item in items:
@@ -439,6 +546,7 @@ def _note_units(
     schema_version: str,
     analyzer_name: str,
     analyzer_version: str,
+    png_bytes: bytes | None,
 ) -> tuple[CurrentOccurrence, ...]:
     raw_segments = payload.get("segments")
     if not isinstance(raw_segments, list | tuple) or not raw_segments:
@@ -462,14 +570,14 @@ def _note_units(
             height = float(geometry["height"])
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("a GoodNotes proposal is missing required geometry") from error
-        crop = segment.get("crop_sha256")
-        if crop is not None and not isinstance(crop, str):
+        if not isinstance(segment.get("crop_sha256"), str | None):
             raise ValueError("a GoodNotes proposal is missing required geometry")
         transcription = segment.get("transcription")
         if not isinstance(transcription, str) or not transcription:
             raise ValueError("a GoodNotes proposal is missing required geometry")
         primary = segment.get("primary_class")
         primary_class = None if primary is None else GoodNotesNoteClass(str(primary))
+        grounded = _ground_crop(png_bytes, x_min, y_min, width, height)
         current.append(
             CurrentOccurrence(
                 logical_page_id=logical_page_id,
@@ -479,17 +587,37 @@ def _note_units(
                 y_min=y_min,
                 width=width,
                 height=height,
-                crop_sha256=crop,
+                crop_sha256=None if grounded is None else grounded.digest,
                 context_anchor_sha256=anchor,
                 transcription=transcription,
                 primary_class=primary_class,
                 schema_version=schema_version,
                 analyzer_name=analyzer_name,
                 analyzer_version=analyzer_version,
-                geometry_key=occurrence_geometry_key(x_min, y_min, width, height, crop),
+                geometry_key=occurrence_geometry_key(
+                    x_min,
+                    y_min,
+                    width,
+                    height,
+                    None if grounded is None else grounded.digest,
+                ),
+                visual_verified=grounded is not None and not grounded.blank,
+                crop_dhash=None if grounded is None else grounded.dhash,
             )
         )
     return tuple(current)
+
+
+def _ground_crop(
+    png_bytes: bytes | None,
+    x_min: float,
+    y_min: float,
+    width: float,
+    height: float,
+) -> GroundedPageCrop | None:
+    if png_bytes is None:
+        return None
+    return crop_normalized_png(png_bytes, x_min, y_min, width, height)
 
 
 class GoodNotesOccurrenceReconciler:
@@ -527,13 +655,10 @@ class GoodNotesOccurrenceReconciler:
             raise ValueError("the request names no stored GoodNotes ingestion run")
         notebook_id = snapshots[0].notebook_id
         snapshot_by_page: dict[str, str] = {}
-        logical_pages: dict[str, None] = {}
         for snapshot in snapshots:
             for position in repository.page_positions(principal_id, snapshot.snapshot_id):
-                logical_pages.setdefault(position.logical_page_id, None)
                 if position.page_version_id is not None:
                     snapshot_by_page[position.page_version_id] = snapshot.snapshot_id
-        page_ids = tuple(logical_pages)
         proposals = repository.semantic_proposals_for_run(principal_id, run_id)
         current: list[CurrentOccurrence] = []
         for page_version_id, schema_version, analyzer_name, analyzer_version, payload in proposals:
@@ -542,6 +667,7 @@ class GoodNotesOccurrenceReconciler:
                 raise ValueError("a GoodNotes proposal is missing required geometry")
             if version.logical_page_id is None:
                 raise ValueError("a GoodNotes proposal is missing required geometry")
+            raster = repository.page_raster(principal_id, page_version_id)
             current.extend(
                 _note_units(
                     payload=payload,
@@ -551,11 +677,12 @@ class GoodNotesOccurrenceReconciler:
                     schema_version=schema_version,
                     analyzer_name=analyzer_name,
                     analyzer_version=analyzer_version,
+                    png_bytes=None if raster is None else raster.png_bytes,
                 )
             )
         prior = tuple(
             item
-            for item in repository.occurrences_for_logical_pages(principal_id, page_ids)
+            for item in repository.occurrences_for_notebook(principal_id, notebook_id)
             if item.identity_status in _ACTIVE_PRIOR
         )
         matches = match_occurrences(current=current, prior=prior)
@@ -589,6 +716,17 @@ class GoodNotesOccurrenceReconciler:
         for match in matches:
             if match.kind is OccurrenceMatchKind.AMBIGUOUS:
                 if match.prior is None:
+                    if match.current is None:
+                        raise ValueError("an occurrence match could not be classified")
+                    written.append(
+                        _write_current_ambiguous(
+                            principal_id=principal_id,
+                            run_id=run_id,
+                            current=match.current,
+                            repository=repository,
+                            now=now,
+                        )
+                    )
                     continue
                 occurrence = repository.store_occurrence(
                     replace(
@@ -652,6 +790,17 @@ class GoodNotesOccurrenceReconciler:
                 continue
             if match.current is None:
                 raise ValueError("an occurrence match could not be classified")
+            if not match.current.visual_verified:
+                written.append(
+                    _write_current_ambiguous(
+                        principal_id=principal_id,
+                        run_id=run_id,
+                        current=match.current,
+                        repository=repository,
+                        now=now,
+                    )
+                )
+                continue
             written.append(
                 self._write_new(
                     principal_id=principal_id,
@@ -680,7 +829,8 @@ class GoodNotesOccurrenceReconciler:
         latest = repository.latest_revision_for_occurrence(principal_id, prior.occurrence_id)
         prior_digest = None if latest is None else _transcription_digest(latest.transcription)
         current_digest = _transcription_digest(current.transcription)
-        revised = prior_digest != current_digest
+        transcription_changed = prior_digest != current_digest
+        visual_changed = _visual_changed(prior, current)
         occurrence = repository.store_occurrence(
             replace(
                 prior,
@@ -690,6 +840,13 @@ class GoodNotesOccurrenceReconciler:
                 snapshot_id=current.snapshot_id,
                 run_id=run_id,
                 context_anchor_sha256=current.context_anchor_sha256,
+                x_min=current.x_min,
+                y_min=current.y_min,
+                width=current.width,
+                height=current.height,
+                crop_sha256=(
+                    current.crop_sha256 if current.crop_sha256 is not None else prior.crop_sha256
+                ),
             )
         )
         note = repository.note(principal_id, occurrence.note_id)
@@ -703,8 +860,9 @@ class GoodNotesOccurrenceReconciler:
                 primary_class=current.primary_class or note.primary_class,
             )
         )
-        if revised:
-            repository.store_revision(
+        revision_id = None
+        if transcription_changed or visual_changed:
+            stored_revision = repository.store_revision(
                 GoodNotesNoteRevision(
                     revision_id=issue_stable_id(
                         "gnrev", principal_id, run_id, occurrence.occurrence_id, current_digest
@@ -719,9 +877,16 @@ class GoodNotesOccurrenceReconciler:
                     occurrence_id=occurrence.occurrence_id,
                     supersedes_revision_id=None if latest is None else latest.revision_id,
                     primary_class=current.primary_class,
+                    page_version_id=current.page_version_id,
+                    snapshot_id=current.snapshot_id,
                 )
             )
-        state = GoodNotesNoteChangeState.REVISED if revised else GoodNotesNoteChangeState.UNCHANGED
+            revision_id = stored_revision.revision_id
+        state = (
+            GoodNotesNoteChangeState.REVISED
+            if visual_changed
+            else GoodNotesNoteChangeState.UNCHANGED
+        )
         return repository.store_run_note_change(
             _change(
                 principal_id,
@@ -730,6 +895,7 @@ class GoodNotesOccurrenceReconciler:
                 occurrence.occurrence_id,
                 state,
                 now,
+                revision_id=revision_id,
             )
         )
 
@@ -807,7 +973,7 @@ class GoodNotesOccurrenceReconciler:
                 context_anchor_sha256=current.context_anchor_sha256,
             )
         )
-        repository.store_revision(
+        revision = repository.store_revision(
             GoodNotesNoteRevision(
                 revision_id=issue_stable_id(
                     "gnrev",
@@ -825,6 +991,8 @@ class GoodNotesOccurrenceReconciler:
                 created_at=now,
                 occurrence_id=occurrence.occurrence_id,
                 primary_class=current.primary_class,
+                page_version_id=current.page_version_id,
+                snapshot_id=current.snapshot_id,
             )
         )
         return repository.store_run_note_change(
@@ -835,8 +1003,55 @@ class GoodNotesOccurrenceReconciler:
                 occurrence.occurrence_id,
                 GoodNotesNoteChangeState.NEW,
                 now,
+                revision_id=revision.revision_id,
             )
         )
+
+
+def _visual_changed(prior: GoodNotesNoteOccurrence, current: CurrentOccurrence) -> bool:
+    box_changed = (
+        f"{prior.x_min:.4f}" != f"{current.x_min:.4f}"
+        or f"{prior.y_min:.4f}" != f"{current.y_min:.4f}"
+        or f"{prior.width:.4f}" != f"{current.width:.4f}"
+        or f"{prior.height:.4f}" != f"{current.height:.4f}"
+    )
+    crop_changed = (
+        prior.crop_sha256 is not None
+        and current.crop_sha256 is not None
+        and prior.crop_sha256 != current.crop_sha256
+    )
+    return box_changed or crop_changed
+
+
+def _write_current_ambiguous(
+    *,
+    principal_id: str,
+    run_id: str,
+    current: CurrentOccurrence,
+    repository: GoodNotesOccurrenceRepository,
+    now: datetime,
+) -> GoodNotesRunNoteChange:
+    return repository.store_run_note_change(
+        GoodNotesRunNoteChange(
+            change_id=issue_stable_id(
+                "gnchg",
+                principal_id,
+                run_id,
+                current.page_version_id,
+                current.geometry_key,
+                GoodNotesNoteChangeState.AMBIGUOUS.value,
+            ),
+            principal_id=principal_id,
+            run_id=run_id,
+            note_id=None,
+            occurrence_id=None,
+            change_state=GoodNotesNoteChangeState.AMBIGUOUS,
+            created_at=now,
+            page_version_id=current.page_version_id,
+            geometry_key=current.geometry_key,
+            reason=_UNVERIFIED_REASON if not current.visual_verified else None,
+        )
+    )
 
 
 def _change(
@@ -846,6 +1061,8 @@ def _change(
     occurrence_id: str,
     state: GoodNotesNoteChangeState,
     now: datetime,
+    *,
+    revision_id: str | None = None,
 ) -> GoodNotesRunNoteChange:
     return GoodNotesRunNoteChange(
         change_id=issue_stable_id("gnchg", principal_id, run_id, occurrence_id, state.value),
@@ -855,4 +1072,5 @@ def _change(
         occurrence_id=occurrence_id,
         change_state=state,
         created_at=now,
+        revision_id=revision_id,
     )

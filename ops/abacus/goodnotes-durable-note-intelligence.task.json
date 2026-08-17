@@ -1,0 +1,34 @@
+{
+  "status": "DRAFT_NOT_ACTIVATED",
+  "task_name": "GoodNotes Durable Note Intelligence",
+  "kind": "regular_agent_task",
+  "mcp_surface": "my-pa",
+  "allowed_capabilities": [
+    "goodnotes.work",
+    "goodnotes.propose"
+  ],
+  "constraints": {
+    "request_only_bounded_my_pa_work": true,
+    "analyze_immutable_page_version_content": true,
+    "return_schema_valid_proposals": true,
+    "no_direct_db_writes": true,
+    "no_direct_source_writes": true,
+    "no_direct_destination_writes": true,
+    "fail_closed_on_mcp_auth_or_content_transfer_failure": true,
+    "must_not_emit_canonical_new_only_summary": true
+  },
+  "not_in_allowlist": [
+    "knowledge.search",
+    "knowledge.read",
+    "context.prepare",
+    "review.decide",
+    "tasks.create",
+    "documents.create"
+  ],
+  "notes": [
+    "Reuse the existing GN-04 MCP tools derived from Capability/Command. Do not invent a second MCP surface.",
+    "GoodNotes reconcile, operator correction, and NEW-only delivery are not MCP capabilities and must not be added for this Task. Delivery remains GN-06.",
+    "knowledge.search is not a substitute work plane.",
+    "Activation, live Abacus Task create/edit/enable/disable, OAuth, and scheduled Task to remote MCP expiry/refresh proof remain operator-gated."
+  ]
+}

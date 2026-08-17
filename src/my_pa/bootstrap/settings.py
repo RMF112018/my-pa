@@ -297,6 +297,13 @@ class Settings(StrictModel):
     mcp_surface_disabled: bool = False
     remote_mcp_enabled: bool = False
     remote_writes_enabled: bool = False
+    #: Process-local gate for the proposed regular Abacus Agent Task
+    #: **GoodNotes Durable Note Intelligence**. Default off. Turning it on does
+    #: not create, edit, enable, or disable a live Abacus Task, does not call
+    #: Abacus APIs, and does not change bounded GoodNotes OCR/review composition.
+    #: `bootstrap.goodnotes_durable_note` is what reads it; `bootstrap.goodnotes`
+    #: does not.
+    goodnotes_durable_note_intelligence_enabled: bool = False
     remote_mcp_public_host: str = ""
     #: Legacy Entra verifier inputs remain available only to the dormant
     #: `auth_mode=entra` path. Remote MCP never reads them.

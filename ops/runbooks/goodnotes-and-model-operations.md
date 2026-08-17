@@ -85,7 +85,11 @@ event (`GoodNotesCorrectionService.apply`): it appends a
 transcription remain. It is not a new ingestion run, does not rewrite
 `goodnotes_run_note_changes`, and is not an MCP capability. Teams and email
 are not correction channels. Dormant evaluation helpers score a labeled
-synthetic fixture; they do not call a model or run an optimizer.
+synthetic fixture; they do not call a model or run an optimizer. The proposed
+regular Agent Task **GoodNotes Durable Note Intelligence** is a separate dormant
+repository contract
+([`goodnotes-durable-note-intelligence.md`](goodnotes-durable-note-intelligence.md));
+it does not authorize a live Abacus Task.
 
 ## Operator-only prerequisites
 

@@ -1,0 +1,50 @@
+{
+  "work_item": "GN-09",
+  "campaign_package": "WP-13",
+  "kind": "tbr_staff_meeting_regression_and_optional_bridge_design",
+  "status": "GN-09_EXTERNAL_TASK_GATE_PENDING",
+  "live_task_mutation": false,
+  "live_bridge_implemented": false,
+  "existing_tbr_task": {
+    "must_not_change": true,
+    "separate_task_change_authorization": false
+  },
+  "inputs": {
+    "staff_meeting": ["manual", "sharepoint"]
+  },
+  "ink": {
+    "included": ["black", "red"],
+    "excluded": ["blue"],
+    "blue_is_preparatory": true,
+    "leader_lines": "unambiguous_included_ink_follows_target_else_human_review",
+    "ambiguity": "human_review"
+  },
+  "outputs": {
+    "part_a": "paste_ready",
+    "part_b": "review_docx"
+  },
+  "destinations": {
+    "onedrive_meeting_notes": "/Meetings/Meeting Notes",
+    "teams_enabled": false,
+    "email_enabled": false,
+    "teams_email_require_separate_authorization": true
+  },
+  "archive": {
+    "tbr_sharepoint_archive_tbr_only": true
+  },
+  "corrections": {
+    "supervised_input_only": true
+  },
+  "separation": {
+    "general_goodnotes_must_not_merge_tbr_ink_rules": true,
+    "general_goodnotes_must_not_merge_sharepoint_archival": true,
+    "general_goodnotes_must_not_merge_teams_email": true
+  },
+  "optional_bridge": {
+    "authorized": false,
+    "implemented": false,
+    "near_term_default": "do_not_change_existing_tbr_task",
+    "requires_separate_task_change_authorization": true,
+    "wp_15_activation": false
+  }
+}

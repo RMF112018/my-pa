@@ -16,6 +16,7 @@ Operational procedures for running `my-pa` locally.
 | [`context-semantic-retrieval.md`](context-semantic-retrieval.md) | Semantic retrieval gate: currently `SEMANTIC_GATE_FAIL`, lexical `context.prepare` is the active path, and how to re-run the SPECIALIZED evaluation. |
 | [`managed-knowledge-context.md`](managed-knowledge-context.md) | ChatLLM operating contract, recommended grants, activation sequence, and rollback for `context.prepare`. Production is not activated. |
 | [`goodnotes-durable-note-intelligence.md`](goodnotes-durable-note-intelligence.md) | Dormant Abacus Task contract for GoodNotes Durable Note Intelligence. Synthetic canary only; live Task create/edit/enable remains unauthorized. |
+| [`goodnotes-tbr-preservation.md`](goodnotes-tbr-preservation.md) | GN-09 TBR Staff Meeting regression freeze and dormant optional-bridge design. Existing TBR Task must not change; live bridge remains unauthorized. |
 | [`context-personal-knowledge-pilot.md`](context-personal-knowledge-pilot.md) | Operator-authorized personal-knowledge pilot checklist. Does not access live personal data; queries and evidence must not be committed. |
 
 Related, outside this directory:

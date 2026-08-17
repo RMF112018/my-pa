@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -170,6 +171,41 @@ class GoodNotesEntityKind(StrEnum):
     PROJECT = "PROJECT"
     PERSON = "PERSON"
     NOTE = "NOTE"
+    MEETING = "MEETING"
+    AGENDA = "AGENDA"
+
+
+class GoodNotesTranscriptionStatus(StrEnum):
+    CLEAR = "CLEAR"
+    UNCERTAIN = "UNCERTAIN"
+    UNREADABLE = "UNREADABLE"
+
+
+NOTE_UNIT_SCHEMA_V1 = "note-unit.v1"
+NOTE_UNIT_SCHEMA_V2 = "note-unit.v2"
+_LOW_TRANSCRIPTION = 0.5
+
+
+def inferred_transcription_status(
+    *,
+    transcription: str | None,
+    confidence: Mapping[str, object] | None,
+) -> GoodNotesTranscriptionStatus:
+    """Default v2 status when the analyzer omitted `transcription_status`."""
+    if confidence is not None:
+        note = confidence.get("uncertainty")
+        if isinstance(note, str) and note:
+            return GoodNotesTranscriptionStatus.UNCERTAIN
+        score = confidence.get("transcription")
+        if (
+            not isinstance(score, bool)
+            and isinstance(score, int | float)
+            and float(score) < _LOW_TRANSCRIPTION
+        ):
+            return GoodNotesTranscriptionStatus.UNCERTAIN
+    if isinstance(transcription, str) and transcription:
+        return GoodNotesTranscriptionStatus.CLEAR
+    return GoodNotesTranscriptionStatus.UNCERTAIN
 
 
 def occurrence_geometry_key(
@@ -1037,7 +1073,7 @@ def _destination(value: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class GoodNotesEntityDirectoryRecord:
-    """Existing Principal-partitioned Project, person, or note a candidate may match."""
+    """Existing Principal-partitioned Project, person, note, meeting, or agenda."""
 
     entity_id: str
     kind: GoodNotesEntityKind

@@ -235,6 +235,10 @@ def _segment(
     crop_sha256: str | None = None,
     primary_class: str | None = "MEETING",
     kind: str = "NOTE_UNIT",
+    ranked_candidates: tuple[dict[str, object], ...] | None = None,
+    transcription_status: str | None = None,
+    confidence: dict[str, object] | None = None,
+    candidate_tags: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     values: dict[str, object] = {
         "kind": kind,
@@ -244,6 +248,14 @@ def _segment(
     }
     if crop_sha256 is not None:
         values["crop_sha256"] = crop_sha256
+    if ranked_candidates is not None:
+        values["ranked_candidates"] = ranked_candidates
+    if transcription_status is not None:
+        values["transcription_status"] = transcription_status
+    if confidence is not None:
+        values["confidence"] = confidence
+    if candidate_tags is not None:
+        values["candidate_tags"] = candidate_tags
     return values
 
 
@@ -257,12 +269,13 @@ def _propose(
     segments: tuple[dict[str, object], ...],
     ranked_candidates: tuple[dict[str, object], ...] = (),
     confidence: dict[str, object] | None = None,
+    schema_version: str = "note-unit.v1",
 ) -> None:
     command = SubmitGoodNotesProposal(
         run_id=run_id,
         page_version_id=page_version_id,
         content_sha256=DIGEST,
-        schema_version="note-unit.v1",
+        schema_version=schema_version,
         analyzer_name="synthetic",
         analyzer_version="1",
         idempotency_key=key,
@@ -479,8 +492,14 @@ def test_unique_exact_candidate_associates(engine: Engine) -> None:
             run_id=run_id,
             page_version_id=page_id,
             key="assoc",
-            segments=(_segment(x_min=0.1, transcription="synthetic note"),),
-            ranked_candidates=({"rank": 1, "candidate": "Alpha Project"},),
+            schema_version="note-unit.v2",
+            segments=(
+                _segment(
+                    x_min=0.1,
+                    transcription="synthetic note",
+                    ranked_candidates=({"rank": 1, "candidate": "Alpha Project"},),
+                ),
+            ),
         )
         GoodNotesOccurrenceReconciler().reconcile(
             A, run_id, repository=lineage, clock=lambda: LATER
@@ -510,8 +529,14 @@ def test_ambiguous_name_stays_unresolved_and_does_not_create_a_project(engine: E
             run_id=run_id,
             page_version_id=page_id,
             key="ambig",
-            segments=(_segment(x_min=0.1, transcription="synthetic heading"),),
-            ranked_candidates=({"rank": 1, "candidate": "Shared Name"},),
+            schema_version="note-unit.v2",
+            segments=(
+                _segment(
+                    x_min=0.1,
+                    transcription="synthetic heading",
+                    ranked_candidates=({"rank": 1, "candidate": "Shared Name"},),
+                ),
+            ),
         )
         GoodNotesOccurrenceReconciler().reconcile(
             A, run_id, repository=lineage, clock=lambda: LATER
@@ -523,3 +548,139 @@ def test_ambiguous_name_stays_unresolved_and_does_not_create_a_project(engine: E
         assert result.associations[0].resolution is GoodNotesEntityResolution.UNRESOLVED
         assert result.associations[0].resolved_id is None
         assert _project_count(connection, A, name="Shared Name") == before == 2
+
+
+def test_mixed_page_candidates_do_not_cross_contaminate(engine: Engine) -> None:
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        semantics = SqlGoodNotesSemanticRepository(connection)
+        delivery = PostgresGoodNotesDeliveryRepository(connection)
+        run_id, page_id, _, _ = _plant(lineage, A, "mixed")
+        alpha = _project(connection, A, "Mixed Alpha Project")
+        beta = _project(connection, A, "Mixed Beta Project")
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="mixed",
+            schema_version="note-unit.v2",
+            segments=(
+                _segment(
+                    x_min=0.1,
+                    transcription="synthetic left",
+                    ranked_candidates=({"rank": 1, "candidate": "Mixed Alpha Project"},),
+                ),
+                _segment(
+                    x_min=0.6,
+                    transcription="synthetic right",
+                    ranked_candidates=({"rank": 1, "candidate": "Mixed Beta Project"},),
+                ),
+            ),
+        )
+        reconciled = GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: LATER
+        )
+        result = GoodNotesNewOnlyDelivery().deliver(
+            A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
+        )
+        notes = {
+            change.note_id: lineage.latest_revision_for_occurrence(A, change.occurrence_id)
+            for change in reconciled.changes
+            if change.note_id is not None and change.occurrence_id is not None
+        }
+        left_id = next(
+            note_id
+            for note_id, revision in notes.items()
+            if revision and revision.transcription == "synthetic left"
+        )
+        right_id = next(
+            note_id
+            for note_id, revision in notes.items()
+            if revision and revision.transcription == "synthetic right"
+        )
+        by_note = {item.note_id: item for item in result.associations}
+        assert by_note[left_id].candidate == "Mixed Alpha Project"
+        assert by_note[left_id].resolved_id == alpha
+        assert by_note[right_id].candidate == "Mixed Beta Project"
+        assert by_note[right_id].resolved_id == beta
+        assert {item.candidate for item in result.associations if item.note_id == left_id} == {
+            "Mixed Alpha Project"
+        }
+        assert {item.candidate for item in result.associations if item.note_id == right_id} == {
+            "Mixed Beta Project"
+        }
+
+
+def test_v1_page_level_candidates_do_not_contaminate_two_note_units(engine: Engine) -> None:
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        semantics = SqlGoodNotesSemanticRepository(connection)
+        delivery = PostgresGoodNotesDeliveryRepository(connection)
+        run_id, page_id, _, _ = _plant(lineage, A, "v1mix")
+        before = _project_count(connection, A, name="V1 Mix Project")
+        _project(connection, A, "V1 Mix Project")
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="v1mix",
+            schema_version="note-unit.v1",
+            segments=(
+                _segment(x_min=0.1, transcription="synthetic left"),
+                _segment(x_min=0.6, transcription="synthetic right"),
+            ),
+            ranked_candidates=({"rank": 1, "candidate": "V1 Mix Project"},),
+        )
+        GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: LATER
+        )
+        result = GoodNotesNewOnlyDelivery().deliver(
+            A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
+        )
+        assert result.associations == ()
+        assert _project_count(connection, A, name="V1 Mix Project") == before + 1
+
+
+def test_unreadable_does_not_become_fabricated_new_transcription(engine: Engine) -> None:
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        semantics = SqlGoodNotesSemanticRepository(connection)
+        delivery = PostgresGoodNotesDeliveryRepository(connection)
+        run_id, page_id, _, _ = _plant(lineage, A, "unreadable")
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="unreadable",
+            schema_version="note-unit.v2",
+            segments=(
+                _segment(
+                    x_min=0.1,
+                    transcription="invented text",
+                    transcription_status="UNREADABLE",
+                ),
+            ),
+        )
+        reconciled = GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: LATER
+        )
+        assert {item.change_state for item in reconciled.changes} == {
+            GoodNotesNoteChangeState.AMBIGUOUS
+        }
+        assert all(item.note_id is None for item in reconciled.changes)
+        revisions = connection.execute(
+            text(
+                "SELECT count(*) FROM knowledge.goodnotes_note_revisions "
+                "WHERE principal_id = :principal AND transcription = :text"
+            ),
+            {"principal": A, "text": "invented text"},
+        ).scalar_one()
+        assert int(revisions) == 0
+        result = GoodNotesNewOnlyDelivery().deliver(
+            A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
+        )
+        assert result.receipt.suppressed is True
+        assert result.associations == ()

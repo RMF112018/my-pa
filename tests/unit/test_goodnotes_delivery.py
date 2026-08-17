@@ -159,6 +159,7 @@ def test_identical_transcriptions_in_different_geometry_both_appear() -> None:
 
 def test_unique_exact_candidate_associates_and_ambiguous_name_does_not() -> None:
     project_id = "prj_aaaaaaaaaaaaaaaa"
+    meeting_id = "mtg_aaaaaaaaaaaaaaaa"
     directory = (
         GoodNotesEntityDirectoryRecord(
             entity_id=project_id,
@@ -175,21 +176,43 @@ def test_unique_exact_candidate_associates_and_ambiguous_name_does_not() -> None
             kind=GoodNotesEntityKind.PROJECT,
             normalized_name="shared name",
         ),
+        GoodNotesEntityDirectoryRecord(
+            entity_id=meeting_id,
+            kind=GoodNotesEntityKind.MEETING,
+            normalized_name="staff meeting",
+        ),
     )
     associated = resolve_entity_candidate("Alpha Project", directory)
     by_id = resolve_entity_candidate(project_id, directory)
+    meeting = resolve_entity_candidate("Staff Meeting", directory)
+    meeting_id_hit = resolve_entity_candidate(meeting_id, directory)
     ambiguous = resolve_entity_candidate("shared name", directory)
     missing = resolve_entity_candidate("no such project", directory)
     close = resolve_entity_candidate("Alpha Project!", directory)
+    empty_meeting = resolve_entity_candidate("Staff Meeting", ())
     assert associated == (
         GoodNotesEntityResolution.ASSOCIATED,
         GoodNotesEntityKind.PROJECT,
         project_id,
     )
     assert by_id == associated
+    assert meeting == (
+        GoodNotesEntityResolution.ASSOCIATED,
+        GoodNotesEntityKind.MEETING,
+        meeting_id,
+    )
+    assert meeting_id_hit == meeting
     assert ambiguous == (GoodNotesEntityResolution.UNRESOLVED, None, None)
     assert missing == (GoodNotesEntityResolution.UNRESOLVED, None, None)
     assert close == (GoodNotesEntityResolution.UNRESOLVED, None, None)
+    assert empty_meeting == (GoodNotesEntityResolution.UNRESOLVED, None, None)
+    assert {member.value for member in GoodNotesEntityKind} == {
+        "PROJECT",
+        "PERSON",
+        "NOTE",
+        "MEETING",
+        "AGENDA",
+    }
 
 
 def test_uncertainty_uses_missing_class_and_proposal_confidence() -> None:
@@ -364,12 +387,24 @@ def test_deliver_filters_non_new_changes_and_replays_the_same_receipt() -> None:
         proposals=(
             (
                 page,
-                "note-unit.v1",
+                "note-unit.v2",
                 "synthetic",
                 "1",
                 {
-                    "ranked_candidates": [{"rank": 1, "candidate": "missing project"}],
-                    "confidence": {"uncertainty": "faint ink"},
+                    "segments": [
+                        {
+                            "kind": "NOTE_UNIT",
+                            "geometry": {
+                                "x_min": 0.1,
+                                "y_min": 0.2,
+                                "width": 0.2,
+                                "height": 0.1,
+                            },
+                            "transcription": "synthetic note",
+                            "ranked_candidates": [{"rank": 1, "candidate": "missing project"}],
+                            "confidence": {"uncertainty": "faint ink"},
+                        }
+                    ],
                 },
             ),
         ),
@@ -451,3 +486,190 @@ def test_delivery_receipt_hides_transcription_from_repr() -> None:
     )
     assert "synthetic note" not in repr(receipt)
     assert replace(receipt, suppressed=True, body=None).suppressed is True
+
+
+def test_v1_page_level_candidates_do_not_attach_to_two_note_units() -> None:
+    from my_pa.domain.goodnotes.models import GoodNotesNoteRevision
+
+    page = issue_stable_id("gnver", "mixed-v1")
+    left = _change("left", GoodNotesNoteChangeState.NEW)
+    right = _change("right", GoodNotesNoteChangeState.NEW)
+    revisions = {
+        left.occurrence_id: GoodNotesNoteRevision(
+            revision_id=issue_stable_id("gnrev", "left"),
+            principal_id=A,
+            note_id=left.note_id,
+            schema_version="note-unit.v1",
+            analyzer_name="synthetic",
+            analyzer_version="1",
+            transcription="synthetic left",
+            created_at=WHEN,
+            occurrence_id=left.occurrence_id,
+            primary_class=GoodNotesNoteClass.MEETING,
+        ),
+        right.occurrence_id: GoodNotesNoteRevision(
+            revision_id=issue_stable_id("gnrev", "right"),
+            principal_id=A,
+            note_id=right.note_id,
+            schema_version="note-unit.v1",
+            analyzer_name="synthetic",
+            analyzer_version="1",
+            transcription="synthetic right",
+            created_at=WHEN,
+            occurrence_id=right.occurrence_id,
+            primary_class=GoodNotesNoteClass.MEETING,
+        ),
+    }
+    repo = _FakeDeliveryRepository(
+        principal_id=A,
+        stored_run=_run(),
+        changes=(left, right),
+        occurrences={
+            left.occurrence_id: _occurrence("left", page),
+            right.occurrence_id: replace(_occurrence("right", page), x_min=0.6),
+        },
+        revisions=revisions,
+        proposals=(
+            (
+                page,
+                "note-unit.v1",
+                "synthetic",
+                "1",
+                {
+                    "segments": [
+                        {
+                            "kind": "NOTE_UNIT",
+                            "geometry": {
+                                "x_min": 0.1,
+                                "y_min": 0.2,
+                                "width": 0.2,
+                                "height": 0.1,
+                            },
+                            "transcription": "synthetic left",
+                        },
+                        {
+                            "kind": "NOTE_UNIT",
+                            "geometry": {
+                                "x_min": 0.6,
+                                "y_min": 0.2,
+                                "width": 0.2,
+                                "height": 0.1,
+                            },
+                            "transcription": "synthetic right",
+                        },
+                    ],
+                    "ranked_candidates": [{"rank": 1, "candidate": "Alpha Project"}],
+                },
+            ),
+        ),
+        directory=(
+            GoodNotesEntityDirectoryRecord(
+                entity_id="prj_aaaaaaaaaaaaaaaa",
+                kind=GoodNotesEntityKind.PROJECT,
+                normalized_name="alpha project",
+            ),
+        ),
+    )
+    result = GoodNotesNewOnlyDelivery().deliver(
+        A, RUN, DESTINATION, repository=repo, clock=lambda: WHEN
+    )
+    assert result.associations == ()
+
+
+def test_v2_mixed_page_candidates_stay_on_the_note_unit_that_named_them() -> None:
+    from my_pa.domain.goodnotes.models import GoodNotesNoteRevision
+
+    page = issue_stable_id("gnver", "mixed-v2")
+    left = _change("left-v2", GoodNotesNoteChangeState.NEW)
+    right = _change("right-v2", GoodNotesNoteChangeState.NEW)
+    revisions = {
+        left.occurrence_id: GoodNotesNoteRevision(
+            revision_id=issue_stable_id("gnrev", "left-v2"),
+            principal_id=A,
+            note_id=left.note_id,
+            schema_version="note-unit.v2",
+            analyzer_name="synthetic",
+            analyzer_version="1",
+            transcription="synthetic left",
+            created_at=WHEN,
+            occurrence_id=left.occurrence_id,
+            primary_class=GoodNotesNoteClass.MEETING,
+        ),
+        right.occurrence_id: GoodNotesNoteRevision(
+            revision_id=issue_stable_id("gnrev", "right-v2"),
+            principal_id=A,
+            note_id=right.note_id,
+            schema_version="note-unit.v2",
+            analyzer_name="synthetic",
+            analyzer_version="1",
+            transcription="synthetic right",
+            created_at=WHEN,
+            occurrence_id=right.occurrence_id,
+            primary_class=GoodNotesNoteClass.MEETING,
+        ),
+    }
+    repo = _FakeDeliveryRepository(
+        principal_id=A,
+        stored_run=_run(),
+        changes=(left, right),
+        occurrences={
+            left.occurrence_id: _occurrence("left-v2", page),
+            right.occurrence_id: replace(_occurrence("right-v2", page), x_min=0.6),
+        },
+        revisions=revisions,
+        proposals=(
+            (
+                page,
+                "note-unit.v2",
+                "synthetic",
+                "1",
+                {
+                    "segments": [
+                        {
+                            "kind": "NOTE_UNIT",
+                            "geometry": {
+                                "x_min": 0.1,
+                                "y_min": 0.2,
+                                "width": 0.2,
+                                "height": 0.1,
+                            },
+                            "transcription": "synthetic left",
+                            "ranked_candidates": [{"rank": 1, "candidate": "Alpha Project"}],
+                        },
+                        {
+                            "kind": "NOTE_UNIT",
+                            "geometry": {
+                                "x_min": 0.6,
+                                "y_min": 0.2,
+                                "width": 0.2,
+                                "height": 0.1,
+                            },
+                            "transcription": "synthetic right",
+                            "ranked_candidates": [{"rank": 1, "candidate": "Beta Project"}],
+                        },
+                    ],
+                },
+            ),
+        ),
+        directory=(
+            GoodNotesEntityDirectoryRecord(
+                entity_id="prj_aaaaaaaaaaaaaaaa",
+                kind=GoodNotesEntityKind.PROJECT,
+                normalized_name="alpha project",
+            ),
+            GoodNotesEntityDirectoryRecord(
+                entity_id="prj_bbbbbbbbbbbbbbbb",
+                kind=GoodNotesEntityKind.PROJECT,
+                normalized_name="beta project",
+            ),
+        ),
+    )
+    result = GoodNotesNewOnlyDelivery().deliver(
+        A, RUN, DESTINATION, repository=repo, clock=lambda: WHEN
+    )
+    by_note = {item.note_id: item for item in result.associations}
+    assert set(by_note) == {left.note_id, right.note_id}
+    assert by_note[left.note_id].candidate == "Alpha Project"
+    assert by_note[left.note_id].resolved_id == "prj_aaaaaaaaaaaaaaaa"
+    assert by_note[right.note_id].candidate == "Beta Project"
+    assert by_note[right.note_id].resolved_id == "prj_bbbbbbbbbbbbbbbb"

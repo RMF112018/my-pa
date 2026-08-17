@@ -1,4 +1,4 @@
-"""Additive GoodNotes occurrence grounding: server crop identity and ledger FKs."""
+"""Additive widening of GoodNotes entity association kinds for Meeting and Agenda."""
 
 from __future__ import annotations
 
@@ -21,13 +21,13 @@ from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-REVISION: Final = "b7f2c9e4a618"
-PRIOR: Final = "a4d9c2e7b815"
+REVISION: Final = "d9c4e1a7b628"
+PRIOR: Final = "b7f2c9e4a618"
 HEAD_REVISION: Final = "d9c4e1a7b628"
 MIGRATION: Final = ROOT / (
-    "migrations/versions/20260817_b7f2c9e4a618_ground_goodnotes_note_unit_visual_identity.py"
+    "migrations/versions/20260817_d9c4e1a7b628_widen_goodnotes_entity_kind_meeting_agenda.py"
 )
-DISPOSABLE_DATABASE: Final = "my_pa_goodnotes_occurrence_grounding_migration_test"
+DISPOSABLE_DATABASE: Final = "my_pa_goodnotes_entity_kind_migration_test"
 
 
 def _administer(maintenance: Engine, *statements: Executable) -> None:
@@ -40,17 +40,20 @@ def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO())
 
 
-def _columns(engine: Engine, table: str, schema: str = "knowledge") -> set[str]:
+def _kind_check(engine: Engine, name: str) -> str | None:
     with engine.connect() as connection:
-        return set(
-            connection.execute(
-                text(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_schema = :schema AND table_name = :table"
-                ),
-                {"schema": schema, "table": table},
-            ).scalars()
-        )
+        return connection.execute(
+            text(
+                "SELECT pg_get_constraintdef(c.oid) "
+                "FROM pg_constraint c "
+                "JOIN pg_class t ON c.conrelid = t.oid "
+                "JOIN pg_namespace n ON t.relnamespace = n.oid "
+                "WHERE n.nspname = 'knowledge' "
+                "AND t.relname = 'goodnotes_entity_associations' "
+                "AND c.conname = :name"
+            ),
+            {"name": name},
+        ).scalar_one_or_none()
 
 
 @pytest.fixture
@@ -80,7 +83,6 @@ def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert list(script.get_heads()) == [HEAD_REVISION]
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert script.get_revision(HEAD_REVISION).down_revision == REVISION
     assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 57
 
 
@@ -95,20 +97,20 @@ def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
     assert "my_pa.infrastructure.persistence.tables" not in imported
     assert not any(module.startswith("my_pa.domain") for module in imported)
     assert "from my_pa" not in source
+    assert "GoodNotesEntityKind" not in source
     assert "CREATE TABLE" not in source
-    assert "GoodNotesNoteChangeState" not in source
 
 
-def test_the_frozen_sql_is_additive_and_fail_closed() -> None:
+def test_the_frozen_sql_widens_meeting_and_agenda_by_alter() -> None:
     source = MIGRATION.read_text(encoding="utf-8")
-    assert "one_goodnotes_occurrence_note_pair" in source
-    assert "goodnotes_note_revisions_occurrence_note_fk" in source
-    assert "goodnotes_run_note_changes_occurrence_note_fk" in source
-    assert "one_goodnotes_run_current_ambiguous_change" in source
-    assert "goodnotes_change_identity_matches_state" in source
-    assert "REMOVED_OR_NO_LONGER_PRESENT" in source
-    assert "AMBIGUOUS" in source
-    assert "DROP TABLE" not in source
+    assert "DROP CONSTRAINT goodnotes_entity_associations_entity_kind_check" in source
+    assert "ADD CONSTRAINT goodnotes_entity_association_kind_is_known" in source
+    assert "'MEETING'" in source
+    assert "'AGENDA'" in source
+    assert "'PROJECT'" in source
+    assert "'PERSON'" in source
+    assert "'NOTE'" in source
+    assert "CREATE TABLE" not in source
     for semantic in ("pgvector", "halfvec", "embedding", "hnsw", "ivfflat"):
         assert semantic not in source.casefold()
 
@@ -123,35 +125,31 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
             assert revision == HEAD_REVISION
-        assert "page_version_id" in _columns(engine, "goodnotes_note_revisions")
-        assert "revision_id" in _columns(engine, "goodnotes_run_note_changes")
+        definition = _kind_check(engine, "goodnotes_entity_association_kind_is_known")
+        assert definition is not None
+        assert "MEETING" in definition
+        assert "AGENDA" in definition
+        assert "PROJECT" in definition
     finally:
         engine.dispose()
 
 
 @pytest.mark.database
-def test_downgrade_drops_only_this_revision(disposable_database: str) -> None:
+def test_downgrade_restores_the_prior_kind_check(disposable_database: str) -> None:
     command.upgrade(_config(), "head")
     command.downgrade(_config(), PRIOR)
     engine = create_database_engine(disposable_database)
     try:
-        assert "page_version_id" not in _columns(engine, "goodnotes_note_revisions")
-        assert "revision_id" not in _columns(engine, "goodnotes_run_note_changes")
+        definition = _kind_check(engine, "goodnotes_entity_associations_entity_kind_check")
+        assert definition is not None
+        assert "MEETING" not in definition
+        assert "AGENDA" not in definition
+        assert "PROJECT" in definition
+        assert _kind_check(engine, "goodnotes_entity_association_kind_is_known") is None
         with engine.connect() as connection:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
             assert revision == PRIOR
-            tables = set(
-                connection.execute(
-                    text(
-                        "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = 'knowledge' AND table_type = 'BASE TABLE'"
-                    )
-                ).scalars()
-            )
-        assert "goodnotes_notes" in tables
-        assert "goodnotes_note_occurrences" in tables
-        assert "goodnotes_page_rasters" in tables
     finally:
         engine.dispose()

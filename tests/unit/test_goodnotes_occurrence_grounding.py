@@ -260,6 +260,7 @@ def _segment(
     y_min: float = 0.2,
     width: float = 0.2,
     height: float = 0.1,
+    transcription_status: str | None = None,
 ) -> dict[str, object]:
     values: dict[str, object] = {
         "kind": "NOTE_UNIT",
@@ -269,6 +270,8 @@ def _segment(
     }
     if crop_sha256 is not None:
         values["crop_sha256"] = crop_sha256
+    if transcription_status is not None:
+        values["transcription_status"] = transcription_status
     return values
 
 
@@ -544,3 +547,32 @@ def test_deleted_logical_page_emits_removed() -> None:
     stored = store.occurrence(A, gone.occurrence_id)
     assert stored is not None
     assert stored.identity_status is GoodNotesIdentityStatus.RETIRED
+
+
+def test_unreadable_does_not_mint_fabricated_new_transcription() -> None:
+    store = MemoryDurableNoteStore()
+    run_id, page_id, _, _ = _plant(store, "unreadable", png=_ink_png())
+    store.store_semantic_proposal(
+        A,
+        run_id,
+        page_id,
+        "note-unit.v2",
+        "synthetic",
+        "1",
+        {
+            "segments": [
+                _segment(
+                    x_min=0.1, transcription="invented text", transcription_status="UNREADABLE"
+                )
+            ]
+        },
+    )
+    result = GoodNotesOccurrenceReconciler().reconcile(
+        A, run_id, repository=store, clock=lambda: LATER
+    )
+    assert [item.change_state for item in result.changes] == [GoodNotesNoteChangeState.AMBIGUOUS]
+    assert result.changes[0].note_id is None
+    assert result.changes[0].occurrence_id is None
+    assert store._notes == {}
+    assert store._revisions == {}
+    assert "invented text" not in repr(result)

@@ -311,7 +311,10 @@ def test_remote_goodnotes_proposal_admits_replays_and_refuses_conflicts(
         assert (
             _count(
                 connection,
-                "SELECT count(*) FROM knowledge.goodnotes_delivery_attempts WHERE principal_id = :p",
+                (
+                    "SELECT count(*) FROM knowledge.goodnotes_delivery_attempts"
+                    " WHERE principal_id = :p"
+                ),
                 p=A,
             )
             == before_attempts

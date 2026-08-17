@@ -13,6 +13,7 @@ from sqlalchemy import (
     insert,
     literal,
     select,
+    text,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -79,6 +80,7 @@ from my_pa.infrastructure.persistence.tables import (
     goodnotes_region_proposals,
     goodnotes_review_decisions,
     goodnotes_run_note_changes,
+    goodnotes_semantic_proposals,
     goodnotes_source_snapshots,
     source_object_versions,
     source_objects,
@@ -1175,6 +1177,131 @@ class PostgresGoodNotesRepository:
             .one_or_none()
         )
         return None if row is None else _run_note_change(row)
+
+    def try_lock_source_root(self, principal_id: str, source_root_id: str) -> bool:
+        acquired = self.connection.execute(
+            text("SELECT pg_try_advisory_xact_lock(hashtextextended(:lock_key, 2026081605))"),
+            {"lock_key": f"{principal_id}:gn-occ:{source_root_id}"},
+        ).scalar()
+        return bool(acquired)
+
+    def snapshots_for_run(
+        self, principal_id: str, run_id: str
+    ) -> tuple[GoodNotesSourceSnapshot, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_source_snapshots)
+                .where(
+                    _mine(goodnotes_source_snapshots, principal_id),
+                    goodnotes_source_snapshots.c.run_id == run_id,
+                )
+                .order_by(
+                    goodnotes_source_snapshots.c.observed_at,
+                    goodnotes_source_snapshots.c.snapshot_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_snapshot(row) for row in rows)
+
+    def semantic_proposals_for_run(
+        self, principal_id: str, run_id: str
+    ) -> tuple[tuple[str, str, str, str, dict[str, object]], ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_semantic_proposals)
+                .where(
+                    _mine(goodnotes_semantic_proposals, principal_id),
+                    goodnotes_semantic_proposals.c.run_id == run_id,
+                )
+                .order_by(
+                    goodnotes_semantic_proposals.c.created_at,
+                    goodnotes_semantic_proposals.c.proposal_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        loaded: list[tuple[str, str, str, str, dict[str, object]]] = []
+        for row in rows:
+            payload = row["payload"]
+            if not isinstance(payload, dict):
+                raise ValueError("a GoodNotes proposal is missing required geometry")
+            loaded.append(
+                (
+                    str(row["page_version_id"]),
+                    str(row["schema_version"]),
+                    str(row["analyzer_name"]),
+                    str(row["analyzer_version"]),
+                    payload,
+                )
+            )
+        return tuple(loaded)
+
+    def occurrences_for_logical_pages(
+        self, principal_id: str, logical_page_ids: tuple[str, ...]
+    ) -> tuple[GoodNotesNoteOccurrence, ...]:
+        if not logical_page_ids:
+            return ()
+        rows = (
+            self.connection.execute(
+                select(goodnotes_note_occurrences)
+                .where(
+                    _mine(goodnotes_note_occurrences, principal_id),
+                    goodnotes_note_occurrences.c.logical_page_id.in_(logical_page_ids),
+                )
+                .order_by(
+                    goodnotes_note_occurrences.c.logical_page_id,
+                    goodnotes_note_occurrences.c.geometry_key,
+                    goodnotes_note_occurrences.c.occurrence_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_occurrence(row) for row in rows)
+
+    def latest_revision_for_occurrence(
+        self, principal_id: str, occurrence_id: str
+    ) -> GoodNotesNoteRevision | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_note_revisions)
+                .where(
+                    _mine(goodnotes_note_revisions, principal_id),
+                    goodnotes_note_revisions.c.occurrence_id == occurrence_id,
+                )
+                .order_by(
+                    goodnotes_note_revisions.c.created_at.desc(),
+                    goodnotes_note_revisions.c.revision_id.desc(),
+                )
+                .limit(1)
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _revision(row)
+
+    def run_note_changes(
+        self, principal_id: str, run_id: str
+    ) -> tuple[GoodNotesRunNoteChange, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_run_note_changes)
+                .where(
+                    _mine(goodnotes_run_note_changes, principal_id),
+                    goodnotes_run_note_changes.c.run_id == run_id,
+                )
+                .order_by(
+                    goodnotes_run_note_changes.c.created_at,
+                    goodnotes_run_note_changes.c.change_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_run_note_change(row) for row in rows)
 
 
 def _require_identical(

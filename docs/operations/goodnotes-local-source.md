@@ -71,6 +71,9 @@ Additive knowledge-schema tables persist NOTE_UNIT identity, physical
 occurrences, append-only revisions, structural note links, and exact per-run
 change-state rows. A PDF is not a note and a page is not a note; printed or
 typed agenda text is SOURCE_CONTEXT. Occurrence identity is aligned visual
-geometry plus crop/context anchors, not transcription. Agent, MCP, and
-deterministic occurrence reconciliation remain later slices; this persistence
-stores a supplied change-state and does not decide NEW versus REVISED.
+geometry plus crop/context anchors, not transcription. `GoodNotesOccurrenceReconciler`
+reads Principal-bound semantic proposals, re-reads committed occurrence state,
+and writes those rows atomically with supplied-as-computed change states.
+Uncertainty is `AMBIGUOUS`; identity is never reused from a silent pick.
+The service does not build a user-facing NEW-only summary and does not deliver.
+Agent and MCP exposure of reconciliation remain later slices.

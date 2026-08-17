@@ -21,6 +21,7 @@ from my_pa.application.commands import SubmitGoodNotesProposal
 from my_pa.application.goodnotes_occurrences import (
     GoodNotesOccurrenceReconciler,
     OccurrenceReconcileBusyError,
+    _context_anchor,
 )
 from my_pa.application.goodnotes_semantics import fingerprint_proposal
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
@@ -604,3 +605,81 @@ def test_unique_visual_match_with_new_transcription_is_revised(engine: Engine) -
         assert latest.supersedes_revision_id == original.revision_id
         assert lineage.revision(A, original.revision_id) is not None
         assert lineage.revision(A, original.revision_id).transcription == "follow up Tuesday"
+
+
+def test_new_occurrence_does_not_reuse_note_by_page_wide_context_hash(engine: Engine) -> None:
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        semantics = SqlGoodNotesSemanticRepository(connection)
+        run_id, page_id, notebook_id, logical_id = _plant(lineage, A, "append")
+        heading = _segment(x_min=0.4, transcription="synthetic heading", kind="SOURCE_CONTEXT")
+        existing_unit = _segment(x_min=0.1, transcription="synthetic note", crop_sha256=CROP)
+        appended = _segment(x_min=0.6, transcription="synthetic note", crop_sha256="e" * 64)
+        note = lineage.store_note(
+            GoodNotesNote(
+                note_id=issue_stable_id("gnnt", A, "append"),
+                principal_id=A,
+                notebook_id=notebook_id,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=WHEN,
+                last_seen_at=WHEN,
+            )
+        )
+        existing = lineage.store_occurrence(
+            GoodNotesNoteOccurrence(
+                occurrence_id=issue_stable_id("gnocc", A, "append"),
+                principal_id=A,
+                note_id=note.note_id,
+                logical_page_id=logical_id,
+                x_min=0.1,
+                y_min=0.2,
+                width=0.2,
+                height=0.1,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=WHEN,
+                last_seen_at=WHEN,
+                crop_sha256=CROP,
+                context_anchor_sha256=_context_anchor((heading, existing_unit, appended)),
+            )
+        )
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="append",
+            segments=(heading, existing_unit, appended),
+        )
+        notes_before, _ = _counts(connection, A)
+        result = GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: LATER
+        )
+        notes_after, _ = _counts(connection, A)
+        assert notes_after == notes_before + 1
+        notebook_notes = int(
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM knowledge.goodnotes_notes "
+                    "WHERE principal_id = :principal AND notebook_id = :notebook"
+                ),
+                {"principal": A, "notebook": notebook_id},
+            ).scalar_one()
+        )
+        assert notebook_notes == 2
+        new_changes = [
+            item for item in result.changes if item.change_state is GoodNotesNoteChangeState.NEW
+        ]
+        assert len(new_changes) == 1
+        assert new_changes[0].note_id != note.note_id
+        assert new_changes[0].occurrence_id != existing.occurrence_id
+        stored = lineage.occurrence(A, new_changes[0].occurrence_id)
+        assert stored is not None
+        assert stored.note_id != note.note_id
+        assert stored.note_id == new_changes[0].note_id
+        paired = [item for item in result.changes if item.occurrence_id == existing.occurrence_id]
+        assert len(paired) == 1
+        assert paired[0].change_state in {
+            GoodNotesNoteChangeState.UNCHANGED,
+            GoodNotesNoteChangeState.REVISED,
+        }
+        assert paired[0].note_id == note.note_id

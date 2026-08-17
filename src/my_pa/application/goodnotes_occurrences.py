@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
@@ -74,7 +74,7 @@ class CurrentOccurrence:
     height: float
     crop_sha256: str | None
     context_anchor_sha256: str | None
-    transcription: str
+    transcription: str = field(repr=False)
     primary_class: GoodNotesNoteClass | None
     schema_version: str
     analyzer_name: str
@@ -585,13 +585,6 @@ class GoodNotesOccurrenceReconciler:
         repository: GoodNotesOccurrenceRepository,
         now: datetime,
     ) -> tuple[GoodNotesRunNoteChange, ...]:
-        note_ids_for_anchor: dict[str, set[str]] = {}
-        for match in matches:
-            if match.prior is None or match.prior.context_anchor_sha256 is None:
-                continue
-            note_ids_for_anchor.setdefault(match.prior.context_anchor_sha256, set()).add(
-                match.prior.note_id
-            )
         written: list[GoodNotesRunNoteChange] = []
         for match in matches:
             if match.kind is OccurrenceMatchKind.AMBIGUOUS:
@@ -665,7 +658,6 @@ class GoodNotesOccurrenceReconciler:
                     run_id=run_id,
                     notebook_id=notebook_id,
                     current=match.current,
-                    note_ids_for_anchor=note_ids_for_anchor,
                     repository=repository,
                     now=now,
                 )
@@ -748,68 +740,49 @@ class GoodNotesOccurrenceReconciler:
         run_id: str,
         notebook_id: str,
         current: CurrentOccurrence,
-        note_ids_for_anchor: dict[str, set[str]],
         repository: GoodNotesOccurrenceRepository,
         now: datetime,
     ) -> GoodNotesRunNoteChange:
-        attached: str | None = None
-        if current.context_anchor_sha256 is not None:
-            notes = note_ids_for_anchor.get(current.context_anchor_sha256, set())
-            if len(notes) == 1:
-                attached = next(iter(notes))
-        if attached is None:
-            note = repository.store_note(
-                GoodNotesNote(
-                    note_id=issue_stable_id(
-                        "gnnt", principal_id, run_id, current.logical_page_id, current.geometry_key
-                    ),
-                    principal_id=principal_id,
-                    notebook_id=notebook_id,
-                    identity_status=GoodNotesIdentityStatus.ACTIVE,
-                    created_at=now,
-                    last_seen_at=now,
-                    primary_class=current.primary_class,
-                )
+        note = repository.store_note(
+            GoodNotesNote(
+                note_id=issue_stable_id(
+                    "gnnt", principal_id, run_id, current.logical_page_id, current.geometry_key
+                ),
+                principal_id=principal_id,
+                notebook_id=notebook_id,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=now,
+                last_seen_at=now,
+                primary_class=current.primary_class,
             )
+        )
+        repository.store_note_link(
+            GoodNotesNoteLink(
+                link_id=issue_stable_id(
+                    "gnlink", principal_id, note.note_id, "page", current.logical_page_id
+                ),
+                principal_id=principal_id,
+                note_id=note.note_id,
+                link_kind=GoodNotesNoteLinkKind.NOTE_TO_LOGICAL_PAGE,
+                created_at=now,
+                target_logical_page_id=current.logical_page_id,
+            )
+        )
+        if current.context_anchor_sha256 is not None:
             repository.store_note_link(
                 GoodNotesNoteLink(
                     link_id=issue_stable_id(
-                        "gnlink", principal_id, note.note_id, "page", current.logical_page_id
+                        "gnlink",
+                        principal_id,
+                        note.note_id,
+                        "ctx",
+                        current.context_anchor_sha256,
                     ),
                     principal_id=principal_id,
                     note_id=note.note_id,
-                    link_kind=GoodNotesNoteLinkKind.NOTE_TO_LOGICAL_PAGE,
+                    link_kind=GoodNotesNoteLinkKind.NOTE_TO_SOURCE_CONTEXT,
                     created_at=now,
-                    target_logical_page_id=current.logical_page_id,
-                )
-            )
-            if current.context_anchor_sha256 is not None:
-                repository.store_note_link(
-                    GoodNotesNoteLink(
-                        link_id=issue_stable_id(
-                            "gnlink",
-                            principal_id,
-                            note.note_id,
-                            "ctx",
-                            current.context_anchor_sha256,
-                        ),
-                        principal_id=principal_id,
-                        note_id=note.note_id,
-                        link_kind=GoodNotesNoteLinkKind.NOTE_TO_SOURCE_CONTEXT,
-                        created_at=now,
-                        target_context_anchor_sha256=current.context_anchor_sha256,
-                    )
-                )
-        else:
-            existing = repository.note(principal_id, attached)
-            if existing is None:
-                raise ValueError("the GoodNotes note could not be stored")
-            note = repository.store_note(
-                replace(
-                    existing,
-                    identity_status=GoodNotesIdentityStatus.ACTIVE,
-                    last_seen_at=now,
-                    primary_class=current.primary_class or existing.primary_class,
+                    target_context_anchor_sha256=current.context_anchor_sha256,
                 )
             )
         occurrence = repository.store_occurrence(

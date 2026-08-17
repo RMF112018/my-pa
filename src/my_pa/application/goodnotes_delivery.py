@@ -2,8 +2,9 @@
 
 Reads committed GN-05 run-note-changes. Does not re-reconcile, does not write
 notes/occurrences/revisions/run-change rows, and does not decide change state.
-Does not create Projects, people, or Tasks. Does not send to Teams, email, or
-Abacus. Destination is an explicit string such as `operator-local`.
+Does not create Projects, people, Tasks, Meetings, or Agendas. Does not send to
+Teams, email, or Abacus. Destination is an explicit string such as
+`operator-local`. Page-level `note-unit.v1` candidates are not attached to notes.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from typing import Protocol
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.goodnotes.models import (
+    NOTE_UNIT_SCHEMA_V2,
     GoodNotesDeliveryReceipt,
     GoodNotesEntityAssociation,
     GoodNotesEntityDirectoryRecord,
@@ -29,6 +31,9 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesNoteOccurrence,
     GoodNotesNoteRevision,
     GoodNotesRunNoteChange,
+    GoodNotesSegmentKind,
+    GoodNotesTranscriptionStatus,
+    inferred_transcription_status,
     issue_stable_id,
 )
 
@@ -195,13 +200,69 @@ def _confidence(payload: Mapping[str, object]) -> dict[str, object] | None:
     return raw if isinstance(raw, dict) else None
 
 
-def _payloads_by_page(
+def _box_key(x_min: float, y_min: float, width: float, height: float) -> str:
+    return f"{x_min:.4f},{y_min:.4f},{width:.4f},{height:.4f}"
+
+
+def _matching_note_unit(
+    occurrence: GoodNotesNoteOccurrence,
     proposals: Sequence[tuple[str, str, str, str, dict[str, object]]],
-) -> dict[str, tuple[dict[str, object], ...]]:
-    grouped: dict[str, list[dict[str, object]]] = {}
-    for page_version_id, _schema, _analyzer, _version, payload in proposals:
-        grouped.setdefault(page_version_id, []).append(payload)
-    return {key: tuple(items) for key, items in grouped.items()}
+) -> tuple[str, Mapping[str, object]] | None:
+    """The unique NOTE_UNIT on this page version whose geometry produced the occurrence."""
+    if occurrence.page_version_id is None:
+        return None
+    wanted = _box_key(occurrence.x_min, occurrence.y_min, occurrence.width, occurrence.height)
+    matches: list[tuple[str, Mapping[str, object]]] = []
+    for page_version_id, schema_version, _analyzer, _version, payload in proposals:
+        if page_version_id != occurrence.page_version_id:
+            continue
+        raw_segments = payload.get("segments")
+        if not isinstance(raw_segments, list | tuple):
+            continue
+        for segment in raw_segments:
+            if not isinstance(segment, dict):
+                continue
+            if segment.get("kind") != GoodNotesSegmentKind.NOTE_UNIT.value:
+                continue
+            geometry = segment.get("geometry")
+            if not isinstance(geometry, dict):
+                continue
+            try:
+                key = _box_key(
+                    float(geometry["x_min"]),
+                    float(geometry["y_min"]),
+                    float(geometry["width"]),
+                    float(geometry["height"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            if key == wanted:
+                matches.append((schema_version, segment))
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _note_unit_status(
+    schema_version: str, segment: Mapping[str, object]
+) -> GoodNotesTranscriptionStatus | None:
+    if schema_version != NOTE_UNIT_SCHEMA_V2:
+        return None
+    raw = segment.get("transcription_status")
+    transcription = segment.get("transcription")
+    text = transcription if isinstance(transcription, str) else None
+    if isinstance(raw, str) and raw:
+        try:
+            return GoodNotesTranscriptionStatus(raw)
+        except ValueError:
+            return inferred_transcription_status(
+                transcription=text,
+                confidence=_confidence(segment),
+            )
+    return inferred_transcription_status(
+        transcription=text,
+        confidence=_confidence(segment),
+    )
 
 
 class GoodNotesNewOnlyDelivery:
@@ -222,7 +283,7 @@ class GoodNotesNewOnlyDelivery:
         new_changes = tuple(
             item for item in changes if item.change_state is GoodNotesNoteChangeState.NEW
         )
-        proposals = _payloads_by_page(repository.semantic_proposals_for_run(principal_id, run_id))
+        proposals = repository.semantic_proposals_for_run(principal_id, run_id)
         directory = repository.entity_directory(principal_id)
         now = clock()
         summary_notes: list[NewOnlySummaryNote] = []
@@ -236,18 +297,19 @@ class GoodNotesNewOnlyDelivery:
             revision = repository.latest_revision_for_occurrence(principal_id, change.occurrence_id)
             if revision is None:
                 raise ValueError("the request names no stored GoodNotes ingestion run")
-            payloads = (
-                ()
-                if occurrence.page_version_id is None
-                else proposals.get(occurrence.page_version_id, ())
-            )
-            uncertain = any(
-                new_note_is_uncertain(
+            matched = _matching_note_unit(occurrence, proposals)
+            schema_version = "" if matched is None else matched[0]
+            segment: Mapping[str, object] = {} if matched is None else matched[1]
+            status = _note_unit_status(schema_version, segment)
+            confidence = _confidence(segment) if schema_version == NOTE_UNIT_SCHEMA_V2 else None
+            uncertain = (
+                status is GoodNotesTranscriptionStatus.UNCERTAIN
+                or status is GoodNotesTranscriptionStatus.UNREADABLE
+                or new_note_is_uncertain(
                     primary_class=revision.primary_class,
-                    confidence=_confidence(payload),
+                    confidence=confidence,
                 )
-                for payload in payloads
-            ) or new_note_is_uncertain(primary_class=revision.primary_class, confidence=None)
+            )
             summary_notes.append(
                 NewOnlySummaryNote(
                     note_id=change.note_id,
@@ -257,35 +319,35 @@ class GoodNotesNewOnlyDelivery:
                     transcription=revision.transcription,
                 )
             )
+            ranked = _ranked_candidates(segment) if schema_version == NOTE_UNIT_SCHEMA_V2 else ()
             seen: set[tuple[int, str]] = set()
-            for payload in payloads:
-                for rank, candidate in _ranked_candidates(payload):
-                    key = (rank, candidate)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    resolution, kind, resolved_id = resolve_entity_candidate(candidate, directory)
-                    associations.append(
-                        GoodNotesEntityAssociation(
-                            association_id=issue_stable_id(
-                                "gnent",
-                                principal_id,
-                                run_id,
-                                change.note_id,
-                                str(rank),
-                                candidate,
-                            ),
-                            principal_id=principal_id,
-                            run_id=run_id,
-                            note_id=change.note_id,
-                            candidate=candidate,
-                            rank=rank,
-                            resolution=resolution,
-                            created_at=now,
-                            entity_kind=kind,
-                            resolved_id=resolved_id,
-                        )
+            for rank, candidate in ranked:
+                key = (rank, candidate)
+                if key in seen:
+                    continue
+                seen.add(key)
+                resolution, kind, resolved_id = resolve_entity_candidate(candidate, directory)
+                associations.append(
+                    GoodNotesEntityAssociation(
+                        association_id=issue_stable_id(
+                            "gnent",
+                            principal_id,
+                            run_id,
+                            change.note_id,
+                            str(rank),
+                            candidate,
+                        ),
+                        principal_id=principal_id,
+                        run_id=run_id,
+                        note_id=change.note_id,
+                        candidate=candidate,
+                        rank=rank,
+                        resolution=resolution,
+                        created_at=now,
+                        entity_kind=kind,
+                        resolved_id=resolved_id,
                     )
+                )
         body = build_new_only_summary(summary_notes)
         digest = summary_digest(body)
         existing = repository.delivery_receipt_by_key(principal_id, run_id, destination, digest)

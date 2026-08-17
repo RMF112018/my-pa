@@ -20,6 +20,7 @@ from typing import Protocol
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.goodnotes.models import (
+    NOTE_UNIT_SCHEMA_V2,
     GoodNotesIdentityStatus,
     GoodNotesIngestionRun,
     GoodNotesNote,
@@ -35,6 +36,8 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesRunNoteChange,
     GoodNotesSegmentKind,
     GoodNotesSourceSnapshot,
+    GoodNotesTranscriptionStatus,
+    inferred_transcription_status,
     issue_stable_id,
     occurrence_geometry_key,
 )
@@ -45,6 +48,7 @@ _LEASE_OWNER_DEFAULT = "occurrence-reconcile"
 _ACTIVE_PRIOR = frozenset({GoodNotesIdentityStatus.ACTIVE, GoodNotesIdentityStatus.AMBIGUOUS})
 _IOU_THRESHOLD = 0.85
 _UNVERIFIED_REASON = "UNVERIFIED_VISUAL"
+_UNREADABLE_REASON = "UNREADABLE_TRANSCRIPTION"
 
 
 class OccurrenceReconcileBusyError(ValueError):
@@ -87,6 +91,7 @@ class CurrentOccurrence:
     geometry_key: str
     visual_verified: bool = False
     crop_dhash: str | None = None
+    transcription_status: GoodNotesTranscriptionStatus | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -573,8 +578,26 @@ def _note_units(
         if not isinstance(segment.get("crop_sha256"), str | None):
             raise ValueError("a GoodNotes proposal is missing required geometry")
         transcription = segment.get("transcription")
-        if not isinstance(transcription, str) or not transcription:
+        if transcription is None:
+            transcription = ""
+        if not isinstance(transcription, str):
             raise ValueError("a GoodNotes proposal is missing required geometry")
+        status: GoodNotesTranscriptionStatus | None = None
+        if schema_version == NOTE_UNIT_SCHEMA_V2:
+            raw_status = segment.get("transcription_status")
+            confidence = segment.get("confidence")
+            if isinstance(raw_status, str) and raw_status:
+                status = GoodNotesTranscriptionStatus(raw_status)
+            else:
+                status = inferred_transcription_status(
+                    transcription=transcription,
+                    confidence=confidence if isinstance(confidence, dict) else None,
+                )
+        if not transcription:
+            if schema_version != NOTE_UNIT_SCHEMA_V2:
+                raise ValueError("a GoodNotes proposal is missing required geometry")
+            if status is GoodNotesTranscriptionStatus.CLEAR:
+                raise ValueError("a GoodNotes proposal is missing required geometry")
         primary = segment.get("primary_class")
         primary_class = None if primary is None else GoodNotesNoteClass(str(primary))
         grounded = _ground_crop(png_bytes, x_min, y_min, width, height)
@@ -603,6 +626,7 @@ def _note_units(
                 ),
                 visual_verified=grounded is not None and not grounded.blank,
                 crop_dhash=None if grounded is None else grounded.dhash,
+                transcription_status=status,
             )
         )
     return tuple(current)
@@ -778,6 +802,17 @@ class GoodNotesOccurrenceReconciler:
                     raise ValueError(
                         "a paired occurrence match is missing current or prior identity"
                     )
+                if _cannot_mint_new(match.current):
+                    written.append(
+                        _write_current_ambiguous(
+                            principal_id=principal_id,
+                            run_id=run_id,
+                            current=match.current,
+                            repository=repository,
+                            now=now,
+                        )
+                    )
+                    continue
                 written.append(
                     self._write_paired(
                         principal_id=principal_id,
@@ -790,7 +825,7 @@ class GoodNotesOccurrenceReconciler:
                 continue
             if match.current is None:
                 raise ValueError("an occurrence match could not be classified")
-            if not match.current.visual_verified:
+            if _cannot_mint_new(match.current):
                 written.append(
                     _write_current_ambiguous(
                         principal_id=principal_id,
@@ -1008,6 +1043,14 @@ class GoodNotesOccurrenceReconciler:
         )
 
 
+def _cannot_mint_new(current: CurrentOccurrence) -> bool:
+    if not current.visual_verified:
+        return True
+    if current.transcription_status is GoodNotesTranscriptionStatus.UNREADABLE:
+        return True
+    return not current.transcription
+
+
 def _visual_changed(prior: GoodNotesNoteOccurrence, current: CurrentOccurrence) -> bool:
     box_changed = (
         f"{prior.x_min:.4f}" != f"{current.x_min:.4f}"
@@ -1049,9 +1092,19 @@ def _write_current_ambiguous(
             created_at=now,
             page_version_id=current.page_version_id,
             geometry_key=current.geometry_key,
-            reason=_UNVERIFIED_REASON if not current.visual_verified else None,
+            reason=_ambiguous_reason(current),
         )
     )
+
+
+def _ambiguous_reason(current: CurrentOccurrence) -> str | None:
+    if not current.visual_verified:
+        return _UNVERIFIED_REASON
+    if current.transcription_status is GoodNotesTranscriptionStatus.UNREADABLE:
+        return _UNREADABLE_REASON
+    if not current.transcription:
+        return _UNREADABLE_REASON
+    return None
 
 
 def _change(

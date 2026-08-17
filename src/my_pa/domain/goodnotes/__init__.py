@@ -1,6 +1,8 @@
 """Source-first GoodNotes page and region records."""
 
 from my_pa.domain.goodnotes.models import (
+    NOTE_UNIT_SCHEMA_V1,
+    NOTE_UNIT_SCHEMA_V2,
     GoodNotesDeliveryReceipt,
     GoodNotesEntityAssociation,
     GoodNotesEntityDirectoryRecord,
@@ -37,17 +39,21 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesSegmentKind,
     GoodNotesSemanticProposal,
     GoodNotesSourceSnapshot,
+    GoodNotesTranscriptionStatus,
     PageRender,
     ReconciliationReceipt,
     RegionBox,
     SourcePage,
     TranscribedRegion,
+    inferred_transcription_status,
     issue_stable_id,
     note_link_target_key,
     occurrence_geometry_key,
 )
 
 __all__ = [
+    "NOTE_UNIT_SCHEMA_V1",
+    "NOTE_UNIT_SCHEMA_V2",
     "GoodNotesDeliveryReceipt",
     "GoodNotesEntityAssociation",
     "GoodNotesEntityDirectoryRecord",
@@ -84,11 +90,13 @@ __all__ = [
     "GoodNotesSegmentKind",
     "GoodNotesSemanticProposal",
     "GoodNotesSourceSnapshot",
+    "GoodNotesTranscriptionStatus",
     "PageRender",
     "ReconciliationReceipt",
     "RegionBox",
     "SourcePage",
     "TranscribedRegion",
+    "inferred_transcription_status",
     "issue_stable_id",
     "note_link_target_key",
     "occurrence_geometry_key",

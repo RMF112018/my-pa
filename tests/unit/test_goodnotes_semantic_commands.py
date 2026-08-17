@@ -91,3 +91,52 @@ def test_prompt_injection_is_stored_as_text_not_executed() -> None:
     rendered = repr(command)
     assert INJECTION not in rendered
     assert "principal_id" not in rendered
+
+
+def test_v1_refuses_note_unit_semantic_fields() -> None:
+    with pytest.raises(InvalidRequestError) as refused:
+        _proposal(
+            segments=(_segment(ranked_candidates=({"rank": 1, "candidate": "Alpha Project"},)),)
+        )
+    assert refused.value.safe_details == (SafeDetail.SEGMENTS,)
+
+
+def test_v2_admits_note_unit_semantic_fields() -> None:
+    command = _proposal(
+        schema_version="note-unit.v2",
+        segments=(
+            _segment(
+                ranked_candidates=({"rank": 1, "candidate": "Alpha Project"},),
+                candidate_tags=("follow-up",),
+                confidence={"transcription": 0.9, "linking": 0.8},
+                transcription_status="CLEAR",
+            ),
+        ),
+    )
+    segment = command.segments[0]
+    assert segment["ranked_candidates"] == ({"rank": 1, "candidate": "Alpha Project"},)
+    assert segment["candidate_tags"] == ("follow-up",)
+    assert segment["transcription_status"] == "CLEAR"
+
+
+def test_v2_clear_requires_transcription() -> None:
+    with pytest.raises(InvalidRequestError) as refused:
+        _proposal(
+            schema_version="note-unit.v2",
+            segments=(_segment(transcription="", transcription_status="CLEAR"),),
+        )
+    assert refused.value.safe_details == (SafeDetail.TRANSCRIPTION,)
+
+
+def test_v2_unreadable_may_omit_transcription() -> None:
+    command = _proposal(
+        schema_version="note-unit.v2",
+        segments=(_segment(transcription="", transcription_status="UNREADABLE"),),
+    )
+    assert command.segments[0]["transcription_status"] == "UNREADABLE"
+
+
+def test_unknown_schema_version_is_refused() -> None:
+    with pytest.raises(InvalidRequestError) as refused:
+        _proposal(schema_version="note-unit.v3")
+    assert refused.value.safe_details == (SafeDetail.SCHEMA_VERSION,)

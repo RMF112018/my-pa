@@ -5772,7 +5772,7 @@ goodnotes_entity_associations = Table(
         name="goodnotes_entity_association_resolution_is_known",
     ),
     CheckConstraint(
-        "entity_kind IS NULL OR entity_kind IN ('PROJECT', 'PERSON', 'NOTE')",
+        "entity_kind IS NULL OR entity_kind IN ('PROJECT', 'PERSON', 'NOTE', 'MEETING', 'AGENDA')",
         name="goodnotes_entity_association_kind_is_known",
     ),
     CheckConstraint(

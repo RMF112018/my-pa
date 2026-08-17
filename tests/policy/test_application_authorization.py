@@ -67,6 +67,7 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetGoodNotesWork,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
@@ -94,6 +95,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchKnowledge,
     SearchTasks,
+    SubmitGoodNotesProposal,
     TransitionTask,
     UpdateTask,
     WaitingOn,
@@ -105,6 +107,7 @@ from my_pa.domain.audit.events import AuditOutcome
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.context.preference import ContextPreferenceAction
+from my_pa.domain.goodnotes.models import issue_stable_id
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
@@ -273,6 +276,30 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             action=ContextPreferenceAction.PIN,
             target_id=issue_identifier(IdKind.PROJECT),
             idempotency_key="denial-feedback-0001",
+        ),
+        Capability.GOODNOTES_WORK: GetGoodNotesWork(
+            run_id=issue_stable_id("gnrun", "denial"),
+            page_version_id=issue_stable_id("gnver", "denial"),
+        ),
+        Capability.GOODNOTES_PROPOSE: SubmitGoodNotesProposal(
+            run_id=issue_stable_id("gnrun", "denial"),
+            page_version_id=issue_stable_id("gnver", "denial"),
+            content_sha256="a" * 64,
+            schema_version="note-unit.v1",
+            analyzer_name="synthetic",
+            analyzer_version="1",
+            idempotency_key="denial-goodnotes-propose-0001",
+            segments=(
+                {
+                    "kind": "NOTE_UNIT",
+                    "geometry": {
+                        "x_min": 0.1,
+                        "y_min": 0.1,
+                        "width": 0.2,
+                        "height": 0.2,
+                    },
+                },
+            ),
         ),
     }
 
@@ -488,6 +515,8 @@ SCOPED_CAPABILITIES = [
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_PREPARE,
         Capability.CONTEXT_FEEDBACK,
+        Capability.GOODNOTES_WORK,
+        Capability.GOODNOTES_PROPOSE,
     }
 ]
 
@@ -582,6 +611,8 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_PREPARE,
         Capability.CONTEXT_FEEDBACK,
+        Capability.GOODNOTES_WORK,
+        Capability.GOODNOTES_PROPOSE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

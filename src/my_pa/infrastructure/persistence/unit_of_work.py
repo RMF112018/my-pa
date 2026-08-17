@@ -70,6 +70,7 @@ from my_pa.contracts.ports import (
     ContinuityReadRepository,
     EnrollmentRepository,
     EvidenceUnavailableError,
+    GoodNotesSemanticRepository,
     KnowledgeRecord,
     KnowledgeRepository,
     ManagedDocumentRepository,
@@ -128,6 +129,7 @@ from my_pa.infrastructure.persistence.goodnotes import (
     goodnotes_review_cases,
     is_goodnotes_review_case,
 )
+from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
 from my_pa.infrastructure.persistence.knowledge import (
     corpus_coverage,
@@ -738,6 +740,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def context_preferences(self) -> ContextPreferenceRepository:
         """Append-only retrieval preferences, on this transaction's connection."""
         return SqlContextPreferenceRepository(self._open)
+
+    @property
+    def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
+        """Immutable page-version work and semantic proposal receipts."""
+        return SqlGoodNotesSemanticRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

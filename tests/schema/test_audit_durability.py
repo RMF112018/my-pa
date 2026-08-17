@@ -59,6 +59,7 @@ from my_pa.contracts.ports import (
     ContextRunRepository,
     EnrollmentRepository,
     EvidenceUnavailableError,
+    GoodNotesSemanticRepository,
     KnowledgeRecord,
     KnowledgeRepository,
     ManagedDocumentRepository,
@@ -291,6 +292,10 @@ class _FailsAfterTheWork(UnitOfWork):
     @property
     def context_preferences(self) -> ContextPreferenceRepository:
         return self._inner.context_preferences
+
+    @property
+    def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
+        return self._inner.goodnotes_semantics
 
     @property
     def audit(self) -> AuditSink:

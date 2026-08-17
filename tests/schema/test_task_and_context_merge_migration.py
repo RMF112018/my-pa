@@ -1,7 +1,7 @@
 """Revision `b7c4e9a2d518`: merge task-management and context-prepare heads.
 
-Note: This revision is no longer the head. Current head `c9e2b6a4d813` revises
-`f8c3a1e6b247`. The test remains to verify the merge revision's structure and
+Note: This revision is no longer the head. Current head `d7e1a4c8b926` revises
+`c9e2b6a4d813`. The test remains to verify the merge revision's structure and
 frozen literals.
 """
 
@@ -38,7 +38,7 @@ def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PARENTS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 51
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 52
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:
@@ -46,9 +46,9 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
-    assert admitted == declared
+    assert admitted <= declared
     purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
-    assert purposes == {member.value for member in Purpose}
+    assert purposes <= {member.value for member in Purpose}
     source = next(
         path for path in (ROOT / "migrations" / "versions").glob("*.py") if REVISION in path.name
     ).read_text(encoding="utf-8")

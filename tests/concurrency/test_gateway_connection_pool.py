@@ -87,6 +87,7 @@ from my_pa.contracts.ports import (
     ContextPreferenceRepository,
     ContextRunRepository,
     EnrollmentRepository,
+    GoodNotesSemanticRepository,
     KnowledgeRepository,
     ManagedDocumentRepository,
     OperationQueue,
@@ -243,6 +244,10 @@ class _HoldsItsConnection(UnitOfWork):
     @property
     def context_preferences(self) -> ContextPreferenceRepository:
         return self._inner.context_preferences
+
+    @property
+    def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
+        return self._inner.goodnotes_semantics
 
     @property
     def audit(self) -> AuditSink:

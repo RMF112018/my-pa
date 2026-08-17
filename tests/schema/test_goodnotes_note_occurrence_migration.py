@@ -23,6 +23,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "c9e2b6a4d813"
+HEAD_REVISION: Final = "d7e1a4c8b926"
 PRIOR: Final = "f8c3a1e6b247"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_c9e2b6a4d813_add_goodnotes_note_unit_occurrence_.py"
@@ -104,11 +105,12 @@ def disposable_database() -> Iterator[str]:
         maintenance.dispose()
 
 
-def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 51
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 52
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -155,7 +157,7 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == REVISION
+            assert revision == HEAD_REVISION
         assert _tables(engine) >= NEW_TABLES | LINEAGE_TABLES | LEGACY_TABLES
     finally:
         engine.dispose()
@@ -188,7 +190,7 @@ def test_prior_head_to_new_head_preserves_lineage_rows(disposable_database: str)
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == REVISION
+            assert revision == HEAD_REVISION
         assert _tables(engine) >= NEW_TABLES | LINEAGE_TABLES
     finally:
         engine.dispose()

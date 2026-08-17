@@ -1,4 +1,4 @@
-"""The ports the forty-five capability use cases call, and nothing else.
+"""The ports the forty-seven capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -77,7 +77,11 @@ from my_pa.domain.documents.managed import (
 from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
-from my_pa.domain.goodnotes.models import GoodNotesReviewCase
+from my_pa.domain.goodnotes.models import (
+    GoodNotesPageWork,
+    GoodNotesReviewCase,
+    GoodNotesSemanticProposal,
+)
 from my_pa.domain.policy.decision import validate_policy_version
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.relationship.identity import (
@@ -942,6 +946,56 @@ class ContextPreferenceRepository(ABC):
         """The acting Principal's current projection. Empty when none are set."""
 
 
+class GoodNotesProposalConflictError(Exception):
+    """The same idempotency key was reused with a different proposal body."""
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesProposalAdmission:
+    """One semantic proposal write: the stored receipt, and whether it was created."""
+
+    proposal: GoodNotesSemanticProposal
+    created: bool
+
+
+class GoodNotesSemanticRepository(ABC):
+    """Principal-bound GoodNotes page-version work and semantic proposal receipts.
+
+    Work is a read of immutable page-version identity. Proposals are insert-only
+    receipts. Neither writes canonical notes, occurrences, revisions, or
+    run-note-changes. `principal_id` is a parameter on every method and is the
+    authenticated caller's partition, never a caller-supplied field.
+    """
+
+    @abstractmethod
+    def page_work(
+        self, principal_id: str, run_id: str, page_version_id: str
+    ) -> GoodNotesPageWork | None:
+        """The page version belonging to `run_id` for this Principal, or `None`."""
+
+    @abstractmethod
+    def submit_proposal(
+        self,
+        *,
+        principal_id: str,
+        run_id: str,
+        page_version_id: str,
+        content_sha256: str,
+        schema_version: str,
+        analyzer_name: str,
+        analyzer_version: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        payload_sha256: str,
+        payload: dict[str, object],
+        correlation_id: str,
+        request_id: str,
+        audit_id: str | None,
+        created_at: datetime,
+    ) -> GoodNotesProposalAdmission:
+        """Insert one receipt, or replay/conflict on the Principal's idempotency key."""
+
+
 class SourceProviders(ABC):
     """The lookup from a configured source's identity to its read-only adapter.
 
@@ -1277,6 +1331,16 @@ class UnitOfWork(ABC):
         never deleted; the current projection is folded in the same transaction.
         `principal_id` is a parameter on every method and is the authenticated
         caller's partition, never a caller-supplied field.
+        """
+
+    @property
+    @abstractmethod
+    def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
+        """Immutable GoodNotes page-version work and semantic proposal receipts.
+
+        Written by `goodnotes.propose` and read by `goodnotes.work`. Proposals
+        are insert-only. `principal_id` is a parameter on every method and is
+        the authenticated caller's partition, never a caller-supplied field.
         """
 
     @property

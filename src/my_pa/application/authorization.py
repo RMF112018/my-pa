@@ -65,6 +65,7 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetGoodNotesWork,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
@@ -92,6 +93,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchKnowledge,
     SearchTasks,
+    SubmitGoodNotesProposal,
     TransitionTask,
     UpdateTask,
     WaitingOn,
@@ -258,6 +260,8 @@ def _requested_scope(
             # `_SCOPELESS` is where that empty set is read that way.
             | PrepareContext()
             | RecordContextFeedback()
+            | GetGoodNotesWork()
+            | SubmitGoodNotesProposal()
         ):
             return frozenset()
         case CreateCapture():

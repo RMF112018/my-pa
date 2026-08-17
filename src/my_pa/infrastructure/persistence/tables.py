@@ -5404,6 +5404,93 @@ goodnotes_run_note_changes = Table(
     ),
 )
 
+#: One receipt per semantic proposal. Insert only. Not a canonical note,
+#: occurrence, revision, or run-note-change. The payload is bounded JSON the
+#: analyzer submitted; transcription inside it is data, never instructions.
+goodnotes_semantic_proposals = Table(
+    "goodnotes_semantic_proposals",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("proposal_id", String(36), primary_key=True),
+    Column("run_id", String(36), nullable=False),
+    Column("page_version_id", String(30), nullable=False),
+    Column("content_sha256", String(64), nullable=False),
+    Column("schema_version", String(40), nullable=False),
+    Column("analyzer_name", String(100), nullable=False),
+    Column("analyzer_version", String(100), nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_fingerprint", String(64), nullable=False),
+    Column("payload_sha256", String(64), nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text),
+    Column("request_id", Text, nullable=False),
+    CheckConstraint(
+        "proposal_id ~ '^gnprp_[a-f0-9]{24}$'",
+        name="goodnotes_semantic_proposal_id_shape",
+    ),
+    CheckConstraint(
+        "run_id ~ '^gnrun_[a-f0-9]{24}$'",
+        name="goodnotes_semantic_proposal_run_id_shape",
+    ),
+    CheckConstraint(
+        "page_version_id ~ '^gnver_[a-f0-9]{24}$'",
+        name="goodnotes_semantic_proposal_page_version_id_shape",
+    ),
+    CheckConstraint(
+        "content_sha256 ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_semantic_proposal_content_sha256_shape",
+    ),
+    CheckConstraint(
+        "char_length(schema_version) BETWEEN 1 AND 40",
+        name="goodnotes_semantic_proposal_schema_version_is_bounded",
+    ),
+    CheckConstraint(
+        "char_length(analyzer_name) BETWEEN 1 AND 100",
+        name="goodnotes_semantic_proposal_analyzer_name_is_bounded",
+    ),
+    CheckConstraint(
+        "char_length(analyzer_version) BETWEEN 1 AND 100",
+        name="goodnotes_semantic_proposal_analyzer_version_is_bounded",
+    ),
+    CheckConstraint(
+        "length(idempotency_key) BETWEEN 1 AND 128",
+        name="goodnotes_semantic_proposal_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_fingerprint ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_semantic_proposal_fingerprint_shape",
+    ),
+    CheckConstraint(
+        "payload_sha256 ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_semantic_proposal_payload_sha256_shape",
+    ),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    CheckConstraint(
+        f"audit_id IS NULL OR audit_id ~ '^{IdKind.AUDIT.value}_{_IDENTIFIER_SUFFIX}$'",
+        name="goodnotes_semantic_proposal_audit_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "length(request_id) BETWEEN 1 AND 128",
+        name="goodnotes_semantic_proposal_request_id_is_bounded",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "idempotency_key",
+        name="one_goodnotes_semantic_proposal_key",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_semantic_proposals_run_fk",
+    ),
+)
+
 #: One row per `context.prepare` disclosure. Insert only. Reconstructs which
 #: evidence references were returned without storing the query, conversation
 #: context, or excerpt text. `remote_client_id` is omitted rather than stored

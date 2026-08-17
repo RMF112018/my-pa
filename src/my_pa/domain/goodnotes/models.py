@@ -28,11 +28,12 @@ _ID_PREFIXES = frozenset(
         "gnrev",
         "gnlink",
         "gnchg",
+        "gnprp",
     }
 )
 _ID = re.compile(
     r"\A(?:gnpg|gnver|gnreg|gnrec|gnnb|gnsnap|gnlp|gnrun|"
-    r"gnnt|gnocc|gnrev|gnlink|gnchg)_[a-f0-9]{24}\Z"
+    r"gnnt|gnocc|gnrev|gnlink|gnchg|gnprp)_[a-f0-9]{24}\Z"
 )
 _SHA256 = re.compile(r"\A[a-f0-9]{64}\Z")
 _GEOMETRY_KEY = re.compile(
@@ -878,4 +879,71 @@ class GoodNotesRunNoteChange:
         _goodnotes_id(self.run_id, "gnrun")
         _goodnotes_id(self.note_id, "gnnt")
         _goodnotes_id(self.occurrence_id, "gnocc")
+        ensure_utc(self.created_at)
+
+
+class GoodNotesSegmentKind(StrEnum):
+    NOTE_UNIT = "NOTE_UNIT"
+    SOURCE_CONTEXT = "SOURCE_CONTEXT"
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPageWork:
+    """Immutable page-version work a semantic analyzer may inspect.
+
+    The digest is the handle. Page bytes and live transcription are not here.
+    """
+
+    run_id: str
+    page_version_id: str
+    principal_id: str
+    content_sha256: str
+    logical_page_id: str | None = None
+    renderer_name: str | None = None
+    renderer_version: str | None = None
+    render_profile_version: str | None = None
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.run_id, "gnrun")
+        _goodnotes_id(self.page_version_id, "gnver")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _sha256(self.content_sha256, what="content digest")
+        if self.logical_page_id is not None:
+            _goodnotes_id(self.logical_page_id, "gnlp")
+        for name in ("renderer_name", "renderer_version", "render_profile_version"):
+            value = getattr(self, name)
+            if value is not None:
+                _bounded_text(value, what=name.replace("_", " "), maximum=100)
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesSemanticProposal:
+    """A Principal-bound semantic proposal receipt. Not reconciled truth."""
+
+    proposal_id: str
+    principal_id: str
+    run_id: str
+    page_version_id: str
+    content_sha256: str
+    schema_version: str
+    analyzer_name: str
+    analyzer_version: str
+    idempotency_key: str
+    request_fingerprint: str
+    payload_sha256: str
+    created_at: datetime
+    replayed: bool = False
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.proposal_id, "gnprp")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        _goodnotes_id(self.run_id, "gnrun")
+        _goodnotes_id(self.page_version_id, "gnver")
+        _sha256(self.content_sha256, what="content digest")
+        _bounded_text(self.schema_version, what="schema version", maximum=_SCHEMA_VERSION_MAX)
+        _bounded_text(self.analyzer_name, what="analyzer name", maximum=_ANALYZER_TEXT_MAX)
+        _bounded_text(self.analyzer_version, what="analyzer version", maximum=_ANALYZER_TEXT_MAX)
+        _bounded_text(self.idempotency_key, what="idempotency key", maximum=128)
+        _sha256(self.request_fingerprint, what="request fingerprint")
+        _sha256(self.payload_sha256, what="payload digest")
         ensure_utc(self.created_at)

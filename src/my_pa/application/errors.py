@@ -148,6 +148,20 @@ class SafeDetail(StrEnum):
     #: exactly as `TASK_ID` does for the task plane.
     COUNTERPARTY_PERSON_ID = "counterparty_person_id"
     COMMITMENT_ID = "commitment_id"
+    #: The GoodNotes semantic plane's own fields (GN-04). Each names a field and
+    #: never its value. Transcription is data and is never echoed here.
+    RUN_ID = "run_id"
+    PAGE_VERSION_ID = "page_version_id"
+    CONTENT_SHA256 = "content_sha256"
+    SCHEMA_VERSION = "schema_version"
+    ANALYZER_NAME = "analyzer_name"
+    ANALYZER_VERSION = "analyzer_version"
+    SEGMENTS = "segments"
+    GEOMETRY = "geometry"
+    TRANSCRIPTION = "transcription"
+    CANDIDATE_TAGS = "candidate_tags"
+    RANKED_CANDIDATES = "ranked_candidates"
+    CONFIDENCE = "confidence"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

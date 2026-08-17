@@ -336,6 +336,21 @@ class Capability(StrEnum):
     # Alembic revision `c6f1a8d3e204` admits the live vocabulary. A stored
     # `capability_is_known` constraint before that revision refuses the name.
     CONTEXT_FEEDBACK = "context.feedback"
+    # A pair of capabilities rather than a widening of `knowledge.search`,
+    # `knowledge.read`, `review.decide`, or `context.prepare` (`D-91`). Search
+    # and read are the extraction plane, scoped by enrollment. Review decides
+    # canonical change state. Prepare assembles a cross-plane packet. None of
+    # those is "return one immutable GoodNotes page-version handle" or "accept a
+    # structured semantic proposal without reconciling it". One grant covering
+    # both of these would let a request issued to fetch work also submit a
+    # proposal, so the names stay distinct. Two-segment `noun.verb`, no
+    # former-employer branding.
+    #
+    # Neither is operator-only: each operates on the acting Principal's own
+    # partition and grants no authority. Alembic revision `d7e1a4c8b926` admits
+    # the live vocabulary.
+    GOODNOTES_WORK = "goodnotes.work"
+    GOODNOTES_PROPOSE = "goodnotes.propose"
 
 
 class NativeSourceCapability(StrEnum):
@@ -568,6 +583,10 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # `CONTINUITY_AUTHORING`, or `REVIEW_DISPOSITION`. The mapping comment
         # sits with the member: those write notes, projects, and promotions.
         Capability.CONTEXT_FEEDBACK: frozenset({Purpose.CONTEXT_PREFERENCE}),
+        # Matching purposes, not a reuse of `knowledge_search` or
+        # `review_disposition`. The mapping comment sits with the members.
+        Capability.GOODNOTES_WORK: frozenset({Purpose.GOODNOTES_WORK}),
+        Capability.GOODNOTES_PROPOSE: frozenset({Purpose.GOODNOTES_PROPOSAL}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

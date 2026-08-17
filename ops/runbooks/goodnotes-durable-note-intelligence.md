@@ -8,8 +8,10 @@ The repository-side durable-note pipeline is now runnable in tests and through
 a dormant composition helper: observe → settle → split/render → lineage →
 content-ready → waiting-proposal → reconcile → NEW-only preview/receipt.
 Lineage completion is not terminal success. Terminal `SUCCEEDED` is recorded
-only after repository-side reconcile and preview. Live Teams/email delivery,
-live Abacus inference, and production activation remain unauthorized.
+only after repository-side reconcile and preview. Production persistence is
+`PostgresDurableNoteStore` on a caller-supplied connection; the composition
+helper does not open a connection or auto-wire the gateway. Live Teams/email
+delivery, live Abacus inference, and production activation remain unauthorized.
 
 **Production is not activated.** No step below was executed against a live
 Abacus account, a live Abacus Task, `abacus.ai`, or live personal data. Steps
@@ -68,7 +70,9 @@ The protocol harness is automated against `ApplicationService.invoke` and MCP
 tool descriptions in
 `tests/contract/test_goodnotes_durable_note_canary.py`. Pipeline stage
 advancement, including lineage-not-terminal and crash/resume, is covered by
-`tests/unit/test_goodnotes_orchestrator.py`. Both use synthetic fixtures only
+`tests/unit/test_goodnotes_orchestrator.py`. PostgreSQL stage/raster persistence
+through `PostgresDurableNoteStore` is covered by
+`tests/database/test_goodnotes_orchestrator.py`. Both use synthetic fixtures only
 (`"synthetic note"`, admitted vector PDFs). Live Abacus OAuth, remote
 `tools/list`, actual ChatLLM/Agent Task invocation, and scheduled Task→remote
 MCP expiry/refresh proof are **not** in that suite and remain operator-gated.

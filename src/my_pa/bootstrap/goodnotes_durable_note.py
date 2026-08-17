@@ -78,5 +78,9 @@ def mcp_profile_refuses(tool_name: str, *, published: frozenset[str]) -> bool:
 
 
 def compose_durable_note_orchestrator() -> GoodNotesDurableNoteOrchestrator:
-    """Dormant composition helper. Not invoked from gateway startup."""
+    """Dormant composition helper. Not invoked from gateway startup.
+
+    Production persistence is `PostgresDurableNoteStore` on a caller-supplied
+    connection. This helper does not open a connection or auto-wire the store.
+    """
     return GoodNotesDurableNoteOrchestrator()

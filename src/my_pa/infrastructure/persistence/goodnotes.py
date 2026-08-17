@@ -48,13 +48,17 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesNoteRevision,
     GoodNotesPage,
     GoodNotesPagePosition,
+    GoodNotesPageRaster,
     GoodNotesPageVersion,
+    GoodNotesPipelineStage,
     GoodNotesPriorPageEvidence,
     GoodNotesRegionProposal,
     GoodNotesReviewCase,
     GoodNotesRunNoteChange,
+    GoodNotesRunStage,
     GoodNotesSourceBinding,
     GoodNotesSourceSnapshot,
+    GoodNotesStageStatus,
     ReconciliationReceipt,
 )
 from my_pa.domain.source.registry import issue_identifier
@@ -66,6 +70,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
 from my_pa.infrastructure.persistence.tables import (
     enrollment_objects,
     enrollments,
+    goodnotes_ingestion_run_stages,
     goodnotes_ingestion_runs,
     goodnotes_logical_pages,
     goodnotes_note_links,
@@ -75,6 +80,7 @@ from my_pa.infrastructure.persistence.tables import (
     goodnotes_notebooks,
     goodnotes_notes,
     goodnotes_page_positions,
+    goodnotes_page_rasters,
     goodnotes_page_versions,
     goodnotes_pages,
     goodnotes_reconciliation_receipts,
@@ -972,6 +978,126 @@ class PostgresGoodNotesRepository:
             raise ValueError("the GoodNotes ingestion run could not be updated")
         return updated
 
+    def record_stage(self, stage: GoodNotesRunStage) -> GoodNotesRunStage:
+        expected = _bound(
+            goodnotes_ingestion_run_stages,
+            stage.principal_id,
+            {
+                "run_id": stage.run_id,
+                "stage": stage.stage.value,
+                "status": stage.status.value,
+                "attempt": stage.attempt,
+                "started_at": stage.started_at,
+                "ended_at": stage.ended_at,
+                "error_code": stage.error_code,
+                "error_class": stage.error_class,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_ingestion_run_stages)
+            .values(expected)
+            .on_conflict_do_update(
+                index_elements=["principal_id", "run_id", "stage"],
+                set_={
+                    "status": stage.status.value,
+                    "attempt": stage.attempt,
+                    "started_at": stage.started_at,
+                    "ended_at": stage.ended_at,
+                    "error_code": stage.error_code,
+                    "error_class": stage.error_class,
+                },
+            )
+        )
+        stored = self._stage(stage.principal_id, stage.run_id, stage.stage)
+        if stored is None:
+            raise ValueError("the GoodNotes run stage could not be stored")
+        return stored
+
+    def stages(self, principal_id: str, run_id: str) -> tuple[GoodNotesRunStage, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_ingestion_run_stages)
+                .where(
+                    _mine(goodnotes_ingestion_run_stages, principal_id),
+                    goodnotes_ingestion_run_stages.c.run_id == run_id,
+                )
+                .order_by(
+                    goodnotes_ingestion_run_stages.c.started_at,
+                    goodnotes_ingestion_run_stages.c.stage,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_run_stage(row) for row in rows)
+
+    def _stage(
+        self, principal_id: str, run_id: str, stage: GoodNotesPipelineStage
+    ) -> GoodNotesRunStage | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_ingestion_run_stages).where(
+                    _mine(goodnotes_ingestion_run_stages, principal_id),
+                    goodnotes_ingestion_run_stages.c.run_id == run_id,
+                    goodnotes_ingestion_run_stages.c.stage == stage.value,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _run_stage(row)
+
+    def store_page_raster(self, raster: GoodNotesPageRaster) -> GoodNotesPageRaster:
+        expected = _bound(
+            goodnotes_page_rasters,
+            raster.principal_id,
+            {
+                "page_version_id": raster.page_version_id,
+                "run_id": raster.run_id,
+                "exact_render_sha256": raster.exact_render_sha256,
+                "png_sha256": raster.png_sha256,
+                "media_type": raster.media_type,
+                "byte_length": raster.byte_length,
+                "png_bytes": raster.png_bytes,
+                "renderer_name": raster.renderer_name,
+                "renderer_version": raster.renderer_version,
+                "render_profile_version": raster.render_profile_version,
+                "created_at": raster.created_at,
+            },
+        )
+        self.connection.execute(
+            pg_insert(goodnotes_page_rasters).values(expected).on_conflict_do_nothing()
+        )
+        stored = self.page_raster(raster.principal_id, raster.page_version_id)
+        if stored is None:
+            raise ValueError("the GoodNotes page raster could not be stored")
+        if (
+            stored.run_id != raster.run_id
+            or stored.exact_render_sha256 != raster.exact_render_sha256
+            or stored.png_sha256 != raster.png_sha256
+            or stored.byte_length != raster.byte_length
+            or stored.renderer_name != raster.renderer_name
+            or stored.renderer_version != raster.renderer_version
+            or stored.render_profile_version != raster.render_profile_version
+        ):
+            raise ValueError(
+                "the stable GoodNotes page raster identity collided with other content"
+            )
+        return stored
+
+    def page_raster(self, principal_id: str, page_version_id: str) -> GoodNotesPageRaster | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_page_rasters).where(
+                    _mine(goodnotes_page_rasters, principal_id),
+                    goodnotes_page_rasters.c.page_version_id == page_version_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _page_raster(row)
+
     def store_note(self, note: GoodNotesNote) -> GoodNotesNote:
         expected = _bound(
             goodnotes_notes,
@@ -1552,6 +1678,40 @@ def _run(row: object) -> GoodNotesIngestionRun:
         ambiguous_page_count=int(values["ambiguous_page_count"]),  # type: ignore[index]
         error_code=values["error_code"],  # type: ignore[index]
         error_class=values["error_class"],  # type: ignore[index]
+    )
+
+
+def _run_stage(row: object) -> GoodNotesRunStage:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesRunStage(
+        principal_id=values["principal_id"],  # type: ignore[index]
+        run_id=values["run_id"],  # type: ignore[index]
+        stage=GoodNotesPipelineStage(values["stage"]),  # type: ignore[index]
+        status=GoodNotesStageStatus(values["status"]),  # type: ignore[index]
+        started_at=values["started_at"],  # type: ignore[index]
+        attempt=int(values["attempt"]),  # type: ignore[index]
+        ended_at=values["ended_at"],  # type: ignore[index]
+        error_code=values["error_code"],  # type: ignore[index]
+        error_class=values["error_class"],  # type: ignore[index]
+    )
+
+
+def _page_raster(row: object) -> GoodNotesPageRaster:
+    values = row  # mapping-like SQLAlchemy row
+    payload = bytes(values["png_bytes"])  # type: ignore[index]
+    return GoodNotesPageRaster(
+        principal_id=values["principal_id"],  # type: ignore[index]
+        page_version_id=values["page_version_id"],  # type: ignore[index]
+        run_id=values["run_id"],  # type: ignore[index]
+        exact_render_sha256=values["exact_render_sha256"],  # type: ignore[index]
+        png_sha256=values["png_sha256"],  # type: ignore[index]
+        byte_length=int(values["byte_length"]),  # type: ignore[index]
+        png_bytes=payload,
+        renderer_name=values["renderer_name"],  # type: ignore[index]
+        renderer_version=values["renderer_version"],  # type: ignore[index]
+        render_profile_version=values["render_profile_version"],  # type: ignore[index]
+        created_at=values["created_at"],  # type: ignore[index]
+        media_type=str(values["media_type"]),  # type: ignore[index]
     )
 
 

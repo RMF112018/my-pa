@@ -14,6 +14,7 @@ logical_network=cloudflare-egress
 origin_logical_network=mcp-origin
 : "${MY_PA_NAS_DOCKER:=/usr/local/bin/docker}"
 : "${MY_PA_NAS_IPTABLES:=/usr/bin/iptables}"
+: "${MY_PA_NAS_IPTABLES_SAVE:=}"
 : "${MY_PA_NAS_IP:=/usr/bin/ip}"
 
 resolve_tool() {
@@ -37,6 +38,16 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 docker_bin=$(resolve_tool "$MY_PA_NAS_DOCKER" Docker)
 iptables_bin=$(resolve_tool "$MY_PA_NAS_IPTABLES" iptables)
 ip_bin=$(resolve_tool "$MY_PA_NAS_IP" ip)
+if [ -n "$MY_PA_NAS_IPTABLES_SAVE" ]; then
+  iptables_save_bin=$(resolve_tool "$MY_PA_NAS_IPTABLES_SAVE" iptables-save)
+else
+  iptables_dir=$(dirname -- "$iptables_bin")
+  if [ -x "$iptables_dir/iptables-save" ]; then
+    iptables_save_bin=$iptables_dir/iptables-save
+  else
+    iptables_save_bin=$(resolve_tool iptables-save iptables-save)
+  fi
+fi
 
 if [ "$action" != remove ]; then
   "$script_dir/synology-data-plane-firewall.sh" check >/dev/null
@@ -125,19 +136,22 @@ origin_bridge="docker-$(printf '%s\n' "$origin_network_id" | cut -c1-8)"
   exit 1
 }
 
-rules=$("$iptables_bin" -S) || {
-  echo "iptables inspection failed; root firewall authority is required" >&2
+# Shared data-plane FORWARD identity: MY_PA_DATA_PLANE then FORWARD_FIREWALL.
+# Independent origin/DNS/QUIC/TLS and NAT contracts are unchanged below.
+filter_save=$("$iptables_save_bin" -t filter) || {
+  echo "iptables-save inspection failed; root firewall authority is required" >&2
   exit 1
 }
-firewall_jump=$(printf '%s\n' "$rules" | awk '$0 == "-A FORWARD -j FORWARD_FIREWALL" {print NR; exit}')
-docker_jump=$(printf '%s\n' "$rules" | awk '$0 == "-A FORWARD -j DEFAULT_FORWARD" {print NR; exit}')
-case "$firewall_jump:$docker_jump" in
-  *[!0-9:]*|:*|*:) echo "Synology FORWARD chain identity mismatch" >&2; exit 1 ;;
-esac
-[ "$firewall_jump" -lt "$docker_jump" ] || {
-  echo "Synology firewall does not precede Docker forwarding as expected" >&2
+first_forward=$(printf '%s\n' "$filter_save" | awk '$1 == "-A" && $2 == "FORWARD" {print; exit}')
+second_forward=$(printf '%s\n' "$filter_save" | awk '$1 == "-A" && $2 == "FORWARD" {n++; if (n == 2) {print; exit}}')
+my_pa_jumps=$(printf '%s\n' "$filter_save" | awk '$0 == "-A FORWARD -j MY_PA_DATA_PLANE" {count++} END {print count + 0}')
+default_jumps=$(printf '%s\n' "$filter_save" | awk '$0 == "-A FORWARD -j DEFAULT_FORWARD" {count++} END {print count + 0}')
+if [ "$first_forward" != "-A FORWARD -j MY_PA_DATA_PLANE" ] || \
+   [ "$second_forward" != "-A FORWARD -j FORWARD_FIREWALL" ] || \
+   [ "$my_pa_jumps" -ne 1 ] || [ "$default_jumps" -ne 0 ]; then
+  echo "Synology FORWARD chain identity mismatch" >&2
   exit 1
-}
+fi
 nat_rule="-A DEFAULT_POSTROUTING -s $subnet ! -o $bridge -j MASQUERADE"
 nat_rules=$("$iptables_bin" -t nat -S DEFAULT_POSTROUTING) || {
   echo "Docker Cloudflare egress masquerade rule inspection failed" >&2

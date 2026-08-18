@@ -123,13 +123,16 @@ ops/nas/postgres-bootstrap-start.sh \
   DEPLOYABLE_MANIFEST ARCHIVE_DIRECTORY /etc/my-pa/postgres-resources.toml
 ```
 
-5. Synology DSM evaluates `FORWARD_FIREWALL` before Docker's
-   `DEFAULT_FORWARD` chain. On a deny-by-default host this can drop traffic
-   between two containers on the same otherwise-correct internal bridge. Plan,
-   explicitly admit, and verify only the exact canonical bridge/subnet rule:
+5. Synology DSM `FORWARD_FIREWALL` contains RELATED/ESTABLISHED ACCEPT and
+   broad source RETURNs. Data-plane protection is a repository-owned
+   `MY_PA_DATA_PLANE` chain installed as FORWARD rule 1, before
+   `FORWARD_FIREWALL`. It ACCEPTs only exact canonical same-bridge/subnet
+   traffic, DROPs every other packet that touches the data-plane bridge, and
+   RETURNs unrelated forwarding to DSM. Plan, explicitly admit, and verify:
 
 ```sh
 export MY_PA_NAS_IPTABLES=/usr/bin/iptables
+export MY_PA_NAS_IPTABLES_SAVE=/usr/bin/iptables-save
 export MY_PA_NAS_IP=/usr/bin/ip
 ops/nas/synology-data-plane-firewall.sh plan
 export MY_PA_CONFIRM_FIREWALL_MUTATION=my-pa-nas-contract_data-plane
@@ -139,20 +142,22 @@ ops/nas/synology-data-plane-firewall.sh check
 ```
 
 The script derives the current network ID, Synology bridge name, and subnet
-from the exact internal Compose-owned data plane. It also requires Docker's
-same-bridge ACCEPT rule and the proven Synology chain ordering before it will
-mutate anything. Admission means one exact rule in the first
-`FORWARD_FIREWALL` position, before DSM deny rules. `plan` is read-only; `apply`
-is idempotent and requires the exact confirmation value; `remove` is the exact
-bounded rollback and requires the same confirmation. A duplicate or misplaced
-exact rule is refused: use confirmed `remove` and then `apply`, rather than
-layering another rule over ambiguous state. A failed post-insert check rolls
-back the rule inserted by that invocation. The rule is runtime firewall state,
-not a DSM profile mutation. A DSM firewall reload or NAS reboot can remove it,
-so re-run `apply` before lifecycle recovery. Database operations, six-service
+from the exact internal Compose-owned data plane. Built-in FORWARD order is
+read from `iptables-save -t filter`. `DEFAULT_FORWARD` is obsolete on this
+DSM and is not accepted. Admission means exact four-rule `MY_PA_DATA_PLANE`
+contents, FORWARD jumps `MY_PA_DATA_PLANE` then `FORWARD_FIREWALL`, and no
+source-only data-plane RETURN in `FORWARD_FIREWALL`. `plan` is read-only;
+`apply` is idempotent and requires the exact confirmation value; `remove`
+restores the legacy source-only RETURN before withdrawing the MY_PA jump,
+then deletes only the verified repository-owned chain. Foreign or duplicate
+state is refused. The rule set is runtime firewall state, not a DSM profile
+mutation. A DSM firewall reload or NAS reboot can remove it, so re-run
+`apply` before lifecycle recovery. Database operations, six-service
 start/restart, and health fail closed when `check` does not pass. Do not add a
-broad subnet rule to `INPUT_FIREWALL`, disable DSM firewall, or allow unrelated
-Docker networks.
+broad subnet rule to `INPUT_FIREWALL`, disable DSM firewall, wire Docker
+isolation globally, or treat data-plane `check` as admission of the
+ingress-plane or Cloudflare-egress gates. Passing data-plane alone does not
+authorize GoodNotes validation.
 
 The canonical ingress plane needs the same bounded same-bridge allowance so
 the proxy can reach the web service. It does not exist during PostgreSQL-only

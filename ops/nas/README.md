@@ -79,17 +79,22 @@ operator-provisioned configuration. `postgresql_default`, the local-development
 Compose file, ad-hoc PostgreSQL, and direct production `docker compose up
 postgres` are not bootstrap paths.
 
-[`synology-data-plane-firewall.sh`](synology-data-plane-firewall.sh) closes the
-DSM-specific forwarding-order prerequisite without disabling the host
-firewall. It derives and verifies the exact Compose-owned internal network,
-Synology bridge, subnet, Docker same-bridge ACCEPT rule, and chain ordering.
+[`synology-data-plane-firewall.sh`](synology-data-plane-firewall.sh) admits a
+repository-owned `MY_PA_DATA_PLANE` chain as FORWARD rule 1, before DSM
+`FORWARD_FIREWALL`. That chain ACCEPTs only the exact Compose-owned internal
+data-plane same-bridge/subnet 4-tuple (P1), then DROPs every other packet with
+that bridge as in-interface (P2) or out-interface (P3), then RETURNs unrelated
+forwarding to DSM. Built-in FORWARD order is inspected through `iptables-save
+-t filter` because `iptables -S/-L/-C FORWARD` is unreliable on this DSM.
+`DEFAULT_FORWARD` is not an accepted equivalent, Docker isolation stays unwired,
+and a leftover source-only data-plane RETURN in `FORWARD_FIREWALL` is refused.
 Read-only `plan`/`check` are separate from explicitly confirmed, idempotent
-`apply` and exact `remove`. Admission requires one exact rule in the first
-`FORWARD_FIREWALL` position; a duplicate or misplaced rule is refused rather
-than treated as effective. PostgreSQL database operations and ordinary runtime
-start/restart/health refuse if the rule is missing. DSM firewall reload or NAS
+`apply` and exact `remove`. PostgreSQL database operations and ordinary runtime
+start/restart/health refuse if the gate is missing. DSM firewall reload or NAS
 reboot can clear runtime iptables state, so recovery must re-apply and re-check
-the rule before service lifecycle operations.
+before service lifecycle operations. Passing this gate does not admit the
+ingress-plane or Cloudflare-egress gates, and does not authorize GoodNotes
+validation.
 
 [`synology-ingress-plane-firewall.sh`](synology-ingress-plane-firewall.sh)
 applies the same exact-identity contract to the internal ingress bridge without

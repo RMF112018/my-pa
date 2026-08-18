@@ -873,8 +873,14 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
     fake_iptables.write_text(
         "#!/bin/sh\n"
         'case "$*" in\n'
-        "  '-S') printf '%s\\n' '-A FORWARD -j FORWARD_FIREWALL' "
-        "'-A FORWARD -j DEFAULT_FORWARD' ;;\n"
+        "  '-S MY_PA_DATA_PLANE')\n"
+        '    [ "$MY_TEST_MODE" = firewall_missing ] && exit 1\n'
+        "    printf '%s\\n' '-N MY_PA_DATA_PLANE' "
+        "'-A MY_PA_DATA_PLANE -s 172.22.0.0/16 -d 172.22.0.0/16 "
+        "-i docker-d4d93b25 -o docker-d4d93b25 -j ACCEPT' "
+        "'-A MY_PA_DATA_PLANE -i docker-d4d93b25 -j DROP' "
+        "'-A MY_PA_DATA_PLANE -o docker-d4d93b25 -j DROP' "
+        "'-A MY_PA_DATA_PLANE -j RETURN' ;;\n"
         "  '-S FORWARD_FIREWALL')\n"
         '    [ "$MY_TEST_MODE" = firewall_missing ] || '
         "printf '%s\\n' '-A FORWARD_FIREWALL -s 172.22.0.0/16 -d 172.22.0.0/16 "
@@ -883,8 +889,6 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
         '[ "$MY_TEST_MODE" = ingress_firewall_missing ] || '
         "printf '%s\\n' '-A FORWARD_FIREWALL -s 172.23.0.0/16 -d 172.23.0.0/16 "
         "-i docker-a1b2c3d4 -o docker-a1b2c3d4 -j RETURN';;\n"
-        "  '-C DEFAULT_FORWARD -i docker-d4d93b25 -o docker-d4d93b25 -j ACCEPT') exit 0 ;;\n"
-        "  '-C DEFAULT_FORWARD -i docker-a1b2c3d4 -o docker-a1b2c3d4 -j ACCEPT') exit 0 ;;\n"
         "  '-C FORWARD_FIREWALL -i docker-d4d93b25 -o docker-d4d93b25 "
         "-s 172.22.0.0/16 -d 172.22.0.0/16 -j RETURN') exit 0 ;;\n"
         "  '-C FORWARD_FIREWALL -i docker-a1b2c3d4 -o docker-a1b2c3d4 "
@@ -895,6 +899,25 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
     )
     fake_ip.chmod(0o700)
     fake_iptables.chmod(0o700)
+    fake_iptables_save = tools / "iptables-save"
+    fake_iptables_save.write_text(
+        "#!/bin/sh\n"
+        'if [ "$MY_TEST_MODE" = firewall_missing ]; then\n'
+        "  printf '%s\\n' '*filter' ':FORWARD ACCEPT [0:0]' ':FORWARD_FIREWALL - [0:0]' "
+        "'-A FORWARD -j FORWARD_FIREWALL' COMMIT\n"
+        "  exit 0\n"
+        "fi\n"
+        "printf '%s\\n' '*filter' ':FORWARD ACCEPT [0:0]' ':FORWARD_FIREWALL - [0:0]' "
+        "':MY_PA_DATA_PLANE - [0:0]' "
+        "'-A FORWARD -j MY_PA_DATA_PLANE' '-A FORWARD -j FORWARD_FIREWALL' "
+        "'-A MY_PA_DATA_PLANE -s 172.22.0.0/16 -d 172.22.0.0/16 "
+        "-i docker-d4d93b25 -o docker-d4d93b25 -j ACCEPT' "
+        "'-A MY_PA_DATA_PLANE -i docker-d4d93b25 -j DROP' "
+        "'-A MY_PA_DATA_PLANE -o docker-d4d93b25 -j DROP' "
+        "'-A MY_PA_DATA_PLANE -j RETURN' COMMIT\n",
+        encoding="utf-8",
+    )
+    fake_iptables_save.chmod(0o700)
     result = subprocess.run(  # noqa: S603 - fixed checked-in script with synthetic PATH
         [str(ROOT / "ops/nas/start.sh"), str(tmp_path / "manifest"), str(tmp_path)],
         cwd=ROOT,
@@ -904,6 +927,7 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
             "MY_PA_NAS_COMPOSE_FILE": str(COMPOSE),
             "MY_PA_NAS_IP": str(fake_ip),
             "MY_PA_NAS_IPTABLES": str(fake_iptables),
+            "MY_PA_NAS_IPTABLES_SAVE": str(fake_iptables_save),
             "MY_TEST_MODE": mode,
         },
         check=False,

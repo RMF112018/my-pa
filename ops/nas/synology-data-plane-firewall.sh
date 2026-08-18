@@ -10,8 +10,10 @@ action=$1
 network_name=my-pa-nas-contract_data-plane
 project_name=my-pa-nas-contract
 logical_network=data-plane
+enforcement_chain=MY_PA_DATA_PLANE
 : "${MY_PA_NAS_DOCKER:=/usr/local/bin/docker}"
 : "${MY_PA_NAS_IPTABLES:=/usr/bin/iptables}"
+: "${MY_PA_NAS_IPTABLES_SAVE:=}"
 : "${MY_PA_NAS_IP:=/usr/bin/ip}"
 
 resolve_tool() {
@@ -34,6 +36,16 @@ resolve_tool() {
 docker_bin=$(resolve_tool "$MY_PA_NAS_DOCKER" Docker)
 iptables_bin=$(resolve_tool "$MY_PA_NAS_IPTABLES" iptables)
 ip_bin=$(resolve_tool "$MY_PA_NAS_IP" ip)
+if [ -n "$MY_PA_NAS_IPTABLES_SAVE" ]; then
+  iptables_save_bin=$(resolve_tool "$MY_PA_NAS_IPTABLES_SAVE" iptables-save)
+else
+  iptables_dir=$(dirname -- "$iptables_bin")
+  if [ -x "$iptables_dir/iptables-save" ]; then
+    iptables_save_bin=$iptables_dir/iptables-save
+  else
+    iptables_save_bin=$(resolve_tool iptables-save iptables-save)
+  fi
+fi
 
 network_state=$(
   "$docker_bin" network inspect --format \
@@ -76,62 +88,188 @@ bridge="docker-$(printf '%s\n' "$network_id" | cut -c1-8)"
   exit 1
 }
 
-rules=$("$iptables_bin" -S) || {
-  echo "iptables inspection failed; root firewall authority is required" >&2
-  exit 1
-}
-firewall_jump=$(printf '%s\n' "$rules" | awk '$0 == "-A FORWARD -j FORWARD_FIREWALL" {print NR; exit}')
-docker_jump=$(printf '%s\n' "$rules" | awk '$0 == "-A FORWARD -j DEFAULT_FORWARD" {print NR; exit}')
-case "$firewall_jump:$docker_jump" in
-  *[!0-9:]*|:*|*:) echo "Synology FORWARD chain identity mismatch" >&2; exit 1 ;;
-esac
-[ "$firewall_jump" -lt "$docker_jump" ] || {
-  echo "Synology firewall does not precede Docker forwarding as expected" >&2
-  exit 1
-}
-"$iptables_bin" -C DEFAULT_FORWARD -i "$bridge" -o "$bridge" -j ACCEPT >/dev/null 2>&1 || {
-  echo "Docker same-bridge ACCEPT rule is unavailable" >&2
-  exit 1
-}
-
 # Synology's iptables 1.8 renderer canonicalizes address matches before
 # interface matches regardless of insertion argument order.
-exact_rule="-A FORWARD_FIREWALL -s $subnet -d $subnet -i $bridge -o $bridge -j RETURN"
+p1_rule="-A $enforcement_chain -s $subnet -d $subnet -i $bridge -o $bridge -j ACCEPT"
+p2_rule="-A $enforcement_chain -i $bridge -j DROP"
+p3_rule="-A $enforcement_chain -o $bridge -j DROP"
+p4_rule="-A $enforcement_chain -j RETURN"
+broad_return="-A FORWARD_FIREWALL -s $subnet -j RETURN"
+negated_egress="-A $enforcement_chain -i $bridge ! -o $bridge -j DROP"
+negated_ingress="-A $enforcement_chain ! -i $bridge -o $bridge -j DROP"
+my_pa_jump="-A FORWARD -j $enforcement_chain"
+firewall_jump="-A FORWARD -j FORWARD_FIREWALL"
+default_jump="-A FORWARD -j DEFAULT_FORWARD"
 
-rule_present() {
-  "$iptables_bin" -C FORWARD_FIREWALL \
-    -i "$bridge" -o "$bridge" -s "$subnet" -d "$subnet" -j RETURN \
-    >/dev/null 2>&1
+filter_table() {
+  "$iptables_save_bin" -t filter || {
+    echo "iptables-save inspection failed; root firewall authority is required" >&2
+    return 1
+  }
 }
 
-rule_state() {
-  chain_rules=$("$iptables_bin" -S FORWARD_FIREWALL) || {
+forward_appends() {
+  printf '%s\n' "$1" | awk '$1 == "-A" && $2 == "FORWARD" {print}'
+}
+
+chain_appends() {
+  printf '%s\n' "$1" | awk -v chain="$enforcement_chain" \
+    '$1 == "-A" && $2 == chain {print}'
+}
+
+broad_return_count() {
+  "$iptables_bin" -S FORWARD_FIREWALL 2>/dev/null | awk -v exact="$broad_return" \
+    '$0 == exact {count++} END {print count + 0}'
+}
+
+chain_classification() {
+  if ! chain_dump=$("$iptables_bin" -S "$enforcement_chain" 2>/dev/null); then
+    echo missing
+    return 0
+  fi
+  actual=$(chain_appends "$chain_dump")
+  expected=$(printf '%s\n' "$p1_rule" "$p2_rule" "$p3_rule" "$p4_rule")
+  if [ "$actual" = "$expected" ]; then
+    echo exact
+    return 0
+  fi
+  if [ -z "$actual" ]; then
+    echo empty
+    return 0
+  fi
+  printf '%s\n' "$actual" | awk -v neg_e="$negated_egress" -v neg_i="$negated_ingress" '
+    $0 == neg_e || $0 == neg_i {found=1}
+    END {exit found ? 0 : 1}
+  ' && {
+    echo negated-drop
+    return 0
+  }
+  printf '%s\n' "$actual" | awk -v p1="$p1_rule" -v p2="$p2_rule" -v p3="$p3_rule" '
+    $0 == p1 {has_p1=1}
+    $0 == p2 {has_p2=1}
+    $0 == p3 {has_p3=1}
+    {n++}
+    END {
+      if (n > 4) {print "extra-rule"; exit}
+      if (n != 4) {print "partial-chain"; exit}
+      if (!has_p1) {print "missing-p1"; exit}
+      if (!has_p2) {print "missing-i-drop"; exit}
+      if (!has_p3) {print "missing-o-drop"; exit}
+      print "foreign-chain"
+    }
+  '
+}
+
+enforcement_state() {
+  save=$(filter_table) || return 1
+  forwards=$(forward_appends "$save")
+  forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
+  my_pa_jumps=$(printf '%s\n' "$forwards" | awk -v exact="$my_pa_jump" \
+    '$0 == exact {count++} END {print count + 0}')
+  default_jumps=$(printf '%s\n' "$forwards" | awk -v exact="$default_jump" \
+    '$0 == exact {count++} END {print count + 0}')
+  first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
+  second=$(printf '%s\n' "$forwards" | awk 'NF {n++; if (n == 2) {print; exit}}')
+  chain_state=$(chain_classification)
+  broad_count=$(broad_return_count)
+
+  if [ "$default_jumps" -gt 0 ]; then
+    echo default-forward
+    return 0
+  fi
+  if [ "$my_pa_jumps" -gt 1 ]; then
+    echo duplicate-jump
+    return 0
+  fi
+  if [ "$forward_count" -eq 0 ]; then
+    echo policy-accept-only
+    return 0
+  fi
+  if [ "$first" = "$firewall_jump" ] && [ "$second" = "$my_pa_jump" ]; then
+    echo my-pa-after-dsm
+    return 0
+  fi
+  if [ "$first" = "$firewall_jump" ] && [ "$forward_count" -eq 1 ]; then
+    case "$chain_state" in
+      missing|empty) echo legacy ;;
+      exact) echo missing-jump ;;
+      *) echo "$chain_state" ;;
+    esac
+    return 0
+  fi
+  if [ "$first" != "$my_pa_jump" ] || [ "$second" != "$firewall_jump" ]; then
+    echo extra-forward
+    return 0
+  fi
+  if [ "$forward_count" -ne 2 ]; then
+    echo extra-forward
+    return 0
+  fi
+  case "$chain_state" in
+    missing) echo missing-chain ;;
+    exact)
+      if [ "$broad_count" -gt 0 ]; then
+        echo broad-return
+      else
+        echo effective
+      fi
+      ;;
+    *) echo "$chain_state" ;;
+  esac
+}
+
+populate_enforcement_chain() {
+  "$iptables_bin" -A "$enforcement_chain" \
+    -s "$subnet" -d "$subnet" -i "$bridge" -o "$bridge" -j ACCEPT
+  "$iptables_bin" -A "$enforcement_chain" -i "$bridge" -j DROP
+  "$iptables_bin" -A "$enforcement_chain" -o "$bridge" -j DROP
+  "$iptables_bin" -A "$enforcement_chain" -j RETURN
+}
+
+delete_owned_chain() {
+  "$iptables_bin" -F "$enforcement_chain"
+  "$iptables_bin" -X "$enforcement_chain"
+}
+
+restore_legacy_broad_return() {
+  fw_rules=$("$iptables_bin" -S FORWARD_FIREWALL) || {
     echo "Synology data-plane firewall rule inspection failed" >&2
     return 1
   }
-  exact_count=$(printf '%s\n' "$chain_rules" | awk -v exact="$exact_rule" '$0 == exact {count++} END {print count + 0}')
-  first_rule=$(printf '%s\n' "$chain_rules" | awk '$1 == "-A" && $2 == "FORWARD_FIREWALL" {print; exit}')
-  case "$exact_count:$first_rule" in
-    0:*) echo missing ;;
-    1:"$exact_rule") echo effective ;;
-    1:*) echo misordered ;;
-    *) echo duplicate ;;
-  esac
+  if printf '%s\n' "$fw_rules" | awk -v exact="$broad_return" \
+    '$0 == exact {found=1} END {exit found ? 0 : 1}'; then
+    return 0
+  fi
+  drop_pos=$(printf '%s\n' "$fw_rules" | awk '
+    $1 == "-A" && $2 == "FORWARD_FIREWALL" {
+      n++
+      if ($0 == "-A FORWARD_FIREWALL -j DROP") {hits++; pos=n}
+    }
+    END {if (hits != 1) exit 1; print pos}
+  ') || {
+    echo "ambiguous rollback identity: unique FORWARD_FIREWALL DROP is unavailable" >&2
+    return 1
+  }
+  "$iptables_bin" -I FORWARD_FIREWALL "$drop_pos" -s "$subnet" -j RETURN
+  [ "$(broad_return_count)" -eq 1 ] || {
+    echo "legacy source-only data-plane RETURN restore failed" >&2
+    return 1
+  }
 }
 
 case "$action" in
   plan)
-    state=$(rule_state)
+    state=$(enforcement_state)
     if [ "$state" = effective ]; then
-      echo "Synology data-plane firewall rule is already admitted for $network_name"
+      echo "Synology data-plane firewall enforcement is already admitted for $network_name"
     else
-      echo "Synology data-plane firewall rule requires admission for $network_name on $bridge ($subnet): $state"
+      echo "Synology data-plane firewall enforcement requires admission for $network_name on $bridge ($subnet): $state"
     fi
     ;;
   check)
-    state=$(rule_state)
+    state=$(enforcement_state)
     [ "$state" = effective ] || {
-      echo "Synology data-plane firewall rule is not effective: $state" >&2
+      echo "Synology data-plane firewall is not effective: $state" >&2
       exit 1
     }
     echo "Synology data-plane firewall gate passed"
@@ -145,23 +283,71 @@ case "$action" in
       echo "set MY_PA_CONFIRM_FIREWALL_MUTATION=$network_name to admit the exact rule" >&2
       exit 1
     }
-    state=$(rule_state)
+    state=$(enforcement_state)
     case "$state" in
       effective) ;;
-      missing)
-        "$iptables_bin" -I FORWARD_FIREWALL 1 \
-          -i "$bridge" -o "$bridge" -s "$subnet" -d "$subnet" -j RETURN
-        if [ "$(rule_state)" != effective ]; then
-          if ! "$iptables_bin" -D FORWARD_FIREWALL \
-            -i "$bridge" -o "$bridge" -s "$subnet" -d "$subnet" -j RETURN; then
-            echo "Synology data-plane firewall admission failed and exact rollback failed" >&2
+      legacy|missing-jump|broad-return|empty)
+        created_chain=0
+        chain_state=$(chain_classification)
+        case "$chain_state" in
+          missing)
+            "$iptables_bin" -N "$enforcement_chain"
+            created_chain=1
+            populate_enforcement_chain
+            ;;
+          empty)
+            populate_enforcement_chain
+            created_chain=1
+            ;;
+          exact) ;;
+          *)
+            echo "Synology data-plane firewall state requires explicit removal before apply: $chain_state" >&2
+            exit 1
+            ;;
+        esac
+        if [ "$(chain_classification)" != exact ]; then
+          if [ "$created_chain" -eq 1 ]; then
+            delete_owned_chain
+          fi
+          echo "Synology data-plane enforcement chain is not exact; FORWARD jump was not installed" >&2
+          exit 1
+        fi
+        save=$(filter_table) || exit 1
+        forwards=$(forward_appends "$save")
+        first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
+        forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
+        if [ "$first" != "$my_pa_jump" ]; then
+          [ "$first" = "$firewall_jump" ] && [ "$forward_count" -eq 1 ] || {
+            echo "Synology FORWARD chain identity mismatch" >&2
+            exit 1
+          }
+          "$iptables_bin" -I FORWARD 1 -j "$enforcement_chain"
+          save=$(filter_table) || exit 1
+          forwards=$(forward_appends "$save")
+          first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
+          second=$(printf '%s\n' "$forwards" | awk 'NF {n++; if (n == 2) {print; exit}}')
+          forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
+          if [ "$first" != "$my_pa_jump" ] || [ "$second" != "$firewall_jump" ] || \
+             [ "$forward_count" -ne 2 ]; then
+            "$iptables_bin" -D FORWARD -j "$enforcement_chain" || true
+            if [ "$created_chain" -eq 1 ]; then
+              delete_owned_chain
+            fi
+            echo "Synology data-plane firewall admission failed; inserted jump was rolled back" >&2
             exit 1
           fi
-          if rule_present; then
-            echo "Synology data-plane firewall admission failed and rollback left the exact rule present" >&2
+        fi
+        n=0
+        while [ "$(broad_return_count)" -gt 0 ]; do
+          n=$((n + 1))
+          [ "$n" -le 1 ] || {
+            echo "duplicate source-only data-plane RETURN requires explicit removal" >&2
             exit 1
-          fi
-          echo "Synology data-plane firewall admission failed; inserted rule was rolled back" >&2
+          }
+          "$iptables_bin" -D FORWARD_FIREWALL -s "$subnet" -j RETURN
+        done
+        if [ "$(enforcement_state)" != effective ]; then
+          echo "Synology data-plane firewall admission failed post-condition" >&2
           exit 1
         fi
         ;;
@@ -170,7 +356,7 @@ case "$action" in
         exit 1
         ;;
     esac
-    echo "Synology data-plane firewall rule admitted"
+    echo "Synology data-plane firewall enforcement admitted"
     ;;
   remove)
     [ "$(id -u)" -eq 0 ] || {
@@ -181,21 +367,46 @@ case "$action" in
       echo "set MY_PA_CONFIRM_FIREWALL_MUTATION=$network_name to remove the exact rule" >&2
       exit 1
     }
-    state=$(rule_state)
+    state=$(enforcement_state)
     case "$state" in
-      effective|misordered) ;;
+      effective|broad-return) ;;
       *)
-        echo "one exact Synology data-plane firewall rule is not present: $state" >&2
+        echo "one exact Synology data-plane enforcement chain is not present: $state" >&2
         exit 1
-        ;;
+      ;;
     esac
-    "$iptables_bin" -D FORWARD_FIREWALL \
-      -i "$bridge" -o "$bridge" -s "$subnet" -d "$subnet" -j RETURN
-    if rule_present; then
-      echo "Synology data-plane firewall rule removal failed" >&2
+    [ "$(chain_classification)" = exact ] || {
+      echo "refusing to delete foreign MY_PA_DATA_PLANE contents" >&2
+      exit 1
+    }
+    restore_legacy_broad_return
+    save=$(filter_table) || exit 1
+    forwards=$(forward_appends "$save")
+    my_pa_jumps=$(printf '%s\n' "$forwards" | awk -v exact="$my_pa_jump" \
+      '$0 == exact {count++} END {print count + 0}')
+    [ "$my_pa_jumps" -eq 1 ] || {
+      echo "MY_PA_DATA_PLANE FORWARD jump identity mismatch" >&2
+      exit 1
+    }
+    "$iptables_bin" -D FORWARD -j "$enforcement_chain"
+    save=$(filter_table) || exit 1
+    forwards=$(forward_appends "$save")
+    first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
+    forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
+    [ "$first" = "$firewall_jump" ] && [ "$forward_count" -eq 1 ] || {
+      echo "legacy DSM-first FORWARD restoration failed" >&2
+      exit 1
+    }
+    delete_owned_chain
+    if "$iptables_bin" -S "$enforcement_chain" >/dev/null 2>&1; then
+      echo "MY_PA_DATA_PLANE chain removal failed" >&2
       exit 1
     fi
-    echo "Synology data-plane firewall rule removed"
+    [ "$(broad_return_count)" -eq 1 ] || {
+      echo "legacy source-only data-plane RETURN is not present after remove" >&2
+      exit 1
+    }
+    echo "Synology data-plane firewall enforcement removed"
     ;;
   *)
     echo "usage: $0 check|plan|apply|remove" >&2

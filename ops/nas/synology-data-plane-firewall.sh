@@ -117,8 +117,23 @@ chain_appends() {
     '$1 == "-A" && $2 == chain {print}'
 }
 
+forward_firewall_rules() {
+  "$iptables_bin" -S FORWARD_FIREWALL || {
+    echo "Synology data-plane firewall rule inspection failed" >&2
+    return 1
+  }
+}
+
 broad_return_count() {
-  "$iptables_bin" -S FORWARD_FIREWALL 2>/dev/null | awk -v exact="$broad_return" \
+  fw_rules=$(forward_firewall_rules) || return 1
+  printf '%s\n' "$fw_rules" | awk -v exact="$broad_return" \
+    '$0 == exact {count++} END {print count + 0}'
+}
+
+my_pa_forward_jump_count() {
+  save=$(filter_table) || return 1
+  forwards=$(forward_appends "$save")
+  printf '%s\n' "$forwards" | awk -v exact="$my_pa_jump" \
     '$0 == exact {count++} END {print count + 0}'
 }
 
@@ -171,8 +186,12 @@ enforcement_state() {
   first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
   second=$(printf '%s\n' "$forwards" | awk 'NF {n++; if (n == 2) {print; exit}}')
   chain_state=$(chain_classification)
-  broad_count=$(broad_return_count)
+  broad_count=$(broad_return_count) || return 1
 
+  if [ "$broad_count" -gt 1 ]; then
+    echo duplicate-broad-return
+    return 0
+  fi
   if [ "$default_jumps" -gt 0 ]; then
     echo default-forward
     return 0
@@ -220,24 +239,48 @@ enforcement_state() {
 
 populate_enforcement_chain() {
   "$iptables_bin" -A "$enforcement_chain" \
-    -s "$subnet" -d "$subnet" -i "$bridge" -o "$bridge" -j ACCEPT
-  "$iptables_bin" -A "$enforcement_chain" -i "$bridge" -j DROP
-  "$iptables_bin" -A "$enforcement_chain" -o "$bridge" -j DROP
-  "$iptables_bin" -A "$enforcement_chain" -j RETURN
+    -s "$subnet" -d "$subnet" -i "$bridge" -o "$bridge" -j ACCEPT || return 1
+  "$iptables_bin" -A "$enforcement_chain" -i "$bridge" -j DROP || return 1
+  "$iptables_bin" -A "$enforcement_chain" -o "$bridge" -j DROP || return 1
+  "$iptables_bin" -A "$enforcement_chain" -j RETURN || return 1
+}
+
+assert_no_my_pa_forward_jump() {
+  jump_count=$(my_pa_forward_jump_count) || return 1
+  [ "$jump_count" -eq 0 ] || {
+    echo "refusing to mutate MY_PA_DATA_PLANE while FORWARD jump exists" >&2
+    return 1
+  }
 }
 
 delete_owned_chain() {
-  "$iptables_bin" -F "$enforcement_chain"
-  "$iptables_bin" -X "$enforcement_chain"
+  assert_no_my_pa_forward_jump || return 1
+  "$iptables_bin" -F "$enforcement_chain" || return 1
+  "$iptables_bin" -X "$enforcement_chain" || return 1
+  if "$iptables_bin" -S "$enforcement_chain" >/dev/null 2>&1; then
+    echo "MY_PA_DATA_PLANE chain removal failed" >&2
+    return 1
+  fi
+}
+
+restore_empty_owned_chain() {
+  assert_no_my_pa_forward_jump || return 1
+  "$iptables_bin" -F "$enforcement_chain" || return 1
+  [ "$(chain_classification)" = empty ] || {
+    echo "failed to restore empty MY_PA_DATA_PLANE" >&2
+    return 1
+  }
 }
 
 restore_legacy_broad_return() {
-  fw_rules=$("$iptables_bin" -S FORWARD_FIREWALL) || {
-    echo "Synology data-plane firewall rule inspection failed" >&2
-    return 1
-  }
+  fw_rules=$(forward_firewall_rules) || return 1
   if printf '%s\n' "$fw_rules" | awk -v exact="$broad_return" \
     '$0 == exact {found=1} END {exit found ? 0 : 1}'; then
+    restored=$(broad_return_count) || return 1
+    [ "$restored" -eq 1 ] || {
+      echo "duplicate source-only data-plane RETURN requires explicit removal" >&2
+      return 1
+    }
     return 0
   fi
   drop_pos=$(printf '%s\n' "$fw_rules" | awk '
@@ -251,7 +294,8 @@ restore_legacy_broad_return() {
     return 1
   }
   "$iptables_bin" -I FORWARD_FIREWALL "$drop_pos" -s "$subnet" -j RETURN
-  [ "$(broad_return_count)" -eq 1 ] || {
+  restored=$(broad_return_count) || return 1
+  [ "$restored" -eq 1 ] || {
     echo "legacy source-only data-plane RETURN restore failed" >&2
     return 1
   }
@@ -259,7 +303,7 @@ restore_legacy_broad_return() {
 
 case "$action" in
   plan)
-    state=$(enforcement_state)
+    state=$(enforcement_state) || exit 1
     if [ "$state" = effective ]; then
       echo "Synology data-plane firewall enforcement is already admitted for $network_name"
     else
@@ -267,7 +311,7 @@ case "$action" in
     fi
     ;;
   check)
-    state=$(enforcement_state)
+    state=$(enforcement_state) || exit 1
     [ "$state" = effective ] || {
       echo "Synology data-plane firewall is not effective: $state" >&2
       exit 1
@@ -283,21 +327,38 @@ case "$action" in
       echo "set MY_PA_CONFIRM_FIREWALL_MUTATION=$network_name to admit the exact rule" >&2
       exit 1
     }
-    state=$(enforcement_state)
+    state=$(enforcement_state) || exit 1
     case "$state" in
       effective) ;;
       legacy|missing-jump|broad-return|empty)
-        created_chain=0
+        population_mode=none
         chain_state=$(chain_classification)
         case "$chain_state" in
           missing)
-            "$iptables_bin" -N "$enforcement_chain"
-            created_chain=1
-            populate_enforcement_chain
+            "$iptables_bin" -N "$enforcement_chain" || {
+              echo "failed to create MY_PA_DATA_PLANE" >&2
+              exit 1
+            }
+            population_mode=created
+            if ! populate_enforcement_chain; then
+              if ! delete_owned_chain; then
+                echo "Synology data-plane enforcement chain population failed and owned chain cleanup failed" >&2
+                exit 1
+              fi
+              echo "Synology data-plane enforcement chain population failed; owned chain was removed" >&2
+              exit 1
+            fi
             ;;
           empty)
-            populate_enforcement_chain
-            created_chain=1
+            population_mode=emptied
+            if ! populate_enforcement_chain; then
+              if ! restore_empty_owned_chain; then
+                echo "Synology data-plane enforcement chain population failed and empty-chain restore failed" >&2
+                exit 1
+              fi
+              echo "Synology data-plane enforcement chain population failed; empty chain was restored" >&2
+              exit 1
+            fi
             ;;
           exact) ;;
           *)
@@ -306,9 +367,14 @@ case "$action" in
             ;;
         esac
         if [ "$(chain_classification)" != exact ]; then
-          if [ "$created_chain" -eq 1 ]; then
-            delete_owned_chain
-          fi
+          case "$population_mode" in
+            created)
+              delete_owned_chain || true
+              ;;
+            emptied)
+              restore_empty_owned_chain || true
+              ;;
+          esac
           echo "Synology data-plane enforcement chain is not exact; FORWARD jump was not installed" >&2
           exit 1
         fi
@@ -330,23 +396,29 @@ case "$action" in
           if [ "$first" != "$my_pa_jump" ] || [ "$second" != "$firewall_jump" ] || \
              [ "$forward_count" -ne 2 ]; then
             "$iptables_bin" -D FORWARD -j "$enforcement_chain" || true
-            if [ "$created_chain" -eq 1 ]; then
-              delete_owned_chain
+            if [ "$population_mode" = created ]; then
+              delete_owned_chain || true
             fi
             echo "Synology data-plane firewall admission failed; inserted jump was rolled back" >&2
             exit 1
           fi
         fi
-        n=0
-        while [ "$(broad_return_count)" -gt 0 ]; do
-          n=$((n + 1))
-          [ "$n" -le 1 ] || {
+        remaining=$(broad_return_count) || exit 1
+        case "$remaining" in
+          0) ;;
+          1)
+            "$iptables_bin" -D FORWARD_FIREWALL -s "$subnet" -j RETURN || {
+              echo "failed to remove source-only data-plane RETURN" >&2
+              exit 1
+            }
+            ;;
+          *)
             echo "duplicate source-only data-plane RETURN requires explicit removal" >&2
             exit 1
-          }
-          "$iptables_bin" -D FORWARD_FIREWALL -s "$subnet" -j RETURN
-        done
-        if [ "$(enforcement_state)" != effective ]; then
+            ;;
+        esac
+        final_state=$(enforcement_state) || exit 1
+        if [ "$final_state" != effective ]; then
           echo "Synology data-plane firewall admission failed post-condition" >&2
           exit 1
         fi
@@ -367,7 +439,7 @@ case "$action" in
       echo "set MY_PA_CONFIRM_FIREWALL_MUTATION=$network_name to remove the exact rule" >&2
       exit 1
     }
-    state=$(enforcement_state)
+    state=$(enforcement_state) || exit 1
     case "$state" in
       effective|broad-return) ;;
       *)
@@ -402,7 +474,8 @@ case "$action" in
       echo "MY_PA_DATA_PLANE chain removal failed" >&2
       exit 1
     fi
-    [ "$(broad_return_count)" -eq 1 ] || {
+    remaining=$(broad_return_count) || exit 1
+    [ "$remaining" -eq 1 ] || {
       echo "legacy source-only data-plane RETURN is not present after remove" >&2
       exit 1
     }

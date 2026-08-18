@@ -96,6 +96,9 @@ emit_firewall() {
   printf '%s\n' '-A FORWARD_FIREWALL -s 10.0.0.0/24 -j RETURN'
   if [ "$broad" = present ]; then
     printf '%s\n' '{BROAD}'
+  elif [ "$broad" = duplicate ]; then
+    printf '%s\n' '{BROAD}'
+    printf '%s\n' '{BROAD}'
   fi
   printf '%s\n' '-A FORWARD_FIREWALL -s 172.25.0.0/16 -j RETURN'
   case "$drop" in
@@ -131,6 +134,7 @@ case "$*" in
     emit_chain_lines
     ;;
   "-S FORWARD_FIREWALL")
+    [ "${FAKE_FW_S_FAIL:-0}" = 1 ] && exit 1
     emit_firewall
     ;;
   "-N MY_PA_DATA_PLANE")
@@ -138,15 +142,19 @@ case "$*" in
     : > "$chain_file"
     ;;
   "-A MY_PA_DATA_PLANE -s {SUBNET} -d {SUBNET} -i {BRIDGE} -o {BRIDGE} -j ACCEPT")
+    [ "${FAKE_APPEND_FAIL:-}" = p1 ] && exit 1
     printf '%s\n' '{P1}' >> "$chain_file"
     ;;
   "-A MY_PA_DATA_PLANE -i {BRIDGE} -j DROP")
+    [ "${FAKE_APPEND_FAIL:-}" = p2 ] && exit 1
     printf '%s\n' '{P2}' >> "$chain_file"
     ;;
   "-A MY_PA_DATA_PLANE -o {BRIDGE} -j DROP")
+    [ "${FAKE_APPEND_FAIL:-}" = p3 ] && exit 1
     printf '%s\n' '{P3}' >> "$chain_file"
     ;;
   "-A MY_PA_DATA_PLANE -j RETURN")
+    [ "${FAKE_APPEND_FAIL:-}" = p4 ] && exit 1
     printf '%s\n' '{P4}' >> "$chain_file"
     printf '%s\n' exact > "${state_dir}/chain"
     ;;
@@ -256,6 +264,8 @@ def _environment(
             "FAKE_FW_STATE": str(state),
             "FAKE_JUMP_FAIL": jump_fail,
             "FAKE_JUMP_VERIFY_FAIL": jump_verify_fail,
+            "FAKE_FW_S_FAIL": "0",
+            "FAKE_APPEND_FAIL": "",
         },
         state,
         state / "calls",
@@ -270,6 +280,20 @@ def _run(action: str, environment: dict[str, str]) -> subprocess.CompletedProces
         text=True,
         check=False,
     )
+
+
+def _recorded(calls: Path) -> str:
+    return calls.read_text(encoding="utf-8")
+
+
+def _assert_no_enforcement_mutation(calls: Path) -> None:
+    recorded = _recorded(calls)
+    assert "-N MY_PA_DATA_PLANE" not in recorded
+    assert "-A MY_PA_DATA_PLANE" not in recorded
+    assert "-I FORWARD 1" not in recorded
+    assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
 
 
 def test_plan_is_read_only_and_check_fails_on_legacy_state(tmp_path: Path) -> None:
@@ -365,6 +389,112 @@ def test_check_and_apply_refuse_abnormal_states(
     assert applied.returncode != 0
     assert "explicit removal" in applied.stderr or needle in applied.stderr
     assert "-I FORWARD 1" not in calls.read_text(encoding="utf-8")
+
+
+def test_forward_firewall_inspection_failure_fails_closed(tmp_path: Path) -> None:
+    environment, state, calls = _environment(
+        tmp_path, forward="effective", chain="exact", broad="absent"
+    )
+    environment["FAKE_FW_S_FAIL"] = "1"
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    checked = _run("check", environment)
+    assert checked.returncode != 0
+    assert "inspection failed" in checked.stderr
+    assert "effective" not in checked.stderr
+    assert "gate passed" not in checked.stdout
+    calls.write_text("", encoding="utf-8")
+    applied = _run("apply", environment)
+    assert applied.returncode != 0
+    assert "inspection failed" in applied.stderr
+    _assert_no_enforcement_mutation(calls)
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    calls.write_text("", encoding="utf-8")
+    removed = _run("remove", environment)
+    assert removed.returncode != 0
+    assert "inspection failed" in removed.stderr
+    _assert_no_enforcement_mutation(calls)
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "absent"
+
+
+def test_duplicate_broad_return_is_refused_before_mutation(tmp_path: Path) -> None:
+    environment, state, calls = _environment(
+        tmp_path, forward="legacy", chain="missing", broad="duplicate"
+    )
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    checked = _run("check", environment)
+    assert checked.returncode != 0
+    assert "duplicate-broad-return" in checked.stderr
+    assert "gate passed" not in checked.stdout
+    calls.write_text("", encoding="utf-8")
+    applied = _run("apply", environment)
+    assert applied.returncode != 0
+    assert "duplicate-broad-return" in applied.stderr
+    _assert_no_enforcement_mutation(calls)
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "duplicate"
+    calls.write_text("", encoding="utf-8")
+    removed = _run("remove", environment)
+    assert removed.returncode != 0
+    assert "duplicate-broad-return" in removed.stderr
+    _assert_no_enforcement_mutation(calls)
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "duplicate"
+
+
+@pytest.mark.parametrize("fail_at", ["p1", "p2", "p3", "p4"])
+def test_created_chain_population_failure_rolls_back_completely(
+    tmp_path: Path, fail_at: str
+) -> None:
+    environment, state, calls = _environment(tmp_path)
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    environment["FAKE_APPEND_FAIL"] = fail_at
+    applied = _run("apply", environment)
+    assert applied.returncode != 0, applied.stderr
+    assert "population failed" in applied.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "present"
+    recorded = _recorded(calls)
+    assert "-N MY_PA_DATA_PLANE" in recorded
+    assert "-I FORWARD 1" not in recorded
+    assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
+    assert "-X MY_PA_DATA_PLANE" in recorded
+    environment["FAKE_APPEND_FAIL"] = ""
+    calls.write_text("", encoding="utf-8")
+    retried = _run("apply", environment)
+    assert retried.returncode == 0, retried.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "absent"
+    assert _run("check", environment).returncode == 0
+
+
+def test_empty_chain_population_failure_restores_empty_chain(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path, chain="empty")
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    environment["FAKE_APPEND_FAIL"] = "p2"
+    applied = _run("apply", environment)
+    assert applied.returncode != 0, applied.stderr
+    assert "empty chain was restored" in applied.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "present"
+    recorded = _recorded(calls)
+    assert "-N MY_PA_DATA_PLANE" not in recorded
+    assert "-I FORWARD 1" not in recorded
+    assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
+    assert "-F MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+    environment["FAKE_APPEND_FAIL"] = ""
+    calls.write_text("", encoding="utf-8")
+    retried = _run("apply", environment)
+    assert retried.returncode == 0, retried.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "absent"
+    assert _run("check", environment).returncode == 0
 
 
 def test_r1_001_dsm_established_cannot_precede_my_pa(tmp_path: Path) -> None:
@@ -511,7 +641,18 @@ def test_database_path_stops_before_container_exec_when_firewall_is_missing(
     ip = tools / "ip"
     ip.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     iptables = tools / "iptables"
-    iptables.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    iptables.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        '  "-S FORWARD_FIREWALL")\n'
+        "    printf '%s\\n' '-N FORWARD_FIREWALL' "
+        "'-A FORWARD_FIREWALL -m state --state RELATED,ESTABLISHED -j ACCEPT' "
+        f"'-A FORWARD_FIREWALL -s {SUBNET} -j RETURN' "
+        "'-A FORWARD_FIREWALL -j DROP' ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
     iptables_save = tools / "iptables-save"
     iptables_save.write_text(
         "#!/bin/sh\n"

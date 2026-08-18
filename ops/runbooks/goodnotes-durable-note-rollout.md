@@ -85,8 +85,14 @@ flags without their earlier prerequisites fail closed and unlock no live step.
    selects preview. Preview is not live delivery. No attempt auto-send.
 6. **Operator-reviewed delivery canary.** Intelligence, canonical writes, and
    delivery on; ingestion and TBR remain off. May record dormant attempt-ledger
-   windows. Still does not send to Teams, email, OneDrive, or Abacus. A live
-   canary is **operator-only**.
+   windows (PREPARED, ACKNOWLEDGED, or FAILED). Continuation of an existing
+   preview-success run verifies exact ingestion and page/source identity before
+   mutation, reuses completed lineage when consistent, restores only missing
+   post-LINEAGE rasters, and replays the existing operator-local receipt.
+   Successful PREVIEW/run/`ended_at` are not rewritten. Still does not send to
+   Teams, email, OneDrive, SharePoint, or Abacus (`SENT` remains 0). A live
+   canary is **operator-only**. A historical run whose PREVIEW stage was marked
+   FAILED while a preview receipt remains is not a resume target.
 7. **Bounded scheduled operation.** Ingestion plus the step-6 flags. Same live
    send posture as the canary: still off. This repository does not add a
    scheduler. Scheduling against a live root is **operator-only**.

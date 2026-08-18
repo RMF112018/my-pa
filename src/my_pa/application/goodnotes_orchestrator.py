@@ -18,6 +18,7 @@ from my_pa.application.goodnotes_delivery import (
     GoodNotesDeliveryAttemptLedger,
     GoodNotesDeliveryRepository,
     GoodNotesNewOnlyDelivery,
+    new_only_preview_digest,
 )
 from my_pa.application.goodnotes_lineage import (
     GoodNotesLineageRepository,
@@ -25,6 +26,7 @@ from my_pa.application.goodnotes_lineage import (
     LineageReconcileRequest,
     ObservedNotebookFile,
     PageRenderer,
+    ingestion_request_fingerprint,
 )
 from my_pa.application.goodnotes_occurrences import (
     GoodNotesOccurrenceReconciler,
@@ -42,6 +44,7 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesPageRaster,
     GoodNotesPipelineStage,
     GoodNotesRunStage,
+    GoodNotesSourceSnapshot,
     GoodNotesStageStatus,
     PageRender,
     SourcePage,
@@ -77,6 +80,10 @@ class DurableNoteStageError(RuntimeError):
         super().__init__(message)
         self.stage = stage
         self.run_id = run_id
+
+
+class DurableNoteContinuationError(ValueError):
+    """Identity or completed-stage consistency rejected. Existing run is not mutated."""
 
 
 class RolloutGateError(RuntimeError):
@@ -149,6 +156,7 @@ class DurableNoteRequest:
     label: str | None = None
     trigger_type: GoodNotesIngestionTrigger = GoodNotesIngestionTrigger.MANUAL
     observed_at: datetime | None = None
+    representation_media_type: str = "application/pdf"
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +213,44 @@ class GoodNotesDurableNoteOrchestrator:
         if not request.pdf_bytes:
             raise ValueError("a durable-note run requires admitted PDF bytes")
         observed_at = request.observed_at or clock()
-        run = self._ensure_run(request, store=store, renderer=renderer, observed_at=observed_at)
+        existing = store.run_by_request(request.principal_id, request.request_id)
+        if existing is not None:
+            _assert_ingestion_identity(existing, request, renderer)
+        completed = (
+            {
+                row.stage
+                for row in store.stages(request.principal_id, existing.run_id)
+                if row.status is GoodNotesStageStatus.SUCCEEDED
+            }
+            if existing is not None
+            else set()
+        )
+        if existing is not None:
+            _assert_completed_prefix(completed)
+            if GoodNotesPipelineStage.LINEAGE in completed:
+                _assert_lineage_artifact_presence(store, existing)
+        pages: tuple[SourcePage, ...] = ()
+        rasters: tuple[tuple[int, PageRender, bytes], ...] = ()
+        if rollout_stage_permits(self._rollout_stage, "split_render_lineage"):
+            pages, rasters = self._split_render(
+                request, renderer=renderer, splitter=splitter, completed=completed
+            )
+            if existing is not None and GoodNotesPipelineStage.LINEAGE in completed:
+                _assert_lineage_identity(store, existing, request, renderer, pages)
+        if existing is not None:
+            _assert_later_stage_consistency(store, existing, completed, destination=destination)
+            _assert_not_abnormal_preview(store, existing, completed)
+        terminal_preview = existing is not None and _is_terminal_preview(
+            store, existing, completed, destination
+        )
+        run = self._bind_run(
+            request,
+            existing=existing,
+            store=store,
+            renderer=renderer,
+            observed_at=observed_at,
+            terminal_preview=terminal_preview,
+        )
         completed = {
             row.stage
             for row in store.stages(request.principal_id, run.run_id)
@@ -232,6 +277,7 @@ class GoodNotesDurableNoteOrchestrator:
                 rollout_stage=self._rollout_stage,
             )
 
+        prepared = False
         try:
             if GoodNotesPipelineStage.OBSERVE not in completed:
                 self._complete_stage(store, run, GoodNotesPipelineStage.OBSERVE, observed_at, clock)
@@ -241,37 +287,42 @@ class GoodNotesDurableNoteOrchestrator:
                 after(GoodNotesPipelineStage.SETTLE)
             if not rollout_stage_permits(self._rollout_stage, "split_render_lineage"):
                 return snapshot(run, waiting=False)
-            pages, rasters = self._split_render(
-                request, renderer=renderer, splitter=splitter, completed=completed
-            )
             if GoodNotesPipelineStage.SPLIT_RENDER not in completed:
                 self._complete_stage(
                     store, run, GoodNotesPipelineStage.SPLIT_RENDER, observed_at, clock
                 )
                 after(GoodNotesPipelineStage.SPLIT_RENDER)
-            lineage = self._lineage.reconcile(
-                LineageReconcileRequest(
-                    principal_id=request.principal_id,
-                    request_id=request.request_id,
-                    source_root_id=request.source_root_id,
-                    source_object_id=request.source_object_id,
-                    observation=request.observation,
-                    pages=pages,
-                    notebook_id=request.notebook_id,
-                    label=request.label,
-                    trigger_type=request.trigger_type,
-                    observed_at=observed_at,
-                ),
-                renderer=renderer,
-                repository=store,
-                clock=clock,
-                finalize_run=False,
-            )
-            run = lineage.run
-            if GoodNotesPipelineStage.LINEAGE not in completed:
-                self._complete_stage(store, run, GoodNotesPipelineStage.LINEAGE, observed_at, clock)
-                after(GoodNotesPipelineStage.LINEAGE)
-            self._persist_rasters(store, run, lineage.positions, rasters, observed_at)
+            skip_lineage = GoodNotesPipelineStage.LINEAGE in completed
+            if skip_lineage:
+                snapshot_row = _required_snapshot(store, run)
+                positions = store.page_positions(run.principal_id, snapshot_row.snapshot_id)
+            else:
+                lineage = self._lineage.reconcile(
+                    LineageReconcileRequest(
+                        principal_id=request.principal_id,
+                        request_id=request.request_id,
+                        source_root_id=request.source_root_id,
+                        source_object_id=request.source_object_id,
+                        observation=request.observation,
+                        pages=pages,
+                        notebook_id=request.notebook_id,
+                        label=request.label,
+                        trigger_type=request.trigger_type,
+                        observed_at=observed_at,
+                    ),
+                    renderer=renderer,
+                    repository=store,
+                    clock=clock,
+                    finalize_run=False,
+                )
+                run = lineage.run
+                positions = lineage.positions
+                if GoodNotesPipelineStage.LINEAGE not in completed:
+                    self._complete_stage(
+                        store, run, GoodNotesPipelineStage.LINEAGE, observed_at, clock
+                    )
+                    after(GoodNotesPipelineStage.LINEAGE)
+            self._persist_rasters(store, run, positions, rasters, observed_at)
             if not rollout_stage_permits(self._rollout_stage, "semantic_proposals"):
                 return snapshot(run, waiting=False)
             if GoodNotesPipelineStage.CONTENT_READY not in completed:
@@ -316,6 +367,7 @@ class GoodNotesDurableNoteOrchestrator:
                     repository=store,
                     clock=clock,
                 )
+                prepared = True
             preview = self._delivery.deliver(
                 request.principal_id,
                 run.run_id,
@@ -338,66 +390,97 @@ class GoodNotesDurableNoteOrchestrator:
             if GoodNotesPipelineStage.PREVIEW not in completed:
                 self._complete_stage(store, run, GoodNotesPipelineStage.PREVIEW, observed_at, clock)
                 after(GoodNotesPipelineStage.PREVIEW)
-            run = store.update_run(
-                replace(
-                    run,
-                    status=GoodNotesIngestionStatus.SUCCEEDED,
-                    ended_at=clock(),
+            if not terminal_preview and run.status is not GoodNotesIngestionStatus.SUCCEEDED:
+                run = store.update_run(
+                    replace(
+                        run,
+                        status=GoodNotesIngestionStatus.SUCCEEDED,
+                        ended_at=clock(),
+                    )
                 )
-            )
+            elif terminal_preview and run.status is not GoodNotesIngestionStatus.SUCCEEDED:
+                run = store.update_run(
+                    replace(
+                        run,
+                        status=GoodNotesIngestionStatus.SUCCEEDED,
+                        ended_at=clock() if run.ended_at is None else run.ended_at,
+                    )
+                )
             return snapshot(run, waiting=False, preview_id=preview.receipt.receipt_id)
         except DurableNoteStageError:
             raise
         except RolloutGateError:
             raise
+        except DurableNoteContinuationError:
+            raise
         except Exception as error:
+            if terminal_preview:
+                if prepared:
+                    self._attempts.record(
+                        request.principal_id,
+                        run.run_id,
+                        destination,
+                        request.request_id,
+                        GoodNotesDeliveryAttemptState.FAILED,
+                        repository=store,
+                        clock=clock,
+                    )
+                raise DurableNoteStageError(
+                    GoodNotesPipelineStage.PREVIEW,
+                    run.run_id,
+                    "durable-note stage failed",
+                ) from error
             failed = self._fail_run(store, run, clock, error)
             run = failed
             raise DurableNoteStageError(
-                _current_open_stage(store, run.run_id, request.principal_id),
+                _current_open_stage(store, run.run_id, request.principal_id)
+                or GoodNotesPipelineStage.PREVIEW,
                 run.run_id,
                 "durable-note stage failed",
             ) from error
 
-    def _ensure_run(
+    def _bind_run(
         self,
         request: DurableNoteRequest,
         *,
+        existing: GoodNotesIngestionRun | None,
         store: GoodNotesDurableNoteStore,
         renderer: PageRasterizer,
         observed_at: datetime,
+        terminal_preview: bool,
     ) -> GoodNotesIngestionRun:
-        existing = store.run_by_request(request.principal_id, request.request_id)
-        if existing is not None:
-            if existing.status is GoodNotesIngestionStatus.FAILED:
-                return store.update_run(
-                    replace(
-                        existing,
-                        status=GoodNotesIngestionStatus.RUNNING,
-                        ended_at=None,
-                        error_code=None,
-                        error_class=None,
-                    )
-                )
-            return existing
-        digest = hashlib.sha256(
-            f"{request.principal_id}\x1f{request.source_root_id}\x1f"
-            f"{request.source_object_id}\x1f{request.observation.sha256}\x1f"
-            f"{renderer.name}\x1f{renderer.version}\x1f{renderer.profile_version}\x1f".encode()
-        ).hexdigest()
-        return store.create_run(
-            GoodNotesIngestionRun(
-                run_id=issue_stable_id("gnrun", request.principal_id, request.request_id),
+        if existing is None:
+            digest = ingestion_request_fingerprint(
                 principal_id=request.principal_id,
                 source_root_id=request.source_root_id,
-                trigger_type=request.trigger_type,
-                request_id=request.request_id,
-                idempotency_key=request.request_id,
-                request_fingerprint=digest,
-                started_at=observed_at,
-                status=GoodNotesIngestionStatus.RUNNING,
+                source_object_id=request.source_object_id,
+                observation_sha256=request.observation.sha256,
+                renderer=renderer,
             )
-        )
+            return store.create_run(
+                GoodNotesIngestionRun(
+                    run_id=issue_stable_id("gnrun", request.principal_id, request.request_id),
+                    principal_id=request.principal_id,
+                    source_root_id=request.source_root_id,
+                    trigger_type=request.trigger_type,
+                    request_id=request.request_id,
+                    idempotency_key=request.request_id,
+                    request_fingerprint=digest,
+                    started_at=observed_at,
+                    status=GoodNotesIngestionStatus.RUNNING,
+                )
+            )
+        if existing.status is GoodNotesIngestionStatus.FAILED and not terminal_preview:
+            return store.update_run(
+                replace(
+                    existing,
+                    status=GoodNotesIngestionStatus.RUNNING,
+                    ended_at=None,
+                    error_code=None,
+                    error_class=None,
+                )
+            )
+        return existing
 
     def _split_render(
         self,
@@ -425,7 +508,7 @@ class GoodNotesDurableNoteOrchestrator:
                     page_number=index,
                     observed_at=observed_at,
                     content=part,
-                    representation_media_type="application/pdf",
+                    representation_media_type=request.representation_media_type,
                 )
             )
             rasters.append((index, render, png))
@@ -505,6 +588,8 @@ class GoodNotesDurableNoteOrchestrator:
         error: Exception,
     ) -> GoodNotesIngestionRun:
         stage = _current_open_stage(store, run.run_id, run.principal_id)
+        if stage is None:
+            return run
         store.record_stage(
             GoodNotesRunStage(
                 principal_id=run.principal_id,
@@ -530,7 +615,7 @@ class GoodNotesDurableNoteOrchestrator:
 
 def _current_open_stage(
     store: GoodNotesDurableNoteStore, run_id: str, principal_id: str
-) -> GoodNotesPipelineStage:
+) -> GoodNotesPipelineStage | None:
     done = {
         row.stage
         for row in store.stages(principal_id, run_id)
@@ -539,4 +624,230 @@ def _current_open_stage(
     for stage in PIPELINE_STAGES:
         if stage not in done:
             return stage
-    return GoodNotesPipelineStage.PREVIEW
+    return None
+
+
+def _bound_identity_error() -> DurableNoteContinuationError:
+    return DurableNoteContinuationError("the request id is bound to another ingestion")
+
+
+def _consistency_error() -> DurableNoteContinuationError:
+    return DurableNoteContinuationError("durable-note continuation is inconsistent")
+
+
+def _assert_ingestion_identity(
+    existing: GoodNotesIngestionRun,
+    request: DurableNoteRequest,
+    renderer: PageRenderer,
+) -> None:
+    digest = ingestion_request_fingerprint(
+        principal_id=request.principal_id,
+        source_root_id=request.source_root_id,
+        source_object_id=request.source_object_id,
+        observation_sha256=request.observation.sha256,
+        renderer=renderer,
+    )
+    if existing.request_fingerprint != digest:
+        raise _bound_identity_error()
+    if existing.source_root_id != request.source_root_id:
+        raise _bound_identity_error()
+
+
+def _assert_completed_prefix(completed: set[GoodNotesPipelineStage]) -> None:
+    if GoodNotesPipelineStage.LINEAGE not in completed:
+        return
+    required = (
+        GoodNotesPipelineStage.OBSERVE,
+        GoodNotesPipelineStage.SETTLE,
+        GoodNotesPipelineStage.SPLIT_RENDER,
+        GoodNotesPipelineStage.LINEAGE,
+    )
+    if any(stage not in completed for stage in required):
+        raise _consistency_error()
+    if GoodNotesPipelineStage.CONTENT_READY in completed and (
+        GoodNotesPipelineStage.SPLIT_RENDER not in completed
+    ):
+        raise _consistency_error()
+    if GoodNotesPipelineStage.RECONCILE in completed and (
+        GoodNotesPipelineStage.CONTENT_READY not in completed
+    ):
+        raise _consistency_error()
+    if GoodNotesPipelineStage.PREVIEW in completed and (
+        GoodNotesPipelineStage.RECONCILE not in completed
+    ):
+        raise _consistency_error()
+
+
+def _required_snapshot(
+    store: GoodNotesDurableNoteStore, run: GoodNotesIngestionRun
+) -> GoodNotesSourceSnapshot:
+    snapshots = store.snapshots_for_run(run.principal_id, run.run_id)
+    if len(snapshots) != 1:
+        raise _consistency_error()
+    return snapshots[0]
+
+
+def _assert_lineage_artifact_presence(
+    store: GoodNotesDurableNoteStore, run: GoodNotesIngestionRun
+) -> None:
+    snapshot = _required_snapshot(store, run)
+    positions = store.page_positions(run.principal_id, snapshot.snapshot_id)
+    expected_count = snapshot.page_count
+    if expected_count < 1 or len(positions) != expected_count:
+        raise _consistency_error()
+    numbers = tuple(item.page_number for item in positions)
+    if numbers != tuple(range(1, expected_count + 1)):
+        raise _consistency_error()
+    for position in positions:
+        if position.page_version_id is None or position.logical_page_id is None:
+            raise _consistency_error()
+        version = store.page_version(run.principal_id, position.page_version_id)
+        if version is None:
+            raise _consistency_error()
+        page = store.page(run.principal_id, version.page_id)
+        if page is None:
+            raise _consistency_error()
+
+
+def _assert_lineage_identity(
+    store: GoodNotesDurableNoteStore,
+    run: GoodNotesIngestionRun,
+    request: DurableNoteRequest,
+    renderer: PageRenderer,
+    pages: tuple[SourcePage, ...],
+) -> None:
+    snapshot = _required_snapshot(store, run)
+    if snapshot.source_object_id != request.source_object_id:
+        raise _bound_identity_error()
+    if snapshot.raw_sha256 != request.observation.sha256:
+        raise _bound_identity_error()
+    if snapshot.size_bytes != request.observation.size_bytes:
+        raise _bound_identity_error()
+    page_count = (
+        request.observation.page_count if request.observation.page_count is not None else len(pages)
+    )
+    if snapshot.page_count != page_count or snapshot.page_count != len(pages):
+        raise _bound_identity_error()
+    if request.notebook_id is not None and snapshot.notebook_id != request.notebook_id:
+        raise _bound_identity_error()
+    notebook = store.notebook(run.principal_id, snapshot.notebook_id)
+    if notebook is None or notebook.source_root_id != request.source_root_id:
+        raise _bound_identity_error()
+    positions = store.page_positions(run.principal_id, snapshot.snapshot_id)
+    if len(positions) != len(pages):
+        raise _bound_identity_error()
+    by_number = {page.page_number: page for page in pages}
+    for position in positions:
+        source_page = by_number.get(position.page_number)
+        if source_page is None or position.page_version_id is None:
+            raise _bound_identity_error()
+        version = store.page_version(run.principal_id, position.page_version_id)
+        if version is None:
+            raise _bound_identity_error()
+        page_id = issue_stable_id(
+            "gnpg", source_page.source_object_id, str(source_page.page_number)
+        )
+        expected_version_id = issue_stable_id(
+            "gnver",
+            page_id,
+            source_page.source_version_id,
+            source_page.representation_media_type,
+            version.content_sha256,
+        )
+        if position.page_version_id != expected_version_id:
+            raise _bound_identity_error()
+        if version.source_version_id != source_page.source_version_id:
+            raise _bound_identity_error()
+        if (
+            version.renderer_name != renderer.name
+            or version.renderer_version != renderer.version
+            or version.render_profile_version != renderer.profile_version
+        ):
+            raise _bound_identity_error()
+        stored_page = store.page(run.principal_id, version.page_id)
+        if stored_page is None:
+            raise _bound_identity_error()
+        if stored_page.source_id != source_page.source_id:
+            raise _bound_identity_error()
+        if stored_page.source_object_id != source_page.source_object_id:
+            raise _bound_identity_error()
+        if stored_page.page_number != source_page.page_number:
+            raise _bound_identity_error()
+        if stored_page.page_id != page_id:
+            raise _bound_identity_error()
+
+
+def _assert_later_stage_consistency(
+    store: GoodNotesDurableNoteStore,
+    run: GoodNotesIngestionRun,
+    completed: set[GoodNotesPipelineStage],
+    *,
+    destination: str,
+) -> None:
+    if GoodNotesPipelineStage.LINEAGE in completed:
+        snapshot = _required_snapshot(store, run)
+        positions = store.page_positions(run.principal_id, snapshot.snapshot_id)
+        if GoodNotesPipelineStage.CONTENT_READY in completed:
+            for position in positions:
+                if position.page_version_id is None:
+                    raise _consistency_error()
+                if store.page_raster(run.principal_id, position.page_version_id) is None:
+                    raise _consistency_error()
+    if GoodNotesPipelineStage.RECONCILE in completed:
+        changes = store.run_note_changes(run.principal_id, run.run_id)
+        for change in changes:
+            if change.occurrence_id is not None and (
+                store.occurrence(run.principal_id, change.occurrence_id) is None
+            ):
+                raise _consistency_error()
+            if change.revision_id is not None and (
+                store.revision(run.principal_id, change.revision_id) is None
+            ):
+                raise _consistency_error()
+            if change.note_id is not None and store.note(run.principal_id, change.note_id) is None:
+                raise _consistency_error()
+    if GoodNotesPipelineStage.PREVIEW in completed:
+        digest = new_only_preview_digest(run.principal_id, run.run_id, repository=store)
+        receipt = store.delivery_receipt_by_key(run.principal_id, run.run_id, destination, digest)
+        if receipt is None:
+            raise _consistency_error()
+        if run.status is GoodNotesIngestionStatus.FAILED:
+            raise _consistency_error()
+
+
+def _preview_stage(
+    store: GoodNotesDurableNoteStore, run: GoodNotesIngestionRun
+) -> GoodNotesRunStage | None:
+    found = [
+        row
+        for row in store.stages(run.principal_id, run.run_id)
+        if row.stage is GoodNotesPipelineStage.PREVIEW
+    ]
+    return found[-1] if found else None
+
+
+def _assert_not_abnormal_preview(
+    store: GoodNotesDurableNoteStore,
+    run: GoodNotesIngestionRun,
+    completed: set[GoodNotesPipelineStage],
+) -> None:
+    del completed
+    preview = _preview_stage(store, run)
+    receipts = store.delivery_receipts_for_run(run.principal_id, run.run_id)
+    if preview is not None and preview.status is GoodNotesStageStatus.FAILED and receipts:
+        raise _consistency_error()
+
+
+def _is_terminal_preview(
+    store: GoodNotesDurableNoteStore,
+    run: GoodNotesIngestionRun,
+    completed: set[GoodNotesPipelineStage],
+    destination: str,
+) -> bool:
+    if GoodNotesPipelineStage.PREVIEW not in completed:
+        return False
+    if run.status is GoodNotesIngestionStatus.FAILED:
+        return False
+    digest = new_only_preview_digest(run.principal_id, run.run_id, repository=store)
+    receipt = store.delivery_receipt_by_key(run.principal_id, run.run_id, destination, digest)
+    return receipt is not None

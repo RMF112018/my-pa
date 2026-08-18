@@ -107,6 +107,10 @@ class GoodNotesDeliveryRepository(Protocol):
         summary_hash: str,
     ) -> GoodNotesDeliveryReceipt | None: ...
 
+    def delivery_receipts_for_run(
+        self, principal_id: str, run_id: str
+    ) -> tuple[GoodNotesDeliveryReceipt, ...]: ...
+
     def store_delivery_attempt(
         self, attempt: GoodNotesDeliveryAttempt
     ) -> GoodNotesDeliveryAttempt: ...
@@ -183,6 +187,55 @@ def build_new_only_summary(notes: Sequence[NewOnlySummaryNote]) -> str | None:
 
 def summary_digest(body: str | None) -> str:
     return hashlib.sha256((body or "").encode()).hexdigest()
+
+
+def new_only_preview_digest(
+    principal_id: str,
+    run_id: str,
+    *,
+    repository: GoodNotesDeliveryRepository,
+) -> str:
+    """Deterministic NEW-only hash for an already-committed run. Does not write."""
+    changes = repository.run_note_changes(principal_id, run_id)
+    new_changes = tuple(
+        item for item in changes if item.change_state is GoodNotesNoteChangeState.NEW
+    )
+    proposals = repository.semantic_proposals_for_run(principal_id, run_id)
+    notes: list[NewOnlySummaryNote] = []
+    for change in new_changes:
+        if change.occurrence_id is None or change.note_id is None:
+            raise ValueError("the request names no stored GoodNotes ingestion run")
+        occurrence = repository.occurrence(principal_id, change.occurrence_id)
+        if occurrence is None:
+            raise ValueError("the request names no stored GoodNotes ingestion run")
+        if change.revision_id is None:
+            raise ValueError("the request names no stored GoodNotes note revision")
+        revision = repository.revision(principal_id, change.revision_id)
+        if revision is None:
+            raise ValueError("the request names no stored GoodNotes note revision")
+        matched = _matching_note_unit(occurrence, proposals)
+        schema_version = "" if matched is None else matched[0]
+        segment: Mapping[str, object] = {} if matched is None else matched[1]
+        status = _note_unit_status(schema_version, segment)
+        confidence = _confidence(segment) if schema_version == NOTE_UNIT_SCHEMA_V2 else None
+        uncertain = (
+            status is GoodNotesTranscriptionStatus.UNCERTAIN
+            or status is GoodNotesTranscriptionStatus.UNREADABLE
+            or new_note_is_uncertain(
+                primary_class=revision.primary_class,
+                confidence=confidence,
+            )
+        )
+        notes.append(
+            NewOnlySummaryNote(
+                note_id=change.note_id,
+                occurrence_id=change.occurrence_id,
+                primary_class=revision.primary_class,
+                uncertain=uncertain,
+                transcription=revision.transcription,
+            )
+        )
+    return summary_digest(build_new_only_summary(notes))
 
 
 def _section(title: str, notes: Sequence[NewOnlySummaryNote]) -> str:

@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from my_pa.application.goodnotes_lineage import ObservedNotebookFile
+from my_pa.application.goodnotes_delivery import GoodNotesNewOnlyDelivery
+from my_pa.application.goodnotes_lineage import (
+    GoodNotesLineageService,
+    ObservedNotebookFile,
+    ingestion_request_fingerprint,
+)
 from my_pa.application.goodnotes_orchestrator import (
+    DurableNoteContinuationError,
     DurableNoteRequest,
     DurableNoteResult,
     DurableNoteStageError,
@@ -17,11 +24,14 @@ from my_pa.application.goodnotes_orchestrator import (
     RolloutGateError,
 )
 from my_pa.bootstrap.goodnotes_durable_note import compose_durable_note_orchestrator
+from my_pa.bootstrap.goodnotes_rollout import rollout_report
 from my_pa.bootstrap.settings import GoodNotesRolloutStage, Settings
 from my_pa.domain.goodnotes.models import (
     GoodNotesDeliveryAttemptState,
     GoodNotesIngestionStatus,
     GoodNotesPipelineStage,
+    GoodNotesRunStage,
+    GoodNotesStageStatus,
     issue_stable_id,
 )
 from my_pa.infrastructure.goodnotes.pdf import split_admitted_pdf
@@ -426,3 +436,451 @@ def test_later_effect_cannot_run_at_an_earlier_stage() -> None:
     assert again.preview_receipt_id is None
     assert _notes(store) == []
     assert store._attempts == []
+
+
+class _SpyLineage(GoodNotesLineageService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def reconcile(self, *args: object, **kwargs: object) -> object:
+        self.calls += 1
+        return super().reconcile(*args, **kwargs)  # type: ignore[arg-type]
+
+
+class _BoomDelivery(GoodNotesNewOnlyDelivery):
+    def deliver(self, *args: object, **kwargs: object) -> object:
+        raise ValueError("injected local receipt failure")
+
+
+class _Clock:
+    def __init__(self, current: datetime) -> None:
+        self.current = current
+
+    def __call__(self) -> datetime:
+        return self.current
+
+    def advance(self) -> None:
+        self.current = self.current + timedelta(minutes=5)
+
+
+def _run_at(
+    store: MemoryDurableNoteStore,
+    request: DurableNoteRequest,
+    stage: str,
+    *,
+    lineage: GoodNotesLineageService | None = None,
+    delivery: GoodNotesNewOnlyDelivery | None = None,
+    renderer: object | None = None,
+    clock: Callable[[], datetime] | None = None,
+) -> DurableNoteResult:
+    return GoodNotesDurableNoteOrchestrator(
+        lineage=lineage,
+        delivery=delivery,
+        rollout_stage=stage,
+    ).run(
+        request,
+        renderer=renderer or production_page_renderer(),  # type: ignore[arg-type]
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=clock or (lambda: WHEN),
+    )
+
+
+def test_t1_completed_lineage_is_not_re_executed() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    spy = _SpyLineage()
+    request = _request(pdf, "t1-skip-lineage")
+    first = _run_at(store, request, PREVIEW, lineage=spy)
+    assert spy.calls == 1
+    _propose(store, first.run.run_id)
+    second = _run_at(store, request, PREVIEW, lineage=spy)
+    assert second.run.status is GoodNotesIngestionStatus.SUCCEEDED
+    assert spy.calls == 1
+
+
+def test_ingestion_fingerprint_is_the_orchestrator_contract() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, "fingerprint-contract")
+    renderer = production_page_renderer()
+    result = _run_at(store, request, DRY_RUN, renderer=renderer)
+    assert result.run.request_fingerprint == ingestion_request_fingerprint(
+        principal_id=request.principal_id,
+        source_root_id=request.source_root_id,
+        source_object_id=request.source_object_id,
+        observation_sha256=request.observation.sha256,
+        renderer=renderer,
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        "source_object_id",
+        "source_id",
+        "source_version_id",
+        "observation_digest",
+        "representation_media_type",
+        "renderer",
+        "principal",
+    ],
+)
+def test_t2_bound_identity_rejects_before_prepared(mutate: str) -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, f"t2-{mutate}")
+    first = _run(store, pdf, request.request_id, PREVIEW)
+    run_id = first.run.run_id
+    before = store.run(A, run_id)
+    assert before is not None
+    before_status = before.status
+    before_ended = before.ended_at
+    before_stages = store.stages(A, run_id)
+    renderer: object = production_page_renderer()
+    changed = request
+    if mutate == "source_object_id":
+        changed = replace(request, source_object_id="obj_bbbbbbbbbbbbbbbbbbbbbbbb")
+    elif mutate == "source_id":
+        changed = replace(request, source_id="src_bbbbbbbbbbbbbbbbbbbbbbbb")
+    elif mutate == "source_version_id":
+        changed = replace(request, source_version_id="ver_bbbbbbbbbbbbbbbbbbbbbbbb")
+    elif mutate == "observation_digest":
+        other_pdf = vector_pdf((BODY,))
+        changed = replace(
+            request,
+            pdf_bytes=other_pdf,
+            observation=replace(
+                request.observation,
+                sha256=_sha(other_pdf),
+                size_bytes=len(other_pdf),
+                page_count=len(split_admitted_pdf(other_pdf)),
+            ),
+        )
+    elif mutate == "representation_media_type":
+        changed = replace(request, representation_media_type="image/jpeg")
+    elif mutate == "renderer":
+
+        class _OtherRenderer:
+            name = "other-renderer"
+            version = production_page_renderer().version
+            profile_version = production_page_renderer().profile_version
+
+            def render_png(self, page_bytes: bytes) -> object:
+                return production_page_renderer().render_png(page_bytes)
+
+            def render(self, page_bytes: bytes) -> object:
+                return production_page_renderer().render(page_bytes)
+
+        renderer = _OtherRenderer()
+    elif mutate == "principal":
+        changed = replace(request, principal_id="prn_bbbbbbbbbbbbbbbbbbbbbbbb")
+    if mutate == "principal":
+        _run_at(store, changed, CANARY, renderer=renderer)
+    else:
+        with pytest.raises(DurableNoteContinuationError):
+            _run_at(store, changed, CANARY, renderer=renderer)
+    held = store.run(A, run_id)
+    assert held is not None
+    assert held.status is before_status
+    assert held.ended_at == before_ended
+    assert store.stages(A, run_id) == before_stages
+    assert store._attempts == []
+    assert store.delivery_receipts_for_run(A, run_id) == ()
+    assert len(_notes(store)) == 0
+
+
+def test_t2_path_and_mtime_are_observation_only() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, "t2-mtime-path")
+    first = _run(store, pdf, request.request_id, PREVIEW)
+    _propose(store, first.run.run_id)
+    changed = replace(
+        request,
+        observation=replace(
+            request.observation,
+            relative_path="Notebooks/moved.goodnotes",
+            mtime_ns=99,
+        ),
+        label="moved",
+    )
+    finished = _run_at(store, changed, PREVIEW)
+    assert finished.run.status is GoodNotesIngestionStatus.SUCCEEDED
+
+
+def test_t3_t4_t7_t8_t9_preview_then_canary_replays_receipt() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    clock = _Clock(WHEN)
+    request = _request(pdf, "t3-happy")
+    report_before = rollout_report(
+        Settings(database_url=DSN, goodnotes_rollout_stage=GoodNotesRolloutStage.OBSERVE_ONLY)
+    )
+    first = _run_at(store, request, PREVIEW, clock=clock)
+    _propose(store, first.run.run_id)
+    previewed = _run_at(store, request, PREVIEW, clock=clock)
+    assert previewed.run.status is GoodNotesIngestionStatus.SUCCEEDED
+    ended = previewed.run.ended_at
+    receipt_id = previewed.preview_receipt_id
+    assert receipt_id is not None
+    assert store._attempts == []
+    clock.advance()
+    canary = _run_at(store, request, CANARY, clock=clock)
+    assert canary.preview_receipt_id == receipt_id
+    receipts = store.delivery_receipts_for_run(A, canary.run.run_id)
+    assert len(receipts) == 1
+    states = {item.state for item in store._attempts}
+    assert states == {
+        GoodNotesDeliveryAttemptState.PREPARED,
+        GoodNotesDeliveryAttemptState.ACKNOWLEDGED,
+    }
+    assert GoodNotesDeliveryAttemptState.SENT not in states
+    held = store.run(A, canary.run.run_id)
+    assert held is not None
+    assert held.status is GoodNotesIngestionStatus.SUCCEEDED
+    assert held.ended_at == ended
+    assert GoodNotesPipelineStage.PREVIEW in _succeeded(canary)
+    assert len(_notes(store)) == 1
+    report_after = rollout_report(
+        Settings(database_url=DSN, goodnotes_rollout_stage=GoodNotesRolloutStage.OBSERVE_ONLY)
+    )
+    assert report_after == report_before
+    assert report_after["current_stage"] == "observe-only"
+
+
+def test_t5_t6_canary_failure_after_prepared_preserves_terminal_state() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, "t5-canary-fail")
+    first = _run(store, pdf, request.request_id, PREVIEW)
+    _propose(store, first.run.run_id)
+    previewed = _run_at(store, request, PREVIEW)
+    ended = previewed.run.ended_at
+    receipt_id = previewed.preview_receipt_id
+    notes = list(_notes(store))
+    with pytest.raises(DurableNoteStageError):
+        _run_at(store, request, CANARY, delivery=_BoomDelivery())
+    held = store.run(A, previewed.run.run_id)
+    assert held is not None
+    assert held.status is GoodNotesIngestionStatus.SUCCEEDED
+    assert held.ended_at == ended
+    preview_row = [
+        row for row in store.stages(A, held.run_id) if row.stage is GoodNotesPipelineStage.PREVIEW
+    ][-1]
+    assert preview_row.status is GoodNotesStageStatus.SUCCEEDED
+    states = [item.state for item in store._attempts]
+    assert states.count(GoodNotesDeliveryAttemptState.PREPARED) == 1
+    assert states.count(GoodNotesDeliveryAttemptState.FAILED) == 1
+    assert GoodNotesDeliveryAttemptState.ACKNOWLEDGED not in states
+    assert GoodNotesDeliveryAttemptState.SENT not in states
+    assert store.delivery_receipts_for_run(A, held.run_id)[0].receipt_id == receipt_id
+    assert _notes(store) == notes
+
+
+def test_t10_orchestrator_tests_are_synthetic() -> None:
+    assert _segment()["transcription"] == "synthetic note"
+    pdf = vector_pdf((COVER,))
+    request = _request(pdf, "t10-synthetic")
+    assert "Inbox" not in request.observation.relative_path
+    assert request.request_id == "t10-synthetic"
+
+
+def test_t11_inconsistent_completed_prefix_fails_closed() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    first = _run(store, pdf, "t11-prefix", "observe-only")
+    store.record_stage(
+        GoodNotesRunStage(
+            principal_id=A,
+            run_id=first.run.run_id,
+            stage=GoodNotesPipelineStage.LINEAGE,
+            status=GoodNotesStageStatus.SUCCEEDED,
+            started_at=WHEN,
+            attempt=1,
+            ended_at=WHEN,
+        )
+    )
+    with pytest.raises(DurableNoteContinuationError):
+        _run(store, pdf, "t11-prefix", PREVIEW)
+    stages = {row.stage for row in store.stages(A, first.run.run_id)}
+    assert GoodNotesPipelineStage.SPLIT_RENDER not in stages
+    assert store._attempts == []
+
+
+def test_t12_missing_lineage_evidence_fails_closed_missing_raster_does_not() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    _run(store, pdf, "t12-missing-snapshot", DRY_RUN)
+    store._snapshots.clear()
+    with pytest.raises(DurableNoteContinuationError):
+        _run(store, pdf, "t12-missing-snapshot", DRY_RUN)
+    store = MemoryDurableNoteStore()
+    _run(store, pdf, "t12-missing-positions", DRY_RUN)
+    store._positions.clear()
+    with pytest.raises(DurableNoteContinuationError):
+        _run(store, pdf, "t12-missing-positions", DRY_RUN)
+    store = MemoryDurableNoteStore()
+    _run(store, pdf, "t12-missing-raster-ok", DRY_RUN)
+    store._rasters.clear()
+    resumed = _run(store, pdf, "t12-missing-raster-ok", DRY_RUN)
+    assert GoodNotesPipelineStage.LINEAGE in _succeeded(resumed)
+    assert store._rasters
+
+
+def test_t13_corrupt_reconcile_evidence_fails_closed() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, "t13-corrupt")
+    first = _run(store, pdf, request.request_id, PREVIEW)
+    _propose(store, first.run.run_id)
+    reconciled = _run_at(store, request, CANONICAL)
+    assert GoodNotesPipelineStage.RECONCILE in _succeeded(reconciled)
+    changes = store.run_note_changes(A, reconciled.run.run_id)
+    assert changes
+    store._revisions.clear()
+    with pytest.raises(DurableNoteContinuationError):
+        _run_at(store, request, PREVIEW)
+    assert store.delivery_receipts_for_run(A, reconciled.run.run_id) == ()
+    assert store._attempts == []
+
+
+def test_t14_inconsistent_and_abnormal_preview_fail_closed() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, "t14-missing-receipt")
+    first = _run(store, pdf, request.request_id, PREVIEW)
+    _propose(store, first.run.run_id)
+    previewed = _run_at(store, request, PREVIEW)
+    ended = previewed.run.ended_at
+    store._receipts.clear()
+    with pytest.raises(DurableNoteContinuationError):
+        _run_at(store, request, CANARY)
+    held = store.run(A, previewed.run.run_id)
+    assert held is not None
+    assert held.status is GoodNotesIngestionStatus.SUCCEEDED
+    assert held.ended_at == ended
+    assert store._attempts == []
+
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, "t14-abnormal")
+    first = _run(store, pdf, request.request_id, PREVIEW)
+    _propose(store, first.run.run_id)
+    previewed = _run_at(store, request, PREVIEW)
+    store.record_stage(
+        GoodNotesRunStage(
+            principal_id=A,
+            run_id=previewed.run.run_id,
+            stage=GoodNotesPipelineStage.PREVIEW,
+            status=GoodNotesStageStatus.FAILED,
+            started_at=WHEN,
+            attempt=1,
+            ended_at=WHEN,
+            error_code="STAGE_FAILED",
+            error_class="ValueError",
+        )
+    )
+    with pytest.raises(DurableNoteContinuationError):
+        _run_at(store, request, CANARY)
+    assert store._attempts == []
+    preview_row = [
+        row
+        for row in store.stages(A, previewed.run.run_id)
+        if row.stage is GoodNotesPipelineStage.PREVIEW
+    ][-1]
+    assert preview_row.status is GoodNotesStageStatus.FAILED
+    assert store.delivery_receipts_for_run(A, previewed.run.run_id)
+
+
+def test_t15_post_lineage_crash_recovers_rasters_without_rerunning_lineage() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    spy = _SpyLineage()
+    request = _request(pdf, "t15-lineage-crash")
+    with pytest.raises(DurableNoteStageError) as raised:
+        GoodNotesDurableNoteOrchestrator(lineage=spy, rollout_stage=PREVIEW).run(
+            request,
+            renderer=production_page_renderer(),
+            splitter=split_admitted_pdf,
+            store=store,
+            clock=lambda: WHEN,
+            fail_after=GoodNotesPipelineStage.LINEAGE,
+        )
+    assert spy.calls == 1
+    assert store._rasters == {}
+    snapshots = store.snapshots_for_run(A, raised.value.run_id)
+    assert snapshots
+    positions = store.page_positions(A, snapshots[0].snapshot_id)
+    logical = {item.logical_page_id for item in positions}
+    _propose(store, raised.value.run_id)
+    resumed = _run_at(store, request, PREVIEW, lineage=spy)
+    assert spy.calls == 1
+    assert resumed.run.status is GoodNotesIngestionStatus.SUCCEEDED
+    assert store._rasters
+    later = store.page_positions(A, snapshots[0].snapshot_id)
+    assert {item.logical_page_id for item in later} == logical
+
+
+def test_t16_failed_run_mismatch_causes_zero_mutation() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, "t16-failed")
+    first = _run(store, pdf, request.request_id, PREVIEW)
+    failed = store.update_run(
+        replace(
+            first.run,
+            status=GoodNotesIngestionStatus.FAILED,
+            ended_at=WHEN,
+            error_code="STAGE_FAILED",
+            error_class="ValueError",
+        )
+    )
+    before_stages = store.stages(A, failed.run_id)
+    before_notes = dict(store._notes)
+    changed = replace(request, source_object_id="obj_bbbbbbbbbbbbbbbbbbbbbbbb")
+    with pytest.raises(DurableNoteContinuationError):
+        _run_at(store, changed, CANARY)
+    held = store.run(A, failed.run_id)
+    assert held is not None
+    assert held.status is GoodNotesIngestionStatus.FAILED
+    assert held.ended_at == WHEN
+    assert held.error_code == "STAGE_FAILED"
+    assert held.error_class == "ValueError"
+    assert store.stages(A, failed.run_id) == before_stages
+    assert store._attempts == []
+    assert store.delivery_receipts_for_run(A, failed.run_id) == ()
+    assert store._notes == before_notes
+
+
+def test_t17_zero_change_reconcile_is_valid_and_canary_replays_suppressed_receipt() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, "t17-zero-change")
+    first = _run(store, pdf, request.request_id, PREVIEW)
+    _propose(store, first.run.run_id)
+    store.record_stage(
+        GoodNotesRunStage(
+            principal_id=A,
+            run_id=first.run.run_id,
+            stage=GoodNotesPipelineStage.RECONCILE,
+            status=GoodNotesStageStatus.SUCCEEDED,
+            started_at=WHEN,
+            attempt=1,
+            ended_at=WHEN,
+        )
+    )
+    assert store.run_note_changes(A, first.run.run_id) == ()
+    previewed = _run_at(store, request, PREVIEW)
+    assert GoodNotesPipelineStage.RECONCILE in _succeeded(previewed)
+    assert store.run_note_changes(A, previewed.run.run_id) == ()
+    receipts = store.delivery_receipts_for_run(A, previewed.run.run_id)
+    assert len(receipts) == 1
+    assert receipts[0].suppressed is True
+    canary = _run_at(store, request, CANARY)
+    assert canary.preview_receipt_id == receipts[0].receipt_id
+    assert len(store.delivery_receipts_for_run(A, previewed.run.run_id)) == 1
+    states = {item.state for item in store._attempts}
+    assert GoodNotesDeliveryAttemptState.PREPARED in states
+    assert GoodNotesDeliveryAttemptState.ACKNOWLEDGED in states
+    assert GoodNotesDeliveryAttemptState.SENT not in states

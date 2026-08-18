@@ -219,6 +219,8 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # Durable-note orchestration receives the same authenticated Principal as
     # an explicit DurableNoteRequest field, not a public Command or envelope
     # value, and threads it into lineage, occurrence, and preview stores.
+    # Continuation identity/consistency checks re-read the stored run partition
+    # and the request Principal before any FAILED→RUNNING mutation.
     "application/goodnotes_orchestrator.py": (
         ("request", "principal_id"),
         ("request", "principal_id"),
@@ -235,6 +237,30 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
         ("run", "principal_id"),
         ("run", "principal_id"),
         ("run", "principal_id"),
@@ -356,6 +382,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("snapshot", "principal_id"),
         ("stage", "principal_id"),
         ("stage", "principal_id"),
+        ("values", "principal_id"),
         ("values", "principal_id"),
         ("values", "principal_id"),
         ("values", "principal_id"),

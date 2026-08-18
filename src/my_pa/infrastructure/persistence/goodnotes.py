@@ -674,6 +674,19 @@ class PostgresGoodNotesRepository:
         )
         return None if row is None else _page_version_row(row)
 
+    def page(self, principal_id: str, page_id: str) -> GoodNotesPage | None:
+        row = (
+            self.connection.execute(
+                select(goodnotes_pages).where(
+                    _mine(goodnotes_pages, principal_id),
+                    goodnotes_pages.c.page_id == page_id,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return None if row is None else _page_row(row)
+
     def prior_page_evidence(
         self, principal_id: str, notebook_id: str
     ) -> tuple[GoodNotesPriorPageEvidence, ...]:
@@ -1646,6 +1659,17 @@ def _snapshot(row: object) -> GoodNotesSourceSnapshot:
         settled_at=values["settled_at"],  # type: ignore[index]
         run_id=values["run_id"],  # type: ignore[index]
         mtime_ns=values["mtime_ns"],  # type: ignore[index]
+    )
+
+
+def _page_row(row: object) -> GoodNotesPage:
+    values = row  # mapping-like SQLAlchemy row
+    return GoodNotesPage(
+        page_id=values["page_id"],  # type: ignore[index]
+        principal_id=values["principal_id"],  # type: ignore[index]
+        source_id=values["source_id"],  # type: ignore[index]
+        source_object_id=values["source_object_id"],  # type: ignore[index]
+        page_number=int(values["page_number"]),  # type: ignore[index]
     )
 
 

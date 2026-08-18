@@ -270,6 +270,23 @@ class PostgresGoodNotesDeliveryRepository:
         )
         return None if row is None else _delivery_receipt(row)
 
+    def delivery_receipts_for_run(
+        self, principal_id: str, run_id: str
+    ) -> tuple[GoodNotesDeliveryReceipt, ...]:
+        rows = (
+            self.connection.execute(
+                select(goodnotes_delivery_receipts)
+                .where(
+                    _mine(goodnotes_delivery_receipts, principal_id),
+                    goodnotes_delivery_receipts.c.run_id == run_id,
+                )
+                .order_by(goodnotes_delivery_receipts.c.created_at)
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(_delivery_receipt(row) for row in rows)
+
     def store_delivery_attempt(self, attempt: GoodNotesDeliveryAttempt) -> GoodNotesDeliveryAttempt:
         expected = _bound(
             goodnotes_delivery_attempts,

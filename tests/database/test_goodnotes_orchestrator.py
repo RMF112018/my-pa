@@ -209,10 +209,18 @@ def test_fail_after_lineage_resume_does_not_duplicate_logical_pages(engine: Engi
         assert run.status is not GoodNotesIngestionStatus.SUCCEEDED
         first_pages = _notebook_logical_ids(store, A, run.run_id)
         assert len(first_pages) == 1
+        snapshots = store.snapshots_for_run(A, run.run_id)
+        assert snapshots
+        positions = store.page_positions(A, snapshots[0].snapshot_id)
+        assert positions
+        version_id = positions[0].page_version_id
+        assert version_id is not None
+        assert store.page_raster(A, version_id) is None
         resumed = _run(store, pdf, request_id)
         assert resumed.run.status is not GoodNotesIngestionStatus.SUCCEEDED
         assert resumed.waiting_for_proposal is True
         assert _notebook_logical_ids(store, A, resumed.run.run_id) == first_pages
+        assert store.page_raster(A, version_id) is not None
         stages = _succeeded(store, A, resumed.run.run_id)
         assert GoodNotesPipelineStage.LINEAGE in stages
         assert GoodNotesPipelineStage.CONTENT_READY in stages

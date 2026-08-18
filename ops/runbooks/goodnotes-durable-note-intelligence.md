@@ -8,7 +8,20 @@ The repository-side durable-note pipeline is now runnable in tests and through
 a dormant composition helper: observe → settle → split/render → lineage →
 content-ready → waiting-proposal → reconcile → NEW-only preview/receipt.
 Lineage completion is not terminal success. Terminal `SUCCEEDED` is recorded
-only after repository-side reconcile and preview. Production persistence is
+only after repository-side reconcile and preview. Later continuation of the
+same `request_id` verifies ingestion identity and persisted page/source
+evidence **before** any FAILED→RUNNING mutation. Completed LINEAGE is skipped
+only after that proof; missing rasters in the post-LINEAGE / pre-CONTENT_READY
+crash window are restored deterministically without rerunning lineage. A
+legitimate zero-change reconciliation is valid and yields a suppressed NEW-only
+receipt (`summary_hash` of the empty body). Successful PREVIEW/run terminal
+state and the original successful `ended_at` are monotonic. The
+operator-reviewed delivery canary records PREPARED → local receipt replay →
+ACKNOWLEDGED on the attempt ledger and does not send externally (`SENT` stays
+0). A historical failed canary that left PREVIEW FAILED while a preview receipt
+still exists is fail-closed and is not a resume target.
+
+Production persistence is
 `PostgresDurableNoteStore` on a caller-supplied connection; the composition
 helper does not open a connection or auto-wire the gateway. Live Teams/email
 delivery, live Abacus inference, and production activation remain unauthorized.

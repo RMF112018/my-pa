@@ -89,6 +89,10 @@ class GoodNotesLineageRepository(Protocol):
         self, principal_id: str, notebook_id: str
     ) -> tuple[GoodNotesPriorPageEvidence, ...]: ...
 
+    def notebook(self, principal_id: str, notebook_id: str) -> GoodNotesNotebook | None: ...
+
+    def page(self, principal_id: str, page_id: str) -> GoodNotesPage | None: ...
+
     def notebooks_for_source_object(
         self, principal_id: str, source_root_id: str, source_object_id: str
     ) -> tuple[GoodNotesNotebook, ...]: ...
@@ -351,15 +355,16 @@ class GoodNotesLineageService:
                 render.normalized_render_sha256 for _, render in rendered
             ),
         )
-        fingerprint = _request_fingerprint(request, renderer, principal_id)
+        fingerprint = ingestion_request_fingerprint(
+            principal_id=principal_id,
+            source_root_id=request.source_root_id,
+            source_object_id=request.source_object_id,
+            observation_sha256=request.observation.sha256,
+            renderer=renderer,
+        )
         existing_run = repository.run_by_request(principal_id, request.request_id)
         if existing_run is not None:
-            resumable = existing_run.status in {
-                GoodNotesIngestionStatus.PENDING,
-                GoodNotesIngestionStatus.RUNNING,
-                GoodNotesIngestionStatus.FAILED,
-            }
-            if existing_run.request_fingerprint != fingerprint and not resumable:
+            if existing_run.request_fingerprint != fingerprint:
                 raise ValueError("the request id is bound to another ingestion")
             run = existing_run
             if existing_run.status is GoodNotesIngestionStatus.FAILED:
@@ -572,21 +577,20 @@ def _page_version(
     )
 
 
-def _request_fingerprint(
-    request: LineageReconcileRequest, renderer: PageRenderer, principal_id: str
+def ingestion_request_fingerprint(
+    *,
+    principal_id: str,
+    source_root_id: str,
+    source_object_id: str,
+    observation_sha256: str,
+    renderer: PageRenderer,
 ) -> str:
-    digest = hashlib.sha256(
-        f"{principal_id}\x1f{request.source_root_id}\x1f"
-        f"{request.source_object_id}\x1f{request.observation.sha256}\x1f"
+    """Canonical GoodNotesIngestionRun.request_fingerprint (ingestion, not page-byte)."""
+    return hashlib.sha256(
+        f"{principal_id}\x1f{source_root_id}\x1f"
+        f"{source_object_id}\x1f{observation_sha256}\x1f"
         f"{renderer.name}\x1f{renderer.version}\x1f{renderer.profile_version}\x1f".encode()
-    )
-    for page in request.pages:
-        digest.update(
-            f"{page.source_object_id}\x1f{page.page_number}\x1f"
-            f"{page.source_version_id}\x1f{page.representation_media_type}\x1f".encode()
-        )
-        digest.update(hashlib.sha256(page.content).digest())
-    return digest.hexdigest()
+    ).hexdigest()
 
 
 def resolve_notebook_identity(

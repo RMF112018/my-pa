@@ -100,6 +100,11 @@ class PostgresDurableNoteStore(PostgresGoodNotesRepository):
             principal_id, run_id, destination, summary_hash
         )
 
+    def delivery_receipts_for_run(
+        self, principal_id: str, run_id: str
+    ) -> tuple[GoodNotesDeliveryReceipt, ...]:
+        return self._delivery.delivery_receipts_for_run(principal_id, run_id)
+
     def store_delivery_attempt(self, attempt: GoodNotesDeliveryAttempt) -> GoodNotesDeliveryAttempt:
         return self._delivery.store_delivery_attempt(attempt)
 

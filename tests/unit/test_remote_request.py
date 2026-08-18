@@ -244,7 +244,121 @@ def test_task_and_commitment_writes_are_stamped_remotely() -> None:
         Capability.TASKS_BULK_CONFIRM,
         Capability.COMMITMENTS_CREATE,
         Capability.COMMITMENTS_CLOSE,
+        Capability.GOODNOTES_PROPOSE,
     } <= _IDEMPOTENT_REMOTE_CAPABILITIES
+
+
+def _connected_v2_proposal_payload(
+    *,
+    run_id: str = "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+    page_version_id: str = "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+    content_sha256: str = "a" * 64,
+) -> dict[str, object]:
+    return {
+        "run_id": run_id,
+        "page_version_id": page_version_id,
+        "content_sha256": content_sha256,
+        "schema_version": "note-unit.v2",
+        "analyzer_name": "chatllm-synthetic-validator",
+        "analyzer_version": "1.0.0",
+        "segments": [
+            {
+                "kind": "NOTE_UNIT",
+                "geometry": {"x_min": 0.1, "y_min": 0.1, "width": 0.5, "height": 0.2},
+                "transcription": None,
+                "transcription_status": "UNREADABLE",
+                "confidence": {"transcription": 0.0, "classification": 0.6},
+                "candidate_tags": ["GENERAL"],
+                "ranked_candidates": [],
+            }
+        ],
+        "confidence": {
+            "transcription": 0.0,
+            "segmentation": 0.85,
+            "classification": 0.6,
+        },
+        "candidate_tags": ["GENERAL"],
+        "ranked_candidates": [],
+    }
+
+
+def test_goodnotes_propose_remote_schema_hides_idempotency_key() -> None:
+    commands = {member.capability: member for member in get_args(Command.__value__)}
+    schema = remote_tool_schema(input_schema_for(commands[Capability.GOODNOTES_PROPOSE]))
+    payload = schema["properties"]["payload"]
+    payload_properties = payload.get("properties", {})
+    assert "idempotency_key" not in payload_properties
+    assert "idempotency_key" not in payload.get("required", [])
+
+
+def test_compose_stamps_idempotency_for_goodnotes_propose() -> None:
+    payload = _connected_v2_proposal_payload()
+    composed = compose_remote_arguments(
+        capability_name=Capability.GOODNOTES_PROPOSE.value,
+        arguments={"payload": payload},
+        principal=PRINCIPAL,
+        grants=frozenset({(Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL)}),
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    key = composed["payload"]["idempotency_key"]
+    assert key.startswith("idk_")
+    assert len(key) == 36
+    assert composed["purpose"] == Purpose.GOODNOTES_PROPOSAL.value
+    replay = compose_remote_arguments(
+        capability_name=Capability.GOODNOTES_PROPOSE.value,
+        arguments={"payload": payload},
+        principal=PRINCIPAL,
+        grants=frozenset({(Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL)}),
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert replay["payload"]["idempotency_key"] == key
+    changed = compose_remote_arguments(
+        capability_name=Capability.GOODNOTES_PROPOSE.value,
+        arguments={
+            "payload": {
+                **_connected_v2_proposal_payload(),
+                "candidate_tags": ["CHANGED"],
+            }
+        },
+        principal=PRINCIPAL,
+        grants=frozenset({(Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL)}),
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert changed["payload"]["idempotency_key"] != key
+
+
+def test_compose_rejects_caller_owned_goodnotes_idempotency_key() -> None:
+    payload = _connected_v2_proposal_payload()
+    payload["idempotency_key"] = "forged"
+    with pytest.raises(InvalidRequestError):
+        compose_remote_arguments(
+            capability_name=Capability.GOODNOTES_PROPOSE.value,
+            arguments={"payload": payload},
+            principal=PRINCIPAL,
+            grants=frozenset({(Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL)}),
+            clock=lambda: FROZEN,
+            issue_id=_issue,
+        )
+
+
+def test_remote_goodnotes_proposal_payload_normalizes() -> None:
+    from my_pa.adapters.normalization import normalize
+    from my_pa.application.commands import SubmitGoodNotesProposal
+
+    composed = compose_remote_arguments(
+        capability_name=Capability.GOODNOTES_PROPOSE.value,
+        arguments={"payload": _connected_v2_proposal_payload()},
+        principal=PRINCIPAL,
+        grants=frozenset({(Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL)}),
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    _metadata, command = normalize(Capability.GOODNOTES_PROPOSE.value, composed)
+    assert isinstance(command, SubmitGoodNotesProposal)
+    assert command.idempotency_key.startswith("idk_")
 
 
 def test_compose_stamps_idempotency_for_task_create() -> None:

@@ -322,6 +322,13 @@ class _FakeDeliveryRepository:
                 return item
         return None
 
+    def delivery_receipts_for_run(
+        self, principal_id: str, run_id: str
+    ) -> tuple[GoodNotesDeliveryReceipt, ...]:
+        if principal_id != self.principal_id:
+            return ()
+        return tuple(item for item in self.receipts if item.run_id == run_id)
+
     def store_delivery_attempt(self, attempt: GoodNotesDeliveryAttempt) -> GoodNotesDeliveryAttempt:
         for existing in self.attempts:
             if existing.attempt_id == attempt.attempt_id:

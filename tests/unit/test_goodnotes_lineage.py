@@ -11,12 +11,14 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from my_pa.application.goodnotes_lineage import (
+    GoodNotesLineageService,
     LineageReconcileRequest,
     ObservedNotebookFile,
     match_logical_pages,
 )
 from my_pa.domain.goodnotes.models import (
     GoodNotesIdentityStatus,
+    GoodNotesIngestionStatus,
     GoodNotesMatchMethod,
     GoodNotesPriorPageEvidence,
     PageRender,
@@ -29,6 +31,7 @@ from my_pa.infrastructure.goodnotes.local import (
     ManifestGoodNotesSource,
 )
 from my_pa.infrastructure.goodnotes.render import MappedPageRenderer, RawRepresentationRenderer
+from tests.unit.goodnotes_lineage_memory import MemoryLineageRepository
 
 WHEN = datetime(2026, 8, 16, 16, 0, tzinfo=UTC)
 A = "prn_aaaaaaaaaaaaaaaaaaaaaaaa"
@@ -391,3 +394,212 @@ def test_lineage_request_keeps_supplied_notebook_id_across_path_rename() -> None
     )
     assert request.notebook_id == NOTEBOOK
     assert request.observation.relative_path == "Archive/alpha.pdf"
+
+
+def _standalone_page(
+    *,
+    version_id: str = "ver_aaaaaaaaaaaaaaaaaaaaaaaa",
+    source_id: str = "src_aaaaaaaaaaaaaaaaaaaaaaaa",
+    media_type: str = "application/octet-stream",
+    content: bytes = b"page-one",
+) -> SourcePage:
+    return SourcePage(
+        principal_id=A,
+        source_id=source_id,
+        source_object_id="obj_aaaaaaaaaaaaaaaaaaaaaaaa",
+        source_version_id=version_id,
+        page_number=1,
+        observed_at=WHEN,
+        content=content,
+        representation_media_type=media_type,
+    )
+
+
+def _standalone_request(
+    pages: tuple[SourcePage, ...],
+    *,
+    request_id: str = "lineage-standalone-1",
+) -> LineageReconcileRequest:
+    payload = b"\x1f".join(page.content for page in pages)
+    return LineageReconcileRequest(
+        principal_id=A,
+        request_id=request_id,
+        source_root_id="icloud-goodnotes",
+        source_object_id="obj_aaaaaaaaaaaaaaaaaaaaaaaa",
+        observation=ObservedNotebookFile(
+            relative_path="Inbox/standalone.pdf",
+            size_bytes=len(payload),
+            sha256=_sha(payload),
+            mtime_ns=1,
+            page_count=len(pages),
+        ),
+        pages=pages,
+        notebook_id=NOTEBOOK,
+        observed_at=WHEN,
+    )
+
+
+def test_standalone_lineage_replay_rejects_page_identity_collision() -> None:
+    repository = MemoryLineageRepository()
+    service = GoodNotesLineageService()
+    renderer = RawRepresentationRenderer()
+    first_pages = (_standalone_page(),)
+    first = service.reconcile(
+        _standalone_request(first_pages),
+        renderer=renderer,
+        repository=repository,
+        clock=lambda: WHEN,
+    )
+    assert first.replayed_snapshot is False
+    collisions = (
+        _standalone_page(version_id="ver_bbbbbbbbbbbbbbbbbbbbbbbb"),
+        _standalone_page(source_id="src_bbbbbbbbbbbbbbbbbbbbbbbb"),
+        _standalone_page(media_type="application/pdf"),
+    )
+    held = repository.run_by_request(A, "lineage-standalone-1")
+    assert held is not None
+    before = (held.status, held.ended_at, first.positions)
+    for colliding in collisions:
+        with pytest.raises(ValueError, match="bound to another ingestion"):
+            service.reconcile(
+                _standalone_request((colliding,)),
+                renderer=renderer,
+                repository=repository,
+                clock=lambda: WHEN,
+            )
+        after = repository.run_by_request(A, "lineage-standalone-1")
+        assert after is not None
+        assert after.status is before[0]
+        assert after.ended_at == before[1]
+        assert repository.page_positions(A, first.snapshot.snapshot_id) == before[2]
+
+
+def test_standalone_lineage_failed_resume_rejects_page_identity_before_mutation() -> None:
+    repository = MemoryLineageRepository()
+    service = GoodNotesLineageService()
+    renderer = RawRepresentationRenderer()
+    first = service.reconcile(
+        _standalone_request((_standalone_page(),)),
+        renderer=renderer,
+        repository=repository,
+        clock=lambda: WHEN,
+    )
+    failed = repository.update_run(
+        replace(
+            first.run,
+            status=GoodNotesIngestionStatus.FAILED,
+            error_code="STAGE_FAILED",
+            error_class="Synthetic",
+        )
+    )
+    with pytest.raises(ValueError, match="bound to another ingestion"):
+        service.reconcile(
+            _standalone_request((_standalone_page(version_id="ver_bbbbbbbbbbbbbbbbbbbbbbbb"),)),
+            renderer=renderer,
+            repository=repository,
+            clock=lambda: WHEN,
+        )
+    held = repository.run_by_request(A, "lineage-standalone-1")
+    assert held is not None
+    assert held.status is GoodNotesIngestionStatus.FAILED
+    assert held.error_code == "STAGE_FAILED"
+    assert held.ended_at == failed.ended_at
+    replayed = service.reconcile(
+        _standalone_request((_standalone_page(),)),
+        renderer=renderer,
+        repository=repository,
+        clock=lambda: WHEN,
+    )
+    assert replayed.replayed_snapshot is True
+    assert replayed.run.status is GoodNotesIngestionStatus.REPLAYED
+    assert replayed.positions == first.positions
+
+
+def _content_only_standalone_request(
+    request: LineageReconcileRequest, content: bytes
+) -> LineageReconcileRequest:
+    original = request.pages[0]
+    colliding = replace(
+        request,
+        pages=(
+            _standalone_page(
+                version_id=original.source_version_id,
+                source_id=original.source_id,
+                media_type=original.representation_media_type,
+                content=content,
+            ),
+        ),
+    )
+    assert colliding.observation == request.observation
+    assert colliding.observation.sha256 == request.observation.sha256
+    assert colliding.request_id == request.request_id
+    assert colliding.source_object_id == request.source_object_id
+    assert colliding.notebook_id == request.notebook_id
+    assert colliding.pages[0].source_id == original.source_id
+    assert colliding.pages[0].source_version_id == original.source_version_id
+    assert colliding.pages[0].page_number == original.page_number
+    assert colliding.pages[0].representation_media_type == original.representation_media_type
+    assert _sha(colliding.pages[0].content) != _sha(original.content)
+    return colliding
+
+
+def test_standalone_lineage_replay_rejects_content_only_mismatch() -> None:
+    repository = MemoryLineageRepository()
+    service = GoodNotesLineageService()
+    renderer = RawRepresentationRenderer()
+    request = _standalone_request((_standalone_page(),))
+    first = service.reconcile(request, renderer=renderer, repository=repository, clock=lambda: WHEN)
+    version_id = first.positions[0].page_version_id
+    assert version_id is not None
+    held_run = repository.run_by_request(A, request.request_id)
+    held_version = repository.page_version(A, version_id)
+    assert held_version is not None
+    held_page = repository.page(A, held_version.page_id)
+    snapshots = repository.snapshots(A, NOTEBOOK)
+    with pytest.raises(ValueError, match="bound to another ingestion"):
+        service.reconcile(
+            _content_only_standalone_request(request, b"page-two"),
+            renderer=renderer,
+            repository=repository,
+            clock=lambda: WHEN,
+        )
+    after = repository.run_by_request(A, request.request_id)
+    assert after == held_run
+    assert repository.page_positions(A, first.snapshot.snapshot_id) == first.positions
+    assert repository.page_version(A, version_id) == held_version
+    assert repository.page(A, held_version.page_id) == held_page
+    assert repository.snapshots(A, NOTEBOOK) == snapshots
+
+
+def test_standalone_lineage_failed_resume_rejects_content_only_mismatch_before_mutation() -> None:
+    repository = MemoryLineageRepository()
+    service = GoodNotesLineageService()
+    renderer = RawRepresentationRenderer()
+    request = _standalone_request((_standalone_page(),))
+    first = service.reconcile(request, renderer=renderer, repository=repository, clock=lambda: WHEN)
+    version_id = first.positions[0].page_version_id
+    assert version_id is not None
+    failed = repository.update_run(
+        replace(
+            first.run,
+            status=GoodNotesIngestionStatus.FAILED,
+            error_code="STAGE_FAILED",
+            error_class="Synthetic",
+        )
+    )
+    held_version = repository.page_version(A, version_id)
+    with pytest.raises(ValueError, match="bound to another ingestion"):
+        service.reconcile(
+            _content_only_standalone_request(request, b"page-two"),
+            renderer=renderer,
+            repository=repository,
+            clock=lambda: WHEN,
+        )
+    held = repository.run_by_request(A, request.request_id)
+    assert held is not None
+    assert held.status is GoodNotesIngestionStatus.FAILED
+    assert held.ended_at == failed.ended_at
+    assert held.error_code == "STAGE_FAILED"
+    assert held.error_class == "Synthetic"
+    assert repository.page_positions(A, first.snapshot.snapshot_id) == first.positions
+    assert repository.page_version(A, version_id) == held_version

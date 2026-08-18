@@ -89,6 +89,14 @@ class GoodNotesLineageRepository(Protocol):
         self, principal_id: str, notebook_id: str
     ) -> tuple[GoodNotesPriorPageEvidence, ...]: ...
 
+    def notebook(self, principal_id: str, notebook_id: str) -> GoodNotesNotebook | None: ...
+
+    def page(self, principal_id: str, page_id: str) -> GoodNotesPage | None: ...
+
+    def page_version(
+        self, principal_id: str, page_version_id: str
+    ) -> GoodNotesPageVersion | None: ...
+
     def notebooks_for_source_object(
         self, principal_id: str, source_root_id: str, source_object_id: str
     ) -> tuple[GoodNotesNotebook, ...]: ...
@@ -351,28 +359,32 @@ class GoodNotesLineageService:
                 render.normalized_render_sha256 for _, render in rendered
             ),
         )
-        fingerprint = _request_fingerprint(request, renderer, principal_id)
+        fingerprint = ingestion_request_fingerprint(
+            principal_id=principal_id,
+            source_root_id=request.source_root_id,
+            source_object_id=request.source_object_id,
+            observation_sha256=request.observation.sha256,
+            renderer=renderer,
+        )
         existing_run = repository.run_by_request(principal_id, request.request_id)
-        if existing_run is not None:
-            resumable = existing_run.status in {
-                GoodNotesIngestionStatus.PENDING,
-                GoodNotesIngestionStatus.RUNNING,
-                GoodNotesIngestionStatus.FAILED,
-            }
-            if existing_run.request_fingerprint != fingerprint and not resumable:
-                raise ValueError("the request id is bound to another ingestion")
-            run = existing_run
-            if existing_run.status is GoodNotesIngestionStatus.FAILED:
-                run = repository.update_run(
-                    replace(
-                        existing_run,
-                        status=GoodNotesIngestionStatus.RUNNING,
-                        ended_at=None,
-                        error_code=None,
-                        error_class=None,
-                    )
-                )
-        else:
+        if existing_run is not None and existing_run.request_fingerprint != fingerprint:
+            raise ValueError("the request id is bound to another ingestion")
+        held_positions = _positions_for_observation(
+            repository,
+            principal_id=principal_id,
+            notebook_id=notebook_id,
+            raw_sha256=request.observation.sha256,
+        )
+        if held_positions and existing_run is not None:
+            verify_persisted_page_identity(
+                principal_id=principal_id,
+                pages=request.pages,
+                positions=held_positions,
+                renderer=renderer,
+                repository=repository,
+                verify_supplied_content_digest=True,
+            )
+        if existing_run is None:
             run = repository.create_run(
                 GoodNotesIngestionRun(
                     run_id=issue_stable_id("gnrun", principal_id, request.request_id),
@@ -386,6 +398,18 @@ class GoodNotesLineageService:
                     status=GoodNotesIngestionStatus.RUNNING,
                 )
             )
+        elif existing_run.status is GoodNotesIngestionStatus.FAILED:
+            run = repository.update_run(
+                replace(
+                    existing_run,
+                    status=GoodNotesIngestionStatus.RUNNING,
+                    ended_at=None,
+                    error_code=None,
+                    error_class=None,
+                )
+            )
+        else:
+            run = existing_run
         notebook = repository.store_notebook(
             GoodNotesNotebook(
                 notebook_id=notebook_id,
@@ -572,21 +596,101 @@ def _page_version(
     )
 
 
-def _request_fingerprint(
-    request: LineageReconcileRequest, renderer: PageRenderer, principal_id: str
-) -> str:
-    digest = hashlib.sha256(
-        f"{principal_id}\x1f{request.source_root_id}\x1f"
-        f"{request.source_object_id}\x1f{request.observation.sha256}\x1f"
-        f"{renderer.name}\x1f{renderer.version}\x1f{renderer.profile_version}\x1f".encode()
-    )
-    for page in request.pages:
-        digest.update(
-            f"{page.source_object_id}\x1f{page.page_number}\x1f"
-            f"{page.source_version_id}\x1f{page.representation_media_type}\x1f".encode()
+def verify_persisted_page_identity(
+    *,
+    principal_id: str,
+    pages: Sequence[SourcePage],
+    positions: Sequence[GoodNotesPagePosition],
+    renderer: PageRenderer,
+    repository: GoodNotesLineageRepository,
+    verify_supplied_content_digest: bool,
+) -> None:
+    """Fail closed when supplied pages do not match persisted page/version evidence.
+
+    gnver is recomputed from persisted content_sha256 plus the supplied page
+    identity fields. This is not the ingestion fingerprint and does not hash
+    freshly supplied page bytes into GoodNotesIngestionRun.request_fingerprint.
+
+    `verify_supplied_content_digest` is an explicit path contract, not inferred
+    from caller type: standalone request-bound lineage replay requires
+    sha256(SourcePage.content) == persisted content_sha256; durable-orchestrator
+    completed-LINEAGE continuation does not, because split_admitted_pdf is not
+    byte-stable across equivalent invocations.
+    """
+    if len(positions) != len(pages):
+        raise ValueError("the request id is bound to another ingestion")
+    by_number = {page.page_number: page for page in pages}
+    for position in positions:
+        source_page = by_number.get(position.page_number)
+        if source_page is None or position.page_version_id is None:
+            raise ValueError("the request id is bound to another ingestion")
+        version = repository.page_version(principal_id, position.page_version_id)
+        if version is None:
+            raise ValueError("the request id is bound to another ingestion")
+        page_id = issue_stable_id(
+            "gnpg", source_page.source_object_id, str(source_page.page_number)
         )
-        digest.update(hashlib.sha256(page.content).digest())
-    return digest.hexdigest()
+        expected_version_id = issue_stable_id(
+            "gnver",
+            page_id,
+            source_page.source_version_id,
+            source_page.representation_media_type,
+            version.content_sha256,
+        )
+        if position.page_version_id != expected_version_id:
+            raise ValueError("the request id is bound to another ingestion")
+        if version.source_version_id != source_page.source_version_id:
+            raise ValueError("the request id is bound to another ingestion")
+        if (
+            version.renderer_name != renderer.name
+            or version.renderer_version != renderer.version
+            or version.render_profile_version != renderer.profile_version
+        ):
+            raise ValueError("the request id is bound to another ingestion")
+        stored_page = repository.page(principal_id, version.page_id)
+        if stored_page is None:
+            raise ValueError("the request id is bound to another ingestion")
+        if stored_page.source_id != source_page.source_id:
+            raise ValueError("the request id is bound to another ingestion")
+        if stored_page.source_object_id != source_page.source_object_id:
+            raise ValueError("the request id is bound to another ingestion")
+        if stored_page.page_number != source_page.page_number:
+            raise ValueError("the request id is bound to another ingestion")
+        if stored_page.page_id != page_id:
+            raise ValueError("the request id is bound to another ingestion")
+        if verify_supplied_content_digest and (
+            hashlib.sha256(source_page.content).hexdigest() != version.content_sha256
+        ):
+            raise ValueError("the request id is bound to another ingestion")
+
+
+def _positions_for_observation(
+    repository: GoodNotesLineageRepository,
+    *,
+    principal_id: str,
+    notebook_id: str,
+    raw_sha256: str,
+) -> tuple[GoodNotesPagePosition, ...]:
+    for snapshot in repository.snapshots(principal_id, notebook_id):
+        if snapshot.raw_sha256 == raw_sha256:
+            return repository.page_positions(principal_id, snapshot.snapshot_id)
+    return ()
+
+
+def ingestion_request_fingerprint(
+    *,
+    principal_id: str,
+    source_root_id: str,
+    source_object_id: str,
+    observation_sha256: str,
+    renderer: PageRenderer,
+) -> str:
+    """Canonical GoodNotesIngestionRun.request_fingerprint (ingestion, not page-byte)."""
+    return hashlib.sha256(
+        f"{principal_id}\x1f{source_root_id}\x1f"
+        f"{source_object_id}\x1f{observation_sha256}\x1f"
+        f"{renderer.name}\x1f{renderer.version}\x1f{renderer.profile_version}\x1f".encode()
+    ).hexdigest()
 
 
 def resolve_notebook_identity(

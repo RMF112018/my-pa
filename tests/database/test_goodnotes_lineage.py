@@ -6,6 +6,7 @@ import hashlib
 import io
 import os
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -424,6 +425,208 @@ def test_lineage_reconcile_twice_on_identical_bytes_replays_snapshot(engine: Eng
         assert len(repository.logical_pages(A, notebook_id)) == 2
         assert first.run.new_logical_page_count == 2
         assert second.run.new_logical_page_count == 0
+
+
+def test_standalone_lineage_replay_rejects_page_identity_before_failed_resume(
+    engine: Engine,
+) -> None:
+    cover = b"synthetic-cover-collision"
+    object_id = "obj_eeeeeeeeeeeeeeeeeeeeeeee"
+    source_id = "src_eeeeeeeeeeeeeeeeeeeeeeee"
+    notebook_id = issue_stable_id("gnnb", A, "service-collision")
+    pages = (
+        _source_page(
+            principal_id=A,
+            source_id=source_id,
+            object_id=object_id,
+            version_id="ver_eeeeeeeeeeeeeeeeeeeeeeee",
+            page_number=1,
+            content=cover,
+        ),
+    )
+    request = LineageReconcileRequest(
+        principal_id=A,
+        request_id="lineage-collision-1",
+        source_root_id="icloud-goodnotes",
+        source_object_id=object_id,
+        observation=_observation("Inbox/collision.pdf", cover, 1),
+        pages=pages,
+        notebook_id=notebook_id,
+        observed_at=WHEN,
+    )
+    colliding = LineageReconcileRequest(
+        principal_id=A,
+        request_id=request.request_id,
+        source_root_id=request.source_root_id,
+        source_object_id=object_id,
+        observation=request.observation,
+        pages=(
+            _source_page(
+                principal_id=A,
+                source_id=source_id,
+                object_id=object_id,
+                version_id="ver_ffffffffffffffffffffffff",
+                page_number=1,
+                content=cover,
+            ),
+        ),
+        notebook_id=notebook_id,
+        observed_at=LATER,
+    )
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        service = GoodNotesLineageService()
+        first = service.reconcile(
+            request, renderer=RawRepresentationRenderer(), repository=repository, clock=lambda: WHEN
+        )
+        with pytest.raises(ValueError, match="bound to another ingestion"):
+            service.reconcile(
+                colliding,
+                renderer=RawRepresentationRenderer(),
+                repository=repository,
+                clock=lambda: LATER,
+            )
+        held = repository.run_by_request(A, request.request_id)
+        assert held is not None
+        assert held.status is first.run.status
+        failed = repository.update_run(
+            replace(
+                first.run,
+                status=GoodNotesIngestionStatus.FAILED,
+                error_code="STAGE_FAILED",
+                error_class="Synthetic",
+            )
+        )
+        with pytest.raises(ValueError, match="bound to another ingestion"):
+            service.reconcile(
+                colliding,
+                renderer=RawRepresentationRenderer(),
+                repository=repository,
+                clock=lambda: LATER,
+            )
+        still_failed = repository.run_by_request(A, request.request_id)
+        assert still_failed is not None
+        assert still_failed.status is GoodNotesIngestionStatus.FAILED
+        assert still_failed.error_code == "STAGE_FAILED"
+        assert still_failed.ended_at == failed.ended_at
+        replayed = service.reconcile(
+            LineageReconcileRequest(
+                principal_id=A,
+                request_id=request.request_id,
+                source_root_id=request.source_root_id,
+                source_object_id=object_id,
+                observation=request.observation,
+                pages=pages,
+                notebook_id=notebook_id,
+                observed_at=LATER,
+            ),
+            renderer=RawRepresentationRenderer(),
+            repository=repository,
+            clock=lambda: LATER,
+        )
+        assert replayed.replayed_snapshot is True
+        assert replayed.run.status is GoodNotesIngestionStatus.REPLAYED
+        assert len(repository.logical_pages(A, notebook_id)) == 1
+
+
+def test_standalone_lineage_replay_rejects_content_only_mismatch_before_failed_resume(
+    engine: Engine,
+) -> None:
+    cover = b"synthetic-cover-content"
+    object_id = "obj_121212121212121212121212"
+    source_id = "src_121212121212121212121212"
+    version_id = "ver_121212121212121212121212"
+    notebook_id = issue_stable_id("gnnb", A, "service-content-collision")
+    pages = (
+        _source_page(
+            principal_id=A,
+            source_id=source_id,
+            object_id=object_id,
+            version_id=version_id,
+            page_number=1,
+            content=cover,
+        ),
+    )
+    request = LineageReconcileRequest(
+        principal_id=A,
+        request_id="lineage-content-collision-1",
+        source_root_id="icloud-goodnotes",
+        source_object_id=object_id,
+        observation=_observation("Inbox/content-collision.pdf", cover, 1),
+        pages=pages,
+        notebook_id=notebook_id,
+        observed_at=WHEN,
+    )
+    colliding = replace(
+        request,
+        pages=(
+            _source_page(
+                principal_id=A,
+                source_id=source_id,
+                object_id=object_id,
+                version_id=version_id,
+                page_number=1,
+                content=b"synthetic-cover-altered",
+            ),
+        ),
+        observed_at=LATER,
+    )
+    assert colliding.observation == request.observation
+    assert colliding.observation.sha256 == request.observation.sha256
+    assert _sha(colliding.pages[0].content) != _sha(cover)
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        service = GoodNotesLineageService()
+        first = service.reconcile(
+            request, renderer=RawRepresentationRenderer(), repository=repository, clock=lambda: WHEN
+        )
+        page_version_id = first.positions[0].page_version_id
+        assert page_version_id is not None
+        held_version = repository.page_version(A, page_version_id)
+        with pytest.raises(ValueError, match="bound to another ingestion"):
+            service.reconcile(
+                colliding,
+                renderer=RawRepresentationRenderer(),
+                repository=repository,
+                clock=lambda: LATER,
+            )
+        held = repository.run_by_request(A, request.request_id)
+        assert held is not None
+        assert held.status is first.run.status
+        assert held.ended_at == first.run.ended_at
+        assert repository.page_positions(A, first.snapshot.snapshot_id) == first.positions
+        assert repository.page_version(A, page_version_id) == held_version
+        failed = repository.update_run(
+            replace(
+                first.run,
+                status=GoodNotesIngestionStatus.FAILED,
+                error_code="STAGE_FAILED",
+                error_class="Synthetic",
+            )
+        )
+        with pytest.raises(ValueError, match="bound to another ingestion"):
+            service.reconcile(
+                colliding,
+                renderer=RawRepresentationRenderer(),
+                repository=repository,
+                clock=lambda: LATER,
+            )
+        still_failed = repository.run_by_request(A, request.request_id)
+        assert still_failed is not None
+        assert still_failed.status is GoodNotesIngestionStatus.FAILED
+        assert still_failed.error_code == "STAGE_FAILED"
+        assert still_failed.error_class == "Synthetic"
+        assert still_failed.ended_at == failed.ended_at
+        assert repository.page_positions(A, first.snapshot.snapshot_id) == first.positions
+        assert repository.page_version(A, page_version_id) == held_version
+        replayed = service.reconcile(
+            replace(request, observed_at=LATER),
+            renderer=RawRepresentationRenderer(),
+            repository=repository,
+            clock=lambda: LATER,
+        )
+        assert replayed.replayed_snapshot is True
+        assert replayed.run.status is GoodNotesIngestionStatus.REPLAYED
 
 
 def test_lineage_reorder_across_two_snapshots(engine: Engine) -> None:

@@ -204,6 +204,16 @@ class MemoryDurableNoteStore(MemoryLineageRepository):
     ) -> GoodNotesDeliveryReceipt | None:
         return self._receipts.get((principal_id, run_id, destination, summary_hash))
 
+    def delivery_receipts_for_run(
+        self, principal_id: str, run_id: str
+    ) -> tuple[GoodNotesDeliveryReceipt, ...]:
+        found = [
+            item
+            for item in self._receipts.values()
+            if item.principal_id == principal_id and item.run_id == run_id
+        ]
+        return tuple(sorted(found, key=lambda item: item.created_at))
+
     def store_delivery_attempt(self, attempt: GoodNotesDeliveryAttempt) -> GoodNotesDeliveryAttempt:
         for existing in self._attempts:
             if existing.attempt_id == attempt.attempt_id:

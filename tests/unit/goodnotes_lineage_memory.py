@@ -26,6 +26,7 @@ class MemoryLineageRepository:
         self._logical: dict[tuple[str, str], GoodNotesLogicalPage] = {}
         self._positions: dict[tuple[str, str, int], GoodNotesPagePosition] = {}
         self._versions: dict[tuple[str, str], GoodNotesPageVersion] = {}
+        self._pages: dict[tuple[str, str], GoodNotesPage] = {}
 
     def create_run(self, run: GoodNotesIngestionRun) -> GoodNotesIngestionRun:
         held = self.run_by_request(run.principal_id, run.request_id)
@@ -135,9 +136,15 @@ class MemoryLineageRepository:
     def store_page_version_render(
         self, *, page: GoodNotesPage, version: GoodNotesPageVersion
     ) -> GoodNotesPageVersion:
-        del page
+        self._pages[(page.principal_id, page.page_id)] = page
         self._versions[(version.page_version_id, version.page_id)] = version
         return version
+
+    def page(self, principal_id: str, page_id: str) -> GoodNotesPage | None:
+        return self._pages.get((principal_id, page_id))
+
+    def notebook(self, principal_id: str, notebook_id: str) -> GoodNotesNotebook | None:
+        return self.notebooks.get((principal_id, notebook_id))
 
     def page_version(self, principal_id: str, page_version_id: str) -> GoodNotesPageVersion | None:
         del principal_id

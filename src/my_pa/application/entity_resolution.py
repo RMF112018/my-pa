@@ -49,6 +49,8 @@ from my_pa.domain.relationship.normalization import (
     normalize_name,
 )
 from my_pa.domain.relationship.resolution import (
+    RESOLUTION_CANDIDATE_LIMIT,
+    ContextualSignal,
     EntityResolution,
     ResolutionBasis,
     ResolutionCandidate,
@@ -241,9 +243,20 @@ class EntityResolutionService:
         if len(by_entity) > 1:
             warnings.append(ResolutionWarning.SEVERAL_ENTITIES_SHARE_THIS_NAME)
 
-        narrowed = self._narrow_by_scope(principal_id, by_entity, request)
-        if narrowed is not by_entity:
+        signals = {
+            entity_id: self._signals_for(principal_id, entity_id, request)
+            for entity_id in by_entity
+        }
+        narrowed = _narrow_by_signals(by_entity, signals)
+        was_narrowed = narrowed is not by_entity
+        if was_narrowed:
             warnings.append(ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE)
+        elif any(signals.values()) and len(by_entity) > 1:
+            # Something corroborated, and it corroborated everyone. Said out
+            # loud: "we noticed and it did not help" is a different disclosure
+            # from silence, and only one of them lets a reader tell whether the
+            # context was consulted at all.
+            warnings.append(ResolutionWarning.CONTEXT_DID_NOT_DISTINGUISH_THE_CANDIDATES)
 
         candidates = order_candidates(
             tuple(
@@ -254,6 +267,7 @@ class EntityResolutionService:
                     status=entity.status,
                     evidence=tuple(evidence),
                     superseded_by_entity_id=entity.superseded_by_entity_id,
+                    signals=signals[entity.entity_id],
                 )
                 for entity, evidence in narrowed.values()
             )
@@ -263,12 +277,18 @@ class EntityResolutionService:
                 outcome=ResolutionOutcome.NOT_FOUND, warnings=tuple(dict.fromkeys(warnings))
             )
 
-        return self._name_outcome(candidates, narrowed is not by_entity, warnings)
+        bounded = candidates[:RESOLUTION_CANDIDATE_LIMIT]
+        truncated = len(bounded) < len(candidates)
+        if truncated:
+            warnings.append(ResolutionWarning.MORE_CANDIDATES_THAN_THIS_ANSWER_CARRIES)
+
+        return self._name_outcome(bounded, was_narrowed, truncated, warnings)
 
     def _name_outcome(
         self,
         candidates: tuple[ResolutionCandidate, ...],
         was_narrowed: bool,
+        truncated: bool,
         warnings: list[ResolutionWarning],
     ) -> EntityResolution:
         """The decision. One candidate is not by itself a resolution.
@@ -277,35 +297,31 @@ class EntityResolutionService:
         reason `ResolutionOutcome.AMBIGUOUS` states: there is no count at which
         a name becomes an identifier.
         """
-        if len(candidates) > 1:
+
+        def unresolved(outcome: ResolutionOutcome) -> EntityResolution:
             return EntityResolution(
-                outcome=ResolutionOutcome.AMBIGUOUS,
+                outcome=outcome,
                 candidates=candidates,
                 warnings=tuple(dict.fromkeys(warnings)),
+                candidates_were_truncated=truncated,
             )
+
+        if len(candidates) > 1 or truncated:
+            # Truncated means candidates were dropped, and a resolution drawn
+            # from a list that dropped someone is a resolution that never saw
+            # the person it might have been.
+            return unresolved(ResolutionOutcome.AMBIGUOUS)
 
         only = candidates[0]
         resolves = only.strongest_basis is ResolutionBasis.ALIAS or was_narrowed
         if not resolves:
-            return EntityResolution(
-                outcome=ResolutionOutcome.AMBIGUOUS,
-                candidates=candidates,
-                warnings=tuple(dict.fromkeys(warnings)),
-            )
+            return unresolved(ResolutionOutcome.AMBIGUOUS)
 
-        warnings.extend(_currency_warnings(_as_entity_status(only)))
+        warnings.extend(_currency_warnings(only.status))
         if only.status is not EntityStatus.ACTIVE:
             if only.strongest_basis is ResolutionBasis.CANONICAL_NAME:
-                return EntityResolution(
-                    outcome=ResolutionOutcome.AMBIGUOUS,
-                    candidates=candidates,
-                    warnings=tuple(dict.fromkeys(warnings)),
-                )
-            return EntityResolution(
-                outcome=ResolutionOutcome.HISTORICAL_MATCH,
-                candidates=candidates,
-                warnings=tuple(dict.fromkeys(warnings)),
-            )
+                return unresolved(ResolutionOutcome.AMBIGUOUS)
+            return unresolved(ResolutionOutcome.HISTORICAL_MATCH)
 
         outcome = (
             ResolutionOutcome.RESOLVED_CONTEXTUAL
@@ -313,7 +329,9 @@ class EntityResolutionService:
             else ResolutionOutcome.RESOLVED_EXACT
         )
         return EntityResolution(
-            outcome=outcome, candidates=candidates, warnings=tuple(dict.fromkeys(warnings))
+            outcome=outcome,
+            candidates=candidates,
+            warnings=tuple(dict.fromkeys(warnings)),
         )
 
     # --- filters ---------------------------------------------------------
@@ -328,53 +346,68 @@ class EntityResolutionService:
         """
         return request.entity_type is None or entity.entity_type is request.entity_type
 
-    def _narrow_by_scope(
-        self,
-        principal_id: str,
-        by_entity: dict[str, tuple[Entity, list[ResolutionEvidence]]],
-        request: ResolutionRequest,
-    ) -> dict[str, tuple[Entity, list[ResolutionEvidence]]]:
-        """Keep only candidates assigned to, or related within, the supplied scope.
+    def _signals_for(
+        self, principal_id: str, entity_id: str, request: ResolutionRequest
+    ) -> tuple[ContextualSignal, ...]:
+        """Everything the surrounding context corroborates about one candidate.
 
-        Returns the *same object* when no scope was supplied or when narrowing
-        removed nothing, so the caller can tell whether the scope did any work
-        by identity — a scope that changed nothing is not a scope that resolved
-        anything, and reporting `RESOLVED_CONTEXTUAL` for it would credit the
-        caller's hint with a decision the evidence made on its own.
+        Computed for every candidate, including when it cannot change the
+        answer, because a signal is evidence a reader is entitled to see even
+        when it did not decide anything -- and because computing it only for the
+        winner would mean the signals on an `AMBIGUOUS` answer were absent
+        rather than false.
         """
-        if request.scope_entity_id is None or len(by_entity) < 2:
-            return by_entity
-        scope = request.scope_entity_id
-        kept = {
-            entity_id: pair
-            for entity_id, pair in by_entity.items()
-            if self._within_scope(principal_id, entity_id, scope, request.as_of)
-        }
-        if not kept or len(kept) == len(by_entity):
-            return by_entity
-        return kept
+        found: list[ContextualSignal] = []
+        if request.scope_entity_id is not None:
+            if self._assigned_to(principal_id, entity_id, request.scope_entity_id, request.as_of):
+                found.append(ContextualSignal.ASSIGNED_TO_THE_NAMED_SCOPE)
+            if self._related_to(principal_id, entity_id, request.scope_entity_id, request.as_of):
+                found.append(ContextualSignal.RELATED_TO_THE_NAMED_SCOPE)
+        return tuple(found)
 
-    def _within_scope(
+    def _assigned_to(
         self, principal_id: str, entity_id: str, scope_entity_id: str, as_of: datetime | None
     ) -> bool:
-        """Whether an entity is assigned to, or related within, a scope entity."""
-        for assignment in self._entities.assignments(principal_id, entity_id, active_only=True):
-            if assignment.scope_entity_id == scope_entity_id and _is_effective(
-                assignment.effective_from, assignment.effective_to, as_of
-            ):
-                return True
-        for relationship in self._entities.relationships(
-            principal_id, entity_id, direction="outgoing"
-        ):
-            reaches = scope_entity_id in (
-                relationship.to_entity_id,
-                relationship.scope_entity_id,
+        return any(
+            assignment.scope_entity_id == scope_entity_id
+            and _is_effective(assignment.effective_from, assignment.effective_to, as_of)
+            for assignment in self._entities.assignments(principal_id, entity_id, active_only=True)
+        )
+
+    def _related_to(
+        self, principal_id: str, entity_id: str, scope_entity_id: str, as_of: datetime | None
+    ) -> bool:
+        return any(
+            scope_entity_id in (relationship.to_entity_id, relationship.scope_entity_id)
+            and _is_effective(relationship.effective_from, relationship.effective_to, as_of)
+            for relationship in self._entities.relationships(
+                principal_id, entity_id, direction="outgoing"
             )
-            if reaches and _is_effective(
-                relationship.effective_from, relationship.effective_to, as_of
-            ):
-                return True
-        return False
+        )
+
+
+def _narrow_by_signals(
+    by_entity: dict[str, tuple[Entity, list[ResolutionEvidence]]],
+    signals: dict[str, tuple[ContextualSignal, ...]],
+) -> dict[str, tuple[Entity, list[ResolutionEvidence]]]:
+    """Keep only the candidates the surrounding context said something about.
+
+    Returns the *same object* when nothing was narrowed -- no signal, no
+    candidate carrying one, or every candidate carrying one -- so the caller can
+    tell by identity whether the context did any work. A signal true of everyone
+    has distinguished nobody, and reporting `RESOLVED_CONTEXTUAL` for it would
+    credit the caller's hint with a decision the evidence never made.
+
+    Narrowing to nothing is also no narrowing. A scope that excluded every
+    candidate is more likely to be a scope the caller got wrong than proof that
+    none of these people is the one they meant.
+    """
+    if len(by_entity) < 2:
+        return by_entity
+    kept = {entity_id: pair for entity_id, pair in by_entity.items() if signals.get(entity_id)}
+    if not kept or len(kept) == len(by_entity):
+        return by_entity
+    return kept
 
 
 # --- evidence construction --------------------------------------------------
@@ -450,7 +483,3 @@ def _currency_warnings(subject: Entity | EntityStatus) -> list[ResolutionWarning
             ResolutionWarning.ENTITY_IS_NOT_CURRENT,
         ]
     return [ResolutionWarning.ENTITY_IS_NOT_CURRENT]
-
-
-def _as_entity_status(candidate: ResolutionCandidate) -> EntityStatus:
-    return candidate.status

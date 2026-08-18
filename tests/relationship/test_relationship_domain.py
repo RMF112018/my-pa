@@ -347,10 +347,11 @@ EXPECTED_MODEL_FIELDS = {
             "status",
             "evidence",
             "superseded_by_entity_id",
+            "signals",
         }
     ),
     "my_pa.domain.relationship.resolution.EntityResolution": frozenset(
-        {"outcome", "candidates", "warnings"}
+        {"outcome", "candidates", "warnings", "candidates_were_truncated"}
     ),
 }
 

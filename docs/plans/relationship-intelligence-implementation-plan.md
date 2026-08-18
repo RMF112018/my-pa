@@ -26,7 +26,7 @@ Abacus/ChatLLM Task changes, destructive actions, and operator risk acceptance
 | WP-RI-01 | Domain model (`Entity`, `ExternalIdentifier`, `Assignment`, `EntityRelationship`), four identifier prefixes, four tables, Alembic revision `9def3c2e63bb` | **complete** |
 | WP-RI-02 | `EntitiesRepository` port, `SqlEntityRepository`, the `UnitOfWork.entities` seat, the in-memory fake, FAST-tier tests | **complete** |
 | WP-RI-03 | Exact resolution: alias table, namespace and alias normalization, effective-date filtering, entity-type and scope filtering, conflicting-identifier handling, historical resolution, same-name protection | **complete** |
-| WP-RI-04 | Contextual resolution: bounded candidate ranking, calibration, explainable evidence, collision-biased safety, false-resolution evaluation | not started |
+| WP-RI-04 | Contextual resolution: bounded candidate ranking, calibration, explainable evidence, collision-biased safety, false-resolution evaluation | **complete** |
 | WP-RI-05 | The capability and MCP surface: `Capability` members, `Purpose` registration, the forward `ALTER`, commands, handlers, remote-exposure decision | not started |
 | WP-RI-06 | Observation, proposal, review, and merge | not started |
 | WP-RI-07 | Context card assembly (the specification's "context packet", section 26.3) | not started |
@@ -69,6 +69,9 @@ Two consequences bind WP-RI-03 and WP-RI-04:
 * The false-resolution evaluation in WP-RI-04 is **collision-biased**: the
   fixture is built to make wrong joins likely (same surname, shared employer,
   recycled email local-parts), because a corpus of easy cases measures nothing.
+  Delivered as `tests/evaluation/fixtures/resolution_corpus.py` and measured by
+  `tests/evaluation/resolution_harness.py`; the frozen result is
+  [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md).
 
 ---
 
@@ -91,14 +94,14 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 |---|---|---|---|
 | RI-AC-001 | Public language is Relationships / Relationship Intelligence; PRIE historical only | `OPEN` | WP-RI-13 |
 | RI-AC-002 | Integrated into `my-pa`, not a standalone engine | `MET` | No new process, database, or service; `tests/architecture/test_dependency_direction.py` |
-| RI-AC-003 | The product states relationships are not scores | `PARTIAL` | Enforced structurally by `tests/architecture/test_relationship_scoring_surface_is_denied.py`, now widened to the entity plane. The *statement* is WP-RI-13 |
+| RI-AC-003 | The product states relationships are not scores | `PARTIAL` | Enforced structurally by `tests/architecture/test_relationship_scoring_surface_is_denied.py`, widened to the entity plane; no numeric reaches the durable surface (`D-RI-14`). The *statement* is WP-RI-13 |
 | RI-AC-004 | Value without starting a chat | `BLOCKED_BY_D09` | — |
 | RI-AC-005 | Contact/source rows stay observations, not automatic canonical people | `OPEN` | WP-RI-06 |
 | RI-AC-006 | Unresolved mentions are first-class and searchable | `PARTIAL` | `ResolutionOutcome.AMBIGUOUS`/`NOT_FOUND` are first-class answers carrying their candidates and warnings; a *stored* unresolved mention is WP-RI-06 |
 | RI-AC-007 | No identity merge without governed policy | `OPEN` | WP-RI-06 |
 | RI-AC-008 | Merge preview shows all materially affected records | `OPEN` | WP-RI-06 |
 | RI-AC-009 | Merge and split history preserved and correctable | `PARTIAL` | `entities.superseded_by_entity_id` + the `merged_redirect` biconditional exist; lineage records are WP-RI-06 |
-| RI-AC-010 | Negative identity evidence prevents repeated false matches | `OPEN` | WP-RI-04 |
+| RI-AC-010 | Negative identity evidence prevents repeated false matches | `OPEN` | WP-RI-06 — negative evidence needs a record to live in, which the observation plane brings |
 | RI-AC-011 | Every material profile statement links to evidence or is marked | `OPEN` | WP-RI-06 |
 | RI-AC-012 | Source facts / notes / assertions / inferences structurally distinct | `OPEN` | WP-RI-06 |
 | RI-AC-013 | Coverage, freshness, exclusions appear before synthesis | `OPEN` | WP-RI-07 |
@@ -196,6 +199,47 @@ it `UNIQUE`, which forbids merging two entities into the same survivor — the
 ordinary case. Replaced with two named CHECKs: an entity redirects **exactly**
 when its status is `merged_redirect`, and it does not supersede itself.
 
+**D-RI-14 — the calibration is a measured table, not a number on a record.**
+Specification section 22.3 admits a numeric "only when calibrated and
+explained", and `D-RI-02` removed `confidence` from the durable surface because
+nothing calibrated it. WP-RI-04 resolves that tension without weakening either
+constraint: an answer carries the *basis* it rests on, and
+`RESOLUTION_CALIBRATION.md` publishes the observed precision of each
+`outcome:basis` pair over the labelled corpus. The number is a counted frequency
+rather than a chosen weight, it lives in the evaluation rather than on a record
+about a person, and a reader who wants to know what a `RESOLVED_EXACT` on a
+verified identifier is worth looks it up. The table is keyed by outcome *and*
+basis deliberately: keyed by basis alone it would report `canonical_name: 1.0`,
+which would read as though a bare name were sufficient — the exact claim the
+plane refuses. `exact_resolutions_on_a_bare_name` is asserted to stay zero.
+
+**D-RI-15 — the safety evaluation runs in the FAST tier, not as a SPECIALIZED
+suite.** `tests/evaluation`'s existing harness is `evaluation`-marked, which no
+CI job selects. That is right for a suite that exercises a whole retrieval
+pipeline and wrong for this one: it is microseconds of pure Python over an
+in-memory corpus, and what it protects is the plane's central claim.
+`AGENTS.md` section 7 admits a test to the PR gate when it protects a critical
+contract at acceptable cost. The frozen record is checked in the same run, so
+the published calibration cannot rot.
+
+**D-RI-16 — a recall floor, because "never resolve" would otherwise pass.** Zero
+false joins is trivially achievable by answering nothing, so
+`resolution_recall` is measured over `MUST_RESOLVE_FAMILIES` and floored at
+0.9. Both failure modes are measured, because only measuring both distinguishes
+a careful resolver from a useless one. The corpus therefore contains cases that
+*must* resolve — a married name, a diacritic variant, a reissued mailbox at two
+different moments — and refusing those is as much a failure as joining the two
+Alices.
+
+**D-RI-17 — no signal that nothing can reach.** A `SHARES_THE_REFERENCE_IDENTIFIER_DOMAIN`
+signal was drafted and removed: contextual signals are computed only on the name
+path, which runs only when the identifier lookup found nothing, so a
+domain-corroboration signal would have required a person whose *name* is an
+email address. Section 15.1 does list "email addresses and domains" as
+resolution evidence, and it becomes reachable when observations arrive; it is
+not modelled before then. The discriminating/corroborating split went with it,
+for the same reason — a classification with one empty half classifies nothing.
+
 **D-RI-11 — a lone name match is `AMBIGUOUS`, not resolved.** The single most
 consequential call in WP-RI-03. One entity carries a name and no other does, and
 that is still not evidence that a reference means that entity: uniqueness is a
@@ -261,11 +305,21 @@ sets it.
 
 * **`Entity.canonical_name` normalization is unenforced** (`D-RI-13`). WP-RI-06
   owns it.
-* **Contextual resolution is only as good as the scope it is given.** WP-RI-03
-  narrows by assignment and by outgoing relationship, and reports
-  `NARROWED_BY_SUPPLIED_SCOPE` only when the scope actually excluded someone. It
-  does not rank, calibrate, or evaluate — WP-RI-04 owns those, including the
-  collision-biased false-resolution evaluation.
+* **The evaluation measures the service against a double, not against SQL.**
+  `_CorpusRepository` subclasses the real port, so the service cannot pass
+  against a shape production could not supply — but the production partition,
+  the joins, and the constraints are proved in `tests/database` and
+  `tests/schema`, not here. Neither suite alone is sufficient.
+* **The corpus is small and synthetic.** Twenty-six labelled cases over twelve
+  entities is evidence that the stated refusals hold and that the resolver still
+  answers what it should. It is not a population estimate, and no number in
+  `RESOLUTION_CALIBRATION.md` should be read as a probability about a real
+  person. That limitation is stated in the report itself.
+* **Only two contextual signals exist** — assignment to a named scope, and a
+  typed relationship reaching it. Section 15.1's calendar attendees, email
+  participants, introduction chains, and negative evidence all need the
+  observation record (WP-RI-06). `RI-AC-010` stays `OPEN` for exactly that
+  reason.
 * **No MCP or capability surface exists** (`D-RI-01`), so nothing outside the
   process can reach any of this yet. That is deliberate until WP-RI-05.
 * **`record_assignment` and `record_relationship` have no natural key**, so a

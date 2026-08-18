@@ -43,6 +43,8 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.relationship.entity import EntityStatus, EntityType
 
 __all__ = [
+    "RESOLUTION_CANDIDATE_LIMIT",
+    "ContextualSignal",
     "EntityResolution",
     "ResolutionBasis",
     "ResolutionCandidate",
@@ -50,6 +52,14 @@ __all__ = [
     "ResolutionOutcome",
     "ResolutionWarning",
 ]
+
+#: The most candidates one answer carries. A bound rather than everything,
+#: because an unbounded candidate list is an unbounded response, and a caller
+#: choosing between four hundred people is not being helped by the extra three
+#: hundred and ninety. Truncation is *disclosed* rather than silent
+#: (`EntityResolution.candidates_were_truncated`), which is section 26.4's rule:
+#: a partial answer must not read as a complete one.
+RESOLUTION_CANDIDATE_LIMIT: int = 10
 
 
 class ResolutionOutcome(StrEnum):
@@ -118,6 +128,33 @@ _BASIS_ORDER: dict[ResolutionBasis, int] = {
 }
 
 
+class ContextualSignal(StrEnum):
+    """What the surrounding context corroborated, beyond what the reference matched.
+
+    Distinct from `ResolutionBasis` on purpose. A *basis* is what the reference
+    matched -- an identifier, an alias, a name. A *signal* is something true of
+    the candidate that the reference did not say: that they are on the project
+    the caller named. Collapsing the two would let a corroborating detail read as
+    though the reference had named it.
+
+    Section 15.1 admits "organization and role overlap" and "project-team
+    membership" as resolution evidence, and both of those are here. It also
+    admits calendar attendees, email participants, introduction chains and
+    negative evidence -- none of which this product observes yet. They arrive
+    with the observation record, and with them the question of whether a signal
+    may *select* a candidate or only support one; today every signal here is a
+    recorded assignment or a typed edge, and both are specific enough to select.
+    """
+
+    #: The candidate holds an assignment whose scope is the entity the caller
+    #: named. The strongest contextual evidence available here: someone being on
+    #: the project asked about is a recorded fact about them and the project.
+    ASSIGNED_TO_THE_NAMED_SCOPE = "assigned_to_the_named_scope"
+    #: A typed relationship of the candidate reaches the named scope -- works
+    #: for that organization, is a contractor on that project.
+    RELATED_TO_THE_NAMED_SCOPE = "related_to_the_named_scope"
+
+
 class ResolutionWarning(StrEnum):
     """What was true about an answer that a caller must not have to infer.
 
@@ -146,6 +183,13 @@ class ResolutionWarning(StrEnum):
     #: A supplied scope narrowed the candidate set. Disclosed because the answer
     #: would have been `AMBIGUOUS` without it.
     NARROWED_BY_SUPPLIED_SCOPE = "narrowed_by_supplied_scope"
+    #: More candidates matched than the answer carries. Disclosed because a
+    #: truncated list that reads as complete is the failure section 26.4 names.
+    MORE_CANDIDATES_THAN_THIS_ANSWER_CARRIES = "more_candidates_than_this_answer_carries"
+    #: The supplied context was true of every candidate, so it distinguished
+    #: none of them. Said out loud so a reader can see that the system consulted
+    #: the context and it did not help, rather than never having looked.
+    CONTEXT_DID_NOT_DISTINGUISH_THE_CANDIDATES = "context_did_not_distinguish_the_candidates"
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +231,7 @@ class ResolutionCandidate:
     status: EntityStatus
     evidence: tuple[ResolutionEvidence, ...]
     superseded_by_entity_id: str | None = None
+    signals: tuple[ContextualSignal, ...] = ()
 
     def __post_init__(self) -> None:
         validate_identifier(self.entity_id, IdKind.ENTITY)
@@ -198,6 +243,11 @@ class ResolutionCandidate:
             raise ValueError("a resolution candidate states why it is a candidate")
         if self.superseded_by_entity_id is not None:
             validate_identifier(self.superseded_by_entity_id, IdKind.ENTITY)
+        for signal in self.signals:
+            if not isinstance(signal, ContextualSignal):
+                raise ValueError("a contextual signal is from the closed vocabulary")
+        if len(set(self.signals)) != len(self.signals):
+            raise ValueError("a resolution candidate states each signal once")
 
     @property
     def strongest_basis(self) -> ResolutionBasis:
@@ -210,6 +260,11 @@ class ResolutionCandidate:
     @property
     def is_current(self) -> bool:
         return self.status is EntityStatus.ACTIVE
+
+    @property
+    def is_corroborated(self) -> bool:
+        """Whether the surrounding context said anything about this candidate."""
+        return bool(self.signals)
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,10 +280,17 @@ class EntityResolution:
     outcome: ResolutionOutcome
     candidates: tuple[ResolutionCandidate, ...] = ()
     warnings: tuple[ResolutionWarning, ...] = ()
+    candidates_were_truncated: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.outcome, ResolutionOutcome):
             raise ValueError("a resolution has a closed outcome")
+        if len(self.candidates) > RESOLUTION_CANDIDATE_LIMIT:
+            raise ValueError("a resolution carries a bounded candidate list")
+        if self.candidates_were_truncated and (
+            ResolutionWarning.MORE_CANDIDATES_THAN_THIS_ANSWER_CARRIES not in self.warnings
+        ):
+            raise ValueError("a truncated resolution says so in its warnings")
         for warning in self.warnings:
             if not isinstance(warning, ResolutionWarning):
                 raise ValueError("a resolution warning is from the closed vocabulary")
@@ -271,6 +333,8 @@ class EntityResolution:
             and ResolutionWarning.IDENTIFIER_CLAIMED_BY_SEVERAL_ENTITIES not in self.warnings
         ):
             raise ValueError("a conflicted identifier outcome says the identifier is conflicted")
+        if self.candidates_were_truncated and self.is_resolved:
+            raise ValueError("a resolved outcome is not one candidate out of an unknown many")
         named_only = {ResolutionOutcome.RESOLVED_EXACT, ResolutionOutcome.HISTORICAL_MATCH}
         if (
             self.outcome in named_only

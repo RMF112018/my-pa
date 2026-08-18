@@ -23,6 +23,8 @@ from my_pa.domain.relationship.entity import (
     AssignmentType,
     Entity,
     EntityAlias,
+    EntityRelationship,
+    EntityRelationshipType,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
@@ -34,6 +36,8 @@ from my_pa.domain.relationship.normalization import (
     normalize_name,
 )
 from my_pa.domain.relationship.resolution import (
+    RESOLUTION_CANDIDATE_LIMIT,
+    ContextualSignal,
     EntityResolution,
     ResolutionBasis,
     ResolutionCandidate,
@@ -49,6 +53,8 @@ OTHER = "prn_bbbb0002bbbb0002bbbb0002"
 ALICE = "ent_aaaa0001aaaa0001"
 ALICE_TWO = "ent_bbbb0002bbbb0002"
 TOWER = "ent_dddd0004dddd0004"
+THIRD = "ent_eeee0005eeee0005"
+SECOND_ORG = "ent_ffff0006ffff0006"
 
 WHEN = datetime(2026, 8, 17, 12, tzinfo=UTC)
 BEFORE = WHEN - timedelta(days=365)
@@ -724,3 +730,186 @@ def test_candidates_are_presented_strongest_evidence_first(
 def test_a_blank_reference_is_refused_before_it_becomes_a_query() -> None:
     with pytest.raises(ValueError, match="names something to resolve"):
         ResolutionRequest(raw_reference="   ")
+
+
+# --- WP-RI-04: bounded ranking, signals, and truncation ---------------------
+
+
+def test_a_contextual_resolution_carries_the_signal_that_selected_it(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """An unexplained selection is not explainable, whatever else it is."""
+    entities = _Entities(world)
+    entities.create(an_entity(ALICE, "Alice Synthetic"))
+    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.record_assignment(
+        PRINCIPAL,
+        Assignment(
+            assignment_id="asn_aaaa0001aaaa0001",
+            entity_id=ALICE,
+            assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+            principal_id=PRINCIPAL,
+            scope_entity_id=TOWER,
+        ),
+    )
+    answer = resolving.resolve(
+        PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER)
+    )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.candidates[0].signals == (ContextualSignal.ASSIGNED_TO_THE_NAMED_SCOPE,)
+    assert answer.candidates[0].is_corroborated is True
+
+
+def test_a_relationship_reaching_the_scope_is_its_own_signal(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    entities = _Entities(world)
+    entities.create(an_entity(ALICE, "Alice Synthetic"))
+    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(an_entity(SECOND_ORG, "Acme", entity_type=EntityType.ORGANIZATION))
+    entities.record_relationship(
+        PRINCIPAL,
+        EntityRelationship(
+            relationship_id="erel_aaaa0001aaaa0001",
+            from_entity_id=ALICE,
+            relationship_type=EntityRelationshipType.WORKS_FOR,
+            to_entity_id=SECOND_ORG,
+            principal_id=PRINCIPAL,
+        ),
+    )
+    answer = resolving.resolve(
+        PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=SECOND_ORG)
+    )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.candidates[0].signals == (ContextualSignal.RELATED_TO_THE_NAMED_SCOPE,)
+
+
+def test_context_true_of_everyone_is_disclosed_as_having_distinguished_nobody(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """Noticing and declining is a different disclosure from never looking."""
+    entities = _Entities(world)
+    entities.create(an_entity(ALICE, "Alice Synthetic"))
+    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    for assignment_id, entity_id in (
+        ("asn_aaaa0001aaaa0001", ALICE),
+        ("asn_bbbb0002bbbb0002", ALICE_TWO),
+    ):
+        entities.record_assignment(
+            PRINCIPAL,
+            Assignment(
+                assignment_id=assignment_id,
+                entity_id=entity_id,
+                assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+                principal_id=PRINCIPAL,
+                scope_entity_id=TOWER,
+            ),
+        )
+    answer = resolving.resolve(
+        PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER)
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert ResolutionWarning.CONTEXT_DID_NOT_DISTINGUISH_THE_CANDIDATES in answer.warnings
+    assert all(candidate.signals for candidate in answer.candidates)
+
+
+def test_narrowing_to_two_is_still_ambiguous(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """Narrowing is not choosing.
+
+    Three people share the name and two are on the project. The scope excluded
+    the third, which is real work, and the answer is still `AMBIGUOUS` because
+    two remain. A resolver that treated "the context narrowed something" as
+    "the context decided" would answer here, and would be wrong half the time.
+    """
+    entities = _Entities(world)
+    entities.create(an_entity(ALICE, "Alice Synthetic"))
+    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(an_entity(THIRD, "Alice Synthetic"))
+    entities.create(an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    for assignment_id, entity_id in (
+        ("asn_aaaa0001aaaa0001", ALICE),
+        ("asn_bbbb0002bbbb0002", ALICE_TWO),
+    ):
+        entities.record_assignment(
+            PRINCIPAL,
+            Assignment(
+                assignment_id=assignment_id,
+                entity_id=entity_id,
+                assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+                principal_id=PRINCIPAL,
+                scope_entity_id=TOWER,
+            ),
+        )
+    answer = resolving.resolve(
+        PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER)
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert {candidate.entity_id for candidate in answer.candidates} == {ALICE, ALICE_TWO}
+    assert all(candidate.signals for candidate in answer.candidates)
+    assert ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE in answer.warnings
+
+
+def test_an_answer_carrying_more_candidates_than_the_bound_is_truncated_and_says_so(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A truncated list that reads as complete is the failure section 26.4 names."""
+    entities = _Entities(world)
+    for index in range(RESOLUTION_CANDIDATE_LIMIT + 3):
+        entities.create(an_entity(f"ent_crowd{index:04d}crowd{index:04d}", "Alice Synthetic"))
+    answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic"))
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert len(answer.candidates) == RESOLUTION_CANDIDATE_LIMIT
+    assert answer.candidates_were_truncated is True
+    assert ResolutionWarning.MORE_CANDIDATES_THAN_THIS_ANSWER_CARRIES in answer.warnings
+
+
+def test_a_truncated_answer_can_never_be_a_resolution(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A resolution drawn from a list that dropped someone never saw them."""
+    entities = _Entities(world)
+    for index in range(RESOLUTION_CANDIDATE_LIMIT + 1):
+        entity_id = f"ent_crowd{index:04d}crowd{index:04d}"
+        entities.create(an_entity(entity_id, "Alice Synthetic"))
+        entities.record_alias(
+            PRINCIPAL, an_alias(f"eals_crowd{index:04d}crowd{index:04d}", entity_id, "Ali")
+        )
+    answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Ali"))
+    assert answer.resolved_entity_id is None
+    assert answer.candidates_were_truncated is True
+
+
+def test_the_type_refuses_a_resolution_that_admits_it_was_truncated() -> None:
+    with pytest.raises(ValueError, match="not one candidate out of an unknown many"):
+        EntityResolution(
+            outcome=ResolutionOutcome.RESOLVED_EXACT,
+            candidates=(a_candidate(),),
+            warnings=(ResolutionWarning.MORE_CANDIDATES_THAN_THIS_ANSWER_CARRIES,),
+            candidates_were_truncated=True,
+        )
+
+
+def test_the_type_refuses_more_candidates_than_the_bound() -> None:
+    crowd = tuple(
+        a_candidate(f"ent_crowd{index:04d}crowd{index:04d}")
+        for index in range(RESOLUTION_CANDIDATE_LIMIT + 1)
+    )
+    with pytest.raises(ValueError, match="bounded candidate list"):
+        EntityResolution(outcome=ResolutionOutcome.AMBIGUOUS, candidates=crowd)
+
+
+def test_a_signal_outside_the_closed_vocabulary_is_refused() -> None:
+    with pytest.raises(ValueError, match="closed vocabulary"):
+        ResolutionCandidate(
+            entity_id=ALICE,
+            entity_type=EntityType.PERSON,
+            display_name="Alice Synthetic",
+            status=EntityStatus.ACTIVE,
+            evidence=(an_evidence(),),
+            signals=("assigned_to_the_named_scope",),  # type: ignore[arg-type]
+        )

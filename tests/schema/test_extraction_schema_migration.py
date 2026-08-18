@@ -271,6 +271,18 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     # WP-RI-03: the entity alias table, so exact resolution can match on the
     # name forms an entity is actually referred to by.
     "b7f4d1a92c36": frozenset({"entity_aliases"}),
+    # WP-RI-06's entity governance records: what a source said, what something
+    # wants to change, and the lineage an accepted merge leaves behind. The
+    # revision between this one and `b7f4d1a92c36` — `c1a7e4b93d58` — creates no
+    # table at all, so it is absent here rather than pinned to an empty set, and
+    # `.get(revision, frozenset())` below reads absence as "creates nothing".
+    "d2b8f5c04e71": frozenset(
+        {
+            "entity_observations",
+            "entity_proposals",
+            "entity_merge_records",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

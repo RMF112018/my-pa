@@ -170,9 +170,16 @@ from my_pa.domain.relationship.entity import (
     Entity,
     EntityAlias,
     EntityRelationship,
+    EntityStatus,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+)
+from my_pa.domain.relationship.governance import (
+    EntityMergeRecord,
+    EntityObservation,
+    EntityProposal,
+    EntityProposalState,
 )
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
 from my_pa.domain.situation.continuity import (
@@ -410,6 +417,9 @@ class World:
     entities: list[Entity] = field(default_factory=list)
     entity_identifiers: list[ExternalIdentifier] = field(default_factory=list)
     entity_aliases: list[EntityAlias] = field(default_factory=list)
+    entity_observations: list[EntityObservation] = field(default_factory=list)
+    entity_proposals: list[EntityProposal] = field(default_factory=list)
+    entity_merges: list[EntityMergeRecord] = field(default_factory=list)
     entity_assignments: list[Assignment] = field(default_factory=list)
     entity_relationships: list[EntityRelationship] = field(default_factory=list)
     commits: int = 0
@@ -2434,6 +2444,135 @@ class _Entities(EntitiesRepository):
             if (held.entity_id, held.alias_type, held.normalized_value) == natural_key:
                 return
         self._world.entity_aliases.append(alias)
+
+    # --- WP-RI-06 governance ----------------------------------------------
+
+    def record_observation(self, principal_id: str, observation: EntityObservation) -> None:
+        self._world.fail("entities.record_observation")
+        if observation.principal_id != principal_id:
+            raise ValueError("an observation belongs to the acting Principal")
+        if observation.entity_id is not None:
+            self._require_own(principal_id, observation.entity_id)
+        for held in self._world.entity_observations:
+            if held.observation_id == observation.observation_id:
+                if held != observation:
+                    raise ValueError(
+                        "an observation identifier cannot be rebound to different values"
+                    )
+                return
+        self._world.entity_observations.append(observation)
+
+    def observations(
+        self, principal_id: str, entity_id: str | None = None, *, unresolved_only: bool = False
+    ) -> list[EntityObservation]:
+        self._world.fail("entities.observations")
+        return sorted(
+            (
+                observation
+                for observation in self._world.entity_observations
+                if observation.principal_id == principal_id
+                and (entity_id is None or observation.entity_id == entity_id)
+                and (not unresolved_only or observation.entity_id is None)
+            ),
+            key=lambda observation: observation.observation_id,
+        )
+
+    def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:
+        self._world.fail("entities.link_observation")
+        self._require_own(principal_id, entity_id)
+        for index, held in enumerate(self._world.entity_observations):
+            if held.observation_id == observation_id and held.principal_id == principal_id:
+                self._world.entity_observations[index] = replace(held, entity_id=entity_id)
+                return
+        raise UnknownScopeError("an observation link names an observation outside this scope")
+
+    def record_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        self._world.fail("entities.record_proposal")
+        if proposal.principal_id != principal_id:
+            raise ValueError("a proposal belongs to the acting Principal")
+        for held in self._world.entity_proposals:
+            if held.proposal_id == proposal.proposal_id:
+                if held != proposal:
+                    raise ValueError("a proposal identifier cannot be rebound to different values")
+                return
+        self._world.entity_proposals.append(proposal)
+
+    def proposal(self, principal_id: str, proposal_id: str) -> EntityProposal | None:
+        self._world.fail("entities.proposal")
+        return next(
+            (
+                held
+                for held in self._world.entity_proposals
+                if held.proposal_id == proposal_id and held.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def proposals(
+        self, principal_id: str, state: EntityProposalState | None = None
+    ) -> list[EntityProposal]:
+        self._world.fail("entities.proposals")
+        return sorted(
+            (
+                held
+                for held in self._world.entity_proposals
+                if held.principal_id == principal_id and (state is None or held.state is state)
+            ),
+            key=lambda held: held.proposal_id,
+        )
+
+    def decide_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        self._world.fail("entities.decide_proposal")
+        if proposal.principal_id != principal_id:
+            raise ValueError("a proposal belongs to the acting Principal")
+        for index, held in enumerate(self._world.entity_proposals):
+            if held.proposal_id == proposal.proposal_id and held.principal_id == principal_id:
+                self._world.entity_proposals[index] = proposal
+                return
+        raise UnknownScopeError("a decision names a proposal outside this scope")
+
+    def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
+        self._world.fail("entities.record_merge")
+        if record.principal_id != principal_id:
+            raise ValueError("a merge record belongs to the acting Principal")
+        self._require_own(principal_id, record.retained_entity_id, record.merged_entity_id)
+        if any(
+            held.merged_entity_id == record.merged_entity_id for held in self._world.entity_merges
+        ):
+            raise ValueError("an entity is merged away once")
+        self._world.entity_merges.append(record)
+
+    def merges(self, principal_id: str, entity_id: str | None = None) -> list[EntityMergeRecord]:
+        self._world.fail("entities.merges")
+        return sorted(
+            (
+                held
+                for held in self._world.entity_merges
+                if held.principal_id == principal_id
+                and (
+                    entity_id is None
+                    or entity_id in (held.retained_entity_id, held.merged_entity_id)
+                )
+            ),
+            key=lambda held: held.merge_id,
+        )
+
+    def redirect_entity(
+        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
+    ) -> None:
+        self._world.fail("entities.redirect_entity")
+        self._require_own(principal_id, merged_entity_id, retained_entity_id)
+        if merged_entity_id == retained_entity_id:
+            raise ValueError("an entity cannot be merged into itself")
+        for index, held in enumerate(self._world.entities):
+            if held.entity_id == merged_entity_id and held.principal_id == principal_id:
+                self._world.entities[index] = replace(
+                    held,
+                    status=EntityStatus.MERGED_REDIRECT,
+                    superseded_by_entity_id=retained_entity_id,
+                )
+                return
+        raise UnknownScopeError("a redirect names an entity outside this scope")
 
     def record_assignment(self, principal_id: str, assignment: Assignment) -> None:
         self._world.fail("entities.record_assignment")

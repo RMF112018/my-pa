@@ -53,7 +53,8 @@ ENTITY_REVISION = "9def3c2e63bb"
 #: this revision, so it moves whenever a revision is added; the chain test below
 #: is written not to depend on it.
 ALIAS_REVISION = "b7f4d1a92c36"
-HEAD_REVISION = "c1a7e4b93d58"
+CAPABILITY_REVISION = "c1a7e4b93d58"
+HEAD_REVISION = "d2b8f5c04e71"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -143,8 +144,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(ATTEMPT_REVISION).down_revision == ENTITY_KIND_REVISION
     assert script.get_revision(ENTITY_REVISION).down_revision == ATTEMPT_REVISION
     assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ALIAS_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 61
+    assert script.get_revision(CAPABILITY_REVISION).down_revision == ALIAS_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == CAPABILITY_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 62
 
 
 @pytest.mark.database

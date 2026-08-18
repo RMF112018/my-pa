@@ -6,7 +6,7 @@ relationship surface contains none of them — but *absence today is not a
 guarantee for tomorrow*, and the guard that already exists does not supply one.
 
 `tests/relationship/test_relationship_domain.py` freezes the exact field
-vocabulary of all twenty-three relationship tables and all twenty-six
+vocabulary of all twenty-six relationship tables and all thirty
 relationship dataclasses as a **closed allow-list**. That makes any new field *visible*: a
 column added without touching the constant reddens the build. It does not make a
 scoring field *impossible*, because the constant and the schema are both source,
@@ -254,8 +254,8 @@ def test_the_scan_reaches_the_whole_relationship_surface() -> None:
     vocabularies = relationship_vocabularies()
     declared = declared_allow_list()
 
-    assert len(columns) == 23, f"{len(columns)} relationship tables reached, not twenty-three"
-    assert len(models) == 26, f"{len(models)} relationship models reached, not twenty-six"
+    assert len(columns) == 26, f"{len(columns)} relationship tables reached, not twenty-six"
+    assert len(models) == 30, f"{len(models)} relationship models reached, not thirty"
     assert vocabularies, "no closed relationship vocabulary was reached"
     assert set(declared) == set(ALLOW_LIST_CONSTANTS), (
         f"{sorted(declared)} allow-list constants were read from "

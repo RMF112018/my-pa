@@ -163,7 +163,7 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build implements forty-eight, one per
+same as the tools this build implements. The build implements fifty-three, one per
 capability name. A default process publishes **twenty**.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
@@ -182,7 +182,7 @@ apps/gateway.py mcp` — by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
 (unset: twenty, none beginning `documents.`) and
 `::test_a_child_with_a_managed_root_publishes_every_capability` (set:
-forty-eight).
+fifty-three).
 
 **Re-executed 2026-08-03** — a real `stdio_client` spawning
 `.venv/bin/python apps/gateway.py mcp` as a child process, against a disposable
@@ -219,8 +219,8 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-12):** the tool list is derived from all
-**forty-eight** current capabilities, and the schema has **sixty-one** revisions
-at head `c1a7e4b93d58`. `capabilities.get` also reports content-free
+**forty-eight** current capabilities, and the schema has **sixty-two** revisions
+at head `d2b8f5c04e71`. `capabilities.get` also reports content-free
 `worker_planes`. The dated transcript below remains historical evidence for its
 stated head.
 

@@ -214,8 +214,19 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("entity", "principal_id"),
         ("entity", "principal_id"),
         ("identifier", "principal_id"),
+        ("observation", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("record", "principal_id"),
         ("rel", "principal_id"),
     ),
+    # WP-RI-06's governance service carries the `principal_id` of the proposal
+    # it just loaded onto the decided copy of that proposal. The value is not
+    # caller input: `proposal(principal_id, ...)` is partition-scoped, so a
+    # proposal held by anyone else was already answered as absent, and the read
+    # is of a row this Principal owns. `decide_proposal` then refuses a mismatch
+    # again at the write, which is where the registry's own rule wants it.
+    "application/entity_governance.py": (("held", "principal_id"),),
     "application/goodnotes.py": (
         ("page", "principal_id"),
         ("page", "principal_id"),

@@ -292,6 +292,7 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
 )
+from my_pa.domain.relationship.governance import EntityObservation
 from my_pa.domain.relationship.resolution import EntityResolution
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
@@ -858,14 +859,51 @@ def _resolution_view(answer: EntityResolution) -> dict[str, object]:
 
 
 def _context_card_view(card: EntityContextCard) -> dict[str, object]:
+    """One context card as the wire sees it.
+
+    `coverage` and `limitations` come before the records in reading order for the
+    reason `RI-AC-013` gives: coverage, freshness and exclusions belong *before*
+    synthesis, not appended after it where a reader has already drawn a
+    conclusion.
+    """
     return {
         "entity": _entity_view(card.entity),
+        "assembled_at": format_rfc3339(card.assembled_at),
+        "coverage": [
+            {
+                "source_id": entry.source_id,
+                "observation_count": entry.observation_count,
+                "most_recent_observation_at": format_rfc3339(entry.most_recent_observation_at),
+            }
+            for entry in card.coverage
+        ],
+        "most_recent_observation_at": _moment_or_none(card.most_recent_observation_at),
+        "limitations": [limitation.value for limitation in card.limitations],
+        "is_complete": card.is_complete,
         "aliases": [_alias_view(alias) for alias in card.aliases],
         "identifiers": [_identifier_view(item) for item in card.identifiers],
         "assignments": [_assignment_view(item) for item in card.assignments],
         "relationships": [_relationship_view(edge) for edge in card.relationships],
-        "limitations": [limitation.value for limitation in card.limitations],
-        "is_complete": card.is_complete,
+        "observations": [_observation_view(item) for item in card.observations],
+    }
+
+
+def _observation_view(observation: EntityObservation) -> dict[str, object]:
+    """One observation, without the value it observed.
+
+    The card carries *that* a source said something and when, not the text it
+    said: the observed value is a name or an address lifted out of someone's
+    mail, and a context card is a summary rather than the evidence itself.
+    `entities.get` on the source object is where the evidence lives.
+    """
+    return {
+        "observation_id": observation.observation_id,
+        "kind": observation.kind.value,
+        "source_id": observation.source_id,
+        "source_object_id": observation.source_object_id,
+        "source_version_id": observation.source_version_id,
+        "observed_at": format_rfc3339(observation.observed_at),
+        "recorded_at": format_rfc3339(observation.recorded_at),
     }
 
 
@@ -2781,7 +2819,9 @@ class ApplicationService:
         """`entities.context`: the bounded context card for one entity."""
         with _translated():
             card = EntityContextService(unit_of_work.entities).card(
-                authorization.principal.principal_id, command.entity_id
+                authorization.principal.principal_id,
+                command.entity_id,
+                assembled_at=authorization.at,
             )
         if card is None:
             raise NotFoundError(SafeDetail.TARGET_ID)

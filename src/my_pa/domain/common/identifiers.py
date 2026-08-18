@@ -210,6 +210,19 @@ class IdKind(StrEnum):
     ASSIGNMENT = "asn"
     ENTITY_RELATIONSHIP = "erel"
     ENTITY_ALIAS = "eals"
+    #: WP-RI-06: the evidence and governance records. `ENTITY_OBSERVATION` names
+    #: one source-bound observation that may refer to an entity and does not
+    #: become one (specification section 12.2). `ENTITY_PROPOSAL` names a
+    #: proposed mutation awaiting a decision. `ENTITY_MERGE` names the lineage
+    #: record an accepted merge leaves behind, which is what makes a merge
+    #: reversible rather than destructive (section 15.3).
+    #:
+    #: These three were deliberately absent until now: a prefix is a contract
+    #: this module promises is stable, and until this work package there was no
+    #: table for any of them to name.
+    ENTITY_OBSERVATION = "eobs"
+    ENTITY_PROPOSAL = "eprp"
+    ENTITY_MERGE = "emrg"
 
 
 class InvalidIdentifierError(ValueError):

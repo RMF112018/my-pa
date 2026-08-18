@@ -350,13 +350,64 @@ EXPECTED_MODEL_FIELDS = {
             "signals",
         }
     ),
+    # WP-RI-06: the governance records. Frozen here for the reason the
+    # resolution types are: these decide *whether* an entity changes, so a field
+    # added to one is a new input to that decision.
+    "my_pa.domain.relationship.governance.EntityObservation": frozenset(
+        {
+            "observation_id",
+            "principal_id",
+            "kind",
+            "observed_value",
+            "normalized_value",
+            "source_id",
+            "source_object_id",
+            "source_version_id",
+            "observed_at",
+            "recorded_at",
+            "entity_id",
+        }
+    ),
+    "my_pa.domain.relationship.governance.EntityProposal": frozenset(
+        {
+            "proposal_id",
+            "principal_id",
+            "kind",
+            "state",
+            "payload",
+            "observation_ids",
+            "proposed_at",
+            "proposed_by",
+            "decided_by",
+            "decided_at",
+            "decision_reason",
+        }
+    ),
+    "my_pa.domain.relationship.governance.EntityMergeRecord": frozenset(
+        {
+            "merge_id",
+            "principal_id",
+            "retained_entity_id",
+            "merged_entity_id",
+            "proposal_id",
+            "decided_by",
+            "reason",
+            "decided_at",
+        }
+    ),
+    "my_pa.domain.relationship.context_card.ContextCardCoverage": frozenset(
+        {"source_id", "observation_count", "most_recent_observation_at"}
+    ),
     "my_pa.domain.relationship.context_card.EntityContextCard": frozenset(
         {
             "entity",
+            "assembled_at",
             "aliases",
             "identifiers",
             "assignments",
             "relationships",
+            "observations",
+            "coverage",
             "limitations",
         }
     ),
@@ -506,6 +557,48 @@ EXPECTED_TABLE_COLUMNS = {
             "principal_id",
         }
     ),
+    "entity_observations": frozenset(
+        {
+            "observation_id",
+            "principal_id",
+            "kind",
+            "observed_value",
+            "normalized_value",
+            "source_id",
+            "source_object_id",
+            "source_version_id",
+            "observed_at",
+            "recorded_at",
+            "entity_id",
+        }
+    ),
+    "entity_proposals": frozenset(
+        {
+            "proposal_id",
+            "principal_id",
+            "kind",
+            "state",
+            "payload",
+            "observation_ids",
+            "proposed_at",
+            "proposed_by",
+            "decided_by",
+            "decided_at",
+            "decision_reason",
+        }
+    ),
+    "entity_merge_records": frozenset(
+        {
+            "merge_id",
+            "principal_id",
+            "retained_entity_id",
+            "merged_entity_id",
+            "proposal_id",
+            "decided_by",
+            "reason",
+            "decided_at",
+        }
+    ),
     "entity_aliases": frozenset(
         {
             "alias_id",
@@ -580,8 +673,8 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 26
-    assert len(actual_table_columns) == 23
+    assert len(actual_model_fields) == 30
+    assert len(actual_table_columns) == 26
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

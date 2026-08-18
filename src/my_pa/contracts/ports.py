@@ -95,6 +95,12 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifierNamespace,
 )
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
+from my_pa.domain.relationship.governance import (
+    EntityMergeRecord,
+    EntityObservation,
+    EntityProposal,
+    EntityProposalState,
+)
 from my_pa.domain.relationship.identity import (
     IdentityCandidateSet,
     IdentityObservation,
@@ -403,6 +409,89 @@ class EntitiesRepository(ABC):
         An equality match, not a substring one: `search` is the substring
         surface, and resolution asks a different question -- who *is* this --
         for which a partial match is evidence of nothing.
+        """
+
+    # --- WP-RI-06: observation, proposal, and merge lineage -----------------
+    #
+    # These are the governed half of the plane. They are on this port rather
+    # than a second one because they read and write the same partition through
+    # the same transaction, and a second port over the same rows would be a
+    # second place the partition has to be remembered.
+
+    @abstractmethod
+    def record_observation(self, principal_id: str, observation: EntityObservation) -> None:
+        """Record one source-bound observation. Idempotent on its identifier.
+
+        Recording an observation never creates or modifies an entity.  Section
+        12.2 is explicit that a source row "does not become the canonical person
+        by itself", and this method is where that is true rather than intended.
+        """
+
+    @abstractmethod
+    def observations(
+        self, principal_id: str, entity_id: str | None = None, *, unresolved_only: bool = False
+    ) -> list[EntityObservation]:
+        """Observations in this Principal's partition.
+
+        `entity_id` selects those linked to one entity. `unresolved_only`
+        selects those linked to none, which is the unresolved-mention queue and
+        the reason `entity_id` is nullable at all.
+        """
+
+    @abstractmethod
+    def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:
+        """Link one observation to an entity.
+
+        Separate from recording it, because the two happen at different times
+        for different reasons: a source produces the observation, and a
+        resolution or a review decides what it refers to.
+        """
+
+    @abstractmethod
+    def record_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        """Record one proposed mutation. Idempotent on its identifier.
+
+        Recording a proposal applies nothing.  A proposal is a request, and the
+        decision that grants it is `decide_proposal`.
+        """
+
+    @abstractmethod
+    def proposal(self, principal_id: str, proposal_id: str) -> EntityProposal | None:
+        """One proposal in this Principal's partition, or `None`."""
+
+    @abstractmethod
+    def proposals(
+        self, principal_id: str, state: EntityProposalState | None = None
+    ) -> list[EntityProposal]:
+        """Proposals in this Principal's partition, optionally by state."""
+
+    @abstractmethod
+    def decide_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        """Replace one proposal with its decided form.
+
+        Takes the whole record rather than the fields, so the decided proposal
+        has been through `EntityProposal.__post_init__` -- which is what refuses
+        a decision with no actor, or an actor on an undecided proposal.
+        """
+
+    @abstractmethod
+    def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
+        """Record the lineage of one accepted merge."""
+
+    @abstractmethod
+    def merges(self, principal_id: str, entity_id: str | None = None) -> list[EntityMergeRecord]:
+        """Merge lineage in this Principal's partition, optionally touching one entity."""
+
+    @abstractmethod
+    def redirect_entity(
+        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
+    ) -> None:
+        """Point one entity at the entity it was merged into.
+
+        Sets `status` to `merged_redirect` and `superseded_by_entity_id` to the
+        survivor.  The merged entity is not deleted: section 15.3 asks a merge to
+        preserve prior identifiers as lineage, and a row that still resolves as a
+        `HISTORICAL_MATCH` is how that is done.
         """
 
     @abstractmethod

@@ -28,8 +28,8 @@ Abacus/ChatLLM Task changes, destructive actions, and operator risk acceptance
 | WP-RI-03 | Exact resolution: alias table, namespace and alias normalization, effective-date filtering, entity-type and scope filtering, conflicting-identifier handling, historical resolution, same-name protection | **complete** |
 | WP-RI-04 | Contextual resolution: bounded candidate ranking, calibration, explainable evidence, collision-biased safety, false-resolution evaluation | **complete** |
 | WP-RI-05 | The capability and MCP surface: five `Capability` members, the `entity_read` purpose, the forward `ALTER`, commands, handlers, transport builders, scope policy, the composition gate, and a minimal context card | **complete** |
-| WP-RI-06 | Observation, proposal, review, and merge | not started |
-| WP-RI-07 | Context card enrichment: coverage, freshness, and disclosure on the card WP-RI-05 delivered | not started |
+| WP-RI-06 | Observation, proposal, and governed merge with lineage | **complete** |
+| WP-RI-07 | Context card enrichment: coverage, freshness, and generation identity | **complete** |
 | WP-RI-08 | Backfill / re-enrichment (the specification's "re-enrichment triggers", section 27.4) | not started |
 | WP-RI-09 | Inspection tooling | not started |
 | WP-RI-10 | Intelligence-task integration | not started |
@@ -96,15 +96,15 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 | RI-AC-002 | Integrated into `my-pa`, not a standalone engine | `MET` | No new process, database, or service; `tests/architecture/test_dependency_direction.py` |
 | RI-AC-003 | The product states relationships are not scores | `PARTIAL` | Enforced structurally by `tests/architecture/test_relationship_scoring_surface_is_denied.py`, widened to the entity plane; no numeric reaches the durable surface (`D-RI-14`). The *statement* is WP-RI-13 |
 | RI-AC-004 | Value without starting a chat | `BLOCKED_BY_D09` | — |
-| RI-AC-005 | Contact/source rows stay observations, not automatic canonical people | `OPEN` | WP-RI-06 |
-| RI-AC-006 | Unresolved mentions are first-class and searchable | `PARTIAL` | `ResolutionOutcome.AMBIGUOUS`/`NOT_FOUND` are first-class answers over the wire, carrying candidates and warnings, proved in `tests/contract/test_entity_capabilities.py`; a *stored* unresolved mention is WP-RI-06 |
-| RI-AC-007 | No identity merge without governed policy | `OPEN` | WP-RI-06 |
+| RI-AC-005 | Contact/source rows stay observations, not automatic canonical people | `MET` | `EntityGovernanceService.observe` records an observation and can do nothing else; `tests/unit/test_entity_governance.py` asserts no entity appears |
+| RI-AC-006 | Unresolved mentions are first-class and searchable | `MET` (backend) | An unlinked `entity_observations` row *is* the unresolved mention, listable via `unresolved_mentions`; resolution answers `AMBIGUOUS`/`NOT_FOUND` over the wire. Surfacing it to a user is `BLOCKED_BY_D09` |
+| RI-AC-007 | No identity merge without governed policy | `MET` | `ReviewRequirement.REQUIRES_OPERATOR` refuses an unauthorised accept; the server refuses a decided proposal with no actor (`tests/database/test_entity_governance.py`) |
 | RI-AC-008 | Merge preview shows all materially affected records | `OPEN` | WP-RI-06 |
-| RI-AC-009 | Merge and split history preserved and correctable | `PARTIAL` | `entities.superseded_by_entity_id` + the `merged_redirect` biconditional exist; lineage records are WP-RI-06 |
+| RI-AC-009 | Merge and split history preserved and correctable | `PARTIAL` | `entity_merge_records` carries actor, reason, moment and both identifiers; the merged entity survives as a redirect. **Split is not implemented** — section 15.4's requirements are unmet and open |
 | RI-AC-010 | Negative identity evidence prevents repeated false matches | `OPEN` | WP-RI-06 — negative evidence needs a record to live in, which the observation plane brings |
 | RI-AC-011 | Every material profile statement links to evidence or is marked | `OPEN` | WP-RI-06 |
 | RI-AC-012 | Source facts / notes / assertions / inferences structurally distinct | `OPEN` | WP-RI-06 |
-| RI-AC-013 | Coverage, freshness, exclusions appear before synthesis | `PARTIAL` | The context card names every collection it truncated (`limitations`, `is_complete`); coverage and freshness are WP-RI-07 |
+| RI-AC-013 | Coverage, freshness, exclusions appear before synthesis | `MET` (backend) | The card carries `coverage` per source, `most_recent_observation_at`, `assembled_at`, and `limitations`, ordered before the records. Presentation is `BLOCKED_BY_D09` |
 | RI-AC-014 | Stale evidence never presented as current | `PARTIAL` | Resolution answers `HISTORICAL_MATCH` with `ENTITY_IS_NOT_CURRENT`/`ENTITY_HAS_BEEN_MERGED_AWAY`, and filters evidence by effective date under `as_of` (WP-RI-03). Briefing-level staleness is WP-RI-07; presentation is `BLOCKED_BY_D09` |
 | RI-AC-015 | Contradictory evidence preserved, not collapsed | `OPEN` | WP-RI-06 |
 | RI-AC-016 | Briefings retain evidence scope and model identity | `OPEN` | WP-RI-07 |
@@ -121,16 +121,16 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 | RI-AC-027 | Meeting briefing identifies attendee ambiguity and unavailable evidence | `OPEN` | WP-RI-07 |
 | RI-AC-028 | Deterministic meeting context usable when AI is unavailable | `OPEN` | WP-RI-07 |
 | RI-AC-029 | Briefing claims navigate to source evidence | `BLOCKED_BY_D09` | — |
-| RI-AC-030 | Post-meeting capture creates proposals without changing source events | `OPEN` | WP-RI-06 |
+| RI-AC-030 | Post-meeting capture creates proposals without changing source events | `PARTIAL` | The proposal plane exists and writes no source; no capture pipeline feeds it yet |
 | RI-AC-031 | Quick Note / Call launchable in-app and from device shortcuts | `BLOCKED_BY_D09` | — |
 | RI-AC-032 | One general input field required before save | `BLOCKED_BY_D09` | — |
 | RI-AC-033 | Original input durably stored before enrichment | `NOT_APPLICABLE_TO_THIS_CAMPAIGN` | Quick Capture plane (ADR-003) |
 | RI-AC-034 | Enrichment failure does not lose or block the capture | `NOT_APPLICABLE_TO_THIS_CAMPAIGN` | Quick Capture plane |
-| RI-AC-035 | Participants, commitments, sensitive facts, dates follow review policy | `OPEN` | WP-RI-06 |
+| RI-AC-035 | Participants, commitments, sensitive facts, dates follow review policy | `PARTIAL` | Identity proposals require review and merges require an operator; commitments and sensitive facts belong to their own planes |
 | RI-AC-036 | Repeated processing does not duplicate structured records | `PARTIAL` | `bind_identifier` is idempotent against its natural key; `record_assignment` and `record_relationship` are idempotent only against their own identifier. Closing this needs a write-path idempotency key — WP-RI-06 |
 | RI-AC-037 | Capture corrections retain immutable before/after evidence | `NOT_APPLICABLE_TO_THIS_CAMPAIGN` | Quick Capture plane |
 | RI-AC-038 | AI output carries an authority class | `OPEN` | WP-RI-06 |
-| RI-AC-039 | Models cannot merge identities or promote inferences autonomously | `OPEN` | WP-RI-06, WP-RI-11 |
+| RI-AC-039 | Models cannot merge identities or promote inferences autonomously | `MET` | `propose` cannot apply; `accept` refuses a merge without declared operator authority; both mutations were mutation-tested |
 | RI-AC-040 | No external action occurs through a relationship knowledge write | `OPEN` | WP-RI-11 |
 
 **Tier discipline.** A criterion requiring MCP, integration, canary, or live
@@ -144,6 +144,36 @@ here precisely because no such test exists yet.
 
 Recorded here because each one is a choice a reviewer would otherwise have to
 reconstruct from a diff.
+
+**D-RI-21 — WP-RI-06 registers no capability, and that is the gate.** The
+governance plane writes: it links observations, decides proposals, and redirects
+merged entities. Specification section 21.4 forbids a model merging identities;
+`RI-AC-039` says the same; the carry-forward gate on this campaign says write
+methods must not become remote before their authorization gate. So observation,
+proposal and merge are reachable in-process — by `WP-RI-08`'s re-enrichment and
+by a future review surface — and reachable over no transport at all. A write
+capability would need a write purpose, which would put it in
+`adapters/mcp/remote._WRITE_PURPOSES` and on the remote surface the moment
+writes were enabled, and that is a decision for the work package that has a
+reviewer to grant it.
+
+**D-RI-22 — `ReviewRequirement`, not a risk band.** Specification section 12.18
+asks a review case for a "risk class"; the scoring prohibition refuses the token
+`risk` on this surface. Naming the concept for what it *does* —
+`MAY_BE_ACCEPTED_AUTOMATICALLY`, `REQUIRES_REVIEW`, `REQUIRES_OPERATOR` — keeps
+the guard intact and is more useful besides: "this needs an operator" is
+actionable, where "high risk" is a label somebody still has to translate. It is
+derived from the proposal kind rather than stored on the proposal, so a proposer
+cannot name its own weakest requirement.
+
+**D-RI-23 — a merge redirects; it never deletes.** Accepting a merge sets the
+merged-away entity to `merged_redirect`, points it at the survivor, and writes an
+`entity_merge_records` row naming the actor, the reason and the moment. It does
+not delete the entity, rewrite its identifiers, or move its observations.
+Section 15.3 asks a merge to preserve prior identifiers as lineage and to support
+a governed correction path, and an entity that still resolves as a
+`HISTORICAL_MATCH` is how both are true at once. Re-pointing the records that
+referred to it is `WP-RI-08`.
 
 **D-RI-18 — WP-RI-05 registered all five capabilities at once, including
 `entities.context`.** Registering one costs a forward `ALTER` on

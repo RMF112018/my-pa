@@ -30,7 +30,8 @@ GROUNDING_REVISION: Final = "b7f2c9e4a618"
 #: this revision, so it moves whenever a revision is added; the chain test below
 #: is written not to depend on it.
 ALIAS_REVISION: Final = "b7f4d1a92c36"
-HEAD_REVISION: Final = "c1a7e4b93d58"
+CAPABILITY_REVISION: Final = "c1a7e4b93d58"
+HEAD_REVISION: Final = "d2b8f5c04e71"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_a4d9c2e7b815_admit_goodnotes_content_and_durable_note_stages.py"
 )
@@ -39,6 +40,11 @@ PURPOSES_ADDED: Final[frozenset[str]] = frozenset({"goodnotes_content"})
 NEW_TABLES: Final[frozenset[str]] = frozenset(
     {"goodnotes_ingestion_run_stages", "goodnotes_page_rasters"}
 )
+
+#: The constant whose presence marks a revision as one that freezes the audited
+#: capability vocabulary. A revision that creates tables and admits nothing does
+#: not write it, which is how `_latest_vocabulary_migration` tells the two apart.
+_ADMITTING_CONSTANT: Final = "_CAPABILITIES_AT_THIS_REVISION"
 
 
 def _config() -> Config:
@@ -57,18 +63,35 @@ def _frozen_literals(constant: str) -> frozenset[str]:
     return frozenset(_frozen_names(MIGRATION, constant))
 
 
-def _head_migration() -> Path:
-    """The file of whichever revision is currently at the head of the chain.
+def _latest_vocabulary_migration() -> Path:
+    """The file of the most recent revision that *freezes* the audited vocabulary.
 
-    Derived rather than written down, for the reason
-    `test_the_chain_has_one_head_and_this_revision_is_on_it` no longer pins a
-    head: the identity of the last revision moves every time one is written, and
-    a literal here would have to be edited by every later work package.
+    This read `script.get_revision(head).path` until `d2b8f5c04e71`, and the
+    head was the right file only for as long as every revision widened the
+    vocabulary. `d2b8f5c04e71` creates three tables and admits nothing, so it
+    declares no `_CAPABILITIES_AT_THIS_REVISION` at all and the head reader
+    raised on a constant that was never there — a DDL-only revision is not a
+    vocabulary claim, and asking it for one is asking the wrong revision.
+
+    So the search is for the property the claim is actually about: the last
+    revision in the chain that states a frozen capability vocabulary is the one
+    whose statement a running database is currently enforcing, because `D-69`
+    means no later revision has touched the closed set. `walk_revisions()` walks
+    head-first, so the first match is that revision. Derived rather than written
+    down because a literal here would have to be edited by every later work
+    package — and, as `d2b8f5c04e71` has just shown, by DDL-only ones too.
     """
     script = ScriptDirectory.from_config(_config())
     heads = list(script.get_heads())
     assert len(heads) == 1, f"expected a single Alembic head, found {heads}"
-    return Path(script.get_revision(heads[0]).path)
+    for entry in script.walk_revisions():
+        path = Path(entry.path)
+        if f"{_ADMITTING_CONSTANT}: Final = (" in path.read_text(encoding="utf-8"):
+            return path
+    raise AssertionError(
+        f"no revision in the chain declares {_ADMITTING_CONSTANT}; the audited "
+        "closed sets are then installed by nothing and this comparison is vacuous"
+    )
 
 
 def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
@@ -91,8 +114,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(ATTEMPT_REVISION).down_revision == ENTITY_KIND_REVISION
     assert script.get_revision(ENTITY_REVISION).down_revision == ATTEMPT_REVISION
     assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ALIAS_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 61
+    assert script.get_revision(CAPABILITY_REVISION).down_revision == ALIAS_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == CAPABILITY_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 62
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -113,7 +137,7 @@ def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
 
 #: Every frozen vocabulary a revision of this shape declares.
 _FROZEN_CONSTANTS: Final = (
-    "_CAPABILITIES_AT_THIS_REVISION",
+    _ADMITTING_CONSTANT,
     "_CAPABILITIES_BEFORE_THIS_REVISION",
     "_PURPOSES_AT_THIS_REVISION",
     "_PURPOSES_BEFORE_THIS_REVISION",
@@ -121,16 +145,16 @@ _FROZEN_CONSTANTS: Final = (
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:
-    """The *head* revision's frozen vocabulary is the domain, exactly.
+    """The last *admitting* revision's frozen vocabulary is the domain, exactly.
 
     This assertion used to be made of `a4d9c2e7b815`, and it was correct for as
     long as `a4d9c2e7b815` was the last revision to widen the audited vocabulary.
     It is not any more, and it is not *stale* — it is a claim that revision no
-    longer carries. `c1a7e4b93d58` admits the five `entities.*` capabilities and
+    longer carries. `d2b8f5c04e71` admits the five `entities.*` capabilities and
     the `entity_read` purpose to the `audit_events` closed sets, so
     `a4d9c2e7b815`'s literals are now what they are required to be by `D-69`:
     frozen at the vocabulary that revision emitted when it merged, and therefore
-    short of the domain by exactly what `c1a7e4b93d58` added. Asserting equality
+    short of the domain by exactly what `d2b8f5c04e71` added. Asserting equality
     of the older revision would
     force every later widening to edit a merged migration, which is the defect
     `D-69` exists to forbid.
@@ -138,32 +162,43 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     So the claim is kept and moved rather than dropped: *some* revision's frozen
     literals still have to equal the live domain exactly — otherwise the closed
     set a running database enforces has drifted from the enum the application
-    dispatches on — and the revision that carries it is whichever one is at the
-    head, derived. `a4d9c2e7b815` keeps the half that is still its own: the delta
-    it added over its predecessor, and the sorted order of every literal it
-    froze.
+    dispatches on. Which revision carries it was read as "the head" until
+    `d2b8f5c04e71`, and that was a near-miss rather than the claim: the head is
+    the revision that carries the vocabulary only while every revision admits
+    something. `d2b8f5c04e71` creates the entity observation, proposal, and
+    merge-lineage tables and admits nothing, so it states no vocabulary to
+    compare — and the closed set a database migrated to it enforces is still the
+    one `d2b8f5c04e71` installed, because `D-69` guarantees that only a revision
+    which writes the set out can have changed it. The subject is therefore the
+    most recent revision that *froze* a vocabulary, derived by walking the chain
+    head-first for one that declares `_CAPABILITIES_AT_THIS_REVISION`; a
+    DDL-only revision moves the head without moving that, and the rule survives
+    the next one too. `a4d9c2e7b815` keeps the half that is still its own: the
+    delta it added over its predecessor, and the sorted order of every literal
+    it froze.
     """
-    head = _head_migration()
-    admitted = frozenset(_frozen_names(head, "_CAPABILITIES_AT_THIS_REVISION"))
+    admitting = _latest_vocabulary_migration()
+    admitted = frozenset(_frozen_names(admitting, _ADMITTING_CONSTANT))
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
     assert admitted == declared, (
-        f"the head revision {head.name} freezes a capability vocabulary that is not "
-        f"the domain; the difference is {sorted(admitted ^ declared)}"
+        f"the last admitting revision {admitting.name} freezes a capability vocabulary "
+        f"that is not the domain; the difference is {sorted(admitted ^ declared)}"
     )
-    purposes = frozenset(_frozen_names(head, "_PURPOSES_AT_THIS_REVISION"))
+    purposes = frozenset(_frozen_names(admitting, "_PURPOSES_AT_THIS_REVISION"))
     assert purposes == {member.value for member in Purpose}, (
-        f"the head revision {head.name} freezes a purpose vocabulary that is not the "
-        f"domain; the difference is {sorted(purposes ^ {member.value for member in Purpose})}"
+        f"the last admitting revision {admitting.name} freezes a purpose vocabulary that "
+        f"is not the domain; the difference is "
+        f"{sorted(purposes ^ {member.value for member in Purpose})}"
     )
 
-    this_revision = _frozen_literals("_CAPABILITIES_AT_THIS_REVISION")
+    this_revision = _frozen_literals(_ADMITTING_CONSTANT)
     this_purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
     before = _frozen_literals("_CAPABILITIES_BEFORE_THIS_REVISION")
     assert this_revision - before == CAPABILITIES_ADDED
     assert this_purposes - _frozen_literals("_PURPOSES_BEFORE_THIS_REVISION") == PURPOSES_ADDED
-    for path in (MIGRATION, head):
+    for path in (MIGRATION, admitting):
         for constant in _FROZEN_CONSTANTS:
             names = _frozen_names(path, constant)
             assert names == sorted(names), f"{path.name}'s {constant} is not in sorted order"

@@ -226,7 +226,7 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     26: "Twenty-six",
     27: "Twenty-seven",
     28: "Twenty-eight",
-    29: "Thirty",
+    29: "Twenty-nine",
     30: "Thirty",
     31: "Thirty-one",
     32: "Thirty-two",
@@ -244,14 +244,14 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     44: "Forty-four",
     45: "Forty-five",
     46: "Forty-six",
-    47: "Forty-eight",
+    47: "Forty-seven",
     48: "Forty-eight",
     49: "Forty-nine",
     50: "Fifty",
     51: "Fifty-one",
     52: "Fifty-two",
     53: "Fifty-three",
-    54: "Fifty-five",
+    54: "Fifty-four",
     55: "Fifty-five",
     56: "Fifty-six",
     57: "Fifty-seven",
@@ -259,6 +259,7 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     59: "Fifty-nine",
     60: "Sixty",
     61: "Sixty-one",
+    62: "Sixty-two",
 }
 
 
@@ -344,7 +345,7 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
     guard went stale in step with the prose instead of catching it.
 
     The capability figure is now derived for the same reason and by the same
-    argument. It was a spelled literal until `c1a7e4b93d58` admitted the
+    argument. It was a spelled literal until `d2b8f5c04e71` admitted the
     `entities.*` names, and on that day the guard and all three documents were
     wrong together — the guard asserting the stale spelling was present, which is
     the one thing that cannot detect a stale spelling. `Capability` is what the

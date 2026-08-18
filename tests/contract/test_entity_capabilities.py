@@ -42,6 +42,7 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
 )
+from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
 
 ALICE = "ent_alice0001alice0001"
@@ -129,6 +130,22 @@ def staged(scene: Scene) -> Scene:
                 relationship_type=EntityRelationshipType.WORKS_FOR,
                 to_entity_id=ACME,
                 principal_id=principal_id,
+            ),
+        )
+        entities.record_observation(
+            principal_id,
+            EntityObservation(
+                observation_id="eobs_alice0001alice001",
+                principal_id=principal_id,
+                kind=ObservationKind.MESSAGE_PARTICIPANT,
+                observed_value="Alice Chen <a.chen@acme.test>",
+                normalized_value=normalize_name("Alice Chen"),
+                source_id=scene.source.source_id,
+                source_object_id=scene.markdown.source_object_id,
+                source_version_id="ver_alice0001alice0001",
+                observed_at=WHEN,
+                recorded_at=WHEN,
+                entity_id=ALICE,
             ),
         )
     return scene
@@ -293,6 +310,40 @@ def test_the_context_card_carries_every_record_around_the_entity(staged: Scene) 
     assert [item["role"] for item in card["assignments"]] == ["structural engineer"]
     assert [edge["to_entity_id"] for edge in card["relationships"]] == [ACME]
     assert card["limitations"] == []
+    assert card["is_complete"] is True
+
+
+def test_the_context_card_states_its_coverage_and_freshness(staged: Scene) -> None:
+    """`RI-AC-013`: coverage and freshness, before the records rather than after."""
+    result = _payload(staged, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE))
+    card = result["context_card"]
+    assert isinstance(card, dict)
+    assert card["assembled_at"]
+    assert [entry["source_id"] for entry in card["coverage"]] == [staged.source.source_id]
+    assert card["coverage"][0]["observation_count"] == 1
+    assert card["most_recent_observation_at"] is not None
+    assert [item["observation_id"] for item in card["observations"]] == ["eobs_alice0001alice001"]
+
+
+def test_a_context_card_observation_does_not_carry_the_text_it_observed(
+    staged: Scene,
+) -> None:
+    """The card says a source spoke and when, not what it said."""
+    result = _payload(staged, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE))
+    assert "a.chen@acme.test" not in str(result["context_card"]["observations"])  # type: ignore[index]
+
+
+def test_an_entity_no_source_has_observed_says_so(staged: Scene) -> None:
+    """Section 6.8: a lack of indexed evidence is not evidence of absence.
+
+    `ACME` has no observations, and the card says that in a limitation rather
+    than by carrying an empty list that looks the same as an unbuilt card.
+    """
+    result = _payload(staged, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ACME))
+    card = result["context_card"]
+    assert isinstance(card, dict)
+    assert card["coverage"] == []
+    assert "no_source_has_been_observed" in card["limitations"]
     assert card["is_complete"] is True
 
 

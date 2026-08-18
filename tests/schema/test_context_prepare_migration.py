@@ -157,7 +157,7 @@ def test_the_chain_has_one_head_and_these_revisions_are_in_order() -> None:
     assert TABLE_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(VOCABULARY_REVISION).down_revision == PREVIOUS
     assert script.get_revision(TABLE_REVISION).down_revision == VOCABULARY_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 61
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 62
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

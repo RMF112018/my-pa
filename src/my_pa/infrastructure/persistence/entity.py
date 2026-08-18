@@ -40,7 +40,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Row, Table, insert, or_, select, true
+from sqlalchemy import Row, Table, insert, or_, select, true, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 from sqlalchemy.sql.elements import ColumnElement
@@ -60,6 +60,14 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
 )
+from my_pa.domain.relationship.governance import (
+    EntityMergeRecord,
+    EntityObservation,
+    EntityProposal,
+    EntityProposalKind,
+    EntityProposalState,
+    ObservationKind,
+)
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -70,6 +78,9 @@ from my_pa.infrastructure.persistence.tables import (
     entity_aliases,
     entity_assignments,
     entity_external_identifiers,
+    entity_merge_records,
+    entity_observations,
+    entity_proposals,
     entity_relationships,
 )
 
@@ -491,6 +502,208 @@ class SqlEntityRepository(EntitiesRepository):
             )
         )
 
+    # --- WP-RI-06: observation, proposal, and merge lineage ------------------
+
+    def record_observation(self, principal_id: str, observation: EntityObservation) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if observation.principal_id != principal_id:
+            raise ValueError("an observation belongs to the acting Principal")
+        if observation.entity_id is not None:
+            self._require_own_entity(principal_id, observation.entity_id)
+        existing = self._connection.execute(
+            select(entity_observations).where(
+                _mine(entity_observations, principal_id),
+                entity_observations.c.observation_id == observation.observation_id,
+            )
+        ).one_or_none()
+        if existing is not None:
+            if _row_to_observation(existing) != observation:
+                raise ValueError("an observation identifier cannot be rebound to different values")
+            return
+        self._connection.execute(
+            insert(entity_observations).values(
+                _bound(
+                    entity_observations,
+                    principal_id,
+                    observation_id=observation.observation_id,
+                    kind=observation.kind.value,
+                    observed_value=observation.observed_value,
+                    normalized_value=observation.normalized_value,
+                    source_id=observation.source_id,
+                    source_object_id=observation.source_object_id,
+                    source_version_id=observation.source_version_id,
+                    observed_at=observation.observed_at,
+                    recorded_at=observation.recorded_at,
+                    entity_id=observation.entity_id,
+                )
+            )
+        )
+
+    def observations(
+        self, principal_id: str, entity_id: str | None = None, *, unresolved_only: bool = False
+    ) -> list[EntityObservation]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if entity_id is not None:
+            validate_identifier(entity_id, IdKind.ENTITY)
+        rows = self._connection.execute(
+            select(entity_observations)
+            .where(
+                _mine(entity_observations, principal_id),
+                _optional(entity_observations.c.entity_id == entity_id if entity_id else None),
+                _optional(entity_observations.c.entity_id.is_(None) if unresolved_only else None),
+            )
+            .order_by(entity_observations.c.observation_id)
+        ).all()
+        return [_row_to_observation(row) for row in rows]
+
+    def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(observation_id, IdKind.ENTITY_OBSERVATION)
+        self._require_own_entity(principal_id, entity_id)
+        result = self._connection.execute(
+            update(entity_observations)
+            .where(
+                _mine(entity_observations, principal_id),
+                entity_observations.c.observation_id == observation_id,
+            )
+            .values(entity_id=entity_id)
+        )
+        if result.rowcount == 0:
+            raise UnknownScopeError("an observation link names an observation outside this scope")
+
+    def record_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if proposal.principal_id != principal_id:
+            raise ValueError("a proposal belongs to the acting Principal")
+        existing = self.proposal(principal_id, proposal.proposal_id)
+        if existing is not None:
+            if existing != proposal:
+                raise ValueError("a proposal identifier cannot be rebound to different values")
+            return
+        self._connection.execute(
+            insert(entity_proposals).values(
+                _bound(
+                    entity_proposals,
+                    principal_id,
+                    proposal_id=proposal.proposal_id,
+                    kind=proposal.kind.value,
+                    state=proposal.state.value,
+                    payload=dict(proposal.payload),
+                    observation_ids=list(proposal.observation_ids),
+                    proposed_at=proposal.proposed_at,
+                    proposed_by=proposal.proposed_by,
+                    decided_by=proposal.decided_by,
+                    decided_at=proposal.decided_at,
+                    decision_reason=proposal.decision_reason,
+                )
+            )
+        )
+
+    def proposal(self, principal_id: str, proposal_id: str) -> EntityProposal | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(proposal_id, IdKind.ENTITY_PROPOSAL)
+        row = self._connection.execute(
+            select(entity_proposals).where(
+                _mine(entity_proposals, principal_id),
+                entity_proposals.c.proposal_id == proposal_id,
+            )
+        ).one_or_none()
+        return None if row is None else _row_to_proposal(row)
+
+    def proposals(
+        self, principal_id: str, state: EntityProposalState | None = None
+    ) -> list[EntityProposal]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        rows = self._connection.execute(
+            select(entity_proposals)
+            .where(
+                _mine(entity_proposals, principal_id),
+                _optional(entity_proposals.c.state == state.value if state else None),
+            )
+            .order_by(entity_proposals.c.proposal_id)
+        ).all()
+        return [_row_to_proposal(row) for row in rows]
+
+    def decide_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if proposal.principal_id != principal_id:
+            raise ValueError("a proposal belongs to the acting Principal")
+        result = self._connection.execute(
+            update(entity_proposals)
+            .where(
+                _mine(entity_proposals, principal_id),
+                entity_proposals.c.proposal_id == proposal.proposal_id,
+            )
+            .values(
+                state=proposal.state.value,
+                decided_by=proposal.decided_by,
+                decided_at=proposal.decided_at,
+                decision_reason=proposal.decision_reason,
+            )
+        )
+        if result.rowcount == 0:
+            raise UnknownScopeError("a decision names a proposal outside this scope")
+
+    def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if record.principal_id != principal_id:
+            raise ValueError("a merge record belongs to the acting Principal")
+        self._require_own_entities(principal_id, record.retained_entity_id, record.merged_entity_id)
+        self._connection.execute(
+            insert(entity_merge_records).values(
+                _bound(
+                    entity_merge_records,
+                    principal_id,
+                    merge_id=record.merge_id,
+                    retained_entity_id=record.retained_entity_id,
+                    merged_entity_id=record.merged_entity_id,
+                    proposal_id=record.proposal_id,
+                    decided_by=record.decided_by,
+                    reason=record.reason,
+                    decided_at=record.decided_at,
+                )
+            )
+        )
+
+    def merges(self, principal_id: str, entity_id: str | None = None) -> list[EntityMergeRecord]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if entity_id is not None:
+            validate_identifier(entity_id, IdKind.ENTITY)
+        rows = self._connection.execute(
+            select(entity_merge_records)
+            .where(
+                _mine(entity_merge_records, principal_id),
+                _optional(
+                    or_(
+                        entity_merge_records.c.retained_entity_id == entity_id,
+                        entity_merge_records.c.merged_entity_id == entity_id,
+                    )
+                    if entity_id
+                    else None
+                ),
+            )
+            .order_by(entity_merge_records.c.merge_id)
+        ).all()
+        return [_row_to_merge(row) for row in rows]
+
+    def redirect_entity(
+        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        self._require_own_entities(principal_id, merged_entity_id, retained_entity_id)
+        if merged_entity_id == retained_entity_id:
+            raise ValueError("an entity cannot be merged into itself")
+        result = self._connection.execute(
+            update(entities)
+            .where(_mine(entities, principal_id), entities.c.entity_id == merged_entity_id)
+            .values(
+                status=EntityStatus.MERGED_REDIRECT.value,
+                superseded_by_entity_id=retained_entity_id,
+            )
+        )
+        if result.rowcount == 0:
+            raise UnknownScopeError("a redirect names an entity outside this scope")
+
 
 #: The three directions `relationships` admits, as predicates. A mapping rather
 #: than an if-chain so an unknown direction is a refusal rather than a silent
@@ -585,4 +798,51 @@ def _row_to_relationship(row: Row[Any]) -> EntityRelationship:
         effective_to=row.effective_to,
         state=str(row.state),
         version=int(row.version),
+    )
+
+
+def _row_to_observation(row: Row[Any]) -> EntityObservation:
+    return EntityObservation(
+        observation_id=str(row.observation_id),
+        principal_id=str(row.principal_id),
+        kind=ObservationKind(str(row.kind)),
+        observed_value=str(row.observed_value),
+        normalized_value=str(row.normalized_value),
+        source_id=str(row.source_id),
+        source_object_id=str(row.source_object_id),
+        source_version_id=str(row.source_version_id),
+        observed_at=row.observed_at,
+        recorded_at=row.recorded_at,
+        entity_id=_text_or_none(row.entity_id),
+    )
+
+
+def _row_to_proposal(row: Row[Any]) -> EntityProposal:
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    observation_ids = row.observation_ids if isinstance(row.observation_ids, list) else []
+    return EntityProposal(
+        proposal_id=str(row.proposal_id),
+        principal_id=str(row.principal_id),
+        kind=EntityProposalKind(str(row.kind)),
+        state=EntityProposalState(str(row.state)),
+        payload=tuple(sorted((str(k), str(v)) for k, v in payload.items())),
+        observation_ids=tuple(str(item) for item in observation_ids),
+        proposed_at=row.proposed_at,
+        proposed_by=str(row.proposed_by),
+        decided_by=_text_or_none(row.decided_by),
+        decided_at=row.decided_at,
+        decision_reason=_text_or_none(row.decision_reason),
+    )
+
+
+def _row_to_merge(row: Row[Any]) -> EntityMergeRecord:
+    return EntityMergeRecord(
+        merge_id=str(row.merge_id),
+        principal_id=str(row.principal_id),
+        retained_entity_id=str(row.retained_entity_id),
+        merged_entity_id=str(row.merged_entity_id),
+        proposal_id=str(row.proposal_id),
+        decided_by=str(row.decided_by),
+        reason=str(row.reason),
+        decided_at=row.decided_at,
     )

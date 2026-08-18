@@ -115,6 +115,9 @@ def test_contract_prefixes_are_stable() -> None:
         "asn",
         "erel",
         "eals",
+        "eobs",
+        "eprp",
+        "emrg",
     }
 
 

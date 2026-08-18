@@ -184,6 +184,11 @@ from my_pa.domain.relationship.entity import (
     EntityType as RelationshipEntityType,
 )
 from my_pa.domain.relationship.event import RelationshipEventType
+from my_pa.domain.relationship.governance import (
+    EntityProposalKind,
+    EntityProposalState,
+    ObservationKind,
+)
 from my_pa.domain.relationship.identity import ResolutionAction
 from my_pa.domain.relationship.profile import EvidenceAuthority
 from my_pa.domain.situation.continuity import (
@@ -3008,6 +3013,139 @@ entity_relationships = Table(
     Index("entity_relationships_by_principal", "principal_id"),
     Index("entity_relationships_by_from_entity", "from_entity_id"),
     Index("entity_relationships_by_to_entity", "to_entity_id"),
+)
+
+#: WP-RI-06: one source-bound observation that may refer to an entity.
+#: `entity_id` is nullable and that is the point -- an observation nothing has
+#: linked is an unresolved mention (specification section 13.1), not a failed
+#: write. `observed_value` and `normalized_value` hold a name or an address, so
+#: nothing here is indexed by them across Principals: the lookup index is
+#: `(principal_id, normalized_value)`.
+entity_observations = Table(
+    "entity_observations",
+    METADATA,
+    Column("observation_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("observed_value", Text, nullable=False),
+    Column("normalized_value", Text, nullable=False),
+    Column("source_id", Text, nullable=False),
+    Column("source_object_id", Text, nullable=False),
+    Column("source_version_id", Text, nullable=False),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column(
+        "entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="SET NULL"),
+    ),
+    _is_identifier("observation_id", IdKind.ENTITY_OBSERVATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("kind", ObservationKind, name="an_observation_kind_is_known"),
+    CheckConstraint(
+        "length(trim(observed_value)) > 0",
+        name="an_observation_records_what_was_observed",
+    ),
+    CheckConstraint(
+        "length(trim(normalized_value)) > 0",
+        name="an_observation_records_the_form_it_is_matched_by",
+    ),
+    CheckConstraint(
+        "recorded_at >= observed_at",
+        name="an_observation_is_not_recorded_before_it_was_observed",
+    ),
+    Index("entity_observations_by_principal", "principal_id"),
+    Index("entity_observations_by_normalized_value", "principal_id", "normalized_value"),
+    Index("entity_observations_by_entity", "entity_id"),
+)
+
+#: WP-RI-06: one proposed mutation of the entity plane.
+#: `decided_by`/`decided_at` are NULL exactly while the proposal is open, and a
+#: CHECK says so: "nothing has decided this" is then a shape rather than a
+#: convention. `payload` is JSONB because a proposal is a request to call one of
+#: six repository writes and their argument shapes differ; the service that
+#: applies one is where the shape is checked.
+entity_proposals = Table(
+    "entity_proposals",
+    METADATA,
+    Column("proposal_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=text("'proposed'")),
+    Column("payload", JSONB, nullable=False),
+    Column("observation_ids", JSONB, nullable=False),
+    Column("proposed_at", DateTime(timezone=True), nullable=False),
+    Column("proposed_by", Text, nullable=False),
+    Column("decided_by", Text),
+    Column("decided_at", DateTime(timezone=True)),
+    Column("decision_reason", Text),
+    _is_identifier("proposal_id", IdKind.ENTITY_PROPOSAL),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("kind", EntityProposalKind, name="a_proposal_kind_is_known"),
+    _one_of("state", EntityProposalState, name="a_proposal_state_is_known"),
+    CheckConstraint(
+        "length(trim(proposed_by)) > 0",
+        name="a_proposal_names_what_proposed_it",
+    ),
+    CheckConstraint(
+        "(state IN ('accepted', 'rejected')) = (decided_by IS NOT NULL)",
+        name="a_proposal_is_decided_exactly_when_something_decided_it",
+    ),
+    CheckConstraint(
+        "(decided_by IS NULL) = (decided_at IS NULL)",
+        name="a_proposal_decision_has_both_an_actor_and_a_moment",
+    ),
+    CheckConstraint(
+        "decided_at IS NULL OR decided_at >= proposed_at",
+        name="a_proposal_is_not_decided_before_it_was_proposed",
+    ),
+    Index("entity_proposals_by_principal", "principal_id"),
+    Index("entity_proposals_by_state", "principal_id", "state"),
+)
+
+#: WP-RI-06: the lineage one accepted merge left behind (section 15.3).
+#: `merged_entity_id` is UNIQUE because an entity is merged away once -- a
+#: second merge of the same entity would mean it had two successors, and a
+#: redirect with two targets resolves to neither. `retained_entity_id` is *not*
+#: unique: many entities may be merged into one survivor, which is the ordinary
+#: shape of a duplicate cleanup.
+entity_merge_records = Table(
+    "entity_merge_records",
+    METADATA,
+    Column("merge_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column(
+        "retained_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "merged_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "proposal_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_proposals.proposal_id"),
+        nullable=False,
+    ),
+    Column("decided_by", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("decided_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("merge_id", IdKind.ENTITY_MERGE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "retained_entity_id <> merged_entity_id",
+        name="a_merge_joins_two_distinct_entities",
+    ),
+    CheckConstraint("length(trim(decided_by)) > 0", name="a_merge_names_who_decided_it"),
+    CheckConstraint("length(trim(reason)) > 0", name="a_merge_records_why_it_was_accepted"),
+    Index("entity_merge_records_by_principal", "principal_id"),
+    Index("entity_merge_records_by_retained", "retained_entity_id"),
 )
 
 #: `pulse_items`: derived attention recommendations with a reason, a

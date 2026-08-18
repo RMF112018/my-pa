@@ -42,6 +42,12 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
 )
+from my_pa.domain.relationship.governance import (
+    EntityMergeRecord,
+    EntityObservation,
+    EntityProposal,
+    EntityProposalState,
+)
 from my_pa.domain.relationship.resolution import (
     EntityResolution,
     ResolutionBasis,
@@ -274,6 +280,49 @@ class _CorpusRepository(EntitiesRepository):
         raise NotImplementedError("the evaluation corpus is frozen")
 
     def record_relationship(self, principal_id: str, rel: EntityRelationship) -> None:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    # --- governance, which resolution does not use -------------------------
+    #
+    # Present because the port declares them and absent in substance because
+    # resolving reads no observation and decides no proposal. Raising rather
+    # than returning empty: a resolver that started consulting these would be
+    # silently measured against nothing, and this corpus would say it was fine.
+
+    def record_observation(self, principal_id: str, observation: EntityObservation) -> None:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def observations(
+        self, principal_id: str, entity_id: str | None = None, *, unresolved_only: bool = False
+    ) -> list[EntityObservation]:
+        raise NotImplementedError("resolution reads no observation")
+
+    def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def record_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def proposal(self, principal_id: str, proposal_id: str) -> EntityProposal | None:
+        raise NotImplementedError("resolution decides no proposal")
+
+    def proposals(
+        self, principal_id: str, state: EntityProposalState | None = None
+    ) -> list[EntityProposal]:
+        raise NotImplementedError("resolution decides no proposal")
+
+    def decide_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def merges(self, principal_id: str, entity_id: str | None = None) -> list[EntityMergeRecord]:
+        raise NotImplementedError("resolution reads no merge lineage")
+
+    def redirect_entity(
+        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
+    ) -> None:
         raise NotImplementedError("the evaluation corpus is frozen")
 
 

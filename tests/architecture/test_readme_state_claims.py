@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -205,57 +206,63 @@ def _alembic_identity() -> tuple[int, str]:
     return len(list(script.walk_revisions())), heads[0]
 
 
+#: Spelled revision counts, so a guard states the count the chain actually has
+#: rather than a literal that goes stale in step with the prose it guards.
+_COUNT_WORDS: Final[dict[int, str]] = {
+    12: "Twelve",
+    13: "Thirteen",
+    14: "Fourteen",
+    15: "Fifteen",
+    16: "Sixteen",
+    17: "Seventeen",
+    18: "Eighteen",
+    19: "Nineteen",
+    20: "Twenty",
+    21: "Twenty-one",
+    22: "Twenty-two",
+    23: "Twenty-three",
+    24: "Twenty-four",
+    25: "Twenty-five",
+    26: "Twenty-six",
+    27: "Twenty-seven",
+    28: "Twenty-eight",
+    29: "Thirty",
+    30: "Thirty",
+    31: "Thirty-one",
+    32: "Thirty-two",
+    33: "Thirty-three",
+    34: "Thirty-four",
+    35: "Thirty-five",
+    36: "Thirty-six",
+    37: "Thirty-seven",
+    38: "Thirty-eight",
+    39: "Thirty-nine",
+    40: "Forty",
+    41: "Forty-one",
+    42: "Forty-two",
+    43: "Forty-three",
+    44: "Forty-four",
+    45: "Forty-five",
+    46: "Forty-six",
+    47: "Forty-eight",
+    48: "Forty-eight",
+    49: "Forty-nine",
+    50: "Fifty",
+    51: "Fifty-one",
+    52: "Fifty-two",
+    53: "Fifty-three",
+    54: "Fifty-five",
+    55: "Fifty-five",
+    56: "Fifty-six",
+    57: "Fifty-seven",
+    58: "Fifty-eight",
+    59: "Fifty-nine",
+    60: "Sixty",
+}
+
+
 def test_readme_derives_the_current_alembic_count_and_head() -> None:
-    words = {
-        12: "Twelve",
-        13: "Thirteen",
-        14: "Fourteen",
-        15: "Fifteen",
-        16: "Sixteen",
-        17: "Seventeen",
-        18: "Eighteen",
-        19: "Nineteen",
-        20: "Twenty",
-        21: "Twenty-one",
-        22: "Twenty-two",
-        23: "Twenty-three",
-        24: "Twenty-four",
-        25: "Twenty-five",
-        26: "Twenty-six",
-        27: "Twenty-seven",
-        28: "Twenty-eight",
-        29: "Thirty",
-        30: "Thirty",
-        31: "Thirty-one",
-        32: "Thirty-two",
-        33: "Thirty-three",
-        34: "Thirty-four",
-        35: "Thirty-five",
-        36: "Thirty-six",
-        37: "Thirty-seven",
-        38: "Thirty-eight",
-        39: "Thirty-nine",
-        40: "Forty",
-        41: "Forty-one",
-        42: "Forty-two",
-        43: "Forty-three",
-        44: "Forty-four",
-        45: "Forty-five",
-        46: "Forty-six",
-        47: "Forty-eight",
-        48: "Forty-eight",
-        49: "Forty-nine",
-        50: "Fifty",
-        51: "Fifty-one",
-        52: "Fifty-two",
-        53: "Fifty-three",
-        54: "Fifty-five",
-        55: "Fifty-five",
-        56: "Fifty-six",
-        57: "Fifty-seven",
-        58: "Fifty-eight",
-        59: "Fifty-nine",
-    }
+    words = _COUNT_WORDS
     count, head = _alembic_identity()
     assert count in words, "extend the readable README count vocabulary"
     readme = README.read_text(encoding="utf-8")
@@ -347,7 +354,9 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
         assert "forty-eight capabilit" in text.lower().replace(" public ", " "), (
             f"{label} lost the current capability count"
         )
-        assert "fifty" in text, f"{label} lost the current revision count"
+        assert _COUNT_WORDS[_count].lower() in text.lower(), (
+            f"{label} lost the current revision count"
+        )
         assert head in text, f"{label} lost the current Alembic head"
 
 

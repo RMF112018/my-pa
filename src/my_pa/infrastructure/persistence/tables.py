@@ -174,6 +174,7 @@ from my_pa.domain.native_sources import (
 )
 from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
 from my_pa.domain.relationship.entity import (
+    AliasType,
     AssignmentType,
     EntityRelationshipType,
     EntityStatus,
@@ -2863,6 +2864,55 @@ entity_external_identifiers = Table(
         "namespace",
         "normalized_value",
     ),
+)
+
+#: WP-RI-03: one recorded name form of an entity.  Resolution matches on
+#: aliases as well as on canonical names (specification section 15.1), so the
+#: index is on `(normalized_value)` rather than on the entity: the lookup goes
+#: from a name to the entities that carry it, not the other way round.  The
+#: unique constraint is per `(entity_id, alias_type, normalized_value)` so the
+#: same name may be held by two *different* entities -- two real people do share
+#: a name, and a schema that made that a conflict would force the false join
+#: this plane exists to avoid.
+entity_aliases = Table(
+    "entity_aliases",
+    METADATA,
+    Column("alias_id", Text, primary_key=True),
+    Column(
+        "entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("alias_type", Text, nullable=False),
+    Column("normalized_value", Text, nullable=False),
+    Column("display_value", Text, nullable=False),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("alias_id", IdKind.ENTITY_ALIAS),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("alias_type", AliasType, name="an_alias_type_is_known"),
+    CheckConstraint(
+        "length(trim(normalized_value)) > 0",
+        name="an_alias_normalized_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "length(trim(display_value)) > 0",
+        name="an_alias_display_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="an_alias_ends_after_it_starts",
+    ),
+    UniqueConstraint(
+        "entity_id",
+        "alias_type",
+        "normalized_value",
+        name="an_alias_is_recorded_once_per_entity_and_type",
+    ),
+    Index("entity_aliases_by_principal", "principal_id"),
+    Index("entity_aliases_by_normalized_value", "normalized_value"),
 )
 
 #: WP-RI-01: a typed assignment of an entity to a scope entity.  Employment,

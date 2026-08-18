@@ -22,7 +22,7 @@ Related:
 
 | Item | Value |
 | --- | --- |
-| Alembic head | `9def3c2e63bb` (context.feedback remains `c6f1a8d3e204`) |
+| Alembic head | `b7f4d1a92c36` (context.feedback remains `c6f1a8d3e204`) |
 | Ranking version | `lexical_structured.v1` |
 | Retrieval mode | `lexical_structured` |
 | Semantic gate | `SEMANTIC_GATE_FAIL` (`SemanticRetrievalGate.enabled` is false) |
@@ -103,7 +103,7 @@ None of these steps turns production on by existing in this document. Marked
 steps require a separate operator decision.
 
 1. Merge the reviewed pull request.
-2. Migrate a **disposable** database to head `9def3c2e63bb`. A production-shaped
+2. Migrate a **disposable** database to head `b7f4d1a92c36`. A production-shaped
    database migrate is **operator-only**.
 3. Deploy with `context.prepare` / `context.feedback` **not** granted remotely.
    Image cutover is **operator-only**.

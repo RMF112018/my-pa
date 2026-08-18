@@ -47,11 +47,12 @@ CONTENT_REVISION = "a4d9c2e7b815"
 GROUNDING_REVISION = "b7f2c9e4a618"
 ENTITY_KIND_REVISION = "d9c4e1a7b628"
 ATTEMPT_REVISION = "f4c1a8e6b205"
+ENTITY_REVISION = "9def3c2e63bb"
 #: Where `upgrade head` lands, which the database tier reads back out of
 #: `alembic_version`. That is a position in the chain rather than a property of
 #: this revision, so it moves whenever a revision is added; the chain test below
 #: is written not to depend on it.
-HEAD_REVISION = "9def3c2e63bb"
+HEAD_REVISION = "b7f4d1a92c36"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -139,8 +140,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(GROUNDING_REVISION).down_revision == CONTENT_REVISION
     assert script.get_revision(ENTITY_KIND_REVISION).down_revision == GROUNDING_REVISION
     assert script.get_revision(ATTEMPT_REVISION).down_revision == ENTITY_KIND_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ATTEMPT_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 59
+    assert script.get_revision(ENTITY_REVISION).down_revision == ATTEMPT_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == ENTITY_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 60
 
 
 @pytest.mark.database

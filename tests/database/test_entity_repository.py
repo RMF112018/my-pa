@@ -25,18 +25,27 @@ from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
 
+from my_pa.application.entity_resolution import EntityResolutionService, ResolutionRequest
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.relationship.entity import (
+    AliasType,
     Assignment,
     AssignmentType,
     Entity,
+    EntityAlias,
     EntityRelationship,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+)
+from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
+from my_pa.domain.relationship.resolution import (
+    ResolutionBasis,
+    ResolutionOutcome,
+    ResolutionWarning,
 )
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
@@ -465,3 +474,209 @@ def test_one_principal_may_hold_two_entities_with_the_same_name(
     with migrated_engine.connect() as connection:
         found = SqlEntityRepository(connection).search(PRINCIPAL_A, "Alice Synthetic")
     assert sorted(summary.entity_id for summary in found) == sorted([ALICE, BOB])
+
+
+# --- the joined resolution lookups, against real SQL ------------------------
+#
+# These four exist because `entities_by_identifier` and `entities_by_alias`
+# SELECT two tables that both declare `entity_id` and `principal_id`, and the
+# row mappers read those by attribute. Whether that resolves to the column the
+# mapper meant is a property of the driver and the statement, not of the Python
+# — so it is asserted here rather than reasoned about.
+
+
+def _an_alias(alias_id: str, entity_id: str, name: str) -> EntityAlias:
+    return EntityAlias(
+        alias_id=alias_id,
+        entity_id=entity_id,
+        alias_type=AliasType.NICKNAME,
+        normalized_value=normalize_name(name),
+        display_value=name,
+        principal_id=PRINCIPAL_A,
+    )
+
+
+def _an_email(
+    identifier_id: str, entity_id: str, address: str, verified: bool
+) -> ExternalIdentifier:
+    return ExternalIdentifier(
+        identifier_id=identifier_id,
+        entity_id=entity_id,
+        namespace=ExternalIdentifierNamespace.EMAIL,
+        normalized_value=normalize_identifier(ExternalIdentifierNamespace.EMAIL, address),
+        display_value=address,
+        principal_id=PRINCIPAL_A,
+        verified=verified,
+    )
+
+
+def test_a_joined_identifier_lookup_hydrates_both_records(migrated_engine: Engine) -> None:
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.bind_identifier(
+            PRINCIPAL_A, ALICE, _an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test", True)
+        )
+    with migrated_engine.connect() as connection:
+        found = SqlEntityRepository(connection).entities_by_identifier(
+            PRINCIPAL_A, ExternalIdentifierNamespace.EMAIL, "alice@example.test"
+        )
+    assert len(found) == 1
+    entity, identifier = found[0]
+    assert entity.entity_id == ALICE
+    assert entity.display_name == "Alice Synthetic"
+    assert identifier.identifier_id == "xid_aaaa0001aaaa0001"
+    assert identifier.entity_id == ALICE
+    assert identifier.verified is True
+    assert identifier.namespace is ExternalIdentifierNamespace.EMAIL
+
+
+def test_a_joined_alias_lookup_hydrates_both_records(migrated_engine: Engine) -> None:
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.record_alias(PRINCIPAL_A, _an_alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
+    with migrated_engine.connect() as connection:
+        found = SqlEntityRepository(connection).entities_by_alias(PRINCIPAL_A, "ali")
+    assert len(found) == 1
+    entity, alias = found[0]
+    assert entity.entity_id == ALICE
+    assert entity.display_name == "Alice Synthetic"
+    assert alias.alias_id == "eals_aaaa0001aaaa0001"
+    assert alias.display_value == "Ali"
+    assert alias.alias_type is AliasType.NICKNAME
+
+
+def test_a_joined_lookup_cannot_reach_another_principals_entity(
+    migrated_engine: Engine,
+) -> None:
+    """The partition is applied to both sides of the join, not only to the entity."""
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(an_entity(BOB, PRINCIPAL_B, "Bob Synthetic"))
+        repository.record_alias(
+            PRINCIPAL_B,
+            EntityAlias(
+                alias_id="eals_bbbb0002bbbb0002",
+                entity_id=BOB,
+                alias_type=AliasType.NICKNAME,
+                normalized_value="bob",
+                display_value="Bob",
+                principal_id=PRINCIPAL_B,
+            ),
+        )
+    with migrated_engine.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        assert repository.entities_by_alias(PRINCIPAL_A, "bob") == []
+        assert repository.entities_by_canonical_name(PRINCIPAL_A, "bob synthetic") == []
+
+
+def test_a_canonical_name_lookup_is_an_equality_not_a_substring(
+    migrated_engine: Engine,
+) -> None:
+    """`search` answers "who is like this"; resolution answers "who is this"."""
+    with migrated_engine.begin() as connection:
+        SqlEntityRepository(connection).create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+    with migrated_engine.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        found = repository.entities_by_canonical_name(PRINCIPAL_A, "alice synthetic")
+        assert [entity.entity_id for entity in found] == [ALICE]
+        assert repository.entities_by_canonical_name(PRINCIPAL_A, "alice") == []
+
+
+# --- resolution end to end, over real SQL -----------------------------------
+
+
+def test_resolution_resolves_a_verified_identifier_over_real_sql(
+    migrated_engine: Engine,
+) -> None:
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.bind_identifier(
+            PRINCIPAL_A, ALICE, _an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test", True)
+        )
+    with migrated_engine.connect() as connection:
+        answer = EntityResolutionService(SqlEntityRepository(connection)).resolve(
+            PRINCIPAL_A,
+            ResolutionRequest(
+                raw_reference="Alice@Example.TEST",
+                namespace=ExternalIdentifierNamespace.EMAIL,
+            ),
+        )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_EXACT
+    assert answer.resolved_entity_id == ALICE
+    assert answer.candidates[0].strongest_basis is ResolutionBasis.VERIFIED_EXTERNAL_IDENTIFIER
+
+
+def test_resolution_refuses_two_people_who_share_a_name_over_real_sql(
+    migrated_engine: Engine,
+) -> None:
+    """The false join, attempted against the store that would have to hold it."""
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(an_entity(BOB, PRINCIPAL_A, "Alice Synthetic"))
+    with migrated_engine.connect() as connection:
+        answer = EntityResolutionService(SqlEntityRepository(connection)).resolve(
+            PRINCIPAL_A, ResolutionRequest(raw_reference="Alice Synthetic")
+        )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert {candidate.entity_id for candidate in answer.candidates} == {ALICE, BOB}
+    assert ResolutionWarning.SEVERAL_ENTITIES_SHARE_THIS_NAME in answer.warnings
+
+
+def test_resolution_stops_on_a_conflicted_identifier_over_real_sql(
+    migrated_engine: Engine,
+) -> None:
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        for identifier_id, entity_id in (
+            ("xid_aaaa0001aaaa0001", ALICE),
+            ("xid_bbbb0002bbbb0002", BOB),
+        ):
+            repository.bind_identifier(
+                PRINCIPAL_A,
+                entity_id,
+                _an_email(identifier_id, entity_id, "shared@example.test", True),
+            )
+    with migrated_engine.connect() as connection:
+        answer = EntityResolutionService(SqlEntityRepository(connection)).resolve(
+            PRINCIPAL_A,
+            ResolutionRequest(
+                raw_reference="shared@example.test",
+                namespace=ExternalIdentifierNamespace.EMAIL,
+            ),
+        )
+    assert answer.outcome is ResolutionOutcome.CONFLICTED_IDENTIFIER
+    assert answer.resolved_entity_id is None
+
+
+def test_resolution_cannot_cross_the_partition_over_real_sql(migrated_engine: Engine) -> None:
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(an_entity(BOB, PRINCIPAL_B, "Bob Synthetic"))
+        repository.bind_identifier(
+            PRINCIPAL_B,
+            BOB,
+            ExternalIdentifier(
+                identifier_id="xid_bbbb0002bbbb0002",
+                entity_id=BOB,
+                namespace=ExternalIdentifierNamespace.EMAIL,
+                normalized_value="bob@example.test",
+                display_value="bob@example.test",
+                principal_id=PRINCIPAL_B,
+                verified=True,
+            ),
+        )
+    with migrated_engine.connect() as connection:
+        answer = EntityResolutionService(SqlEntityRepository(connection)).resolve(
+            PRINCIPAL_A,
+            ResolutionRequest(
+                raw_reference="bob@example.test", namespace=ExternalIdentifierNamespace.EMAIL
+            ),
+        )
+    assert answer.outcome is ResolutionOutcome.NOT_FOUND

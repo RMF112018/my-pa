@@ -25,7 +25,7 @@ Abacus/ChatLLM Task changes, destructive actions, and operator risk acceptance
 |---|---|---|
 | WP-RI-01 | Domain model (`Entity`, `ExternalIdentifier`, `Assignment`, `EntityRelationship`), four identifier prefixes, four tables, Alembic revision `9def3c2e63bb` | **complete** |
 | WP-RI-02 | `EntitiesRepository` port, `SqlEntityRepository`, the `UnitOfWork.entities` seat, the in-memory fake, FAST-tier tests | **complete** |
-| WP-RI-03 | Exact resolution: alias table, namespace and alias normalization, effective-date filtering, entity-type and scope filtering, conflicting-identifier handling, historical resolution, same-name protection, a labelled exact-resolution fixture | not started |
+| WP-RI-03 | Exact resolution: alias table, namespace and alias normalization, effective-date filtering, entity-type and scope filtering, conflicting-identifier handling, historical resolution, same-name protection | **complete** |
 | WP-RI-04 | Contextual resolution: bounded candidate ranking, calibration, explainable evidence, collision-biased safety, false-resolution evaluation | not started |
 | WP-RI-05 | The capability and MCP surface: `Capability` members, `Purpose` registration, the forward `ALTER`, commands, handlers, remote-exposure decision | not started |
 | WP-RI-06 | Observation, proposal, review, and merge | not started |
@@ -57,11 +57,15 @@ metrics**.
 
 Two consequences bind WP-RI-03 and WP-RI-04:
 
-* `entities.resolve` must return a **typed outcome** with ranked alternatives,
-  warnings, calibrated confidence, and explainable evidence. It must never
-  collapse an ambiguous or conflicted result into a generic `NotFoundError`,
-  because "I could not find them" and "I found four of them" are different
-  answers and only one of them is safe to act on.
+* Resolution must return a **typed outcome** with ordered alternatives,
+  warnings, and explainable evidence. It must never collapse an ambiguous or
+  conflicted result into a generic `NotFoundError`, because "I could not find
+  them" and "I found four of them" are different answers and only one of them is
+  safe to act on. WP-RI-03 delivers this: `EntityResolution.resolved_entity_id`
+  is a derived property that exists only for the two resolved outcomes, so an
+  `AMBIGUOUS` answer has no identifier for any caller to read. Calibration — a
+  numeric a caller can threshold on — is deliberately *not* part of it, for the
+  reason `D-RI-02` gives, and is WP-RI-04's to design with its exemption.
 * The false-resolution evaluation in WP-RI-04 is **collision-biased**: the
   fixture is built to make wrong joins likely (same surname, shared employer,
   recycled email local-parts), because a corpus of easy cases measures nothing.
@@ -90,7 +94,7 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 | RI-AC-003 | The product states relationships are not scores | `PARTIAL` | Enforced structurally by `tests/architecture/test_relationship_scoring_surface_is_denied.py`, now widened to the entity plane. The *statement* is WP-RI-13 |
 | RI-AC-004 | Value without starting a chat | `BLOCKED_BY_D09` | — |
 | RI-AC-005 | Contact/source rows stay observations, not automatic canonical people | `OPEN` | WP-RI-06 |
-| RI-AC-006 | Unresolved mentions are first-class and searchable | `OPEN` | WP-RI-03 |
+| RI-AC-006 | Unresolved mentions are first-class and searchable | `PARTIAL` | `ResolutionOutcome.AMBIGUOUS`/`NOT_FOUND` are first-class answers carrying their candidates and warnings; a *stored* unresolved mention is WP-RI-06 |
 | RI-AC-007 | No identity merge without governed policy | `OPEN` | WP-RI-06 |
 | RI-AC-008 | Merge preview shows all materially affected records | `OPEN` | WP-RI-06 |
 | RI-AC-009 | Merge and split history preserved and correctable | `PARTIAL` | `entities.superseded_by_entity_id` + the `merged_redirect` biconditional exist; lineage records are WP-RI-06 |
@@ -98,7 +102,7 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 | RI-AC-011 | Every material profile statement links to evidence or is marked | `OPEN` | WP-RI-06 |
 | RI-AC-012 | Source facts / notes / assertions / inferences structurally distinct | `OPEN` | WP-RI-06 |
 | RI-AC-013 | Coverage, freshness, exclusions appear before synthesis | `OPEN` | WP-RI-07 |
-| RI-AC-014 | Stale evidence never presented as current | `OPEN` | WP-RI-07 |
+| RI-AC-014 | Stale evidence never presented as current | `PARTIAL` | Resolution answers `HISTORICAL_MATCH` with `ENTITY_IS_NOT_CURRENT`/`ENTITY_HAS_BEEN_MERGED_AWAY`, and filters evidence by effective date under `as_of` (WP-RI-03). Briefing-level staleness is WP-RI-07; presentation is `BLOCKED_BY_D09` |
 | RI-AC-015 | Contradictory evidence preserved, not collapsed | `OPEN` | WP-RI-06 |
 | RI-AC-016 | Briefings retain evidence scope and model identity | `OPEN` | WP-RI-07 |
 | RI-AC-017 | Person profile exposes the full record set | `BLOCKED_BY_D09` | — |
@@ -178,16 +182,45 @@ declared by the work packages that create their tables. A prefix in `IdKind` is
 a stability promise, and promising one for a record nothing issues is a promise
 about nothing.
 
-**D-RI-05 — no alias table yet.** `AliasType` and the port's `add_alias` /
-`aliases` methods were removed rather than left raising `NotImplementedError`.
-Aliases are core resolution evidence (section 15.1) and the table arrives in
-WP-RI-03, together with the methods that use it, rather than as a port method
-that always raises.
+**D-RI-05 — the alias table arrived with the code that uses it.** WP-RI-02
+removed `AliasType` and the port's alias methods rather than leaving them
+raising `NotImplementedError`; WP-RI-03 added `entity_aliases`, `EntityAlias`,
+`record_alias`/`aliases`, and the resolution that reads them, together. The
+unique constraint is `(entity_id, alias_type, normalized_value)` and
+deliberately **not** global on `normalized_value`: two real people share a name,
+and a schema that made that a conflict would force one of them to be merged into
+the other.
 
 **D-RI-06 — `superseded_by_entity_id` is not unique.** The prior draft declared
 it `UNIQUE`, which forbids merging two entities into the same survivor — the
 ordinary case. Replaced with two named CHECKs: an entity redirects **exactly**
 when its status is `merged_redirect`, and it does not supersede itself.
+
+**D-RI-11 — a lone name match is `AMBIGUOUS`, not resolved.** The single most
+consequential call in WP-RI-03. One entity carries a name and no other does, and
+that is still not evidence that a reference means that entity: uniqueness is a
+fact about the database, not about the person. So `ResolutionOutcome.AMBIGUOUS`
+admits one candidate as well as several, and `EntityResolution` refuses by
+construction to report `RESOLVED_EXACT` for a candidate whose strongest evidence
+is a canonical name. An alias *does* resolve, because an alias is a recorded
+fact about the entity rather than an incidental collision.
+
+**D-RI-12 — email local-parts are not rewritten.** Dot and `+tag` folding is one
+provider's rule; applying it everywhere merges two distinct mailboxes at every
+other provider. The domain is lowercased (DNS is case-insensitive by
+specification) and the local-part is lowercased (universal in this product's
+reach), and nothing else is touched. Opaque `vendor_system_id` and
+`source_participant_id` values are compared exactly, because their issuers' case
+rules are unknown and folding could collide two distinct records. Recorded
+because the specification defines no normalization algorithm at all.
+
+**D-RI-13 — `Entity.canonical_name` is expected to hold a normalized name, and
+nothing yet enforces it.** Resolution compares a normalized query against that
+column by equality, so a writer that stored an unnormalized name would make its
+entity unresolvable. The invariant is not in the dataclass because
+`domain/relationship/entity.py` and `domain/relationship/normalization.py` would
+import each other. It belongs on the write path, and the write path arrives in
+WP-RI-06. Carried in section 5 as a known gap rather than assumed.
 
 **D-RI-07 — the resolution outcome vocabulary is an addition, not a
 requirement.** The specification contains no per-query resolution outcome enum.
@@ -226,15 +259,15 @@ sets it.
 
 ## 5. Known gaps carried forward
 
-* **No database-tier evidence yet.** `MY_PA_DATABASE_URL` is unset in the
-  development environment and no test PostgreSQL was started, so the Alembic
-  empty-to-head test, the head-to-empty test, the declaration-versus-server
-  constraint parity test, and the cross-Principal isolation test for this plane
-  have **not been executed**. The migration and the declaration were written to
-  match each other by hand and by name; that is a checked claim only once those
-  tests run. `tests/database/test_entity_repository.py` and
-  `tests/schema/test_entity_schema_migration.py` are the two files that must
-  exist and pass before WP-RI-12 can claim anything.
+* **`Entity.canonical_name` normalization is unenforced** (`D-RI-13`). WP-RI-06
+  owns it.
+* **Contextual resolution is only as good as the scope it is given.** WP-RI-03
+  narrows by assignment and by outgoing relationship, and reports
+  `NARROWED_BY_SUPPLIED_SCOPE` only when the scope actually excluded someone. It
+  does not rank, calibrate, or evaluate — WP-RI-04 owns those, including the
+  collision-biased false-resolution evaluation.
+* **No MCP or capability surface exists** (`D-RI-01`), so nothing outside the
+  process can reach any of this yet. That is deliberate until WP-RI-05.
 * **`record_assignment` and `record_relationship` have no natural key**, so a
   retry that mints a fresh identifier writes a second row (RI-AC-036).
 * **The specification is silent** on identifier namespaces, the normalization

@@ -196,15 +196,20 @@ class IdKind(StrEnum):
     #: association" (section 12.6) under one record. `ENTITY_RELATIONSHIP`
     #: names a directed, typed relationship between two entities.
     #:
-    #: Four prefixes are *not* declared here, and their absence is the point:
-    #: an observation, a proposal, a context packet, and a merge lineage record
-    #: each belong to a later work package that has a table for them. A prefix
-    #: is a contract this module promises is stable, and promising one before
-    #: anything issues it is a promise about a record that does not exist.
+    #: `ENTITY_ALIAS` names one recorded alias of an entity, added by WP-RI-03
+    #: because resolution matches on aliases (specification section 15.1) and a
+    #: match has to be able to say which alias it matched.
+    #:
+    #: Three prefixes are *not* declared here, and their absence is the point:
+    #: an observation, a proposal, and a context packet each belong to a later
+    #: work package that has a table for them. A prefix is a contract this
+    #: module promises is stable, and promising one before anything issues it is
+    #: a promise about a record that does not exist.
     ENTITY = "ent"
     EXTERNAL_IDENTIFIER = "xid"
     ASSIGNMENT = "asn"
     ENTITY_RELATIONSHIP = "erel"
+    ENTITY_ALIAS = "eals"
 
 
 class InvalidIdentifierError(ValueError):

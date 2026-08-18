@@ -132,7 +132,7 @@ curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
 ```
 
 **Current-state correction (2026-08-15):** the candidate has **forty-eight**
-capabilities and **fifty-nine** Alembic revisions at head `9def3c2e63bb`.
+capabilities and **sixty** Alembic revisions at head `b7f4d1a92c36`.
 `capabilities.get` now also returns `worker_planes`; backlog without a live
 heartbeat is `worker_absent`/`worker_stale`, never silently healthy. The dated
 transcript below remains historical evidence for its stated head.

@@ -41,9 +41,11 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 
 __all__ = [
+    "AliasType",
     "Assignment",
     "AssignmentType",
     "Entity",
+    "EntityAlias",
     "EntityRelationship",
     "EntityRelationshipType",
     "EntityStatus",
@@ -84,6 +86,24 @@ class EntityStatus(StrEnum):
     HISTORICAL = "historical"
     MERGED_REDIRECT = "merged_redirect"
     ARCHIVED = "archived"
+
+
+class AliasType(StrEnum):
+    """The kinds of alias an entity may carry.
+
+    Closed as of WP-RI-03, because the migration's `alias_type` CHECK references
+    these values.  The set is the name *forms* a source can produce, not a
+    judgement about which is correct: `FULL_NAME` and `PREFERRED_NAME` are both
+    the person's name, and resolution treats them alike.
+    """
+
+    FULL_NAME = "full_name"
+    PREFERRED_NAME = "preferred_name"
+    NICKNAME = "nickname"
+    INITIALS = "initials"
+    ABBREVIATION = "abbreviation"
+    FORMER_NAME = "former_name"
+    DOCUMENT_REFERENCE = "document_reference"
 
 
 class ExternalIdentifierNamespace(StrEnum):
@@ -232,6 +252,58 @@ class ExternalIdentifier:
             and self.effective_to < self.effective_from
         ):
             raise ValueError("an external identifier cannot end before it begins")
+
+
+@dataclass(frozen=True, slots=True)
+class EntityAlias:
+    """One recorded name form of an entity.
+
+    Named `EntityAlias` rather than `Alias` because `relationship.identity`
+    already declares an `Alias`, and that one is source-bound to a single
+    observation while this one belongs to the entity. Two records with one name
+    in one package would make every import site say which plane it meant.
+
+    Carried separately from `Entity.canonical_name` because an entity has one
+    canonical name and many names it is actually referred to by, and resolution
+    has to match on all of them (specification section 15.1, "aliases and
+    initials").
+
+    Both forms are kept for the reason `ExternalIdentifier` keeps both:
+    `normalized_value` is what a lookup compares against and is lossy, and
+    `display_value` is the evidence -- what a source actually wrote. An alias is
+    time-aware, so a former name can be matched without being presented as
+    current (section 12.3).
+    """
+
+    alias_id: str
+    entity_id: str
+    alias_type: AliasType
+    normalized_value: str
+    display_value: str
+    principal_id: str
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.alias_id, IdKind.ENTITY_ALIAS)
+        validate_identifier(self.entity_id, IdKind.ENTITY)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not isinstance(self.alias_type, AliasType):
+            raise ValueError("an alias has a closed alias type")
+        if not self.normalized_value.strip():
+            raise ValueError("an alias normalized value is not blank")
+        if not self.display_value.strip():
+            raise ValueError("an alias display value is not blank")
+        if self.effective_from is not None:
+            ensure_utc(self.effective_from)
+        if self.effective_to is not None:
+            ensure_utc(self.effective_to)
+        if (
+            self.effective_from is not None
+            and self.effective_to is not None
+            and self.effective_to < self.effective_from
+        ):
+            raise ValueError("an alias cannot end before it begins")
 
 
 @dataclass(frozen=True, slots=True)

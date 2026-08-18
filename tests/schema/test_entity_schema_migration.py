@@ -40,7 +40,10 @@ SCHEMA: Final = "knowledge"
 ENTITY_REVISION: Final = "9def3c2e63bb"
 PREVIOUS_REVISION: Final = "f4c1a8e6b205"
 
-NEW_TABLES: Final = frozenset(
+#: WP-RI-03's alias table, on the revision after the four.
+ALIAS_REVISION: Final = "b7f4d1a92c36"
+
+ENTITY_TABLES: Final = frozenset(
     {
         "entities",
         "entity_external_identifiers",
@@ -48,6 +51,8 @@ NEW_TABLES: Final = frozenset(
         "entity_relationships",
     }
 )
+
+NEW_TABLES: Final = ENTITY_TABLES | {"entity_aliases"}
 
 #: A name distinct from every other database-tier fixture's disposable
 #: database, so this suite can run alongside them without one dropping the
@@ -163,6 +168,14 @@ def _seed_entity(engine: Engine, entity_id: str, principal_id: str, status: str 
 
 
 # --- chain position (no database) -------------------------------------------
+
+
+def test_the_alias_revision_is_in_the_chain_on_the_entity_revision() -> None:
+    """The alias table follows the four it references, on one unbranched chain."""
+    script = ScriptDirectory.from_config(_config())
+    assert len(list(script.get_heads())) == 1
+    assert ALIAS_REVISION in {entry.revision for entry in script.walk_revisions()}
+    assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
 
 
 def test_the_entity_revision_is_in_the_chain_on_the_goodnotes_revision() -> None:
@@ -530,3 +543,107 @@ def test_the_foreign_key_alone_admits_a_cross_principal_reference(
             )
         ).scalar_one()
     assert stored == PRINCIPAL_A
+
+
+# --- the alias table -------------------------------------------------------
+
+
+def _seed_alias(
+    engine: Engine,
+    alias_id: str,
+    entity_id: str,
+    value: str,
+    principal_id: str = PRINCIPAL_A,
+    alias_type: str = "nickname",
+) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                f"INSERT INTO {SCHEMA}.entity_aliases "  # noqa: S608
+                "(alias_id, entity_id, alias_type, normalized_value, display_value, principal_id) "
+                "VALUES (:alias_id, :entity_id, :alias_type, :value, :value, :principal_id)"
+            ),
+            {
+                "alias_id": alias_id,
+                "entity_id": entity_id,
+                "alias_type": alias_type,
+                "value": value,
+                "principal_id": principal_id,
+            },
+        )
+
+
+@pytest.mark.database
+def test_two_entities_may_carry_the_same_alias(migrated_engine: Engine) -> None:
+    """The safety argument of this table, asserted against the server.
+
+    Two real people share a name. A unique index on `normalized_value` would
+    make that a constraint violation, and the only way to satisfy it would be to
+    merge one into the other -- the false join the whole plane exists to avoid.
+    """
+    _seed_entity(migrated_engine, ENTITY_A, PRINCIPAL_A)
+    _seed_entity(migrated_engine, ENTITY_B, PRINCIPAL_A)
+    _seed_alias(migrated_engine, "eals_aaaa0001aaaa0001", ENTITY_A, "alice synthetic")
+    _seed_alias(migrated_engine, "eals_bbbb0002bbbb0002", ENTITY_B, "alice synthetic")
+    with migrated_engine.connect() as connection:
+        held = connection.execute(
+            text(
+                f"SELECT count(*) FROM {SCHEMA}.entity_aliases "  # noqa: S608
+                "WHERE normalized_value = 'alice synthetic'"
+            )
+        ).scalar_one()
+    assert held == 2
+
+
+@pytest.mark.database
+def test_one_entity_cannot_record_the_same_alias_twice(migrated_engine: Engine) -> None:
+    _seed_entity(migrated_engine, ENTITY_A, PRINCIPAL_A)
+    _seed_alias(migrated_engine, "eals_aaaa0001aaaa0001", ENTITY_A, "ali")
+    with pytest.raises(IntegrityError, match="an_alias_is_recorded_once_per_entity_and_type"):
+        _seed_alias(migrated_engine, "eals_bbbb0002bbbb0002", ENTITY_A, "ali")
+
+
+@pytest.mark.database
+def test_the_same_alias_under_a_different_type_is_a_second_record(
+    migrated_engine: Engine,
+) -> None:
+    """The key includes the type, so a full name and a nickname may coincide."""
+    _seed_entity(migrated_engine, ENTITY_A, PRINCIPAL_A)
+    _seed_alias(migrated_engine, "eals_aaaa0001aaaa0001", ENTITY_A, "ali", alias_type="nickname")
+    _seed_alias(migrated_engine, "eals_bbbb0002bbbb0002", ENTITY_A, "ali", alias_type="full_name")
+    with migrated_engine.connect() as connection:
+        held = connection.execute(
+            text(f"SELECT count(*) FROM {SCHEMA}.entity_aliases")  # noqa: S608
+        ).scalar_one()
+    assert held == 2
+
+
+@pytest.mark.database
+def test_an_alias_type_outside_the_closed_set_is_refused(migrated_engine: Engine) -> None:
+    _seed_entity(migrated_engine, ENTITY_A, PRINCIPAL_A)
+    with pytest.raises(IntegrityError, match="an_alias_type_is_known"):
+        _seed_alias(migrated_engine, "eals_aaaa0001aaaa0001", ENTITY_A, "ali", alias_type="handle")
+
+
+@pytest.mark.database
+def test_an_alias_identifier_must_carry_its_own_prefix(migrated_engine: Engine) -> None:
+    _seed_entity(migrated_engine, ENTITY_A, PRINCIPAL_A)
+    with pytest.raises(IntegrityError, match="alias_id_is_an_opaque_identifier"):
+        _seed_alias(migrated_engine, "xid_aaaa0001aaaa0001", ENTITY_A, "ali")
+
+
+@pytest.mark.database
+def test_dropping_an_entity_drops_its_aliases(migrated_engine: Engine) -> None:
+    """`ON DELETE CASCADE`: an alias of a deleted entity names nothing."""
+    _seed_entity(migrated_engine, ENTITY_A, PRINCIPAL_A)
+    _seed_alias(migrated_engine, "eals_aaaa0001aaaa0001", ENTITY_A, "ali")
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(f"DELETE FROM {SCHEMA}.entities WHERE entity_id = :entity_id"),  # noqa: S608
+            {"entity_id": ENTITY_A},
+        )
+    with migrated_engine.connect() as connection:
+        held = connection.execute(
+            text(f"SELECT count(*) FROM {SCHEMA}.entity_aliases")  # noqa: S608
+        ).scalar_one()
+    assert held == 0

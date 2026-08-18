@@ -24,11 +24,12 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "d9c4e1a7b628"
 PRIOR: Final = "b7f2c9e4a618"
 ATTEMPT_REVISION: Final = "f4c1a8e6b205"
+ENTITY_REVISION: Final = "9def3c2e63bb"
 #: Where `upgrade head` lands, which the database tier reads back out of
 #: `alembic_version`. That is a position in the chain rather than a property of
 #: this revision, so it moves whenever a revision is added; the chain test below
 #: is written not to depend on it.
-HEAD_REVISION: Final = "9def3c2e63bb"
+HEAD_REVISION: Final = "b7f4d1a92c36"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_d9c4e1a7b628_widen_goodnotes_entity_kind_meeting_agenda.py"
 )
@@ -96,8 +97,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(ATTEMPT_REVISION).down_revision == REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ATTEMPT_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 59
+    assert script.get_revision(ENTITY_REVISION).down_revision == ATTEMPT_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == ENTITY_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 60
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

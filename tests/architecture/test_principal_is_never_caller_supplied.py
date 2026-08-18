@@ -207,6 +207,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # before writing when the two differ. The value is never trusted; it is
     # checked, which is what this registry is for.
     "infrastructure/persistence/entity.py": (
+        ("alias", "principal_id"),
         ("assignment", "principal_id"),
         ("entity", "principal_id"),
         ("entity", "principal_id"),

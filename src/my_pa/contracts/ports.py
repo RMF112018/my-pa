@@ -87,10 +87,12 @@ from my_pa.domain.policy.decision import validate_policy_version
 from my_pa.domain.relationship.entity import (
     Assignment,
     Entity,
+    EntityAlias,
     EntityRelationship,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
+    ExternalIdentifierNamespace,
 )
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.relationship.identity import (
@@ -354,6 +356,53 @@ class EntitiesRepository(ABC):
         same values returns the stored row, and a repeat carrying different
         values under an identifier already issued is refused rather than
         silently dropped or silently applied.
+        """
+
+    @abstractmethod
+    def record_alias(self, principal_id: str, alias: EntityAlias) -> None:
+        """Idempotently record one alias of an entity.
+
+        Idempotent against the natural key `(entity_id, alias_type,
+        normalized_value)`.  Note what that key does *not* say: two different
+        entities may hold the same alias, because two real people share a name,
+        and a schema that refused it would force one of them into the other.
+        """
+
+    @abstractmethod
+    def aliases(self, principal_id: str, entity_id: str) -> list[EntityAlias]:
+        """Every alias recorded for an entity in this Principal's partition."""
+
+    @abstractmethod
+    def entities_by_identifier(
+        self,
+        principal_id: str,
+        namespace: ExternalIdentifierNamespace,
+        normalized_value: str,
+    ) -> list[tuple[Entity, ExternalIdentifier]]:
+        """Every entity holding this external identity, with the record that says so.
+
+        Returns the identifier row alongside the entity rather than the entity
+        alone, because resolution has to report *why* a candidate is a candidate
+        and whether the evidence was verified and effective (`RI-AC-011`).
+
+        More than one result is not an error here -- it is the
+        `CONFLICTED_IDENTIFIER` case the caller must be able to see. Deciding
+        what to do about it is the resolution service's job, not this port's.
+        """
+
+    @abstractmethod
+    def entities_by_alias(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityAlias]]:
+        """Every entity carrying this normalized alias, with the alias that matched."""
+
+    @abstractmethod
+    def entities_by_canonical_name(self, principal_id: str, normalized_value: str) -> list[Entity]:
+        """Every entity whose canonical name is exactly this normalized value.
+
+        An equality match, not a substring one: `search` is the substring
+        surface, and resolution asks a different question -- who *is* this --
+        for which a partial match is evidence of nothing.
         """
 
     @abstractmethod

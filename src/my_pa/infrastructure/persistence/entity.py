@@ -48,9 +48,11 @@ from sqlalchemy.sql.elements import ColumnElement
 from my_pa.contracts.ports import EntitiesRepository, EntitySummary, UnknownScopeError
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.relationship.entity import (
+    AliasType,
     Assignment,
     AssignmentType,
     Entity,
+    EntityAlias,
     EntityRelationship,
     EntityRelationshipType,
     EntityStatus,
@@ -65,6 +67,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
 )
 from my_pa.infrastructure.persistence.tables import (
     entities,
+    entity_aliases,
     entity_assignments,
     entity_external_identifiers,
     entity_relationships,
@@ -225,6 +228,75 @@ class SqlEntityRepository(EntitiesRepository):
         ).all()
         return [_row_to_external_identifier(row) for row in rows]
 
+    def aliases(self, principal_id: str, entity_id: str) -> list[EntityAlias]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        rows = self._connection.execute(
+            select(entity_aliases)
+            .where(
+                _mine(entity_aliases, principal_id),
+                entity_aliases.c.entity_id == entity_id,
+            )
+            .order_by(entity_aliases.c.alias_id)
+        ).all()
+        return [_row_to_alias(row) for row in rows]
+
+    def entities_by_identifier(
+        self,
+        principal_id: str,
+        namespace: ExternalIdentifierNamespace,
+        normalized_value: str,
+    ) -> list[tuple[Entity, ExternalIdentifier]]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        rows = self._connection.execute(
+            select(*_ENTITY_COLUMNS, entity_external_identifiers)
+            .join_from(
+                entities,
+                entity_external_identifiers,
+                entities.c.entity_id == entity_external_identifiers.c.entity_id,
+            )
+            .where(
+                _mine(entities, principal_id),
+                _mine(entity_external_identifiers, principal_id),
+                entity_external_identifiers.c.namespace == namespace.value,
+                entity_external_identifiers.c.normalized_value == normalized_value,
+            )
+            .order_by(entities.c.entity_id)
+        ).all()
+        return [(_row_to_entity(row), _row_to_external_identifier(row)) for row in rows]
+
+    def entities_by_alias(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityAlias]]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        rows = self._connection.execute(
+            select(*_ENTITY_COLUMNS, entity_aliases)
+            .join_from(
+                entities,
+                entity_aliases,
+                entities.c.entity_id == entity_aliases.c.entity_id,
+            )
+            .where(
+                _mine(entities, principal_id),
+                _mine(entity_aliases, principal_id),
+                entity_aliases.c.normalized_value == normalized_value,
+            )
+            .order_by(entities.c.entity_id, entity_aliases.c.alias_id)
+        ).all()
+        return [(_row_to_entity(row), _row_to_alias(row)) for row in rows]
+
+    def entities_by_canonical_name(self, principal_id: str, normalized_value: str) -> list[Entity]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        rows = self._connection.execute(
+            select(*_ENTITY_COLUMNS)
+            .where(
+                _mine(entities, principal_id),
+                entities.c.canonical_name == normalized_value,
+            )
+            .order_by(entities.c.entity_id)
+        ).all()
+        return [_row_to_entity(row) for row in rows]
+
     def assignments(
         self, principal_id: str, entity_id: str, active_only: bool = True
     ) -> list[Assignment]:
@@ -323,6 +395,29 @@ class SqlEntityRepository(EntitiesRepository):
             .on_conflict_do_nothing(
                 constraint="an_external_identifier_is_recorded_once_per_namespace"
             )
+        )
+
+    def record_alias(self, principal_id: str, alias: EntityAlias) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if alias.principal_id != principal_id:
+            raise ValueError("an alias belongs to the acting Principal")
+        self._require_own_entity(principal_id, alias.entity_id)
+        self._connection.execute(
+            pg_insert(entity_aliases)
+            .values(
+                _bound(
+                    entity_aliases,
+                    principal_id,
+                    alias_id=alias.alias_id,
+                    entity_id=alias.entity_id,
+                    alias_type=alias.alias_type.value,
+                    normalized_value=alias.normalized_value,
+                    display_value=alias.display_value,
+                    effective_from=alias.effective_from,
+                    effective_to=alias.effective_to,
+                )
+            )
+            .on_conflict_do_nothing(constraint="an_alias_is_recorded_once_per_entity_and_type")
         )
 
     def record_assignment(self, principal_id: str, assignment: Assignment) -> None:
@@ -444,6 +539,19 @@ def _row_to_external_identifier(row: Row[Any]) -> ExternalIdentifier:
         display_value=str(row.display_value),
         principal_id=str(row.principal_id),
         verified=bool(row.verified),
+        effective_from=row.effective_from,
+        effective_to=row.effective_to,
+    )
+
+
+def _row_to_alias(row: Row[Any]) -> EntityAlias:
+    return EntityAlias(
+        alias_id=str(row.alias_id),
+        entity_id=str(row.entity_id),
+        alias_type=AliasType(str(row.alias_type)),
+        normalized_value=str(row.normalized_value),
+        display_value=str(row.display_value),
+        principal_id=str(row.principal_id),
         effective_from=row.effective_from,
         effective_to=row.effective_to,
     )

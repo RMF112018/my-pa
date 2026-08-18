@@ -291,6 +291,18 @@ EXPECTED_MODEL_FIELDS = {
             "effective_to",
         }
     ),
+    "my_pa.domain.relationship.entity.EntityAlias": frozenset(
+        {
+            "alias_id",
+            "entity_id",
+            "alias_type",
+            "normalized_value",
+            "display_value",
+            "principal_id",
+            "effective_from",
+            "effective_to",
+        }
+    ),
     "my_pa.domain.relationship.entity.Assignment": frozenset(
         {
             "assignment_id",
@@ -319,6 +331,26 @@ EXPECTED_MODEL_FIELDS = {
             "state",
             "version",
         }
+    ),
+    # What a resolution attempt answers. Frozen here for a reason the durable
+    # records above do not have: these are the types a caller reads to decide
+    # whether two references name one person, so a field added to them is a new
+    # input to that decision and has to be argued for rather than appear.
+    "my_pa.domain.relationship.resolution.ResolutionEvidence": frozenset(
+        {"basis", "matched_value", "verified", "source_record_id"}
+    ),
+    "my_pa.domain.relationship.resolution.ResolutionCandidate": frozenset(
+        {
+            "entity_id",
+            "entity_type",
+            "display_name",
+            "status",
+            "evidence",
+            "superseded_by_entity_id",
+        }
+    ),
+    "my_pa.domain.relationship.resolution.EntityResolution": frozenset(
+        {"outcome", "candidates", "warnings"}
     ),
 }
 
@@ -463,6 +495,18 @@ EXPECTED_TABLE_COLUMNS = {
             "principal_id",
         }
     ),
+    "entity_aliases": frozenset(
+        {
+            "alias_id",
+            "entity_id",
+            "alias_type",
+            "normalized_value",
+            "display_value",
+            "effective_from",
+            "effective_to",
+            "principal_id",
+        }
+    ),
     "entity_assignments": frozenset(
         {
             "assignment_id",
@@ -525,8 +569,8 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 21
-    assert len(actual_table_columns) == 22
+    assert len(actual_model_fields) == 25
+    assert len(actual_table_columns) == 23
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

@@ -168,9 +168,11 @@ from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.relationship.entity import (
     Assignment,
     Entity,
+    EntityAlias,
     EntityRelationship,
     EntityType,
     ExternalIdentifier,
+    ExternalIdentifierNamespace,
 )
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
 from my_pa.domain.situation.continuity import (
@@ -407,6 +409,7 @@ class World:
     #: partition false join the plane exists to avoid.
     entities: list[Entity] = field(default_factory=list)
     entity_identifiers: list[ExternalIdentifier] = field(default_factory=list)
+    entity_aliases: list[EntityAlias] = field(default_factory=list)
     entity_assignments: list[Assignment] = field(default_factory=list)
     entity_relationships: list[EntityRelationship] = field(default_factory=list)
     commits: int = 0
@@ -2310,6 +2313,58 @@ class _Entities(EntitiesRepository):
             key=lambda identifier: identifier.identifier_id,
         )
 
+    def aliases(self, principal_id: str, entity_id: str) -> list[EntityAlias]:
+        self._world.fail("entities.aliases")
+        return sorted(
+            (
+                alias
+                for alias in self._world.entity_aliases
+                if alias.principal_id == principal_id and alias.entity_id == entity_id
+            ),
+            key=lambda alias: alias.alias_id,
+        )
+
+    def entities_by_identifier(
+        self,
+        principal_id: str,
+        namespace: ExternalIdentifierNamespace,
+        normalized_value: str,
+    ) -> list[tuple[Entity, ExternalIdentifier]]:
+        self._world.fail("entities.entities_by_identifier")
+        matched = [
+            (entity, identifier)
+            for identifier in self._world.entity_identifiers
+            if identifier.principal_id == principal_id
+            and identifier.namespace is namespace
+            and identifier.normalized_value == normalized_value
+            and (entity := self._mine(principal_id, identifier.entity_id)) is not None
+        ]
+        return sorted(matched, key=lambda pair: pair[0].entity_id)
+
+    def entities_by_alias(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityAlias]]:
+        self._world.fail("entities.entities_by_alias")
+        matched = [
+            (entity, alias)
+            for alias in self._world.entity_aliases
+            if alias.principal_id == principal_id
+            and alias.normalized_value == normalized_value
+            and (entity := self._mine(principal_id, alias.entity_id)) is not None
+        ]
+        return sorted(matched, key=lambda pair: (pair[0].entity_id, pair[1].alias_id))
+
+    def entities_by_canonical_name(self, principal_id: str, normalized_value: str) -> list[Entity]:
+        self._world.fail("entities.entities_by_canonical_name")
+        return sorted(
+            (
+                entity
+                for entity in self._world.entities
+                if entity.principal_id == principal_id and entity.canonical_name == normalized_value
+            ),
+            key=lambda entity: entity.entity_id,
+        )
+
     def assignments(
         self, principal_id: str, entity_id: str, active_only: bool = True
     ) -> list[Assignment]:
@@ -2368,6 +2423,17 @@ class _Entities(EntitiesRepository):
             if (held.entity_id, held.namespace, held.normalized_value) == natural_key:
                 return
         self._world.entity_identifiers.append(identifier)
+
+    def record_alias(self, principal_id: str, alias: EntityAlias) -> None:
+        self._world.fail("entities.record_alias")
+        if alias.principal_id != principal_id:
+            raise ValueError("an alias belongs to the acting Principal")
+        self._require_own(principal_id, alias.entity_id)
+        natural_key = (alias.entity_id, alias.alias_type, alias.normalized_value)
+        for held in self._world.entity_aliases:
+            if (held.entity_id, held.alias_type, held.normalized_value) == natural_key:
+                return
+        self._world.entity_aliases.append(alias)
 
     def record_assignment(self, principal_id: str, assignment: Assignment) -> None:
         self._world.fail("entities.record_assignment")

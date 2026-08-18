@@ -27,6 +27,7 @@ from my_pa.application.goodnotes_lineage import (
     ObservedNotebookFile,
     PageRenderer,
     ingestion_request_fingerprint,
+    verify_persisted_page_identity,
 )
 from my_pa.application.goodnotes_occurrences import (
     GoodNotesOccurrenceReconciler,
@@ -654,28 +655,14 @@ def _assert_ingestion_identity(
 
 
 def _assert_completed_prefix(completed: set[GoodNotesPipelineStage]) -> None:
-    if GoodNotesPipelineStage.LINEAGE not in completed:
-        return
-    required = (
-        GoodNotesPipelineStage.OBSERVE,
-        GoodNotesPipelineStage.SETTLE,
-        GoodNotesPipelineStage.SPLIT_RENDER,
-        GoodNotesPipelineStage.LINEAGE,
-    )
-    if any(stage not in completed for stage in required):
-        raise _consistency_error()
-    if GoodNotesPipelineStage.CONTENT_READY in completed and (
-        GoodNotesPipelineStage.SPLIT_RENDER not in completed
-    ):
-        raise _consistency_error()
-    if GoodNotesPipelineStage.RECONCILE in completed and (
-        GoodNotesPipelineStage.CONTENT_READY not in completed
-    ):
-        raise _consistency_error()
-    if GoodNotesPipelineStage.PREVIEW in completed and (
-        GoodNotesPipelineStage.RECONCILE not in completed
-    ):
-        raise _consistency_error()
+    for stage in completed:
+        for prior in PIPELINE_STAGES:
+            if prior is stage:
+                break
+            if prior is GoodNotesPipelineStage.WAITING_PROPOSAL:
+                continue
+            if prior not in completed:
+                raise _consistency_error()
 
 
 def _required_snapshot(
@@ -734,47 +721,16 @@ def _assert_lineage_identity(
     if notebook is None or notebook.source_root_id != request.source_root_id:
         raise _bound_identity_error()
     positions = store.page_positions(run.principal_id, snapshot.snapshot_id)
-    if len(positions) != len(pages):
-        raise _bound_identity_error()
-    by_number = {page.page_number: page for page in pages}
-    for position in positions:
-        source_page = by_number.get(position.page_number)
-        if source_page is None or position.page_version_id is None:
-            raise _bound_identity_error()
-        version = store.page_version(run.principal_id, position.page_version_id)
-        if version is None:
-            raise _bound_identity_error()
-        page_id = issue_stable_id(
-            "gnpg", source_page.source_object_id, str(source_page.page_number)
+    try:
+        verify_persisted_page_identity(
+            principal_id=run.principal_id,
+            pages=pages,
+            positions=positions,
+            renderer=renderer,
+            repository=store,
         )
-        expected_version_id = issue_stable_id(
-            "gnver",
-            page_id,
-            source_page.source_version_id,
-            source_page.representation_media_type,
-            version.content_sha256,
-        )
-        if position.page_version_id != expected_version_id:
-            raise _bound_identity_error()
-        if version.source_version_id != source_page.source_version_id:
-            raise _bound_identity_error()
-        if (
-            version.renderer_name != renderer.name
-            or version.renderer_version != renderer.version
-            or version.render_profile_version != renderer.profile_version
-        ):
-            raise _bound_identity_error()
-        stored_page = store.page(run.principal_id, version.page_id)
-        if stored_page is None:
-            raise _bound_identity_error()
-        if stored_page.source_id != source_page.source_id:
-            raise _bound_identity_error()
-        if stored_page.source_object_id != source_page.source_object_id:
-            raise _bound_identity_error()
-        if stored_page.page_number != source_page.page_number:
-            raise _bound_identity_error()
-        if stored_page.page_id != page_id:
-            raise _bound_identity_error()
+    except ValueError as error:
+        raise _bound_identity_error() from error
 
 
 def _assert_later_stage_consistency(
@@ -793,6 +749,10 @@ def _assert_later_stage_consistency(
                     raise _consistency_error()
                 if store.page_raster(run.principal_id, position.page_version_id) is None:
                     raise _consistency_error()
+    if (
+        GoodNotesPipelineStage.RECONCILE in completed or GoodNotesPipelineStage.PREVIEW in completed
+    ) and not store.semantic_proposals_for_run(run.principal_id, run.run_id):
+        raise _consistency_error()
     if GoodNotesPipelineStage.RECONCILE in completed:
         changes = store.run_note_changes(run.principal_id, run.run_id)
         for change in changes:

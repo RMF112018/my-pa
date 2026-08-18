@@ -167,6 +167,33 @@ def _propose(store: MemoryDurableNoteStore, run_id: str) -> None:
     )
 
 
+def _propose_source_context(store: MemoryDurableNoteStore, run_id: str) -> None:
+    positions = ()
+    for snapshot in store.snapshots_for_run(A, run_id):
+        positions = store.page_positions(A, snapshot.snapshot_id)
+        break
+    assert positions
+    version_id = positions[0].page_version_id
+    assert version_id is not None
+    store.store_semantic_proposal(
+        A,
+        run_id,
+        version_id,
+        "note-unit.v1",
+        "synthetic",
+        "1",
+        {
+            "segments": [
+                {
+                    "kind": "SOURCE_CONTEXT",
+                    "geometry": {"x_min": 0.1, "y_min": 0.1, "width": 0.2, "height": 0.2},
+                    "transcription": "",
+                }
+            ]
+        },
+    )
+
+
 def test_lineage_alone_is_not_terminal_success() -> None:
     pdf = vector_pdf((COVER,))
     store = MemoryDurableNoteStore()
@@ -687,15 +714,24 @@ def test_t10_orchestrator_tests_are_synthetic() -> None:
     assert request.request_id == "t10-synthetic"
 
 
-def test_t11_inconsistent_completed_prefix_fails_closed() -> None:
+@pytest.mark.parametrize(
+    "forged",
+    [
+        GoodNotesPipelineStage.LINEAGE,
+        GoodNotesPipelineStage.CONTENT_READY,
+        GoodNotesPipelineStage.RECONCILE,
+        GoodNotesPipelineStage.PREVIEW,
+    ],
+)
+def test_t11_inconsistent_completed_prefix_fails_closed(forged: GoodNotesPipelineStage) -> None:
     pdf = vector_pdf((COVER,))
     store = MemoryDurableNoteStore()
-    first = _run(store, pdf, "t11-prefix", "observe-only")
+    first = _run(store, pdf, f"t11-prefix-{forged.value}", "observe-only")
     store.record_stage(
         GoodNotesRunStage(
             principal_id=A,
             run_id=first.run.run_id,
-            stage=GoodNotesPipelineStage.LINEAGE,
+            stage=forged,
             status=GoodNotesStageStatus.SUCCEEDED,
             started_at=WHEN,
             attempt=1,
@@ -703,9 +739,32 @@ def test_t11_inconsistent_completed_prefix_fails_closed() -> None:
         )
     )
     with pytest.raises(DurableNoteContinuationError):
-        _run(store, pdf, "t11-prefix", PREVIEW)
+        _run(store, pdf, f"t11-prefix-{forged.value}", PREVIEW)
     stages = {row.stage for row in store.stages(A, first.run.run_id)}
     assert GoodNotesPipelineStage.SPLIT_RENDER not in stages
+    assert store._attempts == []
+
+
+def test_t11_reconcile_without_content_ready_fails_closed() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    first = _run(store, pdf, "t11-reconcile-gap", DRY_RUN)
+    store.record_stage(
+        GoodNotesRunStage(
+            principal_id=A,
+            run_id=first.run.run_id,
+            stage=GoodNotesPipelineStage.RECONCILE,
+            status=GoodNotesStageStatus.SUCCEEDED,
+            started_at=WHEN,
+            attempt=1,
+            ended_at=WHEN,
+        )
+    )
+    with pytest.raises(DurableNoteContinuationError):
+        _run(store, pdf, "t11-reconcile-gap", PREVIEW)
+    assert GoodNotesPipelineStage.CONTENT_READY not in {
+        row.stage for row in store.stages(A, first.run.run_id)
+    }
     assert store._attempts == []
 
 
@@ -858,19 +917,7 @@ def test_t17_zero_change_reconcile_is_valid_and_canary_replays_suppressed_receip
     store = MemoryDurableNoteStore()
     request = _request(pdf, "t17-zero-change")
     first = _run(store, pdf, request.request_id, PREVIEW)
-    _propose(store, first.run.run_id)
-    store.record_stage(
-        GoodNotesRunStage(
-            principal_id=A,
-            run_id=first.run.run_id,
-            stage=GoodNotesPipelineStage.RECONCILE,
-            status=GoodNotesStageStatus.SUCCEEDED,
-            started_at=WHEN,
-            attempt=1,
-            ended_at=WHEN,
-        )
-    )
-    assert store.run_note_changes(A, first.run.run_id) == ()
+    _propose_source_context(store, first.run.run_id)
     previewed = _run_at(store, request, PREVIEW)
     assert GoodNotesPipelineStage.RECONCILE in _succeeded(previewed)
     assert store.run_note_changes(A, previewed.run.run_id) == ()
@@ -884,3 +931,24 @@ def test_t17_zero_change_reconcile_is_valid_and_canary_replays_suppressed_receip
     assert GoodNotesDeliveryAttemptState.PREPARED in states
     assert GoodNotesDeliveryAttemptState.ACKNOWLEDGED in states
     assert GoodNotesDeliveryAttemptState.SENT not in states
+
+
+def test_t17_completed_reconcile_without_proposal_fails_closed() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    first = _run(store, pdf, "t17-missing-proposal", PREVIEW)
+    store.record_stage(
+        GoodNotesRunStage(
+            principal_id=A,
+            run_id=first.run.run_id,
+            stage=GoodNotesPipelineStage.RECONCILE,
+            status=GoodNotesStageStatus.SUCCEEDED,
+            started_at=WHEN,
+            attempt=1,
+            ended_at=WHEN,
+        )
+    )
+    with pytest.raises(DurableNoteContinuationError):
+        _run(store, pdf, "t17-missing-proposal", PREVIEW)
+    assert store.delivery_receipts_for_run(A, first.run.run_id) == ()
+    assert store._attempts == []

@@ -10,12 +10,17 @@ content-ready → waiting-proposal → reconcile → NEW-only preview/receipt.
 Lineage completion is not terminal success. Terminal `SUCCEEDED` is recorded
 only after repository-side reconcile and preview. Later continuation of the
 same `request_id` verifies ingestion identity and persisted page/source
-evidence **before** any FAILED→RUNNING mutation. Completed LINEAGE is skipped
-only after that proof; missing rasters in the post-LINEAGE / pre-CONTENT_READY
-crash window are restored deterministically without rerunning lineage. A
-legitimate zero-change reconciliation is valid and yields a suppressed NEW-only
-receipt (`summary_hash` of the empty body). Successful PREVIEW/run terminal
-state and the original successful `ended_at` are monotonic. The
+evidence **before** any FAILED→RUNNING mutation. Standalone lineage replay
+performs the same persisted page/version identity check before returning
+existing positions and before FAILED→RUNNING. Completed-stage prefix
+validation covers the full prerequisite chain even when LINEAGE itself is
+absent. Completed LINEAGE is skipped only after that proof; missing rasters
+in the post-LINEAGE / pre-CONTENT_READY crash window are restored
+deterministically without rerunning lineage. Completed RECONCILE and PREVIEW
+require proposal evidence; a legitimate zero-change reconciliation (proposal
+present, zero change rows) is valid and yields a suppressed NEW-only receipt
+(`summary_hash` of the empty body). Successful PREVIEW/run terminal state and
+the original successful `ended_at` are monotonic. The
 operator-reviewed delivery canary records PREPARED → local receipt replay →
 ACKNOWLEDGED on the attempt ledger and does not send externally (`SENT` stays
 0). A historical failed canary that left PREVIEW FAILED while a preview receipt

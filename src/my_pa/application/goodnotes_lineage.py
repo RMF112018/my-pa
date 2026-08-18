@@ -382,6 +382,7 @@ class GoodNotesLineageService:
                 positions=held_positions,
                 renderer=renderer,
                 repository=repository,
+                verify_supplied_content_digest=True,
             )
         if existing_run is None:
             run = repository.create_run(
@@ -602,12 +603,19 @@ def verify_persisted_page_identity(
     positions: Sequence[GoodNotesPagePosition],
     renderer: PageRenderer,
     repository: GoodNotesLineageRepository,
+    verify_supplied_content_digest: bool,
 ) -> None:
     """Fail closed when supplied pages do not match persisted page/version evidence.
 
     gnver is recomputed from persisted content_sha256 plus the supplied page
     identity fields. This is not the ingestion fingerprint and does not hash
     freshly supplied page bytes into GoodNotesIngestionRun.request_fingerprint.
+
+    `verify_supplied_content_digest` is an explicit path contract, not inferred
+    from caller type: standalone request-bound lineage replay requires
+    sha256(SourcePage.content) == persisted content_sha256; durable-orchestrator
+    completed-LINEAGE continuation does not, because split_admitted_pdf is not
+    byte-stable across equivalent invocations.
     """
     if len(positions) != len(pages):
         raise ValueError("the request id is bound to another ingestion")
@@ -649,6 +657,10 @@ def verify_persisted_page_identity(
         if stored_page.page_number != source_page.page_number:
             raise ValueError("the request id is bound to another ingestion")
         if stored_page.page_id != page_id:
+            raise ValueError("the request id is bound to another ingestion")
+        if verify_supplied_content_digest and (
+            hashlib.sha256(source_page.content).hexdigest() != version.content_sha256
+        ):
             raise ValueError("the request id is bound to another ingestion")
 
 

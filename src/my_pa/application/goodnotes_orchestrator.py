@@ -728,6 +728,7 @@ def _assert_lineage_identity(
             positions=positions,
             renderer=renderer,
             repository=store,
+            verify_supplied_content_digest=False,
         )
     except ValueError as error:
         raise _bound_identity_error() from error

@@ -67,6 +67,8 @@ from my_pa.contracts.ports import (
     ContextRunRepository,
     ContinuityAuthoringRepository,
     EnrollmentRepository,
+    EntitiesRepository,
+    EntitySummary,
     GoodNotesProposalAdmission,
     GoodNotesProposalConflictError,
     GoodNotesSemanticRepository,
@@ -163,6 +165,13 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
+from my_pa.domain.relationship.entity import (
+    Assignment,
+    Entity,
+    EntityRelationship,
+    EntityType,
+    ExternalIdentifier,
+)
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -384,6 +393,22 @@ class World:
         default_factory=dict
     )
     goodnotes_rasters: dict[tuple[str, str], GoodNotesPageRaster] = field(default_factory=dict)
+    #: The relationship-intelligence entity plane. Flat lists for the reason
+    #: every other plane on `World` is one: the fake's whole job is the
+    #: partition predicate, and a list a filter runs over is the clearest place
+    #: to see one missing.
+    #:
+    #: **What this fake cannot prove.** There is no CHECK constraint on a
+    #: Python list, so the closed-set, effective-dating, and redirect
+    #: invariants are proved by the domain dataclasses here and by the server
+    #: in `tests/database` — never by this class. What it can prove is that a
+    #: read filters by Principal first and that a write refuses an entity
+    #: reference the acting Principal does not hold, which is the cross-
+    #: partition false join the plane exists to avoid.
+    entities: list[Entity] = field(default_factory=list)
+    entity_identifiers: list[ExternalIdentifier] = field(default_factory=list)
+    entity_assignments: list[Assignment] = field(default_factory=list)
+    entity_relationships: list[EntityRelationship] = field(default_factory=list)
     commits: int = 0
     rollbacks: int = 0
     #: Port failures a test wants raised, keyed by the method that should raise.
@@ -2206,6 +2231,182 @@ class _Pulse(PulseRepository):
         )
 
 
+class _Entities(EntitiesRepository):
+    """The entity plane over `World`, partition-first.
+
+    Every method takes `principal_id` and applies it before anything else, so
+    an entity belonging to another Principal is answered exactly as an absent
+    one. The write methods repeat the SQL repository's entity-reference guard
+    rather than trusting the caller: in the real schema those columns are
+    foreign keys that span every Principal, so "the row exists" and "the row is
+    mine" are different questions, and only the second one is safe.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    # --- guards ----------------------------------------------------------
+
+    def _mine(self, principal_id: str, entity_id: str) -> Entity | None:
+        return next(
+            (
+                entity
+                for entity in self._world.entities
+                if entity.entity_id == entity_id and entity.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def _require_own(self, principal_id: str, *entity_ids: str | None) -> None:
+        for entity_id in entity_ids:
+            if entity_id is not None and self._mine(principal_id, entity_id) is None:
+                raise UnknownScopeError("an entity operation names an entity outside this scope")
+
+    # --- reads -----------------------------------------------------------
+
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        entity_type: EntityType | None = None,
+        limit: int = 50,
+    ) -> list[EntitySummary]:
+        self._world.fail("entities.search")
+        needle = query.casefold()
+        matched = [
+            entity
+            for entity in self._world.entities
+            if entity.principal_id == principal_id
+            and (entity_type is None or entity.entity_type is entity_type)
+            and (
+                needle in entity.canonical_name.casefold()
+                or needle in entity.display_name.casefold()
+            )
+        ]
+        matched.sort(key=lambda entity: (entity.canonical_name, entity.entity_id))
+        return [
+            EntitySummary(
+                entity_id=entity.entity_id,
+                entity_type=entity.entity_type,
+                canonical_name=entity.canonical_name,
+                display_name=entity.display_name,
+                status=entity.status,
+            )
+            for entity in matched[: limit if limit >= 1 else 50]
+        ]
+
+    def get(self, principal_id: str, entity_id: str) -> Entity | None:
+        self._world.fail("entities.get")
+        return self._mine(principal_id, entity_id)
+
+    def external_identifiers(self, principal_id: str, entity_id: str) -> list[ExternalIdentifier]:
+        self._world.fail("entities.external_identifiers")
+        return sorted(
+            (
+                identifier
+                for identifier in self._world.entity_identifiers
+                if identifier.principal_id == principal_id and identifier.entity_id == entity_id
+            ),
+            key=lambda identifier: identifier.identifier_id,
+        )
+
+    def assignments(
+        self, principal_id: str, entity_id: str, active_only: bool = True
+    ) -> list[Assignment]:
+        self._world.fail("entities.assignments")
+        return sorted(
+            (
+                assignment
+                for assignment in self._world.entity_assignments
+                if assignment.principal_id == principal_id
+                and assignment.entity_id == entity_id
+                and (not active_only or assignment.status == "active")
+            ),
+            key=lambda assignment: assignment.assignment_id,
+        )
+
+    def relationships(
+        self, principal_id: str, entity_id: str, direction: str = "any"
+    ) -> list[EntityRelationship]:
+        self._world.fail("entities.relationships")
+        if direction not in ("any", "outgoing", "incoming"):
+            raise ValueError("an entity relationship direction is any, outgoing, or incoming")
+        return sorted(
+            (
+                relationship
+                for relationship in self._world.entity_relationships
+                if relationship.principal_id == principal_id
+                and _touches(relationship, entity_id, direction)
+            ),
+            key=lambda relationship: relationship.relationship_id,
+        )
+
+    # --- writes ----------------------------------------------------------
+
+    def create(self, entity: Entity) -> Entity:
+        self._world.fail("entities.create")
+        held = self._mine(entity.principal_id, entity.entity_id)
+        if held is not None:
+            if held != entity:
+                raise ValueError("an entity identifier cannot be rebound to different values")
+            return held
+        self._require_own(entity.principal_id, entity.superseded_by_entity_id)
+        self._world.entities.append(entity)
+        return entity
+
+    def bind_identifier(
+        self, principal_id: str, entity_id: str, identifier: ExternalIdentifier
+    ) -> None:
+        self._world.fail("entities.bind_identifier")
+        if identifier.entity_id != entity_id:
+            raise ValueError("an external identifier binds to the entity it names")
+        if identifier.principal_id != principal_id:
+            raise ValueError("an external identifier belongs to the acting Principal")
+        self._require_own(principal_id, entity_id)
+        natural_key = (identifier.entity_id, identifier.namespace, identifier.normalized_value)
+        for held in self._world.entity_identifiers:
+            if (held.entity_id, held.namespace, held.normalized_value) == natural_key:
+                return
+        self._world.entity_identifiers.append(identifier)
+
+    def record_assignment(self, principal_id: str, assignment: Assignment) -> None:
+        self._world.fail("entities.record_assignment")
+        if assignment.principal_id != principal_id:
+            raise ValueError("an assignment belongs to the acting Principal")
+        self._require_own(principal_id, assignment.entity_id, assignment.scope_entity_id)
+        for held in self._world.entity_assignments:
+            if held.assignment_id == assignment.assignment_id:
+                if held != assignment:
+                    raise ValueError(
+                        "an assignment identifier cannot be rebound to different values"
+                    )
+                return
+        self._world.entity_assignments.append(assignment)
+
+    def record_relationship(self, principal_id: str, rel: EntityRelationship) -> None:
+        self._world.fail("entities.record_relationship")
+        if rel.principal_id != principal_id:
+            raise ValueError("an entity relationship belongs to the acting Principal")
+        self._require_own(principal_id, rel.from_entity_id, rel.to_entity_id, rel.scope_entity_id)
+        for held in self._world.entity_relationships:
+            if held.relationship_id == rel.relationship_id:
+                if held != rel:
+                    raise ValueError(
+                        "an entity relationship identifier cannot be rebound to different values"
+                    )
+                return
+        self._world.entity_relationships.append(rel)
+
+
+def _touches(relationship: EntityRelationship, entity_id: str, direction: str) -> bool:
+    """Whether one edge answers a directed enumeration for `entity_id`."""
+    if direction == "outgoing":
+        return relationship.from_entity_id == entity_id
+    if direction == "incoming":
+        return relationship.to_entity_id == entity_id
+    return entity_id in (relationship.from_entity_id, relationship.to_entity_id)
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -2302,6 +2503,11 @@ class FakeUnitOfWork(UnitOfWork):
     def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
         """Immutable page-version work and semantic proposal receipts over this `World`."""
         return _GoodNotesSemantics(self._world)
+
+    @property
+    def entities(self) -> EntitiesRepository:
+        """The relationship-intelligence entity plane over this `World`."""
+        return _Entities(self._world)
 
     @property
     def audit(self) -> AuditSink:

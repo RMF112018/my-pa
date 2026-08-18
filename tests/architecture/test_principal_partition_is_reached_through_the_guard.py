@@ -109,6 +109,11 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         "infrastructure/persistence/apple_bridge_credentials.py",
         "infrastructure/persistence/capture_search.py",
         "infrastructure/persistence/continuity_read.py",
+        # The generalized entity plane. Every statement it builds — four reads,
+        # four writes, and the entity-reference guard the writes call first —
+        # goes through `partition_criterion` or `principal_bound_values`, so it
+        # is registered statement-level below rather than per-module.
+        "infrastructure/persistence/entity.py",
         "infrastructure/persistence/goodnotes.py",
         "infrastructure/persistence/goodnotes_semantics.py",
         "infrastructure/persistence/goodnotes_delivery.py",
@@ -248,6 +253,7 @@ QUARANTINED: Final = {
 #: for every statement it builds over a partitioned table.
 STATEMENT_LEVEL: Final = frozenset(
     {
+        "infrastructure/persistence/entity.py",
         "infrastructure/persistence/jobs.py",
         "infrastructure/persistence/knowledge.py",
         "infrastructure/persistence/managed_documents.py",
@@ -775,6 +781,52 @@ def test_every_relationship_statement_reaches_the_partition() -> None:
         "table without reaching the partition through `principal_scope`. Every "
         "read and update predicate goes through `_mine`; every insert goes "
         "through `_bound`"
+    )
+
+
+def test_every_entity_statement_reaches_the_partition() -> None:
+    """The generalized entity plane, statement by statement.
+
+    The same claim `test_every_relationship_statement_reaches_the_partition`
+    makes about the WP-9 substrate, made about the plane that generalizes it,
+    and made the same way: a statement naming a partitioned declaration must
+    also name `_mine` (the read predicate) or `_bound` (the insert stamp).
+
+    This module has no `text()` block and no registered exception, so the
+    offending list is expected to be empty outright rather than empty against a
+    registry -- which is the state a new plane should be in, since every
+    exception the older modules carry was earned by code that predated the
+    guard.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "entity.py"
+    partitioned = set(_partitioned_tables())
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    checked = 0
+    offending: list[str] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        for statement in ast.walk(function):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
+                continue
+            rendered = ast.unparse(statement)
+            if not any(
+                f"{table}.c" in rendered or f"({table}," in rendered for table in partitioned
+            ):
+                continue
+            checked += 1
+            if "_mine(" not in rendered and "_bound(" not in rendered:
+                offending.append(f"{function.name}:{statement.lineno}")
+
+    assert checked >= 9, (
+        f"only {checked} entity statements were examined; the walk is not "
+        "reaching the module's queries"
+    )
+    assert offending == [], (
+        f"{offending} build a statement over a principal-partitioned entity "
+        "table without reaching the partition through `principal_scope`. Every "
+        "read predicate goes through `_mine`; every insert goes through `_bound`"
     )
 
 
@@ -1516,6 +1568,7 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
                 "infrastructure/persistence/managed_documents.py",
                 "infrastructure/persistence/relationships.py",
                 "infrastructure/persistence/reveal.py",
+                "infrastructure/persistence/entity.py",
             }
         )
         == STATEMENT_LEVEL
@@ -1524,9 +1577,10 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
         "`test_every_relationship_statement_reaches_the_partition`, "
         "`test_every_job_statement_reaches_the_partition_or_is_registered`, "
         "`test_every_reveal_statement_reaches_the_partition`, "
-        "`test_every_corpus_coverage_statement_reaches_the_partition` and "
+        "`test_every_corpus_coverage_statement_reaches_the_partition`, "
         "`test_every_managed_document_statement_reaches_the_partition_or_is_registered` "
-        "are the five that exist"
+        "and `test_every_entity_statement_reaches_the_partition` are the six "
+        "that exist"
     )
 
 

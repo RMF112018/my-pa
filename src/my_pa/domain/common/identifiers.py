@@ -185,6 +185,26 @@ class IdKind(StrEnum):
     #: names a prepared package or a preference that ranked one, and `ctxm`
     #: already names the assembled packet.
     CONTEXT_PREFERENCE_EVENT = "cpref"
+    #: WP-RI-01: the relationship-intelligence entity plane. Each surface is its
+    #: own prefix on the same argument the existing relationship-plane prefixes
+    #: make — a stored reference or an audit row has to say which record it
+    #: names. `ENTITY` names the generalized entity row (which may be a person,
+    #: organization, program, project, work package, team, or location).
+    #: `EXTERNAL_IDENTIFIER` names an entity's identity in an external namespace.
+    #: `ASSIGNMENT` names a typed assignment of an entity to a scope entity —
+    #: the spec's "role and affiliation" (section 12.5) and "project
+    #: association" (section 12.6) under one record. `ENTITY_RELATIONSHIP`
+    #: names a directed, typed relationship between two entities.
+    #:
+    #: Four prefixes are *not* declared here, and their absence is the point:
+    #: an observation, a proposal, a context packet, and a merge lineage record
+    #: each belong to a later work package that has a table for them. A prefix
+    #: is a contract this module promises is stable, and promising one before
+    #: anything issues it is a promise about a record that does not exist.
+    ENTITY = "ent"
+    EXTERNAL_IDENTIFIER = "xid"
+    ASSIGNMENT = "asn"
+    ENTITY_RELATIONSHIP = "erel"
 
 
 class InvalidIdentifierError(ValueError):

@@ -1,5 +1,16 @@
 """Relationship identity, evidence, profiles, and governed resolution."""
 
+from my_pa.domain.relationship.entity import (
+    Assignment,
+    AssignmentType,
+    Entity,
+    EntityRelationship,
+    EntityRelationshipType,
+    EntityStatus,
+    EntityType,
+    ExternalIdentifier,
+    ExternalIdentifierNamespace,
+)
 from my_pa.domain.relationship.identity import (
     Affiliation,
     Alias,
@@ -28,10 +39,19 @@ from my_pa.domain.relationship.profile import (
 __all__ = [
     "Affiliation",
     "Alias",
+    "Assignment",
+    "AssignmentType",
     "CoverageDomain",
     "DuplicateCandidateSet",
+    "Entity",
+    "EntityRelationship",
+    "EntityRelationshipType",
+    "EntityStatus",
+    "EntityType",
     "EvidenceAuthority",
     "EvidenceItem",
+    "ExternalIdentifier",
+    "ExternalIdentifierNamespace",
     "IdentityCandidateSet",
     "IdentityObservation",
     "IdentityResolution",

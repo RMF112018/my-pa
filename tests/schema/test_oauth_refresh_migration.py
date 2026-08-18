@@ -46,7 +46,12 @@ EXACT_RENDER_REVISION = "c3e9a7f1b204"
 CONTENT_REVISION = "a4d9c2e7b815"
 GROUNDING_REVISION = "b7f2c9e4a618"
 ENTITY_KIND_REVISION = "d9c4e1a7b628"
-HEAD_REVISION = "f4c1a8e6b205"
+ATTEMPT_REVISION = "f4c1a8e6b205"
+#: Where `upgrade head` lands, which the database tier reads back out of
+#: `alembic_version`. That is a position in the chain rather than a property of
+#: this revision, so it moves whenever a revision is added; the chain test below
+#: is written not to depend on it.
+HEAD_REVISION = "9def3c2e63bb"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -113,9 +118,17 @@ def test_refresh_tables_share_the_canonical_identity_metadata() -> None:
     }.issubset({table.name for table in IDENTITY_METADATA.tables.values()})
 
 
-def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
+    """Renamed from "is the head", because that was never the claim needed here.
+
+    This revision stopped being the head six revisions ago; the pin survived
+    because each of those revisions edited this line, and it rotted again at
+    `9def3c2e63bb`. A single unbranched chain that reaches this revision, and
+    the ordered links written against it, are what the tests below depend on.
+    """
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [HEAD_REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert OAUTH_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(OAUTH_REVISION).down_revision == PRIOR_REVISION
     assert script.get_revision(LINEAGE_REVISION).down_revision == OAUTH_REVISION
     assert script.get_revision(NOTE_REVISION).down_revision == LINEAGE_REVISION
@@ -125,8 +138,9 @@ def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
     assert script.get_revision(CONTENT_REVISION).down_revision == EXACT_RENDER_REVISION
     assert script.get_revision(GROUNDING_REVISION).down_revision == CONTENT_REVISION
     assert script.get_revision(ENTITY_KIND_REVISION).down_revision == GROUNDING_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ENTITY_KIND_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 58
+    assert script.get_revision(ATTEMPT_REVISION).down_revision == ENTITY_KIND_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == ATTEMPT_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 59
 
 
 @pytest.mark.database

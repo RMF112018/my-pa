@@ -254,6 +254,7 @@ def test_readme_derives_the_current_alembic_count_and_head() -> None:
         56: "Fifty-six",
         57: "Fifty-seven",
         58: "Fifty-eight",
+        59: "Fifty-nine",
     }
     count, head = _alembic_identity()
     assert count in words, "extend the readable README count vocabulary"
@@ -328,7 +329,14 @@ def test_readme_declares_the_current_remediation_lineage_and_preserves_history()
 
 
 def test_current_state_docs_name_the_current_capability_and_migration_counts() -> None:
-    """Protect the two exact-state figures that repeatedly went stale."""
+    """Protect the two exact-state figures that repeatedly went stale.
+
+    The head is derived rather than written down here. It was a literal until
+    `9def3c2e63bb` moved it, and a literal in the guard is the same claim with
+    the same shelf life as the literal in the document it is guarding — so the
+    guard went stale in step with the prose instead of catching it.
+    """
+    _count, head = _alembic_identity()
     documents = {
         "system context": ROOT / "docs" / "architecture" / "system-context.md",
         "gateway runbook": ROOT / "ops" / "runbooks" / "gateway-operations.md",
@@ -340,7 +348,7 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
             f"{label} lost the current capability count"
         )
         assert "fifty" in text, f"{label} lost the current revision count"
-        assert "f4c1a8e6b205" in text, f"{label} lost the current Alembic head"
+        assert head in text, f"{label} lost the current Alembic head"
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

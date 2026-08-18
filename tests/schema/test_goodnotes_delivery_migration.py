@@ -27,7 +27,12 @@ EXACT_RENDER_REVISION: Final = "c3e9a7f1b204"
 CONTENT_REVISION: Final = "a4d9c2e7b815"
 GROUNDING_REVISION: Final = "b7f2c9e4a618"
 ENTITY_KIND_REVISION: Final = "d9c4e1a7b628"
-HEAD_REVISION: Final = "f4c1a8e6b205"
+ATTEMPT_REVISION: Final = "f4c1a8e6b205"
+#: Where `upgrade head` lands, which the database tier reads back out of
+#: `alembic_version`. That is a position in the chain rather than a property of
+#: this revision, so it moves whenever a revision is added; the chain test below
+#: is written not to depend on it.
+HEAD_REVISION: Final = "9def3c2e63bb"
 PRIOR: Final = "d7e1a4c8b926"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_e8c1b5a7d204_add_goodnotes_new_only_delivery_receipts.py"
@@ -83,15 +88,25 @@ def disposable_database() -> Iterator[str]:
 
 
 def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
+    """On the chain, in order — not at the end of it.
+
+    The name already said "is on it" while the assertion said "is the head", and
+    the assertion is the half that rotted when `9def3c2e63bb` landed. One
+    unbranched head, this revision reachable from it, and the successor links it
+    is stated against are what the tests below depend on; which revision happens
+    to be last is not.
+    """
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [HEAD_REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(EXACT_RENDER_REVISION).down_revision == REVISION
     assert script.get_revision(CONTENT_REVISION).down_revision == EXACT_RENDER_REVISION
     assert script.get_revision(GROUNDING_REVISION).down_revision == CONTENT_REVISION
     assert script.get_revision(ENTITY_KIND_REVISION).down_revision == GROUNDING_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ENTITY_KIND_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 58
+    assert script.get_revision(ATTEMPT_REVISION).down_revision == ENTITY_KIND_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == ATTEMPT_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 59
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

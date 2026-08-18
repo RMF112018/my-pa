@@ -84,6 +84,14 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesSemanticProposal,
 )
 from my_pa.domain.policy.decision import validate_policy_version
+from my_pa.domain.relationship.entity import (
+    Assignment,
+    Entity,
+    EntityRelationship,
+    EntityStatus,
+    EntityType,
+    ExternalIdentifier,
+)
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.relationship.identity import (
     IdentityCandidateSet,
@@ -143,6 +151,8 @@ __all__ = [
     "ContinuityReadRepository",
     "ContinuityRepository",
     "EnrollmentRepository",
+    "EntitiesRepository",
+    "EntitySummary",
     "EvidenceUnavailableError",
     "FrameRepository",
     "KnowledgeRecord",
@@ -256,6 +266,160 @@ class RelationshipRepository(ABC):
         observation_ids: tuple[str, ...] = (),
     ) -> str:
         """Attach exactly one resolved or unresolved target and exact support."""
+
+
+# --- WP-RI-02: Entity repository port ----------------------------------------
+#
+# `EntitiesRepository` is the port for the generalized entity model introduced
+# in WP-RI-01.  It is *additive*: it does not modify or replace
+# `RelationshipRepository`, which remains the governed identity writer and
+# deterministic profile reader for the person-and-organization plane.
+#
+# Every method takes `principal_id` from the caller and it is the authenticated
+# caller's partition, exactly as `RelationshipRepository` and
+# `TaskManagementRepository` state: an entity belonging to another Principal is
+# answered as an absent one, and a write stamped with another Principal is
+# refused before it is written.
+#
+# `EntitySummary` is a lightweight search result — the fields a list or search
+# response needs without the full domain model's validation overhead.
+
+
+@dataclass(frozen=True, slots=True)
+class EntitySummary:
+    """A lightweight entity summary for search and list results.
+
+    Carries only the fields a caller needs to identify and display an entity
+    without loading the full domain model.  `entity_id` and `entity_type`
+    are the minimum required; all other fields are optional display hints.
+    """
+
+    entity_id: str
+    entity_type: EntityType
+    canonical_name: str
+    display_name: str
+    status: EntityStatus
+
+
+class EntitiesRepository(ABC):
+    """The generalized entity read/write port for relationship intelligence v0.3.
+
+    **Additive alongside `RelationshipRepository`.** This port serves the
+    `Entity`/`ExternalIdentifier`/`Assignment`/`EntityRelationship` model
+    introduced in WP-RI-01.  The existing `RelationshipRepository` serves the
+    person-and-organization-only WP-9 substrate and is not modified.
+
+    **`principal_id` is a parameter on every method**, and it is the
+    authenticated caller's partition, never a caller-supplied field: the
+    concrete repository stamps every write with it and filters every read by
+    it, so an entity belonging to another Principal is unreachable through
+    this port.
+
+    **Authorization is checked centrally in `authorization.py`**, not in the
+    repository.  This port performs only data access; it does not decide
+    whether the caller may access it.
+    """
+
+    @abstractmethod
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        entity_type: EntityType | None = None,
+        limit: int = 50,
+    ) -> list[EntitySummary]:
+        """One bounded page of entities whose canonical or display name matches `query`.
+
+        A case-insensitive substring match over `canonical_name` and
+        `display_name`, scoped by `principal_id` and optionally by
+        `entity_type`.  Aliases are *not* searched, because no alias table
+        exists yet; the work package that adds one widens this method rather
+        than leaving the gap unstated here.
+        """
+
+    @abstractmethod
+    def get(self, principal_id: str, entity_id: str) -> Entity | None:
+        """One entity in this Principal's partition, or `None`.
+
+        `principal_id` is part of the lookup key, not a filter applied after
+        the fact: an entity belonging to another Principal is answered as an
+        absent one, never as a filtered-out one.
+        """
+
+    @abstractmethod
+    def create(self, entity: Entity) -> Entity:
+        """Insert one entity row, or return the identical existing one.
+
+        Idempotent against the entity's own identifier: a repeat carrying the
+        same values returns the stored row, and a repeat carrying different
+        values under an identifier already issued is refused rather than
+        silently dropped or silently applied.
+        """
+
+    @abstractmethod
+    def bind_identifier(
+        self, principal_id: str, entity_id: str, identifier: ExternalIdentifier
+    ) -> None:
+        """Idempotently bind one external identifier to an entity.
+
+        The identifier's `entity_id` must match `entity_id` and its
+        `principal_id` must match the acting Principal.  Idempotent against the
+        natural key: a repeat of the same `(entity_id, namespace,
+        normalized_value)` is a no-op whatever identifier the caller minted for
+        it, because that triple is what "the same external identity" means.
+        """
+
+    @abstractmethod
+    def external_identifiers(self, principal_id: str, entity_id: str) -> list[ExternalIdentifier]:
+        """Every external identifier bound to an entity in this Principal's partition."""
+
+    @abstractmethod
+    def record_assignment(self, principal_id: str, assignment: Assignment) -> None:
+        """Record one assignment.
+
+        The assignment's `entity_id`, `scope_entity_id` and `principal_id` are
+        verified against the acting Principal before the row is written --
+        including the scope, because the schema's foreign key spans every
+        Principal and would otherwise admit a cross-partition join.
+
+        Idempotent against the assignment's own identifier, on the same terms
+        as `create`.  It is *not* yet idempotent against a natural key: a retry
+        that mints a fresh `assignment_id` writes a second row.  Closing that
+        needs an idempotency key on a write path, and no work package has one
+        yet.
+        """
+
+    @abstractmethod
+    def assignments(
+        self, principal_id: str, entity_id: str, active_only: bool = True
+    ) -> list[Assignment]:
+        """Assignments involving an entity, scoped by `principal_id`.
+
+        When `active_only` is true, returns only assignments with status
+        `'active'`.
+        """
+
+    @abstractmethod
+    def record_relationship(self, principal_id: str, rel: EntityRelationship) -> None:
+        """Record one entity relationship.
+
+        The relationship's `from_entity_id`, `to_entity_id`, `scope_entity_id`
+        and `principal_id` are verified against the acting Principal before the
+        row is written, for the reason `record_assignment` states.
+
+        Idempotent against the relationship's own identifier, and not yet
+        against a natural key, on the same terms as `record_assignment`.
+        """
+
+    @abstractmethod
+    def relationships(
+        self, principal_id: str, entity_id: str, direction: str = "any"
+    ) -> list[EntityRelationship]:
+        """Entity relationships involving an entity, scoped by `principal_id`.
+
+        `direction` is `'any'` (default), `'outgoing'` (from_entity_id matches),
+        or `'incoming'` (to_entity_id matches).
+        """
 
 
 class PortError(Exception):
@@ -1317,6 +1481,20 @@ class UnitOfWork(ABC):
         capability seats for read and write, so it is reached through
         `ApplicationService.invoke`, behind `authorize`, inside the one
         transaction a request owns.
+
+        `principal_id` remains a parameter on every method of the port and is
+        the authenticated caller's partition, never a caller-supplied field.
+        """
+
+    @property
+    @abstractmethod
+    def entities(self) -> EntitiesRepository:
+        """The generalized entity rows, inside this transaction (WP-RI-02).
+
+        Placed here for the same reason every other plane with capability seats
+        is: WP-RI-02 gives the relationship-intelligence plane read and write
+        seats, so it is reached through `ApplicationService.invoke`, behind
+        `authorize`, inside the one transaction a request owns.
 
         `principal_id` remains a parameter on every method of the port and is
         the authenticated caller's partition, never a caller-supplied field.

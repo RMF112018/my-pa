@@ -257,6 +257,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "b7f2c9e4a618": frozenset(),
     "d9c4e1a7b628": frozenset(),
     "f4c1a8e6b205": frozenset({"goodnotes_delivery_attempts"}),
+    # WP-RI-01's relationship-intelligence entity plane: the entity itself, the
+    # external identifiers it is known by, its assignments, and the relationships
+    # between entities.
+    "9def3c2e63bb": frozenset(
+        {
+            "entities",
+            "entity_external_identifiers",
+            "entity_assignments",
+            "entity_relationships",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

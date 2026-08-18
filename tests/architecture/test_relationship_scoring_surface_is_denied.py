@@ -6,8 +6,8 @@ relationship surface contains none of them — but *absence today is not a
 guarantee for tomorrow*, and the guard that already exists does not supply one.
 
 `tests/relationship/test_relationship_domain.py` freezes the exact field
-vocabulary of all eighteen relationship tables and all seventeen relationship
-dataclasses as a **closed allow-list**. That makes any new field *visible*: a
+vocabulary of all twenty-two relationship tables and all twenty-one
+relationship dataclasses as a **closed allow-list**. That makes any new field *visible*: a
 column added without touching the constant reddens the build. It does not make a
 scoring field *impossible*, because the constant and the schema are both source,
 and one commit can widen both. `EXPECTED_TABLE_COLUMNS["relationship_people"] |
@@ -17,7 +17,8 @@ allow-list, and green is precisely the wrong answer.
 This module supplies the missing half: a **semantic deny rule**, applied to four
 surfaces, one of which is that allow-list itself.
 
-* the live SQLAlchemy declaration for every `relationship_*` table;
+* the live SQLAlchemy declaration for every `relationship_*` table and every
+  table of the generalized entity plane (`entities`, `entity_*`);
 * the live dataclass fields of `my_pa.domain.relationship`;
 * the closed vocabularies those modules declare — a `StrEnum` member name *or*
   value is a channel too, and `RelationshipEventType.SENTIMENT_POSITIVE` would
@@ -46,7 +47,8 @@ denied one, which is asserted directly in
 * **`priority`** is denied *here* but `pulse_items.attention_rank` (the domain
   field `PulseItem.attention_rank`) is untouched: that column is a bounded 1..10
   ordering of attention items on the Pulse plane, not a durable attribute of a
-  person. This module scans `relationship_*` only, so the two do not collide —
+  person. This module scans the relationship surface only, so the two do not
+  collide —
   and a `priority` on a *person* would be people ranking, which is why the stem
   is denied on this surface.
 * **`index`**, **`fit`**, **`condition`**, **`spouse`**, **`urgency`** — each
@@ -158,11 +160,22 @@ def _violations(surface: dict[str, tuple[str, ...]]) -> list[str]:
     )
 
 
+#: The table-name prefixes that make a table part of the relationship surface.
+#: `relationship_` is the WP-9 substrate. `entities`/`entity_` is the
+#: generalized entity plane, and it is named here rather than left out because a
+#: prefix list is the whole population this rule sees: a plane that stores
+#: people, organizations, their assignments and their typed edges is the
+#: relationship surface whatever its tables are called, and a deny rule that
+#: reached only the older half would pass perfectly while the newer half carried
+#: exactly the field it exists to refuse.
+RELATIONSHIP_TABLE_PREFIXES: Final = ("relationship_", "entities", "entity_")
+
+
 def relationship_table_columns() -> dict[str, tuple[str, ...]]:
     return {
         table.name: tuple(column.name for column in table.columns)
         for table in METADATA.tables.values()
-        if table.name.startswith("relationship_")
+        if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
 
 
@@ -241,8 +254,8 @@ def test_the_scan_reaches_the_whole_relationship_surface() -> None:
     vocabularies = relationship_vocabularies()
     declared = declared_allow_list()
 
-    assert len(columns) == 18, f"{len(columns)} relationship tables reached, not eighteen"
-    assert len(models) == 17, f"{len(models)} relationship models reached, not seventeen"
+    assert len(columns) == 22, f"{len(columns)} relationship tables reached, not twenty-two"
+    assert len(models) == 21, f"{len(models)} relationship models reached, not twenty-one"
     assert vocabularies, "no closed relationship vocabulary was reached"
     assert set(declared) == set(ALLOW_LIST_CONSTANTS), (
         f"{sorted(declared)} allow-list constants were read from "

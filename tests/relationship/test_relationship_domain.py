@@ -147,6 +147,13 @@ def test_unresolved_source_binding_is_bounded_without_storing_raw_mention_text()
     assert "raw_text" not in {field.name for field in fields(UnresolvedMention)}
 
 
+#: The table-name prefixes that make a table part of the relationship surface.
+#: `relationship_` is the WP-9 substrate; `entities`/`entity_` is the
+#: generalized entity plane. Both are frozen here rather than assumed, so a
+#: plane added under a third prefix is undiscovered surface the count assertion
+#: below reports rather than surface the scan silently omits.
+RELATIONSHIP_TABLE_PREFIXES = ("relationship_", "entities", "entity_")
+
 EXPECTED_MODEL_FIELDS = {
     "my_pa.domain.relationship.event.RelationshipEvent": frozenset(
         {
@@ -251,6 +258,67 @@ EXPECTED_MODEL_FIELDS = {
     ),
     "my_pa.domain.relationship.provider.PersonalSourceBatch": frozenset(
         {"domain", "state", "observations", "limitation"}
+    ),
+    # The generalized entity plane. Frozen here on the same terms as the WP-9
+    # models above: a field added to any of these without editing this constant
+    # reddens the build, which is what makes the semantic deny rule in
+    # `tests/architecture/test_relationship_scoring_surface_is_denied` a check
+    # on a visible surface rather than on whatever happened to be declared.
+    "my_pa.domain.relationship.entity.Entity": frozenset(
+        {
+            "entity_id",
+            "principal_id",
+            "entity_type",
+            "canonical_name",
+            "display_name",
+            "status",
+            "created_at",
+            "updated_at",
+            "version",
+            "superseded_by_entity_id",
+        }
+    ),
+    "my_pa.domain.relationship.entity.ExternalIdentifier": frozenset(
+        {
+            "identifier_id",
+            "entity_id",
+            "namespace",
+            "normalized_value",
+            "display_value",
+            "principal_id",
+            "verified",
+            "effective_from",
+            "effective_to",
+        }
+    ),
+    "my_pa.domain.relationship.entity.Assignment": frozenset(
+        {
+            "assignment_id",
+            "entity_id",
+            "assignment_type",
+            "principal_id",
+            "scope_entity_id",
+            "role",
+            "discipline",
+            "responsibility_class",
+            "effective_from",
+            "effective_to",
+            "status",
+        }
+    ),
+    "my_pa.domain.relationship.entity.EntityRelationship": frozenset(
+        {
+            "relationship_id",
+            "from_entity_id",
+            "relationship_type",
+            "to_entity_id",
+            "principal_id",
+            "scope_entity_id",
+            "effective_from",
+            "effective_to",
+            "state",
+            "version",
+        }
     ),
 }
 
@@ -368,6 +436,62 @@ EXPECTED_TABLE_COLUMNS = {
             "observed_at",
         }
     ),
+    "entities": frozenset(
+        {
+            "entity_id",
+            "principal_id",
+            "entity_type",
+            "canonical_name",
+            "display_name",
+            "status",
+            "created_at",
+            "updated_at",
+            "version",
+            "superseded_by_entity_id",
+        }
+    ),
+    "entity_external_identifiers": frozenset(
+        {
+            "identifier_id",
+            "entity_id",
+            "namespace",
+            "normalized_value",
+            "display_value",
+            "verified",
+            "effective_from",
+            "effective_to",
+            "principal_id",
+        }
+    ),
+    "entity_assignments": frozenset(
+        {
+            "assignment_id",
+            "entity_id",
+            "scope_entity_id",
+            "assignment_type",
+            "role",
+            "discipline",
+            "responsibility_class",
+            "effective_from",
+            "effective_to",
+            "status",
+            "principal_id",
+        }
+    ),
+    "entity_relationships": frozenset(
+        {
+            "relationship_id",
+            "from_entity_id",
+            "to_entity_id",
+            "relationship_type",
+            "scope_entity_id",
+            "effective_from",
+            "effective_to",
+            "state",
+            "version",
+            "principal_id",
+        }
+    ),
 }
 
 
@@ -399,10 +523,10 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
     actual_table_columns = {
         table.name: frozenset(column.name for column in table.columns)
         for table in METADATA.tables.values()
-        if table.name.startswith("relationship_")
+        if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 17
-    assert len(actual_table_columns) == 18
+    assert len(actual_model_fields) == 21
+    assert len(actual_table_columns) == 22
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))
@@ -430,7 +554,7 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         and isinstance(node.value.func, ast.Name)
         and node.value.func.id == "Table"
         for target in node.targets
-        if isinstance(target, ast.Name) and target.id.startswith("relationship_")
+        if isinstance(target, ast.Name) and target.id.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
     assert ast_relationship_tables == set(actual_table_columns)
     _assert_closed_vocabulary(actual_model_fields, EXPECTED_MODEL_FIELDS)

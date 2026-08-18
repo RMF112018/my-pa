@@ -21,9 +21,14 @@ from my_pa.domain.identity.purpose import Purpose
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "a4d9c2e7b815"
 PRIOR: Final = "c3e9a7f1b204"
-HEAD_REVISION: Final = "f4c1a8e6b205"
+ATTEMPT_REVISION: Final = "f4c1a8e6b205"
 ENTITY_KIND_REVISION: Final = "d9c4e1a7b628"
 GROUNDING_REVISION: Final = "b7f2c9e4a618"
+#: Where `upgrade head` lands, which the database tier reads back out of
+#: `alembic_version`. That is a position in the chain rather than a property of
+#: this revision, so it moves whenever a revision is added; the chain test below
+#: is written not to depend on it.
+HEAD_REVISION: Final = "9def3c2e63bb"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_a4d9c2e7b815_admit_goodnotes_content_and_durable_note_stages.py"
 )
@@ -45,14 +50,26 @@ def _frozen_literals(constant: str) -> frozenset[str]:
     return frozenset(re.findall(r"'([^']+)'", source[start:end]))
 
 
-def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
+    """Deliberately not "is the head".
+
+    Being the head is true only until the next revision is written, and pinning
+    it here made every later work package edit this file — which is what
+    `9def3c2e63bb` had to do. A single unbranched chain that contains this
+    revision, on the predecessor it names, is the property everything below
+    depends on, and it does not rot. See
+    `tests/schema/test_extraction_schema_migration.py`'s chain test for the
+    argument in full.
+    """
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [HEAD_REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(GROUNDING_REVISION).down_revision == REVISION
     assert script.get_revision(ENTITY_KIND_REVISION).down_revision == GROUNDING_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ENTITY_KIND_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 58
+    assert script.get_revision(ATTEMPT_REVISION).down_revision == ENTITY_KIND_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == ATTEMPT_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 59
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

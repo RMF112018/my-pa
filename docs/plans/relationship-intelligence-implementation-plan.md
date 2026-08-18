@@ -30,12 +30,12 @@ Abacus/ChatLLM Task changes, destructive actions, and operator risk acceptance
 | WP-RI-05 | The capability and MCP surface: five `Capability` members, the `entity_read` purpose, the forward `ALTER`, commands, handlers, transport builders, scope policy, the composition gate, and a minimal context card | **complete** |
 | WP-RI-06 | Observation, proposal, and governed merge with lineage | **complete** |
 | WP-RI-07 | Context card enrichment: coverage, freshness, and generation identity | **complete** |
-| WP-RI-08 | Backfill / re-enrichment (the specification's "re-enrichment triggers", section 27.4) | not started |
-| WP-RI-09 | Inspection tooling | not started |
-| WP-RI-10 | Intelligence-task integration | not started |
-| WP-RI-11 | Security and privacy regression | not started |
-| WP-RI-12 | Acceptance evidence against the ledger in section 3 | not started |
-| WP-RI-13 | Documentation and runbook | not started |
+| WP-RI-08 | Re-enrichment: bounded, idempotent passes after a merge and after an alias | **complete** (two of nine triggers) |
+| WP-RI-09 | Read-only operator inspection (`scripts/inspect_entity_plane.py`) | **complete** |
+| WP-RI-10 | Dormant intelligence-Task profile, read-only and default-off | **complete** (draft, not activated) |
+| WP-RI-11 | Security and privacy regression for the entity plane | **complete** |
+| WP-RI-12 | Acceptance evidence against the ledger in section 3 | **complete** |
+| WP-RI-13 | Operator runbook (`ops/runbooks/relationship-intelligence.md`) | **complete** |
 
 WP-RI-06 … WP-RI-09 are parallelizable once WP-RI-05 lands. WP-RI-03 must
 precede WP-RI-04, and both must precede WP-RI-05.
@@ -92,7 +92,7 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 
 | ID | Criterion (abridged) | Status | Where |
 |---|---|---|---|
-| RI-AC-001 | Public language is Relationships / Relationship Intelligence; PRIE historical only | `OPEN` | WP-RI-13 |
+| RI-AC-001 | Public language is Relationships / Relationship Intelligence; PRIE historical only | `MET` (backend) | No source, doc or runbook produced here uses "PRIE"; `ops/runbooks/relationship-intelligence.md` and the capability names use the current label. User-facing copy is `BLOCKED_BY_D09` |
 | RI-AC-002 | Integrated into `my-pa`, not a standalone engine | `MET` | No new process, database, or service; `tests/architecture/test_dependency_direction.py` |
 | RI-AC-003 | The product states relationships are not scores | `PARTIAL` | Enforced structurally by `tests/architecture/test_relationship_scoring_surface_is_denied.py`, widened to the entity plane; no numeric reaches the durable surface (`D-RI-14`). The *statement* is WP-RI-13 |
 | RI-AC-004 | Value without starting a chat | `BLOCKED_BY_D09` | — |
@@ -107,7 +107,7 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 | RI-AC-013 | Coverage, freshness, exclusions appear before synthesis | `MET` (backend) | The card carries `coverage` per source, `most_recent_observation_at`, `assembled_at`, and `limitations`, ordered before the records. Presentation is `BLOCKED_BY_D09` |
 | RI-AC-014 | Stale evidence never presented as current | `PARTIAL` | Resolution answers `HISTORICAL_MATCH` with `ENTITY_IS_NOT_CURRENT`/`ENTITY_HAS_BEEN_MERGED_AWAY`, and filters evidence by effective date under `as_of` (WP-RI-03). Briefing-level staleness is WP-RI-07; presentation is `BLOCKED_BY_D09` |
 | RI-AC-015 | Contradictory evidence preserved, not collapsed | `OPEN` | WP-RI-06 |
-| RI-AC-016 | Briefings retain evidence scope and model identity | `OPEN` | WP-RI-07 |
+| RI-AC-016 | Briefings retain evidence scope and model identity | `PARTIAL` | The context card carries `assembled_at` and per-source `coverage`. No briefing and no model exist to attribute — `NOT_APPLICABLE` until one does |
 | RI-AC-017 | Person profile exposes the full record set | `BLOCKED_BY_D09` | — |
 | RI-AC-018 | Timeline distinguishes event / effective / observed / recorded times | `PARTIAL` | `effective_from`/`effective_to` and `created_at`/`updated_at` exist; the four-clock model is WP-RI-06 |
 | RI-AC-019 | Profile navigation preserves context and return state | `BLOCKED_BY_D09` | — |
@@ -127,11 +127,11 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 | RI-AC-033 | Original input durably stored before enrichment | `NOT_APPLICABLE_TO_THIS_CAMPAIGN` | Quick Capture plane (ADR-003) |
 | RI-AC-034 | Enrichment failure does not lose or block the capture | `NOT_APPLICABLE_TO_THIS_CAMPAIGN` | Quick Capture plane |
 | RI-AC-035 | Participants, commitments, sensitive facts, dates follow review policy | `PARTIAL` | Identity proposals require review and merges require an operator; commitments and sensitive facts belong to their own planes |
-| RI-AC-036 | Repeated processing does not duplicate structured records | `PARTIAL` | `bind_identifier` is idempotent against its natural key; `record_assignment` and `record_relationship` are idempotent only against their own identifier. Closing this needs a write-path idempotency key — WP-RI-06 |
+| RI-AC-036 | Repeated processing does not duplicate structured records | `PARTIAL` | `bind_identifier` and `record_alias` are idempotent against a natural key; re-enrichment passes are idempotent and tested twice-run. `record_assignment`/`record_relationship` remain idempotent only against their own identifier — a retry minting a fresh one still writes a second row |
 | RI-AC-037 | Capture corrections retain immutable before/after evidence | `NOT_APPLICABLE_TO_THIS_CAMPAIGN` | Quick Capture plane |
 | RI-AC-038 | AI output carries an authority class | `OPEN` | WP-RI-06 |
 | RI-AC-039 | Models cannot merge identities or promote inferences autonomously | `MET` | `propose` cannot apply; `accept` refuses a merge without declared operator authority; both mutations were mutation-tested |
-| RI-AC-040 | No external action occurs through a relationship knowledge write | `OPEN` | WP-RI-11 |
+| RI-AC-040 | No external action occurs through a relationship knowledge write | `MET` | The plane has no write capability at all and no connector; the Task profile grants five reads. `tests/security/test_entity_privacy_regression.py` asserts a name that reads as an instruction reaches no tool description and gains no capability |
 
 **Tier discipline.** A criterion requiring MCP, integration, canary, or live
 evidence is not satisfied by a FAST-tier unit test. RI-AC-036 in particular is
@@ -144,6 +144,24 @@ here precisely because no such test exists yet.
 
 Recorded here because each one is a choice a reviewer would otherwise have to
 reconstruct from a diff.
+
+**D-RI-24 — the intelligence Task profile is read-only and dormant.**
+`bootstrap/relationship_intelligence_task.py` states which capabilities a
+proposed Task may reach: the five reads and nothing else, `DRAFT_NOT_ACTIVATED`,
+and empty until the process gate is on. It creates, edits and enables nothing —
+live Abacus/ChatLLM Task changes are out of scope for this campaign by explicit
+instruction and reserved by `AGENTS.md` section 8.2 regardless. The profile
+exists so the answer to "what would such a Task be allowed" is in the repository
+before anyone is in a position to grant it.
+
+**D-RI-25 — two of nine re-enrichment triggers.** Specification section 27.4
+lists nine; `WP-RI-08` implements the two that are reachable — a completed merge
+(re-point the stranded observations) and a recorded alias (re-offer the
+unresolved mentions). The other seven need observations from sources this
+product does not read. Listed in the module rather than implied, because a pass
+that silently covered two of nine would look like a pass that covered all of
+them. The alias pass links only `RESOLVED_EXACT`: a background walk with nobody
+watching is the last place a doubtful identity join should be made.
 
 **D-RI-21 — WP-RI-06 registers no capability, and that is the gate.** The
 governance plane writes: it links observations, decides proposals, and redirects
@@ -361,6 +379,31 @@ is the relationship surface whatever its tables are called; both now scan
 "created and updated times". Nothing updates an entity yet, so the column has a
 server default and no trigger; the work package that first mutates an entity
 sets it.
+
+---
+
+## 4a. Evidence, as executed
+
+Every figure below was produced by running the command named, on this branch.
+
+| Claim | Evidence |
+|---|---|
+| FAST tier green | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **7760 passed, 0 failed** |
+| Lint and format | `ruff check .` and `ruff format --check .` — clean over 901 files |
+| Types | `mypy` (configured targets: `src`, `migrations`, `apps`, `ops`) — clean over 333 files |
+| Migrations apply and reverse | `tests/schema/test_entity_schema_migration.py` — empty-to-head, head-to-empty, and declaration-to-server constraint parity, against a disposable PostgreSQL 17 |
+| Partition holds at the server | `tests/database/test_entity_repository.py` — cross-Principal isolation on every read and every write, including the joined resolution lookups |
+| Governance holds at the server | `tests/database/test_entity_governance.py` — a proposal cannot be accepted without an actor, in either direction |
+| MCP surface | `tests/contract/test_mcp_transport.py` — a real child process publishes 53 tools when composed for the plane and withholds all five when not |
+| Remote exposure | `tests/contract/test_entity_remote_exposure.py` — none of the five reaches the remote profile with the plane off, under either write setting |
+| False-resolution rate | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) — 0 false resolutions, 0 leaks, recall 1.0 over 26 labelled collision-biased cases |
+| The safety rules bite | Mutation-tested: resolving a lone name, choosing a claimant of a conflicted identifier, ignoring effective dates, dropping the partition, dropping the operator gate, letting `propose` apply its own merge — each reddened the suite |
+
+**What no evidence here covers.** Nothing has been run against a shared or
+production database; every database figure comes from a disposable database
+created and dropped by its own fixture. No connector, source, or live personal
+data was touched. No independent exact-head review has occurred, so nothing here
+is merge-eligible under `AGENTS.md` section 8.1.
 
 ---
 

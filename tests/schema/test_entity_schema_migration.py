@@ -54,6 +54,19 @@ ENTITY_TABLES: Final = frozenset(
 
 NEW_TABLES: Final = ENTITY_TABLES | {"entity_aliases"}
 
+#: WP-RI-06's governance tables, on `d2b8f5c04e71`. Not part of `NEW_TABLES`:
+#: the constraint-parity and CHECK groups below belong to *this* revision, and
+#: `tests/schema/test_entity_governance_migration.py` makes the same claims for
+#: those three. They are named here only because a downgrade to
+#: `PREVIOUS_REVISION` passes through their revision on the way, so they are
+#: part of what that downgrade removes.
+GOVERNANCE_TABLES: Final = frozenset(
+    {"entity_observations", "entity_proposals", "entity_merge_records"}
+)
+
+#: Everything the entity plane adds between `PREVIOUS_REVISION` and head.
+PLANE_TABLES: Final = NEW_TABLES | GOVERNANCE_TABLES
+
 #: A name distinct from every other database-tier fixture's disposable
 #: database, so this suite can run alongside them without one dropping the
 #: database another is mid-transaction against.
@@ -218,25 +231,40 @@ def test_the_entity_revision_runs_empty_to_head_and_head_to_empty(
 
 
 @pytest.mark.database
-def test_downgrading_one_revision_drops_only_the_entity_tables(
+def test_downgrading_to_before_this_revision_drops_only_the_entity_plane(
     migrated_engine: Engine,
 ) -> None:
-    """Additive: the WP-9 substrate is untouched by this revision's downgrade."""
+    """Additive: the WP-9 substrate is untouched by this revision's downgrade.
+
+    The downgrade target is the revision *below* this one, so it passes through
+    every entity-plane revision above it as well -- the aliases table and the
+    three governance tables. The equality is stated over all of them rather than
+    over this revision's four alone, because a set that named only the four
+    would fail the moment the plane grew, which is bookkeeping rather than a
+    finding. What it still catches is the thing worth catching: a table outside
+    the plane removed by one of those downgrades, or a plane table left behind.
+    """
     before = _tables(migrated_engine)
     assert {"relationship_people", "relationship_organizations"} <= before
 
     command.downgrade(_config(), PREVIOUS_REVISION)
     after = _tables(migrated_engine)
 
-    assert before - after == NEW_TABLES
+    assert before - after == PLANE_TABLES
     assert {"relationship_people", "relationship_organizations"} <= after
 
 
 # --- declaration parity ------------------------------------------------------
+#
+# Parameterized over `PLANE_TABLES` rather than `NEW_TABLES`: these four claims
+# are about hand-written DDL matching a declaration, and that cost is paid the
+# same way by every table on the plane. The governance revision added three
+# without a suite of its own, which meant three tables whose constraint names,
+# columns and partition column nothing checked against a server.
 
 
 @pytest.mark.database
-@pytest.mark.parametrize("table_name", sorted(NEW_TABLES))
+@pytest.mark.parametrize("table_name", sorted(PLANE_TABLES))
 def test_every_declared_constraint_name_exists_on_the_server(
     migrated_engine: Engine, table_name: str
 ) -> None:
@@ -258,7 +286,7 @@ def test_every_declared_constraint_name_exists_on_the_server(
 
 
 @pytest.mark.database
-@pytest.mark.parametrize("table_name", sorted(NEW_TABLES))
+@pytest.mark.parametrize("table_name", sorted(PLANE_TABLES))
 def test_every_declared_column_exists_on_the_server(
     migrated_engine: Engine, table_name: str
 ) -> None:
@@ -268,7 +296,7 @@ def test_every_declared_column_exists_on_the_server(
 
 
 @pytest.mark.database
-@pytest.mark.parametrize("table_name", sorted(NEW_TABLES))
+@pytest.mark.parametrize("table_name", sorted(PLANE_TABLES))
 def test_every_entity_table_carries_a_principal_partition(
     migrated_engine: Engine, table_name: str
 ) -> None:
@@ -287,7 +315,7 @@ def test_no_entity_table_carries_a_confidence_or_score_column(
     hand-written migration and never declared is caught too.
     """
     denied = {"confidence", "score", "rating", "rank", "trust", "sentiment"}
-    for table_name in NEW_TABLES:
+    for table_name in PLANE_TABLES:
         assert not _columns(migrated_engine, table_name) & denied
 
 
@@ -647,3 +675,108 @@ def test_dropping_an_entity_drops_its_aliases(migrated_engine: Engine) -> None:
             text(f"SELECT count(*) FROM {SCHEMA}.entity_aliases")  # noqa: S608
         ).scalar_one()
     assert held == 0
+
+
+#
+# `d2b8f5c04e71` added three tables and no suite of its own; these are the CHECKs
+# whose absence would be invisible from the application, because the application
+# happens never to write the row they refuse. Each is asserted against a server.
+
+OBSERVATION: Final = "eobs_aaaa0001aaaa0001"
+PROPOSAL: Final = "eprp_aaaa0001aaaa0001"
+MERGE: Final = "emrg_aaaa0001aaaa0001"
+
+
+def _seed_observation(engine: Engine, **overrides: object) -> None:
+    values: dict[str, object] = {
+        "observation_id": OBSERVATION,
+        "principal_id": PRINCIPAL_A,
+        "kind": "message_participant",
+        "observed_value": "Alice Chen",
+        "normalized_value": "alice chen",
+        "source_id": "src_aaaa0001aaaa0001",
+        "source_object_id": "obj_aaaa0001aaaa0001",
+        "source_version_id": "ver_aaaa0001aaaa0001",
+        "observed_at": "2026-08-18T12:00:00+00:00",
+        "recorded_at": "2026-08-18T12:00:00+00:00",
+    }
+    values.update(overrides)
+    columns = ", ".join(values)
+    binds = ", ".join(f":{name}" for name in values)
+    with engine.begin() as connection:
+        connection.execute(
+            text(f"INSERT INTO {SCHEMA}.entity_observations ({columns}) VALUES ({binds})"),  # noqa: S608
+            values,
+        )
+
+
+def _seed_proposal(engine: Engine, **overrides: object) -> None:
+    values: dict[str, object] = {
+        "proposal_id": PROPOSAL,
+        "principal_id": PRINCIPAL_A,
+        "kind": "merge_entities",
+        "state": "proposed",
+        "payload": "{}",
+        "observation_ids": "[]",
+        "proposed_at": "2026-08-18T12:00:00+00:00",
+        "proposed_by": "resolver",
+    }
+    values.update(overrides)
+    columns = ", ".join(values)
+    binds = ", ".join(f":{name}" for name in values)
+    with engine.begin() as connection:
+        connection.execute(
+            text(f"INSERT INTO {SCHEMA}.entity_proposals ({columns}) VALUES ({binds})"),  # noqa: S608
+            values,
+        )
+
+
+def _seed_merge(engine: Engine, **overrides: object) -> None:
+    values: dict[str, object] = {
+        "merge_id": MERGE,
+        "principal_id": PRINCIPAL_A,
+        "retained_entity_id": ENTITY_A,
+        "merged_entity_id": ENTITY_B,
+        "proposal_id": PROPOSAL,
+        "decided_by": "the operator",
+        "reason": "the same person, recorded twice",
+        "decided_at": "2026-08-18T12:00:00+00:00",
+    }
+    values.update(overrides)
+    columns = ", ".join(values)
+    binds = ", ".join(f":{name}" for name in values)
+    with engine.begin() as connection:
+        connection.execute(
+            text(f"INSERT INTO {SCHEMA}.entity_merge_records ({columns}) VALUES ({binds})"),  # noqa: S608
+            values,
+        )
+
+
+@pytest.mark.database
+def test_an_observation_of_an_unknown_kind_is_refused(migrated_engine: Engine) -> None:
+    """The closed set lives in the migration, so it is the server that must hold it."""
+    with pytest.raises(IntegrityError, match="an_observation_kind_is_known"):
+        _seed_observation(migrated_engine, kind="overheard_in_a_lift")
+
+
+@pytest.mark.database
+def test_an_observation_with_no_matchable_form_is_refused(migrated_engine: Engine) -> None:
+    """An empty normalized value would match nothing, or everything, by query."""
+    with pytest.raises(IntegrityError, match="an_observation_records_the_form_it_is_matched_by"):
+        _seed_observation(migrated_engine, normalized_value="   ")
+
+
+@pytest.mark.database
+def test_a_proposal_in_an_unknown_state_is_refused(migrated_engine: Engine) -> None:
+    with pytest.raises(IntegrityError, match="a_proposal_state_is_known"):
+        _seed_proposal(migrated_engine, state="probably_fine")
+
+
+@pytest.mark.database
+def test_a_merge_with_no_stated_reason_is_refused(migrated_engine: Engine) -> None:
+    """Section 10.11: the record exists to say *why*, not only that."""
+    _seed_entity(migrated_engine, ENTITY_A, PRINCIPAL_A)
+    _seed_entity(migrated_engine, ENTITY_B, PRINCIPAL_A)
+    _seed_proposal(migrated_engine)
+    with pytest.raises(IntegrityError, match="a_merge_records_why_it_was_accepted"):
+        _seed_merge(migrated_engine, reason="  ")

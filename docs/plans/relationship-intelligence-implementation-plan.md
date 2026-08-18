@@ -87,8 +87,18 @@ criteria — a backend that makes a criterion *possible* has not satisfied a
 criterion about what a user sees.
 
 Status vocabulary: `MET` (evidence exists), `PARTIAL` (some evidence, gap
-named), `OPEN` (in a planned work package), `BLOCKED_BY_D09` (needs the held
-frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
+named), `OPEN` (in a work package this campaign has not yet delivered),
+`UNMET` (the work package that was to carry it has shipped, and shipped without
+it), `BLOCKED_BY_D09` (needs the held frontend),
+`NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
+
+`UNMET` exists because `OPEN` stopped being true. Nine criteria were routed to
+WP-RI-06, WP-RI-07 and WP-RI-10; all three have now landed, and a criterion
+still reading "in a planned work package" against a delivered package is a
+ledger that quietly converts an unmet criterion into a scheduled one. Each is
+restated below against what actually shipped, with the specific missing thing
+named rather than a package number. **No criterion moved to `MET` in this
+pass**; the change is from a status that was wrong to one that is not.
 
 | ID | Criterion (abridged) | Status | Where |
 |---|---|---|---|
@@ -99,14 +109,14 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 | RI-AC-005 | Contact/source rows stay observations, not automatic canonical people | `MET` | `EntityGovernanceService.observe` records an observation and can do nothing else; `tests/unit/test_entity_governance.py` asserts no entity appears |
 | RI-AC-006 | Unresolved mentions are first-class and searchable | `MET` (backend) | An unlinked `entity_observations` row *is* the unresolved mention, listable via `unresolved_mentions`; resolution answers `AMBIGUOUS`/`NOT_FOUND` over the wire. Surfacing it to a user is `BLOCKED_BY_D09` |
 | RI-AC-007 | No identity merge without governed policy | `MET` | `ReviewRequirement.REQUIRES_OPERATOR` refuses an unauthorised accept; the server refuses a decided proposal with no actor (`tests/database/test_entity_governance.py`) |
-| RI-AC-008 | Merge preview shows all materially affected records | `OPEN` | WP-RI-06 |
+| RI-AC-008 | Merge preview shows all materially affected records | `UNMET` | WP-RI-06 shipped the merge *record* and `merge_lineage`, which are post-hoc. Nothing computes a pre-decision preview, and there is no surface on which to show one: `EntityGovernanceService` is composed by nothing (`D-RI-21`, runbook section 4). Needs a decision surface first |
 | RI-AC-009 | Merge and split history preserved and correctable | `PARTIAL` | `entity_merge_records` carries actor, reason, moment and both identifiers; the merged entity survives as a redirect. **Split is not implemented** — section 15.4's requirements are unmet and open |
-| RI-AC-010 | Negative identity evidence prevents repeated false matches | `OPEN` | WP-RI-06 — negative evidence needs a record to live in, which the observation plane brings |
-| RI-AC-011 | Every material profile statement links to evidence or is marked | `OPEN` | WP-RI-06 |
-| RI-AC-012 | Source facts / notes / assertions / inferences structurally distinct | `OPEN` | WP-RI-06 |
+| RI-AC-010 | Negative identity evidence prevents repeated false matches | `UNMET` | WP-RI-06 brought the record it needed — a rejected proposal persists as `EntityProposalState.REJECTED` — but nothing reads it back. `EntityResolutionService` consults entities, aliases and identifiers and never proposals, so a rejected merge does not stop the same pairing being proposed again. The gap is a read, not a table |
+| RI-AC-011 | Every material profile statement links to evidence or is marked | `PARTIAL` | The context card carries its observations and per-source `coverage`, and marks what it left out (`ContextCardLimitation`, including `COVERAGE_COUNTED_A_BOUNDED_SAMPLE`). But an alias, an identifier and an assignment on that card carry no link to the observation that evidenced them — no column relates them — so those statements are neither linked nor marked |
+| RI-AC-012 | Source facts / notes / assertions / inferences structurally distinct | `PARTIAL` | `ObservationKind` distinguishes kinds of *source record* (contact row, message participant, calendar attendee, document mention, user statement). It does not distinguish a source fact from an assertion or an inference: nothing in this plane records an inference at all, so the distinction is unmade rather than made wrongly |
 | RI-AC-013 | Coverage, freshness, exclusions appear before synthesis | `MET` (backend) | The card carries `coverage` per source, `most_recent_observation_at`, `assembled_at`, and `limitations`, ordered before the records. Presentation is `BLOCKED_BY_D09` |
 | RI-AC-014 | Stale evidence never presented as current | `PARTIAL` | Resolution answers `HISTORICAL_MATCH` with `ENTITY_IS_NOT_CURRENT`/`ENTITY_HAS_BEEN_MERGED_AWAY`, and filters evidence by effective date under `as_of` (WP-RI-03). Briefing-level staleness is WP-RI-07; presentation is `BLOCKED_BY_D09` |
-| RI-AC-015 | Contradictory evidence preserved, not collapsed | `OPEN` | WP-RI-06 |
+| RI-AC-015 | Contradictory evidence preserved, not collapsed | `PARTIAL` | Preserved, and one contradiction is surfaced: an identifier claimed by two entities answers `CONFLICTED_IDENTIFIER` rather than picking one (`tests/unit/test_entity_resolution.py`). Nothing is ever deleted or merged away silently. But contradiction *between observations* — two sources disagreeing about a name or an affiliation — is stored and never detected or presented as a contradiction |
 | RI-AC-016 | Briefings retain evidence scope and model identity | `PARTIAL` | The context card carries `assembled_at` and per-source `coverage`. No briefing and no model exist to attribute — `NOT_APPLICABLE` until one does |
 | RI-AC-017 | Person profile exposes the full record set | `BLOCKED_BY_D09` | — |
 | RI-AC-018 | Timeline distinguishes event / effective / observed / recorded times | `PARTIAL` | `effective_from`/`effective_to` and `created_at`/`updated_at` exist; the four-clock model is WP-RI-06 |
@@ -116,10 +126,10 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 | RI-AC-022 | Commitments and tasks remain distinct | `NOT_APPLICABLE_TO_THIS_CAMPAIGN` | Existing planes |
 | RI-AC-023 | Extracted commitments require review initially | `NOT_APPLICABLE_TO_THIS_CAMPAIGN` | Existing review plane |
 | RI-AC-024 | Fulfillment retains evidence or explicit confirmation | `NOT_APPLICABLE_TO_THIS_CAMPAIGN` | Existing planes |
-| RI-AC-025 | Commitments by and to a person separately visible | `OPEN` | WP-RI-10 |
+| RI-AC-025 | Commitments by and to a person separately visible | `UNMET` | WP-RI-10 delivered the dormant Task profile and the privacy regression suite; neither touches commitments. No column, query or capability relates an entity to a `commitments` row in either direction. This is a join this campaign did not build |
 | RI-AC-026 | Follow-ups distinct from commitments | `NOT_APPLICABLE_TO_THIS_CAMPAIGN` | Existing planes |
-| RI-AC-027 | Meeting briefing identifies attendee ambiguity and unavailable evidence | `OPEN` | WP-RI-07 |
-| RI-AC-028 | Deterministic meeting context usable when AI is unavailable | `OPEN` | WP-RI-07 |
+| RI-AC-027 | Meeting briefing identifies attendee ambiguity and unavailable evidence | `UNMET` | WP-RI-07 delivered both halves *as parts*: `entities.resolve` names attendee ambiguity (`AMBIGUOUS`, ranked alternatives, warnings) and the card names unavailable evidence (`NO_SOURCE_HAS_BEEN_OBSERVED` and the other limitations). There is no meeting briefing to assemble them into, and nothing reads a calendar event |
+| RI-AC-028 | Deterministic meeting context usable when AI is unavailable | `PARTIAL` | The determinism half holds: `EntityContextService` calls no model, takes its clock as an argument, and returns the same card for the same rows — so the context that exists is fully usable with AI unavailable. The *meeting* half does not exist; the card is assembled per entity, not per event |
 | RI-AC-029 | Briefing claims navigate to source evidence | `BLOCKED_BY_D09` | — |
 | RI-AC-030 | Post-meeting capture creates proposals without changing source events | `PARTIAL` | The proposal plane exists and writes no source; no capture pipeline feeds it yet |
 | RI-AC-031 | Quick Note / Call launchable in-app and from device shortcuts | `BLOCKED_BY_D09` | — |
@@ -129,7 +139,7 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 | RI-AC-035 | Participants, commitments, sensitive facts, dates follow review policy | `PARTIAL` | Identity proposals require review and merges require an operator; commitments and sensitive facts belong to their own planes |
 | RI-AC-036 | Repeated processing does not duplicate structured records | `PARTIAL` | `bind_identifier` and `record_alias` are idempotent against a natural key; re-enrichment passes are idempotent and tested twice-run. `record_assignment`/`record_relationship` remain idempotent only against their own identifier — a retry minting a fresh one still writes a second row |
 | RI-AC-037 | Capture corrections retain immutable before/after evidence | `NOT_APPLICABLE_TO_THIS_CAMPAIGN` | Quick Capture plane |
-| RI-AC-038 | AI output carries an authority class | `OPEN` | WP-RI-06 |
+| RI-AC-038 | AI output carries an authority class | `UNMET` | Nothing in this plane produces AI output — every capability is a deterministic read — so there is no output here to class. The criterion becomes live for whatever first generates a statement about an entity, and this campaign built no such generator. Recorded as unmet rather than not-applicable: the plane is what such a generator would read from |
 | RI-AC-039 | Models cannot merge identities or promote inferences autonomously | `MET` | `propose` cannot apply; `accept` refuses a merge without declared operator authority; both mutations were mutation-tested |
 | RI-AC-040 | No external action occurs through a relationship knowledge write | `MET` | The plane has no write capability at all and no connector; the Task profile grants five reads. `tests/security/test_entity_privacy_regression.py` asserts a name that reads as an instruction reaches no tool description and gains no capability |
 
@@ -162,6 +172,50 @@ product does not read. Listed in the module rather than implied, because a pass
 that silently covered two of nine would look like a pass that covered all of
 them. The alias pass links only `RESOLVED_EXACT`: a background walk with nobody
 watching is the last place a doubtful identity join should be made.
+
+**D-RI-26 — re-enrichment carries a precondition and a constraint, not just a
+bound.** Two decisions taken after adversarial review, both of the same kind:
+a background pass with nobody watching may not make an identity join a watched
+one would have refused.
+
+* `after_merge` requires a **recorded merge in that direction and that
+  Principal's partition** before it moves a single observation. Its authority to
+  re-point someone's evidence at another person comes from an operator's
+  decision (section 8.4) and from nothing else; called with two identifiers no
+  decision connects, it performed exactly the false join `RI-RISK-001` names —
+  silently, with no proposal, no actor, and no lineage row to find it by.
+* `after_alias` carries each mention's kind into resolution as an `entity_type`
+  constraint where the kind settles it (`KIND_IMPLIES_ENTITY_TYPE`). A contact
+  row, a message participant and a calendar attendee are records *of a person*.
+  Without the constraint the pass asked only "who is called this", and a
+  calendar attendee linked to a project of the same name. `DOCUMENT_MENTION`
+  and `USER_STATEMENT` are deliberately unconstrained — a document can name
+  anything, and inventing a constraint there would be this module guessing.
+
+Both are mutation-tested: removing either reddens the suite.
+
+**D-RI-27 — coverage is computed to a stated ceiling, not from the displayed
+page and not without limit.** The context card carries at most
+`CONTEXT_CARD_COLLECTION_LIMIT` observations and computes `coverage` from up to
+`CONTEXT_CARD_COVERAGE_LIMIT` of them. Both halves matter. Computing coverage
+from the twenty-five shown would report "one source" for an entity with four,
+which is the claim the card exists to make trustworthy. Computing it from all of
+them makes a single read pull an unbounded result set, because observations are
+the one collection here that grows with every source record that ever mentioned
+someone. When the ceiling bites the card says so
+(`COVERAGE_COUNTED_A_BOUNDED_SAMPLE`), so a partial count is never presented as
+a complete one.
+
+**D-RI-28 — a decision is a one-time act, enforced by the write predicate.**
+`decide_proposal` carries `state = 'proposed'` in its own `UPDATE` predicate
+rather than checking before writing. `EntityGovernanceService` already refuses a
+decided proposal, but that check reads and then writes — two statements, so two
+callers can both read "open". Without the predicate, the second write replaced
+`decided_by`, `decided_at` and the reason: the record of who decided and why
+became whoever called last, and a *rejected* merge could be re-accepted with
+nothing left to show it had ever been refused. A merge record's `proposal_id` is
+partition-checked for the same reason — a row citing another Principal's
+proposal presents their decision as this Principal's own.
 
 **D-RI-21 — WP-RI-06 registers no capability, and that is the gate.** The
 governance plane writes: it links observations, decides proposals, and redirects
@@ -388,35 +442,79 @@ Every figure below was produced by running the command named, on this branch.
 
 | Claim | Evidence |
 |---|---|
-| FAST tier green | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **7760 passed, 0 failed** |
-| Lint and format | `ruff check .` and `ruff format --check .` — clean over 901 files |
+| FAST tier green | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **7780 passed, 0 failed, 913 deselected** |
+| Lint and format | `ruff check .` and `ruff format --check .` — clean over 903 files |
 | Types | `mypy` (configured targets: `src`, `migrations`, `apps`, `ops`) — clean over 333 files |
-| Migrations apply and reverse | `tests/schema/test_entity_schema_migration.py` — empty-to-head, head-to-empty, and declaration-to-server constraint parity, against a disposable PostgreSQL 17 |
-| Partition holds at the server | `tests/database/test_entity_repository.py` — cross-Principal isolation on every read and every write, including the joined resolution lookups |
-| Governance holds at the server | `tests/database/test_entity_governance.py` — a proposal cannot be accepted without an actor, in either direction |
+| Full database tier green | `pytest -m "database or recovery or e2e"` against a live PostgreSQL 17 — **903 passed, 0 failed, 7790 deselected**. The four schema-suite failures adversarial review surfaced (accumulation sets in the audit, enrollment, capture and entity migration tests, outgrown by this plane's eight tables and five capabilities) are fixed, not deselected |
+| Evaluation tier | `pytest -m evaluation` — 2 passed. Selected by no CI job by design; the frozen record is what CI checks |
+| Migrations apply and reverse | `tests/schema/test_entity_schema_migration.py` — 54 tests: empty-to-head, head-to-empty, and declaration-to-server constraint, column and partition parity across **all eight** plane tables, against a disposable PostgreSQL 17. The parity groups were parameterized on this revision's four until the governance revision added three the parity checks never reached |
+| Partition holds at the server | `tests/database/test_entity_repository.py` — 34 tests: cross-Principal isolation on every read and every write, including the joined resolution lookups, and the redirect refusals (cycle, chain, absent survivor, cross-partition) |
+| Governance holds at the server | `tests/database/test_entity_governance.py` — 18 tests: a proposal cannot be accepted without an actor in either direction; a decided proposal cannot be decided again (asserted at the repository, below the service's own check); a merge record cannot cite another Principal's proposal |
+| The context card is honest about its own bounds | `tests/unit/test_entity_context.py` — 9 tests: coverage counts past the page the card displays, discloses when the read ceiling bit, holds at the off-by-one, never counts another Principal's observation, and asks the repository for a bounded read. `tests/database/test_entity_governance.py` proves the cap becomes a server-side `LIMIT` rather than a slice of a full result set. Before this the module had no direct test at all |
 | MCP surface | `tests/contract/test_mcp_transport.py` — a real child process publishes 53 tools when composed for the plane and withholds all five when not |
 | Remote exposure | `tests/contract/test_entity_remote_exposure.py` — none of the five reaches the remote profile with the plane off, under either write setting |
-| False-resolution rate | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) — 0 false resolutions, 0 leaks, recall 1.0 over 26 labelled collision-biased cases |
-| The safety rules bite | Mutation-tested: resolving a lone name, choosing a claimant of a conflicted identifier, ignoring effective dates, dropping the partition, dropping the operator gate, letting `propose` apply its own merge — each reddened the suite |
+| False-resolution rate | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) — 0 false resolutions, 0 cross-Principal leaks, 0 forbidden candidates, recall 1.0 over **27** labelled collision-biased cases (12 must-resolve, 15 must-not) |
+| The safety rules bite | Mutation-tested: resolving a lone name, choosing a claimant of a conflicted identifier, ignoring effective dates, dropping the partition, dropping the operator gate, letting `propose` apply its own merge, dropping the observation-kind entity-type constraint, dropping the recorded-merge precondition, dropping the still-open predicate, dropping the merge record's proposal partition check — each reddened the suite |
 
 **What no evidence here covers.** Nothing has been run against a shared or
 production database; every database figure comes from a disposable database
 created and dropped by its own fixture. No connector, source, or live personal
-data was touched. No independent exact-head review has occurred, so nothing here
-is merge-eligible under `AGENTS.md` section 8.1.
+data was touched. **No independent exact-head review has occurred**, so nothing
+here is merge-eligible under `AGENTS.md` section 8.1. The adversarial pass
+recorded in section 4b was run by this campaign against its own work; it is not
+that review and does not substitute for it.
+
+---
+
+## 4b. Adversarial review, and what it found
+
+An adversarial pass was run over the whole branch after WP-RI-13. It raised
+thirteen findings. Recording them here because the interesting ones are the
+three that were **confirmed by execution rather than accepted on argument** —
+each was reproduced as a failing assertion before anything was changed, and each
+had made the resolver answer confidently and wrongly.
+
+| # | Severity | What it was | Disposition |
+|---|---|---|---|
+| 1 | HIGH | The `entity_type` filter ran *before* the conflicted-identifier check, so an identifier claimed by a person and a project answered `RESOLVED_EXACT` — a different entity per caller, with no warning | Fixed: the conflict is computed on the unfiltered effective set |
+| 2 | HIGH | One unnormalized `canonical_name` flipped `AMBIGUOUS` to `RESOLVED_EXACT` naming the *neighbouring* entity. The same hole existed, undocumented, on `EntityAlias.normalized_value` and `ExternalIdentifier.normalized_value` | Fixed: `is_normalized_name` / `is_normalized_identifier` are enforced by all three records at construction. `ExternalIdentifierNamespace` moved to `normalization.py` so the dependency runs one way |
+| 3 | MED-HIGH | `RESOLVED_CONTEXTUAL` required a rival, so adding a duplicate row *upgraded a refusal into a resolution*. Separately, a scope true of nobody was silent | Fixed: corroboration resolves without a rival; a scope matching no candidate warns |
+| 4 | MED | `redirect_entity` permitted a merge cycle and a merge chain, making `superseded_by_entity_id` a pointer that never arrives | Fixed and regression-tested at the SQL layer; the fake carries the same guard so a unit test cannot pass without it |
+| 5 | MED | `EntitiesRepository.create` took no `principal_id`, contradicting the port's own universal invariant | Fixed: `create(principal_id, entity)`, 130 call sites updated |
+| 6 | MED | `after_merge` moved observations between any two entities named together — no merge record required. `after_alias` discarded the observation's kind, so a calendar attendee could link to a project of the same name | Fixed: a recorded merge in that direction and partition is a precondition; `KIND_IMPLIES_ENTITY_TYPE` constrains the re-offer. Both mutation-tested |
+| 7 | MED | The runbook instructed operators to run `EntityGovernanceService` and `EntityReenrichmentService`, which **nothing in `src/` composes** | Corrected, not papered over: runbook section 4 now says plainly that the queue can be read and cannot be worked, and section 7 carries it as a gap |
+| 8 | MED | Nine acceptance criteria read `OPEN` — "in a planned work package" — against WP-RI-06/07/10, all of which had shipped | Fixed by re-dispositioning each against what actually shipped, with an `UNMET` status added for exactly this. **None moved to `MET`** |
+| 9 | LOW | `cross_principal_leakage` in the calibration record actually counted all forbidden candidates | Fixed: split into two metrics |
+| 10 | LOW | The inspection script emitted free-text `proposed_by` while claiming it printed no personal data | Fixed: the column is not selected, and the docstring says why |
+| 11 | LOW | The end-to-end scoring scan covered four of the five capabilities | Fixed: `ENTITIES_RELATIONSHIPS` added |
+| 12 | LOW | `ports.py` said "no alias table exists yet" — stale since WP-RI-03 | Fixed: the claim (aliases are not searched) is now stated as the decision it is, with the disclosure reason |
+| 13 | LOW | Six smaller items: an unbounded observation read in the context card (and, once looked for, the same slice-after-fetch in both re-enrichment passes); `record_merge` not partition-checking `proposal_id`; `decide_proposal` not asserting the proposal was still open; `reached_the_bound` naming; a stale file count; two must-resolve cases filed under a "must not resolve" banner | All fixed. The two persistence ones carry mutation-tested database regressions; the card now reads at a disclosed ceiling and says when it bit |
+
+Four schema-suite failures surfaced alongside these, all of the same kind:
+accumulation sets in `test_audit_schema_migration.py`,
+`test_enrollment_objects_migration.py`, `test_capture_schema_migration.py` and
+`test_entity_schema_migration.py` that name what the revisions above them create,
+and which the entity plane's eight tables and five capabilities had outgrown.
+Each was corrected as bookkeeping.
 
 ---
 
 ## 5. Known gaps carried forward
 
-* **`Entity.canonical_name` normalization is unenforced** (`D-RI-13`). WP-RI-06
-  owns it.
+* **`Entity.canonical_name` normalization is unenforced at the schema level**
+  (`D-RI-13`). The domain records now refuse an unnormalized canonical name,
+  alias value or identifier value at construction, so nothing routed through
+  `Entity`, `EntityAlias` or `ExternalIdentifier` can store one — that was
+  adversarial finding 2, and it had made a refusal resolve to a *neighbouring*
+  entity. A migration, a backfill or a direct `INSERT` still can: the CHECK
+  would have to reimplement `normalize_name` in SQL, which would then be a
+  second implementation to keep in step with the first.
 * **The evaluation measures the service against a double, not against SQL.**
   `_CorpusRepository` subclasses the real port, so the service cannot pass
   against a shape production could not supply — but the production partition,
   the joins, and the constraints are proved in `tests/database` and
   `tests/schema`, not here. Neither suite alone is sufficient.
-* **The corpus is small and synthetic.** Twenty-six labelled cases over twelve
+* **The corpus is small and synthetic.** Twenty-seven labelled cases over twelve
   entities is evidence that the stated refusals hold and that the resolver still
   answers what it should. It is not a population estimate, and no number in
   `RESOLUTION_CALIBRATION.md` should be read as a probability about a real
@@ -424,13 +522,26 @@ is merge-eligible under `AGENTS.md` section 8.1.
 * **Only two contextual signals exist** — assignment to a named scope, and a
   typed relationship reaching it. Section 15.1's calendar attendees, email
   participants, introduction chains, and negative evidence all need the
-  observation record (WP-RI-06). `RI-AC-010` stays `OPEN` for exactly that
-  reason.
+  observation record. WP-RI-06 has since delivered that record, and the
+  resolver still does not read it: `EntityResolutionService` consults entities,
+  aliases and identifiers only. `RI-AC-010` is therefore `UNMET` rather than
+  `OPEN` — the table it was waiting for exists, and the read was never written.
 * **The MCP surface exists and is off by default** (`D-RI-20`). A process that
   has not set `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` publishes none of the
   five, locally or remotely.
 * **`record_assignment` and `record_relationship` have no natural key**, so a
   retry that mints a fresh identifier writes a second row (RI-AC-036).
+* **The governance plane has no caller.** `EntityGovernanceService` and
+  `EntityReenrichmentService` are composed by nothing in `src/` — no capability
+  (`D-RI-21`), no bootstrap wiring, no script, no worker. A proposal can be
+  written and read and cannot be decided. This is the single largest gap between
+  what the branch implements and what an operator can do with it, and it is
+  named in `ops/runbooks/relationship-intelligence.md` section 4 as well, since
+  the runbook is where somebody would go looking for the procedure.
+* **The context card counts coverage from at most
+  `CONTEXT_CARD_COVERAGE_LIMIT` observations**, and says so
+  (`COVERAGE_COUNTED_A_BOUNDED_SAMPLE`) when the ceiling bites. Beyond it the
+  per-source counts are floors and a source may be missing entirely.
 * **The specification is silent** on identifier namespaces, the normalization
   algorithm, `effective_from`/`effective_to` null and overlap semantics, as-of
   queries, merge-redirect read behaviour, person lifecycle values, and

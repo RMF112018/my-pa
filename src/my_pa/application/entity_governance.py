@@ -84,15 +84,25 @@ class EntityGovernanceService:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         self._entities.record_observation(principal_id, observation)
 
-    def unresolved_mentions(self, principal_id: str) -> list[EntityObservation]:
+    def unresolved_mentions(
+        self, principal_id: str, *, limit: int | None = None
+    ) -> list[EntityObservation]:
         """Every observation nothing has linked to an entity.
 
         A first-class queue rather than a gap in the data (`RI-AC-006`): these
         are the references the system knows it has not placed, and being able to
         list them is what makes "unresolved" a state rather than an absence.
+
+        `limit` defaults to `None`, which is genuinely unbounded and is the
+        right default *here*: this is the queue, and a caller shown a truncated
+        queue with nothing saying so would believe it had reached the end. Every
+        other read of this table caps itself, because it is the one collection
+        on this plane that grows with every source record that ever mentioned
+        anyone. A caller that would rather page than wait passes a limit and
+        knows it did.
         """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
-        return self._entities.observations(principal_id, unresolved_only=True)
+        return self._entities.observations(principal_id, unresolved_only=True, limit=limit)
 
     def link(self, principal_id: str, observation_id: str, entity_id: str) -> None:
         """Attach one observation to the entity it turned out to refer to."""

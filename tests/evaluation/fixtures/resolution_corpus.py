@@ -33,8 +33,10 @@ The collisions, and what each is for:
 * `JOSE_ALVAREZ` — recorded with and without diacritics. Same person.
 * `CHEN_PARTNERS` — an organization named for a person. Type filtering must
   separate them.
-* `CONFLICTED_ADDRESS` — one address recorded against two entities, which is a
-  data defect rather than a person. Must stop, never pick.
+* `CONFLICTED_ADDRESS` — one address recorded against three entities, spanning
+  two entity types, which is a data defect rather than a person. Must stop,
+  never pick — including when a caller supplies an `entity_type` that would
+  leave one claimant standing.
 * `DEPARTED_CONTRACTOR` — merged away into a survivor. Must answer historically.
 * `BOB_CHEN_OTHER_PRINCIPAL` — same surname, different Principal. Must be
   invisible.
@@ -259,9 +261,14 @@ CORPUS_IDENTIFIERS: Final[tuple[ExternalIdentifier, ...]] = (
     # A local-part recycled across two domains by two unrelated people.
     _email("xid_local0005acmejose", JOSE_ALVAREZ, "j.alvarez@acme.test"),
     _email("xid_local0006northwnd", ALICE_CHEN_LAWYER, "j.alvarez@northwind.test"),
-    # One address recorded against two entities: a data defect, not a person.
+    # One address recorded against three entities, and deliberately across two
+    # entity *types*: a shared mailbox is the ordinary way this happens, and the
+    # cross-type case is the one that caught a real defect — filtering by type
+    # before counting claimants let each filtered view see a single claimant and
+    # resolve exactly, to a different entity per caller.
     _email("xid_conflict0007first", ALICE_CHEN_ENGINEER, "shared.inbox@acme.test"),
     _email("xid_conflict0008second", ROBERT_CHEN, "shared.inbox@acme.test"),
+    _email("xid_conflict0011third", CHEN_PARTNERS, "shared.inbox@acme.test"),
     # An unverified address, so the corpus can tell verified from not.
     _email(
         "xid_unverified0009dana",

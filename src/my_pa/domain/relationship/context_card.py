@@ -49,6 +49,7 @@ from my_pa.domain.relationship.governance import EntityObservation
 
 __all__ = [
     "CONTEXT_CARD_COLLECTION_LIMIT",
+    "CONTEXT_CARD_COVERAGE_LIMIT",
     "ContextCardCoverage",
     "ContextCardLimitation",
     "EntityContextCard",
@@ -58,6 +59,21 @@ __all__ = [
 #: one budget over the whole card, because a person with forty edges and two
 #: aliases should not lose the aliases to the edges.
 CONTEXT_CARD_COLLECTION_LIMIT: int = 25
+
+#: The most observations the card will *read* to compute coverage, as distinct
+#: from the `CONTEXT_CARD_COLLECTION_LIMIT` it will carry.
+#:
+#: Higher than the collection limit on purpose: coverage says which sources
+#: contributed and how recently, and computing it from the twenty-five rows the
+#: card happens to show would report "one source" for an entity with four. But
+#: it is a ceiling rather than no limit at all, because observations are the one
+#: collection here that grows with every source record that ever mentioned
+#: someone -- a heavily observed entity would otherwise pull an unbounded result
+#: set into memory to answer a single read.
+#:
+#: When the ceiling bites, the card says so (`COVERAGE_COUNTED_A_BOUNDED_SAMPLE`)
+#: rather than presenting a partial count as a complete one.
+CONTEXT_CARD_COVERAGE_LIMIT: int = 500
 
 
 class ContextCardLimitation(StrEnum):
@@ -79,6 +95,13 @@ class ContextCardLimitation(StrEnum):
     #: person" and "nothing looked" are different, and only one of them is a
     #: fact about the person.
     NO_SOURCE_HAS_BEEN_OBSERVED = "no_source_has_been_observed"
+    #: Coverage was computed from the first `CONTEXT_CARD_COVERAGE_LIMIT`
+    #: observations rather than from all of them. The sources named are real;
+    #: the counts are floors and there may be sources not named at all. Stated
+    #: because a coverage figure a reader takes for complete is worse than no
+    #: coverage figure -- it is the "four sources agree" the card exists to make
+    #: trustworthy, computed from a sample nobody was told about.
+    COVERAGE_COUNTED_A_BOUNDED_SAMPLE = "coverage_counted_a_bounded_sample"
 
 
 @dataclass(frozen=True, slots=True)

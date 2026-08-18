@@ -81,10 +81,14 @@ def staged(scene: Scene) -> Scene:
     principal_id = scene.principal.principal_id
     with FakeUnitOfWork(scene.world) as unit_of_work:
         entities = unit_of_work.entities
-        entities.create(_entity(ALICE, "Alice Chen", principal_id))
-        entities.create(_entity(ALICE_TWO, "Alice Chen", principal_id))
-        entities.create(_entity(ACME, "Acme Construction", principal_id, EntityType.ORGANIZATION))
-        entities.create(_entity(TOWER, "Harbour Tower", principal_id, EntityType.PROJECT))
+        entities.create(principal_id, _entity(ALICE, "Alice Chen", principal_id))
+        entities.create(principal_id, _entity(ALICE_TWO, "Alice Chen", principal_id))
+        entities.create(
+            principal_id, _entity(ACME, "Acme Construction", principal_id, EntityType.ORGANIZATION)
+        )
+        entities.create(
+            principal_id, _entity(TOWER, "Harbour Tower", principal_id, EntityType.PROJECT)
+        )
         entities.bind_identifier(
             principal_id,
             ALICE,

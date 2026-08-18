@@ -49,13 +49,30 @@ a report across all Principals would be the cross-Principal read the partition
 exists to prevent.
 
 Read `unresolved_mentions` and `open_proposals` first. The first is references
-the system knows it has not placed; the second is decisions waiting on a person.
+the system knows it has not placed; the second is decisions waiting on a person
+— and, in this build, waiting indefinitely (section 4).
 
-## 4. Deciding a proposal
+The report names proposals by identifier and kind and prints no `proposed_by`:
+that column is free text a caller supplies, and one free-text column would end
+the guarantee that this report carries no personal data.
 
-There is **no capability for this**, deliberately. A proposal is decided
-in-process through `EntityGovernanceService`, and a merge additionally requires
-the caller to declare operator authority:
+## 4. Deciding a proposal — **not yet operable**
+
+Read this section as a description of the rules, not as a procedure. There is
+**no way to decide a proposal in this build.**
+
+- There is no capability for it, deliberately (`D-RI-21`): observe, propose,
+  decide and merge exist on no transport, local or remote.
+- There is also no operator entry point. `EntityGovernanceService` and
+  `EntityReenrichmentService` are composed by **nothing** in `src/` — no
+  bootstrap wiring, no script, no worker. They are in-process contracts with a
+  test suite and no caller.
+
+So the queue `scripts/inspect_entity_plane.py` reports can be *read* and cannot
+be *worked*. An operator who needs a proposal decided today has no supported
+action; wiring one is its own work package, with its own authorization gate.
+
+The rules those services encode, for when there is:
 
 - `RECORD_ALIAS`, `RECORD_ASSIGNMENT`, `RECORD_RELATIONSHIP` — may be accepted
   under a configured threshold.
@@ -65,11 +82,11 @@ the caller to declare operator authority:
 
 Accepting a merge redirects the merged-away entity at the survivor and writes an
 `entity_merge_records` row naming the actor, reason and moment. It deletes
-nothing: the merged entity still resolves as a `HISTORICAL_MATCH`.
-
-After accepting a merge, run the re-enrichment pass
-(`EntityReenrichmentService.after_merge`) until `reached_the_bound` is false, so
-the observations that pointed at the merged-away entity follow the decision.
+nothing: the merged entity still resolves as a `HISTORICAL_MATCH`. The merge
+record is also a precondition rather than a formality — `after_merge` refuses to
+move any observation between two entities no recorded merge connects, in that
+direction, in that Principal's partition. A pass is repeated until
+`more_remains` is false.
 
 ## 5. Reading a resolution answer
 
@@ -108,7 +125,14 @@ candidate is the honest answer.
   merge is.
 - **Seven of nine re-enrichment triggers** (section 27.4) are unimplemented,
   because they need observations from sources this product does not read yet.
-- **`Entity.canonical_name` normalization is unenforced** at the schema level;
-  a writer that stored an unnormalized name would make its entity unresolvable.
+- **No operator entry point for governance.** See section 4: the review plane is
+  implemented and composed by nothing. Reading the queue works; working it does
+  not.
+- **`Entity.canonical_name` normalization is unenforced** at the schema level.
+  The domain record now refuses an unnormalized `canonical_name`, alias value or
+  identifier value at construction, so nothing routed through `Entity`,
+  `EntityAlias` or `ExternalIdentifier` can store one — but a migration, a
+  backfill or a direct `INSERT` still can, and such a row is unresolvable or,
+  worse, resolves as a neighbouring entity.
 - **`record_assignment` and `record_relationship` have no natural key**, so a
   retry that mints a fresh identifier writes a second row.

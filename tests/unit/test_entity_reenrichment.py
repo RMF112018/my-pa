@@ -27,6 +27,7 @@ from my_pa.domain.relationship.entity import (
     EntityType,
 )
 from my_pa.domain.relationship.governance import (
+    EntityMergeRecord,
     EntityObservation,
     EntityProposalKind,
     ObservationKind,
@@ -97,6 +98,29 @@ def _alias(alias_id: str, entity_id: str, name: str) -> EntityAlias:
     )
 
 
+def _record_merge(entities, merged: str = ALICE_TWO, retained: str = ALICE) -> None:  # noqa: ANN001
+    """Write the lineage row `after_merge` requires before it will move anything.
+
+    Called by every pass below, because `after_merge`'s authority to re-point
+    someone's evidence comes from an operator's merge decision and from nothing
+    else. A test that skipped this would be exercising the method in a state the
+    product cannot reach.
+    """
+    entities.record_merge(
+        PRINCIPAL,
+        EntityMergeRecord(
+            merge_id="emrg_aaaa0001aaaa0001",
+            principal_id=PRINCIPAL,
+            retained_entity_id=retained,
+            merged_entity_id=merged,
+            proposal_id="eprp_aaaa0001aaaa0001",
+            decided_by="operator",
+            reason="the same person, recorded twice",
+            decided_at=WHEN,
+        ),
+    )
+
+
 # --- after a merge ----------------------------------------------------------
 
 
@@ -105,12 +129,13 @@ def test_a_merge_repoints_the_stranded_observations(
 ) -> None:
     """What makes a merge finished rather than merely recorded."""
     entities = _entities(world)
-    entities.create(_entity(ALICE))
-    entities.create(_entity(ALICE_TWO))
+    entities.create(PRINCIPAL, _entity(ALICE))
+    entities.create(PRINCIPAL, _entity(ALICE_TWO))
     for index in range(3):
         entities.record_observation(
             PRINCIPAL, _observation(f"eobs_{index:04d}aaaa0001aaaa", ALICE_TWO)
         )
+    _record_merge(entities)
     outcome = enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
 
     assert outcome.trigger is ReenrichmentTrigger.IDENTITY_MERGED
@@ -125,9 +150,10 @@ def test_repointing_twice_changes_nothing_the_second_time(
 ) -> None:
     """Section 27.2: a retry must not duplicate."""
     entities = _entities(world)
-    entities.create(_entity(ALICE))
-    entities.create(_entity(ALICE_TWO))
+    entities.create(PRINCIPAL, _entity(ALICE))
+    entities.create(PRINCIPAL, _entity(ALICE_TWO))
     entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", ALICE_TWO))
+    _record_merge(entities)
 
     enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
     second = enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
@@ -141,8 +167,9 @@ def test_a_merge_does_not_touch_another_entitys_observations(
 ) -> None:
     entities = _entities(world)
     for entity_id in (ALICE, ALICE_TWO, BOB):
-        entities.create(_entity(entity_id))
+        entities.create(PRINCIPAL, _entity(entity_id))
     entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", BOB))
+    _record_merge(entities)
     enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
     assert len(entities.observations(PRINCIPAL, BOB)) == 1
 
@@ -159,15 +186,16 @@ def test_a_merge_pass_is_bounded_and_says_so(
 ) -> None:
     """More work than one pass carries is reported, not silently dropped."""
     entities = _entities(world)
-    entities.create(_entity(ALICE))
-    entities.create(_entity(ALICE_TWO))
+    entities.create(PRINCIPAL, _entity(ALICE))
+    entities.create(PRINCIPAL, _entity(ALICE_TWO))
     for index in range(REENRICHMENT_BOUND + 5):
         entities.record_observation(
             PRINCIPAL, _observation(f"eobs_{index:05d}aaaa0001aaa", ALICE_TWO)
         )
+    _record_merge(entities)
     outcome = enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
     assert outcome.observations_repointed == REENRICHMENT_BOUND
-    assert outcome.reached_the_bound is True
+    assert outcome.more_remains is True
     assert len(entities.observations(PRINCIPAL, ALICE_TWO)) == 5
 
 
@@ -176,13 +204,14 @@ def test_looping_a_bounded_pass_finishes_the_work(
 ) -> None:
     """The bound is a pacing device, not a ceiling on what can be done."""
     entities = _entities(world)
-    entities.create(_entity(ALICE))
-    entities.create(_entity(ALICE_TWO))
+    entities.create(PRINCIPAL, _entity(ALICE))
+    entities.create(PRINCIPAL, _entity(ALICE_TWO))
     for index in range(REENRICHMENT_BOUND + 5):
         entities.record_observation(
             PRINCIPAL, _observation(f"eobs_{index:05d}aaaa0001aaa", ALICE_TWO)
         )
-    while enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE).reached_the_bound:
+    _record_merge(entities)
+    while enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE).more_remains:
         pass
     assert entities.observations(PRINCIPAL, ALICE_TWO) == []
 
@@ -194,7 +223,7 @@ def test_a_new_alias_links_a_mention_it_now_resolves(
     world: World, enriching: EntityReenrichmentService
 ) -> None:
     entities = _entities(world)
-    entities.create(_entity(ALICE, "Alice Chen"))
+    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
     entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Ali"))
     assert len(entities.observations(PRINCIPAL, unresolved_only=True)) == 1
 
@@ -217,8 +246,8 @@ def test_an_ambiguous_mention_is_left_exactly_where_it_was(
     it went in — and is counted, so the pass is honest about having looked.
     """
     entities = _entities(world)
-    entities.create(_entity(ALICE, "Alice Chen"))
-    entities.create(_entity(ALICE_TWO, "Alicia Chen"))
+    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
+    entities.create(PRINCIPAL, _entity(ALICE_TWO, "Alicia Chen"))
     entities.record_alias(PRINCIPAL, _alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
     entities.record_alias(PRINCIPAL, _alias("eals_bbbb0002bbbb0002", ALICE_TWO, "Ali"))
     entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Ali"))
@@ -240,7 +269,7 @@ def test_a_bare_name_match_does_not_link_a_mention(
     pass — where it matters more, because nobody is reading the answer.
     """
     entities = _entities(world)
-    entities.create(_entity(ALICE, "Alice Chen"))
+    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
     entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Alice Chen"))
     outcome = enriching.after_alias(PRINCIPAL)
     assert outcome.mentions_linked == 0
@@ -251,7 +280,7 @@ def test_a_mention_matching_nothing_stays_unresolved(
     world: World, enriching: EntityReenrichmentService
 ) -> None:
     entities = _entities(world)
-    entities.create(_entity(ALICE, "Alice Chen"))
+    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
     entities.record_observation(
         PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Nobody Whatsoever")
     )
@@ -264,7 +293,7 @@ def test_running_the_alias_pass_twice_links_nothing_new(
     world: World, enriching: EntityReenrichmentService
 ) -> None:
     entities = _entities(world)
-    entities.create(_entity(ALICE, "Alice Chen"))
+    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
     entities.record_alias(PRINCIPAL, _alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
     entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Ali"))
 
@@ -311,8 +340,8 @@ def test_an_accepted_merge_followed_by_re_enrichment_moves_the_evidence(
     """
     entities = _entities(world)
     governing = EntityGovernanceService(entities)
-    entities.create(_entity(ALICE))
-    entities.create(_entity(ALICE_TWO))
+    entities.create(PRINCIPAL, _entity(ALICE))
+    entities.create(PRINCIPAL, _entity(ALICE_TWO))
     entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", ALICE_TWO))
     governing.propose(
         PRINCIPAL,
@@ -339,3 +368,142 @@ def test_an_accepted_merge_followed_by_re_enrichment_moves_the_evidence(
     merged = entities.get(PRINCIPAL, ALICE_TWO)
     assert merged is not None
     assert merged.status is EntityStatus.MERGED_REDIRECT
+
+
+# --- the guards -------------------------------------------------------------
+
+
+def test_a_merge_pass_refuses_a_pair_no_decision_connects(
+    world: World, enriching: EntityReenrichmentService
+) -> None:
+    """The pass's whole authority is the merge record; without one it declines.
+
+    Before this refusal, `after_merge` would move every observation off one
+    entity onto another purely because a caller named the two together — the
+    exact false join `RI-RISK-001` describes, performed in the background with
+    no proposal, no operator and no lineage row to find it by afterwards.
+    """
+    entities = _entities(world)
+    entities.create(PRINCIPAL, _entity(ALICE))
+    entities.create(PRINCIPAL, _entity(BOB, "Bob Nguyen"))
+    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", BOB))
+
+    with pytest.raises(ValueError, match="recorded merge"):
+        enriching.after_merge(PRINCIPAL, BOB, ALICE)
+    assert len(entities.observations(PRINCIPAL, BOB)) == 1
+
+
+def test_a_merge_pass_refuses_a_recorded_merge_run_backwards(
+    world: World, enriching: EntityReenrichmentService
+) -> None:
+    """Direction is part of the decision, not an argument order the caller picks.
+
+    A record saying "ALICE_TWO was merged into ALICE" does not authorise moving
+    ALICE's evidence onto ALICE_TWO. Asserted separately because a membership
+    test that ignored direction would pass every test above.
+    """
+    entities = _entities(world)
+    entities.create(PRINCIPAL, _entity(ALICE))
+    entities.create(PRINCIPAL, _entity(ALICE_TWO))
+    _record_merge(entities)
+
+    with pytest.raises(ValueError, match="recorded merge"):
+        enriching.after_merge(PRINCIPAL, ALICE, ALICE_TWO)
+
+
+def test_a_merge_pass_refuses_another_principals_lineage(
+    world: World, enriching: EntityReenrichmentService
+) -> None:
+    """`merges` is partitioned, so the lookup finds nothing and the pass stops."""
+    entities = _entities(world)
+    entities.create(PRINCIPAL, _entity(ALICE))
+    entities.create(PRINCIPAL, _entity(ALICE_TWO))
+    _record_merge(entities)
+
+    other = "prn_ffff0009ffff0009ffff0009"
+    with pytest.raises(ValueError, match="recorded merge"):
+        enriching.after_merge(other, ALICE_TWO, ALICE)
+
+
+def test_an_alias_pass_will_not_link_a_person_mention_to_a_project(
+    world: World, enriching: EntityReenrichmentService
+) -> None:
+    """The constraint the kind implies, asserted where it would otherwise bind.
+
+    A calendar attendee and a project can carry the same text. Without the
+    `entity_type` the kind implies, the pass answers `RESOLVED_EXACT` on the
+    project and links a person's mention to it — unwatched, and afterwards
+    indistinguishable from a link someone meant.
+    """
+    entities = _entities(world)
+    tower = Entity(
+        entity_id=BOB,
+        principal_id=PRINCIPAL,
+        entity_type=EntityType.PROJECT,
+        canonical_name=normalize_name("Harbour Tower"),
+        display_name="Harbour Tower",
+        status=EntityStatus.ACTIVE,
+        created_at=WHEN,
+        updated_at=WHEN,
+        version=1,
+    )
+    entities.create(PRINCIPAL, tower)
+    entities.record_alias(PRINCIPAL, _alias("eals_bbbb0002bbbb0002", BOB, "Harbour Tower"))
+    entities.record_observation(
+        PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Harbour Tower")
+    )
+
+    outcome = enriching.after_alias(PRINCIPAL)
+
+    assert outcome.mentions_linked == 0
+    assert outcome.mentions_left_unresolved == 1
+    assert len(entities.observations(PRINCIPAL, unresolved_only=True)) == 1
+
+
+def test_an_alias_pass_still_links_a_person_mention_to_a_person(
+    world: World, enriching: EntityReenrichmentService
+) -> None:
+    """The constraint narrows the answer; it does not suppress it.
+
+    The pair with the test above: a guard that refused everything would satisfy
+    that one and be useless.
+    """
+    entities = _entities(world)
+    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
+    entities.record_alias(PRINCIPAL, _alias("eals_bbbb0002bbbb0002", ALICE, "Ali"))
+    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Ali"))
+
+    outcome = enriching.after_alias(PRINCIPAL)
+
+    assert outcome.mentions_linked == 1
+    assert entities.observations(PRINCIPAL, unresolved_only=True) == []
+
+
+def test_a_pass_asks_the_repository_for_a_bounded_read(world: World) -> None:
+    """The bound is on the query, not on a slice of everything.
+
+    `more_remains` was already asserted above, and it holds either way — an
+    in-memory double returns the same outcome whether the cap reached the query
+    or a slice was taken after every row had been fetched. Which one it is
+    decides whether "bounded" means anything for an entity with fifty thousand
+    stranded observations, so it is asserted at the call.
+    """
+    asked: list[int | None] = []
+    entities = _entities(world)
+    entities.create(PRINCIPAL, _entity(ALICE))
+    entities.create(PRINCIPAL, _entity(ALICE_TWO))
+    _record_merge(entities)
+
+    class _Recording:
+        def __getattr__(self, name: str) -> object:
+            return getattr(entities, name)
+
+        def observations(self, *args: object, **kwargs: object) -> object:
+            asked.append(kwargs.get("limit"))
+            return entities.observations(*args, **kwargs)  # type: ignore[arg-type]
+
+    enriching = EntityReenrichmentService(_Recording())  # type: ignore[arg-type]
+    enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
+    enriching.after_alias(PRINCIPAL)
+
+    assert asked == [REENRICHMENT_BOUND + 1, REENRICHMENT_BOUND + 1]

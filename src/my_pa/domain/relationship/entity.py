@@ -9,6 +9,15 @@ entity is assigned to a scope entity under a typed role.  EntityRelationship
 records a directed, typed relationship between two entities, optionally scoped
 by a third.
 
+**Every matched-against value is validated as already normalized.** An entity's
+`canonical_name`, an alias's `normalized_value`, and an external identifier's
+`normalized_value` are the columns resolution compares by equality, and until
+these records refused an unnormalized one the whole matching policy in
+`relationship.normalization` was a query-side convention no writer had to
+honour. A single row stored in the wrong form did not merely make itself
+unfindable: it removed itself from a candidate set and thereby promoted a
+*neighbouring* entity from an ambiguous refusal to a confident wrong answer.
+
 These types are *additive*: they do not modify or replace Person/Organization,
 and they do not alter the existing relationship_people or relationship_organizations
 tables.  A later work package unifies the old and new surfaces.
@@ -39,6 +48,11 @@ from enum import StrEnum
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.relationship.normalization import (
+    ExternalIdentifierNamespace,
+    is_normalized_identifier,
+    is_normalized_name,
+)
 
 __all__ = [
     "AliasType",
@@ -104,21 +118,6 @@ class AliasType(StrEnum):
     ABBREVIATION = "abbreviation"
     FORMER_NAME = "former_name"
     DOCUMENT_REFERENCE = "document_reference"
-
-
-class ExternalIdentifierNamespace(StrEnum):
-    """The external namespaces where an entity may hold an identity.
-
-    Closed as of this revision; widening is a visible schema change.
-    """
-
-    EMAIL = "email"
-    ENTRA_OBJECT_ID = "entra_object_id"
-    TEAMS_USER_ID = "teams_user_id"
-    OUTLOOK_CONTACT_ID = "outlook_contact_id"
-    APPLE_CONTACT_ID = "apple_contact_id"
-    SOURCE_PARTICIPANT_ID = "source_participant_id"
-    VENDOR_SYSTEM_ID = "vendor_system_id"
 
 
 class AssignmentType(StrEnum):
@@ -193,6 +192,8 @@ class Entity:
             raise ValueError("an entity has a closed entity type")
         if not self.canonical_name.strip():
             raise ValueError("an entity canonical name is not blank")
+        if not is_normalized_name(self.canonical_name):
+            raise ValueError("an entity canonical name is stored already normalized")
         if not self.display_name.strip():
             raise ValueError("an entity display name is not blank")
         if not isinstance(self.status, EntityStatus):
@@ -240,6 +241,8 @@ class ExternalIdentifier:
             raise ValueError("an external identifier has a closed namespace")
         if not self.normalized_value.strip():
             raise ValueError("an external identifier normalized value is not blank")
+        if not is_normalized_identifier(self.namespace, self.normalized_value):
+            raise ValueError("an external identifier normalized value is stored already normalized")
         if not self.display_value.strip():
             raise ValueError("an external identifier display value is not blank")
         if self.effective_from is not None:
@@ -292,6 +295,8 @@ class EntityAlias:
             raise ValueError("an alias has a closed alias type")
         if not self.normalized_value.strip():
             raise ValueError("an alias normalized value is not blank")
+        if not is_normalized_name(self.normalized_value):
+            raise ValueError("an alias normalized value is stored already normalized")
         if not self.display_value.strip():
             raise ValueError("an alias display value is not blank")
         if self.effective_from is not None:

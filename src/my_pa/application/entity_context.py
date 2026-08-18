@@ -20,6 +20,7 @@ from my_pa.contracts.ports import EntitiesRepository
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.relationship.context_card import (
     CONTEXT_CARD_COLLECTION_LIMIT,
+    CONTEXT_CARD_COVERAGE_LIMIT,
     ContextCardCoverage,
     ContextCardLimitation,
     EntityContextCard,
@@ -65,14 +66,22 @@ class EntityContextService:
         relationships, relationship_limit = _bounded(
             self._entities.relationships(principal_id, entity_id, direction="any")
         )
-        every_observation = self._entities.observations(principal_id, entity_id)
-        observations, observation_limit = _bounded(every_observation)
+        # One row past the ceiling, so "there are exactly this many" and "there
+        # are at least this many" are distinguishable without a second query.
+        counted = self._entities.observations(
+            principal_id, entity_id, limit=CONTEXT_CARD_COVERAGE_LIMIT + 1
+        )
+        sampled = len(counted) > CONTEXT_CARD_COVERAGE_LIMIT
+        counted = counted[:CONTEXT_CARD_COVERAGE_LIMIT]
+        observations, observation_limit = _bounded(counted)
 
-        # Coverage is computed over *every* observation, not the bounded page:
-        # "four sources contributed" is a fact about the evidence, and reporting
-        # it from a truncated sample would understate it exactly when the card
-        # is most crowded.
-        coverage = _coverage(every_observation)
+        # Coverage is computed over every observation the ceiling admitted, not
+        # over the twenty-five the card carries: "four sources contributed" is a
+        # fact about the evidence, and reporting it from the displayed page
+        # would understate it exactly when the card is most crowded. When the
+        # ceiling itself bit, the card says so rather than presenting a partial
+        # count as a complete one.
+        coverage = _coverage(counted)
 
         limitations = tuple(
             limitation
@@ -94,6 +103,7 @@ class EntityContextService:
                     ContextCardLimitation.MORE_OBSERVATIONS_THAN_THIS_CARD_CARRIES,
                     observation_limit,
                 ),
+                (ContextCardLimitation.COVERAGE_COUNTED_A_BOUNDED_SAMPLE, sampled),
                 (ContextCardLimitation.NO_SOURCE_HAS_BEEN_OBSERVED, not coverage),
             )
             if applied

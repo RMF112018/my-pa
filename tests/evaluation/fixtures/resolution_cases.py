@@ -190,15 +190,6 @@ RESOLUTION_CASES: Final[tuple[ResolutionCase, ...]] = (
         must_not_include=frozenset({ALICE_CHEN_LAWYER}),
         note="The lawyer holds j.alvarez@northwind.test. A local-part match would join them.",
     ),
-    # --- must not resolve ---------------------------------------------------
-    ResolutionCase(
-        name="two_people_with_one_name_stay_two",
-        family="same_name",
-        reference="Alice Chen",
-        expected_outcome=ResolutionOutcome.AMBIGUOUS,
-        must_include=frozenset({ALICE_CHEN_ENGINEER, ALICE_CHEN_LAWYER}),
-        note="The plainest false join available, and the plainest refusal.",
-    ),
     ResolutionCase(
         name="a_unique_full_name_alias_resolves",
         family="unique_alias",
@@ -207,6 +198,26 @@ RESOLUTION_CASES: Final[tuple[ResolutionCase, ...]] = (
         expected_outcome=ResolutionOutcome.RESOLVED_EXACT,
         expected_entity_id=TOWER_PROJECT,
         note="Resolves on the recorded FULL_NAME alias, not on the bare canonical name.",
+    ),
+    ResolutionCase(
+        name="a_former_name_is_the_same_person",
+        family="former_name",
+        reference="Alice Nakamura",
+        expected_outcome=ResolutionOutcome.RESOLVED_EXACT,
+        expected_entity_id=ALICE_CHEN_ENGINEER,
+        note=(
+            "The case that catches a merely timid resolver: refusing this one "
+            "is as wrong as joining the two Alices."
+        ),
+    ),
+    # --- must not resolve ---------------------------------------------------
+    ResolutionCase(
+        name="two_people_with_one_name_stay_two",
+        family="same_name",
+        reference="Alice Chen",
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({ALICE_CHEN_ENGINEER, ALICE_CHEN_LAWYER}),
+        note="The plainest false join available, and the plainest refusal.",
     ),
     ResolutionCase(
         name="a_lone_canonical_name_match_does_not_resolve",
@@ -269,8 +280,23 @@ RESOLUTION_CASES: Final[tuple[ResolutionCase, ...]] = (
         reference="shared.inbox@acme.test",
         namespace=ExternalIdentifierNamespace.EMAIL,
         expected_outcome=ResolutionOutcome.CONFLICTED_IDENTIFIER,
-        must_include=frozenset({ALICE_CHEN_ENGINEER, ROBERT_CHEN}),
-        note="A data defect. Choosing either would perform the merge section 15.2 refuses.",
+        must_include=frozenset({ALICE_CHEN_ENGINEER, ROBERT_CHEN, CHEN_PARTNERS}),
+        note="A data defect. Choosing any would perform the merge section 15.2 refuses.",
+    ),
+    ResolutionCase(
+        name="a_type_filter_does_not_resolve_a_conflicted_identifier",
+        family="conflicted_identifier",
+        reference="shared.inbox@acme.test",
+        namespace=ExternalIdentifierNamespace.EMAIL,
+        entity_type=EntityType.ORGANIZATION,
+        expected_outcome=ResolutionOutcome.CONFLICTED_IDENTIFIER,
+        must_include=frozenset({CHEN_PARTNERS}),
+        note=(
+            "The regression case. Exactly one organization claims this address, "
+            "so a resolver that filtered by type before counting claimants would "
+            "answer resolved_exact here — confidently, and differently for a "
+            "caller who asked for a person."
+        ),
     ),
     ResolutionCase(
         name="a_recycled_mailbox_without_a_moment_is_a_stop",
@@ -288,17 +314,6 @@ RESOLUTION_CASES: Final[tuple[ResolutionCase, ...]] = (
         expected_outcome=ResolutionOutcome.HISTORICAL_MATCH,
         must_include=frozenset({DEPARTED_CONTRACTOR}),
         note="Found, and not current. The caller is told which.",
-    ),
-    ResolutionCase(
-        name="a_former_name_is_the_same_person",
-        family="former_name",
-        reference="Alice Nakamura",
-        expected_outcome=ResolutionOutcome.RESOLVED_EXACT,
-        expected_entity_id=ALICE_CHEN_ENGINEER,
-        note=(
-            "The case that catches a merely timid resolver: refusing this one "
-            "is as wrong as joining the two Alices."
-        ),
     ),
     ResolutionCase(
         name="nothing_matching_is_not_found",

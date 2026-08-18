@@ -88,8 +88,10 @@ def staged(scene: Scene) -> Scene:
     mine = scene.principal.principal_id
     theirs = "prn_ffff0009ffff0009ffff0009"
     with FakeUnitOfWork(scene.world) as unit_of_work:
-        unit_of_work.entities.create(_entity(OWN_ENTITY, INJECTION_NAME, mine))
-        unit_of_work.entities.create(_entity(FOREIGN_ENTITY, "Confidential Counterparty", theirs))
+        unit_of_work.entities.create(mine, _entity(OWN_ENTITY, INJECTION_NAME, mine))
+        unit_of_work.entities.create(
+            theirs, _entity(FOREIGN_ENTITY, "Confidential Counterparty", theirs)
+        )
     return scene
 
 
@@ -211,11 +213,15 @@ def test_no_entity_answer_carries_a_judgement_about_a_person(staged: Scene) -> N
         "risk",
         "trustworth",
     )
+    # Every entity capability, `ENTITIES_RELATIONSHIPS` included: the loop that
+    # used to be here omitted it, so `_relationship_view`'s payload was the one
+    # this file never scanned.
     for capability, command in (
         (Capability.ENTITIES_GET, GetEntity(entity_id=OWN_ENTITY)),
         (Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=OWN_ENTITY)),
         (Capability.ENTITIES_SEARCH, SearchEntities(query="Ignore")),
         (Capability.ENTITIES_RESOLVE, ResolveEntity(reference=INJECTION_NAME)),
+        (Capability.ENTITIES_RELATIONSHIPS, GetEntityRelationships(entity_id=OWN_ENTITY)),
     ):
         # The *result* payload, not the whole envelope. Every capability in this
         # build carries `disclosure.trust_basis`, which names what an answer

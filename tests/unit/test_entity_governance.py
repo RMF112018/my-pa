@@ -113,7 +113,7 @@ def test_an_unlinked_observation_is_an_unresolved_mention(
 def test_linking_an_observation_takes_it_off_the_unresolved_queue(
     world: World, governing: EntityGovernanceService
 ) -> None:
-    _entities(world).create(an_entity(ALICE))
+    _entities(world).create(PRINCIPAL, an_entity(ALICE))
     governing.observe(PRINCIPAL, an_observation())
     governing.link(PRINCIPAL, "eobs_aaaa0001aaaa0001", ALICE)
     assert governing.unresolved_mentions(PRINCIPAL) == []
@@ -123,7 +123,7 @@ def test_linking_an_observation_takes_it_off_the_unresolved_queue(
 def test_an_observation_cannot_be_linked_to_another_principals_entity(
     world: World, governing: EntityGovernanceService
 ) -> None:
-    _entities(world).create(an_entity(ALICE, principal_id=OTHER))
+    _entities(world).create(OTHER, an_entity(ALICE, principal_id=OTHER))
     governing.observe(PRINCIPAL, an_observation())
     with pytest.raises(Exception, match="scope"):
         governing.link(PRINCIPAL, "eobs_aaaa0001aaaa0001", ALICE)
@@ -154,8 +154,8 @@ def test_an_observation_does_not_carry_its_observed_value_into_a_repr() -> None:
 
 
 def test_proposing_changes_nothing(world: World, governing: EntityGovernanceService) -> None:
-    _entities(world).create(an_entity(ALICE))
-    _entities(world).create(an_entity(ALICE_TWO, "Alice Chen"))
+    _entities(world).create(PRINCIPAL, an_entity(ALICE))
+    _entities(world).create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Chen"))
     governing.propose(
         PRINCIPAL,
         proposal_id="eprp_aaaa0001aaaa0001",
@@ -223,8 +223,8 @@ def test_a_proposal_cannot_name_its_own_review_requirement() -> None:
 
 
 def _staged_merge(world: World, governing: EntityGovernanceService) -> None:
-    _entities(world).create(an_entity(ALICE))
-    _entities(world).create(an_entity(ALICE_TWO, "Alice Chen"))
+    _entities(world).create(PRINCIPAL, an_entity(ALICE))
+    _entities(world).create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Chen"))
     governing.propose(
         PRINCIPAL,
         proposal_id="eprp_aaaa0001aaaa0001",

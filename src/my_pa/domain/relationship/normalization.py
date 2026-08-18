@@ -41,15 +41,39 @@ from __future__ import annotations
 
 import re
 import unicodedata
-
-from my_pa.domain.relationship.entity import ExternalIdentifierNamespace
+from enum import StrEnum
 
 __all__ = [
     "CASE_FOLDED_NAMESPACES",
+    "ExternalIdentifierNamespace",
     "NormalizationError",
+    "is_normalized_identifier",
+    "is_normalized_name",
     "normalize_identifier",
     "normalize_name",
 ]
+
+
+class ExternalIdentifierNamespace(StrEnum):
+    """The external namespaces where an entity may hold an identity.
+
+    Declared here rather than beside `Entity`, because the namespace and the
+    rule for normalizing within it are one fact: the enum's whole meaning is
+    "which comparison applies". Keeping them apart forced the dependency the
+    wrong way round -- `entity` could not check that a stored value was
+    normalized without importing the module that imports it. Re-exported from
+    `domain.relationship.entity`, so every existing import still resolves.
+
+    Closed as of this revision; widening is a visible schema change.
+    """
+
+    EMAIL = "email"
+    ENTRA_OBJECT_ID = "entra_object_id"
+    TEAMS_USER_ID = "teams_user_id"
+    OUTLOOK_CONTACT_ID = "outlook_contact_id"
+    APPLE_CONTACT_ID = "apple_contact_id"
+    SOURCE_PARTICIPANT_ID = "source_participant_id"
+    VENDOR_SYSTEM_ID = "vendor_system_id"
 
 
 class NormalizationError(ValueError):
@@ -149,3 +173,27 @@ def normalize_identifier(namespace: ExternalIdentifierNamespace, value: str) -> 
     if namespace in CASE_FOLDED_NAMESPACES:
         return stripped.casefold()
     return stripped
+
+
+def is_normalized_name(value: str) -> bool:
+    """Whether `value` is already the form `normalize_name` produces.
+
+    The write-side half of this module. Every rule above is a rule about which
+    two *people* the system may treat as one, and until a writer was obliged to
+    honour them they were a query-side convention: a stored name that had been
+    normalized differently -- or not at all -- silently changed who a reference
+    resolved to, including turning a refusal into a match on a *neighbouring*
+    row. The records enforce it now, so the rules bind both sides.
+    """
+    try:
+        return normalize_name(value) == value
+    except NormalizationError:
+        return False
+
+
+def is_normalized_identifier(namespace: ExternalIdentifierNamespace, value: str) -> bool:
+    """Whether `value` is already the form `normalize_identifier` produces."""
+    try:
+        return normalize_identifier(namespace, value) == value
+    except NormalizationError:
+        return False

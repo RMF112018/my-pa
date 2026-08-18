@@ -2408,8 +2408,10 @@ class _Entities(EntitiesRepository):
 
     # --- writes ----------------------------------------------------------
 
-    def create(self, entity: Entity) -> Entity:
+    def create(self, principal_id: str, entity: Entity) -> Entity:
         self._world.fail("entities.create")
+        if entity.principal_id != principal_id:
+            raise ValueError("an entity belongs to the acting Principal")
         held = self._mine(entity.principal_id, entity.entity_id)
         if held is not None:
             if held != entity:
@@ -2463,10 +2465,17 @@ class _Entities(EntitiesRepository):
         self._world.entity_observations.append(observation)
 
     def observations(
-        self, principal_id: str, entity_id: str | None = None, *, unresolved_only: bool = False
+        self,
+        principal_id: str,
+        entity_id: str | None = None,
+        *,
+        unresolved_only: bool = False,
+        limit: int | None = None,
     ) -> list[EntityObservation]:
         self._world.fail("entities.observations")
-        return sorted(
+        if limit is not None and limit < 1:
+            raise ValueError("an observation limit asks for at least one row")
+        found = sorted(
             (
                 observation
                 for observation in self._world.entity_observations
@@ -2476,6 +2485,7 @@ class _Entities(EntitiesRepository):
             ),
             key=lambda observation: observation.observation_id,
         )
+        return found if limit is None else found[:limit]
 
     def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:
         self._world.fail("entities.link_observation")
@@ -2564,6 +2574,12 @@ class _Entities(EntitiesRepository):
         self._require_own(principal_id, merged_entity_id, retained_entity_id)
         if merged_entity_id == retained_entity_id:
             raise ValueError("an entity cannot be merged into itself")
+        # Mirrors `SqlEntityRepository.redirect_entity`. Held here as well
+        # because a fake that permitted the cycle would let a unit test assert
+        # the refusal and pass without one.
+        survivor = self.get(principal_id, retained_entity_id)
+        if survivor is None or survivor.status is EntityStatus.MERGED_REDIRECT:
+            raise ValueError("an entity is merged into one that is still current")
         for index, held in enumerate(self._world.entities):
             if held.entity_id == merged_entity_id and held.principal_id == principal_id:
                 self._world.entities[index] = replace(

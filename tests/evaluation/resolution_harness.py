@@ -265,7 +265,7 @@ class _CorpusRepository(EntitiesRepository):
 
     # --- writes, refused --------------------------------------------------
 
-    def create(self, entity: Entity) -> Entity:
+    def create(self, principal_id: str, entity: Entity) -> Entity:
         raise NotImplementedError("the evaluation corpus is frozen")
 
     def record_alias(self, principal_id: str, alias: EntityAlias) -> None:
@@ -293,7 +293,12 @@ class _CorpusRepository(EntitiesRepository):
         raise NotImplementedError("the evaluation corpus is frozen")
 
     def observations(
-        self, principal_id: str, entity_id: str | None = None, *, unresolved_only: bool = False
+        self,
+        principal_id: str,
+        entity_id: str | None = None,
+        *,
+        unresolved_only: bool = False,
+        limit: int | None = None,
     ) -> list[EntityObservation]:
         raise NotImplementedError("resolution reads no observation")
 
@@ -418,7 +423,13 @@ def compute_calibration_record() -> dict[str, object]:
     must_not_resolve = [result for result in results if result.case.expected_entity_id is None]
 
     false_resolutions = [result for result in results if result.is_false_resolution]
-    leaked = [result for result in results if result.leaked_ids]
+    # Two different measurements, and they were one under the wrong name. A
+    # forbidden candidate is any entity a case says must never be offered — most
+    # of them same-Principal collisions. Cross-Principal leakage is the subset
+    # that crossed a partition, which is a different severity and deserves its
+    # own number rather than being reported as whichever one a reader assumes.
+    forbidden = [result for result in results if result.leaked_ids]
+    leaked = [result for result in forbidden if result.case.family == "cross_principal"]
     missing = [result for result in results if result.missing_required_ids]
     mismatched = [result for result in results if not result.outcome_matches]
     resolved_correctly = [
@@ -438,6 +449,7 @@ def compute_calibration_record() -> dict[str, object]:
         "must_not_resolve_cases": len(must_not_resolve),
         "false_resolution_count": len(false_resolutions),
         "false_resolution_rate": _rate(len(false_resolutions), len(results)),
+        "forbidden_candidate_cases": len(forbidden),
         "cross_principal_leakage": len(leaked),
         "missing_required_candidate_cases": len(missing),
         "outcome_mismatch_count": len(mismatched),
@@ -451,7 +463,7 @@ def compute_calibration_record() -> dict[str, object]:
         "disposition": (
             RESOLUTION_SAFE
             if not false_resolutions
-            and not leaked
+            and not forbidden
             and not exact_resolutions_on_a_bare_name(results)
             and recall >= RECALL_FLOOR
             else RESOLUTION_UNSAFE

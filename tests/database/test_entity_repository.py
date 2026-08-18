@@ -120,7 +120,10 @@ def an_entity(
         entity_id=entity_id,
         principal_id=principal_id,
         entity_type=entity_type,
-        canonical_name=display_name.casefold(),
+        # `normalize_name`, not `casefold`: the record refuses a canonical name
+        # that is not already the form resolution compares in, and "100%
+        # Synthetic" case-folds to something that still carries the `%`.
+        canonical_name=normalize_name(display_name),
         display_name=display_name,
         status=EntityStatus.ACTIVE,
         created_at=WHEN,
@@ -134,9 +137,11 @@ def two_principals(migrated_engine: Engine) -> Engine:
     """Alice and Acme belong to A; Bob belongs to B. Every read below has a decoy."""
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
-        repository.create(an_entity(ACME, PRINCIPAL_A, "Acme Synthetic", EntityType.ORGANIZATION))
-        repository.create(an_entity(BOB, PRINCIPAL_B, "Bob Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(
+            PRINCIPAL_A, an_entity(ACME, PRINCIPAL_A, "Acme Synthetic", EntityType.ORGANIZATION)
+        )
+        repository.create(PRINCIPAL_B, an_entity(BOB, PRINCIPAL_B, "Bob Synthetic"))
     return migrated_engine
 
 
@@ -181,8 +186,8 @@ def test_a_search_term_containing_a_wildcard_stays_literal(migrated_engine: Engi
     """A caller who typed `%` gets the entities whose names contain `%`, not all of them."""
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
-        repository.create(an_entity(ACME, PRINCIPAL_A, "100% Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ACME, PRINCIPAL_A, "100% Synthetic"))
     with migrated_engine.connect() as connection:
         wildcard = SqlEntityRepository(connection).search(PRINCIPAL_A, "%")
     assert [summary.entity_id for summary in wildcard] == [ACME]
@@ -285,7 +290,7 @@ def test_a_record_stamped_with_another_principal_writes_nothing(
 def test_a_created_entity_reads_back_with_every_field(migrated_engine: Engine) -> None:
     entity = an_entity(ALICE, PRINCIPAL_A)
     with migrated_engine.begin() as connection:
-        SqlEntityRepository(connection).create(entity)
+        SqlEntityRepository(connection).create(PRINCIPAL_A, entity)
     with migrated_engine.connect() as connection:
         stored = SqlEntityRepository(connection).get(PRINCIPAL_A, ALICE)
     assert stored == entity
@@ -295,8 +300,8 @@ def test_creating_the_same_entity_twice_writes_one_row(migrated_engine: Engine) 
     entity = an_entity(ALICE, PRINCIPAL_A)
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        first = repository.create(entity)
-        second = repository.create(entity)
+        first = repository.create(PRINCIPAL_A, entity)
+        second = repository.create(PRINCIPAL_A, entity)
     assert first == second
     assert _row_count(migrated_engine, "entities") == 1
 
@@ -305,12 +310,16 @@ def test_reusing_an_entity_identifier_for_different_values_is_refused(
     migrated_engine: Engine,
 ) -> None:
     with migrated_engine.begin() as connection:
-        SqlEntityRepository(connection).create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        SqlEntityRepository(connection).create(
+            PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic")
+        )
     with (
         pytest.raises(ValueError, match="cannot be rebound"),
         migrated_engine.begin() as connection,
     ):
-        SqlEntityRepository(connection).create(an_entity(ALICE, PRINCIPAL_A, "Someone Else"))
+        SqlEntityRepository(connection).create(
+            PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Someone Else")
+        )
 
 
 def test_binding_the_same_external_identity_twice_writes_one_row(
@@ -324,7 +333,7 @@ def test_binding_the_same_external_identity_twice_writes_one_row(
     """
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
         for identifier_id in ("xid_aaaa0001aaaa0001", "xid_bbbb0002bbbb0002"):
             repository.bind_identifier(
                 PRINCIPAL_A,
@@ -350,7 +359,7 @@ def test_the_same_value_in_two_namespaces_is_two_identifiers(
     """The natural key includes the namespace, so it does not conflate them."""
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
         for identifier_id, namespace in (
             ("xid_aaaa0001aaaa0001", ExternalIdentifierNamespace.EMAIL),
             ("xid_bbbb0002bbbb0002", ExternalIdentifierNamespace.VENDOR_SYSTEM_ID),
@@ -373,8 +382,10 @@ def test_the_same_value_in_two_namespaces_is_two_identifiers(
 def test_an_assignment_reads_back_and_respects_active_only(migrated_engine: Engine) -> None:
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A))
-        repository.create(an_entity(TOWER, PRINCIPAL_A, "Alice Tower", EntityType.PROJECT))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(
+            PRINCIPAL_A, an_entity(TOWER, PRINCIPAL_A, "Alice Tower", EntityType.PROJECT)
+        )
         for assignment_id, status in (
             ("asn_aaaa0001aaaa0001", "active"),
             ("asn_bbbb0002bbbb0002", "ended"),
@@ -404,8 +415,10 @@ def test_an_assignment_reads_back_and_respects_active_only(migrated_engine: Engi
 def test_relationships_are_enumerated_by_direction(migrated_engine: Engine) -> None:
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A))
-        repository.create(an_entity(ACME, PRINCIPAL_A, "Acme Synthetic", EntityType.ORGANIZATION))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(
+            PRINCIPAL_A, an_entity(ACME, PRINCIPAL_A, "Acme Synthetic", EntityType.ORGANIZATION)
+        )
         repository.record_relationship(
             PRINCIPAL_A,
             EntityRelationship(
@@ -438,8 +451,10 @@ def test_recording_the_same_relationship_twice_writes_one_row(migrated_engine: E
     )
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A))
-        repository.create(an_entity(ACME, PRINCIPAL_A, "Acme Synthetic", EntityType.ORGANIZATION))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(
+            PRINCIPAL_A, an_entity(ACME, PRINCIPAL_A, "Acme Synthetic", EntityType.ORGANIZATION)
+        )
         repository.record_relationship(PRINCIPAL_A, relationship)
         repository.record_relationship(PRINCIPAL_A, relationship)
     assert _row_count(migrated_engine, "entity_relationships") == 1
@@ -449,8 +464,8 @@ def test_two_principals_may_hold_entities_with_the_same_name(migrated_engine: En
     """Names are not identities, so a shared name is two rows rather than a conflict."""
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
-        repository.create(an_entity(BOB, PRINCIPAL_B, "Alice Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(PRINCIPAL_B, an_entity(BOB, PRINCIPAL_B, "Alice Synthetic"))
     with migrated_engine.connect() as connection:
         repository = SqlEntityRepository(connection)
         mine = repository.search(PRINCIPAL_A, "Alice Synthetic")
@@ -469,8 +484,8 @@ def test_one_principal_may_hold_two_entities_with_the_same_name(
     """
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
-        repository.create(an_entity(BOB, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Alice Synthetic"))
     with migrated_engine.connect() as connection:
         found = SqlEntityRepository(connection).search(PRINCIPAL_A, "Alice Synthetic")
     assert sorted(summary.entity_id for summary in found) == sorted([ALICE, BOB])
@@ -513,7 +528,7 @@ def _an_email(
 def test_a_joined_identifier_lookup_hydrates_both_records(migrated_engine: Engine) -> None:
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
         repository.bind_identifier(
             PRINCIPAL_A, ALICE, _an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test", True)
         )
@@ -534,7 +549,7 @@ def test_a_joined_identifier_lookup_hydrates_both_records(migrated_engine: Engin
 def test_a_joined_alias_lookup_hydrates_both_records(migrated_engine: Engine) -> None:
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
         repository.record_alias(PRINCIPAL_A, _an_alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
     with migrated_engine.connect() as connection:
         found = SqlEntityRepository(connection).entities_by_alias(PRINCIPAL_A, "ali")
@@ -553,7 +568,7 @@ def test_a_joined_lookup_cannot_reach_another_principals_entity(
     """The partition is applied to both sides of the join, not only to the entity."""
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(BOB, PRINCIPAL_B, "Bob Synthetic"))
+        repository.create(PRINCIPAL_B, an_entity(BOB, PRINCIPAL_B, "Bob Synthetic"))
         repository.record_alias(
             PRINCIPAL_B,
             EntityAlias(
@@ -576,7 +591,9 @@ def test_a_canonical_name_lookup_is_an_equality_not_a_substring(
 ) -> None:
     """`search` answers "who is like this"; resolution answers "who is this"."""
     with migrated_engine.begin() as connection:
-        SqlEntityRepository(connection).create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        SqlEntityRepository(connection).create(
+            PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic")
+        )
     with migrated_engine.connect() as connection:
         repository = SqlEntityRepository(connection)
         found = repository.entities_by_canonical_name(PRINCIPAL_A, "alice synthetic")
@@ -592,7 +609,7 @@ def test_resolution_resolves_a_verified_identifier_over_real_sql(
 ) -> None:
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
         repository.bind_identifier(
             PRINCIPAL_A, ALICE, _an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test", True)
         )
@@ -615,8 +632,8 @@ def test_resolution_refuses_two_people_who_share_a_name_over_real_sql(
     """The false join, attempted against the store that would have to hold it."""
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
-        repository.create(an_entity(BOB, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Alice Synthetic"))
     with migrated_engine.connect() as connection:
         answer = EntityResolutionService(SqlEntityRepository(connection)).resolve(
             PRINCIPAL_A, ResolutionRequest(raw_reference="Alice Synthetic")
@@ -632,8 +649,8 @@ def test_resolution_stops_on_a_conflicted_identifier_over_real_sql(
 ) -> None:
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
-        repository.create(an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
         for identifier_id, entity_id in (
             ("xid_aaaa0001aaaa0001", ALICE),
             ("xid_bbbb0002bbbb0002", BOB),
@@ -658,7 +675,7 @@ def test_resolution_stops_on_a_conflicted_identifier_over_real_sql(
 def test_resolution_cannot_cross_the_partition_over_real_sql(migrated_engine: Engine) -> None:
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(an_entity(BOB, PRINCIPAL_B, "Bob Synthetic"))
+        repository.create(PRINCIPAL_B, an_entity(BOB, PRINCIPAL_B, "Bob Synthetic"))
         repository.bind_identifier(
             PRINCIPAL_B,
             BOB,
@@ -680,3 +697,80 @@ def test_resolution_cannot_cross_the_partition_over_real_sql(migrated_engine: En
             ),
         )
     assert answer.outcome is ResolutionOutcome.NOT_FOUND
+
+
+# --- redirects always arrive somewhere ---------------------------------------
+
+
+def test_a_redirect_points_at_the_survivor(migrated_engine: Engine) -> None:
+    """The happy path, asserted first so the refusals below mean something."""
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        repository.redirect_entity(PRINCIPAL_A, BOB, ALICE)
+    with migrated_engine.connect() as connection:
+        merged = SqlEntityRepository(connection).get(PRINCIPAL_A, BOB)
+    assert merged is not None
+    assert merged.status is EntityStatus.MERGED_REDIRECT
+    assert merged.superseded_by_entity_id == ALICE
+
+
+def test_a_redirect_cycle_is_refused(migrated_engine: Engine) -> None:
+    """Merging back the other way would make each pointer arrive at the other.
+
+    `superseded_by_entity_id` is what the runbook tells an operator to follow
+    out of a `HISTORICAL_MATCH`. A cycle makes that instruction non-terminating,
+    and the declaration's own claim that "a redirect always resolves" false.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        repository.redirect_entity(PRINCIPAL_A, BOB, ALICE)
+        with pytest.raises(ValueError, match="still current"):
+            repository.redirect_entity(PRINCIPAL_A, ALICE, BOB)
+
+
+def test_a_redirect_chain_is_refused(migrated_engine: Engine) -> None:
+    """Merging onto an already-merged entity would need two hops, not one.
+
+    Separate from the cycle above because a chain terminates -- it is simply a
+    pointer the single-hop reader this product ships never follows to the end,
+    so a caller lands on an entity that is itself not current and is told
+    nothing about it.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ACME, PRINCIPAL_A, "Carla Synthetic"))
+        repository.redirect_entity(PRINCIPAL_A, BOB, ALICE)
+        with pytest.raises(ValueError, match="still current"):
+            repository.redirect_entity(PRINCIPAL_A, ACME, BOB)
+
+
+def test_a_redirect_at_an_entity_that_does_not_exist_is_refused(
+    migrated_engine: Engine,
+) -> None:
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        with pytest.raises(UnknownScopeError):
+            repository.redirect_entity(PRINCIPAL_A, BOB, ALICE)
+
+
+def test_a_redirect_into_another_principals_entity_is_refused(
+    two_principals: Engine,
+) -> None:
+    """A merge across the partition would be the join the partition prevents.
+
+    `BOB` belongs to Principal B. A holding `ACME` cannot redirect it there, and
+    the refusal comes from the same ownership check both directions use.
+    """
+    with two_principals.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        with pytest.raises(UnknownScopeError):
+            repository.redirect_entity(PRINCIPAL_A, ACME, BOB)
+        with pytest.raises(UnknownScopeError):
+            repository.redirect_entity(PRINCIPAL_A, BOB, ACME)

@@ -351,7 +351,7 @@ def test_a_verified_identifier_resolves_exactly(
     world: World, resolving: EntityResolutionService
 ) -> None:
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     entities.bind_identifier(
         PRINCIPAL, ALICE, an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test", True)
     )
@@ -371,7 +371,7 @@ def test_an_unverified_identifier_resolves_but_says_so(
     world: World, resolving: EntityResolutionService
 ) -> None:
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     entities.bind_identifier(
         PRINCIPAL, ALICE, an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test")
     )
@@ -390,8 +390,8 @@ def test_one_identifier_claimed_by_two_entities_is_a_stop(
 ) -> None:
     """Section 15.2: conflicting identifiers prevent an automatic join."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
-    entities.create(an_entity(ALICE_TWO, "Alice Other"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Other"))
     for identifier_id, entity_id in (
         ("xid_aaaa0001aaaa0001", ALICE),
         ("xid_bbbb0002bbbb0002", ALICE_TWO),
@@ -416,7 +416,7 @@ def test_an_identifier_outside_its_effective_dates_does_not_resolve(
 ) -> None:
     """A mailbox someone else has since been given must not still name its old holder."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     entities.bind_identifier(
         PRINCIPAL,
         ALICE,
@@ -445,7 +445,7 @@ def test_an_identifier_within_its_effective_dates_resolves(
     world: World, resolving: EntityResolutionService
 ) -> None:
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     entities.bind_identifier(
         PRINCIPAL,
         ALICE,
@@ -474,14 +474,15 @@ def test_an_identifier_on_a_merged_entity_is_a_historical_match(
 ) -> None:
     """The caller is told the record is not current rather than handed it as live."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE_TWO, "Alice Survivor"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Survivor"))
     entities.create(
+        PRINCIPAL,
         an_entity(
             ALICE,
             "Alice Synthetic",
             status=EntityStatus.MERGED_REDIRECT,
             superseded_by=ALICE_TWO,
-        )
+        ),
     )
     entities.bind_identifier(
         PRINCIPAL, ALICE, an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test", True)
@@ -507,7 +508,7 @@ def test_a_lone_name_match_is_ambiguous_not_resolved(
     evidence that this reference means that entity. Uniqueness is a fact about
     the database, not about the person.
     """
-    _Entities(world).create(an_entity(ALICE, "Alice Synthetic"))
+    _Entities(world).create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic"))
     assert answer.outcome is ResolutionOutcome.AMBIGUOUS
     assert answer.resolved_entity_id is None
@@ -519,8 +520,8 @@ def test_two_entities_sharing_a_name_are_ambiguous(
 ) -> None:
     """Same-name protection: neither is chosen, and both are shown."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
-    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
     answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="alice synthetic"))
     assert answer.outcome is ResolutionOutcome.AMBIGUOUS
     assert answer.resolved_entity_id is None
@@ -531,7 +532,7 @@ def test_two_entities_sharing_a_name_are_ambiguous(
 def test_an_alias_match_resolves(world: World, resolving: EntityResolutionService) -> None:
     """An alias is a recorded fact about the entity; a bare canonical name is not."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     entities.record_alias(PRINCIPAL, an_alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
     answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Ali"))
     assert answer.outcome is ResolutionOutcome.RESOLVED_EXACT
@@ -543,8 +544,8 @@ def test_two_entities_sharing_an_alias_are_ambiguous(
     world: World, resolving: EntityResolutionService
 ) -> None:
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
-    entities.create(an_entity(ALICE_TWO, "Alicia Other"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alicia Other"))
     entities.record_alias(PRINCIPAL, an_alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
     entities.record_alias(PRINCIPAL, an_alias("eals_bbbb0002bbbb0002", ALICE_TWO, "Ali"))
     answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Ali"))
@@ -557,7 +558,7 @@ def test_an_alias_outside_its_effective_dates_is_excluded(
 ) -> None:
     """A former name matches history, not the present, when a moment was asked about."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     entities.record_alias(
         PRINCIPAL,
         an_alias(
@@ -578,8 +579,8 @@ def test_an_entity_type_filter_excludes_a_same_named_entity_of_another_kind(
 ) -> None:
     """A caller asking for a project does not want the person who shares its name."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Tower"))
-    entities.create(an_entity(TOWER, "Tower", entity_type=EntityType.PROJECT))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Tower"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Tower", entity_type=EntityType.PROJECT))
     entities.record_alias(PRINCIPAL, an_alias("eals_aaaa0001aaaa0001", TOWER, "Tower"))
     answer = resolving.resolve(
         PRINCIPAL, ResolutionRequest(raw_reference="Tower", entity_type=EntityType.PROJECT)
@@ -592,9 +593,9 @@ def test_a_scope_narrows_two_same_named_people_to_one(
 ) -> None:
     """Contextual resolution, and it is reported as contextual rather than exact."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
-    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
-    entities.create(an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
     entities.record_assignment(
         PRINCIPAL,
         Assignment(
@@ -623,9 +624,9 @@ def test_a_scope_that_narrows_nothing_leaves_the_answer_ambiguous(
     `RESOLVED_CONTEXTUAL` for a coin flip.
     """
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
-    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
-    entities.create(an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
     for assignment_id, entity_id in (
         ("asn_aaaa0001aaaa0001", ALICE),
         ("asn_bbbb0002bbbb0002", ALICE_TWO),
@@ -652,9 +653,9 @@ def test_a_scope_that_excludes_everyone_leaves_the_answer_ambiguous(
 ) -> None:
     """Narrowing to nothing is not evidence; the unnarrowed candidates are returned."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
-    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
-    entities.create(an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
     answer = resolving.resolve(
         PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER)
     )
@@ -663,7 +664,7 @@ def test_a_scope_that_excludes_everyone_leaves_the_answer_ambiguous(
 
 
 def test_nothing_matching_is_not_found(world: World, resolving: EntityResolutionService) -> None:
-    _Entities(world).create(an_entity(ALICE, "Alice Synthetic"))
+    _Entities(world).create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Nobody At All"))
     assert answer.outcome is ResolutionOutcome.NOT_FOUND
     assert answer.candidates == ()
@@ -674,7 +675,7 @@ def test_an_identifier_that_matches_nothing_falls_through_to_the_name(
 ) -> None:
     """A reference that matched no mailbox may still be a name."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "alice@example.test"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "alice@example.test"))
     entities.record_alias(PRINCIPAL, an_alias("eals_aaaa0001aaaa0001", ALICE, "alice@example.test"))
     answer = resolving.resolve(
         PRINCIPAL,
@@ -691,7 +692,7 @@ def test_resolution_cannot_reach_another_principals_entity(
 ) -> None:
     """The partition holds through resolution, not only through the repository."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic", principal_id=OTHER))
+    entities.create(OTHER, an_entity(ALICE, "Alice Synthetic", principal_id=OTHER))
     answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic"))
     assert answer.outcome is ResolutionOutcome.NOT_FOUND
 
@@ -701,7 +702,7 @@ def test_every_candidate_carries_the_evidence_for_it(
 ) -> None:
     """Explainability: an answer no one can check is an answer no one should act on."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     entities.record_alias(PRINCIPAL, an_alias("eals_aaaa0001aaaa0001", ALICE, "Alice Synthetic"))
     answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic"))
     assert answer.candidates
@@ -717,8 +718,8 @@ def test_candidates_are_presented_strongest_evidence_first(
     world: World, resolving: EntityResolutionService
 ) -> None:
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
-    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
     entities.record_alias(
         PRINCIPAL, an_alias("eals_bbbb0002bbbb0002", ALICE_TWO, "Alice Synthetic")
     )
@@ -740,9 +741,9 @@ def test_a_contextual_resolution_carries_the_signal_that_selected_it(
 ) -> None:
     """An unexplained selection is not explainable, whatever else it is."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
-    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
-    entities.create(an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
     entities.record_assignment(
         PRINCIPAL,
         Assignment(
@@ -765,9 +766,9 @@ def test_a_relationship_reaching_the_scope_is_its_own_signal(
     world: World, resolving: EntityResolutionService
 ) -> None:
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
-    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
-    entities.create(an_entity(SECOND_ORG, "Acme", entity_type=EntityType.ORGANIZATION))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(SECOND_ORG, "Acme", entity_type=EntityType.ORGANIZATION))
     entities.record_relationship(
         PRINCIPAL,
         EntityRelationship(
@@ -790,9 +791,9 @@ def test_context_true_of_everyone_is_disclosed_as_having_distinguished_nobody(
 ) -> None:
     """Noticing and declining is a different disclosure from never looking."""
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
-    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
-    entities.create(an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
     for assignment_id, entity_id in (
         ("asn_aaaa0001aaaa0001", ALICE),
         ("asn_bbbb0002bbbb0002", ALICE_TWO),
@@ -826,10 +827,10 @@ def test_narrowing_to_two_is_still_ambiguous(
     "the context decided" would answer here, and would be wrong half the time.
     """
     entities = _Entities(world)
-    entities.create(an_entity(ALICE, "Alice Synthetic"))
-    entities.create(an_entity(ALICE_TWO, "Alice Synthetic"))
-    entities.create(an_entity(THIRD, "Alice Synthetic"))
-    entities.create(an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(THIRD, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
     for assignment_id, entity_id in (
         ("asn_aaaa0001aaaa0001", ALICE),
         ("asn_bbbb0002bbbb0002", ALICE_TWO),
@@ -860,7 +861,9 @@ def test_an_answer_carrying_more_candidates_than_the_bound_is_truncated_and_says
     """A truncated list that reads as complete is the failure section 26.4 names."""
     entities = _Entities(world)
     for index in range(RESOLUTION_CANDIDATE_LIMIT + 3):
-        entities.create(an_entity(f"ent_crowd{index:04d}crowd{index:04d}", "Alice Synthetic"))
+        entities.create(
+            PRINCIPAL, an_entity(f"ent_crowd{index:04d}crowd{index:04d}", "Alice Synthetic")
+        )
     answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic"))
     assert answer.outcome is ResolutionOutcome.AMBIGUOUS
     assert len(answer.candidates) == RESOLUTION_CANDIDATE_LIMIT
@@ -875,7 +878,7 @@ def test_a_truncated_answer_can_never_be_a_resolution(
     entities = _Entities(world)
     for index in range(RESOLUTION_CANDIDATE_LIMIT + 1):
         entity_id = f"ent_crowd{index:04d}crowd{index:04d}"
-        entities.create(an_entity(entity_id, "Alice Synthetic"))
+        entities.create(PRINCIPAL, an_entity(entity_id, "Alice Synthetic"))
         entities.record_alias(
             PRINCIPAL, an_alias(f"eals_crowd{index:04d}crowd{index:04d}", entity_id, "Ali")
         )
@@ -912,4 +915,137 @@ def test_a_signal_outside_the_closed_vocabulary_is_refused() -> None:
             status=EntityStatus.ACTIVE,
             evidence=(an_evidence(),),
             signals=("assigned_to_the_named_scope",),  # type: ignore[arg-type]
+        )
+
+
+# --- regressions found by adversarial review --------------------------------
+
+
+def test_an_entity_type_filter_cannot_collapse_a_conflicted_identifier(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A conflict is a property of the data, not of the question asked about it.
+
+    The shape that found this: one shared mailbox recorded against a person and
+    against the organization. Filtering by type before counting claimants made
+    each filtered view see exactly one, so the same address resolved *exactly*
+    to the person for one caller and to the organization for the next, with no
+    warning at all. Both callers would have been told a confident wrong answer.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Office Manager"))
+    entities.create(PRINCIPAL, an_entity(SECOND_ORG, "Acme", entity_type=EntityType.ORGANIZATION))
+    for identifier_id, entity_id in (
+        ("xid_aaaa0001aaaa0001", ALICE),
+        ("xid_bbbb0002bbbb0002", SECOND_ORG),
+    ):
+        entities.bind_identifier(
+            PRINCIPAL, entity_id, an_email(identifier_id, entity_id, "info@acme.test", True)
+        )
+    for entity_type in (None, EntityType.PERSON, EntityType.ORGANIZATION):
+        answer = resolving.resolve(
+            PRINCIPAL,
+            ResolutionRequest(
+                raw_reference="info@acme.test",
+                namespace=ExternalIdentifierNamespace.EMAIL,
+                entity_type=entity_type,
+            ),
+        )
+        assert answer.outcome is ResolutionOutcome.CONFLICTED_IDENTIFIER, entity_type
+        assert answer.resolved_entity_id is None, entity_type
+        assert ResolutionWarning.IDENTIFIER_CLAIMED_BY_SEVERAL_ENTITIES in answer.warnings
+
+
+def test_a_lone_corroborated_candidate_resolves_without_needing_a_rival(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """More evidence must not produce a weaker answer.
+
+    Keying the decision on "did the scope exclude anyone" meant that *adding a
+    duplicate row* upgraded a refusal into a resolution: one Alice on the named
+    project answered `AMBIGUOUS`, and the same Alice with a same-named stranger
+    beside her answered `RESOLVED_CONTEXTUAL`. Non-uniqueness was licensing the
+    join — the inverse of this plane's own rule.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.record_assignment(
+        PRINCIPAL,
+        Assignment(
+            assignment_id="asn_aaaa0001aaaa0001",
+            entity_id=ALICE,
+            assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+            principal_id=PRINCIPAL,
+            scope_entity_id=TOWER,
+        ),
+    )
+    answer = resolving.resolve(
+        PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER)
+    )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.resolved_entity_id == ALICE
+    assert answer.candidates[0].signals == (ContextualSignal.ASSIGNED_TO_THE_NAMED_SCOPE,)
+
+
+def test_a_scope_true_of_nobody_is_disclosed_rather_than_silent(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A scope that matched nobody used to be indistinguishable from silence.
+
+    The warning fired only when some candidate carried a signal, so the case
+    where the scope fit none of them — the likeliest sign the caller named the
+    wrong scope — was the one case that said nothing.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    answer = resolving.resolve(
+        PRINCIPAL, ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER)
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert ResolutionWarning.CONTEXT_DID_NOT_DISTINGUISH_THE_CANDIDATES in answer.warnings
+
+
+def test_a_record_cannot_store_a_value_resolution_would_never_match(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The write-side half of the matching policy.
+
+    A single entity whose `canonical_name` was stored unnormalized removed
+    *itself* from the candidate set and thereby promoted its same-named
+    neighbour from an ambiguous refusal to a confident wrong answer. The records
+    refuse it now, so the rules in `relationship.normalization` bind the writer
+    as well as the query.
+    """
+    with pytest.raises(ValueError, match="already normalized"):
+        Entity(
+            entity_id=ALICE_TWO,
+            principal_id=PRINCIPAL,
+            entity_type=EntityType.PERSON,
+            canonical_name="Alice Synthetic",
+            display_name="Alice Synthetic",
+            status=EntityStatus.ACTIVE,
+            created_at=WHEN,
+            updated_at=WHEN,
+            version=1,
+        )
+    with pytest.raises(ValueError, match="already normalized"):
+        an_alias("eals_aaaa0001aaaa0001", ALICE, "Ali").__class__(
+            alias_id="eals_bbbb0002bbbb0002",
+            entity_id=ALICE,
+            alias_type=AliasType.NICKNAME,
+            normalized_value="O'Brien",
+            display_value="O'Brien",
+            principal_id=PRINCIPAL,
+        )
+    with pytest.raises(ValueError, match="already normalized"):
+        ExternalIdentifier(
+            identifier_id="xid_cccc0003cccc0003",
+            entity_id=ALICE,
+            namespace=ExternalIdentifierNamespace.EMAIL,
+            normalized_value="Alice@Example.TEST",
+            display_value="Alice@Example.TEST",
+            principal_id=PRINCIPAL,
         )

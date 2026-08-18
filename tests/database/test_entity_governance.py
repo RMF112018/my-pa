@@ -14,6 +14,7 @@ row an autonomous merge would leave behind, and the database refuses to hold it.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
@@ -27,8 +28,10 @@ from sqlalchemy.exc import IntegrityError
 
 from my_pa.application.entity_governance import EntityGovernanceService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.governance import (
+    EntityMergeRecord,
     EntityObservation,
     EntityProposalKind,
     EntityProposalState,
@@ -133,9 +136,9 @@ def _observation(
 def two_principals(migrated_engine: Engine) -> Engine:
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(_entity(ALICE))
-        repository.create(_entity(ALICE_TWO, name="Alice Chen"))
-        repository.create(_entity("ent_cccc0003cccc0003", PRINCIPAL_B, "Bob Chen"))
+        repository.create(PRINCIPAL_A, _entity(ALICE))
+        repository.create(PRINCIPAL_A, _entity(ALICE_TWO, name="Alice Chen"))
+        repository.create(PRINCIPAL_B, _entity("ent_cccc0003cccc0003", PRINCIPAL_B, "Bob Chen"))
     return migrated_engine
 
 
@@ -458,3 +461,123 @@ def test_a_merged_entity_still_resolves_historically(two_principals: Engine) -> 
     assert answer.outcome is ResolutionOutcome.HISTORICAL_MATCH
     assert answer.resolved_entity_id is None
     assert answer.candidates[0].superseded_by_entity_id == ALICE
+
+
+# --- a decision is a one-time act -------------------------------------------
+
+
+def test_the_repository_refuses_to_decide_a_proposal_a_second_time(
+    two_principals: Engine,
+) -> None:
+    """Defence in depth, asserted at the layer that holds it.
+
+    `EntityGovernanceService` already refuses with `ProposalNotOpenError`, and
+    that check reads the proposal and then writes — two statements, so two
+    callers can both read "open" and both write. The repository's `UPDATE` now
+    carries `state = 'proposed'` in its own predicate, which is where that race
+    is actually settled. Driven through `SqlEntityRepository` directly, because
+    going through the service would prove only the service's check.
+
+    What the second write would otherwise do is replace `decided_by`,
+    `decided_at` and the reason: the record of who decided and why becomes
+    whoever called last, and a rejected merge can be re-accepted with nothing
+    left to show it was ever refused.
+    """
+    _propose(two_principals)
+    with two_principals.begin() as connection:
+        EntityGovernanceService(SqlEntityRepository(connection)).reject(
+            PRINCIPAL_A,
+            "eprp_aaaa0001aaaa0001",
+            decided_by="the operator",
+            decided_at=WHEN,
+            reason="different people",
+        )
+    with two_principals.connect() as connection:
+        decided = SqlEntityRepository(connection).proposal(PRINCIPAL_A, "eprp_aaaa0001aaaa0001")
+    assert decided is not None
+
+    with (
+        pytest.raises(UnknownScopeError, match="open proposal"),
+        two_principals.begin() as connection,
+    ):
+        SqlEntityRepository(connection).decide_proposal(
+            PRINCIPAL_A,
+            replace(
+                decided,
+                state=EntityProposalState.ACCEPTED,
+                decided_by="someone else",
+                decision_reason="on reflection",
+            ),
+        )
+
+    with two_principals.connect() as connection:
+        held = SqlEntityRepository(connection).proposal(PRINCIPAL_A, "eprp_aaaa0001aaaa0001")
+    assert held is not None
+    assert held.state is EntityProposalState.REJECTED
+    assert held.decided_by == "the operator"
+    assert held.decision_reason == "different people"
+
+
+def test_a_merge_record_cannot_cite_another_principals_proposal(
+    two_principals: Engine,
+) -> None:
+    """`proposal_id` reads as the authority for the merge, so it is partitioned.
+
+    The foreign key alone only proves the proposal exists *somewhere*. A record
+    citing Principal B's proposal would present B's decision as A's own — a
+    lineage row that looks like authority and is not. Nothing above catches it:
+    the entities are A's, the record is A's, and only the citation crosses.
+    """
+    with two_principals.begin() as connection:
+        EntityGovernanceService(SqlEntityRepository(connection)).propose(
+            PRINCIPAL_B,
+            proposal_id="eprp_bbbb0002bbbb0002",
+            kind=EntityProposalKind.MERGE_ENTITIES,
+            payload={"retained_entity_id": "ent_cccc0003cccc0003"},
+            observation_ids=(),
+            proposed_by="resolver",
+            proposed_at=WHEN,
+        )
+    with (
+        pytest.raises(UnknownScopeError, match="cites a proposal"),
+        two_principals.begin() as connection,
+    ):
+        SqlEntityRepository(connection).record_merge(
+            PRINCIPAL_A,
+            EntityMergeRecord(
+                merge_id="emrg_aaaa0001aaaa0001",
+                principal_id=PRINCIPAL_A,
+                retained_entity_id=ALICE,
+                merged_entity_id=ALICE_TWO,
+                proposal_id="eprp_bbbb0002bbbb0002",
+                decided_by="the operator",
+                reason="borrowed authority",
+                decided_at=WHEN,
+            ),
+        )
+    with two_principals.connect() as connection:
+        assert SqlEntityRepository(connection).merges(PRINCIPAL_A) == []
+
+
+def test_an_observation_read_honours_its_limit_at_the_server(two_principals: Engine) -> None:
+    """The `LIMIT` is on the statement, not a slice of a full result set.
+
+    `EntityContextService` caps how many observations it reads to compute
+    coverage, and the whole point of the cap is that the surplus rows never
+    leave the server. Asserted here because an in-memory double returns the same
+    card either way, so nothing in the FAST tier can tell a `LIMIT` from a
+    slice.
+    """
+    with two_principals.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        for index in range(5):
+            repository.record_observation(
+                PRINCIPAL_A, _observation(f"eobs_{index:05d}aaaa0001aaa", ALICE)
+            )
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        assert len(repository.observations(PRINCIPAL_A, ALICE)) == 5
+        assert len(repository.observations(PRINCIPAL_A, ALICE, limit=2)) == 2
+        assert len(repository.observations(PRINCIPAL_A, limit=3)) == 3
+        with pytest.raises(ValueError, match="at least one row"):
+            repository.observations(PRINCIPAL_A, ALICE, limit=0)

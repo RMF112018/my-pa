@@ -340,9 +340,15 @@ class EntitiesRepository(ABC):
 
         A case-insensitive substring match over `canonical_name` and
         `display_name`, scoped by `principal_id` and optionally by
-        `entity_type`.  Aliases are *not* searched, because no alias table
-        exists yet; the work package that adds one widens this method rather
-        than leaving the gap unstated here.
+        `entity_type`. Aliases are *not* searched, and that is now a decision
+        rather than a gap: `entity_aliases` has existed since `b7f4d1a92c36`,
+        and this method still reads only the two name columns.
+
+        Searching aliases would put a nickname, a maiden name and a former
+        legal name into a browse result that nobody asked a question about --
+        the disclosure `entities.resolve` makes deliberately, made incidentally
+        here. A caller who wants alias matching asks the question that means
+        it: `entities.resolve` matches aliases and says so in its evidence.
         """
 
     @abstractmethod
@@ -355,8 +361,14 @@ class EntitiesRepository(ABC):
         """
 
     @abstractmethod
-    def create(self, entity: Entity) -> Entity:
+    def create(self, principal_id: str, entity: Entity) -> Entity:
         """Insert one entity row, or return the identical existing one.
+
+        `principal_id` is a parameter here for the reason it is on every other
+        write: without it this method took its partition from a field on the
+        object handed to it, compared against nothing — so the one method that
+        brings a person into existence was the one method that could not refuse
+        a foreign Principal, while the port's own preamble said none could.
 
         Idempotent against the entity's own identifier: a repeat carrying the
         same values returns the stored row, and a repeat carrying different
@@ -429,13 +441,30 @@ class EntitiesRepository(ABC):
 
     @abstractmethod
     def observations(
-        self, principal_id: str, entity_id: str | None = None, *, unresolved_only: bool = False
+        self,
+        principal_id: str,
+        entity_id: str | None = None,
+        *,
+        unresolved_only: bool = False,
+        limit: int | None = None,
     ) -> list[EntityObservation]:
         """Observations in this Principal's partition.
 
         `entity_id` selects those linked to one entity. `unresolved_only`
         selects those linked to none, which is the unresolved-mention queue and
         the reason `entity_id` is nullable at all.
+
+        `limit` caps how many rows come back, as a `LIMIT` on the query rather
+        than a slice of the result -- this is the one table on the plane that
+        grows with every source record that ever mentioned anyone, so an
+        implementation that fetched everything and truncated would have already
+        paid the cost the cap exists to avoid.
+
+        `None` is genuinely unbounded, and is right only where a short answer
+        would be a misleading one: the unresolved-mention queue, where a caller
+        shown a truncated list with nothing saying so would believe they had
+        reached the end. Everywhere else a caller passes a limit -- and is
+        expected to disclose in its own answer that it did.
         """
 
     @abstractmethod

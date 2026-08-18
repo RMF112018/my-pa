@@ -200,8 +200,8 @@ def an_entity(entity_id: str, principal_id: str, name: str = "Synthetic Person")
 def two_principals(world: World) -> World:
     """One entity for each of two Principals, so every read below has a decoy."""
     with FakeUnitOfWork(world) as unit_of_work:
-        unit_of_work.entities.create(an_entity(ENTITY, PRINCIPAL, "Alice Synthetic"))
-        unit_of_work.entities.create(an_entity(SECOND, OTHER, "Bob Synthetic"))
+        unit_of_work.entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL, "Alice Synthetic"))
+        unit_of_work.entities.create(OTHER, an_entity(SECOND, OTHER, "Bob Synthetic"))
     return world
 
 
@@ -233,7 +233,7 @@ def test_a_search_matches_the_display_name_as_well_as_the_canonical_one(
 
 def test_a_search_filters_by_entity_type(world: World) -> None:
     with FakeUnitOfWork(world) as unit_of_work:
-        unit_of_work.entities.create(an_entity(ENTITY, PRINCIPAL, "Alice Synthetic"))
+        unit_of_work.entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL, "Alice Synthetic"))
         project = Entity(
             entity_id=SECOND,
             principal_id=PRINCIPAL,
@@ -245,7 +245,7 @@ def test_a_search_filters_by_entity_type(world: World) -> None:
             updated_at=WHEN,
             version=1,
         )
-        unit_of_work.entities.create(project)
+        unit_of_work.entities.create(PRINCIPAL, project)
         people = unit_of_work.entities.search(PRINCIPAL, "alice", entity_type=EntityType.PERSON)
         projects = unit_of_work.entities.search(PRINCIPAL, "alice", entity_type=EntityType.PROJECT)
     assert [summary.entity_id for summary in people] == [ENTITY]
@@ -255,8 +255,8 @@ def test_a_search_filters_by_entity_type(world: World) -> None:
 def test_creating_the_same_entity_twice_returns_the_stored_one(world: World) -> None:
     entity = an_entity(ENTITY, PRINCIPAL)
     with FakeUnitOfWork(world) as unit_of_work:
-        first = unit_of_work.entities.create(entity)
-        second = unit_of_work.entities.create(entity)
+        first = unit_of_work.entities.create(PRINCIPAL, entity)
+        second = unit_of_work.entities.create(PRINCIPAL, entity)
     assert first == second
     assert len(world.entities) == 1
 
@@ -264,9 +264,9 @@ def test_creating_the_same_entity_twice_returns_the_stored_one(world: World) -> 
 def test_reusing_an_entity_identifier_for_different_values_is_refused(world: World) -> None:
     """Retry-safe, not overwrite-safe: the same identifier cannot mean two things."""
     with FakeUnitOfWork(world) as unit_of_work:
-        unit_of_work.entities.create(an_entity(ENTITY, PRINCIPAL, "Alice Synthetic"))
+        unit_of_work.entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL, "Alice Synthetic"))
         with pytest.raises(ValueError, match="cannot be rebound"):
-            unit_of_work.entities.create(an_entity(ENTITY, PRINCIPAL, "Someone Else"))
+            unit_of_work.entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL, "Someone Else"))
 
 
 def test_binding_an_identifier_to_another_principals_entity_is_refused(
@@ -292,7 +292,7 @@ def test_binding_an_identifier_to_another_principals_entity_is_refused(
 def test_binding_the_same_external_identity_twice_writes_one_row(world: World) -> None:
     """Idempotent against the natural key, not against the identifier the caller minted."""
     with FakeUnitOfWork(world) as unit_of_work:
-        unit_of_work.entities.create(an_entity(ENTITY, PRINCIPAL))
+        unit_of_work.entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL))
         for identifier_id in ("xid_aaaa0001aaaa0001", "xid_bbbb0002bbbb0002"):
             unit_of_work.entities.bind_identifier(
                 PRINCIPAL,
@@ -360,8 +360,8 @@ def test_a_write_stamped_with_another_principal_is_refused(two_principals: World
 def test_relationships_are_enumerated_by_direction(world: World) -> None:
     with FakeUnitOfWork(world) as unit_of_work:
         entities = unit_of_work.entities
-        entities.create(an_entity(ENTITY, PRINCIPAL, "Alice Synthetic"))
-        entities.create(an_entity(SECOND, PRINCIPAL, "Acme Synthetic"))
+        entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL, "Alice Synthetic"))
+        entities.create(PRINCIPAL, an_entity(SECOND, PRINCIPAL, "Acme Synthetic"))
         entities.record_relationship(
             PRINCIPAL,
             EntityRelationship(
@@ -383,7 +383,7 @@ def test_relationships_are_enumerated_by_direction(world: World) -> None:
 def test_an_unknown_direction_is_refused_rather_than_treated_as_any(world: World) -> None:
     """A caller who asked for outgoing edges must not silently receive every edge."""
     with FakeUnitOfWork(world) as unit_of_work:
-        unit_of_work.entities.create(an_entity(ENTITY, PRINCIPAL))
+        unit_of_work.entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL))
         with pytest.raises(ValueError, match="any, outgoing, or incoming"):
             unit_of_work.entities.relationships(PRINCIPAL, ENTITY, direction="both")
 
@@ -391,7 +391,7 @@ def test_an_unknown_direction_is_refused_rather_than_treated_as_any(world: World
 def test_assignments_default_to_the_active_ones_and_can_include_the_rest(world: World) -> None:
     with FakeUnitOfWork(world) as unit_of_work:
         entities = unit_of_work.entities
-        entities.create(an_entity(ENTITY, PRINCIPAL))
+        entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL))
         for assignment_id, status in (
             ("asn_aaaa0001aaaa0001", "active"),
             ("asn_bbbb0002bbbb0002", "ended"),

@@ -184,8 +184,12 @@ def staged_entities(scene: Scene) -> tuple[Entity, Entity]:
     if EntityType.PERSON in held and EntityType.ORGANIZATION in held:
         return held[EntityType.PERSON], held[EntityType.ORGANIZATION]
     entities = FakeUnitOfWork(scene.world).entities
-    person = entities.create(_entity(principal_id, EntityType.PERSON, "Parity Person"))
-    organization = entities.create(_entity(principal_id, EntityType.ORGANIZATION, "Parity Works"))
+    person = entities.create(
+        principal_id, _entity(principal_id, EntityType.PERSON, "Parity Person")
+    )
+    organization = entities.create(
+        principal_id, _entity(principal_id, EntityType.ORGANIZATION, "Parity Works")
+    )
     entities.bind_identifier(
         principal_id,
         person.entity_id,

@@ -343,9 +343,11 @@ class SqlEntityRepository(EntitiesRepository):
 
     # --- Write operations ----------------------------------------------------
 
-    def create(self, entity: Entity) -> Entity:
+    def create(self, principal_id: str, entity: Entity) -> Entity:
         """Insert one entity row, or return the identical existing one."""
-        validate_identifier(entity.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if entity.principal_id != principal_id:
+            raise ValueError("an entity belongs to the acting Principal")
         existing = self._connection.execute(
             select(*_ENTITY_COLUMNS).where(
                 _mine(entities, entity.principal_id),
@@ -540,12 +542,19 @@ class SqlEntityRepository(EntitiesRepository):
         )
 
     def observations(
-        self, principal_id: str, entity_id: str | None = None, *, unresolved_only: bool = False
+        self,
+        principal_id: str,
+        entity_id: str | None = None,
+        *,
+        unresolved_only: bool = False,
+        limit: int | None = None,
     ) -> list[EntityObservation]:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if entity_id is not None:
             validate_identifier(entity_id, IdKind.ENTITY)
-        rows = self._connection.execute(
+        if limit is not None and limit < 1:
+            raise ValueError("an observation limit asks for at least one row")
+        statement = (
             select(entity_observations)
             .where(
                 _mine(entity_observations, principal_id),
@@ -553,7 +562,13 @@ class SqlEntityRepository(EntitiesRepository):
                 _optional(entity_observations.c.entity_id.is_(None) if unresolved_only else None),
             )
             .order_by(entity_observations.c.observation_id)
-        ).all()
+        )
+        if limit is not None:
+            # `LIMIT` on the statement, not a slice of the result: the point of
+            # the cap is that the rows never leave the server, and truncating
+            # after the fact would have already paid for all of them.
+            statement = statement.limit(limit)
+        rows = self._connection.execute(statement).all()
         return [_row_to_observation(row) for row in rows]
 
     def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:
@@ -628,11 +643,19 @@ class SqlEntityRepository(EntitiesRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if proposal.principal_id != principal_id:
             raise ValueError("a proposal belongs to the acting Principal")
+        # `state = 'proposed'` is part of the predicate, not a check made before
+        # it. A decision is a one-time act: without this, deciding an already
+        # decided proposal overwrites `decided_by`, `decided_at` and the reason,
+        # so the record of who made the call and why is replaced by whoever
+        # called last -- and a rejected merge could be re-accepted with no trace
+        # that it had ever been refused. Two concurrent deciders now settle at
+        # the database rather than by arrival order.
         result = self._connection.execute(
             update(entity_proposals)
             .where(
                 _mine(entity_proposals, principal_id),
                 entity_proposals.c.proposal_id == proposal.proposal_id,
+                entity_proposals.c.state == EntityProposalState.PROPOSED.value,
             )
             .values(
                 state=proposal.state.value,
@@ -642,13 +665,28 @@ class SqlEntityRepository(EntitiesRepository):
             )
         )
         if result.rowcount == 0:
-            raise UnknownScopeError("a decision names a proposal outside this scope")
+            # One message for both, deliberately: distinguishing "not yours"
+            # from "already decided" would tell a caller that a proposal they
+            # cannot see exists.
+            raise UnknownScopeError("a decision names an open proposal in this scope")
 
     def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if record.principal_id != principal_id:
             raise ValueError("a merge record belongs to the acting Principal")
         self._require_own_entities(principal_id, record.retained_entity_id, record.merged_entity_id)
+        # The proposal is partitioned too. `proposal_id` is the record's link
+        # back to the decision that authorised the merge, and a row citing a
+        # proposal in another Principal's partition would present that decision
+        # as this Principal's own -- lineage that reads as authority and is not.
+        cited = self._connection.execute(
+            select(entity_proposals.c.proposal_id).where(
+                _mine(entity_proposals, principal_id),
+                entity_proposals.c.proposal_id == record.proposal_id,
+            )
+        ).first()
+        if cited is None:
+            raise UnknownScopeError("a merge record cites a proposal in this scope")
         self._connection.execute(
             insert(entity_merge_records).values(
                 _bound(
@@ -693,6 +731,15 @@ class SqlEntityRepository(EntitiesRepository):
         self._require_own_entities(principal_id, merged_entity_id, retained_entity_id)
         if merged_entity_id == retained_entity_id:
             raise ValueError("an entity cannot be merged into itself")
+        # The survivor must be an entity a reader can land on. Without this a
+        # second merge in the other direction produced a redirect *cycle*, and a
+        # merge onto an already-merged entity produced a chain -- both of which
+        # make `superseded_by_entity_id` a pointer that never arrives, against
+        # the declaration's own claim that "a redirect always resolves" and the
+        # runbook's instruction to follow it.
+        survivor = self.get(principal_id, retained_entity_id)
+        if survivor is None or survivor.status is EntityStatus.MERGED_REDIRECT:
+            raise ValueError("an entity is merged into one that is still current")
         result = self._connection.execute(
             update(entities)
             .where(_mine(entities, principal_id), entities.c.entity_id == merged_entity_id)

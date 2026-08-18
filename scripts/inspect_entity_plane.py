@@ -107,11 +107,20 @@ def _open_proposals(engine: Engine, principal_id: str) -> list[dict[str, Any]]:
     No payload and no observed value: a proposal's payload names the entities it
     would join, and an operator deciding one reads it through a reviewed surface
     rather than out of a report.
+
+    **And no `proposed_by`.** It reads like provenance, but the column is free
+    text the proposing caller supplies -- "resolver" today, and a person's name
+    or address the moment anything records who asked for the change. This
+    module's standing claim is that every figure it prints is a count, a
+    closed-set status name, or an opaque identifier, and one free-text column is
+    all it takes for that to stop being true. An operator who needs to know who
+    proposed something reads the proposal, by identifier, through the reviewed
+    surface -- exactly as they do for the payload.
     """
     with engine.connect() as connection:
         rows = connection.execute(
             text(
-                f"SELECT proposal_id, kind, proposed_by, proposed_at "  # noqa: S608
+                f"SELECT proposal_id, kind, proposed_at "  # noqa: S608
                 f"FROM {SCHEMA}.entity_proposals "
                 "WHERE principal_id = :principal_id AND state = 'proposed' "
                 "ORDER BY proposed_at, proposal_id"
@@ -122,7 +131,6 @@ def _open_proposals(engine: Engine, principal_id: str) -> list[dict[str, Any]]:
         {
             "proposal_id": str(row.proposal_id),
             "kind": str(row.kind),
-            "proposed_by": str(row.proposed_by),
             "proposed_at": row.proposed_at.isoformat(),
         }
         for row in rows

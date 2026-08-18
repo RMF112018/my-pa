@@ -159,40 +159,61 @@ class EntityResolutionService:
         except NormalizationError:
             return None
 
-        matched = self._entities.entities_by_identifier(principal_id, request.namespace, normalized)
-        matched = [
-            (entity, identifier) for entity, identifier in matched if self._admits(entity, request)
-        ]
-        if not matched:
+        held = self._entities.entities_by_identifier(principal_id, request.namespace, normalized)
+        if not held:
             return None
 
+        # Effective dating first, and *before* any caller filter: an identifier
+        # that was not in force at the moment asked about is not evidence of
+        # anything, so it neither resolves nor conflicts.
         effective = [
             (entity, identifier)
-            for entity, identifier in matched
+            for entity, identifier in held
             if _is_effective(identifier.effective_from, identifier.effective_to, request.as_of)
         ]
-        if len(effective) < len(matched):
+        if len(effective) < len(held):
             warnings.append(ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT)
         if not effective:
             return None
-
-        candidates = tuple(
-            _candidate_from_identifier(entity, identifier) for entity, identifier in effective
-        )
 
         # Section 15.2: conflicting identifiers prevent an automatic join. More
         # than one entity holding one identity is exactly that conflict, and it
         # is a stop rather than a tiebreak — picking either would be performing
         # the merge the rule refuses.
+        #
+        # **Decided before the caller's `entity_type` filter, and that ordering
+        # is the whole point.** A conflict is a property of the recorded data,
+        # not of the question asked about it. Filtering first meant a shared
+        # mailbox recorded against a person and an organization resolved
+        # *exactly* — to the person for one caller and to the organization for
+        # the next — with no warning at all, because each filtered view saw one
+        # claimant. The filter narrows what is *offered*; it cannot un-conflict
+        # the identifier.
         if len({entity.entity_id for entity, _ in effective}) > 1:
             warnings.append(ResolutionWarning.IDENTIFIER_CLAIMED_BY_SEVERAL_ENTITIES)
             return EntityResolution(
                 outcome=ResolutionOutcome.CONFLICTED_IDENTIFIER,
-                candidates=order_candidates(candidates),
+                candidates=order_candidates(
+                    tuple(
+                        _candidate_from_identifier(entity, identifier)
+                        for entity, identifier in effective
+                    )
+                ),
                 warnings=tuple(dict.fromkeys(warnings)),
             )
 
-        entity, identifier = effective[0]
+        admitted = [
+            (entity, identifier)
+            for entity, identifier in effective
+            if self._admits(entity, request)
+        ]
+        if not admitted:
+            return None
+        candidates = tuple(
+            _candidate_from_identifier(entity, identifier) for entity, identifier in admitted
+        )
+
+        entity, identifier = admitted[0]
         if not identifier.verified:
             warnings.append(ResolutionWarning.MATCHED_IDENTIFIER_IS_UNVERIFIED)
         warnings.extend(_currency_warnings(entity))
@@ -251,11 +272,12 @@ class EntityResolutionService:
         was_narrowed = narrowed is not by_entity
         if was_narrowed:
             warnings.append(ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE)
-        elif any(signals.values()) and len(by_entity) > 1:
-            # Something corroborated, and it corroborated everyone. Said out
-            # loud: "we noticed and it did not help" is a different disclosure
-            # from silence, and only one of them lets a reader tell whether the
-            # context was consulted at all.
+        elif request.scope_entity_id is not None and len(by_entity) > 1:
+            # A scope was given and it changed nothing — true of everyone, or of
+            # nobody. Both are said out loud: "we consulted the context and it
+            # did not help" is a different disclosure from silence, and the
+            # nobody case used to be silent because no candidate carried a
+            # signal to notice.
             warnings.append(ResolutionWarning.CONTEXT_DID_NOT_DISTINGUISH_THE_CANDIDATES)
 
         candidates = order_candidates(
@@ -313,7 +335,17 @@ class EntityResolutionService:
             return unresolved(ResolutionOutcome.AMBIGUOUS)
 
         only = candidates[0]
-        resolves = only.strongest_basis is ResolutionBasis.ALIAS or was_narrowed
+        # Corroboration resolves on its own, and a rival is not a prerequisite
+        # for it. Keying this on `was_narrowed` alone meant that adding a
+        # *duplicate* row upgraded a refusal into a resolution: one person named
+        # Alice on the named project answered `AMBIGUOUS`, and the same person
+        # with a same-named stranger beside her answered `RESOLVED_CONTEXTUAL`.
+        # Strictly more evidence produced a strictly weaker answer, and
+        # non-uniqueness licensed the join — the inverse of this plane's own
+        # rule that uniqueness is a fact about the database rather than about
+        # the person.
+        corroborated = bool(only.signals)
+        resolves = only.strongest_basis is ResolutionBasis.ALIAS or was_narrowed or corroborated
         if not resolves:
             return unresolved(ResolutionOutcome.AMBIGUOUS)
 
@@ -323,9 +355,13 @@ class EntityResolutionService:
                 return unresolved(ResolutionOutcome.AMBIGUOUS)
             return unresolved(ResolutionOutcome.HISTORICAL_MATCH)
 
+        # Contextual whenever the surrounding context did any of the deciding,
+        # whether by excluding a rival or by being the only thing that lifted a
+        # bare name above `AMBIGUOUS`. A caller reading `RESOLVED_EXACT` should
+        # be able to take it that the reference itself named this entity.
         outcome = (
             ResolutionOutcome.RESOLVED_CONTEXTUAL
-            if was_narrowed
+            if was_narrowed or corroborated
             else ResolutionOutcome.RESOLVED_EXACT
         )
         return EntityResolution(

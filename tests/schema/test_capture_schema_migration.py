@@ -237,6 +237,12 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "goodnotes.work",
         # RWP-02. `a4d9c2e7b815` is the forward `ALTER` that admits it.
         "goodnotes.content",
+        # WP-RI-05. `c1a7e4b93d58` is the forward `ALTER` that admits the five.
+        "entities.search",
+        "entities.get",
+        "entities.resolve",
+        "entities.context",
+        "entities.relationships",
     }
 )
 

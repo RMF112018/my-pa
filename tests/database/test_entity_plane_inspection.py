@@ -116,6 +116,7 @@ def populated(disposable_database: str) -> Iterator[Engine]:
                 (BOB, PRINCIPAL_B, "Bob Chen", EntityType.PERSON),
             ):
                 repository.create(
+                    principal_id,
                     Entity(
                         entity_id=entity_id,
                         principal_id=principal_id,
@@ -126,7 +127,7 @@ def populated(disposable_database: str) -> Iterator[Engine]:
                         created_at=WHEN,
                         updated_at=WHEN,
                         version=1,
-                    )
+                    ),
                 )
             repository.record_alias(
                 PRINCIPAL_A,

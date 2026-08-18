@@ -2712,6 +2712,7 @@ def build_service(
     providers: FakeProviders,
     limits: EffectiveLimits = DEFAULT_LIMITS,
     managed_store: ManagedByteStore | None = None,
+    relationship_intelligence_enabled: bool = True,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -2738,6 +2739,13 @@ def build_service(
         # names its own service refuses.
         task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
         commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
+        # Enabled by the same default reasoning: the five `entities.` names are
+        # withheld from a build that has not turned the plane on, and a suite
+        # that quantifies over `Capability` would be quantifying over names its
+        # own service refuses. A test about the *withheld* build passes `False`
+        # explicitly and says so — `tests/contract/test_mcp_transport` is the one
+        # that does, against a real child process.
+        relationship_intelligence_enabled=relationship_intelligence_enabled,
     )
 
 

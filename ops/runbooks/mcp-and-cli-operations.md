@@ -76,7 +76,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all forty-eight capabilities.
+`tests/contract/test_transport_parity.py` holds it over all fifty-three capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -171,7 +171,7 @@ configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same child publishes all forty-eight. An operator who expects `documents.create`
+same child publishes all fifty-three. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -219,8 +219,8 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-12):** the tool list is derived from all
-**forty-eight** current capabilities, and the schema has **sixty** revisions
-at head `b7f4d1a92c36`. `capabilities.get` also reports content-free
+**forty-eight** current capabilities, and the schema has **sixty-one** revisions
+at head `c1a7e4b93d58`. `capabilities.get` also reports content-free
 `worker_planes`. The dated transcript below remains historical evidence for its
 stated head.
 

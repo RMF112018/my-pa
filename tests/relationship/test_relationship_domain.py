@@ -350,6 +350,16 @@ EXPECTED_MODEL_FIELDS = {
             "signals",
         }
     ),
+    "my_pa.domain.relationship.context_card.EntityContextCard": frozenset(
+        {
+            "entity",
+            "aliases",
+            "identifiers",
+            "assignments",
+            "relationships",
+            "limitations",
+        }
+    ),
     "my_pa.domain.relationship.resolution.EntityResolution": frozenset(
         {"outcome", "candidates", "warnings", "candidates_were_truncated"}
     ),
@@ -570,7 +580,7 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 25
+    assert len(actual_model_fields) == 26
     assert len(actual_table_columns) == 23
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"

@@ -67,6 +67,9 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetEntity,
+    GetEntityContext,
+    GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
     GetPulse,
@@ -89,11 +92,13 @@ from my_pa.application.commands import (
     ReadTask,
     RecordContextFeedback,
     RecordTask,
+    ResolveEntity,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchEntities,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -306,6 +311,17 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
                     },
                 },
             ),
+        ),
+        # The entity plane. Every identifier is minted rather than staged, for
+        # the reason this table exists: a denial test must fail on the authority
+        # and on nothing else, and an entity that existed would let a
+        # `not_found` stand in for a `denied`.
+        Capability.ENTITIES_SEARCH: SearchEntities(query="synthetic"),
+        Capability.ENTITIES_GET: GetEntity(entity_id=issue_identifier(IdKind.ENTITY)),
+        Capability.ENTITIES_RESOLVE: ResolveEntity(reference="synthetic"),
+        Capability.ENTITIES_CONTEXT: GetEntityContext(entity_id=issue_identifier(IdKind.ENTITY)),
+        Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(
+            entity_id=issue_identifier(IdKind.ENTITY)
         ),
     }
 
@@ -524,6 +540,16 @@ SCOPED_CAPABILITIES = [
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
+        # The entity plane is a read plane over the acting Principal's own
+        # entities. An entity carries no enrollment a requested scope could be
+        # compared against — it is the Principal's own record of a person, not
+        # an extraction from a configured source — so there is no scope for a
+        # request to name (WP-RI-05).
+        Capability.ENTITIES_SEARCH,
+        Capability.ENTITIES_GET,
+        Capability.ENTITIES_RESOLVE,
+        Capability.ENTITIES_CONTEXT,
+        Capability.ENTITIES_RELATIONSHIPS,
     }
 ]
 
@@ -621,6 +647,11 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
+        Capability.ENTITIES_SEARCH,
+        Capability.ENTITIES_GET,
+        Capability.ENTITIES_RESOLVE,
+        Capability.ENTITIES_CONTEXT,
+        Capability.ENTITIES_RELATIONSHIPS,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

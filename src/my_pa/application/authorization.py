@@ -65,6 +65,9 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetEntity,
+    GetEntityContext,
+    GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
     GetPulse,
@@ -87,11 +90,13 @@ from my_pa.application.commands import (
     ReadTask,
     RecordContextFeedback,
     RecordTask,
+    ResolveEntity,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchEntities,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -264,6 +269,13 @@ def _requested_scope(
             | GetGoodNotesWork()
             | GetGoodNotesContent()
             | SubmitGoodNotesProposal()
+            # The entity plane names a person, not a source, for the reason
+            # `domain.policy.decision._SCOPELESS` states beside the same five.
+            | SearchEntities()
+            | GetEntity()
+            | ResolveEntity()
+            | GetEntityContext()
+            | GetEntityRelationships()
         ):
             return frozenset()
         case CreateCapture():

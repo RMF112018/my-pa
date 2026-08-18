@@ -208,7 +208,7 @@ def _alembic_identity() -> tuple[int, str]:
 
 #: Spelled revision counts, so a guard states the count the chain actually has
 #: rather than a literal that goes stale in step with the prose it guards.
-_COUNT_WORDS: Final[dict[int, str]] = {
+SPELLED_COUNTS: Final[dict[int, str]] = {
     12: "Twelve",
     13: "Thirteen",
     14: "Fourteen",
@@ -258,15 +258,15 @@ _COUNT_WORDS: Final[dict[int, str]] = {
     58: "Fifty-eight",
     59: "Fifty-nine",
     60: "Sixty",
+    61: "Sixty-one",
 }
 
 
 def test_readme_derives_the_current_alembic_count_and_head() -> None:
-    words = _COUNT_WORDS
     count, head = _alembic_identity()
-    assert count in words, "extend the readable README count vocabulary"
+    assert count in SPELLED_COUNTS, "extend the readable README count vocabulary"
     readme = README.read_text(encoding="utf-8")
-    assert f"{words[count]} Alembic revisions" in readme
+    assert f"{SPELLED_COUNTS[count]} Alembic revisions" in readme
     assert f"head `{head}`" in readme
 
 
@@ -342,8 +342,18 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
     `9def3c2e63bb` moved it, and a literal in the guard is the same claim with
     the same shelf life as the literal in the document it is guarding — so the
     guard went stale in step with the prose instead of catching it.
+
+    The capability figure is now derived for the same reason and by the same
+    argument. It was a spelled literal until `c1a7e4b93d58` admitted the
+    `entities.*` names, and on that day the guard and all three documents were
+    wrong together — the guard asserting the stale spelling was present, which is
+    the one thing that cannot detect a stale spelling. `Capability` is what the
+    application dispatches on, so it is what the prose has to agree with.
     """
     _count, head = _alembic_identity()
+    capabilities = len(list(Capability))
+    assert capabilities in SPELLED_COUNTS, "extend the readable count vocabulary"
+    spelled = SPELLED_COUNTS[capabilities].lower()
     documents = {
         "system context": ROOT / "docs" / "architecture" / "system-context.md",
         "gateway runbook": ROOT / "ops" / "runbooks" / "gateway-operations.md",
@@ -351,10 +361,10 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
     }
     for label, path in documents.items():
         text = path.read_text(encoding="utf-8")
-        assert "forty-eight capabilit" in text.lower().replace(" public ", " "), (
+        assert f"{spelled} capabilit" in text.lower().replace(" public ", " "), (
             f"{label} lost the current capability count"
         )
-        assert _COUNT_WORDS[_count].lower() in text.lower(), (
+        assert SPELLED_COUNTS[_count].lower() in text.lower(), (
             f"{label} lost the current revision count"
         )
         assert head in text, f"{label} lost the current Alembic head"
@@ -408,7 +418,12 @@ def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
     assert routed <= documented, (
         f"web README omits routed capabilities {sorted(routed - documented)}"
     )
-    assert "forty-eight capability names" in lowered
+    # Derived, not spelled out here: see the note on
+    # `test_current_state_docs_name_the_current_capability_and_migration_counts`.
+    # A literal in this guard is the same claim, with the same shelf life, as the
+    # literal in the document it is guarding.
+    assert len(capability_values) in SPELLED_COUNTS, "extend the readable count vocabulary"
+    assert f"{SPELLED_COUNTS[len(capability_values)].lower()} capability names" in lowered
     assert "worker_planes" in text and "capture" in text and "enrollment" in text
     assert "managed-document lifecycle" in lowered
 

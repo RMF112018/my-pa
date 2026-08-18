@@ -176,6 +176,21 @@ _ORDINAL_UNITS = (
     "forty-seventh",
     "forty-eighth",
     "forty-ninth",
+    # The fifties, added when WP-RI-05 admitted the five `entities.*` capabilities
+    # and the public set reached fifty-three, so `a fifty-fourth capability` became
+    # the ordinal a correct claim would use. This boundary announced itself exactly
+    # as the two above did — an `IndexError` in the green-half plant rather than a
+    # false pass — which is the property the density of this tuple buys.
+    "fiftieth",
+    "fifty-first",
+    "fifty-second",
+    "fifty-third",
+    "fifty-fourth",
+    "fifty-fifth",
+    "fifty-sixth",
+    "fifty-seventh",
+    "fifty-eighth",
+    "fifty-ninth",
 )
 
 

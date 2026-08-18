@@ -29,7 +29,8 @@ ENTITY_REVISION: Final = "9def3c2e63bb"
 #: `alembic_version`. That is a position in the chain rather than a property of
 #: this revision, so it moves whenever a revision is added; the chain test below
 #: is written not to depend on it.
-HEAD_REVISION: Final = "b7f4d1a92c36"
+ALIAS_REVISION: Final = "b7f4d1a92c36"
+HEAD_REVISION: Final = "c1a7e4b93d58"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_d9c4e1a7b628_widen_goodnotes_entity_kind_meeting_agenda.py"
 )
@@ -98,8 +99,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(ATTEMPT_REVISION).down_revision == REVISION
     assert script.get_revision(ENTITY_REVISION).down_revision == ATTEMPT_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ENTITY_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 60
+    assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == ALIAS_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 61
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

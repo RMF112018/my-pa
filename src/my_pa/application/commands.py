@@ -2174,6 +2174,112 @@ class GetGoodNotesContent:
         _sha256_digest(self.content_sha256, SafeDetail.CONTENT_SHA256)
 
 
+@dataclass(frozen=True, slots=True)
+class SearchEntities:
+    """`entities.search`: one bounded page of entities whose name matches a query.
+
+    A case-insensitive substring match over the canonical and display names of
+    the acting Principal's own entities. This is the *browse* surface, and it is
+    deliberately not the resolution surface: it answers "who is like this", and
+    a substring match is evidence of nothing about identity. `entities.resolve`
+    answers "who is this", and refuses far more.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_SEARCH
+
+    query: str = field(repr=False)
+    entity_type: str | None = None
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.query.strip():
+            raise InvalidRequestError(SafeDetail.QUERY)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntity:
+    """`entities.get`: one entity of the acting Principal's, by its identifier.
+
+    An entity another Principal holds is answered exactly as an absent one.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_GET
+
+    entity_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveEntity:
+    """`entities.resolve`: which entity a reference names, or why none.
+
+    **The answer may be that it could not be decided, and that is a success.**
+    An ambiguous reference returns the candidates it could not choose between
+    rather than the nearest one, because a wrong identity contaminates every
+    record joined to it afterwards. Callers must read `outcome` before
+    `entity_id`; there is no `entity_id` at all on an unresolved answer.
+
+    `namespace` is stated rather than sniffed. A reference containing an `@` is
+    probably an address, and resolving on "probably" is how a person whose
+    recorded name contains one gets matched as a mailbox.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_RESOLVE
+
+    reference: str = field(repr=False)
+    namespace: str | None = None
+    entity_type: str | None = None
+    scope_entity_id: str | None = None
+    as_of: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not self.reference.strip():
+            raise InvalidRequestError(SafeDetail.SUBJECT)
+        if self.scope_entity_id is not None:
+            _identifier(self.scope_entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        _moment(self.as_of, SafeDetail.OCCURRED_AT)
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntityContext:
+    """`entities.context`: the bounded context card for one entity.
+
+    Aliases, external identifiers, assignments, and typed edges, each bounded,
+    with every bound that bit named in `limitations`. A card that ran out of room
+    says so rather than reading as complete.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_CONTEXT
+
+    entity_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntityRelationships:
+    """`entities.relationships`: one entity's typed edges, to depth one.
+
+    Adjacent edges only. There is no recursive walk and no traversal depth to
+    raise: a graph walk over people is the shape that turns a bounded read into
+    an unbounded one, and depth one is the bound.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_RELATIONSHIPS
+
+    entity_id: str
+    direction: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        if self.direction is not None and self.direction not in ("any", "outgoing", "incoming"):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
 GetGoodNotesContent.__doc__ = (
     "`goodnotes.content`: return the bounded PNG bytes of the pinned visual "
     "raster used for one page-version identity. Call this after `goodnotes.work` "
@@ -2308,6 +2414,11 @@ type Command = (
     | GetGoodNotesWork
     | SubmitGoodNotesProposal
     | GetGoodNotesContent
+    | SearchEntities
+    | GetEntity
+    | ResolveEntity
+    | GetEntityContext
+    | GetEntityRelationships
 )
 
 

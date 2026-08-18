@@ -27,7 +27,8 @@ REVISION: Final = "c9e2b6a4d813"
 #: `alembic_version`. That is a position in the chain rather than a property of
 #: this revision, so it moves whenever a revision is added; the chain test below
 #: is written not to depend on it.
-HEAD_REVISION: Final = "b7f4d1a92c36"
+ALIAS_REVISION: Final = "b7f4d1a92c36"
+HEAD_REVISION: Final = "c1a7e4b93d58"
 PRIOR: Final = "f8c3a1e6b247"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_c9e2b6a4d813_add_goodnotes_note_unit_occurrence_.py"
@@ -114,7 +115,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 60
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 61
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

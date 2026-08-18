@@ -27,9 +27,9 @@ Abacus/ChatLLM Task changes, destructive actions, and operator risk acceptance
 | WP-RI-02 | `EntitiesRepository` port, `SqlEntityRepository`, the `UnitOfWork.entities` seat, the in-memory fake, FAST-tier tests | **complete** |
 | WP-RI-03 | Exact resolution: alias table, namespace and alias normalization, effective-date filtering, entity-type and scope filtering, conflicting-identifier handling, historical resolution, same-name protection | **complete** |
 | WP-RI-04 | Contextual resolution: bounded candidate ranking, calibration, explainable evidence, collision-biased safety, false-resolution evaluation | **complete** |
-| WP-RI-05 | The capability and MCP surface: `Capability` members, `Purpose` registration, the forward `ALTER`, commands, handlers, remote-exposure decision | not started |
+| WP-RI-05 | The capability and MCP surface: five `Capability` members, the `entity_read` purpose, the forward `ALTER`, commands, handlers, transport builders, scope policy, the composition gate, and a minimal context card | **complete** |
 | WP-RI-06 | Observation, proposal, review, and merge | not started |
-| WP-RI-07 | Context card assembly (the specification's "context packet", section 26.3) | not started |
+| WP-RI-07 | Context card enrichment: coverage, freshness, and disclosure on the card WP-RI-05 delivered | not started |
 | WP-RI-08 | Backfill / re-enrichment (the specification's "re-enrichment triggers", section 27.4) | not started |
 | WP-RI-09 | Inspection tooling | not started |
 | WP-RI-10 | Intelligence-task integration | not started |
@@ -97,14 +97,14 @@ frontend), `NOT_APPLICABLE_TO_THIS_CAMPAIGN` (belongs to another plane).
 | RI-AC-003 | The product states relationships are not scores | `PARTIAL` | Enforced structurally by `tests/architecture/test_relationship_scoring_surface_is_denied.py`, widened to the entity plane; no numeric reaches the durable surface (`D-RI-14`). The *statement* is WP-RI-13 |
 | RI-AC-004 | Value without starting a chat | `BLOCKED_BY_D09` | — |
 | RI-AC-005 | Contact/source rows stay observations, not automatic canonical people | `OPEN` | WP-RI-06 |
-| RI-AC-006 | Unresolved mentions are first-class and searchable | `PARTIAL` | `ResolutionOutcome.AMBIGUOUS`/`NOT_FOUND` are first-class answers carrying their candidates and warnings; a *stored* unresolved mention is WP-RI-06 |
+| RI-AC-006 | Unresolved mentions are first-class and searchable | `PARTIAL` | `ResolutionOutcome.AMBIGUOUS`/`NOT_FOUND` are first-class answers over the wire, carrying candidates and warnings, proved in `tests/contract/test_entity_capabilities.py`; a *stored* unresolved mention is WP-RI-06 |
 | RI-AC-007 | No identity merge without governed policy | `OPEN` | WP-RI-06 |
 | RI-AC-008 | Merge preview shows all materially affected records | `OPEN` | WP-RI-06 |
 | RI-AC-009 | Merge and split history preserved and correctable | `PARTIAL` | `entities.superseded_by_entity_id` + the `merged_redirect` biconditional exist; lineage records are WP-RI-06 |
 | RI-AC-010 | Negative identity evidence prevents repeated false matches | `OPEN` | WP-RI-06 — negative evidence needs a record to live in, which the observation plane brings |
 | RI-AC-011 | Every material profile statement links to evidence or is marked | `OPEN` | WP-RI-06 |
 | RI-AC-012 | Source facts / notes / assertions / inferences structurally distinct | `OPEN` | WP-RI-06 |
-| RI-AC-013 | Coverage, freshness, exclusions appear before synthesis | `OPEN` | WP-RI-07 |
+| RI-AC-013 | Coverage, freshness, exclusions appear before synthesis | `PARTIAL` | The context card names every collection it truncated (`limitations`, `is_complete`); coverage and freshness are WP-RI-07 |
 | RI-AC-014 | Stale evidence never presented as current | `PARTIAL` | Resolution answers `HISTORICAL_MATCH` with `ENTITY_IS_NOT_CURRENT`/`ENTITY_HAS_BEEN_MERGED_AWAY`, and filters evidence by effective date under `as_of` (WP-RI-03). Briefing-level staleness is WP-RI-07; presentation is `BLOCKED_BY_D09` |
 | RI-AC-015 | Contradictory evidence preserved, not collapsed | `OPEN` | WP-RI-06 |
 | RI-AC-016 | Briefings retain evidence scope and model identity | `OPEN` | WP-RI-07 |
@@ -144,6 +144,39 @@ here precisely because no such test exists yet.
 
 Recorded here because each one is a choice a reviewer would otherwise have to
 reconstruct from a diff.
+
+**D-RI-18 — WP-RI-05 registered all five capabilities at once, including
+`entities.context`.** Registering one costs a forward `ALTER` on
+`capability_is_known`/`purpose_is_known` plus roughly fifty test registries and
+prose counts; splitting the family across two work packages would pay that
+twice. So WP-RI-05 delivered a minimal-but-real context card — the records
+around an entity, bounded per collection, with every bound that bit named — and
+WP-RI-07 enriches it without touching the capability registry. The alternative,
+registering four now and one later, would have re-run the whole registration
+dance for one name.
+
+**D-RI-19 — one purpose, `entity_read`, for all five.** A purpose of its own
+rather than a reuse, on the `TASK_READ` argument: no existing purpose reaches
+`knowledge.entities`, and a grant issued to search extracted text has no
+occasion to also return who a person is. *One* rather than five, on the
+`capture.search` argument (`D-91`): all five read the same rows under the same
+authority, so a second read purpose would map to exactly one capability and
+separate nothing. There is deliberately no write purpose — this plane has no
+write capability, and a purpose no capability permits is denied for everything
+and reads as a mistake rather than as a decision.
+
+**D-RI-20 — the plane is off by default, and that is the remote-exposure
+gate.** `Settings.relationship_intelligence_enabled` defaults `False`, and
+`ApplicationService.available_capabilities` subtracts `_ENTITY_CAPABILITIES`
+from what the build serves when it is. This is the mechanism `D-RI-01`
+promised, and it is the only one that works: `adapters.mcp.remote.remote_tool_names`
+derives the remote profile from `Capability` with no per-capability exclusion
+list, so "this build serves it" and "a remote client can reach it" are one
+decision. `tests/contract/test_mcp_transport.py` proves the withholding against
+a real child process; `tests/contract/test_entity_remote_exposure.py` proves it
+about the remote profile specifically, which no existing test reached — the
+existing remote test asserts membership by name and so could never have noticed
+an *addition*.
 
 **D-RI-01 — WP-RI-02 registers no capability.** The five `entities.*`
 capabilities move to WP-RI-05. `adapters/mcp/remote.py::remote_tool_names`
@@ -320,8 +353,9 @@ sets it.
   participants, introduction chains, and negative evidence all need the
   observation record (WP-RI-06). `RI-AC-010` stays `OPEN` for exactly that
   reason.
-* **No MCP or capability surface exists** (`D-RI-01`), so nothing outside the
-  process can reach any of this yet. That is deliberate until WP-RI-05.
+* **The MCP surface exists and is off by default** (`D-RI-20`). A process that
+  has not set `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` publishes none of the
+  five, locally or remotely.
 * **`record_assignment` and `record_relationship` have no natural key**, so a
   retry that mints a fresh identifier writes a second row (RI-AC-036).
 * **The specification is silent** on identifier namespaces, the normalization

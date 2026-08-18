@@ -291,6 +291,10 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("sources.enroll", "root_object_id"),
         ("commitments.list", "direction"),
         ("commitments.create", "direction"),
+        # Which way an edge points, not where a file lives. Exempt on exactly the
+        # precedent above: `direction` trips the scan on the substring "dir", and
+        # its admitted values are `any`, `outgoing` and `incoming`.
+        ("entities.relationships", "direction"),
         ("context.feedback", "target_id"),
         ("goodnotes.propose", "uncertainty"),
     }

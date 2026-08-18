@@ -461,8 +461,18 @@ def _child_tool_list(**settings: str) -> tuple[list[str], bytes]:
 #: built with. Derived from the enum rather than written out, so another joins
 #: without editing this file — and asserted non-empty below, because an empty set
 #: would make both halves of the claim vacuous.
+#:
+#: Two families now. `documents.` needs a managed byte store. `entities.` needs
+#: the relationship plane switched on, and that switch is the whole of
+#: `D-RI-01`: `adapters.mcp.remote` derives the remote tool profile from the
+#: capability set with no per-capability exclusion list, so "this build serves
+#: it" and "a remote client can reach it" are one decision. This test is where
+#: that decision is proved — against a real child process, in the transport an
+#: operator actually runs, rather than against a code path.
+_COMPOSED_PREFIXES: Final = ("documents.", "entities.")
+
 _COMPOSED_CAPABILITIES: Final = frozenset(
-    capability for capability in Capability if capability.value.startswith("documents.")
+    capability for capability in Capability if capability.value.startswith(_COMPOSED_PREFIXES)
 )
 
 
@@ -522,6 +532,7 @@ def test_a_child_with_a_managed_root_publishes_every_capability(tmp_path: Path) 
     composed, _errors = _child_tool_list(
         MY_PA_DATABASE_URL=os.environ["MY_PA_DATABASE_URL"],
         MY_PA_MANAGED_DOCUMENT_ROOT=str(root),
+        MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED="true",
     )
     assert composed == [capability.value for capability in Capability]
     assert {capability.value for capability in _COMPOSED_CAPABILITIES} <= set(composed)

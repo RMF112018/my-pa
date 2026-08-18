@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the forty-eight capabilities is addressable over HTTP
+**Reachability.** Every one of the fifty-three capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a forty-ninth capability added to the domain arrives as a failing row instead
+here, so a fifty-fourth capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -56,6 +56,7 @@ from tests.conftest import (
     staged_search,
     staged_task,
 )
+from tests.contract.test_transport_parity import ENTITY_EMAIL, staged_entities
 from tests.wire import Wire, serve
 
 from my_pa.adapters.http import create_http_app
@@ -78,6 +79,9 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetEntity,
+    GetEntityContext,
+    GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
     GetPulse,
@@ -101,11 +105,13 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     RecordTask,
     Representation,
+    ResolveEntity,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchEntities,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -182,6 +188,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    person, _organization = staged_entities(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id},
@@ -367,6 +374,22 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 }
             ],
         },
+        # The relationship-intelligence entity plane (WP-RI-05). `person` and
+        # `organization` are staged once per scene, so the payload table and the
+        # command table below name the same two entities rather than each
+        # staging a pair of its own.
+        Capability.ENTITIES_SEARCH: {"query": "parity"},
+        Capability.ENTITIES_GET: {"entity_id": person.entity_id},
+        # The reference is the address bound to `person`, stated in its own
+        # namespace rather than sniffed, so this answers a resolution rather
+        # than the `not_found` outcome an unknown reference answers with — a
+        # `200` either way, and the weaker of the two to be reachable by.
+        Capability.ENTITIES_RESOLVE: {"reference": ENTITY_EMAIL, "namespace": "email"},
+        Capability.ENTITIES_CONTEXT: {"entity_id": person.entity_id},
+        Capability.ENTITIES_RELATIONSHIPS: {
+            "entity_id": person.entity_id,
+            "direction": "any",
+        },
     }
 
 
@@ -395,6 +418,7 @@ def commands_for(
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    person, _organization = staged_entities(scene)
     return {
         Capability.CAPABILITIES_GET: GetCapabilities(),
         Capability.SOURCES_LIST: ListSources(source_id=scene.source.source_id),
@@ -564,6 +588,17 @@ def commands_for(
                     "primary_class": "MEETING",
                 },
             ),
+        ),
+        # The entity plane. `person` is the same staged entity the payload table
+        # names, because `staged_entities` answers with the pair already in the
+        # world: two tables each staging their own would be comparing two
+        # different requests.
+        Capability.ENTITIES_SEARCH: SearchEntities(query="parity"),
+        Capability.ENTITIES_GET: GetEntity(entity_id=person.entity_id),
+        Capability.ENTITIES_RESOLVE: ResolveEntity(reference=ENTITY_EMAIL, namespace="email"),
+        Capability.ENTITIES_CONTEXT: GetEntityContext(entity_id=person.entity_id),
+        Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(
+            entity_id=person.entity_id, direction="any"
         ),
     }
 

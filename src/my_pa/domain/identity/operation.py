@@ -360,6 +360,38 @@ class Capability(StrEnum):
     # admits the live vocabulary. Not operator-only: it reads the acting
     # Principal's own partition and grants no authority.
     GOODNOTES_CONTENT = "goodnotes.content"
+    # The relationship-intelligence entity plane (WP-RI-05). Five read
+    # capabilities over `knowledge.entities` and the four tables around it.
+    # Alembic revision `c1a7e4b93d58` admits the live vocabulary and the
+    # `entity_read` purpose; the freeze is written before the members, because a
+    # member with no `ALTER` leaves every test green and is refused by the
+    # stored constraint on the first audited operation in the field.
+    #
+    # `D-91`'s test, applied once for the family: would reuse widen the grant?
+    # Yes, in both directions. `knowledge.search` is the extraction plane and
+    # would have to return who a person is; `entities.search` would have to
+    # return extracted document text. They are different custody planes over
+    # different tables.
+    #
+    # Five rather than one, because they answer different questions and a caller
+    # granted one has no occasion to hold the others. `search` is a name-shaped
+    # lookup over a Principal's own entities. `get` is one entity by identifier.
+    # `resolve` answers "who is this reference", and is the one whose answer can
+    # be *ambiguous on purpose*. `context` assembles a bounded card. `relationships`
+    # walks one entity's typed edges to depth one. None of them writes: this plane
+    # has no write capability at all, which is why `_PERMITTED_PURPOSES` maps all
+    # five to a single read purpose.
+    #
+    # Not operator-only: each reads the acting Principal's own partition and
+    # grants no authority. Withholding from a process that has not enabled the
+    # plane is `_ENTITY_CAPABILITIES` in `application.service`, not this flag —
+    # operator-only is about who may call a capability, and composition gating is
+    # about whether this build serves it at all.
+    ENTITIES_SEARCH = "entities.search"
+    ENTITIES_GET = "entities.get"
+    ENTITIES_RESOLVE = "entities.resolve"
+    ENTITIES_CONTEXT = "entities.context"
+    ENTITIES_RELATIONSHIPS = "entities.relationships"
 
 
 class NativeSourceCapability(StrEnum):
@@ -597,6 +629,11 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.GOODNOTES_WORK: frozenset({Purpose.GOODNOTES_WORK}),
         Capability.GOODNOTES_PROPOSE: frozenset({Purpose.GOODNOTES_PROPOSAL}),
         Capability.GOODNOTES_CONTENT: frozenset({Purpose.GOODNOTES_CONTENT}),
+        Capability.ENTITIES_SEARCH: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_GET: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_RESOLVE: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_CONTEXT: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_RELATIONSHIPS: frozenset({Purpose.ENTITY_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

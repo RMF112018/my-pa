@@ -72,6 +72,9 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetEntity,
+    GetEntityContext,
+    GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
     GetPulse,
@@ -95,11 +98,13 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     RecordTask,
     Representation,
+    ResolveEntity,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchEntities,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -572,6 +577,42 @@ def _get_goodnotes_work(payload: Mapping[str, Any]) -> Command:
     return GetGoodNotesWork(**payload)
 
 
+def _search_entities(payload: Mapping[str, Any]) -> Command:
+    return SearchEntities(**payload)
+
+
+def _get_entity(payload: Mapping[str, Any]) -> Command:
+    return GetEntity(**payload)
+
+
+def _resolve_entity(payload: Mapping[str, Any]) -> Command:
+    """`entities.resolve`, with `as_of` parsed from the wire's RFC 3339 string.
+
+    Shape conversion, for the reason `_moments` gives: JSON has no datetime, and
+    the command refuses anything that is not one, so a caller's
+    `"2026-08-18T12:00:00Z"` would otherwise be rejected for being a string
+    rather than for naming a moment.
+    """
+    converted = dict(payload)
+    supplied = converted.get("as_of")
+    if supplied is not None:
+        if not isinstance(supplied, str):
+            raise InvalidRequestError(SafeDetail.OCCURRED_AT)
+        try:
+            converted["as_of"] = datetime.fromisoformat(supplied)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.OCCURRED_AT) from None
+    return ResolveEntity(**converted)
+
+
+def _get_entity_context(payload: Mapping[str, Any]) -> Command:
+    return GetEntityContext(**payload)
+
+
+def _get_entity_relationships(payload: Mapping[str, Any]) -> Command:
+    return GetEntityRelationships(**payload)
+
+
 def _get_goodnotes_content(payload: Mapping[str, Any]) -> Command:
     if "path" in payload or "principal_id" in payload:
         raise InvalidRequestError(SafeDetail.RUN_ID)
@@ -720,6 +761,11 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.GOODNOTES_WORK: _get_goodnotes_work,
         Capability.GOODNOTES_CONTENT: _get_goodnotes_content,
         Capability.GOODNOTES_PROPOSE: _submit_goodnotes_proposal,
+        Capability.ENTITIES_SEARCH: _search_entities,
+        Capability.ENTITIES_GET: _get_entity,
+        Capability.ENTITIES_RESOLVE: _resolve_entity,
+        Capability.ENTITIES_CONTEXT: _get_entity_context,
+        Capability.ENTITIES_RELATIONSHIPS: _get_entity_relationships,
     }
 )
 
@@ -729,7 +775,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the forty-eight names nothing.
+    not one of the fifty-three names nothing.
     """
     try:
         return Capability(capability)

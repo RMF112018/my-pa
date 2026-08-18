@@ -135,6 +135,9 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetEntity,
+    GetEntityContext,
+    GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
     GetPulse,
@@ -160,6 +163,7 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     RecordTask,
     Representation,
+    ResolveEntity,
     RestoreManagedDocument,
     RestoreManagedDocumentCommand,
     RevealSubject,
@@ -167,6 +171,7 @@ from my_pa.application.commands import (
     ReviseManagedDocument,
     ReviseManagedDocumentCommand,
     SearchCaptures,
+    SearchEntities,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -184,6 +189,8 @@ from my_pa.application.disclosure import (
     unenrolled_disclosure,
     with_corpus_caveat,
 )
+from my_pa.application.entity_context import EntityContextService
+from my_pa.application.entity_resolution import EntityResolutionService, ResolutionRequest
 from my_pa.application.errors import (
     AmbiguousRequestError,
     ApplicationError,
@@ -215,6 +222,7 @@ from my_pa.contracts.ports import (
     CaptureAdmissionRequest,
     CaptureSearchOutcome,
     CaptureSearchRequest,
+    EntitySummary,
     EvidenceUnavailableError,
     ManagedByteStore,
     PortError,
@@ -274,6 +282,17 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import POLICY_VERSION
+from my_pa.domain.relationship.context_card import EntityContextCard
+from my_pa.domain.relationship.entity import (
+    Assignment,
+    Entity,
+    EntityAlias,
+    EntityRelationship,
+    EntityType,
+    ExternalIdentifier,
+    ExternalIdentifierNamespace,
+)
+from my_pa.domain.relationship.resolution import EntityResolution
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
     MAX_PAGE_SIZE,
@@ -715,6 +734,7 @@ def _managed_translated() -> Iterator[None]:
 #: system. Not `user_authored`: a managed document is not an ADR-003 record.
 _MANAGED_TRUST_BASIS: Final = ("principal_partition", "product_managed_custody")
 
+
 #: What a task-read answer's trust rests on (WP-TM-03). `principal_partition`
 #: because every `TaskManagementRepository` read method filters by the
 #: authenticated caller's partition, the same basis `_CONTINUITY_TRUST_BASIS`
@@ -723,8 +743,164 @@ _MANAGED_TRUST_BASIS: Final = ("principal_partition", "product_managed_custody")
 #: basis names — WP-TM-01's `Task` does carry `evidence_state`, but nothing in
 #: this package's four reads filters on it, so naming that basis here would
 #: claim a guarantee this plane does not make.
+def _entity_view(entity: Entity) -> dict[str, object]:
+    """One entity as the wire sees it.
+
+    `canonical_name` is included alongside `display_name` because resolution
+    matches on it: a caller debugging why a reference did not resolve needs the
+    form that was compared, not only the form that is shown.
+    """
+    return {
+        "entity_id": entity.entity_id,
+        "entity_type": entity.entity_type.value,
+        "canonical_name": entity.canonical_name,
+        "display_name": entity.display_name,
+        "status": entity.status.value,
+        "created_at": format_rfc3339(entity.created_at),
+        "updated_at": format_rfc3339(entity.updated_at),
+        "version": entity.version,
+        "superseded_by_entity_id": entity.superseded_by_entity_id,
+    }
+
+
+def _entity_summary_view(summary: EntitySummary) -> dict[str, object]:
+    return {
+        "entity_id": summary.entity_id,
+        "entity_type": summary.entity_type.value,
+        "canonical_name": summary.canonical_name,
+        "display_name": summary.display_name,
+        "status": summary.status.value,
+    }
+
+
+def _alias_view(alias: EntityAlias) -> dict[str, object]:
+    return {
+        "alias_id": alias.alias_id,
+        "alias_type": alias.alias_type.value,
+        "display_value": alias.display_value,
+        "effective_from": _moment_or_none(alias.effective_from),
+        "effective_to": _moment_or_none(alias.effective_to),
+    }
+
+
+def _identifier_view(identifier: ExternalIdentifier) -> dict[str, object]:
+    """One external identifier, as recorded.
+
+    The value is the Principal's own record of their own contact, returned to
+    the Principal who holds it, so it is not withheld here. It is withheld from
+    *logs*, which is where `AGENTS.md` section 5 places the rule.
+    """
+    return {
+        "identifier_id": identifier.identifier_id,
+        "namespace": identifier.namespace.value,
+        "display_value": identifier.display_value,
+        "verified": identifier.verified,
+        "effective_from": _moment_or_none(identifier.effective_from),
+        "effective_to": _moment_or_none(identifier.effective_to),
+    }
+
+
+def _assignment_view(assignment: Assignment) -> dict[str, object]:
+    return {
+        "assignment_id": assignment.assignment_id,
+        "assignment_type": assignment.assignment_type.value,
+        "scope_entity_id": assignment.scope_entity_id,
+        "role": assignment.role,
+        "discipline": assignment.discipline,
+        "responsibility_class": assignment.responsibility_class,
+        "status": assignment.status,
+        "effective_from": _moment_or_none(assignment.effective_from),
+        "effective_to": _moment_or_none(assignment.effective_to),
+    }
+
+
+def _relationship_view(edge: EntityRelationship) -> dict[str, object]:
+    return {
+        "relationship_id": edge.relationship_id,
+        "from_entity_id": edge.from_entity_id,
+        "relationship_type": edge.relationship_type.value,
+        "to_entity_id": edge.to_entity_id,
+        "scope_entity_id": edge.scope_entity_id,
+        "state": edge.state,
+        "effective_from": _moment_or_none(edge.effective_from),
+        "effective_to": _moment_or_none(edge.effective_to),
+        "version": edge.version,
+    }
+
+
+def _resolution_view(answer: EntityResolution) -> dict[str, object]:
+    """One resolution as the wire sees it.
+
+    `entity_id` is present and `null` on every unresolved answer rather than
+    absent, so a caller that reads it without reading `outcome` gets `null`
+    rather than a key error and a retry -- the field is the derived property, so
+    there is no arrangement of this payload in which an ambiguous answer carries
+    an identifier.
+    """
+    return {
+        "outcome": answer.outcome.value,
+        "entity_id": answer.resolved_entity_id,
+        "candidates": [
+            {
+                "entity_id": candidate.entity_id,
+                "entity_type": candidate.entity_type.value,
+                "display_name": candidate.display_name,
+                "status": candidate.status.value,
+                "superseded_by_entity_id": candidate.superseded_by_entity_id,
+                "matched_on": [item.basis.value for item in candidate.evidence],
+                "signals": [signal.value for signal in candidate.signals],
+            }
+            for candidate in answer.candidates
+        ],
+        "warnings": [warning.value for warning in answer.warnings],
+        "candidates_were_truncated": answer.candidates_were_truncated,
+    }
+
+
+def _context_card_view(card: EntityContextCard) -> dict[str, object]:
+    return {
+        "entity": _entity_view(card.entity),
+        "aliases": [_alias_view(alias) for alias in card.aliases],
+        "identifiers": [_identifier_view(item) for item in card.identifiers],
+        "assignments": [_assignment_view(item) for item in card.assignments],
+        "relationships": [_relationship_view(edge) for edge in card.relationships],
+        "limitations": [limitation.value for limitation in card.limitations],
+        "is_complete": card.is_complete,
+    }
+
+
+def _moment_or_none(moment: datetime | None) -> str | None:
+    return None if moment is None else format_rfc3339(moment)
+
+
+def _entity_type_or_refuse(named: str | None) -> EntityType | None:
+    """A caller-supplied entity type, or `invalid_request`.
+
+    Refused rather than ignored: a caller who asked for a project and silently
+    received a person would read the wrong answer as the right one.
+    """
+    if named is None:
+        return None
+    try:
+        return EntityType(named)
+    except ValueError:
+        raise InvalidRequestError(SafeDetail.SELECTOR) from None
+
+
+def _namespace_or_refuse(named: str | None) -> ExternalIdentifierNamespace | None:
+    if named is None:
+        return None
+    try:
+        return ExternalIdentifierNamespace(named)
+    except ValueError:
+        raise InvalidRequestError(SafeDetail.SELECTOR) from None
+
+
 _TASK_TRUST_BASIS: Final = ("principal_partition",)
 _COMMITMENT_TRUST_BASIS: Final = ("product_owned_commitment",)
+#: The entity plane reads the acting Principal's own partition and nothing else,
+#: so its trust basis is the partition, exactly as the task plane's is.
+_ENTITY_TRUST_BASIS: Final = ("principal_partition",)
 
 
 class ApplicationService:
@@ -740,6 +916,7 @@ class ApplicationService:
         model_gate: BoundedModelGate | None = None,
         task_management_unit_of_work: Callable[[], Any] | None = None,
         commitment_management_unit_of_work: Callable[[], Any] | None = None,
+        relationship_intelligence_enabled: bool = False,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._limits = _effective_limits(limits)
@@ -750,6 +927,16 @@ class ApplicationService:
         #: build with no managed plane must publish no managed capability rather
         #: than publish six a caller cannot reach.
         self._managed_store_or_none = managed_store
+        #: Whether this build serves the relationship-intelligence entity plane.
+        #: Default `False`, and the default is the point: the five `entities.*`
+        #: capabilities read who a person is, and `adapters.mcp.remote` derives
+        #: the remote tool profile from `Capability` with no per-capability
+        #: exclusion list — so a non-operator read joins the remote surface the
+        #: moment it becomes available. Withholding it here is the one mechanism
+        #: this repository already proves end to end against a real child
+        #: process, and it keeps `capabilities.get`, `tools/list`, and the remote
+        #: profile agreeing about what exists.
+        self._relationship_intelligence_enabled = relationship_intelligence_enabled
         #: Explicit production composition of the optional proposal plane. The
         #: default gate is disabled; an enabled gate cannot be constructed
         #: without its local provider and canonical Review router.
@@ -784,15 +971,19 @@ class ApplicationService:
 
         `_HANDLERS` is what this build *implements* and is fixed at import. This
         is what it can *serve*, which is smaller whenever a capability needs
-        something the composition root did not supply — today, the six
-        `documents.` names in a process with no managed root. It is one answer
-        with two readers: `capabilities.get` publishes it, and the MCP transport
+        something the composition root did not supply — the six `documents.`
+        names in a process with no managed root, and the five `entities.` names
+        in one that has not enabled the relationship plane. It is one answer with
+        two readers: `capabilities.get` publishes it, and the MCP transport
         publishes the tools derived from it, so a client's tool list and the
         manifest cannot disagree about what exists.
         """
-        if self._managed_store_or_none is not None:
-            return frozenset(_HANDLERS)
-        return frozenset(_HANDLERS) - _MANAGED_CAPABILITIES
+        served = frozenset(_HANDLERS)
+        if self._managed_store_or_none is None:
+            served -= _MANAGED_CAPABILITIES
+        if not self._relationship_intelligence_enabled:
+            served -= _ENTITY_CAPABILITIES
+        return served
 
     def invoke(
         self,
@@ -2507,6 +2698,127 @@ class ApplicationService:
             ),
         )
 
+    # --- the relationship-intelligence entity plane (WP-RI-05) ---------------
+    #
+    # Five reads, one purpose, no writes. Each answers from the acting
+    # Principal's own partition, so each carries `_ENTITY_TRUST_BASIS` and an
+    # unenrolled disclosure: an entity belongs to no `src_…` and no `enr_…`, and
+    # naming one would be inventing a grant.
+
+    def _entities_search(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchEntities
+    ) -> _Result:
+        """`entities.search`: one bounded page of entities matching a text query."""
+        principal_id = authorization.principal.principal_id
+        entity_type = _entity_type_or_refuse(command.entity_type)
+        page_size = self._page_size(command.page_size)
+        with _translated():
+            found = unit_of_work.entities.search(
+                principal_id, command.query, entity_type=entity_type, limit=page_size
+            )
+        return _Result(
+            payload={"entities": [_entity_summary_view(summary) for summary in found]},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(is_truncated=len(found) == page_size),
+            ),
+        )
+
+    def _entities_get(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetEntity
+    ) -> _Result:
+        """`entities.get`: one entity, or not found.
+
+        An entity another Principal holds is answered exactly as an absent one,
+        for the reason `_tasks_read` states: `principal_id` is part of the lookup
+        key, so there is no branch here that could distinguish the two.
+        """
+        with _translated():
+            entity = unit_of_work.entities.get(
+                authorization.principal.principal_id, command.entity_id
+            )
+        if entity is None:
+            raise NotFoundError(SafeDetail.TARGET_ID)
+        return _Result(
+            payload={"entity": _entity_view(entity)},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
+    def _entities_resolve(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ResolveEntity
+    ) -> _Result:
+        """`entities.resolve`: which entity a reference names, or why none.
+
+        **Never raises `NotFoundError`.** "I found nobody" and "I found four
+        people and will not choose" are different answers, and collapsing either
+        into an error would lose the candidates and the warnings a caller needs
+        to narrow. Both are `200` with an `outcome` the caller reads first.
+        """
+        request = ResolutionRequest(
+            raw_reference=command.reference,
+            namespace=_namespace_or_refuse(command.namespace),
+            entity_type=_entity_type_or_refuse(command.entity_type),
+            scope_entity_id=command.scope_entity_id,
+            as_of=command.as_of,
+        )
+        with _translated():
+            answer = EntityResolutionService(unit_of_work.entities).resolve(
+                authorization.principal.principal_id, request
+            )
+        return _Result(
+            payload={"resolution": _resolution_view(answer)},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(is_truncated=answer.candidates_were_truncated),
+            ),
+        )
+
+    def _entities_context(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetEntityContext
+    ) -> _Result:
+        """`entities.context`: the bounded context card for one entity."""
+        with _translated():
+            card = EntityContextService(unit_of_work.entities).card(
+                authorization.principal.principal_id, command.entity_id
+            )
+        if card is None:
+            raise NotFoundError(SafeDetail.TARGET_ID)
+        return _Result(
+            payload={"context_card": _context_card_view(card)},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(is_truncated=not card.is_complete),
+            ),
+        )
+
+    def _entities_relationships(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetEntityRelationships,
+    ) -> _Result:
+        """`entities.relationships`: one entity's typed edges, to depth one.
+
+        The entity is read first so an unknown identifier is `not_found` rather
+        than an empty edge list -- "this person has no recorded relationships"
+        and "there is no such person" are different answers.
+        """
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            entity = unit_of_work.entities.get(principal_id, command.entity_id)
+            if entity is None:
+                raise NotFoundError(SafeDetail.TARGET_ID)
+            edges = unit_of_work.entities.relationships(
+                principal_id, command.entity_id, direction=command.direction or "any"
+            )
+        return _Result(
+            payload={"relationships": [_relationship_view(edge) for edge in edges]},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
     def _tasks_read(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadTask
     ) -> _Result:
@@ -3733,12 +4045,31 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.GOODNOTES_WORK: ApplicationService._goodnotes_work,
         Capability.GOODNOTES_CONTENT: ApplicationService._goodnotes_content,
         Capability.GOODNOTES_PROPOSE: ApplicationService._goodnotes_propose,
+        Capability.ENTITIES_SEARCH: ApplicationService._entities_search,
+        Capability.ENTITIES_GET: ApplicationService._entities_get,
+        Capability.ENTITIES_RESOLVE: ApplicationService._entities_resolve,
+        Capability.ENTITIES_CONTEXT: ApplicationService._entities_context,
+        Capability.ENTITIES_RELATIONSHIPS: ApplicationService._entities_relationships,
     }
 )
 
 #: Which capabilities need a composed byte store. Written out rather than
 #: derived from a name prefix, so admitting another is a decision here and not a
 #: spelling that happens to start with `documents.`.
+#: The entity plane's names, withheld from a process that has not enabled
+#: it. Written out rather than derived from the `entities.` prefix, for the
+#: reason `_MANAGED_CAPABILITIES` is: admitting another is a decision here and
+#: not a spelling that happens to start the right way.
+_ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.ENTITIES_SEARCH,
+        Capability.ENTITIES_GET,
+        Capability.ENTITIES_RESOLVE,
+        Capability.ENTITIES_CONTEXT,
+        Capability.ENTITIES_RELATIONSHIPS,
+    }
+)
+
 _MANAGED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.DOCUMENTS_CREATE,

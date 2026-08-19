@@ -54,6 +54,14 @@ esac
     _write(tools / "ip", "#!/bin/sh\nexit 0\n")
     _write(tools / "id", '#!/bin/sh\n[ "$1" = -u ] && echo 0\n')
     _write(
+        tools / "iptables-save",
+        """#!/bin/sh
+printf '%s\\n' '*filter' ':FORWARD ACCEPT [0:0]' ':FORWARD_FIREWALL - [0:0]' ':MY_PA_DATA_PLANE - [0:0]'
+printf '%s\\n' '-A FORWARD -j MY_PA_DATA_PLANE' '-A FORWARD -j FORWARD_FIREWALL'
+printf '%s\\n' COMMIT
+""",
+    )
+    _write(
         tools / "iptables",
         f"""#!/bin/sh
 state_file=${{FAKE_STATE:?}}
@@ -65,10 +73,6 @@ if [ "$1 $2 $3 $4" = '-t nat -S DEFAULT_POSTROUTING' ]; then
     lookalike) printf '%s\n' '-A DEFAULT_POSTROUTING -s {SUBNET} -j MASQUERADE' ;;
     bridge) printf '%s\n' '-A DEFAULT_POSTROUTING ! -o {BRIDGE} -j MASQUERADE' ;;
   esac
-  exit 0
-fi
-if [ "$1" = -S ] && [ "$#" -eq 1 ]; then
-  printf '%s\n' '-A FORWARD -j FORWARD_FIREWALL' '-A FORWARD -j DEFAULT_FORWARD'
   exit 0
 fi
 if [ "$1 $2" = '-S FORWARD_FIREWALL' ]; then
@@ -178,6 +182,7 @@ exit 1
         "PATH": f"{tools}:{os.environ['PATH']}",
         "MY_PA_NAS_DOCKER": str(tools / "docker"),
         "MY_PA_NAS_IPTABLES": str(tools / "iptables"),
+        "MY_PA_NAS_IPTABLES_SAVE": str(tools / "iptables-save"),
         "MY_PA_NAS_IP": str(tools / "ip"),
         "FAKE_STATE": str(state),
         "FAKE_DELETE_LOG": str(delete_log),

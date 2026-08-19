@@ -30,7 +30,6 @@ def _environment(
     tmp_path: Path,
     *,
     wrong_network: bool = False,
-    missing_docker_accept: bool = False,
     data_effective: bool = True,
     initial_rule_state: str = "missing",
     inserted_rule_state: str = "effective",
@@ -64,14 +63,22 @@ def _environment(
         encoding="utf-8",
     )
     data_flag = "true" if data_effective else "false"
-    docker_accept = "exit 1" if missing_docker_accept else "exit 0"
+    data_p1 = (
+        f"-A MY_PA_DATA_PLANE -s {DATA_SUBNET} -d {DATA_SUBNET} "
+        f"-i {DATA_BRIDGE} -o {DATA_BRIDGE} -j ACCEPT"
+    )
     iptables = tools / "iptables"
     iptables.write_text(
         "#!/bin/sh\n"
         f"printf '%s\\n' \"$*\" >> '{calls}'\n"
         'case "$*" in\n'
-        "  '-S') printf '%s\\n' '-A FORWARD -j FORWARD_FIREWALL' "
-        "'-A FORWARD -j DEFAULT_FORWARD' ;;\n"
+        "  '-S MY_PA_DATA_PLANE')\n"
+        f"    if {data_flag}; then\n"
+        f"      printf '%s\\n' '-N MY_PA_DATA_PLANE' '{data_p1}' "
+        f"'-A MY_PA_DATA_PLANE -i {DATA_BRIDGE} -j DROP' "
+        f"'-A MY_PA_DATA_PLANE -o {DATA_BRIDGE} -j DROP' "
+        "'-A MY_PA_DATA_PLANE -j RETURN'\n"
+        "    else exit 1; fi ;;\n"
         "  '-S FORWARD_FIREWALL')\n"
         f"    value=$(cat '{state}')\n"
         f"    if {data_flag}; then printf '%s\\n' '{DATA_RULE}'; fi\n"
@@ -81,9 +88,6 @@ def _environment(
         f"      duplicate) printf '%s\\n' '{INGRESS_RULE}' '{INGRESS_RULE}' ;;\n"
         "      missing) printf '%s\\n' '-A FORWARD_FIREWALL -j DROP' ;;\n"
         "    esac ;;\n"
-        f"  '-C DEFAULT_FORWARD -i {DATA_BRIDGE} -o {DATA_BRIDGE} -j ACCEPT') exit 0 ;;\n"
-        f"  '-C DEFAULT_FORWARD -i {INGRESS_BRIDGE} -o {INGRESS_BRIDGE} -j ACCEPT') "
-        f"{docker_accept} ;;\n"
         f"  '-C FORWARD_FIREWALL -i {DATA_BRIDGE} -o {DATA_BRIDGE} -s {DATA_SUBNET} "
         f"-d {DATA_SUBNET} -j RETURN') {data_flag} ;;\n"
         f"  '-C FORWARD_FIREWALL -i {INGRESS_BRIDGE} -o {INGRESS_BRIDGE} "
@@ -99,9 +103,29 @@ def _environment(
         "esac\n",
         encoding="utf-8",
     )
+    iptables_save = tools / "iptables-save"
+    if data_effective:
+        save_forward = (
+            "'-A FORWARD -j MY_PA_DATA_PLANE' '-A FORWARD -j FORWARD_FIREWALL' "
+            f"'{data_p1}' "
+            f"'-A MY_PA_DATA_PLANE -i {DATA_BRIDGE} -j DROP' "
+            f"'-A MY_PA_DATA_PLANE -o {DATA_BRIDGE} -j DROP' "
+            "'-A MY_PA_DATA_PLANE -j RETURN' "
+        )
+    else:
+        save_forward = "'-A FORWARD -j FORWARD_FIREWALL' "
+    iptables_save.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" >> '{calls}'\n"
+        "printf '%s\\n' '*filter' ':FORWARD ACCEPT [0:0]' ':FORWARD_FIREWALL - [0:0]' "
+        "':MY_PA_DATA_PLANE - [0:0]' "
+        f"{save_forward}"
+        "'-A FORWARD_FIREWALL -j DROP' COMMIT\n",
+        encoding="utf-8",
+    )
     fake_id = tools / "id"
     fake_id.write_text(f'#!/bin/sh\n[ "$1" = -u ] && echo {root_uid}\n', encoding="utf-8")
-    for path in (docker, ip, iptables, fake_id):
+    for path in (docker, ip, iptables, iptables_save, fake_id):
         path.chmod(0o700)
     return (
         {
@@ -109,6 +133,7 @@ def _environment(
             "PATH": f"{tools}:/usr/bin:/bin",
             "MY_PA_NAS_DOCKER": str(docker),
             "MY_PA_NAS_IPTABLES": str(iptables),
+            "MY_PA_NAS_IPTABLES_SAVE": str(iptables_save),
             "MY_PA_NAS_IP": str(ip),
         },
         state,
@@ -153,24 +178,21 @@ def test_apply_check_idempotence_and_exact_remove_preserve_data_rule(tmp_path: P
 
 
 @pytest.mark.parametrize(
-    ("wrong_network", "missing_docker_accept", "data_effective", "expected"),
+    ("wrong_network", "data_effective", "expected"),
     [
-        (True, False, True, "network identity mismatch"),
-        (False, True, True, "same-bridge ACCEPT rule is unavailable"),
-        (False, False, False, "data-plane firewall rule is not effective"),
+        (True, True, "network identity mismatch"),
+        (False, False, "data-plane firewall is not effective"),
     ],
 )
 def test_apply_refuses_unproven_network_forwarding_or_data_rule(
     tmp_path: Path,
     wrong_network: bool,
-    missing_docker_accept: bool,
     data_effective: bool,
     expected: str,
 ) -> None:
     environment, state, calls = _environment(
         tmp_path,
         wrong_network=wrong_network,
-        missing_docker_accept=missing_docker_accept,
         data_effective=data_effective,
     )
     environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_ingress-plane"

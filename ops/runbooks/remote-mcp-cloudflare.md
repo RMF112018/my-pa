@@ -124,10 +124,14 @@ The network must already be internal and owned by Compose project
 `my-pa-nas-contract`; its admitted `postgres` service must be running healthy
 on the exact image recorded by the verified PostgreSQL resource artifact.
 On Synology, run `ops/nas/synology-data-plane-firewall.sh check` before private
-MCP startup. A missing exact same-bridge rule is a deployment refusal; never
-replace it with a broad `INPUT_FIREWALL` exception or disable DSM firewall.
-The five exact rules occupy positions 3–7 after the canonical data- and
-ingress-plane rules. The first admits only same-bridge TCP 8766 on the exact
+MCP startup. That gate requires FORWARD `MY_PA_DATA_PLANE` then
+`FORWARD_FIREWALL`, exact P1/P2/P3 enforcement, and no leftover source-only
+data-plane RETURN. Passing it does not admit the ingress-plane or
+Cloudflare-egress gates and does not authorize GoodNotes validation. Never
+replace it with a broad `INPUT_FIREWALL` exception, `DEFAULT_FORWARD`, or a
+disabled DSM firewall.
+The five exact Cloudflare rules occupy positions 3–7 after the canonical data-
+and ingress-plane `FORWARD_FIREWALL` rules those sibling gates still require. The first admits only same-bridge TCP 8766 on the exact
 internal Compose-owned `mcp-origin` network, allowing `cloudflared` to reach the
 origin without admitting host or external ingress. The remaining four admit
 only DNS over TCP/UDP 53, Cloudflare Tunnel QUIC over UDP 7844, and the

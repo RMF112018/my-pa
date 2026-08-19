@@ -626,3 +626,248 @@ def test_an_observation_limit_reaches_the_server_as_a_limit_clause(
     selects = [statement for statement in issued if "entity_observations" in statement]
     assert selects, "the read issued no statement against entity_observations"
     assert all("LIMIT" in statement.upper() for statement in selects), selects
+
+
+# --- the governance plane's partition, where nothing had reached it ----------
+
+#: The entity Principal B already holds, from the `two_principals` fixture.
+BEE_ONE: Final = "ent_cccc0003cccc0003"
+BEE_TWO: Final = "ent_dddd0004dddd0004"
+B_PROPOSAL: Final = "eprp_bbbb0002bbbb0002"
+B_MERGE: Final = "emrg_bbbb0002bbbb0002"
+A_PROPOSAL: Final = "eprp_aaaa0001aaaa0001"
+A_MERGE: Final = "emrg_aaaa0001aaaa0001"
+
+
+def _propose_for_b(engine: Engine) -> None:
+    """One open proposal in Principal B's partition, so every read below has a decoy."""
+    with engine.begin() as connection:
+        EntityGovernanceService(SqlEntityRepository(connection)).propose(
+            PRINCIPAL_B,
+            proposal_id=B_PROPOSAL,
+            kind=EntityProposalKind.MERGE_ENTITIES,
+            payload={"retained_entity_id": BEE_ONE},
+            observation_ids=(),
+            proposed_by="resolver",
+            proposed_at=WHEN,
+        )
+
+
+def _a_decided_merge_for_b(engine: Engine) -> None:
+    """A whole accepted merge in B's partition: second entity, proposal, decision, lineage."""
+    with engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_B, _entity(BEE_TWO, PRINCIPAL_B, "Bob Chen"))
+        EntityGovernanceService(repository).propose(
+            PRINCIPAL_B,
+            proposal_id=B_PROPOSAL,
+            kind=EntityProposalKind.MERGE_ENTITIES,
+            payload={"retained_entity_id": BEE_ONE, "merged_entity_id": BEE_TWO},
+            observation_ids=(),
+            proposed_by="resolver",
+            proposed_at=WHEN,
+        )
+    with engine.begin() as connection:
+        EntityGovernanceService(SqlEntityRepository(connection)).accept(
+            PRINCIPAL_B,
+            B_PROPOSAL,
+            decided_by="B's operator",
+            decided_at=LATER,
+            reason="same person",
+            has_operator_authority=True,
+            merge_id=B_MERGE,
+        )
+
+
+def test_an_observation_write_decides_a_collision_on_its_own_partitions_rows(
+    two_principals: Engine,
+) -> None:
+    """`record_observation`'s idempotency read is partitioned, so it judges A's rows only.
+
+    `observation_id` is a *global* primary key, so an identifier B already holds
+    is unavailable to A either way -- what the partition decides is which refusal
+    A receives, and on what evidence. Without it the read finds B's observation,
+    compares it against what A described, and tells A its own identifier is bound
+    to different values, from a row in another partition. With it the read finds
+    nothing and the server refuses the key collision that is really there.
+    """
+    identifier = "eobs_cccc0003cccc0003"
+    with two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_observation(
+            PRINCIPAL_B, _observation(identifier, principal_id=PRINCIPAL_B)
+        )
+    with pytest.raises(IntegrityError), two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_observation(
+            PRINCIPAL_A, _observation(identifier, entity_id=ALICE)
+        )
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        theirs = repository.observations(PRINCIPAL_B)
+        assert [item.observation_id for item in theirs] == [identifier], (
+            "the staged foreign row went missing"
+        )
+        assert theirs[0].entity_id is None
+        assert repository.observations(PRINCIPAL_A) == []
+
+
+def test_linking_an_observation_cannot_reach_another_principals_observation(
+    two_principals: Engine,
+) -> None:
+    """The link is an UPDATE, and its partition is the only thing scoping it.
+
+    `link_observation` checks that the *entity* is A's. Nothing above the
+    statement checks the observation, because the statement is where that check
+    lives: `observation_id` is a global primary key, so the identifier alone
+    names B's row exactly. Without the partition predicate A's link succeeds and
+    B's observation is silently re-pointed at an entity in A's partition --
+    evidence B recorded, attached to someone B cannot see, with no error raised
+    at either end.
+    """
+    identifier = "eobs_cccc0003cccc0003"
+    with two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_observation(
+            PRINCIPAL_B, _observation(identifier, principal_id=PRINCIPAL_B)
+        )
+    with (
+        pytest.raises(UnknownScopeError, match="outside this scope"),
+        two_principals.begin() as connection,
+    ):
+        SqlEntityRepository(connection).link_observation(PRINCIPAL_A, identifier, ALICE)
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        theirs = repository.observations(PRINCIPAL_B)
+        assert [item.observation_id for item in theirs] == [identifier], (
+            "the staged foreign row went missing"
+        )
+        assert theirs[0].entity_id is None, "B's observation was re-pointed across the partition"
+        assert repository.observations(PRINCIPAL_B, unresolved_only=True) == theirs
+        assert repository.observations(PRINCIPAL_A, ALICE) == []
+
+
+def test_a_proposal_read_answers_a_foreign_proposal_as_an_absent_one(
+    two_principals: Engine,
+) -> None:
+    """A single-proposal read is partitioned, so B's open decision is not A's to see.
+
+    A proposal carries the payload of a mutation someone is asking for -- which
+    two entities are the same person, by identifier. Served across the partition
+    it discloses both the identifiers and the fact that a merge is pending on
+    them.
+    """
+    _propose(two_principals)
+    _propose_for_b(two_principals)
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        foreign = repository.proposal(PRINCIPAL_A, B_PROPOSAL)
+        absent = repository.proposal(PRINCIPAL_A, "eprp_ffff0006ffff0006")
+        mine = repository.proposal(PRINCIPAL_A, A_PROPOSAL)
+        theirs = repository.proposal(PRINCIPAL_B, B_PROPOSAL)
+    assert foreign is None
+    assert foreign == absent
+    assert mine is not None
+    assert mine.proposal_id == A_PROPOSAL
+    assert theirs is not None, "the staged foreign row went missing"
+    assert theirs.principal_id == PRINCIPAL_B
+
+
+def test_the_proposal_queue_does_not_list_another_principals_proposals(
+    two_principals: Engine,
+) -> None:
+    """The queue an operator works through holds only their own partition's proposals.
+
+    Each Principal holds one open proposal here, so the assertion cannot go
+    vacuous: it fails if the partition is dropped *and* it fails if the fixture
+    ever stops staging either row.
+    """
+    _propose(two_principals)
+    _propose_for_b(two_principals)
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        mine = repository.proposals(PRINCIPAL_A)
+        theirs = repository.proposals(PRINCIPAL_B)
+        mine_open = repository.proposals(PRINCIPAL_A, EntityProposalState.PROPOSED)
+    assert [item.proposal_id for item in mine] == [A_PROPOSAL]
+    assert [item.proposal_id for item in theirs] == [B_PROPOSAL], (
+        "the staged foreign row went missing"
+    )
+    assert [item.proposal_id for item in mine_open] == [A_PROPOSAL]
+
+
+def test_a_decision_cannot_reach_another_principals_proposal(
+    two_principals: Engine,
+) -> None:
+    """`decide_proposal` settles at the database, and its partition is part of that.
+
+    The UPDATE already carries `state = 'proposed'` so a decision happens once.
+    The partition is the other half: `proposal_id` is a global primary key, so
+    without it A's decision matches B's open proposal exactly and accepts it --
+    B's merge authorised by A's operator, recorded as B's own decision, with
+    `decided_by` naming someone in a partition B cannot read.
+    """
+    _propose_for_b(two_principals)
+    with two_principals.connect() as connection:
+        staged = SqlEntityRepository(connection).proposal(PRINCIPAL_B, B_PROPOSAL)
+    assert staged is not None, "the staged foreign row went missing"
+
+    with (
+        pytest.raises(UnknownScopeError, match="open proposal"),
+        two_principals.begin() as connection,
+    ):
+        SqlEntityRepository(connection).decide_proposal(
+            PRINCIPAL_A,
+            replace(
+                staged,
+                principal_id=PRINCIPAL_A,
+                state=EntityProposalState.ACCEPTED,
+                decided_by="A's operator",
+                decided_at=LATER,
+                decision_reason="not mine to make",
+            ),
+        )
+
+    with two_principals.connect() as connection:
+        held = SqlEntityRepository(connection).proposal(PRINCIPAL_B, B_PROPOSAL)
+    assert held is not None
+    assert held.state is EntityProposalState.PROPOSED
+    assert held.decided_by is None
+    assert held.decision_reason is None
+
+
+def test_merge_lineage_does_not_list_another_principals_merges(
+    two_principals: Engine,
+) -> None:
+    """Lineage is partitioned, both unfiltered and filtered by entity.
+
+    A merge record names two entity identifiers, who decided, and why. Listed
+    across the partition it hands A the identifiers of B's entities and the text
+    of B's reasoning -- and `merges(entity_id=...)` would answer A with lineage
+    for an entity A cannot otherwise see at all.
+
+    Both Principals hold a real accepted merge here, so neither assertion can
+    pass by finding nothing.
+    """
+    _propose(two_principals)
+    with two_principals.begin() as connection:
+        EntityGovernanceService(SqlEntityRepository(connection)).accept(
+            PRINCIPAL_A,
+            A_PROPOSAL,
+            decided_by="the operator",
+            decided_at=LATER,
+            reason="confirmed by employee number",
+            has_operator_authority=True,
+            merge_id=A_MERGE,
+        )
+    _a_decided_merge_for_b(two_principals)
+
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        mine = repository.merges(PRINCIPAL_A)
+        theirs = repository.merges(PRINCIPAL_B)
+        mine_for_their_entity = repository.merges(PRINCIPAL_A, BEE_TWO)
+        theirs_for_their_entity = repository.merges(PRINCIPAL_B, BEE_TWO)
+    assert [record.merge_id for record in mine] == [A_MERGE]
+    assert [record.merge_id for record in theirs] == [B_MERGE], (
+        "the staged foreign row went missing"
+    )
+    assert mine_for_their_entity == []
+    assert [record.merge_id for record in theirs_for_their_entity] == [B_MERGE]

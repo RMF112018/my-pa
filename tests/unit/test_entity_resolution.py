@@ -1255,6 +1255,171 @@ def test_an_alias_match_does_not_credit_the_scope_with_the_decision(
     assert ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE not in answer.warnings
 
 
+NOW = datetime(2026, 8, 19, 12, tzinfo=UTC)
+
+
+def test_an_assignment_that_has_not_begun_does_not_corroborate(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A role starting in 2030 must not lift a bare name today.
+
+    Currency used to be inferred from `effective_to is None` -- "nobody wrote an
+    end date" -- so an assignment that had not started read as in force and
+    corroborated a bare canonical name into `RESOLVED_CONTEXTUAL`. The residual
+    recorded against this said detecting it needed a clock the module did not
+    have; the clock is `authorization.at`, and `ResolutionRequest.at` carries it.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.record_assignment(
+        PRINCIPAL,
+        _assignment("asn_aaaa0001aaaa0001", effective_from=datetime(2030, 1, 1, tzinfo=UTC)),
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
+
+
+def test_an_assignment_running_to_a_future_end_date_still_corroborates(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The other half, and the one that made the old rule wrong for ordinary data.
+
+    A contract with a recorded end date in 2030 is in force today. Reading
+    "somebody wrote an end date" as "over" meant every dated employment --
+    the ordinary case -- corroborated nothing, and said so with a warning whose
+    every clause was false for it.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.record_assignment(
+        PRINCIPAL,
+        _assignment(
+            "asn_aaaa0001aaaa0001",
+            effective_from=datetime(2025, 1, 1, tzinfo=UTC),
+            effective_to=datetime(2030, 1, 1, tzinfo=UTC),
+        ),
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.candidates[0].signals == (ContextualSignal.ASSIGNED_TO_THE_NAMED_SCOPE,)
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT not in answer.warnings
+
+
+def test_an_assignment_ended_by_its_status_is_disclosed_not_silent(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """Excluded by `status`, and the caller is told -- as for excluded by date.
+
+    `active_only=True` dropped ended assignments in the query, so they never
+    reached the fold and never set `withheld`: a row recorded as ended produced
+    an `AMBIGUOUS` answer with no warning at all, while the same row left active
+    and date-expired produced one. `RI-AC-014`'s duty does not care which column
+    recorded that the evidence is not current.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001", status="ended"))
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.candidates[0].signals == ()
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
+
+
+def test_an_identifier_whose_rows_are_all_expired_is_not_found(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The sibling branch of the fall-through above, and it was open.
+
+    An identifier that matched rows which are *out of date* used to return
+    `None`, which sent the same string to `_by_name` -- so an expired
+    `source_participant_id` of "Smith, John" answered `RESOLVED_EXACT` naming a
+    *different* person whose alias is "Smith John". `RI-I-003` puts stable
+    external identifiers above lexical matching; discarding the identifier
+    evidence to try the weaker one inverts that.
+
+    The `entity_type` branch beside this one was fixed first and this one was
+    left, which is why the rule is now stated once on the method: falling
+    through means "not an identifier here, or matched nothing". Once a row
+    matched, every exit is an answer.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "John Smith"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Jonathan Smith"))
+    entities.bind_identifier(
+        PRINCIPAL,
+        ALICE,
+        an_email(
+            "xid_aaaa0001aaaa0001",
+            ALICE,
+            "john.smith@example.test",
+            verified=True,
+            effective_to=datetime(2025, 1, 1, tzinfo=UTC),
+        ),
+    )
+    entities.record_alias(
+        PRINCIPAL, an_alias("eals_dddd0004dddd0004", ALICE_TWO, "john smith example test")
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="john.smith@example.test",
+            namespace=ExternalIdentifierNamespace.EMAIL,
+            as_of=datetime(2026, 8, 17, tzinfo=UTC),
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.NOT_FOUND
+    assert answer.resolved_entity_id is None
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
+
+
+def test_a_conflicted_identifier_past_the_candidate_limit_still_answers(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The safety outcome must not fail when the data is most conflicted.
+
+    `EntityResolution` refuses more candidates than `RESOLUTION_CANDIDATE_LIMIT`,
+    and this path passed every claimant, so a shared mailbox bound to eleven
+    entities raised `ValueError` and reached the caller as `internal_error` --
+    the refusal failing in exactly the case it exists for. It is bounded on the
+    same terms the name path is, and says that it is.
+    """
+    entities = _Entities(world)
+    claimants = RESOLUTION_CANDIDATE_LIMIT + 1
+    for index in range(claimants):
+        entity_id = f"ent_{index:04d}shared{index:04d}"
+        entities.create(PRINCIPAL, an_entity(entity_id, f"Team {index} Synthetic"))
+        entities.bind_identifier(
+            PRINCIPAL,
+            entity_id,
+            an_email(f"xid_{index:04d}shared{index:04d}", entity_id, "info@example.test"),
+        )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="info@example.test", namespace=ExternalIdentifierNamespace.EMAIL
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.CONFLICTED_IDENTIFIER
+    assert answer.resolved_entity_id is None
+    assert len(answer.candidates) == RESOLUTION_CANDIDATE_LIMIT
+    assert answer.candidates_were_truncated
+    assert ResolutionWarning.MORE_CANDIDATES_THAN_THIS_ANSWER_CARRIES in answer.warnings
+    assert ResolutionWarning.IDENTIFIER_CLAIMED_BY_SEVERAL_ENTITIES in answer.warnings
+
+
 def test_an_identifier_held_by_the_wrong_kind_of_entity_is_not_found(
     world: World, resolving: EntityResolutionService
 ) -> None:

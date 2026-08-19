@@ -2843,6 +2843,12 @@ class ApplicationService:
             entity_type=_entity_type_or_refuse(command.entity_type),
             scope_entity_id=command.scope_entity_id,
             as_of=command.as_of,
+            # The moment the question is being asked, as distinct from the
+            # moment it asks about. Without it the resolver had to infer whether
+            # a corroborating record was current from whether anyone had written
+            # an end date on it, which read a live dated contract as over and an
+            # unstarted role as in force.
+            at=authorization.at,
         )
         with _translated():
             answer = EntityResolutionService(unit_of_work.entities).resolve(

@@ -24,6 +24,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 
 from my_pa.application.entity_resolution import EntityResolutionService, ResolutionRequest
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
@@ -67,6 +68,7 @@ ALICE: Final = "ent_aaaa0001aaaa0001"
 ACME: Final = "ent_bbbb0002bbbb0002"
 TOWER: Final = "ent_cccc0003cccc0003"
 BOB: Final = "ent_dddd0004dddd0004"
+BOB_TWO: Final = "ent_ffff0006ffff0006"
 
 WHEN: Final = datetime(2026, 8, 17, 12, tzinfo=UTC)
 
@@ -142,6 +144,7 @@ def two_principals(migrated_engine: Engine) -> Engine:
             PRINCIPAL_A, an_entity(ACME, PRINCIPAL_A, "Acme Synthetic", EntityType.ORGANIZATION)
         )
         repository.create(PRINCIPAL_B, an_entity(BOB, PRINCIPAL_B, "Bob Synthetic"))
+        repository.create(PRINCIPAL_B, an_entity(BOB_TWO, PRINCIPAL_B, "Bob Two Synthetic"))
     return migrated_engine
 
 
@@ -173,7 +176,7 @@ def test_a_search_cannot_reach_another_principals_entity(two_principals: Engine)
         mine = repository.search(PRINCIPAL_A, "synthetic")
         theirs = repository.search(PRINCIPAL_B, "synthetic")
     assert sorted(summary.entity_id for summary in mine) == sorted([ALICE, ACME])
-    assert [summary.entity_id for summary in theirs] == [BOB]
+    assert sorted(summary.entity_id for summary in theirs) == sorted([BOB, BOB_TWO])
 
 
 def test_a_search_matches_the_display_name_case_insensitively(two_principals: Engine) -> None:
@@ -210,12 +213,60 @@ def test_a_search_is_bounded_by_its_limit(two_principals: Engine) -> None:
 def test_enumerations_of_a_foreign_entity_are_empty_not_populated(
     two_principals: Engine,
 ) -> None:
-    """Every enumeration answers the same emptiness a missing entity answers."""
+    """Every enumeration answers the same emptiness a missing entity answers.
+
+    **The rows are staged first, and that is the whole test.** This assertion
+    used to run against child tables the fixture never populated, so `== []` was
+    true whether or not the partition predicate existed — deleting the predicate
+    on `external_identifiers`, `assignments` or `relationships` left the entire
+    database suite green while a Principal could read another's email address,
+    employment role, and edges out of their own context card. An emptiness
+    assertion over an empty table asserts nothing about a partition.
+    """
+    with two_principals.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.bind_identifier(
+            PRINCIPAL_B,
+            BOB,
+            ExternalIdentifier(
+                identifier_id="xid_bbbb0002bbbb0002",
+                entity_id=BOB,
+                namespace=ExternalIdentifierNamespace.EMAIL,
+                normalized_value="b.private@example.test",
+                display_value="b.private@example.test",
+                principal_id=PRINCIPAL_B,
+            ),
+        )
+        repository.record_assignment(
+            PRINCIPAL_B,
+            Assignment(
+                assignment_id="asn_bbbb0002bbbb0002",
+                entity_id=BOB,
+                assignment_type=AssignmentType.EMPLOYMENT,
+                role="B private role",
+                principal_id=PRINCIPAL_B,
+            ),
+        )
+        repository.record_relationship(
+            PRINCIPAL_B,
+            EntityRelationship(
+                relationship_id="erel_bbbb0002bbbb0002",
+                from_entity_id=BOB,
+                relationship_type=EntityRelationshipType.AFFILIATED_WITH,
+                to_entity_id=BOB_TWO,
+                principal_id=PRINCIPAL_B,
+            ),
+        )
     with two_principals.connect() as connection:
         repository = SqlEntityRepository(connection)
         assert repository.external_identifiers(PRINCIPAL_A, BOB) == []
         assert repository.assignments(PRINCIPAL_A, BOB) == []
         assert repository.relationships(PRINCIPAL_A, BOB) == []
+        assert repository.aliases(PRINCIPAL_A, BOB) == []
+        # Not vacuous: B sees its own rows through the same three reads.
+        assert len(repository.external_identifiers(PRINCIPAL_B, BOB)) == 1
+        assert len(repository.assignments(PRINCIPAL_B, BOB)) == 1
+        assert len(repository.relationships(PRINCIPAL_B, BOB)) == 1
 
 
 # --- writes refuse a foreign reference before writing ------------------------
@@ -934,3 +985,232 @@ def test_a_redirect_into_another_principals_entity_is_refused(
             repository.redirect_entity(PRINCIPAL_A, ACME, BOB)
         with pytest.raises(UnknownScopeError):
             repository.redirect_entity(PRINCIPAL_A, BOB, ACME)
+
+
+# --- keyset pagination, against the statement that actually pages ------------
+
+
+HUB: Final = "ent_hub00001hub00001"
+
+
+def _a_hub_of_ten_edges(engine: Engine) -> list[str]:
+    """`HUB` with ten outgoing edges, and their identifiers in ascending order."""
+    edge_ids = [f"erel_{index:04d}aaaa0001aaa" for index in range(10)]
+    with engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(HUB, PRINCIPAL_A, "Hub Synthetic"))
+        for index, relationship_id in enumerate(edge_ids):
+            spoke = f"ent_{index:04d}aaaa0001aaa"
+            repository.create(
+                PRINCIPAL_A, an_entity(spoke, PRINCIPAL_A, f"Spoke {index} Synthetic")
+            )
+            repository.record_relationship(
+                PRINCIPAL_A,
+                EntityRelationship(
+                    relationship_id=relationship_id,
+                    from_entity_id=HUB,
+                    relationship_type=EntityRelationshipType.WORKS_FOR,
+                    to_entity_id=spoke,
+                    principal_id=PRINCIPAL_A,
+                ),
+            )
+    return edge_ids
+
+
+def test_walking_the_relationship_pages_returns_each_edge_exactly_once(
+    migrated_engine: Engine,
+) -> None:
+    """The continuation is `>`, so a page resumes past its predecessor, not on it.
+
+    Nothing reached this predicate. Every paging test on this plane drives the
+    in-memory double in `tests/conftest.py`, which carries its own independent
+    copy of the comparison, so the SQL's `>` could become `>=` with the whole
+    suite green. Weakened, walking this ten-edge hub in pages of three returns
+    the cursor row again at the head of every page: a caller reconciling edges
+    by identifier sees four of them twice and counts them twice.
+
+    Driven through `SqlEntityRepository` deliberately -- the double proves the
+    contract, and this proves the statement that has to hold it.
+    """
+    edge_ids = _a_hub_of_ten_edges(migrated_engine)
+    walked: list[str] = []
+    cursor: str | None = None
+    exhausted = False
+    with migrated_engine.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        for _ in range(len(edge_ids) + 1):
+            page = repository.relationships(
+                PRINCIPAL_A,
+                HUB,
+                direction="outgoing",
+                limit=3,
+                after_relationship_id=cursor,
+            )
+            assert len(page) <= 3, "the limit did not reach the server"
+            if not page:
+                exhausted = True
+                break
+            walked.extend(relationship.relationship_id for relationship in page)
+            cursor = page[-1].relationship_id
+    assert exhausted, "the walk never reached an empty page"
+    assert walked == edge_ids
+    assert len(walked) == len(set(walked)) == 10
+
+
+# --- a write's idempotency read decides on the acting Principal's rows -------
+
+
+def test_a_create_decides_a_collision_on_its_own_partitions_rows(
+    two_principals: Engine,
+) -> None:
+    """`create`'s pre-insert read is partitioned, so it judges A's rows only.
+
+    `entities.entity_id` is a *global* primary key, so an identifier B already
+    holds is unavailable to A whichever way this goes -- what the partition
+    decides is *which* refusal A receives, and on what evidence. Without the
+    predicate the read finds B's row, compares it against what A described, and
+    raises "an entity identifier cannot be rebound to different values": a
+    statement about a binding in A's partition, reached from a row that is not
+    in it, told to a caller who has bound nothing. With it the read finds
+    nothing, the INSERT is issued, and the server refuses the key collision that
+    is actually there.
+    """
+    with pytest.raises(IntegrityError), two_principals.begin() as connection:
+        SqlEntityRepository(connection).create(
+            PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Not Bob At All")
+        )
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        held = repository.get(PRINCIPAL_B, BOB)
+        assert held is not None, "the staged foreign row went missing"
+        assert held.display_name == "Bob Synthetic"
+        assert held.principal_id == PRINCIPAL_B
+        assert repository.get(PRINCIPAL_A, BOB) is None
+
+
+def test_an_assignment_write_decides_a_collision_on_its_own_partitions_rows(
+    two_principals: Engine,
+) -> None:
+    """The same rule on `record_assignment`, which has its own copy of the read.
+
+    B holds the assignment identifier. A's write names A's own entity, so every
+    ownership check above it passes and only the idempotency read can cross.
+    Without the partition on it, A is told its own assignment identifier is
+    bound to different values -- from B's row.
+    """
+    identifier = "asn_aaaa0001aaaa0001"
+    with two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_assignment(
+            PRINCIPAL_B,
+            Assignment(
+                assignment_id=identifier,
+                entity_id=BOB,
+                assignment_type=AssignmentType.EMPLOYMENT,
+                principal_id=PRINCIPAL_B,
+                role="Foreman",
+            ),
+        )
+    with pytest.raises(IntegrityError), two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_assignment(
+            PRINCIPAL_A,
+            Assignment(
+                assignment_id=identifier,
+                entity_id=ALICE,
+                assignment_type=AssignmentType.EMPLOYMENT,
+                principal_id=PRINCIPAL_A,
+                role="Estimator",
+            ),
+        )
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        theirs = repository.assignments(PRINCIPAL_B, BOB)
+        assert [assignment.role for assignment in theirs] == ["Foreman"], (
+            "the staged foreign row went missing"
+        )
+        assert repository.assignments(PRINCIPAL_A, ALICE) == []
+
+
+def test_a_relationship_write_decides_a_collision_on_its_own_partitions_rows(
+    two_principals: Engine,
+) -> None:
+    """And on `record_relationship`, whose read is a third copy of the same shape."""
+    identifier = "erel_aaaa0001aaaa0001"
+    bee = "ent_eeee0005eeee0005"
+    with two_principals.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_B, an_entity(bee, PRINCIPAL_B, "Bee Synthetic"))
+        repository.record_relationship(
+            PRINCIPAL_B,
+            EntityRelationship(
+                relationship_id=identifier,
+                from_entity_id=BOB,
+                relationship_type=EntityRelationshipType.WORKS_FOR,
+                to_entity_id=bee,
+                principal_id=PRINCIPAL_B,
+            ),
+        )
+    with pytest.raises(IntegrityError), two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_relationship(
+            PRINCIPAL_A,
+            EntityRelationship(
+                relationship_id=identifier,
+                from_entity_id=ALICE,
+                relationship_type=EntityRelationshipType.WORKS_FOR,
+                to_entity_id=ACME,
+                principal_id=PRINCIPAL_A,
+            ),
+        )
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        theirs = repository.relationships(PRINCIPAL_B, BOB)
+        assert [relationship.to_entity_id for relationship in theirs] == [bee], (
+            "the staged foreign row went missing"
+        )
+        assert repository.relationships(PRINCIPAL_A, ALICE) == []
+
+
+def test_a_foreign_redirect_at_ones_own_entity_does_not_block_merging_it(
+    two_principals: Engine,
+) -> None:
+    """The inbound-pointer check is partitioned, so B's lineage cannot veto A's merge.
+
+    `redirect_entity` refuses to merge away an entity others already redirect
+    *to*, because that leaves a two-hop chain ending on a `merged_redirect`. The
+    rows it looks at have to be A's: `superseded_by_entity_id` is a plain foreign
+    key with no partition behind it, so B can point one of B's own entities at
+    one of A's. Without the predicate that foreign pointer is read as A's own,
+    and a merge A is entitled to make is refused on evidence A cannot see -- an
+    unexplainable refusal sourced from another partition.
+
+    Staged with SQL rather than through the repository on purpose: the
+    repository is what refuses to write such a row, and the row this guards
+    against is the one that arrives some other way.
+    """
+    bee = "ent_eeee0005eeee0005"
+    with two_principals.begin() as connection:
+        SqlEntityRepository(connection).create(
+            PRINCIPAL_B, an_entity(bee, PRINCIPAL_B, "Bee Synthetic")
+        )
+    with two_principals.begin() as connection:
+        connection.execute(
+            text(
+                f"UPDATE {SCHEMA}.entities SET status = 'merged_redirect', "  # noqa: S608
+                "superseded_by_entity_id = :target WHERE entity_id = :bee"
+            ),
+            {"target": ACME, "bee": bee},
+        )
+
+    with two_principals.begin() as connection:
+        SqlEntityRepository(connection).redirect_entity(PRINCIPAL_A, ACME, ALICE)
+
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        merged = repository.get(PRINCIPAL_A, ACME)
+        assert merged is not None
+        assert merged.status is EntityStatus.MERGED_REDIRECT
+        assert merged.superseded_by_entity_id == ALICE
+        # B's pointer is untouched, and B still holds it.
+        theirs = repository.get(PRINCIPAL_B, bee)
+        assert theirs is not None, "the staged foreign row went missing"
+        assert theirs.superseded_by_entity_id == ACME
+        assert repository.get(PRINCIPAL_A, bee) is None

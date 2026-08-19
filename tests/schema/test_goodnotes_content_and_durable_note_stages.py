@@ -150,11 +150,11 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     This assertion used to be made of `a4d9c2e7b815`, and it was correct for as
     long as `a4d9c2e7b815` was the last revision to widen the audited vocabulary.
     It is not any more, and it is not *stale* — it is a claim that revision no
-    longer carries. `d2b8f5c04e71` admits the five `entities.*` capabilities and
+    longer carries. `c1a7e4b93d58` admits the five `entities.*` capabilities and
     the `entity_read` purpose to the `audit_events` closed sets, so
     `a4d9c2e7b815`'s literals are now what they are required to be by `D-69`:
     frozen at the vocabulary that revision emitted when it merged, and therefore
-    short of the domain by exactly what `d2b8f5c04e71` added. Asserting equality
+    short of the domain by exactly what `c1a7e4b93d58` added. Asserting equality
     of the older revision would
     force every later widening to edit a merged migration, which is the defect
     `D-69` exists to forbid.
@@ -168,7 +168,7 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     something. `d2b8f5c04e71` creates the entity observation, proposal, and
     merge-lineage tables and admits nothing, so it states no vocabulary to
     compare — and the closed set a database migrated to it enforces is still the
-    one `d2b8f5c04e71` installed, because `D-69` guarantees that only a revision
+    one `c1a7e4b93d58` installed, because `D-69` guarantees that only a revision
     which writes the set out can have changed it. The subject is therefore the
     most recent revision that *froze* a vocabulary, derived by walking the chain
     head-first for one that declares `_CAPABILITIES_AT_THIS_REVISION`; a
@@ -176,6 +176,16 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     the next one too. `a4d9c2e7b815` keeps the half that is still its own: the
     delta it added over its predecessor, and the sorted order of every literal
     it froze.
+
+    **Corrected 2026-08-19.** Three sentences above named `d2b8f5c04e71` as the
+    revision that admits the five `entities.*` capabilities and the `entity_read`
+    purpose. It does not, and this docstring said so itself two paragraphs down —
+    `d2b8f5c04e71` "creates the entity observation, proposal, and merge-lineage
+    tables and admits nothing". `c1a7e4b93d58` is the admitting revision, which
+    is what `CAPABILITY_REVISION` in this module has always held; only the prose
+    disagreed. Derived rather than reasoned about: `grep -rln "entities\\."
+    migrations/versions/` and `grep -rln "entity_read" migrations/versions/` each
+    return exactly one file, and it is `c1a7e4b93d58`'s.
     """
     admitting = _latest_vocabulary_migration()
     admitted = frozenset(_frozen_names(admitting, _ADMITTING_CONSTANT))

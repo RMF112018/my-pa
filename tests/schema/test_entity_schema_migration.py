@@ -210,8 +210,17 @@ def test_the_entity_revision_is_in_the_chain_on_the_goodnotes_revision() -> None
     assert script.get_revision(ENTITY_REVISION).down_revision == PREVIOUS_REVISION
 
 
-def test_the_revision_declares_the_four_tables_it_creates() -> None:
-    """The declaration and the migration name the same four tables."""
+def test_the_revision_declares_the_tables_it_creates() -> None:
+    """The declaration and the migration name the same tables.
+
+    **Corrected 2026-08-19: this was `..._the_four_tables_...` and compared five.**
+    `NEW_TABLES` is `ENTITY_TABLES | {"entity_aliases"}` and has held five since
+    `b7f4d1a92c36` added the alias table; the name and the docstring kept saying
+    four, so the one place a reader could learn the count from was wrong while
+    the assertion beside it was right. Neither number is written down now — the
+    set is named and `len()` is nobody's business but `NEW_TABLES`'s, which is
+    the shape that cannot go stale when the next revision widens it.
+    """
     declared = {table.name for table in METADATA.tables.values() if table.name in NEW_TABLES}
     assert declared == NEW_TABLES
 

@@ -4,16 +4,36 @@
 scope by the operator's 2026-08-01 reprioritization (`AGENTS.md` sections 1 and
 3).
 
-**Specification.** [`docs/specs/relationship-intelligence-v0.3.md`](../specs/relationship-intelligence-v0.3.md)
-is the controlling requirements source, under governing plan
-`PLAN-MYPA-RELATIONSHIP-INTELLIGENCE-v0.3-20260817-001`. It carries
-`implementation_authority: NOT_GRANTED`; the authorization for the work
-recorded below remains the operator's 2026-08-01 scope reprioritization in
-`AGENTS.md`.
-[`docs/specs/relationship-intelligence-v0.2.md`](../specs/relationship-intelligence-v0.2.md)
-is superseded lineage evidence — see the notice at the top of that file — and
-is **no longer this plan's requirements source**. Section 0 immediately below
-states why that changed and what it corrects.
+**Specification.** [`docs/specs/relationship-intelligence-v0.2.md`](../specs/relationship-intelligence-v0.2.md)
+remains this plan's requirements source.
+[`docs/specs/relationship-intelligence-v0.3.md`](../specs/relationship-intelligence-v0.3.md)
+is a **proposed successor**, mirrored under governing plan
+`PLAN-MYPA-RELATIONSHIP-INTELLIGENCE-v0.3-20260817-001`, and it is not yet
+controlling: its own front matter reads
+`status: PROPOSED_SUCCESSOR_READY_FOR_OPERATOR_REVIEW` and
+`implementation_authority: false`, so the operator decision that would supersede
+v0.2 has not been recorded. Neither document carries implementation authority;
+the authorization for the work recorded below is the operator's 2026-08-01 scope
+reprioritization in `AGENTS.md`, and nothing else.
+
+**Corrected 2026-08-19.** This paragraph read "v0.3 … is the controlling
+requirements source" and called v0.2 "superseded lineage evidence … **no longer
+this plan's requirements source**", citing the successor notice at the top of
+v0.2 as its support. The notice says the opposite, and the notice is right: it
+states in terms that "v0.3 is not yet controlling, and this notice does not make
+it so", and records that an earlier draft of itself made exactly the claim this
+paragraph then repeated. Citing a document as authority for the reverse of what
+it says is the same defect as a stale count, one layer up. The same paragraph
+also quoted v0.3's field as `implementation_authority: NOT_GRANTED`; the file
+reads `false`.
+
+**What this does not change.** Section 0 below still reads the repository
+against v0.3's `WP-RI-00 … WP-RI-13` map, and that reading is still worth having
+— a proposed successor is the best available statement of where this plane is
+going, and measuring against it is how the gap gets known before an operator is
+asked to decide. Section 0 is a *gap analysis against a proposal*, not a
+compliance ledger against a controlling document, and it is labelled that way
+throughout.
 
 **Out of scope for every work package here**, and a mandatory stop if
 approached: production deployment or activation, shared or production database
@@ -23,7 +43,7 @@ Abacus/ChatLLM Task changes, destructive actions, and operator risk acceptance
 
 ---
 
-## 0. Correction: the controlling work-package map (`RI-PR135-BLOCKER-001`)
+## 0. Gap analysis against the proposed v0.3 work-package map (`RI-PR135-BLOCKER-001`)
 
 Independent audit `AUDIT-MYPA-RELATIONSHIP-INTELLIGENCE-PR135-20260819-001`
 (disposition `CORRECTIONS_REQUIRED`, bound to head
@@ -32,57 +52,77 @@ recorded in sections 1 through 5 below — cited
 [`relationship-intelligence-v0.2.md`](../specs/relationship-intelligence-v0.2.md)
 as its requirements source and then defined its *own* `WP-RI-01 … WP-RI-13`
 work-package map and its *own* first-forty acceptance ledger against that
-citation, while the plan that was actually controlling at the time was
+citation, rather than against the numbering v0.2 itself carries. Meanwhile
 [`relationship-intelligence-v0.3.md`](../specs/relationship-intelligence-v0.3.md)
 — a materially different program-scale specification with its own
-`WP-RI-00 … WP-RI-13` and its own `RI-AC-001..040` (section 21 there). Several
-work packages controlling under v0.3 were replaced with narrower tasks bearing
-the same numbers and then marked `complete`. That is `RI-PR135-BLOCKER-001`,
-and this section corrects it.
+`WP-RI-00 … WP-RI-13` and its own `RI-AC-001..040` (section 21 there) — was
+being prepared as v0.2's successor. Several work packages that v0.3 defines were
+substituted with narrower tasks bearing the same numbers and then marked
+`complete`. That is `RI-PR135-BLOCKER-001`, and this section addresses it by
+reading the repository against v0.3's map.
+
+**Corrected 2026-08-19: this paragraph said v0.3 was "the plan that was actually
+controlling at the time".** It was not, and it is not now. v0.3 was created
+2026-08-17, after the campaign below was largely built, and it has carried
+`status: PROPOSED_SUCCESSOR_READY_FOR_OPERATOR_REVIEW` from its creation to this
+head. A specification cannot have been retroactively controlling over work that
+predates it, and a proposal awaiting operator review is not controlling over
+anything. What the audit legitimately found is the substitution — a campaign
+that invented its own numbering and its own forty criteria and then reported
+against those — and that finding stands on its own without the retroactive
+claim. The word "controlling" is used below only where this document is quoting
+what v0.3 requires *of a future implementation*; it is not a statement that v0.3
+governs the record now.
 
 **What this section does not do.** Sections 1 through 5 below are **not
 renumbered in place.** Every `WP-RI-NN` and every `D-RI-NN` from here to the end
 of this document refers to the numbering this campaign invented against v0.2 —
 call it the *legacy numbering* — and every cross-reference between those
 decisions is still internally consistent under it. Renumbering those sections
-to match the controlling map would silently rewrite what the campaign actually
+to match v0.3's map would silently rewrite what the campaign actually
 believed it was building at the time and would break every `D-RI-NN` citation
-below without changing a single line of `src/`. The correction is this section:
-a reading of the same repository against the map that was actually controlling,
-with the legacy numbering cited wherever the two overlap so a reader can find
-the evidence either way.
+below without changing a single line of `src/`. What this section is: a reading
+of the same repository against v0.3's map, with the legacy numbering cited
+wherever the two overlap so a reader can find the evidence either way.
 
 **Reading rule for the rest of this document.** Wherever section 3's ledger,
 section 4's decision log, or section 5's gap list say a criterion or a decision
 belongs to "`WP-RI-08`" or any other legacy number, that is the legacy
-numbering's own package, not the controlling one of the same number. The table
-below is the map to use going forward;
+numbering's own package, not v0.3's package of the same number. The table
+below is the map to use going forward if and when v0.3 is accepted;
 [`relationship-intelligence-v0.3-acceptance.md`](../specs/relationship-intelligence-v0.3-acceptance.md)
-carries the current `RI-AC-001..040` disposition, not section 3 of this
-document.
+carries the disposition against v0.3's `RI-AC-001..040`, and section 3 of this
+document carries this campaign's own substituted forty.
 
-### 0.1 Controlling `WP-RI-00 … WP-RI-13`, read against the repository as it stands today
+**"Controlling" as this section uses the word.** In the table below,
+"controlling WP-RI-NN" names *the requirement v0.3 states under that number* —
+the thing a future implementation would have to satisfy — and never asserts that
+v0.3 governs this repository today. It does not; see the correction above and
+the successor notice at the top of v0.2. Read every row as "what v0.3 would ask
+for, and what is actually here", which is what each row is.
 
-| Controlling WP | Requires | What the repository actually has | What remains |
+### 0.1 v0.3's `WP-RI-00 … WP-RI-13`, read against the repository as it stands today
+
+| v0.3 WP | Requires | What the repository actually has | What remains |
 |---|---|---|---|
 | **WP-RI-00** — reauthentication, lineage reconciliation, contract freeze | A repo-truth note bound to exact head/tree, a v0.2→v0.3 lineage matrix, an existing-primitive reuse map, an exact migration baseline, a file/module impact map | Nothing filed under this label anywhere in the repository. This T1 remediation cycle — this section, [`relationship-intelligence-v0.3.md`](../specs/relationship-intelligence-v0.3.md), and [`relationship-intelligence-v0.3-acceptance.md`](../specs/relationship-intelligence-v0.3-acceptance.md) — is the closest thing to it that exists, produced after the fact rather than before implementation | The forward-looking half: an exact migration baseline and file/module impact map stated *before* further work, not reconstructed *after* it. Outstanding |
 | **WP-RI-01** — domain model and additive migration | `Entity`, `ExternalIdentifier`, `Assignment`, `EntityRelationship` (or equivalent) as an additive schema change | Delivered, and a close match. `src/my_pa/domain/relationship/entity.py` (`Entity`, `ExternalIdentifier`, `EntityAlias`, `Assignment`, `EntityRelationship` dataclasses; closed `EntityType`/`EntityStatus`/`AliasType`/`AssignmentType`/`EntityRelationshipType` enums) against migration `9def3c2e63bb`. This is legacy `WP-RI-01` and the two maps agree here | Nothing controlling-specific outstanding at the domain-model layer itself; see WP-RI-02 for what sits on top of it |
 | **WP-RI-02** — repository/service layer and typed contracts; principal-derived, centrally authorized, idempotent writes, expected-version concurrency, deterministic receipts, audit events | A repository port and implementation with those five properties on every write | Partially delivered, filed under legacy `WP-RI-01`/`WP-RI-02` together. `EntitiesRepository` port, `SqlEntityRepository` (`src/my_pa/infrastructure/persistence/entity.py`), the `UnitOfWork.entities` seat, and a Principal-partitioned in-memory fake exist, and every method takes `principal_id` first. Idempotency is real for `bind_identifier` and `record_alias` against a natural key | Idempotency is **not** general: `create`, `record_assignment`, and `record_relationship` are idempotent only against an identifier the caller already minted, so a retry that mints a fresh one double-writes (`RI-AC-036`, and the legacy document's own section 5 names the `record_assignment`/`record_relationship` half of this). There is **no `update` method on the repository at all**, so `version` is stored on `Entity` and `EntityRelationship` but nothing checks an expected version against it — expected-version concurrency has nothing to guard yet. No receipt is emitted by any write path, and no audit event is emitted outside the security/isolation tests that assert its *absence* of leakage rather than its presence as a record. All four are outstanding |
 | **WP-RI-03** — exact identity and alias resolution | Stage 1 of the resolution contract: exact stable-identifier and verified-alias matching, effective-date filtering, same-name protection | Delivered, close match. `src/my_pa/application/entity_resolution.py` Stage 1/Stage 2; `tests/unit/test_entity_resolution.py`, `tests/database/test_entity_repository.py`. This is legacy `WP-RI-03` and the two maps agree | Nothing controlling-specific outstanding |
-| **WP-RI-04** — contextual resolution and explainability; false resolution is release-blocking | Stage 3/4 of the resolution contract: ranked candidates, explainable evidence, a measured false-resolution rate | Delivered, close match, and recently strengthened by the uncommitted currency fix (section 4a). Contextual ranking is ordinal — `ResolutionBasis` ordering, not a numeric score — and calibration is published in `tests/evaluation/RESOLUTION_CALIBRATION.md`. This is legacy `WP-RI-04` and the two maps agree. See section 0.2 below for the tension between this design and the controlling spec's word "ranked" | The corpus this is measured against is far below controlling WP-RI-12 scale; see that row. The false-resolution rate is real evidence over a small, synthetic, collision-biased corpus — not yet evidence at program scale |
-| **WP-RI-05** — MCP read/resolve/context surface with bounded output and pagination | Five read capabilities, each bounded and paginated | Delivered for the bounded half, not for pagination. Five `Capability` members (`ENTITIES_SEARCH/GET/RESOLVE/CONTEXT/RELATIONSHIPS`), the `entity_read` purpose, the composition gate, remote-exposure withholding (`tests/contract/test_entity_remote_exposure.py`). `SearchEntities` takes a bounded `page_size` | **No pagination**: there is no cursor or offset parameter anywhere in the search contract, so a caller can bound one page and has no way to ask for the next one. A sibling track in this same remediation cycle is actively hardening pagination in `src/` concurrently with this document; this row should be re-checked against that track's landed state before being read as final — flagged rather than guessed at, per this cycle's instructions |
+| **WP-RI-04** — contextual resolution and explainability; false resolution is release-blocking | Stage 3/4 of the resolution contract: ranked candidates, explainable evidence, a measured false-resolution rate | Delivered, close match, and strengthened by the currency fix recorded in section 4a — which is committed at this head, not uncommitted as this cell said until 2026-08-19. Contextual ranking is ordinal — `ResolutionBasis` ordering, not a numeric score — and calibration is published in `tests/evaluation/RESOLUTION_CALIBRATION.md`, which reports 31 cases in 19 families. This is legacy `WP-RI-04` and the two maps agree. See section 0.2 below for the tension between this design and v0.3's word "ranked" | The corpus this is measured against is far below controlling WP-RI-12 scale; see that row. The false-resolution rate is real evidence over a small, synthetic, collision-biased corpus — not yet evidence at program scale |
+| **WP-RI-05** — MCP read/resolve/context surface with bounded output and pagination | Five read capabilities, each bounded and paginated | Delivered in full for the bounded half, and for one of the two capabilities that need pagination. Five `Capability` members (`ENTITIES_SEARCH/GET/RESOLVE/CONTEXT/RELATIONSHIPS`), the `entity_read` purpose, the composition gate, remote-exposure withholding (`tests/contract/test_entity_remote_exposure.py`). `entities.relationships` is now genuinely paginated: `GetEntityRelationships` takes `page_size` **and `after`**, `SqlEntityRepository.list_relationships` takes `after_relationship_id` and keysets on `relationship_id >`, and the disclosure issues `next_cursor` only when the page was truncated (`src/my_pa/application/commands.py`, `application/service.py`, `infrastructure/persistence/entity.py`; `tests/contract/test_entity_read_bounds.py`). `SearchEntities` takes a bounded `page_size` | **`entities.search` is the one read left unpaginated.** It has `page_size` and no cursor or offset, so a caller can bound one page of a name search and has no way to ask for the next one. The other three need none: `entities.get` and `entities.context` each answer about one named entity, and `entities.resolve` returns a candidate set that is bounded by design and would be wrong to page through. Corrected 2026-08-19: this row read "**No pagination**: there is no cursor or offset parameter anywhere in the search contract", which was true when written and was left standing after the sibling track landed the `entities.relationships` cursor it told the reader to watch for. Derived by reading the contract: `grep -rn "next_cursor\|after_relationship_id" src/` and the `after` field on `GetEntityRelationships` |
 | **WP-RI-06** — observation, proposal, review, and merge workflows; review integrated into the *existing* review plane; merge preview; transactional redirect; audit and receipt; replay protection; expected-version checks; scheduled agents excluded from merge apply | A governance service reachable by some caller, whose review path is the repository's one review mechanism | Delivered as a set of application-layer contracts, filed under legacy `WP-RI-06`, with three findings worth stating plainly rather than folding into "complete": (1) **no merge preview exists.** Nothing computes a pre-decision view of affected records, conflicts, or references before a merge is decided; the legacy document's own ledger already marks its version of this `UNMET` (its `RI-AC-008`). (2) **this is very likely a second review system, not the existing one.** The repository already has a review mechanism — `domain/capture/review.py` and `infrastructure/persistence/review.py`, backing `capture_review_cases`, used by capture, native-source, GoodNotes, and extraction-quarantine proposals, with its own `ProposalState`/`ProposalType`/`RiskClass` vocabulary (`domain/capture/proposal.py`). `domain/relationship/governance.py` instead defines its own, structurally separate `EntityProposal`/`EntityProposalState`/`ReviewRequirement` vocabulary with no join or reference to `capture_review_cases` anywhere in the schema or the service. Controlling WP-RI-06 states explicitly: "review integration into the EXISTING review plane (do not build a second review system)." This appears to be exactly that second system, built in good faith and well-tested on its own terms, but not integrated with the one the repository already had. (3) **nothing calls it.** `EntityGovernanceService` is composed by no capability, no bootstrap wiring, no script, and no worker (legacy `D-RI-21`; `ops/runbooks/relationship-intelligence.md` section 4 states this plainly already). A proposal can be written and read and cannot currently be decided by anyone | Merge preview; reconciling `EntityProposal` with `capture_review_cases` (or a documented, argued exception to "do not build a second review system," which does not currently exist); a caller — capability, script, or worker — for the governance service. All three outstanding |
 | **WP-RI-07** — context-card and managed-context integration; `context.prepare` exposes an entity/relationship retrieval plane, Principal-scoped, bounded, provenance-referenced, no promotion side effects | The context card composed into `context.prepare`'s actual retrieval path | The card itself is delivered and well-tested standalone (`src/my_pa/application/entity_context.py`, `domain/relationship/context_card.py`; `tests/unit/test_entity_context.py`, 9 tests). **It is not wired into `context.prepare`.** Confirmed directly: `src/my_pa/application/context/providers.py` declares `ContextPlane.RELATIONSHIP` as a plane, and both `_PLANE_GRANT_CAPABILITIES[ContextPlane.RELATIONSHIP]` (an empty `frozenset`) and `search_plane` return `_relationship_unavailable()` unconditionally for it, reporting `CoverageState.NOT_ADMITTED`. The module's own comment states the reason: *"Relationship has no read capability in this work package and stays omitted under a remote grant set rather than reported as denied."* `context.prepare` therefore never calls the entity plane at all, in any mode | The actual composition: a `context.prepare` path that calls `EntityContextService` when the query names a person/company/project/entity, subject to the same bounds and provenance rules the card already enforces standalone. Outstanding in full |
 | **WP-RI-08** — discovery and backfill framework: deterministic, resumable, idempotent, proposal-first; synthetic adapters only; enumerate authorized evidence, extract stable identifiers and candidate names/orgs, resolve against the registry, record occurrence observations, generate proposals, maintain a run ledger with cursor/checkpoint/idempotency/failures/coverage, produce review-backlog metrics | Nothing. **This is the confirmed headline drift.** What legacy section 1 calls "`WP-RI-08` — Re-enrichment" is `src/my_pa/application/entity_reenrichment.py`: two bounded, idempotent, mutation-tested triggers, `after_merge` (re-point stranded observations once a merge is already recorded) and `after_alias` (re-offer unresolved mentions once a new alias is recorded). Both operate exclusively on records the entity plane already holds. Neither enumerates an external source, extracts a stable identifier or a candidate name from source evidence, or writes anything resembling a run ledger, cursor, checkpoint, or coverage metric — a repository-wide search for those terms scoped to the relationship/entity modules returns nothing. This work is real and is correctly filed under controlling **WP-RI-06** as a supporting re-enrichment mechanism for the governance workflows, not under WP-RI-08 | The entire discovery/backfill framework as specified: source enumeration (against synthetic adapters only, per the standing prohibition on live traversal), identifier/candidate extraction, registry resolution, occurrence observations, proposal generation for unresolved references, and the run ledger with cursor/checkpoint/idempotency/failure/coverage tracking. None of it exists. Fully outstanding |
 | **WP-RI-09** — Bobby-facing management experience: global entity search, entity detail with disambiguators, current/historical assignments, evidence/provenance inspection, review of proposals/conflicts, alias/identity correction, merge preview (CLI/conversational/operator-API acceptable; a broad CRM UI is not required) | Any one authorized surface covering that minimum capability list | What legacy section 1 calls "`WP-RI-09` — Read-only operator inspection" is `scripts/inspect_entity_plane.py`: a read-only reporting CLI over row counts, grouped counts, an unresolved-mentions count, and a listing of open proposals (with `proposed_by` deliberately not selected, per legacy adversarial finding 10). It takes a required `--principal` argument and prints counts and closed-set names. It has **no search-by-text function, no entity-detail view, no assignment listing, no alias/identity-correction path, and no merge preview** — it is a monitoring report, not a management surface, and does not cover the controlling minimum. It is correctly filed here as read-only inspection tooling in support of an operator, not as WP-RI-09's deliverable | Every item in the controlling minimum capability list except aggregate counting. Effectively fully outstanding — this needs a real (even minimal, CLI- or conversational-only) management surface, which section 25 item 5 of the controlling spec leaves open as an operator decision |
 | **WP-RI-10** — intelligence-task integration: Meeting Intelligence attendee/mention resolution, Action & Commitment counterparties, Watch List, Morning Brief; canonical entity IDs attach without those tasks becoming alternate identity authorities | Canonical entity IDs actually attached to at least one of those four intelligence tasks | Nothing. What legacy section 1 calls "`WP-RI-10` — Dormant intelligence-Task profile" is `src/my_pa/bootstrap/relationship_intelligence_task.py`: a capability-grant *profile* for a hypothetical future scheduled Task, `DRAFT_NOT_ACTIVATED`, granting the same five reads and nothing else. It is correctly filed under controlling **WP-RI-11** (security/authorization posture for a not-yet-existing task identity) rather than under WP-RI-10, because it integrates with nothing — there is no Meeting Intelligence, Action & Commitment Intelligence, Watch List Intelligence, or Morning Brief module anywhere in `src/my_pa/` for it to attach an entity ID to. `application/commitments.py` exists and has zero references to `entity` anywhere in it | All four integrations, in full. There is currently no attachment point in this repository for any of them — this is not a partially-done integration, it is an absent one |
-| **WP-RI-11** — security, privacy, authorization, adversarial testing | Principal isolation, impersonation rejection, minimal-disclosure, adversarial coverage | Delivered, and substantive. `tests/security/test_entity_privacy_regression.py` (11 tests: cross-Principal disclosure denial, name-as-instruction injection resistance, judgement-free answers, task-profile draft/gating checks) and `tests/security/test_cross_principal_relationship_isolation.py` (8 tests: foreign-read-as-absent, cross-Principal merge/decide refusal, caller-supplied-Principal rejection, partition non-mutation). This is legacy `WP-RI-11`, and the two maps agree here | Adversarial coverage for the write paths that do not yet have a caller (WP-RI-06) has nothing to exercise yet; revisit once WP-RI-06's caller exists |
-| **WP-RI-12** — program-scale synthetic acceptance and performance: ≥500 persons, ≥100 organizations, several programs/projects/work packages, ≥5,000 combined aliases/identifiers/assignments/relationships/observations, ≥50 collision groups, ≥50 historical assignment changes; p50/p95 benchmarks for exact resolve, candidate search, contextual resolution, entity search, context-card assembly, bounded relationship traversal | A fixture and benchmark record at that floor | **Not close.** The current fixture, per this document's own uncommitted section 4a diff, is thirty-one labelled cases over fifteen entities (`tests/evaluation/fixtures/resolution_corpus.py`, `resolution_cases.py`). That is roughly two to three orders of magnitude below the controlling floor: fifteen entities against a ≥600-entity floor (500 persons + 100 organizations), thirty-one records against a ≥5,000-record floor, and no measured collision-group or historical-assignment-change count at all. A repository-wide search for `p50`, `p95`, and `benchmark` scoped to `tests/` and `docs/` returns no hits anywhere for the entity/relationship plane — no benchmark record exists in any form. **This entire work package is unmet**, and is the second half of `RI-PR135-BLOCKER-006` alongside the acceptance-matrix substitution. A sibling track in this remediation cycle is building a program-scale fixture concurrently; this row should be re-checked against that track's landed state before being read as final | The fixture at scale, and every p50/p95 benchmark this work package requires. Fully outstanding as of this document; watch the sibling fixture track |
-| **WP-RI-13** — documentation, independent review, rollout package, handoff: current `docs/specs/` RI spec, `docs/planning/` implementation/rollout record, MCP tool documentation, schema/data lifecycle, threat/privacy notes, backfill operator procedure, feature-flag/grant matrix, benchmark results, acceptance matrix, rollback/recovery procedure | Each of the ten named documents, current | Mixed. `docs/specs/` RI spec: **corrected by this remediation cycle** — [`relationship-intelligence-v0.3.md`](../specs/relationship-intelligence-v0.3.md) is now current; it was v0.2 (wrong lineage) before this cycle. Implementation/rollout record: this document, under `docs/plans/` rather than a `docs/planning/` directory — present, but see the reading rule above for what in it is legacy-numbered. MCP tool documentation: no standalone doc; tool semantics are described in prose in this document and in `ops/runbooks/relationship-intelligence.md`. Schema/data lifecycle: no dedicated doc; described piecemeal across this document and the runbook. Threat/privacy notes: `docs/security/threat-model.md` exists and names relationship identity (e.g. `ABUSE-PKL-019`), but is scoped to the original MCV read-only slice and has not been revisited for the entity plane specifically. Backfill operator procedure: does not exist, because there is no backfill framework to operate (see WP-RI-08). Feature-flag/grant matrix: reasonably covered informally by `ops/runbooks/relationship-intelligence.md` sections 1–2. Benchmark results: do not exist (see WP-RI-12). Acceptance matrix: **corrected by this remediation cycle** — [`relationship-intelligence-v0.3-acceptance.md`](../specs/relationship-intelligence-v0.3-acceptance.md) scores the controlling `RI-AC-001..040`; section 3 below scores this campaign's own substituted forty and is superseded by it. Rollback/recovery procedure: not present as a named section; the runbook covers disabling the feature flag but not recovering from a bad migration or a bad merge decision | A standalone MCP tool doc, a schema/data-lifecycle doc, a refreshed threat-model pass scoped to the entity plane, a backfill operator procedure (once WP-RI-08 exists), benchmark results (once WP-RI-12 exists), and a rollback/recovery procedure. Five of ten items outstanding in some form; two corrected by this cycle |
+| **WP-RI-11** — security, privacy, authorization, adversarial testing | Principal isolation, impersonation rejection, minimal-disclosure, adversarial coverage | Delivered, and substantive. `tests/security/test_entity_privacy_regression.py` (19 tests — corrected 2026-08-19 from 11, by `--collect-only -q` on the file: cross-Principal disclosure denial, name-as-instruction injection resistance, judgement-free answers, task-profile draft/gating checks) and `tests/security/test_cross_principal_relationship_isolation.py` (8 tests: foreign-read-as-absent, cross-Principal merge/decide refusal, caller-supplied-Principal rejection, partition non-mutation). This is legacy `WP-RI-11`, and the two maps agree here | Adversarial coverage for the write paths that do not yet have a caller (WP-RI-06) has nothing to exercise yet; revisit once WP-RI-06's caller exists |
+| **WP-RI-12** — program-scale synthetic acceptance and performance: ≥500 persons, ≥100 organizations, several programs/projects/work packages, ≥5,000 combined aliases/identifiers/assignments/relationships/observations, ≥50 collision groups, ≥50 historical assignment changes; p50/p95 benchmarks for exact resolve, candidate search, contextual resolution, entity search, context-card assembly, bounded relationship traversal | A fixture and benchmark record at that floor | **A fixture at the floor now exists and nothing runs it; no benchmark exists at all.** The sibling track this row used to point forward to has landed: `tests/evaluation/fixtures/program_scale_corpus.py` and `program_scale_cases.py` are on disk at this head, and the corpus clears every stated minimum — 748 entities (500 persons, 100 organizations), 6 programs, 24 projects, 48 work packages, 5,262 combined alias/identifier/assignment/relationship/observation records (680 + 910 + 1,250 + 922 + 1,500), 60 collision groups, 80 historical employment changes — with 1,090 labelled cases beside it. Derived by loading it, not by reading its constants: `PYTHONPATH=src:. python -c "from tests.evaluation.fixtures.program_scale_corpus import PROGRAM_SCALE_CORPUS as C; import dataclasses; [print(f.name, len(getattr(C, f.name))) for f in dataclasses.fields(C)]"`. **The honest fact about it is that it is inert.** `grep -rn "program_scale" tests/ src/ scripts/ apps/` returns nothing outside the two fixture files themselves — no test imports either module, no tier executes them, and `tests/evaluation/fixtures/__init__.py` does not export them. A fixture no test reads proves the same amount as no fixture; what exists is the data, not the evidence. The smaller live corpus remains the only one anything runs: thirty-one labelled cases over fifteen entities (`resolution_corpus.py`, `resolution_cases.py`), which is what `RESOLUTION_CALIBRATION.md` measures. On benchmarks the row's finding stands and is narrowed: `p50` and `p95` appear nowhere in `tests/` or `docs/` for this plane, so no benchmark record exists in any form. Corrected 2026-08-19: this row also said a search for `benchmark` returns no hits, and that is now false — the token appears twice, at `program_scale_cases.py:51` and `program_scale_corpus.py:742`, both in comments anticipating a benchmark that was never written. **This work package remains unmet**, and is the second half of `RI-PR135-BLOCKER-006` alongside the acceptance-matrix substitution | A test that actually reads the program-scale fixture, and every p50/p95 benchmark this work package requires. The fixture half is built but unexercised; the benchmark half does not exist |
+| **WP-RI-13** — documentation, independent review, rollout package, handoff: current `docs/specs/` RI spec, `docs/planning/` implementation/rollout record, MCP tool documentation, schema/data lifecycle, threat/privacy notes, backfill operator procedure, feature-flag/grant matrix, benchmark results, acceptance matrix, rollback/recovery procedure | Each of the ten named documents, current | Mixed. `docs/specs/` RI spec: v0.2 is the current requirements source and remains so; [`relationship-intelligence-v0.3.md`](../specs/relationship-intelligence-v0.3.md) is mirrored beside it as a proposed successor awaiting operator review, so the "current spec" item is met by v0.2 and the successor is filed but not yet in force. Corrected 2026-08-19: this cell said v0.3 "is now current" and called v0.2 "wrong lineage", which asserted an acceptance v0.3's own front matter says has not happened. Implementation/rollout record: this document, under `docs/plans/` rather than a `docs/planning/` directory — present, but see the reading rule above for what in it is legacy-numbered. MCP tool documentation: no standalone doc; tool semantics are described in prose in this document and in `ops/runbooks/relationship-intelligence.md`. Schema/data lifecycle: no dedicated doc; described piecemeal across this document and the runbook. Threat/privacy notes: `docs/security/threat-model.md` exists and names relationship identity (e.g. `ABUSE-PKL-019`), but is scoped to the original MCV read-only slice and has not been revisited for the entity plane specifically. Backfill operator procedure: does not exist, because there is no backfill framework to operate (see WP-RI-08). Feature-flag/grant matrix: reasonably covered informally by `ops/runbooks/relationship-intelligence.md` sections 1–2. Benchmark results: do not exist (see WP-RI-12). Acceptance matrix: **added by this remediation cycle** — [`relationship-intelligence-v0.3-acceptance.md`](../specs/relationship-intelligence-v0.3-acceptance.md) scores v0.3's `RI-AC-001..040`; section 3 below scores this campaign's own substituted forty and is the record of what the campaign believed it was proving. Neither supersedes the other while v0.3 is unaccepted: the two answer different documents. Rollback/recovery procedure: not present as a named section; the runbook covers disabling the feature flag but not recovering from a bad migration or a bad merge decision | A standalone MCP tool doc, a schema/data-lifecycle doc, a refreshed threat-model pass scoped to the entity plane, a backfill operator procedure (once WP-RI-08 exists), benchmark results (once WP-RI-12 exists), and a rollback/recovery procedure. Five of ten items outstanding in some form; two corrected by this cycle |
 
-### 0.2 A tension the controlling spec and this repository resolve differently, on purpose
+### 0.2 A tension v0.3 and this repository resolve differently, on purpose
 
-Controlling section 9.2 asks contextual resolution to perform "Stage 3 —
+v0.3 section 9.2 asks contextual resolution to perform "Stage 3 —
 contextual ranking," and `RI-AC-005` asks it to return "ranked alternatives."
 `tests/architecture/test_relationship_scoring_surface_is_denied.py` denies the
 token `rank` (along with `score`, `percentile`, `priority`, `influence`, and a
@@ -106,8 +146,8 @@ future reader does not "fix" one side by breaking the other.
 
 ## 1. Work packages (legacy numbering — see section 0)
 
-**This table uses the numbering this campaign invented against v0.2, not the
-controlling map.** Read section 0.1 above first.
+**This table uses the numbering this campaign invented against v0.2, not v0.3's
+map.** Read section 0.1 above first.
 
 | WP | Scope | State |
 |---|---|---|
@@ -163,20 +203,25 @@ Two consequences bind WP-RI-03 and WP-RI-04:
 
 ---
 
-## 3. Acceptance-criteria ledger — RI-AC-001 … RI-AC-040 (legacy, superseded — see section 0)
+## 3. Acceptance-criteria ledger — RI-AC-001 … RI-AC-040 (legacy numbering — see section 0)
 
 **This ledger scores this campaign's own substituted first-forty criteria,
-defined against v0.2, not the controlling `RI-AC-001..040` from
+defined against v0.2, not the `RI-AC-001..040` from
 [`relationship-intelligence-v0.3.md`](../specs/relationship-intelligence-v0.3.md)
-section 21.** It is preserved below as the historical record of what this
-campaign believed it was proving. The current disposition against the
-controlling criteria is
-[`relationship-intelligence-v0.3-acceptance.md`](../specs/relationship-intelligence-v0.3-acceptance.md);
-that document, not this section, is what a reviewer should cite.
+section 21.** It is preserved below as the record of what this campaign believed
+it was proving. The disposition against v0.3's criteria is
+[`relationship-intelligence-v0.3-acceptance.md`](../specs/relationship-intelligence-v0.3-acceptance.md).
+A reviewer should cite both and neither alone: this section answers the document
+that is currently the requirements source under a numbering the campaign
+invented, and that document answers a proposed successor that is not yet in
+force. Corrected 2026-08-19: this heading said "superseded" and this paragraph
+called v0.3's ledger "the current disposition", which asserted a supersession
+that has not been decided.
 
-The specification (v0.2, at the time this section was written) declares
-seventy criteria; this campaign tracked the first forty of that document — a
-different forty, sharing only their `RI-AC-NNN` numbering with the controlling
+The specification — v0.2, then and still — declares
+seventy criteria (`grep -oE "RI-AC-[0-9]{3}" docs/specs/relationship-intelligence-v0.2.md | sort -u | wc -l` → 70;
+the same command over v0.3 returns 40); this campaign tracked the first forty of that document — a
+different forty, sharing only their `RI-AC-NNN` numbering with v0.3's
 ledger, and answering different questions under most of those numbers. **A note
 that must not be lost:** a substantial share of the v0.2-anchored RI-AC-001 …
 RI-AC-040 are product- and interface-level criteria that cannot be satisfied
@@ -254,11 +299,12 @@ here precisely because no such test exists yet.
 
 Recorded here because each one is a choice a reviewer would otherwise have to
 reconstruct from a diff. **"The specification" throughout this section is v0.2,
-this campaign's legacy citation, not the controlling v0.3** — these are
-genuine engineering decisions taken while building the code that exists today,
-and are preserved verbatim because the code still works this way, but the
-document each decision is measured against is not the controlling one. Section
-0 above is the reconciliation against the document that is.
+this campaign's citation and still the requirements source, under a work-package
+numbering the campaign invented rather than v0.2's own** — these are genuine
+engineering decisions taken while building the code that exists today, and are
+preserved verbatim because the code still works this way. Section 0 above reads
+the same decisions against v0.3's map, which is where a reader should go to see
+what a proposed successor would additionally ask for.
 
 **D-RI-24 — the intelligence Task profile is read-only and dormant.**
 `bootstrap/relationship_intelligence_task.py` states which capabilities a
@@ -554,19 +600,19 @@ Every figure below was produced by running the command named, on this branch.
 
 | Claim | Evidence |
 |---|---|
-| FAST tier green | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **7908 passed, 0 failed, 940 deselected** |
+| FAST tier green | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **7914 passed, 0 failed, 951 deselected** |
 | Lint and format | `ruff check .` and `ruff format --check .` — clean over 918 files |
 | Types | `mypy` (configured targets: `src`, `migrations`, `apps`, `ops`) — clean over 337 files |
-| Full database tier green | `pytest -m "database or recovery or e2e"` against a live PostgreSQL 17 — **930 passed, 0 failed, 7918 deselected**. The four schema-suite failures adversarial review surfaced (accumulation sets in the audit, enrollment, capture and entity migration tests, outgrown by this plane's eight tables and five capabilities) are fixed, not deselected |
+| Full database tier green | `pytest -m "database or recovery or e2e"` against a live PostgreSQL 17 — **941 passed, 0 failed, 7924 deselected**. The four schema-suite failures adversarial review surfaced (accumulation sets in the audit, enrollment, capture and entity migration tests, outgrown by this plane's eight tables and five capabilities) are fixed, not deselected |
 | Evaluation tier | `pytest -m evaluation` — 2 passed. Selected by no CI job by design; the frozen record is what CI checks |
-| Migrations apply and reverse | `tests/schema/test_entity_schema_migration.py` — 54 tests: empty-to-head, head-to-empty, and declaration-to-server constraint, column and partition parity across **all eight** plane tables, against a disposable PostgreSQL 17. The parity groups were parameterized on this revision's four until the governance revision added three the parity checks never reached |
+| Migrations apply and reverse | `tests/schema/test_entity_schema_migration.py` — 54 tests: empty-to-head, head-to-empty, and declaration-to-server constraint, column and partition parity across **all eight** plane tables, against a disposable PostgreSQL 17 — `NEW_TABLES`'s five (the four `9def3c2e63bb` created plus `entity_aliases`, added on `b7f4d1a92c36`) and `GOVERNANCE_TABLES`'s three, on `d2b8f5c04e71`. Corrected 2026-08-19: this cell said the parity groups covered "this revision's four" and then three more, which totals seven and silently dropped the alias table; the same off-by-one named a test in that file `..._the_four_tables_...` while it compared five, and both are fixed. Derived from the sets themselves, not counted by hand: `len(NEW_TABLES)` is 5, `len(GOVERNANCE_TABLES)` is 3, `len(PLANE_TABLES)` is 8 |
 | Partition holds at the server | `tests/database/test_entity_repository.py` — 40 tests: cross-Principal isolation on every read and every write, including the joined resolution lookups and the redirect refusals (cycle, chain in **both** orders, absent survivor, cross-partition). Six were added after the independent review: the second-side partition predicate on each joined lookup, isolated by a child row whose partition disagrees with its parent's — the case the previous test could not reach, so both predicates were deletable with the suite green — plus `record_alias`'s write refusal, the `aliases` enumeration, `record_relationship`'s scope check, and the reverse-order chain |
-| Governance holds at the server | `tests/database/test_entity_governance.py` — 18 tests: a proposal cannot be accepted without an actor in either direction; a decided proposal cannot be decided again (asserted at the repository, below the service's own check); a merge record cannot cite another Principal's proposal |
+| Governance holds at the server | `tests/database/test_entity_governance.py` — 19 tests (corrected 2026-08-19 from 18; `PYTHONPATH=src python -m pytest --collect-only -q tests/database/test_entity_governance.py` collects 19): a proposal cannot be accepted without an actor in either direction; a decided proposal cannot be decided again (asserted at the repository, below the service's own check); a merge record cannot cite another Principal's proposal |
 | The context card is honest about its own bounds | `tests/unit/test_entity_context.py` — 9 tests: coverage counts past the page the card displays, discloses when the read ceiling bit, holds at the off-by-one, never counts another Principal's observation, and asks the repository for a bounded read. `tests/database/test_entity_governance.py` captures the SQL actually issued and asserts a `LIMIT` clause reaches the server. It previously counted only the rows returned, which is equally true of a slice of a full fetch — so the guard on the one property the cap exists for was inert until the independent review mutated it. Before this the module had no direct test at all |
 | The plane refuses when it is off | `tests/contract/test_entity_capabilities.py` — every one of the five, parameterized, answers `unsupported` on a build that never enabled the relationship plane. Parameterized deliberately: the floor was missing from all five, so a test covering one would have gone green over four open holes. `tests/contract/test_http_transport.py` composes the plane explicitly, having previously asserted `200` for capabilities the same process reported `not_implemented` |
 | MCP surface | `tests/contract/test_mcp_transport.py` — a real child process publishes 53 tools when composed for the plane and withholds all five when not |
 | Remote exposure | `tests/contract/test_entity_remote_exposure.py` — none of the five reaches the remote profile with the plane off, under either write setting |
-| False-resolution rate | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) — 0 false resolutions, 0 cross-Principal leaks, 0 forbidden candidates, recall 1.0 over **27** labelled collision-biased cases (12 must-resolve, 15 must-not) |
+| False-resolution rate | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) — 0 false resolutions, 0 cross-Principal leaks, 0 forbidden candidates, recall 1.0 over **31** labelled collision-biased cases in 19 families (14 must-resolve, 17 must-not). Corrected 2026-08-19: this row read 27/12/15, which matched no head — the published record has said 31/14/17 since the currency fix in section 4a. Re-derived rather than restated, by `compute_calibration_record()` itself: `PYTHONPATH=src:. python -c "from tests.evaluation.resolution_harness import compute_calibration_record as c; r=c(); print(r['cases'], r['must_resolve_cases'], r['must_not_resolve_cases'])"` → `31 14 17` |
 | The safety rules bite | Mutation-tested: resolving a lone name, choosing a claimant of a conflicted identifier, ignoring effective dates, dropping the partition, dropping the operator gate, letting `propose` apply its own merge, dropping the observation-kind entity-type constraint, dropping the recorded-merge precondition, dropping the still-open predicate, dropping the merge record's proposal partition check — each reddened the suite |
 
 **What no evidence here covers.** Nothing has been run against a shared or
@@ -632,10 +678,24 @@ the findings — the checks existed and nothing was holding them.
 
 ## 4c. Independent merge review, and what it found
 
-Four reviewers, one per lens, against head `d5861e9` — the review `AGENTS.md`
-section 8.1 requires, run by contexts that did not author the change and were
-not instructed toward an outcome. **Three of the four blocked.** Recorded here
-because the pattern across them matters more than any single defect.
+Four reviewers, one per lens, against head `d5861e9`, run by contexts that did
+not author the change and were not instructed toward an outcome. **Three of the
+four blocked.** Recorded here because the pattern across them matters more than
+any single defect.
+
+**This is not the review `AGENTS.md` section 8.1 requires, and this section said
+it was.** Corrected 2026-08-19. Section 8.1 requires an independent review of
+the head being merged; every finding below was answered by a commit, so the tree
+those four reviewers read is no longer this tree — `d5861e9` is an ancestor, not
+this head. Section 4a above says the same thing in the other direction ("**No
+independent exact-head review has occurred**, so nothing here is merge-eligible
+under `AGENTS.md` section 8.1"), and
+[`relationship-intelligence-v0.3-acceptance.md`](../specs/relationship-intelligence-v0.3-acceptance.md)
+states plainly that "a later commit invalidates the exact-head review". Two
+sections of one document disagreeing about whether the merge gate is satisfied
+is the defect, and the conservative reading is the correct one: what follows is
+a real independent review whose findings were acted on, and it does not make
+anything merge-eligible. A fresh review of the corrected head is still owed.
 
 | Lens | Verdict |
 |---|---|
@@ -678,8 +738,24 @@ right. A guard nothing exercises is a comment.
 `**forty-eight** capabilities` against a set of fifty-three, and
 `test_spelled_counts_match_the_sets_they_name.py` found no claim there at all,
 because its pattern allowed only whitespace or a hyphen between the number and
-the noun. The counts are corrected and the pattern now reads across emphasis —
-verified by restoring a stale count and watching the sweep fail.
+the noun. Those two counts were corrected and the pattern now reads across
+emphasis — verified by restoring a stale count and watching the sweep fail.
+
+**Corrected 2026-08-19: this paragraph said "the counts are corrected", and two
+were not.** Widening the pattern to read across emphasis fixed the two claims
+that carried a noun and left the shape beside them untouched: `ops/runbooks/
+mcp-and-cli-operations.md` said "A default process publishes **twenty**" and
+"(unset: twenty, …)" of a set that publishes forty-two by default, under a
+heading reading "Measured at this head". Neither was read by any rule, because a
+number with *no noun after it* matches nothing the guard looked for. Both are
+corrected now, and `BARE_EMPHASIS` reads the shape. The lesson is the section's
+own: a guard widened to catch the instance that was found is a guard shaped by
+the instance that was found. What actually let all four survive is that the
+guard read `apps/`, `ops/`, `src/`, `tests/` and `README.md` and did not read
+`docs/` at all — so this document, which makes more derivable claims than any
+other in the repository, was bound to nothing. It is in `SWEPT_FILES` now, and
+adding it is what surfaced the three false claims corrected in section 0.1 and
+section 4a above.
 
 ---
 

@@ -27,7 +27,7 @@ Implemented, and covered by the FAST tier unless noted:
 - `domain/common`, `domain/policy`, `domain/audit` — identifiers, provenance, classification, coverage state, time, policy decisions, and audit events.
 - `domain/source` — the source registry, bounded enrollment with idempotency keys, and the read-only source-provider port.
 - `domain/capture`, `domain/conversation` — the user-authored capture, immutable version, evidence-bound proposals and assertions, closed review policy, and explicit Conversation Log skeleton. Product-owned and append-only under [ADR-003](docs/decisions/ADR-003-product-owned-user-authored-source-records.md); none grants the source-provider port a write method or an external action.
-- `domain/relationship` and the internal relationship application/read-model path — governed person and organisation identity, unresolved mentions, reversible reviewed resolution, source-backed profiles, timelines, and conversation participants over synthetic personal-source fixtures. WP-9 adds no public capability or live connector.
+- `domain/relationship` and the internal relationship application/read-model path — governed person and organisation identity, unresolved mentions, reversible reviewed resolution, source-backed profiles, timelines, and conversation participants over synthetic personal-source fixtures. WP-9 added no public capability or live connector; the later Relationship Intelligence entity plane added five, `entities.search`, `entities.get`, `entities.resolve`, `entities.context` and `entities.relationships`, all read-only under the single `entity_read` purpose and all withheld unless `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` is set. Corrected 2026-08-19: this bullet said only "WP-9 adds no public capability", which was true of WP-9 and read as true of the plane. [`ops/runbooks/relationship-intelligence.md`](ops/runbooks/relationship-intelligence.md) is the operator document for it, and records that its governance service is composed by nothing and so cannot yet be worked.
 - `domain/extraction` — text and Markdown extraction outcomes, quarantine records, and coverage counts with stated limitations.
 - `domain/search` — the lexical search query type.
 - `bootstrap/settings` — strict `MY_PA_` configuration that fails closed on unknown or invalid values. `MY_PA_DATABASE_URL` is required and has no default.
@@ -35,8 +35,8 @@ Implemented, and covered by the FAST tier unless noted:
 - `infrastructure/persistence` — source registry, enrollment, job lease and retry, extraction and quarantine, lexical search, the immutable capture/version/receipt plane, WP-7's evidence-bound proposal plane, and WP-8's review/promotion plane. Consequential proposals open review cases; accepting creates a canonical assertion plus policy receipt, rejection retains lineage, and a successor edit that changes a cited slice marks the assertion `revalidation_required`. Explicit Conversation Log creation and deterministic launch context are written in the capture save transaction; no external action client exists. **Capture search is a second full-text plane**, over `knowledge.capture_versions.content` with `simple` plus exact confirmation (`D-90`). Covered by the database tier.
 - `infrastructure/providers/fixture.py` — a read-only fixture source provider that proves root containment, revalidates before read, and normalizes provider errors by errno.
 - `application` — the fifty-three capability use cases behind one entry point, one shared authorization and disclosure path, and the capability manifest and readiness report derived from that wiring rather than restated. It reaches persistence and providers only through the ports in `contracts/ports`. The set includes the task-management and commitment plane (`tasks.*`, `commitments.*`), the context-prepare plane (`context.prepare`, `context.feedback`), and the GoodNotes semantic plane (`goodnotes.work`, `goodnotes.content`, `goodnotes.propose`).
-- `adapters/http` and `apps/gateway.py run` — the HTTP transport and its composition root. All fifty-three capabilities are reachable at `POST /v1/<capability>` on `127.0.0.1`, and the response body is the envelope the application produced. Starlette and uvicorn, not FastAPI. In `local_operator` mode the process serves one configured Principal without a request credential; in `entra` mode it requires and validates a bearer token. There is no option to bind anywhere but loopback. [`ops/runbooks/gateway-operations.md`](ops/runbooks/gateway-operations.md) covers running it.
-- `adapters/mcp` and `apps/gateway.py mcp` — the same fifty-three capabilities over the Model Context Protocol, using the official `mcp` SDK on **stdio only**. The tool list is derived from the capability set and each tool's schema from the command it builds, so nothing about a capability is written down twice. No socket is opened and no credential is read; the SDK's network transports are never imported.
+- `adapters/http` and `apps/gateway.py run` — the HTTP transport and its composition root. All fifty-three capabilities are routable at `POST /v1/<capability>` on `127.0.0.1`, and the response body is the envelope the application produced — but routable is not served: on a default process the six `documents.` and five `entities.` names answer `501 unsupported`, because `/v1/{capability}` is a path parameter and dispatch reaches the handler, which refuses. Corrected 2026-08-19 from "reachable", which read as available. Starlette and uvicorn, not FastAPI. In `local_operator` mode the process serves one configured Principal without a request credential; in `entra` mode it requires and validates a bearer token. There is no option to bind anywhere but loopback. [`ops/runbooks/gateway-operations.md`](ops/runbooks/gateway-operations.md) covers running it.
+- `adapters/mcp` and `apps/gateway.py mcp` — the same fifty-three capabilities over the Model Context Protocol, using the official `mcp` SDK on **stdio only**. The tool list is derived from `ApplicationService.available_capabilities` and each tool's schema from the command it builds, so nothing about a capability is written down twice. Corrected 2026-08-19: this said the list is derived from "the capability set", which reads as all fifty-three; `server.py` reads `available_capabilities`, so a default process publishes forty-two tools and withholds the six `documents.` and five `entities.` names until their variables are set. [`ops/runbooks/mcp-and-cli-operations.md`](ops/runbooks/mcp-and-cli-operations.md) states the same split. No socket is opened and no credential is read; the SDK's network transports are never imported.
 - `adapters/cli` and `apps/cli/invoke.py` — the operator CLI, which invokes one capability and writes the envelope to standard output. It is not a privileged bypass: it composes the same runtime the gateway composes, is handed the same principal, and has no option that could change one.
 - `adapters/normalization.py` — the one place a request becomes a `(RequestMetadata, Command)` pair. All three transports call it and none of them can build either value, which is what makes `SPEC-AC-001` a structural property rather than three snapshots that agree today.
 - `infrastructure/migration` — legacy extract and load, the migration control plane, and redaction.
@@ -111,7 +111,9 @@ definition but **off by default and not an active personal-data ingestion path**
 Entra authentication is a separate concern from Graph connector activation, and a
 disabled Graph connector must not be reported as a degraded active source.
 
-Accordingly, `capabilities.get` reports every capability `available` and
+Accordingly, in a fully composed process — one given both
+`MY_PA_MANAGED_DOCUMENT_ROOT` and `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` —
+`capabilities.get` reports every capability `available` and
 readiness `ready`, while PDF still reports `decision_gated` pending
 `P00-OD-003`. Both figures are derived from the application's own wiring rather
 than from a constant, and `ready` is a statement about the application and not
@@ -122,6 +124,21 @@ one of its records with the identifier enumeration issued.
 `tests/end_to_end/test_vertical_slice.py` is that path, walked.
 `tests/architecture/test_readme_state_claims.py` holds this paragraph to
 the values the build actually produces.
+
+**A default process is not that process, and this paragraph did not say so.**
+Corrected 2026-08-19: it read "Accordingly, `capabilities.get` reports every
+capability `available` and readiness `ready`" with no composition named, which is
+true only of a process given both variables above. Neither is set by default
+(`managed_document_root` defaults to `""` and `relationship_intelligence_enabled`
+to `False` in `bootstrap/settings.py`), so a default process publishes a manifest
+in which 42 of the 53 capabilities are `available` and 11 — the six `documents.`
+and five `entities.` names — are `not_implemented`, and readiness is `degraded`
+with the limitation `11 of 53 capabilities are unwired.` Derived by building the
+manifest both ways from the dispatch table, exactly as `_capabilities_get` does:
+`build_capability_manifest(implemented=frozenset(_HANDLERS) - _ENTITY_CAPABILITIES
+- _MANAGED_CAPABILITIES, limits=...)`. `test_readme_state_claims.py` holds the
+paragraph above honest against the fully-composed manifest only; the
+default-composition figures in this paragraph are stated, not yet bound.
 
 The current gap audit and implementation plan is [`docs/plans/mcv-completion-plan.md`](docs/plans/mcv-completion-plan.md).
 On 2026-08-01 the operator reprioritized the objective to admit two features,

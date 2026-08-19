@@ -16,6 +16,15 @@ each survived for a reason worth writing down:
   eleven at the same head, 48 lines apart, and only the lower one was read.
   A rule that covers the section that motivated it and not its neighbour is
   the shape this campaign keeps catching.
+- **The sweep did not read `docs/` at all.** The same defect again, one
+  directory over, and the largest instance of it: the Relationship Intelligence
+  implementation plan makes more derivable claims than any other document here
+  and not one of them was bound to anything. An independent review found three
+  false claims standing in it — a labelled-corpus count, a pagination claim, and
+  a fixture claim — each of which had survived every sweep because no sweep
+  reached the file. It is named in `SWEPT_FILES` now. A guard that reads the
+  documents it was written next to and not the document that makes the claims is
+  the shape above, stated a third time.
 - **The count was written down.** A guard holding a literal `12` is the next
   stale claim, one release later. Every count here is derived: from `Capability`
   and `Purpose` themselves, and from the very `find` commands section 3 names.
@@ -23,10 +32,13 @@ each survived for a reason worth writing down:
 **What a claim is.** A spelled number immediately before `capabilities`,
 `capability names`, `purposes`, or — inside a block that is already talking about
 capabilities — `member`; plus the phrase `closed at <number>`, which is how this
-corpus states the capability set's size without naming it. Ordinals are read as
-the *next* member: `a ninth capability` asserts the set has eight, and is stale
-in exactly the way `eight capabilities` is. The branch that added `capture.*`
-corrected one ordinal site and left eight, which is why ordinals are in.
+corpus states the capability set's size without naming it; plus an emphasised
+number that carries no noun at all, `publishes **twenty**.`, which is how two
+runbook lines stated a default publication count that was never measured and was
+wrong by twenty-two. Ordinals are read as the *next* member: `a ninth capability`
+asserts the set has eight, and is stale in exactly the way `eight capabilities`
+is. The branch that added `capture.*` corrected one ordinal site and left eight,
+which is why ordinals are in.
 
 **Named boundaries, so this guard is not described as closing more than it
 closes.**
@@ -49,6 +61,29 @@ closes.**
   block it sits in. `EXCUSED` is a shrinking allowlist in the `D-81` shape: a
   stale entry reddens, and a new claim anywhere reddens rather than joining
   quietly.
+- **`all <number>` closed by an em-dash is still not read, and the reason is a
+  finding rather than an oversight.** `ALL_OF` requires a comma or a full stop
+  after the number, so `publishing all thirty — does read one` escapes it. The
+  widening is one character; what it surfaces is not. Measured across the swept
+  corpus, adding the dash finds three claims: two in
+  `src/my_pa/domain/identity/operation.py` that are deltas rather than set sizes
+  and would join `EXCUSED`, and one at
+  `tests/contract/test_mcp_transport.py:451` that is a genuine stale count —
+  `publishing all thirty` of a set holding fifty-three, in the docstring of the
+  test this module's sibling rule cites as its own evidence. That correction was
+  outside the file allowlist of the package that found it, so the rule is left
+  open rather than landed half-red or landed with the finding excused. Closing
+  it is one line here plus one word there, and neither should happen without the
+  other.
+- **The published subset is seen but not derived.** `BARE_EMPHASIS` reads
+  `publishes **forty-two**` and compares it against `Capability`, which holds
+  fifty-three, so the two runbook lines stating the default publication count
+  are excused below rather than checked. They are *bound* — a reworded or
+  renumbered claim reddens `test_every_excused_claim_is_still_there` — but the
+  figure itself rests on a reason in an allowlist, not on a derivation. Deriving
+  it means teaching this module the withheld prefixes that
+  `tests/contract/test_mcp_transport.py` already owns, which is a second copy of
+  a constant, and that trade has not been made.
 """
 
 from __future__ import annotations
@@ -77,7 +112,23 @@ SWEPT_ROOTS = ("apps", "ops", "src", "tests")
 #: package added. A root-relative file list rather than a fifth entry in
 #: `SWEPT_ROOTS`, because sweeping `.` would pull in the plan's register and
 #: every other document whose rows are history rather than current state.
-SWEPT_FILES = ("README.md",)
+#:
+#: **`docs/` is not a swept root and the Relationship Intelligence plan is named
+#: here one file at a time, for the reason this list exists.** That plan is the
+#: document in this repository that makes the most derivable claims, and it was
+#: bound to nothing at all: this module read `apps/`, `ops/`, `src/`, `tests/`,
+#: `README.md`, and two sections of the MCV plan, and `docs/plans/` appeared in
+#: none of them. An independent review then found three false claims in it that
+#: had survived precisely because no rule read the file — a corpus count, a
+#: pagination claim, and a fixture claim — which is the same defect this module
+#: was built for, one directory over. The whole file is read rather than named
+#: sections of it, because unlike the MCV plan it carries no history register
+#: below a current-state line; its historical passages are individual blocks and
+#: `EXCUSED` is what names those.
+SWEPT_FILES = (
+    "README.md",
+    "docs/plans/relationship-intelligence-implementation-plan.md",
+)
 
 SKIPPED_DIRECTORIES = frozenset({"__pycache__", ".ruff_cache", ".mypy_cache", ".pytest_cache"})
 
@@ -293,6 +344,26 @@ CLOSED_AT = re.compile(rf"\bclosed at (?P<number>{_NUMBER})\b", re.IGNORECASE)
 #: times, always about the three transports, and every one of them continues.
 ALL_OF = re.compile(rf"\ball (?P<number>{_NUMBER})(?=[,.])", re.IGNORECASE)
 
+#: The emphasised form with the noun left off entirely: `A default process
+#: publishes **twenty**.` Two runbook lines said that of a set whose default
+#: publication is forty-two, and no rule here read either, because `CLAIM` needs
+#: a noun, `CLOSED_AT` needs the words `closed at`, and `ALL_OF` needs `all`. A
+#: number an author bothered to emphasise is a number a reader will believe, and
+#: this shape is the one that carries no noun for a grep to anchor on.
+#:
+#: **Both conditions are load-bearing and were measured, not reasoned about.**
+#: The number must be emphasised *and* must end the phrase — comma, semicolon,
+#: full stop, closing bracket, or end of block. Dropped, the end-of-phrase
+#: condition turns this into a false-finding machine: `**two** revisions behind
+#: head`, `**sixty-two** revisions`, `**five** revisions later` and `a **second**
+#: surface` all sit in blocks that mention capabilities somewhere, and every one
+#: of them already names its own noun. With the condition, one match remains in
+#: the whole swept corpus and it is the defect this rule was added for. Like
+#: `ALL_OF` and `CLOSED_AT`, it is read only where the block is already about
+#: capabilities, which is what excludes `written **first**` and `a **third**,
+#: independent thing` in `src/`.
+BARE_EMPHASIS = re.compile(rf"\*\*(?P<number>{_NUMBER})\*\*(?=[.,;)]|$)", re.IGNORECASE)
+
 #: A borrowed noun is read only where the block is already about capabilities,
 #: because five enums in `src/` are described as having "one member" or gaining
 #: "a second member" and none of them is the capability set.
@@ -475,6 +546,101 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "All five capabilities share the single",
         "the five task-write names sharing one purpose, not the size of `Capability`",
     ),
+    # --- the two runbook lines this package corrected --------------------------
+    #
+    # The default publication count. Read by `BARE_EMPHASIS` and excused rather
+    # than checked, because it is the size of a *different* set — `Capability`
+    # less the two families a default composition withholds — and this module
+    # derives only `Capability` and `Purpose`. Excused, not unread: both lines
+    # said `twenty` of a set that publishes forty-two, and if either is reworded
+    # or the figure moves, `test_every_excused_claim_is_still_there` reddens and
+    # an author has to come back here. The module docstring's last boundary note
+    # records what deriving it would cost.
+    (
+        "ops/runbooks/mcp-and-cli-operations.md",
+        "**forty-two**",
+        "A default process publishes",
+        "the count a default composition publishes — `Capability` less the six "
+        "`documents.` and five `entities.` names it withholds — not the size of "
+        "`Capability`, which the same block states correctly as fifty-three",
+    ),
+    (
+        "ops/runbooks/mcp-and-cli-operations.md",
+        "**forty-two**",
+        "none beginning `documents.`",
+        "the same default-publication count, in the line naming the test that measures it",
+    ),
+    (
+        "README.md",
+        "forty-two tools",
+        "a default process publishes forty-two tools",
+        "the same default-publication count, in the bullet describing the MCP "
+        "adapter; the tool list is derived from `available_capabilities`, not "
+        "from `Capability`, which the same bullet states correctly as fifty-three",
+    ),
+    # --- the Relationship Intelligence plan, newly swept -----------------------
+    #
+    # Every claim this file makes about a count of capabilities is about the
+    # five `entities.*` names — the family that plane added — and not about
+    # `Capability`. That is the same disposition `tests/unit/test_policy.py`'s
+    # two entries and the `capture.*` entries above carry, and it is why the
+    # sweep reaching this file at last produced corrections in the *other*
+    # figures it states (a labelled-corpus count, a pagination claim, a fixture
+    # claim, two test counts) rather than in these.
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "two capabilities",
+        "one of the two capabilities that need pagination",
+        "the two entity reads that return a list and so need a cursor, "
+        "`entities.search` and `entities.relationships`; not a count of any enum",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "five capabilities",
+        "registered all five capabilities at once",
+        "`D-RI-18`: the five `entities.*` names, registered as one family rather "
+        "than one at a time",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "all five",
+        "one purpose, `entity_read`, for all five",
+        "`D-RI-19`: the same five `entities.*` names sharing one purpose",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "five capabilities",
+        "eight tables and five capabilities) are fixed, not deselected",
+        "the entity plane's own five, naming what four schema suites had "
+        "outgrown; not the size of `Capability`",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "all five",
+        "the floor was missing from all five",
+        "the five `entities.*` names the off-switch test is parameterized over",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "five capabilities",
+        "scan covered four of the five capabilities",
+        "an adversarial finding about four of the entity plane's five, which is "
+        "a delta within that family",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "five capabilities",
+        "eight tables and five capabilities had outgrown",
+        "the same entity-plane five, in the paragraph explaining the schema-suite "
+        "accumulation sets",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "forty-eight** capabilities",
+        "Two runbooks read",
+        "quoted prior text: the stale figure two runbooks carried, reproduced in "
+        "the finding that records its correction, not a claim in the author's voice",
+    ),
 )
 
 
@@ -652,14 +818,15 @@ def _claims_in(path: Path, text: str, offset: int = 0) -> list[Claim]:
     for block, linemap in _blocks(text):
         about_capabilities = bool(_MEMBER_NEEDS.search(block))
         taken: list[tuple[int, int]] = []
-        for pattern in (CLAIM, CLOSED_AT, ALL_OF):
+        for pattern in (CLAIM, CLOSED_AT, ALL_OF, BARE_EMPHASIS):
             for match in pattern.finditer(block):
                 noun = match.groupdict().get("noun") or "capabilities"
                 if pattern is not CLAIM and not about_capabilities:
-                    # `member`, `closed at N` and a bare `all N` name no set of
-                    # their own; they are read only where the block is already
-                    # about capabilities. Five enums in `src/` are described as
-                    # having one member or gaining a second, and none is this one.
+                    # `member`, `closed at N`, a bare `all N` and a bare `**N**`
+                    # name no set of their own; they are read only where the
+                    # block is already about capabilities. Five enums in `src/`
+                    # are described as having one member or gaining a second,
+                    # and none is this one.
                     continue
                 if _BORROWED.match(noun) and not about_capabilities:
                     continue
@@ -906,6 +1073,47 @@ def test_a_planted_claim_of_every_shape_is_caught(tmp_path: Path) -> None:
     assert all(stated(claim.number) != expected(claim.noun, claim.number) for claim in found), [
         (claim.phrase, stated(claim.number), expected(claim.noun, claim.number)) for claim in found
     ]
+
+
+def test_a_bare_emphasised_count_is_read_and_a_qualified_one_is_not(tmp_path: Path) -> None:
+    """The shape two runbook lines used, and the three shapes it must not swallow.
+
+    `publishes **twenty**.` is a claim with no noun for any other rule to anchor
+    on, and it is the shape that stated a default publication count wrong by
+    twenty-two under a heading reading "Measured at this head". The three
+    rejections are the measured ones, not imagined: a number that names its own
+    noun (`**two** revisions`) is that noun's claim and not this set's, and a
+    block that is not about capabilities is not read at all — `written **first**`
+    and `a **third**, independent thing` both sit in `src/` today.
+    """
+    planted = tmp_path / "planted.md"
+    planted.write_text(
+        "A default process publishes **twenty**. The capability set is larger.\n"
+        "\n"
+        "The schema is **two** revisions behind, which is a capability-free fact\n"
+        "about migrations even in this capability-naming block.\n"
+        "\n"
+        "The row is written **first**, under `ON CONFLICT DO NOTHING`.\n",
+        encoding="utf-8",
+    )
+
+    found = _claims_in(planted, planted.read_text(encoding="utf-8"))
+    assert [" ".join(claim.phrase.split()) for claim in found] == ["**twenty**"], [
+        claim.phrase for claim in found
+    ]
+    claim = found[0]
+    assert stated(claim.number) != expected(claim.noun, claim.number)
+
+    # The green half of this shape, spelled from the set itself so it moves when
+    # the set does rather than being a second place to correct.
+    correct = tmp_path / "correct.md"
+    correct.write_text(
+        f"A process publishes every capability: **{SPELLED[capability_count()]}**.\n",
+        encoding="utf-8",
+    )
+    passing = _claims_in(correct, correct.read_text(encoding="utf-8"))
+    assert passing, "the correct sentence was not read at all, so the rule proves nothing"
+    assert all(stated(c.number) == expected(c.noun, c.number) for c in passing)
 
 
 def test_a_correct_claim_of_every_shape_passes(tmp_path: Path) -> None:

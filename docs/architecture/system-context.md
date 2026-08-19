@@ -71,8 +71,17 @@ hash.
 
 
 The repository is an executable local candidate, not a documentation scaffold.
-The `my_pa` application exposes fifty-three capabilities through HTTP, MCP, and
-CLI composition, with PostgreSQL Principal partitioning and two worker planes.
+The `my_pa` application defines and wires fifty-three capabilities through HTTP,
+MCP, and CLI composition, with PostgreSQL Principal partitioning and two worker
+planes. **A default composition exposes forty-two of them.** The six
+`documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT` and the five
+`entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`; neither has
+a default, so an unconfigured process withholds both families from
+`capabilities.get` and from the MCP tool list, refuses them `unsupported` over
+HTTP, and reports readiness `degraded`. Corrected 2026-08-19: this sentence read
+"exposes fifty-three capabilities" under a heading claiming authenticated
+current repository state, which is the fully-composed figure rather than the
+default one.
 Alembic owns sixty-two revisions at head `d2b8f5c04e71`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the
@@ -397,6 +406,7 @@ read/write provider that allows accidental source mutation.
 - `SC-INV-012`: User-authored records are product-owned and append-only, and are neither source mutation nor managed-document writes.
 - `SC-INV-013`: No composite relationship score exists, and no protected- or sensitive-trait inference exists at all. Transparent single-basis indicators are permitted and each states its calculation basis and time window.
 - `SC-INV-014`: A canonical person is established only through governed identity resolution; merge and split are reversible and review-required.
+  - **Half of this invariant constrains nothing yet, and the list did not say so.** Merge exists and is review-required (`EntityProposalKind.MERGE_ENTITIES` maps to `REQUIRES_OPERATOR` in `domain/relationship/governance.py`, and `redirect_entity` records the lineage). **Split does not exist** — there is no split proposal kind, no repository method, and no capability; a search of `src/my_pa` for a split of an entity returns only an unrelated PDF splitter and a SQL statement splitter. [`ops/runbooks/relationship-intelligence.md`](../../ops/runbooks/relationship-intelligence.md) states the same ("No split. Section 15.4's split requirements are not implemented; only merge is"). Recorded 2026-08-19 because `SC-INV-013` immediately above is enforced by a live architecture test, so a reader had no way to tell that this neighbour is half aspirational.
 
 
 ## 13. Context acceptance criteria

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from my_pa.contracts.ports import EntitiesRepository
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -73,6 +73,22 @@ class ResolutionRequest:
     display name happens to contain one is matched as a mailbox — so a caller
     that knows says so, and a caller that does not gets name resolution, which
     is the outcome that cannot false-join on its own.
+
+    `at` is the moment the question is being asked and `as_of` is the moment it
+    is being asked *about*. They are separate because the plane treats them
+    differently: matched evidence is deliberately not date-filtered without an
+    `as_of` (an alias somebody stopped using is still a name they were called),
+    while a *corroborating* record has to be current to corroborate. Signals are
+    therefore judged at `as_of` when one is given and at `at` otherwise.
+
+    Before `at` existed, "current" was inferred from `effective_to is None` --
+    "nobody wrote down an end date" -- which is neither necessary nor
+    sufficient. A contract running to 2030 read as over, and a role beginning in
+    2030 read as in force today, so an ordinary dated employment corroborated
+    nothing and an unstarted one corroborated a bare name. The residual recorded
+    against this ("detecting it needs a clock this module does not have") was
+    wrong on its own terms: the only caller holds `authorization.at` and was
+    passing it nowhere.
     """
 
     raw_reference: str
@@ -80,6 +96,7 @@ class ResolutionRequest:
     entity_type: EntityType | None = None
     scope_entity_id: str | None = None
     as_of: datetime | None = None
+    at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.raw_reference.strip():
@@ -94,6 +111,8 @@ class ResolutionRequest:
             validate_identifier(self.scope_entity_id, IdKind.ENTITY)
         if self.as_of is not None:
             ensure_utc(self.as_of)
+        if self.at is not None:
+            ensure_utc(self.at)
 
 
 def _is_effective(
@@ -117,7 +136,7 @@ def _is_effective(
 
 
 def _is_in_force(
-    effective_from: datetime | None, effective_to: datetime | None, as_of: datetime | None
+    effective_from: datetime | None, effective_to: datetime | None, moment: datetime | None
 ) -> bool:
     """Whether a *corroborating* record is in force. Stricter than `_is_effective`.
 
@@ -139,14 +158,37 @@ def _is_in_force(
     default request -- and a bare canonical name resolved to her with no warning
     at all.
 
-    **The residual, named rather than hidden.** A record whose `effective_from`
-    is in the future is *not* excluded here, because detecting that needs a clock
-    and this module deliberately has none: `as_of` is the only moment it knows.
-    A caller that cares passes one.
+    **It is an ordinary point-in-time test, and that took two goes.** The first
+    version inferred "current" from `effective_to is None` when no moment was
+    named -- "nobody wrote down an end date" -- which is neither necessary nor
+    sufficient for being in force. A contract running to 2030 was read as over,
+    so an ordinary dated employment corroborated nothing; a role beginning in
+    2030 was read as in force, so an unstarted assignment lifted a bare name to a
+    confident answer. Both were reproduced. The residual recorded against the
+    second failure claimed detecting it "needs a clock this module does not
+    have"; the clock was `authorization.at`, which the only caller already held
+    and passed nowhere. `ResolutionRequest.at` carries it now, and `moment` below
+    is `as_of` when the caller asked about one and `at` otherwise.
+
+    A request carrying neither -- constructed directly in a test, never by the
+    capability -- falls back to the old open-ended rule, which is the most this
+    function can say with no moment at all.
     """
-    if as_of is not None:
-        return _is_effective(effective_from, effective_to, as_of)
+    if moment is not None:
+        return _is_effective(effective_from, effective_to, moment)
     return effective_to is None
+
+
+#: The one `Assignment.status` that means the assignment still stands, matching
+#: the value `SqlEntityRepository.assignments` filters on for `active_only`.
+ACTIVE_ASSIGNMENT_STATUS: str = "active"
+
+#: An `effective_to` no moment can be at or before, used to spell "this record is
+#: over however you date it" for a row excluded by its *status* rather than its
+#: dates. It keeps one fold responsible for classifying every row that reaches
+#: the scope, instead of some rows being filtered away before they can be
+#: disclosed.
+_BEFORE_ANY_MOMENT: datetime = datetime.min.replace(tzinfo=UTC)
 
 
 #: The one `EntityRelationship.state` that means the edge still stands. `state`
@@ -166,7 +208,7 @@ class _Reach:
 
 
 def _reach(
-    windows: Iterable[tuple[datetime | None, datetime | None]], as_of: datetime | None
+    windows: Iterable[tuple[datetime | None, datetime | None]], moment: datetime | None
 ) -> _Reach:
     """Fold the effective windows of every record that reaches the scope.
 
@@ -177,7 +219,7 @@ def _reach(
     found = False
     withheld = False
     for effective_from, effective_to in windows:
-        if _is_in_force(effective_from, effective_to, as_of):
+        if _is_in_force(effective_from, effective_to, moment):
             found = True
         else:
             withheld = True
@@ -256,7 +298,25 @@ class EntityResolutionService:
         if len(effective) < len(held):
             warnings.append(ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT)
         if not effective:
-            return None
+            # **The identifier matched, and every row it matched is out of
+            # date.** That is an answer, not a miss, and it must not fall
+            # through to `_by_name` -- which re-reads the identifier string as a
+            # *name*, so an expired `source_participant_id` of "Smith, John"
+            # resolved `RESOLVED_EXACT` to a *different* entity holding the
+            # alias "Smith John". `RI-I-003` puts stable external identifiers
+            # above lexical matching; discarding the identifier evidence to try
+            # the weaker one inverts that.
+            #
+            # This is the same defect as the `entity_type` case below, on the
+            # branch above it. The rule the two share, stated once so a third
+            # branch cannot be added without meeting it: **this method falls
+            # through to name matching only when the reference is not an
+            # identifier in this namespace at all, or matches no row.** Once a
+            # row matched, every exit here is an answer.
+            return EntityResolution(
+                outcome=ResolutionOutcome.NOT_FOUND,
+                warnings=tuple(dict.fromkeys(warnings)),
+            )
 
         # Section 15.2: conflicting identifiers prevent an automatic join. More
         # than one entity holding one identity is exactly that conflict, and it
@@ -273,14 +333,31 @@ class EntityResolutionService:
         # the identifier.
         if len({entity.entity_id for entity, _ in effective}) > 1:
             warnings.append(ResolutionWarning.IDENTIFIER_CLAIMED_BY_SEVERAL_ENTITIES)
+            # Bounded on the same terms the name path is bounded, and for a
+            # sharper reason. `EntityResolution` refuses more candidates than
+            # `RESOLUTION_CANDIDATE_LIMIT`, so an identifier held by eleven
+            # entities -- a shared mailbox, a distribution list, a room resource
+            # recorded against every team that books it -- raised `ValueError`
+            # here and reached the caller as `internal_error`. The safety
+            # outcome failed exactly when the data was most conflicted, which is
+            # the one moment it exists for. Truncating discloses less than the
+            # full list and refuses just as hard: `CONFLICTED_IDENTIFIER`
+            # resolves nothing either way, so a caller cannot act on a claimant
+            # that is missing from the page.
+            conflicted = order_candidates(
+                tuple(
+                    _candidate_from_identifier(entity, identifier)
+                    for entity, identifier in effective
+                )
+            )
+            bounded = conflicted[:RESOLUTION_CANDIDATE_LIMIT]
+            truncated = len(bounded) < len(conflicted)
+            if truncated:
+                warnings.append(ResolutionWarning.MORE_CANDIDATES_THAN_THIS_ANSWER_CARRIES)
             return EntityResolution(
                 outcome=ResolutionOutcome.CONFLICTED_IDENTIFIER,
-                candidates=order_candidates(
-                    tuple(
-                        _candidate_from_identifier(entity, identifier)
-                        for entity, identifier in effective
-                    )
-                ),
+                candidates=bounded,
+                candidates_were_truncated=truncated,
                 warnings=tuple(dict.fromkeys(warnings)),
             )
 
@@ -507,10 +584,12 @@ class EntityResolutionService:
         """
         if request.scope_entity_id is None:
             return _ScopeSignals()
-        assigned = self._assigned_to(
-            principal_id, entity_id, request.scope_entity_id, request.as_of
-        )
-        related = self._related_to(principal_id, entity_id, request.scope_entity_id, request.as_of)
+        # `as_of` when the caller asked about a moment, `at` otherwise. See
+        # `_is_in_force`: a corroborating record has to be current, and "current"
+        # needs a clock rather than an inference from a missing end date.
+        moment = request.as_of if request.as_of is not None else request.at
+        assigned = self._assigned_to(principal_id, entity_id, request.scope_entity_id, moment)
+        related = self._related_to(principal_id, entity_id, request.scope_entity_id, moment)
         found: list[ContextualSignal] = []
         if assigned.found:
             found.append(ContextualSignal.ASSIGNED_TO_THE_NAMED_SCOPE)
@@ -519,28 +598,40 @@ class EntityResolutionService:
         return _ScopeSignals(found=tuple(found), withheld=assigned.withheld or related.withheld)
 
     def _assigned_to(
-        self, principal_id: str, entity_id: str, scope_entity_id: str, as_of: datetime | None
+        self, principal_id: str, entity_id: str, scope_entity_id: str, moment: datetime | None
     ) -> _Reach:
         """Whether a *current* assignment of this candidate names the scope.
 
-        `active_only` is the assignment plane's own statement that a row is over,
-        and it is applied before the dates rather than instead of them: a status
-        nobody updated and an end date nobody honoured are two different ways for
-        the same assignment to be stale, and only checking both catches both.
+        A status nobody updated and an end date nobody honoured are two ways for
+        the same assignment to be stale, and both are checked.
+
+        **Both are also disclosed, which took a correction.** `active_only=True`
+        excluded ended assignments in the *query*, so they never reached the fold
+        and never set `withheld` -- an assignment recorded as ended produced an
+        `AMBIGUOUS` answer with no warning at all, while the same assignment left
+        active but date-expired produced one. The exclusion is done here instead,
+        so every row that reaches the scope is classified rather than some being
+        invisible. `RI-AC-014`'s duty is to say the evidence was not current, and
+        it does not care which column recorded that.
         """
         return _reach(
             (
                 (assignment.effective_from, assignment.effective_to)
+                if assignment.status == ACTIVE_ASSIGNMENT_STATUS
+                # A status that says the row is over is stale at every moment.
+                # Spelled as an impossible window so the fold counts it withheld
+                # rather than dropping it.
+                else (None, _BEFORE_ANY_MOMENT)
                 for assignment in self._entities.assignments(
-                    principal_id, entity_id, active_only=True
+                    principal_id, entity_id, active_only=False
                 )
                 if assignment.scope_entity_id == scope_entity_id
             ),
-            as_of,
+            moment,
         )
 
     def _related_to(
-        self, principal_id: str, entity_id: str, scope_entity_id: str, as_of: datetime | None
+        self, principal_id: str, entity_id: str, scope_entity_id: str, moment: datetime | None
     ) -> _Reach:
         """Whether a *current* outgoing edge of this candidate reaches the scope.
 
@@ -555,13 +646,17 @@ class EntityResolutionService:
         return _reach(
             (
                 (relationship.effective_from, relationship.effective_to)
+                if relationship.state == ACTIVE_RELATIONSHIP_STATE
+                # As in `_assigned_to`: an edge whose state says it is over is
+                # withheld rather than unseen, so the caller is told the context
+                # was consulted and had something that no longer holds.
+                else (None, _BEFORE_ANY_MOMENT)
                 for relationship in self._entities.relationships(
                     principal_id, entity_id, direction="outgoing"
                 )
-                if relationship.state == ACTIVE_RELATIONSHIP_STATE
-                and scope_entity_id in (relationship.to_entity_id, relationship.scope_entity_id)
+                if scope_entity_id in (relationship.to_entity_id, relationship.scope_entity_id)
             ),
-            as_of,
+            moment,
         )
 
 

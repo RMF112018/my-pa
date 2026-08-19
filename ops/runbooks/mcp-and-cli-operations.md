@@ -164,7 +164,9 @@ one declared capability, `tools`, and nothing else.
 
 `tools/list` returns the tools **this process can serve**, and that is not the
 same as the tools this build implements. The build implements fifty-three, one per
-capability name. A default process publishes **twenty**.
+capability name. A default process publishes **forty-two**. That is the
+fifty-three, less the six `documents.` and five `entities.` names a default
+composition withholds.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
 configured**, and nothing else gates them. There is no default location and no
@@ -183,9 +185,21 @@ the same gating and the plane's limits.)
 Measured at this head against a real child process — `.venv/bin/python
 apps/gateway.py mcp` — by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
-(unset: twenty, none beginning `documents.`) and
+(unset: **forty-two**, none beginning `documents.`) and
 `::test_a_child_with_a_managed_root_publishes_every_capability` (set:
 fifty-three).
+
+**Corrected 2026-08-19: both figures above read `twenty` and neither had been
+measured.** The test named here derives what it asserts from `Capability` minus
+the withheld prefixes, so it never carried the stale figure; the prose beside it
+did, under a heading that said "Measured at this head". Twenty was the default
+count some earlier head published, and it was left standing through every
+package that widened the set — including the one that added the five
+`entities.` names this same section describes. Re-derived rather than restated:
+`len(Capability)` is 53 and the two withheld families hold 6 and 5, so a default
+process publishes 42. The emphasised spelling is deliberate — it is the form
+`tests/architecture/test_spelled_counts_match_the_sets_they_name.py` reads, and
+until this correction the bare `twenty` on both lines was bound to nothing.
 
 **Re-executed 2026-08-03** — a real `stdio_client` spawning
 `.venv/bin/python apps/gateway.py mcp` as a child process, against a disposable

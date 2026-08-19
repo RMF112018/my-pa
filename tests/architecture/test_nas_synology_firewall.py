@@ -198,6 +198,92 @@ case "$*" in
 esac
 """
 
+_FAKE_IPTABLES_SAVE = r"""
+#!/bin/sh
+set -eu
+state_dir=${FAKE_FW_STATE:?}
+count_file="${state_dir}/save_count"
+count=0
+[ -f "$count_file" ] && count=$(cat "$count_file")
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+mode=${FAKE_FILTER_SAVE_FAIL_MODE:-}
+at=${FAKE_FILTER_SAVE_FAIL_AT:-0}
+calls="${state_dir}/calls"
+after_insert=0
+after_delete=0
+after_x=0
+after_create=0
+after_p4=0
+after_broad_delete=0
+if [ -f "$calls" ] && grep -q -- '-I FORWARD 1 -j MY_PA_DATA_PLANE' "$calls"; then
+  after_insert=1
+fi
+if [ -f "$calls" ] && grep -q -- '-D FORWARD -j MY_PA_DATA_PLANE' "$calls"; then
+  after_delete=1
+fi
+if [ -f "$calls" ] && grep -q -- '-X MY_PA_DATA_PLANE' "$calls"; then
+  after_x=1
+fi
+if [ -f "$calls" ] && grep -q -- '-N MY_PA_DATA_PLANE' "$calls"; then
+  after_create=1
+fi
+if [ -f "$calls" ] && grep -q -- '-A MY_PA_DATA_PLANE -j RETURN' "$calls"; then
+  after_p4=1
+fi
+if [ -f "$calls" ] && grep -q -- '-D FORWARD_FIREWALL' "$calls"; then
+  after_broad_delete=1
+fi
+case "$mode" in
+  once)
+    [ "$at" -gt 0 ] && [ "$count" -eq "$at" ] && exit 1
+    ;;
+  always)
+    [ "$at" -gt 0 ] && [ "$count" -ge "$at" ] && exit 1
+    ;;
+  once-after-insert)
+    if [ "$after_insert" -eq 1 ] && [ ! -f "${state_dir}/save_fail_insert" ]; then
+      : > "${state_dir}/save_fail_insert"
+      exit 1
+    fi
+    ;;
+  always-after-insert)
+    [ "$after_insert" -eq 1 ] && exit 1
+    ;;
+  once-after-jump-delete)
+    if [ "$after_delete" -eq 1 ] && [ ! -f "${state_dir}/save_fail_jump_del" ]; then
+      : > "${state_dir}/save_fail_jump_del"
+      exit 1
+    fi
+    ;;
+  once-after-chain-delete)
+    if [ "$after_x" -eq 1 ] && [ ! -f "${state_dir}/save_fail_x" ]; then
+      : > "${state_dir}/save_fail_x"
+      exit 1
+    fi
+    ;;
+  once-after-create)
+    if [ "$after_create" -eq 1 ] && [ ! -f "${state_dir}/save_fail_create" ]; then
+      : > "${state_dir}/save_fail_create"
+      exit 1
+    fi
+    ;;
+  once-after-p4)
+    if [ "$after_p4" -eq 1 ] && [ ! -f "${state_dir}/save_fail_p4" ]; then
+      : > "${state_dir}/save_fail_p4"
+      exit 1
+    fi
+    ;;
+  once-after-broad-delete)
+    if [ "$after_broad_delete" -eq 1 ] && [ ! -f "${state_dir}/save_fail_broad" ]; then
+      : > "${state_dir}/save_fail_broad"
+      exit 1
+    fi
+    ;;
+esac
+FAKE_TOOL=save exec "$(dirname -- "$0")/iptables" "$@"
+"""
+
 
 def _environment(
     tmp_path: Path,
@@ -212,9 +298,9 @@ def _environment(
     drop: str = "unique",
 ) -> tuple[dict[str, str], Path, Path]:
     tools = tmp_path / "bin"
-    tools.mkdir()
+    tools.mkdir(parents=True)
     state = tmp_path / "fw-state"
-    state.mkdir()
+    state.mkdir(parents=True)
     (state / "forward").write_text(forward + "\n", encoding="utf-8")
     (state / "chain").write_text(chain + "\n", encoding="utf-8")
     (state / "broad").write_text(broad + "\n", encoding="utf-8")
@@ -251,10 +337,7 @@ def _environment(
     iptables = tools / "iptables"
     iptables.write_text(body, encoding="utf-8")
     iptables_save = tools / "iptables-save"
-    iptables_save.write_text(
-        '#!/bin/sh\nFAKE_TOOL=save exec "$(dirname -- "$0")/iptables" "$@"\n',
-        encoding="utf-8",
-    )
+    iptables_save.write_text(_FAKE_IPTABLES_SAVE.lstrip("\n"), encoding="utf-8")
     fake_id = tools / "id"
     fake_id.write_text(f'#!/bin/sh\n[ "$1" = -u ] && echo {root_uid}\n', encoding="utf-8")
     for path in (docker, ip, iptables, iptables_save, fake_id):
@@ -276,6 +359,8 @@ def _environment(
             "FAKE_F_FAIL": "0",
             "FAKE_X_FAIL": "0",
             "FAKE_EXACT_VERIFY_FAIL": "0",
+            "FAKE_FILTER_SAVE_FAIL_MODE": "",
+            "FAKE_FILTER_SAVE_FAIL_AT": "0",
         },
         state,
         state / "calls",
@@ -821,3 +906,279 @@ def test_database_path_stops_before_container_exec_when_firewall_is_missing(
     assert " ps -q postgres" in calls
     assert "network inspect " in calls
     assert " exec " not in calls
+
+
+def _confirm(environment: dict[str, str]) -> dict[str, str]:
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    return environment
+
+
+def test_r3_t1_post_insert_save_fail_rolls_back_when_verified(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path)
+    _confirm(environment)
+    environment["FAKE_FILTER_SAVE_FAIL_MODE"] = "once-after-insert"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "rollback succeeded" in result.stderr
+    assert "ROLLBACK_FAILED" not in result.stderr
+    assert "firewall enforcement admitted" not in result.stdout
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    recorded = _recorded(calls)
+    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-F MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" in recorded
+    assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
+
+
+def test_r3_t2_post_insert_save_fail_then_unreadable_rollback_is_failed(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(tmp_path)
+    _confirm(environment)
+    environment["FAKE_FILTER_SAVE_FAIL_MODE"] = "always-after-insert"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "rollback succeeded" not in result.stderr
+    assert "rolled back" not in result.stderr
+    assert "firewall enforcement admitted" not in result.stdout
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    recorded = _recorded(calls)
+    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+
+
+def test_r3_t3_post_insert_save_fail_then_jump_delete_fail_skips_chain_cleanup(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(tmp_path)
+    _confirm(environment)
+    environment["FAKE_FILTER_SAVE_FAIL_MODE"] = "once-after-insert"
+    environment["FAKE_JUMP_DELETE_FAIL"] = "1"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "rollback succeeded" not in result.stderr
+    assert "rolled back" not in result.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    recorded = _recorded(calls)
+    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+
+
+def test_r3_t4_remove_resumes_missing_jump_cleanup_after_save_fail(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path, forward="effective", chain="exact", broad="absent"
+    )
+    _confirm(environment)
+    environment["FAKE_FILTER_SAVE_FAIL_MODE"] = "once-after-jump-delete"
+    first = _run("remove", environment)
+    assert first.returncode != 0
+    assert "REMOVE_CLEANUP_PENDING" in first.stderr
+    assert "firewall enforcement removed" not in first.stdout
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    recorded = _recorded(calls)
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+    environment["FAKE_FILTER_SAVE_FAIL_MODE"] = ""
+    calls.write_text("", encoding="utf-8")
+    second = _run("remove", environment)
+    assert second.returncode == 0, second.stderr
+    assert "firewall enforcement removed" in second.stdout
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    resumed = _recorded(calls)
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in resumed
+    assert "-F MY_PA_DATA_PLANE" in resumed
+    assert "-X MY_PA_DATA_PLANE" in resumed
+
+
+@pytest.mark.parametrize(
+    ("forward", "chain", "broad"),
+    [
+        ("extra", "exact", "absent"),
+        ("after_dsm", "exact", "absent"),
+        ("legacy", "foreign", "present"),
+        ("legacy", "partial", "present"),
+        ("legacy", "exact", "duplicate"),
+        ("effective", "empty", "absent"),
+    ],
+)
+def test_r3_t5_ambiguous_cleanup_pending_refuses_chain_delete(
+    tmp_path: Path, forward: str, chain: str, broad: str
+) -> None:
+    environment, _state, calls = _environment(tmp_path, forward=forward, chain=chain, broad=broad)
+    _confirm(environment)
+    result = _run("remove", environment)
+    assert result.returncode != 0
+    assert "firewall enforcement removed" not in result.stdout
+    recorded = _recorded(calls)
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+
+
+def test_r3_t6_absence_unverified_then_legacy_missing_is_cleanup_complete(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path, forward="effective", chain="exact", broad="absent"
+    )
+    _confirm(environment)
+    environment["FAKE_FILTER_SAVE_FAIL_MODE"] = "once-after-chain-delete"
+    first = _run("remove", environment)
+    assert first.returncode != 0
+    assert "POSTCONDITION_UNVERIFIED" in first.stderr
+    assert "firewall enforcement removed" not in first.stdout
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    recorded = _recorded(calls)
+    assert "-X MY_PA_DATA_PLANE" in recorded
+    environment["FAKE_FILTER_SAVE_FAIL_MODE"] = ""
+    calls.write_text("", encoding="utf-8")
+    second = _run("remove", environment)
+    assert second.returncode == 0, second.stderr
+    assert "firewall enforcement removed" in second.stdout
+    resumed = _recorded(calls)
+    assert "-X MY_PA_DATA_PLANE" not in resumed
+    assert "-F MY_PA_DATA_PLANE" not in resumed
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in resumed
+
+
+def test_r3_t8_flush_ok_delete_fail_then_empty_cleanup_deletes_only(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path, forward="effective", chain="exact", broad="absent"
+    )
+    _confirm(environment)
+    environment["FAKE_X_FAIL"] = "1"
+    first = _run("remove", environment)
+    assert first.returncode != 0
+    assert "REMOVE_CLEANUP_PENDING" in first.stderr
+    assert "firewall enforcement removed" not in first.stdout
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+    recorded = _recorded(calls)
+    assert "-F MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" in recorded
+    environment["FAKE_X_FAIL"] = "0"
+    calls.write_text("", encoding="utf-8")
+    second = _run("remove", environment)
+    assert second.returncode == 0, second.stderr
+    assert "firewall enforcement removed" in second.stdout
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    resumed = _recorded(calls)
+    assert "-F MY_PA_DATA_PLANE" not in resumed
+    assert "-X MY_PA_DATA_PLANE" in resumed
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in resumed
+
+
+@pytest.mark.parametrize(
+    ("forward", "chain", "broad", "save_mode"),
+    [
+        ("legacy", "empty", "absent", ""),
+        ("legacy", "empty", "duplicate", ""),
+        ("extra", "empty", "absent", ""),
+        ("effective", "empty", "absent", ""),
+        ("legacy", "partial", "present", ""),
+        ("legacy", "foreign", "present", ""),
+        ("legacy", "empty", "present", "always"),
+    ],
+)
+def test_r3_t9_empty_cleanup_ambiguity_refuses_delete(
+    tmp_path: Path, forward: str, chain: str, broad: str, save_mode: str
+) -> None:
+    environment, _state, calls = _environment(tmp_path, forward=forward, chain=chain, broad=broad)
+    _confirm(environment)
+    if save_mode:
+        environment["FAKE_FILTER_SAVE_FAIL_MODE"] = save_mode
+        environment["FAKE_FILTER_SAVE_FAIL_AT"] = "1"
+    result = _run("remove", environment)
+    assert result.returncode != 0
+    assert "firewall enforcement removed" not in result.stdout
+    assert "-X MY_PA_DATA_PLANE" not in _recorded(calls)
+
+
+def test_r3_apply_still_activates_missing_jump_and_populates_empty(
+    tmp_path: Path,
+) -> None:
+    environment, state, _calls = _environment(
+        tmp_path / "missing-jump", forward="legacy", chain="exact", broad="present"
+    )
+    _confirm(environment)
+    applied = _run("apply", environment)
+    assert applied.returncode == 0, applied.stderr
+    assert "firewall enforcement admitted" in applied.stdout
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+
+    environment, state, calls = _environment(
+        tmp_path / "empty", forward="legacy", chain="empty", broad="present"
+    )
+    _confirm(environment)
+    applied = _run("apply", environment)
+    assert applied.returncode == 0, applied.stderr
+    recorded = _recorded(calls)
+    assert "-A MY_PA_DATA_PLANE" in recorded
+    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+
+
+def test_r3_create_unverified_does_not_populate_or_delete(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path)
+    _confirm(environment)
+    environment["FAKE_FILTER_SAVE_FAIL_MODE"] = "once-after-create"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "POSTCONDITION_UNVERIFIED" in result.stderr
+    assert "failed to create MY_PA_DATA_PLANE" not in result.stderr
+    assert "rollback succeeded" not in result.stderr
+    assert "ROLLBACK_FAILED" not in result.stderr
+    recorded = _recorded(calls)
+    assert "-N MY_PA_DATA_PLANE" in recorded
+    assert "-A MY_PA_DATA_PLANE" not in recorded
+    assert "-I FORWARD" not in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+
+
+def test_r3_pre_insert_save_fail_does_not_install_jump(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path)
+    _confirm(environment)
+    environment["FAKE_FILTER_SAVE_FAIL_MODE"] = "once-after-p4"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "POSTCONDITION_UNVERIFIED" in result.stderr
+    assert "firewall enforcement admitted" not in result.stdout
+    recorded = _recorded(calls)
+    assert "-A MY_PA_DATA_PLANE -j RETURN" in recorded
+    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" not in recorded
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+
+
+def test_r3_post_broad_delete_save_fail_does_not_undo_jump(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path)
+    _confirm(environment)
+    environment["FAKE_FILTER_SAVE_FAIL_MODE"] = "once-after-broad-delete"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "POSTCONDITION_UNVERIFIED" in result.stderr
+    assert "firewall enforcement admitted" not in result.stdout
+    recorded = _recorded(calls)
+    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "absent"

@@ -284,11 +284,144 @@ rollback_failed() {
   return 1
 }
 
+postcondition_unverified() {
+  echo "POSTCONDITION_UNVERIFIED${1:+: $1}" >&2
+  return 1
+}
+
+remove_cleanup_pending() {
+  echo "REMOVE_CLEANUP_PENDING${1:+: $1}" >&2
+  return 1
+}
+
+chain_declared_in_save() {
+  printf '%s\n' "$1" | awk -v chain="$enforcement_chain" '
+    $0 ~ "^:" chain "( |$)" {found=1}
+    END {exit found ? 0 : 1}
+  '
+}
+
 delete_owned_chain() {
   assert_no_my_pa_forward_jump || return 1
   "$iptables_bin" -F "$enforcement_chain" || return 1
   "$iptables_bin" -X "$enforcement_chain" || return 1
   owned_chain_absent
+}
+
+cleanup_owned_after_verified_jump_rollback() {
+  case "$population_mode" in
+    created)
+      if ! delete_owned_chain; then
+        rollback_failed "owned chain cleanup after jump rollback"
+        return 1
+      fi
+      ;;
+    emptied)
+      if ! restore_empty_owned_chain; then
+        rollback_failed "empty-chain restore after jump rollback"
+        return 1
+      fi
+      ;;
+  esac
+}
+
+rollback_inserted_forward_jump() {
+  if ! rollback_unverified_forward_jump; then
+    return 1
+  fi
+  if ! cleanup_owned_after_verified_jump_rollback; then
+    return 1
+  fi
+  echo "Synology data-plane firewall admission failed; inserted jump rollback succeeded" >&2
+  return 1
+}
+
+remove_unreferenced_owned_chain() {
+  assert_no_my_pa_forward_jump || {
+    postcondition_unverified "cannot prove MY_PA FORWARD jump absence before chain deletion"
+    return 1
+  }
+  if ! "$iptables_bin" -F "$enforcement_chain"; then
+    echo "MY_PA_DATA_PLANE flush failed" >&2
+    return 1
+  fi
+  if ! "$iptables_bin" -X "$enforcement_chain"; then
+    remove_cleanup_pending "empty MY_PA_DATA_PLANE remains after flush"
+    return 1
+  fi
+  if ! owned_chain_absent; then
+    postcondition_unverified "cannot prove MY_PA_DATA_PLANE absence"
+    return 1
+  fi
+}
+
+prove_empty_cleanup_identity() {
+  save=$(filter_table) || {
+    postcondition_unverified "cannot inspect filter table before empty-chain delete"
+    return 1
+  }
+  forwards=$(forward_appends "$save")
+  first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
+  forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
+  my_pa_jumps=$(printf '%s\n' "$forwards" | awk -v exact="$my_pa_jump" \
+    '$0 == exact {count++} END {print count + 0}')
+  default_jumps=$(printf '%s\n' "$forwards" | awk -v exact="$default_jump" \
+    '$0 == exact {count++} END {print count + 0}')
+  [ "$first" = "$firewall_jump" ] && [ "$forward_count" -eq 1 ] || {
+    echo "refusing empty MY_PA_DATA_PLANE delete: FORWARD identity is not DSM-only" >&2
+    return 1
+  }
+  [ "$my_pa_jumps" -eq 0 ] || {
+    echo "refusing empty MY_PA_DATA_PLANE delete: FORWARD jump is present" >&2
+    return 1
+  }
+  [ "$default_jumps" -eq 0 ] || {
+    echo "refusing empty MY_PA_DATA_PLANE delete: DEFAULT_FORWARD is present" >&2
+    return 1
+  }
+  chain_declared_in_save "$save" || {
+    echo "refusing empty MY_PA_DATA_PLANE delete: chain is not present" >&2
+    return 1
+  }
+  [ -z "$(chain_appends "$save")" ] || {
+    echo "refusing empty MY_PA_DATA_PLANE delete: chain is not empty" >&2
+    return 1
+  }
+  if ! dump=$("$iptables_bin" -S "$enforcement_chain"); then
+    postcondition_unverified "cannot inspect MY_PA_DATA_PLANE contents"
+    return 1
+  fi
+  [ -z "$(chain_appends "$dump")" ] || {
+    echo "refusing empty MY_PA_DATA_PLANE delete: chain contents are not empty" >&2
+    return 1
+  }
+  remaining=$(broad_return_count) || {
+    postcondition_unverified "cannot inspect source-only RETURN before empty-chain delete"
+    return 1
+  }
+  [ "$remaining" -eq 1 ] || {
+    echo "refusing empty MY_PA_DATA_PLANE delete: source-only RETURN count is $remaining" >&2
+    return 1
+  }
+}
+
+attest_legacy_restored() {
+  prove_legacy_forward || {
+    postcondition_unverified "cannot prove DSM-only FORWARD after remove"
+    return 1
+  }
+  remaining=$(broad_return_count) || {
+    postcondition_unverified "cannot prove legacy source-only RETURN"
+    return 1
+  }
+  [ "$remaining" -eq 1 ] || {
+    echo "legacy source-only data-plane RETURN is not present after remove" >&2
+    return 1
+  }
+  owned_chain_absent || {
+    postcondition_unverified "cannot prove MY_PA_DATA_PLANE absence"
+    return 1
+  }
 }
 
 rollback_unverified_forward_jump() {
@@ -387,6 +520,18 @@ case "$action" in
               echo "failed to create MY_PA_DATA_PLANE" >&2
               exit 1
             }
+            if ! save=$(filter_table); then
+              postcondition_unverified "cannot prove MY_PA_DATA_PLANE creation"
+              exit 1
+            fi
+            chain_declared_in_save "$save" || {
+              postcondition_unverified "MY_PA_DATA_PLANE creation is not visible"
+              exit 1
+            }
+            [ -z "$(chain_appends "$save")" ] || {
+              postcondition_unverified "MY_PA_DATA_PLANE is not empty after creation"
+              exit 1
+            }
             population_mode=created
             if ! populate_enforcement_chain; then
               if ! delete_owned_chain; then
@@ -433,7 +578,10 @@ case "$action" in
           echo "Synology data-plane enforcement chain is not exact; FORWARD jump was not installed" >&2
           exit 1
         fi
-        save=$(filter_table) || exit 1
+        save=$(filter_table) || {
+          postcondition_unverified "cannot inspect FORWARD before jump insert"
+          exit 1
+        }
         forwards=$(forward_appends "$save")
         first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
         forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
@@ -460,35 +608,24 @@ case "$action" in
             esac
             exit 1
           fi
-          save=$(filter_table) || exit 1
+          if ! save=$(filter_table); then
+            rollback_inserted_forward_jump
+            exit 1
+          fi
           forwards=$(forward_appends "$save")
           first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
           second=$(printf '%s\n' "$forwards" | awk 'NF {n++; if (n == 2) {print; exit}}')
           forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
           if [ "$first" != "$my_pa_jump" ] || [ "$second" != "$firewall_jump" ] || \
              [ "$forward_count" -ne 2 ]; then
-            if ! rollback_unverified_forward_jump; then
-              exit 1
-            fi
-            case "$population_mode" in
-              created)
-                if ! delete_owned_chain; then
-                  rollback_failed "owned chain cleanup after jump rollback"
-                  exit 1
-                fi
-                ;;
-              emptied)
-                if ! restore_empty_owned_chain; then
-                  rollback_failed "empty-chain restore after jump rollback"
-                  exit 1
-                fi
-                ;;
-            esac
-            echo "Synology data-plane firewall admission failed; inserted jump rollback succeeded" >&2
+            rollback_inserted_forward_jump
             exit 1
           fi
         fi
-        remaining=$(broad_return_count) || exit 1
+        remaining=$(broad_return_count) || {
+          postcondition_unverified "cannot inspect source-only RETURN after MY_PA-first jump"
+          exit 1
+        }
         case "$remaining" in
           0) ;;
           1)
@@ -502,7 +639,10 @@ case "$action" in
             exit 1
             ;;
         esac
-        final_state=$(enforcement_state) || exit 1
+        final_state=$(enforcement_state) || {
+          postcondition_unverified "cannot attest admitted enforcement"
+          exit 1
+        }
         if [ "$final_state" != effective ]; then
           echo "Synology data-plane firewall admission failed post-condition" >&2
           exit 1
@@ -526,46 +666,129 @@ case "$action" in
     }
     state=$(enforcement_state) || exit 1
     case "$state" in
-      effective|broad-return) ;;
+      effective|broad-return)
+        [ "$(chain_classification)" = exact ] || {
+          echo "refusing to delete foreign MY_PA_DATA_PLANE contents" >&2
+          exit 1
+        }
+        restore_legacy_broad_return
+        save=$(filter_table) || {
+          postcondition_unverified "cannot inspect FORWARD before jump deletion"
+          exit 1
+        }
+        forwards=$(forward_appends "$save")
+        my_pa_jumps=$(printf '%s\n' "$forwards" | awk -v exact="$my_pa_jump" \
+          '$0 == exact {count++} END {print count + 0}')
+        [ "$my_pa_jumps" -eq 1 ] || {
+          echo "MY_PA_DATA_PLANE FORWARD jump identity mismatch" >&2
+          exit 1
+        }
+        "$iptables_bin" -D FORWARD -j "$enforcement_chain" || {
+          echo "failed to remove MY_PA_DATA_PLANE FORWARD jump" >&2
+          exit 1
+        }
+        if ! save=$(filter_table); then
+          remove_cleanup_pending "cannot inspect FORWARD after jump deletion"
+          exit 1
+        fi
+        forwards=$(forward_appends "$save")
+        first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
+        forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
+        [ "$first" = "$firewall_jump" ] && [ "$forward_count" -eq 1 ] || {
+          echo "legacy DSM-first FORWARD restoration failed" >&2
+          exit 1
+        }
+        remove_unreferenced_owned_chain || exit 1
+        attest_legacy_restored || exit 1
+        ;;
+      missing-jump)
+        [ "$(chain_classification)" = exact ] || {
+          echo "refusing to delete foreign MY_PA_DATA_PLANE contents" >&2
+          exit 1
+        }
+        prove_legacy_forward || {
+          echo "refusing missing-jump cleanup: FORWARD identity is not DSM-only" >&2
+          exit 1
+        }
+        jump_count=$(my_pa_forward_jump_count) || {
+          postcondition_unverified "cannot prove MY_PA FORWARD jump absence"
+          exit 1
+        }
+        [ "$jump_count" -eq 0 ] || {
+          echo "refusing missing-jump cleanup: FORWARD jump is present" >&2
+          exit 1
+        }
+        remaining=$(broad_return_count) || {
+          postcondition_unverified "cannot inspect source-only RETURN before missing-jump cleanup"
+          exit 1
+        }
+        case "$remaining" in
+          0) restore_legacy_broad_return || exit 1 ;;
+          1) ;;
+          *)
+            echo "duplicate source-only data-plane RETURN requires explicit removal" >&2
+            exit 1
+            ;;
+        esac
+        remaining=$(broad_return_count) || {
+          postcondition_unverified "cannot prove legacy source-only RETURN"
+          exit 1
+        }
+        [ "$remaining" -eq 1 ] || {
+          echo "legacy source-only data-plane RETURN is not present after remove" >&2
+          exit 1
+        }
+        remove_unreferenced_owned_chain || exit 1
+        attest_legacy_restored || exit 1
+        ;;
+      legacy)
+        prove_legacy_forward || {
+          echo "refusing leftover cleanup: FORWARD identity is not DSM-only" >&2
+          exit 1
+        }
+        jump_count=$(my_pa_forward_jump_count) || {
+          postcondition_unverified "cannot prove MY_PA FORWARD jump absence"
+          exit 1
+        }
+        [ "$jump_count" -eq 0 ] || {
+          echo "refusing leftover cleanup: FORWARD jump is present" >&2
+          exit 1
+        }
+        save=$(filter_table) || {
+          postcondition_unverified "cannot inspect filter table before leftover cleanup"
+          exit 1
+        }
+        if chain_declared_in_save "$save"; then
+          prove_empty_cleanup_identity || exit 1
+          if ! "$iptables_bin" -X "$enforcement_chain"; then
+            remove_cleanup_pending "empty MY_PA_DATA_PLANE delete failed"
+            exit 1
+          fi
+          if ! owned_chain_absent; then
+            postcondition_unverified "cannot prove MY_PA_DATA_PLANE absence"
+            exit 1
+          fi
+          attest_legacy_restored || exit 1
+        else
+          if dump=$("$iptables_bin" -S "$enforcement_chain" 2>/dev/null); then
+            postcondition_unverified "filter-table absence disagrees with MY_PA_DATA_PLANE inspection"
+            exit 1
+          fi
+          remaining=$(broad_return_count) || {
+            postcondition_unverified "cannot prove legacy source-only RETURN"
+            exit 1
+          }
+          [ "$remaining" -eq 1 ] || {
+            echo "legacy source-only data-plane RETURN is not present after remove" >&2
+            exit 1
+          }
+        fi
+        ;;
       *)
         echo "one exact Synology data-plane enforcement chain is not present: $state" >&2
         exit 1
-      ;;
+        ;;
     esac
-    [ "$(chain_classification)" = exact ] || {
-      echo "refusing to delete foreign MY_PA_DATA_PLANE contents" >&2
-      exit 1
-    }
-    restore_legacy_broad_return
-    save=$(filter_table) || exit 1
-    forwards=$(forward_appends "$save")
-    my_pa_jumps=$(printf '%s\n' "$forwards" | awk -v exact="$my_pa_jump" \
-      '$0 == exact {count++} END {print count + 0}')
-    [ "$my_pa_jumps" -eq 1 ] || {
-      echo "MY_PA_DATA_PLANE FORWARD jump identity mismatch" >&2
-      exit 1
-    }
-    "$iptables_bin" -D FORWARD -j "$enforcement_chain" || {
-      echo "failed to remove MY_PA_DATA_PLANE FORWARD jump" >&2
-      exit 1
-    }
-    save=$(filter_table) || exit 1
-    forwards=$(forward_appends "$save")
-    first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
-    forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
-    [ "$first" = "$firewall_jump" ] && [ "$forward_count" -eq 1 ] || {
-      echo "legacy DSM-first FORWARD restoration failed" >&2
-      exit 1
-    }
-    delete_owned_chain || {
-      echo "MY_PA_DATA_PLANE chain removal failed" >&2
-      exit 1
-    }
-    remaining=$(broad_return_count) || exit 1
-    [ "$remaining" -eq 1 ] || {
-      echo "legacy source-only data-plane RETURN is not present after remove" >&2
-      exit 1
-    }
     echo "Synology data-plane firewall enforcement removed"
     ;;
   *)

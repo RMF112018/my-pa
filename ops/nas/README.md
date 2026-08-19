@@ -89,7 +89,9 @@ forwarding to DSM. Built-in FORWARD order is inspected through `iptables-save
 `DEFAULT_FORWARD` is not an accepted equivalent, Docker isolation stays unwired,
 and a leftover source-only data-plane RETURN in `FORWARD_FIREWALL` is refused.
 Read-only `plan`/`check` are separate from explicitly confirmed, idempotent
-`apply` and exact `remove`. PostgreSQL database operations and ordinary runtime
+`apply` and exact `remove`. `remove` resumes missing-jump and empty
+unreferenced-chain cleanup; `apply` still populates an empty unreferenced
+chain; proven legacy with the chain absent is already-removed. PostgreSQL database operations and ordinary runtime
 start/restart/health refuse if the gate is missing. DSM firewall reload or NAS
 reboot can clear runtime iptables state, so recovery must re-apply and re-check
 before service lifecycle operations. Passing this gate does not admit the

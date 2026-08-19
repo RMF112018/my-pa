@@ -149,7 +149,10 @@ contents, FORWARD jumps `MY_PA_DATA_PLANE` then `FORWARD_FIREWALL`, and no
 source-only data-plane RETURN in `FORWARD_FIREWALL`. `plan` is read-only;
 `apply` is idempotent and requires the exact confirmation value; `remove`
 restores the legacy source-only RETURN before withdrawing the MY_PA jump,
-then deletes only the verified repository-owned chain. Foreign or duplicate
+then deletes only the verified repository-owned chain. `remove` also resumes
+missing-jump cleanup and empty unreferenced `-X`; `apply` still populates an
+empty unreferenced chain; proven `legacy` with the chain absent is already
+removed. Foreign or duplicate
 state is refused. The rule set is runtime firewall state, not a DSM profile
 mutation. A DSM firewall reload or NAS reboot can remove it, so re-run
 `apply` before lifecycle recovery. Database operations, six-service

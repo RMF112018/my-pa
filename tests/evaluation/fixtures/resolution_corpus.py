@@ -64,6 +64,7 @@ from my_pa.domain.relationship.normalization import normalize_identifier, normal
 
 __all__ = [
     "ACME",
+    "AFTER",
     "ALICE_CHEN_ENGINEER",
     "ALICE_CHEN_LAWYER",
     "CHEN_PARTNERS",
@@ -76,6 +77,8 @@ __all__ = [
     "JOSE_ALVAREZ",
     "LEO_MARCHETTI",
     "MAYA_OSEI",
+    "NADIA_OKONKWO_INCOMING",
+    "NADIA_OKONKWO_OTHER",
     "NORTHWIND",
     "PRINCIPAL_A",
     "PRINCIPAL_B",
@@ -83,6 +86,8 @@ __all__ = [
     "ROBERTA_CHEN",
     "ROBERT_CHEN",
     "SURVIVING_CONTRACTOR",
+    "TOMAS_HALL_CURRENT",
+    "TOMAS_HALL_OTHER",
     "TOWER_PROJECT",
     "WHEN",
 ]
@@ -96,6 +101,12 @@ PRINCIPAL_B: Final = "prn_bbbb0002bbbb0002bbbb0002"
 WHEN: Final = datetime(2026, 8, 18, 12, tzinfo=UTC)
 BEFORE: Final = datetime(2024, 1, 1, tzinfo=UTC)
 MIDPOINT: Final = datetime(2025, 6, 1, tzinfo=UTC)
+#: After `WHEN`, so a window can be *not yet begun* or *still running*. The
+#: corpus had neither shape until now: every dated row was open, open-from-past,
+#: or closed-in-past, so both halves of the currency defect -- a role starting
+#: later read as in force, and a contract running later read as over -- were
+#: measured by nothing and a rule inverting them scored identically.
+AFTER: Final = datetime(2030, 1, 1, tzinfo=UTC)
 
 ALICE_CHEN_ENGINEER: Final = "ent_alice0001engineer01"
 ALICE_CHEN_LAWYER: Final = "ent_alice0002lawyer0002"
@@ -108,6 +119,10 @@ BOB_CHEN_OTHER_PRINCIPAL: Final = "ent_bob0008otherprin08"
 MAYA_OSEI: Final = "ent_maya0013osei00013"
 LEO_MARCHETTI: Final = "ent_leo0014marchetti1"
 PRIYA_RAO: Final = "ent_priya0015rao00015"
+NADIA_OKONKWO_INCOMING: Final = "ent_nadia0016incoming1"
+NADIA_OKONKWO_OTHER: Final = "ent_nadia0017other0017"
+TOMAS_HALL_CURRENT: Final = "ent_tomas0018current18"
+TOMAS_HALL_OTHER: Final = "ent_tomas0019other0019"
 
 ACME: Final = "ent_acme0009org000009a"
 NORTHWIND: Final = "ent_northwind0010org10"
@@ -160,6 +175,13 @@ CORPUS_ENTITIES: Final[tuple[Entity, ...]] = (
     _entity(NORTHWIND, "Northwind Partners", entity_type=EntityType.ORGANIZATION),
     _entity(CHEN_PARTNERS, "Alice Chen", entity_type=EntityType.ORGANIZATION),
     _entity(TOWER_PROJECT, "Harbour Tower", entity_type=EntityType.PROJECT),
+    # Two Nadias and two Tomases, each pair sharing a canonical name so that a
+    # scope signal is the only thing that could lift either above `AMBIGUOUS`.
+    # Their assignments below carry the two future shapes.
+    _entity(NADIA_OKONKWO_INCOMING, "Nadia Okonkwo"),
+    _entity(NADIA_OKONKWO_OTHER, "Nadia Okonkwo"),
+    _entity(TOMAS_HALL_CURRENT, "Tomas Hall"),
+    _entity(TOMAS_HALL_OTHER, "Tomas Hall"),
     # Another Principal's person, whose surname collides on purpose.
     _entity(BOB_CHEN_OTHER_PRINCIPAL, "Bob Chen", principal_id=PRINCIPAL_B),
     # Three uniquely named people whose *only* evidence is a bare canonical name
@@ -352,6 +374,31 @@ CORPUS_ASSIGNMENTS: Final[tuple[Assignment, ...]] = (
         scope_entity_id=TOWER_PROJECT,
         effective_from=BEFORE,
         effective_to=MIDPOINT,
+    ),
+    # Nadia starts on the project in 2030. Nothing has ended, so the rule that
+    # read currency off "nobody wrote an end date" called this in force and let
+    # it corroborate a bare shared name into a confident answer -- a person
+    # named as being somewhere they have not arrived.
+    Assignment(
+        assignment_id="asn_nadia0006incoming",
+        entity_id=NADIA_OKONKWO_INCOMING,
+        assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+        principal_id=PRINCIPAL_A,
+        scope_entity_id=TOWER_PROJECT,
+        effective_from=AFTER,
+    ),
+    # Tomas is on the project now under a contract that runs to 2030. The same
+    # rule read the recorded end date as "over" and refused to corroborate at
+    # all, which is the ordinary dated employment and the half that made the
+    # rule wrong in the safe-looking direction.
+    Assignment(
+        assignment_id="asn_tomas0007current0",
+        entity_id=TOMAS_HALL_CURRENT,
+        assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+        principal_id=PRINCIPAL_A,
+        scope_entity_id=TOWER_PROJECT,
+        effective_from=BEFORE,
+        effective_to=AFTER,
     ),
 )
 

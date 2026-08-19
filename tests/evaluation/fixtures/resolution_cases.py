@@ -33,11 +33,15 @@ from tests.evaluation.fixtures.resolution_corpus import (
     JOSE_ALVAREZ,
     LEO_MARCHETTI,
     MAYA_OSEI,
+    NADIA_OKONKWO_INCOMING,
+    NADIA_OKONKWO_OTHER,
     PRINCIPAL_A,
     PRIYA_RAO,
     ROBERT_CHEN,
     ROBERTA_CHEN,
     SURVIVING_CONTRACTOR,
+    TOMAS_HALL_CURRENT,
+    TOMAS_HALL_OTHER,
     TOWER_PROJECT,
     WHEN,
 )
@@ -64,6 +68,10 @@ class ResolutionCase:
     entity_type: EntityType | None = None
     scope_entity_id: str | None = None
     as_of: datetime | None = None
+    #: The moment the question is asked, defaulted to the corpus clock so every
+    #: case is answered the way the capability answers one. A case that wants the
+    #: no-moment fallback sets it to `None` explicitly and says why.
+    at: datetime | None = WHEN
     #: Entities that must appear among the candidates.
     must_include: frozenset[str] = frozenset()
     #: Entities that must never appear among the candidates.
@@ -208,6 +216,35 @@ RESOLUTION_CASES: Final[tuple[ResolutionCase, ...]] = (
         note=(
             "A caller who names a moment gets that moment's answer. Refusing here would "
             "be the other failure: a currency rule strict enough to answer nothing."
+        ),
+    ),
+    ResolutionCase(
+        name="a_tie_that_has_not_begun_does_not_resolve_a_shared_name",
+        family="signal_currency",
+        reference="Nadia Okonkwo",
+        scope_entity_id=TOWER_PROJECT,
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({NADIA_OKONKWO_INCOMING, NADIA_OKONKWO_OTHER}),
+        note=(
+            "Her assignment starts in 2030 and nobody has ended it. The rule that read "
+            "currency off 'nobody wrote an end date' called that in force, so a person "
+            "was named as being somewhere she has not arrived. Both Nadias stay on the "
+            "answer, which is what refusing looks like here."
+        ),
+    ),
+    ResolutionCase(
+        name="a_tie_running_to_a_future_end_date_still_resolves",
+        family="signal_currency",
+        reference="Tomas Hall",
+        scope_entity_id=TOWER_PROJECT,
+        expected_outcome=ResolutionOutcome.RESOLVED_CONTEXTUAL,
+        expected_entity_id=TOMAS_HALL_CURRENT,
+        must_not_include=frozenset({TOMAS_HALL_OTHER}),
+        note=(
+            "The pair of the case above, and the half that made the old rule wrong for "
+            "ordinary data: a contract with a recorded end date in 2030 is live now. A "
+            "currency rule that refuses this refuses every dated employment, which is a "
+            "resolver that answers nothing and passes for safe."
         ),
     ),
     ResolutionCase(

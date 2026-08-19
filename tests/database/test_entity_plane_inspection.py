@@ -68,6 +68,14 @@ PLANTED_PERSONAL_DATA: Final[tuple[str, ...]] = (
     "a.chen@acme.test",
     "Bob Chen",
     "bob chen",
+    #: Planted into `entity_proposals.proposed_by`, which the inspection script
+    #: argues at length must never be selected because it is free text that will
+    #: carry "a person's name or address the moment anything records who asked
+    #: for the change". The fixture used to plant `"resolver"` there — a value
+    #: that is not personal — so re-adding the column would have left this scan
+    #: green while an operator pasted a person's name into a ticket. The other
+    #: four personal columns were planted and scanned; this was the one gap.
+    "Dana Whitfield",
 )
 
 SOURCE: Final = "src_aaaa0001aaaa0001"
@@ -176,7 +184,7 @@ def populated(disposable_database: str) -> Iterator[Engine]:
                 kind=EntityProposalKind.MERGE_ENTITIES,
                 payload={"retained_entity_id": ALICE, "merged_entity_id": ALICE_TWO},
                 observation_ids=(),
-                proposed_by="resolver",
+                proposed_by="Dana Whitfield",
                 proposed_at=WHEN,
             )
         yield engine

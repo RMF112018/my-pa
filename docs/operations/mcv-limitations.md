@@ -154,14 +154,22 @@ what it produced. `P00-OD-006` is **open**.
 
 Evidence: `src/my_pa/infrastructure/extraction/`, `pyproject.toml`.
 
-## 6. Listings stop at the page size and issue no continuation cursor
+## 6. Listings stop at the page size, and only one issues a continuation cursor
 
 Truncation is disclosed rather than hidden — `truncation.is_truncated` with a
-reason — but `next_cursor` is always `null` and there is no way to ask for the
-next page. A caller that needs the whole of a large scope cannot get it.
+reason. `entities.relationships` issues a keyset `next_cursor` a caller can page
+with. **Every other listing does not**, so a caller that needs the whole of a
+large scope still cannot get it.
 
 This one the build states about itself: it is derived into every
-`capabilities.get` envelope rather than written here.
+`capabilities.get` envelope rather than written here — from which commands
+accept `after`, intersected with what the build actually serves, so a process
+that withholds `entities.relationships` does not advertise its cursor.
+
+Corrected 2026-08-19. This section read "`next_cursor` is **always** `null`"
+after that cursor shipped, while the sentence above claimed the build derives
+this rather than writing it down here — a section contradicting the derived text
+it points at.
 
 Evidence: `src/my_pa/application/capabilities.py`,
 `tests/contract/test_capabilities_and_readiness.py`.

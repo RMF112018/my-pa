@@ -149,7 +149,7 @@ capability set is closed at eight by the canonical contract". `D-68` narrows
 `D-42`'s general premise for the capture family alone — `capture.create` is
 named by the canonical package in six places, and the other three are a
 repository decision under `ADR-003:107`, which reserves capability names to "an
-implementing work package and its pull request". The set is thirty, and it is
+implementing work package and its pull request". The set is fifty-three, and it is
 closed against a ninth *source-registration* capability rather than against a
 ninth member.
 
@@ -202,7 +202,7 @@ Owns transport-neutral public request/response/disclosure/error schemas and appl
 ### 5.3 `application`
 
 
-Owns the thirty public capability use cases; request normalization; semantic validation; principal/purpose/scope authorization; enrollment normalization/idempotency; capture admission, idempotent replay, and the durable-first save; source, knowledge, capture, and managed-document orchestration; disclosure construction; operation/cancellation/recovery coordination; transaction boundaries; and mapping internal failures to public errors.
+Owns the fifty-three public capability use cases; request normalization; semantic validation; principal/purpose/scope authorization; enrollment normalization/idempotency; capture admission, idempotent replay, and the durable-first save; source, knowledge, capture, and managed-document orchestration; disclosure construction; operation/cancellation/recovery coordination; transaction boundaries; and mapping internal failures to public errors.
 
 
 It does not parse HTTP/MCP, execute SQL, open files, call provider SDKs, or embed process lifecycle.

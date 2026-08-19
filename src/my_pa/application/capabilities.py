@@ -147,7 +147,22 @@ def _limitations(
     # is the property this sentence is about, so it is the property it is computed
     # from, and a capability that gains or loses pagination rewrites this line
     # without anyone remembering to.
-    continuable = sorted(capability.value for capability in _CAPABILITIES_ACCEPTING_A_CONTINUATION)
+    # Intersected with what this build actually serves, not just what the
+    # contract defines. Deriving from the command dataclasses alone fixed the
+    # sentence's staleness and introduced a different falsehood: a default build
+    # reports `entities.relationships` as `not_implemented` in the same envelope
+    # that promised it issued a continuation cursor. A limitation is a statement
+    # about *this* build, so it is computed from this build's manifest.
+    served = {
+        status.name
+        for status in manifest.capabilities
+        if status.availability is not Availability.NOT_IMPLEMENTED
+    }
+    continuable = sorted(
+        capability.value
+        for capability in _CAPABILITIES_ACCEPTING_A_CONTINUATION
+        if capability in served
+    )
     if continuable:
         limitations.append(
             "Listings stop at the page size; truncation is disclosed. "

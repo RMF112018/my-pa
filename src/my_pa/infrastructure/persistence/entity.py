@@ -50,8 +50,13 @@ CJK name on one server and admits it on another. A constraint that rejects
 correct data is not a stricter guard than none; it is a different defect. The
 invariant therefore lives where the algorithm does, and the cost of that choice
 is stated rather than hidden: a hand-run `INSERT` on the server still bypasses
-it, which is what `tests/database/test_entity_storage_state_is_adversarial.py`
-injects and measures rather than assumes.
+it, and **no test measures that bypass.** An earlier version of this paragraph
+cited `tests/database/test_entity_storage_state_is_adversarial.py` for it. That
+file has never existed. The guard itself is real -- `_require_normalized_name`
+runs on the write path and on every read mapper, so nothing routed through this
+repository can store or return an unnormalized name -- but the residual is
+carried by argument, not by evidence, and saying so is the difference between a
+known gap and a false citation.
 
 **Idempotency, stated honestly.** ``bind_identifier`` is idempotent against a
 natural key -- ``(entity_id, namespace, normalized_value)`` is a real unique
@@ -858,6 +863,27 @@ class SqlEntityRepository(EntitiesRepository):
         self._require_own_entities(principal_id, merged_entity_id, retained_entity_id)
         if merged_entity_id == retained_entity_id:
             raise ValueError("an entity cannot be merged into itself")
+        # **Both rows are locked before either guard reads.** The two checks
+        # below read one row and then update a *different* one, so under READ
+        # COMMITTED two concurrent redirects never contend and both pass: run
+        # `redirect(BOB, ALICE)` beside `redirect(ALICE, CARLA)` and each sees a
+        # current survivor and no inbound pointer, leaving the chain
+        # `BOB -> ALICE -> CARLA` that the guard exists to prevent. The mirror
+        # pair leaves a cycle, which makes the runbook's "follow
+        # `superseded_by_entity_id`" non-terminating. Nothing in the schema
+        # catches either state and there is no repair path.
+        #
+        # Locked in identifier order so two callers naming the same pair in
+        # opposite directions queue rather than deadlock.
+        self._connection.execute(
+            select(entities.c.entity_id)
+            .where(
+                _mine(entities, principal_id),
+                entities.c.entity_id.in_(sorted((merged_entity_id, retained_entity_id))),
+            )
+            .order_by(entities.c.entity_id)
+            .with_for_update()
+        ).all()
         # The survivor must be an entity a reader can land on. Without this a
         # second merge in the other direction produced a redirect *cycle*, and a
         # merge onto an already-merged entity produced a chain -- both of which

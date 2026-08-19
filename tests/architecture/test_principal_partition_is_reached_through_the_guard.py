@@ -759,7 +759,7 @@ def test_every_relationship_statement_reaches_the_partition() -> None:
         if not isinstance(function, ast.FunctionDef):
             continue
         for statement in ast.walk(function):
-            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.AnnAssign | ast.Return):
                 continue
             rendered = ast.unparse(statement)
             if not any(
@@ -782,6 +782,13 @@ def test_every_relationship_statement_reaches_the_partition() -> None:
         "read and update predicate goes through `_mine`; every insert goes "
         "through `_bound`"
     )
+
+
+#: A floor under the anti-vacuity floor. `entity.py` holds thirty-one statements
+#: touching a partitioned table at this head; twenty-eight leaves room for a
+#: query to be removed without reddening the suite, while a walk that silently
+#: stopped reaching most of the module fails loudly.
+_MINIMUM_ENTITY_STATEMENTS: Final = 28
 
 
 def test_every_entity_statement_reaches_the_partition() -> None:
@@ -808,7 +815,7 @@ def test_every_entity_statement_reaches_the_partition() -> None:
         if not isinstance(function, ast.FunctionDef):
             continue
         for statement in ast.walk(function):
-            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.AnnAssign | ast.Return):
                 continue
             rendered = ast.unparse(statement)
             if not any(
@@ -819,9 +826,14 @@ def test_every_entity_statement_reaches_the_partition() -> None:
             if "_mine(" not in rendered and "_bound(" not in rendered:
                 offending.append(f"{function.name}:{statement.lineno}")
 
-    assert checked >= 9, (
-        f"only {checked} entity statements were examined; the walk is not "
-        "reaching the module's queries"
+    # The floor tracks the real count rather than sitting far beneath it. At 9,
+    # against the statements actually present, a refactor could hide two-thirds
+    # of the module's queries from this walk and still clear it — an
+    # anti-vacuity floor that cannot detect the vacuity it exists for.
+    assert checked >= _MINIMUM_ENTITY_STATEMENTS, (
+        f"only {checked} entity statements were examined, against at least "
+        f"{_MINIMUM_ENTITY_STATEMENTS} present; the walk is not reaching the "
+        "module's queries"
     )
     assert offending == [], (
         f"{offending} build a statement over a principal-partitioned entity "
@@ -889,7 +901,7 @@ def test_every_reveal_statement_reaches_the_partition() -> None:
         if not isinstance(function, ast.FunctionDef):
             continue
         for statement in ast.walk(function):
-            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.AnnAssign | ast.Return):
                 continue
             rendered = ast.unparse(statement)
             if not any(f"{table}.c" in rendered for table in partitioned):
@@ -1159,7 +1171,7 @@ def test_every_corpus_coverage_statement_reaches_the_partition() -> None:
 
     **The unit is the reference and not the statement, and the difference is the
     whole of this rule's history.** As first written it inspected
-    `ast.Expr | ast.Assign | ast.Return` — the three statement kinds the queries
+    `ast.Expr | ast.Assign | ast.AnnAssign | ast.Return` — the four statement kinds the queries
     in this module happened to be written as — and a review planted three
     unpartitioned reads of `enrollments` in the shapes that list omits: an
     annotated assignment, a select over `enrollments.alias()`, and a `select`
@@ -1656,7 +1668,7 @@ def test_every_managed_document_statement_reaches_the_partition_or_is_registered
         if not isinstance(function, ast.FunctionDef):
             continue
         for statement in ast.walk(function):
-            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.AnnAssign | ast.Return):
                 continue
             rendered = ast.unparse(statement)
             if not any(f"{table}.c" in rendered or f"({table}," in rendered for table in managed):

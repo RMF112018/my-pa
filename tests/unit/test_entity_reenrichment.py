@@ -19,6 +19,7 @@ from my_pa.application.entity_reenrichment import (
     ReenrichmentOutcome,
     ReenrichmentTrigger,
 )
+from my_pa.application.entity_resolution import ResolutionRequest
 from my_pa.domain.relationship.entity import (
     AliasType,
     Entity,
@@ -33,6 +34,7 @@ from my_pa.domain.relationship.governance import (
     ObservationKind,
 )
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.relationship.resolution import EntityResolution
 from tests.conftest import FakeUnitOfWork, World
 
 PRINCIPAL = "prn_aaaa0001aaaa0001aaaa0001"
@@ -507,3 +509,40 @@ def test_a_pass_asks_the_repository_for_a_bounded_read(world: World) -> None:
     enriching.after_alias(PRINCIPAL)
 
     assert asked == [REENRICHMENT_BOUND + 1, REENRICHMENT_BOUND + 1]
+
+
+def test_an_alias_pass_asks_no_question_that_needs_a_clock(world: World) -> None:
+    """The background pass supplies no moment, so it must supply no scope either.
+
+    `_is_in_force` falls back to "nobody wrote an end date" when a request
+    carries neither `as_of` nor `at`, and that fallback errs toward *resolving*.
+    `entities.resolve` always passes `authorization.at`; this pass has no clock
+    to pass, and is safe only because it never names a scope -- so no contextual
+    signal is consulted and the currency rule is never reached from here.
+
+    Pinned because the condition is invisible at the call site: adding a
+    `scope_entity_id` to that request, with no moment beside it, would let a
+    background pass with nobody watching link a mention on the strength of a
+    role that has not started. That is the join `RI-RISK-001` names, made by the
+    one caller no operator sees.
+    """
+    asked: list[ResolutionRequest] = []
+    entities = _entities(world)
+    entities.create(PRINCIPAL, _entity(ALICE))
+    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001"))
+    service = EntityReenrichmentService(entities)
+    resolving = service._resolving
+    real_resolve = resolving.resolve
+
+    def _recording(principal_id: str, request: ResolutionRequest) -> EntityResolution:
+        asked.append(request)
+        return real_resolve(principal_id, request)
+
+    resolving.resolve = _recording  # type: ignore[method-assign]
+    service.after_alias(PRINCIPAL)
+
+    assert asked, "the pass resolved nothing, so this test would prove nothing"
+    for request in asked:
+        assert request.scope_entity_id is None
+        assert request.as_of is None
+        assert request.at is None

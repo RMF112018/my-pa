@@ -347,6 +347,12 @@ def run_cases() -> tuple[CaseResult, ...]:
             entity_type=case.entity_type,
             scope_entity_id=case.scope_entity_id,
             as_of=case.as_of,
+            # The moment the corpus is evaluated at, as the capability supplies
+            # `authorization.at`. Omitted until now, so every case was answered
+            # under the no-moment fallback rather than the rule production runs —
+            # which is why removing the currency fix entirely left this gate
+            # green while unit tests caught it.
+            at=case.at,
         )
         results.append(CaseResult(case, service.resolve(case.principal_id, request)))
     return tuple(results)

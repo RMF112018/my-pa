@@ -44,6 +44,7 @@ from my_pa.domain.relationship.entity import (
 )
 from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
+from my_pa.domain.relationship.resolution import ResolutionOutcome
 
 ALICE = "ent_alice0001alice0001"
 ALICE_TWO = "ent_alice0002alice0002"
@@ -404,6 +405,59 @@ def test_relationships_refuses_an_unknown_direction() -> None:
     """Refused at the command, before it could be read as "any"."""
     with pytest.raises(InvalidRequestError):
         GetEntityRelationships(entity_id=ALICE, direction="sideways")
+
+
+# ---- the capability supplies the moment ------------------------------------
+
+
+def test_the_capability_passes_its_own_clock_to_the_resolver(staged: Scene) -> None:
+    """`entities.resolve` answers about *now*, and only the handler knows when now is.
+
+    The resolver holds signals to a currency rule that needs a moment. Without
+    one it falls back to "nobody wrote an end date", under which an assignment
+    beginning in 2030 reads as in force and corroborates a bare canonical name
+    into a confident answer. `ResolutionRequest.at` carries `authorization.at`
+    for exactly that reason.
+
+    Asserted here rather than only in the unit suite because the defect is not in
+    the resolver -- it behaves correctly when told the moment -- but in the one
+    line of the handler that tells it. Deleting `at=authorization.at` left the
+    whole suite green while restoring the defect, so the wiring needs a test of
+    its own.
+
+    The scope is named so the resolver consults context at all; ALICE and
+    ALICE_TWO share a canonical name, so a corroborated signal is the only thing
+    that could lift either above `AMBIGUOUS`.
+    """
+    scene = staged
+    principal_id = scene.principal.principal_id
+    # A scope nobody has a *live* tie to, so the future assignment is the only
+    # thing that could corroborate. Using the staged project would not isolate
+    # the clock: ALICE already holds a current assignment there.
+    harbour = "ent_harbour0007harbour"
+    with FakeUnitOfWork(scene.world) as unit_of_work:
+        unit_of_work.entities.create(
+            principal_id, _entity(harbour, "Harbour Point", principal_id, EntityType.PROJECT)
+        )
+        unit_of_work.entities.record_assignment(
+            principal_id,
+            Assignment(
+                assignment_id="asn_future0002future02",
+                entity_id=ALICE,
+                assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+                principal_id=principal_id,
+                scope_entity_id=harbour,
+                effective_from=datetime(2030, 1, 1, tzinfo=UTC),
+            ),
+        )
+    body = _payload(
+        scene,
+        Capability.ENTITIES_RESOLVE,
+        ResolveEntity(reference="Alice Chen", scope_entity_id=harbour),
+    )
+    resolution = body["resolution"]
+    assert resolution["outcome"] == ResolutionOutcome.AMBIGUOUS.value  # type: ignore[index,call-overload]
+    assert resolution.get("entity_id") is None  # type: ignore[union-attr]
 
 
 # ---- the plane is off ------------------------------------------------------

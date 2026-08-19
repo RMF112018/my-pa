@@ -1314,6 +1314,83 @@ def test_an_assignment_running_to_a_future_end_date_still_corroborates(
     assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT not in answer.warnings
 
 
+def test_a_supplied_as_of_outranks_the_request_moment(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """When both moments are given, the one the caller asked *about* decides.
+
+    `at` says when the question is being asked and `as_of` says when it is being
+    asked about. A caller reconstructing what was true in 2027 must get the
+    assignment that was live in 2027, not the one live at the moment they typed
+    it — otherwise `as_of` is decorative for signals while it decides evidence.
+
+    Untested until now: flipping the precedence left the whole suite green, so
+    the ordering was correct and unpinned.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.record_assignment(
+        PRINCIPAL,
+        _assignment(
+            "asn_aaaa0001aaaa0001",
+            effective_from=datetime(2027, 1, 1, tzinfo=UTC),
+            effective_to=datetime(2028, 1, 1, tzinfo=UTC),
+        ),
+    )
+    request = ResolutionRequest(
+        raw_reference="Alice Synthetic",
+        scope_entity_id=TOWER,
+        as_of=datetime(2027, 6, 1, tzinfo=UTC),
+        at=NOW,
+    )
+    answer = resolving.resolve(PRINCIPAL, request)
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.resolved_entity_id == ALICE
+    # The mirror: at `at` alone the same assignment is over, so it cannot
+    # corroborate and the shared name stays ambiguous.
+    later = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert later.outcome is ResolutionOutcome.AMBIGUOUS
+
+
+def test_a_cancelled_assignment_does_not_corroborate_at_the_earliest_moment(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The status exclusion must not depend on a date comparison at all.
+
+    The first attempt encoded "over however you date it" as a sentinel window
+    ending at `datetime.min`. `_is_effective` closes its end bound with
+    `moment > effective_to`, which is false when the moment *is* `datetime.min`
+    -- so at `as_of="0001-01-01T00:00:00Z"`, which the transport parses and
+    accepts, a **cancelled** assignment read as in force, corroborated a bare
+    canonical name, narrowed away the rival who shared it, and named an entity
+    with no staleness warning at all.
+
+    Liveness is a property of the record, so it is carried as one rather than
+    encoded into dates a comparison can undo.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001", status="cancelled"))
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="Alice Synthetic",
+            scope_entity_id=TOWER,
+            as_of=datetime.min.replace(tzinfo=UTC),
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
+
+
 def test_an_assignment_ended_by_its_status_is_disclosed_not_silent(
     world: World, resolving: EntityResolutionService
 ) -> None:

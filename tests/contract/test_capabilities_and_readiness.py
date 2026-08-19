@@ -302,3 +302,30 @@ def test_manifest_exposes_no_internal_topology() -> None:
     rendered = manifest().to_canonical_json()
     for token in ("postgres", "sqlalchemy", "fastapi", "/Users/", "localhost", "5432", "ssh"):
         assert token not in rendered.lower()
+
+
+def test_the_continuation_limitation_describes_the_build_that_publishes_it() -> None:
+    """A limitation is a claim about *this* build, not about the contract.
+
+    The sentence was a hardcoded "listings issue no continuation cursor" that
+    outlived its condition once `entities.relationships` began issuing a keyset
+    one. Deriving it from the commands that accept `after` fixed the staleness
+    and introduced the opposite falsehood: a default build reported that
+    capability `not_implemented` in the very envelope promising it paged. Both
+    halves are asserted here because fixing either alone has already produced
+    the other.
+    """
+    withheld = {capability for capability in Capability if capability.value.startswith("entities.")}
+    default = build_readiness_report(manifest(implemented=EVERYTHING - withheld))
+    composed = build_readiness_report(manifest())
+
+    assert not any("entities.relationships" in line for line in default.limitations), (
+        "a build that withholds the capability must not advertise its cursor"
+    )
+    assert any("issue no continuation cursor" in line for line in default.limitations), (
+        "and it must still say listings cannot be continued"
+    )
+    assert any(
+        "These issue a continuation cursor: entities.relationships" in line
+        for line in composed.limitations
+    ), "a build that serves it must say so"

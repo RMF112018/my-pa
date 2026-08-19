@@ -24,7 +24,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from my_pa.application.entity_resolution import EntityResolutionService, ResolutionRequest
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
@@ -934,6 +934,54 @@ def test_a_redirect_chain_is_refused(migrated_engine: Engine) -> None:
         repository.redirect_entity(PRINCIPAL_A, BOB, ALICE)
         with pytest.raises(ValueError, match="still current"):
             repository.redirect_entity(PRINCIPAL_A, ACME, BOB)
+
+
+def test_two_concurrent_redirects_cannot_build_a_chain(migrated_engine: Engine) -> None:
+    """The guards read one row and update another, so they must not race.
+
+    Under READ COMMITTED an unlocked check-then-act lets `redirect(BOB, ALICE)`
+    and `redirect(ALICE, CARLA)` both pass: each sees a current survivor and no
+    inbound pointer, and each updates a row the other never read. The result is
+    `BOB -> ALICE -> CARLA` — the pointer that never arrives — with no
+    constraint to catch it and no repair path. The mirror pair leaves a cycle,
+    which makes the runbook's "follow `superseded_by_entity_id`" instruction
+    non-terminating.
+
+    Latent today, because every published capability is a read and the service
+    that would call this is composed by nothing. Closed now because it is much
+    cheaper than closing it after a write surface exists, and because a
+    reproduced corruption path recorded as "unreachable" is one refactor away
+    from being reachable.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ACME, PRINCIPAL_A, "Carla Synthetic"))
+
+    first = migrated_engine.connect()
+    second = migrated_engine.connect()
+    try:
+        first_txn = first.begin()
+        second_txn = second.begin()
+        # T1 takes the lock on {ALICE, BOB} and does not commit.
+        SqlEntityRepository(first).redirect_entity(PRINCIPAL_A, BOB, ALICE)
+        # T2 wants {ALICE, ACME}; ALICE is held, so it must wait rather than
+        # read a stale "ALICE is current" and write beside T1.
+        second.execute(text("SET lock_timeout = '750ms'"))
+        with pytest.raises(DBAPIError, match=r"lock timeout|canceling statement"):
+            SqlEntityRepository(second).redirect_entity(PRINCIPAL_A, ALICE, ACME)
+        second_txn.rollback()
+        first_txn.commit()
+    finally:
+        first.close()
+        second.close()
+
+    with migrated_engine.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        assert repository.get(PRINCIPAL_A, BOB).status is EntityStatus.MERGED_REDIRECT
+        # ALICE survived as a landable survivor: no chain was built.
+        assert repository.get(PRINCIPAL_A, ALICE).status is EntityStatus.ACTIVE
 
 
 def test_a_redirect_chain_is_refused_in_the_other_order_too(migrated_engine: Engine) -> None:

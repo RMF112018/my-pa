@@ -61,20 +61,16 @@ closes.**
   block it sits in. `EXCUSED` is a shrinking allowlist in the `D-81` shape: a
   stale entry reddens, and a new claim anywhere reddens rather than joining
   quietly.
-- **`all <number>` closed by an em-dash is still not read, and the reason is a
-  finding rather than an oversight.** `ALL_OF` requires a comma or a full stop
-  after the number, so `publishing all thirty — does read one` escapes it. The
-  widening is one character; what it surfaces is not. Measured across the swept
-  corpus, adding the dash finds three claims: two in
-  `src/my_pa/domain/identity/operation.py` that are deltas rather than set sizes
-  and would join `EXCUSED`, and one at
-  `tests/contract/test_mcp_transport.py:451` that is a genuine stale count —
-  `publishing all thirty` of a set holding fifty-three, in the docstring of the
-  test this module's sibling rule cites as its own evidence. That correction was
-  outside the file allowlist of the package that found it, so the rule is left
-  open rather than landed half-red or landed with the finding excused. Closing
-  it is one line here plus one word there, and neither should happen without the
-  other.
+- **`all <number>` closed by an em-dash is read now.** `ALL_OF` used to require a
+  comma or a full stop after the number, so `publishing all thirty — does read
+  one` escaped it: a genuine stale count of a set holding fifty-three, in the
+  docstring of the test this module's sibling rule cites as its own evidence.
+  The rule was deliberately left open while that word sat outside the allowlist
+  of the package that found it, on the grounds that closing it would land either
+  half-red or with a real defect excused. Both halves landed together: the
+  docstring now says `all fifty-three`, the dash is admitted, and the corpus
+  yields no new claims. Recorded because "left open on purpose" is a note with a
+  shelf life, and this one expired one commit after it was written.
 - **The published subset is seen but not derived.** `BARE_EMPHASIS` reads
   `publishes **forty-two**` and compares it against `Capability`, which holds
   fifty-three, so the two runbook lines stating the default publication count
@@ -125,12 +121,46 @@ SWEPT_ROOTS = ("apps", "ops", "src", "tests")
 #: sections of it, because unlike the MCV plan it carries no history register
 #: below a current-state line; its historical passages are individual blocks and
 #: `EXCUSED` is what names those.
+SKIPPED_DIRECTORIES = frozenset({"__pycache__", ".ruff_cache", ".mypy_cache", ".pytest_cache"})
+
+#: Documents swept only in their current-state sections, because the rest of the
+#: file is a dated history register whose numbers were true when written. Swept
+#: whole, the MCV plan's register alone contributes seventeen historical claims —
+#: which is why sweeping it section-wise came first, and why widening to `docs/`
+#: must not undo that.
+SECTION_SWEPT_FILES = frozenset({"docs/plans/mcv-completion-plan.md"})
+
+#: Specifications are not swept. A spec records what was proposed and what was
+#: true when it was written; `docs/specs/mcv-read-only-vertical-slice.md` says
+#: twelve capabilities because twelve is what that slice specified, and
+#: `relationship-intelligence-v0.2.md` is explicitly lineage evidence carrying an
+#: operator-review status of its own. Sweeping them would demand that a historical
+#: proposal be rewritten every time the product grew, which is the opposite of
+#: what a lineage document is for — and this repository forbids editing them from
+#: an implementation change in any case.
+SKIPPED_DOCUMENT_DIRECTORIES = frozenset({"specs"})
+
+#: Every other Markdown document under `docs/`, plus the top-level `README.md`.
+#:
+#: Named individually until now — `README.md` and the RI plan — which reproduced
+#: this module's own diagnosis one file over: a plant of `forty-one capabilities`
+#: in `docs/architecture/system-context.md`, whose capability figures this
+#: campaign rewrote, left the suite green. A guard widened to the file where a
+#: defect was found is a guard shaped by where the defect was found.
+#:
+#: Enumerated by walk rather than by hand so a document added tomorrow is swept
+#: without anyone remembering to add it, which is the same reason every count
+#: here is derived rather than written down.
 SWEPT_FILES = (
     "README.md",
-    "docs/plans/relationship-intelligence-implementation-plan.md",
+    *sorted(
+        str(path.relative_to(ROOT))
+        for path in (ROOT / "docs").rglob("*.md")
+        if not any(part in SKIPPED_DIRECTORIES for part in path.parts)
+        and str(path.relative_to(ROOT)) not in SECTION_SWEPT_FILES
+        and not (set(path.relative_to(ROOT).parts) & SKIPPED_DOCUMENT_DIRECTORIES)
+    ),
 )
-
-SKIPPED_DIRECTORIES = frozenset({"__pycache__", ".ruff_cache", ".mypy_cache", ".pytest_cache"})
 
 #: `src/my_pa.egg-info/` is a build artifact, untracked, and holds a stale copy
 #: of `README.md`; correcting it would be correcting a file `pip` rewrites.
@@ -342,7 +372,7 @@ CLOSED_AT = re.compile(rf"\bclosed at (?P<number>{_NUMBER})\b", re.IGNORECASE)
 #: their own subject and are not elided; `all eight,` has nothing after it but
 #: the set the sentence has been discussing. The corpus says `all three` eleven
 #: times, always about the three transports, and every one of them continues.
-ALL_OF = re.compile(rf"\ball (?P<number>{_NUMBER})(?=[,.])", re.IGNORECASE)
+ALL_OF = re.compile(rf"\ball (?P<number>{_NUMBER})(?=[,.\u2014])", re.IGNORECASE)
 
 #: The emphasised form with the noun left off entirely: `A default process
 #: publishes **twenty**.` Two runbook lines said that of a set whose default
@@ -430,6 +460,38 @@ def stated(number: str) -> int:
 #: distinctive fragment of the block, so an entry excuses one occurrence rather
 #: than every occurrence of the same words in the same file.
 EXCUSED: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "docs/architecture/module-boundaries.md",
+        "closed at eight",
+        "what does **not** stand is the reason it used to be given in",
+        "the sentence quotes a superseded premise in order to withdraw it, and "
+        "says so in the same clause",
+    ),
+    (
+        "docs/architecture/module-boundaries.md",
+        "ninth member",
+        "closed against a ninth *source-registration* capability",
+        "about what the set is closed against, not how large it is; the size "
+        "claim beside it was stale and was corrected to fifty-three",
+    ),
+    (
+        "docs/architecture/system-context.md",
+        "twelve capabilities",
+        "Historical note: the earlier figures",
+        "an explicit historical note whose own sentence says these 'are not current-state claims'",
+    ),
+    (
+        "docs/operations/mcv-limitations.md",
+        "two purposes",
+        "Six `documents.` capabilities under two purposes of their own",
+        "the two purposes belonging to the documents family, not the size of `Purpose`",
+    ),
+    (
+        "docs/security/threat-model.md",
+        "two purposes",
+        "Six `documents.` capabilities under two purposes of their own",
+        "the same claim about the documents family, in the second document",
+    ),
     (
         "ops/runbooks/gateway-operations.md",
         "twelve** capabilities",

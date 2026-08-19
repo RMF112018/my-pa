@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
 from my_pa.contracts.ports import EntitiesRepository
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -170,9 +170,19 @@ def _is_in_force(
     and passed nowhere. `ResolutionRequest.at` carries it now, and `moment` below
     is `as_of` when the caller asked about one and `at` otherwise.
 
-    A request carrying neither -- constructed directly in a test, never by the
-    capability -- falls back to the old open-ended rule, which is the most this
-    function can say with no moment at all.
+    A request carrying neither falls back to the old open-ended rule, which is
+    the most this function can say with no moment at all. **That fallback fails
+    in the resolving direction, not the refusing one**, which inverts this
+    module's stated preference, so where it is reachable matters.
+
+    `entities.resolve` always supplies `at`. The other production construction
+    is `EntityReenrichmentService.after_alias`, which supplies neither -- and is
+    safe only because it supplies no `scope_entity_id` either, so no signal is
+    consulted and this function is never called on its path. That is a load
+    bearing condition rather than an incidental one, and
+    `tests/unit/test_entity_reenrichment.py` pins it: adding a scope to that
+    request without adding a moment would hand a background pass with nobody
+    watching the one behaviour this rule exists to prevent.
     """
     if moment is not None:
         return _is_effective(effective_from, effective_to, moment)
@@ -182,14 +192,6 @@ def _is_in_force(
 #: The one `Assignment.status` that means the assignment still stands, matching
 #: the value `SqlEntityRepository.assignments` filters on for `active_only`.
 ACTIVE_ASSIGNMENT_STATUS: str = "active"
-
-#: An `effective_to` no moment can be at or before, used to spell "this record is
-#: over however you date it" for a row excluded by its *status* rather than its
-#: dates. It keeps one fold responsible for classifying every row that reaches
-#: the scope, instead of some rows being filtered away before they can be
-#: disclosed.
-_BEFORE_ANY_MOMENT: datetime = datetime.min.replace(tzinfo=UTC)
-
 
 #: The one `EntityRelationship.state` that means the edge still stands. `state`
 #: is free text on the record rather than a closed enum, so this names the value
@@ -208,18 +210,32 @@ class _Reach:
 
 
 def _reach(
-    windows: Iterable[tuple[datetime | None, datetime | None]], moment: datetime | None
+    records: Iterable[tuple[datetime | None, datetime | None, bool]], moment: datetime | None
 ) -> _Reach:
-    """Fold the effective windows of every record that reaches the scope.
+    """Fold every record that reaches the scope into "any live" and "any stale".
 
     Reports the two facts separately, because a record that reaches the scope and
     is over is not the same as no record at all: the first is something the
     caller is owed a warning about (`RI-AC-014`), and the second is silence.
+
+    **Each record carries its own liveness rather than having it encoded into its
+    dates.** A row can be stale two ways -- its status or state says so, or its
+    window says so -- and the third element is the first of those, asked of the
+    record by the caller that knows which column holds it.
+
+    The first attempt instead mapped a status-excluded row onto a sentinel window
+    (`effective_to = datetime.min`) meaning "over however you date it". It was
+    not: `_is_effective` closes its end bound with `moment > effective_to`, which
+    is false when `moment` is itself `datetime.min` -- so a caller passing
+    `as_of="0001-01-01T00:00:00Z"`, which the transport accepts, made a
+    *cancelled* assignment read as in force, corroborate a bare canonical name,
+    narrow away the rival, and name an entity with no staleness warning. An
+    encoding that has to be impossible is a claim; a flag is a fact.
     """
     found = False
     withheld = False
-    for effective_from, effective_to in windows:
-        if _is_in_force(effective_from, effective_to, moment):
+    for effective_from, effective_to, recorded_live in records:
+        if recorded_live and _is_in_force(effective_from, effective_to, moment):
             found = True
         else:
             withheld = True
@@ -616,12 +632,11 @@ class EntityResolutionService:
         """
         return _reach(
             (
-                (assignment.effective_from, assignment.effective_to)
-                if assignment.status == ACTIVE_ASSIGNMENT_STATUS
-                # A status that says the row is over is stale at every moment.
-                # Spelled as an impossible window so the fold counts it withheld
-                # rather than dropping it.
-                else (None, _BEFORE_ANY_MOMENT)
+                (
+                    assignment.effective_from,
+                    assignment.effective_to,
+                    assignment.status == ACTIVE_ASSIGNMENT_STATUS,
+                )
                 for assignment in self._entities.assignments(
                     principal_id, entity_id, active_only=False
                 )
@@ -645,12 +660,11 @@ class EntityResolutionService:
         """
         return _reach(
             (
-                (relationship.effective_from, relationship.effective_to)
-                if relationship.state == ACTIVE_RELATIONSHIP_STATE
-                # As in `_assigned_to`: an edge whose state says it is over is
-                # withheld rather than unseen, so the caller is told the context
-                # was consulted and had something that no longer holds.
-                else (None, _BEFORE_ANY_MOMENT)
+                (
+                    relationship.effective_from,
+                    relationship.effective_to,
+                    relationship.state == ACTIVE_RELATIONSHIP_STATE,
+                )
                 for relationship in self._entities.relationships(
                     principal_id, entity_id, direction="outgoing"
                 )

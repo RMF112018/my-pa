@@ -10,14 +10,17 @@ as a new tool with the correct schema, and no one edits this file — which WP-6
 exercised: four capabilities were added, and the only change here was a schema
 for a field type no earlier command used.
 
-**Why the schema is assembled here and not owned by one model.** A request is
+**The schema is assembled here and not owned by one model.** A request is
 two documents with two owners: `RequestMetadata` validates the envelope, and the
 command validates the payload. That split is `adapters/normalization.py`'s and
 it is what makes one validation path possible across three transports. The
 consequence is that no single object can render the whole input schema, so this
 module joins the two halves in exactly the shape `normalize` reads them: the
 envelope's fields at the top level, the capability's own fields under
-`PAYLOAD_KEY`.
+`PAYLOAD_KEY`. Nested dict contracts the type graph cannot express — a
+`tuple[dict[str, object], ...]` whose item shape `__post_init__` already
+enforces — may be published on the command as `mcp_payload_properties`. This
+module copies those properties without naming a capability.
 
 **`capability` is removed from the envelope half deliberately.** A tool call
 names its capability in the tool name, and `normalize` refuses a document that
@@ -131,6 +134,9 @@ def payload_schema_for(command: type) -> dict[str, Any]:
     A field with no default is required, which is the same rule the constructor
     enforces: `__post_init__` never runs for a field the caller had to supply
     and did not, because the constructor refuses first.
+
+    `mcp_payload_properties` overlays nested object contracts the annotation
+    `dict[str, object]` cannot describe. The overlay must not invent fields.
     """
     hints = get_type_hints(command)
     properties: dict[str, Any] = {}
@@ -140,6 +146,11 @@ def payload_schema_for(command: type) -> dict[str, Any]:
         properties[field.name] = {} if described is None else described
         if field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING:
             required.append(field.name)
+    overlays = vars(command).get("mcp_payload_properties")
+    if isinstance(overlays, Mapping):
+        for name, schema in overlays.items():
+            if name in properties and isinstance(schema, Mapping):
+                properties[name] = dict(schema)
     return {
         "type": "object",
         "properties": properties,

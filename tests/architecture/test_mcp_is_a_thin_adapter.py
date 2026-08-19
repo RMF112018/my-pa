@@ -282,12 +282,17 @@ NETWORK_MODULES: Final[frozenset[str]] = frozenset(
 #: as `knowledge.reveal`'s `subject_id`. It is matched only because "target" is
 #: in the vocabulary; it names no filesystem path and is validated for shape
 #: only.
+#:
+#: `goodnotes.propose`'s nested `uncertainty` is optional free-text on a
+#: confidence object. It is matched only because "unc" is in the vocabulary as
+#: the UNC-path token; the field is not a location.
 EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
     {
         ("sources.enroll", "root_object_id"),
         ("commitments.list", "direction"),
         ("commitments.create", "direction"),
         ("context.feedback", "target_id"),
+        ("goodnotes.propose", "uncertainty"),
     }
 )
 
@@ -581,7 +586,7 @@ def test_the_location_scan_would_catch_one() -> None:
     # The exemption names tools that exist, and the properties they name are
     # really published — so it cannot rot into a permission for a property that
     # has since changed meaning or disappeared.
-    assert len(EXEMPT_PROPERTIES) == 4
+    assert len(EXEMPT_PROPERTIES) == 5
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

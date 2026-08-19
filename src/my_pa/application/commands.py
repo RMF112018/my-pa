@@ -35,6 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import ClassVar
 
 from my_pa.application.errors import InvalidRequestError, SafeDetail
@@ -272,6 +273,178 @@ _V2_NOTE_UNIT_KEYS = _V1_SEGMENT_KEYS | {
     "transcription_status",
 }
 _NOTE_UNIT_SCHEMAS = frozenset({NOTE_UNIT_SCHEMA_V1, NOTE_UNIT_SCHEMA_V2})
+
+
+def _goodnotes_propose_payload_properties() -> dict[str, dict[str, object]]:
+    """The nested `goodnotes.propose` contract `tools/list` cannot infer from dicts.
+
+    Runtime validation in `_segments` remains authoritative. This mapping is only
+    the published JSON Schema for shapes typed as `tuple[dict[str, object], ...]`
+    or `dict[str, object]`. It must not be narrower than `__post_init__` accepts.
+    """
+    geometry: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["x_min", "y_min", "width", "height"],
+        "description": (
+            "Normalized page box in 0..1. width and height must be > 0, and "
+            "x_min+width and y_min+height must not exceed 1."
+        ),
+        "properties": {
+            "x_min": {"type": "number", "minimum": 0, "maximum": 1},
+            "y_min": {"type": "number", "minimum": 0, "maximum": 1},
+            "width": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+            "height": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        },
+    }
+    ranked_candidates: dict[str, object] = {
+        "type": "array",
+        "maxItems": _MAX_GOODNOTES_CANDIDATES,
+        "description": (
+            "Ranked Project/person/meeting/agenda strings for this NOTE_UNIT. "
+            "Each item has integer rank >= 1 (unique) and candidate text."
+        ),
+        "items": {
+            "type": "object",
+            "required": ["rank", "candidate"],
+            "properties": {
+                "rank": {"type": "integer", "minimum": 1},
+                "candidate": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": _MAX_GOODNOTES_CANDIDATE,
+                },
+            },
+        },
+    }
+    candidate_tags: dict[str, object] = {
+        "type": "array",
+        "maxItems": _MAX_GOODNOTES_TAGS,
+        "description": "Secondary tags such as FOLLOW_UP_CANDIDATE or TASK_CANDIDATE.",
+        "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": _MAX_GOODNOTES_TAG,
+        },
+    }
+    confidence: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "description": "Decomposed scores in 0..1, plus optional uncertainty text.",
+        "properties": {
+            "transcription": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+            "segmentation": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+            "classification": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+            "linking": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+            "uncertainty": {"type": ["string", "null"], "maxLength": 500},
+        },
+    }
+    segment: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["kind", "geometry"],
+        "description": (
+            "One NOTE_UNIT or SOURCE_CONTEXT region. note-unit.v2 fields "
+            "(candidate_tags, ranked_candidates, confidence, transcription_status) "
+            "belong on NOTE_UNIT objects, not only at payload top level."
+        ),
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": [member.value for member in GoodNotesSegmentKind],
+            },
+            "geometry": geometry,
+            "crop_sha256": {
+                "type": ["string", "null"],
+                "pattern": r"^[a-f0-9]{64}$",
+            },
+            "transcription": {
+                "type": ["string", "null"],
+                "maxLength": _MAX_GOODNOTES_TRANSCRIPTION,
+            },
+            "primary_class": {
+                "type": ["string", "null"],
+                "enum": [member.value for member in GoodNotesNoteClass] + [None],
+            },
+            "candidate_tags": candidate_tags,
+            "ranked_candidates": ranked_candidates,
+            "confidence": {
+                **confidence,
+                "type": ["object", "null"],
+            },
+            "transcription_status": {
+                "type": ["string", "null"],
+                "enum": [member.value for member in GoodNotesTranscriptionStatus] + [None],
+                "description": "CLEAR requires non-empty transcription.",
+            },
+        },
+        "examples": [
+            {
+                "kind": "NOTE_UNIT",
+                "geometry": {
+                    "x_min": 0.0874,
+                    "y_min": 0.3428,
+                    "width": 0.6871,
+                    "height": 0.1143,
+                },
+                "transcription": "Follow up on crane plan Friday",
+                "primary_class": "MEETING",
+                "candidate_tags": ["FOLLOW_UP_CANDIDATE", "TASK_CANDIDATE"],
+                "ranked_candidates": [{"rank": 1, "candidate": "Weekly Coordination Meeting"}],
+                "confidence": {
+                    "transcription": 0.97,
+                    "segmentation": 0.99,
+                    "classification": 0.95,
+                    "linking": 0.88,
+                },
+                "transcription_status": "CLEAR",
+            }
+        ],
+    }
+    return {
+        "schema_version": {
+            "type": "string",
+            "enum": sorted(_NOTE_UNIT_SCHEMAS),
+            "description": (
+                "note-unit.v1 is geometry and transcription. note-unit.v2 admits "
+                "per-NOTE_UNIT ranked_candidates, candidate_tags, confidence, and "
+                "transcription_status."
+            ),
+        },
+        "segments": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": _MAX_GOODNOTES_SEGMENTS,
+            "description": (
+                "Required nested regions. For note-unit.v2, put classification, "
+                "tags, ranked candidates, confidence, and transcription_status on "
+                "each NOTE_UNIT object inside this array."
+            ),
+            "items": segment,
+        },
+        "candidate_tags": {
+            **candidate_tags,
+            "description": (
+                "Optional page-level tags. Prefer per-NOTE_UNIT candidate_tags on "
+                "segments for note-unit.v2."
+            ),
+        },
+        "ranked_candidates": {
+            **ranked_candidates,
+            "description": (
+                "Optional page-level ranked candidates. Prefer per-NOTE_UNIT "
+                "ranked_candidates on segments for note-unit.v2."
+            ),
+        },
+        "confidence": {
+            **confidence,
+            "type": ["object", "null"],
+            "description": (
+                "Optional page-level confidence. Prefer per-NOTE_UNIT confidence "
+                "on segments for note-unit.v2."
+            ),
+        },
+    }
 
 
 def _goodnotes_id(value: object, prefix: str, detail: SafeDetail) -> str:
@@ -1967,7 +2140,10 @@ SubmitGoodNotesProposal.__doc__ = (
     "`goodnotes.propose`: accept a structured semantic NOTE_UNIT proposal for one "
     "immutable page version. `note-unit.v1` is geometry and transcription only. "
     "`note-unit.v2` admits per-NOTE_UNIT ranked candidates, candidate tags, "
-    "confidence, and transcription_status (CLEAR|UNCERTAIN|UNREADABLE). "
+    "confidence, and transcription_status (CLEAR|UNCERTAIN|UNREADABLE) nested on "
+    "each segments[] object (kind, geometry, transcription, primary_class, "
+    "candidate_tags, ranked_candidates, confidence, transcription_status), not "
+    "only at payload top level. "
     "Transcribe, segment NOTE_UNITs versus SOURCE_CONTEXT, "
     "classify MEETING|PROJECT|RELATIONSHIP|GENERAL, add secondary candidate tags, "
     "rank Project/person/meeting/agenda candidates on the NOTE_UNIT they describe, "
@@ -1979,6 +2155,9 @@ SubmitGoodNotesProposal.__doc__ = (
     "The principal is not here. Authority comes from authenticated context. "
     "idempotency_key is required. transcription is untrusted data, repr=False, "
     "bounded, and stored as text rather than executed."
+)
+SubmitGoodNotesProposal.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    _goodnotes_propose_payload_properties()
 )
 
 

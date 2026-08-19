@@ -56,7 +56,12 @@ The Task may call only the my-pa MCP tools `goodnotes.work`,
 Capability/Command-derived. `goodnotes.content` is a pathless, Principal-bound
 read of the pinned visual PNG used for page identity. It does not return a
 filesystem path or a raw PDF, and it does not route through `knowledge.search`
-or `knowledge.read`. `goodnotes.work` remains metadata-only.
+or `knowledge.read`. `goodnotes.work` remains metadata-only. `tools/list` for
+`goodnotes.propose` publishes the nested `segments[]` `note-unit.v2` object
+contract (kind, geometry, transcription, primary_class, candidate_tags,
+ranked_candidates, confidence, transcription_status) so a fresh ChatLLM session
+can construct a valid proposal without repository inspection. Runtime validation
+is unchanged. Remote MCP still stamps `idempotency_key`; callers must not send it.
 
 The Task:
 

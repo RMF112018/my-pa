@@ -197,6 +197,29 @@ def test_the_schema_builder_would_notice_an_undescribed_type() -> None:
     assert payload_schema_for(Odd)["properties"] == {"mapping": {}}
 
 
+def test_a_command_may_publish_nested_object_item_shape() -> None:
+    """Unconstrained dict tuples can still publish the item contract they enforce."""
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class Nested:
+        items: tuple[dict[str, object], ...]
+
+    Nested.mcp_payload_properties = {  # type: ignore[attr-defined]
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"kind": {"type": "string"}},
+                "required": ["kind"],
+            },
+        }
+    }
+    items = payload_schema_for(Nested)["properties"]["items"]
+    assert items["items"]["properties"]["kind"] == {"type": "string"}
+    assert items["items"]["required"] == ["kind"]
+
+
 # ---- tools/call --------------------------------------------------------------
 
 

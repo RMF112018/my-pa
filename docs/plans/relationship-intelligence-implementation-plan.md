@@ -442,10 +442,10 @@ Every figure below was produced by running the command named, on this branch.
 
 | Claim | Evidence |
 |---|---|
-| FAST tier green | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **7780 passed, 0 failed, 913 deselected** |
-| Lint and format | `ruff check .` and `ruff format --check .` — clean over 903 files |
-| Types | `mypy` (configured targets: `src`, `migrations`, `apps`, `ops`) — clean over 333 files |
-| Full database tier green | `pytest -m "database or recovery or e2e"` against a live PostgreSQL 17 — **903 passed, 0 failed, 7790 deselected**. The four schema-suite failures adversarial review surfaced (accumulation sets in the audit, enrollment, capture and entity migration tests, outgrown by this plane's eight tables and five capabilities) are fixed, not deselected |
+| FAST tier green | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **7881 passed, 0 failed, 933 deselected** |
+| Lint and format | `ruff check .` and `ruff format --check .` — clean over 913 files |
+| Types | `mypy` (configured targets: `src`, `migrations`, `apps`, `ops`) — clean over 337 files |
+| Full database tier green | `pytest -m "database or recovery or e2e"` against a live PostgreSQL 17 — **923 passed, 0 failed, 7891 deselected**. The four schema-suite failures adversarial review surfaced (accumulation sets in the audit, enrollment, capture and entity migration tests, outgrown by this plane's eight tables and five capabilities) are fixed, not deselected |
 | Evaluation tier | `pytest -m evaluation` — 2 passed. Selected by no CI job by design; the frozen record is what CI checks |
 | Migrations apply and reverse | `tests/schema/test_entity_schema_migration.py` — 54 tests: empty-to-head, head-to-empty, and declaration-to-server constraint, column and partition parity across **all eight** plane tables, against a disposable PostgreSQL 17. The parity groups were parameterized on this revision's four until the governance revision added three the parity checks never reached |
 | Partition holds at the server | `tests/database/test_entity_repository.py` — 34 tests: cross-Principal isolation on every read and every write, including the joined resolution lookups, and the redirect refusals (cycle, chain, absent survivor, cross-partition) |

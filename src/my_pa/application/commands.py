@@ -332,11 +332,11 @@ def _goodnotes_propose_payload_properties() -> dict[str, dict[str, object]]:
         "additionalProperties": False,
         "description": "Decomposed scores in 0..1, plus optional uncertainty text.",
         "properties": {
-            "transcription": {"type": "number", "minimum": 0, "maximum": 1},
-            "segmentation": {"type": "number", "minimum": 0, "maximum": 1},
-            "classification": {"type": "number", "minimum": 0, "maximum": 1},
-            "linking": {"type": "number", "minimum": 0, "maximum": 1},
-            "uncertainty": {"type": "string", "maxLength": 500},
+            "transcription": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+            "segmentation": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+            "classification": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+            "linking": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+            "uncertainty": {"type": ["string", "null"], "maxLength": 500},
         },
     }
     segment: dict[str, object] = {
@@ -354,21 +354,27 @@ def _goodnotes_propose_payload_properties() -> dict[str, dict[str, object]]:
                 "enum": [member.value for member in GoodNotesSegmentKind],
             },
             "geometry": geometry,
-            "crop_sha256": {"type": "string", "pattern": r"^[a-f0-9]{64}$"},
+            "crop_sha256": {
+                "type": ["string", "null"],
+                "pattern": r"^[a-f0-9]{64}$",
+            },
             "transcription": {
-                "type": "string",
+                "type": ["string", "null"],
                 "maxLength": _MAX_GOODNOTES_TRANSCRIPTION,
             },
             "primary_class": {
-                "type": "string",
-                "enum": [member.value for member in GoodNotesNoteClass],
+                "type": ["string", "null"],
+                "enum": [member.value for member in GoodNotesNoteClass] + [None],
             },
             "candidate_tags": candidate_tags,
             "ranked_candidates": ranked_candidates,
-            "confidence": confidence,
+            "confidence": {
+                **confidence,
+                "type": ["object", "null"],
+            },
             "transcription_status": {
-                "type": "string",
-                "enum": [member.value for member in GoodNotesTranscriptionStatus],
+                "type": ["string", "null"],
+                "enum": [member.value for member in GoodNotesTranscriptionStatus] + [None],
                 "description": "CLEAR requires non-empty transcription.",
             },
         },
@@ -432,6 +438,7 @@ def _goodnotes_propose_payload_properties() -> dict[str, dict[str, object]]:
         },
         "confidence": {
             **confidence,
+            "type": ["object", "null"],
             "description": (
                 "Optional page-level confidence. Prefer per-NOTE_UNIT confidence "
                 "on segments for note-unit.v2."

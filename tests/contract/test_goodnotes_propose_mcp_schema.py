@@ -9,6 +9,8 @@ from __future__ import annotations
 from typing import Any, get_args
 
 import pytest
+from tests.conftest import Scene, build_service
+from tests.transports import mcp_transport
 
 from my_pa.adapters.mcp.tools import TOOLS, payload_schema_for
 from my_pa.adapters.normalization import normalize
@@ -44,10 +46,15 @@ def test_published_segments_items_are_typed_objects_not_bare_dicts() -> None:
     assert items["additionalProperties"] is False
     assert set(items["required"]) == {"kind", "geometry"}
     assert properties["kind"]["enum"] == [member.value for member in GoodNotesSegmentKind]
-    assert properties["primary_class"]["enum"] == [member.value for member in GoodNotesNoteClass]
-    assert properties["transcription_status"]["enum"] == [
+    assert set(properties["primary_class"]["enum"]) == {
+        member.value for member in GoodNotesNoteClass
+    } | {None}
+    assert set(properties["transcription_status"]["enum"]) == {
         member.value for member in GoodNotesTranscriptionStatus
-    ]
+    } | {None}
+    assert properties["transcription"]["type"] == ["string", "null"]
+    assert properties["crop_sha256"]["type"] == ["string", "null"]
+    assert properties["confidence"]["type"] == ["object", "null"]
     geometry = properties["geometry"]
     assert set(geometry["required"]) == {"x_min", "y_min", "width", "height"}
     assert set(geometry["properties"]) == {"x_min", "y_min", "width", "height"}
@@ -216,3 +223,42 @@ def test_command_overlay_is_the_same_mapping_payload_schema_uses() -> None:
         published["properties"]["segments"]["items"]["properties"]["kind"]
         == overlay["segments"]["items"]["properties"]["kind"]
     )
+
+
+def test_explicit_null_optional_fields_still_admit() -> None:
+    command = SubmitGoodNotesProposal(
+        run_id="gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+        page_version_id="gnver_bbbbbbbbbbbbbbbbbbbbbbbb",
+        content_sha256="e" * 64,
+        schema_version=NOTE_UNIT_SCHEMA_V2,
+        analyzer_name="synthetic",
+        analyzer_version="1",
+        idempotency_key="schema-discoverability-goodnotes-propose-nulls",
+        segments=(
+            {
+                "kind": "NOTE_UNIT",
+                "geometry": {"x_min": 0.1, "y_min": 0.1, "width": 0.2, "height": 0.2},
+                "crop_sha256": None,
+                "transcription": None,
+                "primary_class": None,
+                "confidence": None,
+                "transcription_status": None,
+            },
+        ),
+        confidence=None,
+    )
+    assert command.segments[0]["transcription"] is None
+    assert command.confidence is None
+
+
+def test_tools_list_protocol_publishes_nested_segments(scene: Scene) -> None:
+    with mcp_transport(build_service(scene.world, scene.providers), scene.principal) as session:
+        listed = session.list_tools()
+    tool = next(entry for entry in listed.tools if entry.name == Capability.GOODNOTES_PROPOSE.value)
+    payload = _payload_schema(tool.input_schema)
+    items = payload["properties"]["segments"]["items"]["properties"]
+    assert items["kind"]["enum"] == [member.value for member in GoodNotesSegmentKind]
+    assert "geometry" in items
+    assert "transcription_status" in items
+    remote = remote_tool_schema(tool.input_schema)
+    assert "idempotency_key" not in remote["properties"]["payload"]["properties"]

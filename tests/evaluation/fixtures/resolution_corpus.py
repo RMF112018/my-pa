@@ -74,9 +74,12 @@ __all__ = [
     "CORPUS_RELATIONSHIPS",
     "DEPARTED_CONTRACTOR",
     "JOSE_ALVAREZ",
+    "LEO_MARCHETTI",
+    "MAYA_OSEI",
     "NORTHWIND",
     "PRINCIPAL_A",
     "PRINCIPAL_B",
+    "PRIYA_RAO",
     "ROBERTA_CHEN",
     "ROBERT_CHEN",
     "SURVIVING_CONTRACTOR",
@@ -102,6 +105,9 @@ JOSE_ALVAREZ: Final = "ent_jose0005alvarez005"
 DEPARTED_CONTRACTOR: Final = "ent_departed0006contra"
 SURVIVING_CONTRACTOR: Final = "ent_surviving0007cont7"
 BOB_CHEN_OTHER_PRINCIPAL: Final = "ent_bob0008otherprin08"
+MAYA_OSEI: Final = "ent_maya0013osei00013"
+LEO_MARCHETTI: Final = "ent_leo0014marchetti1"
+PRIYA_RAO: Final = "ent_priya0015rao00015"
 
 ACME: Final = "ent_acme0009org000009a"
 NORTHWIND: Final = "ent_northwind0010org10"
@@ -156,6 +162,16 @@ CORPUS_ENTITIES: Final[tuple[Entity, ...]] = (
     _entity(TOWER_PROJECT, "Harbour Tower", entity_type=EntityType.PROJECT),
     # Another Principal's person, whose surname collides on purpose.
     _entity(BOB_CHEN_OTHER_PRINCIPAL, "Bob Chen", principal_id=PRINCIPAL_B),
+    # Three uniquely named people whose *only* evidence is a bare canonical name
+    # and a tie to the tower project. Uniquely named on purpose: the corpus's
+    # other contextual case has a rival for the scope to exclude, which meant
+    # the path where corroboration resolves a *lone* candidate -- the one where
+    # the caller's own hint is the entire difference between a refusal and a
+    # confident answer -- had no case at all. Their ties differ only in how
+    # current each one is, which is the axis being measured.
+    _entity(MAYA_OSEI, "Maya Osei"),
+    _entity(LEO_MARCHETTI, "Leo Marchetti"),
+    _entity(PRIYA_RAO, "Priya Rao"),
 )
 
 
@@ -313,6 +329,30 @@ CORPUS_ASSIGNMENTS: Final[tuple[Assignment, ...]] = (
         principal_id=PRINCIPAL_A,
         scope_entity_id=TOWER_PROJECT,
     ),
+    # Maya is on the project and nobody has closed the row. The one case where a
+    # lone bare name is *supposed* to resolve on corroboration alone, so that
+    # tightening the currency rule cannot be mistaken for refusing everything.
+    Assignment(
+        assignment_id="asn_maya0004ontower00",
+        entity_id=MAYA_OSEI,
+        assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+        principal_id=PRINCIPAL_A,
+        scope_entity_id=TOWER_PROJECT,
+        effective_from=BEFORE,
+        role="commissioning manager",
+    ),
+    # Priya's assignment ended at the midpoint. `status` still says active,
+    # because a status nobody updated is the ordinary way a row goes stale --
+    # which is why `active_only` alone was not enough to catch it.
+    Assignment(
+        assignment_id="asn_priya0005offtower",
+        entity_id=PRIYA_RAO,
+        assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+        principal_id=PRINCIPAL_A,
+        scope_entity_id=TOWER_PROJECT,
+        effective_from=BEFORE,
+        effective_to=MIDPOINT,
+    ),
 )
 
 
@@ -344,5 +384,22 @@ CORPUS_RELATIONSHIPS: Final[tuple[EntityRelationship, ...]] = (
         relationship_type=EntityRelationshipType.WORKS_FOR,
         to_entity_id=ACME,
         principal_id=PRINCIPAL_A,
+    ),
+    # Leo contracted on the tower and does not any more. The edge is kept as
+    # lineage, which is what makes it dangerous: `relationships()` takes no
+    # `active_only`, so an ended edge came back indistinguishable from a live one
+    # and corroborated exactly as strongly. Every other edge in this corpus is
+    # open and active, so before this row the state filter had nothing to bite
+    # on and its deletion changed no measurement.
+    EntityRelationship(
+        relationship_id="erel_leo0005offtower0",
+        from_entity_id=LEO_MARCHETTI,
+        relationship_type=EntityRelationshipType.CONTRACTOR_ON,
+        to_entity_id=TOWER_PROJECT,
+        principal_id=PRINCIPAL_A,
+        effective_from=BEFORE,
+        effective_to=MIDPOINT,
+        state="ended",
+        version=2,
     ),
 )

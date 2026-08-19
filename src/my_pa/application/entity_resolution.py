@@ -29,6 +29,7 @@ ranking, calibration, and the false-resolution evaluation are WP-RI-04.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -113,6 +114,87 @@ def _is_effective(
     if effective_from is not None and as_of < effective_from:
         return False
     return not (effective_to is not None and as_of > effective_to)
+
+
+def _is_in_force(
+    effective_from: datetime | None, effective_to: datetime | None, as_of: datetime | None
+) -> bool:
+    """Whether a *corroborating* record is in force. Stricter than `_is_effective`.
+
+    The two differ only at `as_of=None`, and the difference is the whole reason
+    this function exists. `_is_effective` declines to filter without a moment,
+    which is right for the evidence the reference itself matched: the caller
+    asked "who is this", not "who was this", and an alias somebody stopped using
+    is still a name they were called.
+
+    A signal is the other kind of claim. It does not say what the reference
+    matched; it says the candidate **is** on the project the caller named, and
+    that is the whole of why a bare name is allowed to resolve at all
+    (`_name_outcome`). A record whose author wrote down the day it ended does not
+    say that. So an ended record corroborates only when the caller named a moment
+    it covers, and a record nobody has closed corroborates always.
+
+    Without this, a contractor who left in 2024 still corroborated in 2026 on
+    every request that did not happen to ask a temporal question -- which is the
+    default request -- and a bare canonical name resolved to her with no warning
+    at all.
+
+    **The residual, named rather than hidden.** A record whose `effective_from`
+    is in the future is *not* excluded here, because detecting that needs a clock
+    and this module deliberately has none: `as_of` is the only moment it knows.
+    A caller that cares passes one.
+    """
+    if as_of is not None:
+        return _is_effective(effective_from, effective_to, as_of)
+    return effective_to is None
+
+
+#: The one `EntityRelationship.state` that means the edge still stands. `state`
+#: is free text on the record rather than a closed enum, so this names the value
+#: resolution treats as live instead of leaving every call site to spell it --
+#: and an unrecognised state reads as *not* live, which is the direction a
+#: corroborating signal should fail in.
+ACTIVE_RELATIONSHIP_STATE: str = "active"
+
+
+@dataclass(frozen=True, slots=True)
+class _Reach:
+    """Whether any record reached the scope, and whether a stale one was passed over."""
+
+    found: bool = False
+    withheld: bool = False
+
+
+def _reach(
+    windows: Iterable[tuple[datetime | None, datetime | None]], as_of: datetime | None
+) -> _Reach:
+    """Fold the effective windows of every record that reaches the scope.
+
+    Reports the two facts separately, because a record that reaches the scope and
+    is over is not the same as no record at all: the first is something the
+    caller is owed a warning about (`RI-AC-014`), and the second is silence.
+    """
+    found = False
+    withheld = False
+    for effective_from, effective_to in windows:
+        if _is_in_force(effective_from, effective_to, as_of):
+            found = True
+        else:
+            withheld = True
+    return _Reach(found=found, withheld=withheld)
+
+
+@dataclass(frozen=True, slots=True)
+class _ScopeSignals:
+    """What the named scope said about one candidate, and what it declined to say.
+
+    `withheld` is carried separately rather than folded into an empty `found`,
+    because "nothing connects them" and "what connected them is over" are
+    different facts and only the second one is a disclosure the caller is owed.
+    """
+
+    found: tuple[ContextualSignal, ...] = ()
+    withheld: bool = False
 
 
 class EntityResolutionService:
@@ -208,7 +290,18 @@ class EntityResolutionService:
             if self._admits(entity, request)
         ]
         if not admitted:
-            return None
+            # The identifier named somebody, and the caller asked for a
+            # different kind of thing. That is an answer -- "no project holds
+            # this address" -- and it is *not* the fall-through case above.
+            # Falling through here re-read the address as a **name**: an email
+            # lookup constrained to a project answered `RESOLVED_EXACT` naming a
+            # project whose alias happened to be spelled the way
+            # `normalize_name` spells that address, discarding identifier
+            # evidence that pointed at a person to do it.
+            return EntityResolution(
+                outcome=ResolutionOutcome.NOT_FOUND,
+                warnings=tuple(dict.fromkeys(warnings)),
+            )
         candidates = tuple(
             _candidate_from_identifier(entity, identifier) for entity, identifier in admitted
         )
@@ -264,10 +357,17 @@ class EntityResolutionService:
         if len(by_entity) > 1:
             warnings.append(ResolutionWarning.SEVERAL_ENTITIES_SHARE_THIS_NAME)
 
-        signals = {
+        scoped = {
             entity_id: self._signals_for(principal_id, entity_id, request)
             for entity_id in by_entity
         }
+        signals = {entity_id: found.found for entity_id, found in scoped.items()}
+        if any(found.withheld for found in scoped.values()):
+            # Something did connect a candidate to the named scope, and it is
+            # over. Said out loud on the same terms `_by_identifier` says it: a
+            # caller who is not told cannot tell this answer apart from one where
+            # the context simply had nothing to say.
+            warnings.append(ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT)
         narrowed = _narrow_by_signals(by_entity, signals)
         was_narrowed = narrowed is not by_entity
         if was_narrowed:
@@ -345,9 +445,21 @@ class EntityResolutionService:
         # rule that uniqueness is a fact about the database rather than about
         # the person.
         corroborated = bool(only.signals)
-        resolves = only.strongest_basis is ResolutionBasis.ALIAS or was_narrowed or corroborated
+        names_itself = only.strongest_basis is ResolutionBasis.ALIAS
+        resolves = names_itself or was_narrowed or corroborated
         if not resolves:
             return unresolved(ResolutionOutcome.AMBIGUOUS)
+
+        if corroborated and not was_narrowed and not names_itself:
+            # The scope excluded no rival -- there was none -- but it is still
+            # the entire reason this is a resolution rather than a refusal, and
+            # `NARROWED_BY_SUPPLIED_SCOPE` is the disclosure whose own definition
+            # is "the answer would have been `AMBIGUOUS` without it". Without
+            # this the one outcome that most needs the disclosure was the one
+            # that carried no warning at all: a lone bare-name match lifted to
+            # `RESOLVED_CONTEXTUAL` by the caller's own hint, reported as though
+            # the reference had named the entity.
+            warnings.append(ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE)
 
         warnings.extend(_currency_warnings(only.status))
         if only.status is not EntityStatus.ACTIVE:
@@ -384,7 +496,7 @@ class EntityResolutionService:
 
     def _signals_for(
         self, principal_id: str, entity_id: str, request: ResolutionRequest
-    ) -> tuple[ContextualSignal, ...]:
+    ) -> _ScopeSignals:
         """Everything the surrounding context corroborates about one candidate.
 
         Computed for every candidate, including when it cannot change the
@@ -393,32 +505,63 @@ class EntityResolutionService:
         winner would mean the signals on an `AMBIGUOUS` answer were absent
         rather than false.
         """
+        if request.scope_entity_id is None:
+            return _ScopeSignals()
+        assigned = self._assigned_to(
+            principal_id, entity_id, request.scope_entity_id, request.as_of
+        )
+        related = self._related_to(principal_id, entity_id, request.scope_entity_id, request.as_of)
         found: list[ContextualSignal] = []
-        if request.scope_entity_id is not None:
-            if self._assigned_to(principal_id, entity_id, request.scope_entity_id, request.as_of):
-                found.append(ContextualSignal.ASSIGNED_TO_THE_NAMED_SCOPE)
-            if self._related_to(principal_id, entity_id, request.scope_entity_id, request.as_of):
-                found.append(ContextualSignal.RELATED_TO_THE_NAMED_SCOPE)
-        return tuple(found)
+        if assigned.found:
+            found.append(ContextualSignal.ASSIGNED_TO_THE_NAMED_SCOPE)
+        if related.found:
+            found.append(ContextualSignal.RELATED_TO_THE_NAMED_SCOPE)
+        return _ScopeSignals(found=tuple(found), withheld=assigned.withheld or related.withheld)
 
     def _assigned_to(
         self, principal_id: str, entity_id: str, scope_entity_id: str, as_of: datetime | None
-    ) -> bool:
-        return any(
-            assignment.scope_entity_id == scope_entity_id
-            and _is_effective(assignment.effective_from, assignment.effective_to, as_of)
-            for assignment in self._entities.assignments(principal_id, entity_id, active_only=True)
+    ) -> _Reach:
+        """Whether a *current* assignment of this candidate names the scope.
+
+        `active_only` is the assignment plane's own statement that a row is over,
+        and it is applied before the dates rather than instead of them: a status
+        nobody updated and an end date nobody honoured are two different ways for
+        the same assignment to be stale, and only checking both catches both.
+        """
+        return _reach(
+            (
+                (assignment.effective_from, assignment.effective_to)
+                for assignment in self._entities.assignments(
+                    principal_id, entity_id, active_only=True
+                )
+                if assignment.scope_entity_id == scope_entity_id
+            ),
+            as_of,
         )
 
     def _related_to(
         self, principal_id: str, entity_id: str, scope_entity_id: str, as_of: datetime | None
-    ) -> bool:
-        return any(
-            scope_entity_id in (relationship.to_entity_id, relationship.scope_entity_id)
-            and _is_effective(relationship.effective_from, relationship.effective_to, as_of)
-            for relationship in self._entities.relationships(
-                principal_id, entity_id, direction="outgoing"
-            )
+    ) -> _Reach:
+        """Whether a *current* outgoing edge of this candidate reaches the scope.
+
+        `state == "active"` is the edge plane's equivalent of `active_only`, and
+        it was the half this module used to be missing: `relationships()` takes
+        no `active_only` argument, so an edge recorded as ended came back
+        indistinguishable from a live one and corroborated exactly as strongly.
+        An assignment somebody ended stopped counting and a relationship somebody
+        ended did not, which made the answer depend on which table the same fact
+        had been written to.
+        """
+        return _reach(
+            (
+                (relationship.effective_from, relationship.effective_to)
+                for relationship in self._entities.relationships(
+                    principal_id, entity_id, direction="outgoing"
+                )
+                if relationship.state == ACTIVE_RELATIONSHIP_STATE
+                and scope_entity_id in (relationship.to_entity_id, relationship.scope_entity_id)
+            ),
+            as_of,
         )
 
 

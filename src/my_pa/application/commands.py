@@ -2262,22 +2262,40 @@ class GetEntityContext:
 
 @dataclass(frozen=True, slots=True)
 class GetEntityRelationships:
-    """`entities.relationships`: one entity's typed edges, to depth one.
+    """`entities.relationships`: one bounded page of an entity's typed edges, to depth one.
 
     Adjacent edges only. There is no recursive walk and no traversal depth to
     raise: a graph walk over people is the shape that turns a bounded read into
-    an unbounded one, and depth one is the bound.
+    an unbounded one, and depth one is the bound on *shape*.
+
+    `page_size` and `after` are the bound on *count*, and they are separate
+    because depth one never was one. An entity every person on a programme is
+    related to has an edge per person, so "one hop" says nothing about how many
+    rows come back; this capability returned all of them. `after` names the last
+    `erel_…` of the previous page, which is the `next_cursor` the disclosure
+    issued and which the caller already holds -- every edge in the payload
+    carries its own `relationship_id`.
     """
 
     capability: ClassVar[Capability] = Capability.ENTITIES_RELATIONSHIPS
 
     entity_id: str
     direction: str | None = None
+    page_size: int | None = None
+    after: str | None = None
 
     def __post_init__(self) -> None:
         _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
         if self.direction is not None and self.direction not in ("any", "outgoing", "incoming"):
             raise InvalidRequestError(SafeDetail.SELECTOR)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            # Validated as a relationship identifier rather than accepted as an
+            # opaque string, because the repository compares it against
+            # `relationship_id` directly: an arbitrary string would silently
+            # order somewhere in the middle of the key space and skip edges
+            # rather than continue past them.
+            _identifier(self.after, IdKind.ENTITY_RELATIONSHIP, SafeDetail.CURSOR)
 
 
 GetGoodNotesContent.__doc__ = (

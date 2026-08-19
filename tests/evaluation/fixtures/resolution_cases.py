@@ -31,7 +31,10 @@ from tests.evaluation.fixtures.resolution_corpus import (
     CHEN_PARTNERS,
     DEPARTED_CONTRACTOR,
     JOSE_ALVAREZ,
+    LEO_MARCHETTI,
+    MAYA_OSEI,
     PRINCIPAL_A,
+    PRIYA_RAO,
     ROBERT_CHEN,
     ROBERTA_CHEN,
     SURVIVING_CONTRACTOR,
@@ -181,6 +184,33 @@ RESOLUTION_CASES: Final[tuple[ResolutionCase, ...]] = (
         note="Only one of them is on the project, and that is a recorded fact about her.",
     ),
     ResolutionCase(
+        name="a_scope_resolves_a_lone_name_nobody_shares",
+        family="contextual_scope",
+        reference="Maya Osei",
+        scope_entity_id=TOWER_PROJECT,
+        expected_outcome=ResolutionOutcome.RESOLVED_CONTEXTUAL,
+        expected_entity_id=MAYA_OSEI,
+        note=(
+            "Corroboration resolving without a rival to exclude. The corpus's other "
+            "contextual case has one, so this path -- where the caller's own scope is "
+            "the whole difference between a refusal and a confident answer -- was "
+            "unmeasured, and so was every rule about whether the tie is still current."
+        ),
+    ),
+    ResolutionCase(
+        name="a_tie_that_has_since_ended_still_resolves_at_a_moment_it_covered",
+        family="contextual_scope",
+        reference="Priya Rao",
+        scope_entity_id=TOWER_PROJECT,
+        as_of=EARLIER,
+        expected_outcome=ResolutionOutcome.RESOLVED_CONTEXTUAL,
+        expected_entity_id=PRIYA_RAO,
+        note=(
+            "A caller who names a moment gets that moment's answer. Refusing here would "
+            "be the other failure: a currency rule strict enough to answer nothing."
+        ),
+    ),
+    ResolutionCase(
         name="a_local_part_shared_across_domains_is_not_one_person",
         family="local_part_collision",
         reference="j.alvarez@acme.test",
@@ -229,6 +259,34 @@ RESOLUTION_CASES: Final[tuple[ResolutionCase, ...]] = (
             "Exactly one entity carries this name and nothing else matches it, "
             "and that is still not evidence the reference means it. Acme holds "
             "no alias, so the only evidence is the canonical name."
+        ),
+    ),
+    ResolutionCase(
+        name="a_relationship_to_the_scope_that_has_ended_does_not_resolve",
+        family="stale_scope",
+        reference="Leo Marchetti",
+        scope_entity_id=TOWER_PROJECT,
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({LEO_MARCHETTI}),
+        note=(
+            "Leo is the only Leo, and his one tie to the project is recorded as over. "
+            "This used to answer RESOLVED_CONTEXTUAL naming him, with no warning: an "
+            "ended assignment stopped corroborating and an ended relationship did not, "
+            "so the answer depended on which table the fact had been written to."
+        ),
+    ),
+    ResolutionCase(
+        name="an_assignment_to_the_scope_that_expired_does_not_resolve",
+        family="stale_scope",
+        reference="Priya Rao",
+        scope_entity_id=TOWER_PROJECT,
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({PRIYA_RAO}),
+        note=(
+            "The same refusal reached the other way. Priya's row still says active and "
+            "its dates say it ended, and the request names no moment -- the default. "
+            "Not filtering by time without an `as_of` is right for the evidence the "
+            "reference matched and wrong for a signal, which claims she *is* on it."
         ),
     ),
     ResolutionCase(

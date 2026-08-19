@@ -4,11 +4,20 @@ Five reads through the same port, bounded per collection, with every bound that
 bit reported. It writes nothing and decides nothing: the card is what is
 recorded, not a view about it.
 
-**Why the bound is applied here and not in the repository.** The repository
-answers "what is recorded"; deciding how much of that a card carries is a
-product judgement, and putting it behind the port would mean a caller who wanted
-all of it had no way to ask. Whether such a caller should exist is a later
-question; hiding the choice in a SQL `LIMIT` would answer it by accident.
+**Where the bound is decided, and where it is enforced.** The number is decided
+here: the repository answers "what is recorded", and how much of that a card
+carries is a product judgement, so `CONTEXT_CARD_COLLECTION_LIMIT` lives in the
+domain and the port's own default stays unbounded -- a caller who wants every
+alias must still be able to ask for every alias. What is *enforced* in the
+repository is the number this module chose, as a `LIMIT` on each query.
+
+That split is the correction `RI-PR135-MAJOR-001` asks for. This module used to
+decide the bound and then apply it by slicing a list the database had already
+materialized, which meant a person with four thousand recorded edges cost four
+thousand rows to render a card carrying twenty-five of them: the read was
+depth-bounded and card-bounded and not count-bounded, and the only one of those
+three the caller could see was the last. `observations` had said so in its own
+port docstring since `WP-RI-06`; the other four collections now say it too.
 """
 
 from __future__ import annotations
@@ -28,6 +37,17 @@ from my_pa.domain.relationship.context_card import (
 from my_pa.domain.relationship.governance import EntityObservation
 
 __all__ = ["EntityContextService"]
+
+#: How many rows of each collection to ask the repository for: one past what the
+#: card can carry.
+#:
+#: The extra row is the entire truncation indicator. Asking for exactly
+#: `CONTEXT_CARD_COLLECTION_LIMIT` and reporting a limitation when a full page
+#: came back would state "there are more aliases than this card carries" for an
+#: entity holding exactly twenty-five -- a limitation that did not apply, which
+#: `EntityContextCard.__post_init__` refuses outright. Asking for one more turns
+#: the claim into an observation: the overflow row either exists or it does not.
+_FETCH: int = CONTEXT_CARD_COLLECTION_LIMIT + 1
 
 
 class EntityContextService:
@@ -56,15 +76,23 @@ class EntityContextService:
         if entity is None:
             return None
 
-        aliases, alias_limit = _bounded(self._entities.aliases(principal_id, entity_id))
+        # Every collection is read one row past what the card can carry. The
+        # extra row is what makes the limitation *provable*: `len(fetched) >
+        # CONTEXT_CARD_COLLECTION_LIMIT` is the overflow itself, not an
+        # inference from a full page, and no second `COUNT` is issued to learn
+        # it. `EntityReenrichmentService.after_merge` uses the same trick for the
+        # same reason.
+        aliases, alias_limit = _bounded(
+            self._entities.aliases(principal_id, entity_id, limit=_FETCH)
+        )
         identifiers, identifier_limit = _bounded(
-            self._entities.external_identifiers(principal_id, entity_id)
+            self._entities.external_identifiers(principal_id, entity_id, limit=_FETCH)
         )
         assignments, assignment_limit = _bounded(
-            self._entities.assignments(principal_id, entity_id, active_only=False)
+            self._entities.assignments(principal_id, entity_id, active_only=False, limit=_FETCH)
         )
         relationships, relationship_limit = _bounded(
-            self._entities.relationships(principal_id, entity_id, direction="any")
+            self._entities.relationships(principal_id, entity_id, direction="any", limit=_FETCH)
         )
         # One row past the ceiling, so "there are exactly this many" and "there
         # are at least this many" are distinguishable without a second query.
@@ -122,7 +150,15 @@ class EntityContextService:
 
 
 def _bounded[RecordT](records: list[RecordT]) -> tuple[list[RecordT], bool]:
-    """The first `CONTEXT_CARD_COLLECTION_LIMIT` records, and whether that bit."""
+    """The first `CONTEXT_CARD_COLLECTION_LIMIT` records, and whether that bit.
+
+    `records` is what a `_FETCH`-bounded read returned, so the second value is
+    read off the overflow row rather than inferred from a full page: it is true
+    exactly when the repository had one more row than the card can carry, and
+    that is a fact the query already established. Nothing here issues a second
+    query to learn it, which is what `EntityReenrichmentService.after_merge`
+    does and why.
+    """
     kept = records[:CONTEXT_CARD_COLLECTION_LIMIT]
     return kept, len(kept) < len(records)
 

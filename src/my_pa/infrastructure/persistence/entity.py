@@ -24,6 +24,35 @@ against the acting Principal's partition first. A false join across Principals
 is exactly the failure this plane exists to avoid, and a foreign key is not a
 partition.
 
+**The matched form is checked at this boundary, in both directions.** Every
+column resolution compares against -- ``entities.canonical_name``,
+``entity_aliases.normalized_value``, ``entity_external_identifiers.normalized_value``
+-- is checked against `relationship.normalization` before it is written *and*
+before a row carrying it is served. This repeats a rule the domain records
+already state, and the repetition is the point (`RI-PR135-MAJOR-002`): the
+records enforce it for anything that constructs one, and this enforces it for
+anything that reaches the table. A row stored in a form the resolver's equality
+predicate cannot match does not merely fail to resolve -- it *removes itself
+from the candidate set*, so a same-named neighbour stops being ambiguous and is
+returned as a confident answer. A wrong identity asserted with no warning is the
+one failure `RI-RISK-001` is written about, and it is reached by writing a row,
+not by resolving one.
+
+**Why this is not a CHECK constraint.** `normalize_name` is NFKD, combining-mark
+removal, punctuation-to-space, whitespace collapse, then `str.casefold`, and no
+part of the second half survives translation to SQL. `lower(x) = x` is not
+implied by it: 172 codepoints -- the Cherokee syllabary -- case-fold to
+*uppercase*, so that predicate refuses a legitimately normalized Cherokee name.
+A punctuation predicate over a word-character class is worse, because
+`[[:alnum:]]` is decided by
+the server's collation, so the same constraint refuses a legitimately normalized
+CJK name on one server and admits it on another. A constraint that rejects
+correct data is not a stricter guard than none; it is a different defect. The
+invariant therefore lives where the algorithm does, and the cost of that choice
+is stated rather than hidden: a hand-run `INSERT` on the server still bypasses
+it, which is what `tests/database/test_entity_storage_state_is_adversarial.py`
+injects and measures rather than assumes.
+
 **Idempotency, stated honestly.** ``bind_identifier`` is idempotent against a
 natural key -- ``(entity_id, namespace, normalized_value)`` is a real unique
 constraint, so a repeat is a no-op whatever identifier the caller minted.
@@ -40,7 +69,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Row, Table, insert, or_, select, true, update
+from sqlalchemy import Row, Select, Table, insert, or_, select, true, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 from sqlalchemy.sql.elements import ColumnElement
@@ -67,6 +96,10 @@ from my_pa.domain.relationship.governance import (
     EntityProposalKind,
     EntityProposalState,
     ObservationKind,
+)
+from my_pa.domain.relationship.normalization import (
+    is_normalized_identifier,
+    is_normalized_name,
 )
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
@@ -123,6 +156,74 @@ def _optional(criterion: ColumnElement[bool] | None) -> ColumnElement[bool]:
     to assemble from two places is a partition a reader can miss.
     """
     return true() if criterion is None else criterion
+
+
+def _require_normalized_name(value: str) -> None:
+    """Refuse a name that is not already the form resolution compares in.
+
+    Checked here as well as in `Entity.__post_init__` and
+    `EntityAlias.__post_init__`, and the duplication is deliberate. Those
+    constructors bind anything that *builds a record*; this binds anything that
+    *reaches the table*, which is a different population -- a bulk import, a
+    backfill assembling rows from a source dump, a future writer that reuses a
+    stored value without re-validating it, or a record whose validation was
+    relaxed. `RI-PR135-MAJOR-002` is that these two populations were assumed to
+    be the same one and are not.
+
+    Raised as `ValueError` rather than `UnknownScopeError` because it is a
+    malformed value rather than a foreign one: the caller named something real
+    and named it wrongly, and `docs/specs` section 10 puts that under
+    `invalid_request`, not `not_found`.
+    """
+    if not is_normalized_name(value):
+        raise ValueError("an entity name is stored in the form resolution compares in")
+
+
+def _require_normalized_identifier(namespace: ExternalIdentifierNamespace, value: str) -> None:
+    """Refuse an external identifier value that is not already its normalized form.
+
+    The same rule as `_require_normalized_name`, against the per-namespace
+    algorithm rather than the name one, because the two are not the same
+    function: an email folds its local part and its domain and keeps its `@`,
+    which `normalize_name` would replace with a space. Checking a stored email
+    against the name rule would refuse every correct row on the plane.
+
+    The consequence of a miss is worse here than for a name, not better: the
+    identifier path's ambiguity gate is `len({entity_id}) > 1` over the rows the
+    equality predicate returned, so one unmatched row turns a
+    `CONFLICTED_IDENTIFIER` refusal -- two people claiming one address, exactly
+    the state a human must adjudicate -- into a silent `RESOLVED_EXACT`.
+    """
+    if not is_normalized_identifier(namespace, value):
+        raise ValueError("an external identifier is stored in the form resolution compares in")
+
+
+def _require_row_limit(limit: int | None) -> None:
+    """Refuse a row limit that asks for nothing.
+
+    `LIMIT 0` returns an empty page, which a caller reads as "there is nothing
+    recorded" -- the one answer a bounded read must never give by accident. A
+    negative limit is refused for the same reason rather than clamped, because
+    silently substituting a limit the caller did not ask for is how a bound
+    stops matching what the caller then discloses about it. This is the rule
+    `observations` already states, factored out so that the five bounded reads
+    on this plane cannot drift apart on it.
+    """
+    if limit is not None and limit < 1:
+        raise ValueError("an entity row limit asks for at least one row")
+
+
+def _limited[StatementT: Select[Any]](statement: StatementT, limit: int | None) -> StatementT:
+    """`statement` with a `LIMIT`, or unchanged when the caller asked for none.
+
+    Applied here rather than at each call site so that the `LIMIT` lands on the
+    statement the partition predicate is already part of. It never touches the
+    `where` clause, so it cannot move a partition predicate out of the statement
+    it guards -- which is what
+    `tests/architecture/test_principal_partition_is_reached_through_the_guard`
+    reads one statement at a time to notice.
+    """
+    return statement if limit is None else statement.limit(limit)
 
 
 def _contains(term: str) -> str:
@@ -204,16 +305,7 @@ class SqlEntityRepository(EntitiesRepository):
             .order_by(entities.c.canonical_name, entities.c.entity_id)
             .limit(limit)
         ).all()
-        return [
-            EntitySummary(
-                entity_id=str(row.entity_id),
-                entity_type=EntityType(str(row.entity_type)),
-                canonical_name=str(row.canonical_name),
-                display_name=str(row.display_name),
-                status=EntityStatus(str(row.status)),
-            )
-            for row in rows
-        ]
+        return [_row_to_summary(row) for row in rows]
 
     def get(self, principal_id: str, entity_id: str) -> Entity | None:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
@@ -226,30 +318,38 @@ class SqlEntityRepository(EntitiesRepository):
         ).one_or_none()
         return None if row is None else _row_to_entity(row)
 
-    def external_identifiers(self, principal_id: str, entity_id: str) -> list[ExternalIdentifier]:
+    def external_identifiers(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[ExternalIdentifier]:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         validate_identifier(entity_id, IdKind.ENTITY)
-        rows = self._connection.execute(
+        _require_row_limit(limit)
+        statement = (
             select(entity_external_identifiers)
             .where(
                 _mine(entity_external_identifiers, principal_id),
                 entity_external_identifiers.c.entity_id == entity_id,
             )
             .order_by(entity_external_identifiers.c.identifier_id)
-        ).all()
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
         return [_row_to_external_identifier(row) for row in rows]
 
-    def aliases(self, principal_id: str, entity_id: str) -> list[EntityAlias]:
+    def aliases(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityAlias]:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         validate_identifier(entity_id, IdKind.ENTITY)
-        rows = self._connection.execute(
+        _require_row_limit(limit)
+        statement = (
             select(entity_aliases)
             .where(
                 _mine(entity_aliases, principal_id),
                 entity_aliases.c.entity_id == entity_id,
             )
             .order_by(entity_aliases.c.alias_id)
-        ).all()
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
         return [_row_to_alias(row) for row in rows]
 
     def entities_by_identifier(
@@ -309,11 +409,17 @@ class SqlEntityRepository(EntitiesRepository):
         return [_row_to_entity(row) for row in rows]
 
     def assignments(
-        self, principal_id: str, entity_id: str, active_only: bool = True
+        self,
+        principal_id: str,
+        entity_id: str,
+        active_only: bool = True,
+        *,
+        limit: int | None = None,
     ) -> list[Assignment]:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         validate_identifier(entity_id, IdKind.ENTITY)
-        rows = self._connection.execute(
+        _require_row_limit(limit)
+        statement = (
             select(entity_assignments)
             .where(
                 _mine(entity_assignments, principal_id),
@@ -321,24 +427,45 @@ class SqlEntityRepository(EntitiesRepository):
                 _optional(entity_assignments.c.status == "active" if active_only else None),
             )
             .order_by(entity_assignments.c.assignment_id)
-        ).all()
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
         return [_row_to_assignment(row) for row in rows]
 
     def relationships(
-        self, principal_id: str, entity_id: str, direction: str = "any"
+        self,
+        principal_id: str,
+        entity_id: str,
+        direction: str = "any",
+        *,
+        limit: int | None = None,
+        after_relationship_id: str | None = None,
     ) -> list[EntityRelationship]:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         validate_identifier(entity_id, IdKind.ENTITY)
         if direction not in _DIRECTIONS:
             raise ValueError("an entity relationship direction is any, outgoing, or incoming")
-        rows = self._connection.execute(
+        _require_row_limit(limit)
+        if after_relationship_id is not None:
+            validate_identifier(after_relationship_id, IdKind.ENTITY_RELATIONSHIP)
+        # The continuation predicate is `>` against the same column the
+        # `order_by` uses, inside the same statement as the partition. A cursor
+        # applied by dropping rows after the fetch would still have read them,
+        # and a cursor applied to a differently ordered statement would skip
+        # edges rather than continue past them.
+        statement = (
             select(entity_relationships)
             .where(
                 _mine(entity_relationships, principal_id),
                 _DIRECTIONS[direction](entity_id),
+                _optional(
+                    entity_relationships.c.relationship_id > after_relationship_id
+                    if after_relationship_id is not None
+                    else None
+                ),
             )
             .order_by(entity_relationships.c.relationship_id)
-        ).all()
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
         return [_row_to_relationship(row) for row in rows]
 
     # --- Write operations ----------------------------------------------------
@@ -348,6 +475,7 @@ class SqlEntityRepository(EntitiesRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if entity.principal_id != principal_id:
             raise ValueError("an entity belongs to the acting Principal")
+        _require_normalized_name(entity.canonical_name)
         existing = self._connection.execute(
             select(*_ENTITY_COLUMNS).where(
                 _mine(entities, entity.principal_id),
@@ -388,6 +516,7 @@ class SqlEntityRepository(EntitiesRepository):
             raise ValueError("an external identifier binds to the entity it names")
         if identifier.principal_id != principal_id:
             raise ValueError("an external identifier belongs to the acting Principal")
+        _require_normalized_identifier(identifier.namespace, identifier.normalized_value)
         self._require_own_entity(principal_id, entity_id)
         self._connection.execute(
             pg_insert(entity_external_identifiers)
@@ -414,6 +543,7 @@ class SqlEntityRepository(EntitiesRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if alias.principal_id != principal_id:
             raise ValueError("an alias belongs to the acting Principal")
+        _require_normalized_name(alias.normalized_value)
         self._require_own_entity(principal_id, alias.entity_id)
         self._connection.execute(
             pg_insert(entity_aliases)
@@ -552,8 +682,7 @@ class SqlEntityRepository(EntitiesRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if entity_id is not None:
             validate_identifier(entity_id, IdKind.ENTITY)
-        if limit is not None and limit < 1:
-            raise ValueError("an observation limit asks for at least one row")
+        _require_row_limit(limit)
         statement = (
             select(entity_observations)
             .where(
@@ -563,12 +692,10 @@ class SqlEntityRepository(EntitiesRepository):
             )
             .order_by(entity_observations.c.observation_id)
         )
-        if limit is not None:
-            # `LIMIT` on the statement, not a slice of the result: the point of
-            # the cap is that the rows never leave the server, and truncating
-            # after the fact would have already paid for all of them.
-            statement = statement.limit(limit)
-        rows = self._connection.execute(statement).all()
+        # `LIMIT` on the statement, not a slice of the result: the point of the
+        # cap is that the rows never leave the server, and truncating after the
+        # fact would have already paid for all of them.
+        rows = self._connection.execute(_limited(statement, limit)).all()
         return [_row_to_observation(row) for row in rows]
 
     def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:
@@ -740,6 +867,23 @@ class SqlEntityRepository(EntitiesRepository):
         survivor = self.get(principal_id, retained_entity_id)
         if survivor is None or survivor.status is EntityStatus.MERGED_REDIRECT:
             raise ValueError("an entity is merged into one that is still current")
+        # And nothing may already point *at* the entity being merged away. The
+        # survivor check above closes cycles and closes chains built in one
+        # order; it does not close them built in the other. `redirect(BOB,
+        # ALICE)` then `redirect(ALICE, CARLA)` passed both guards and left
+        # `BOB -> ALICE -> CARLA`, because when ALICE was merged she was still
+        # current and CARLA still is. A reader following one hop from BOB lands
+        # on a `merged_redirect`, which is the pointer that never arrives that
+        # this guard exists to prevent -- and `ops/runbooks/relationship-
+        # intelligence.md` tells an operator to follow exactly that hop.
+        inbound = self._connection.execute(
+            select(entities.c.entity_id).where(
+                _mine(entities, principal_id),
+                entities.c.superseded_by_entity_id == merged_entity_id,
+            )
+        ).first()
+        if inbound is not None:
+            raise ValueError("an entity that others redirect to is not merged away")
         result = self._connection.execute(
             update(entities)
             .where(_mine(entities, principal_id), entities.c.entity_id == merged_entity_id)
@@ -773,6 +917,30 @@ def _text_or_none(value: object) -> str | None:
     `None`, which is a different fact.
     """
     return None if value is None else str(value)
+
+
+def _row_to_summary(row: Row[Any]) -> EntitySummary:
+    """One search row as a summary, refusing a name the resolver could not match.
+
+    `EntitySummary` carries no `__post_init__` on purpose -- it is a list row,
+    not a record -- so this is the only place the check can happen for the
+    browse surface. Without it, `search` was the one read on this plane that
+    served a malformed stored name without complaint, while `get` on the same
+    row raised: the surface an operator browses would show the row as ordinary
+    at exactly the moment its unmatchability was silently changing who
+    `entities.resolve` named. Failing here makes the malformed row visible on
+    the surface most likely to be looked at, in the same way and with the same
+    message as every other read of it.
+    """
+    canonical_name = str(row.canonical_name)
+    _require_normalized_name(canonical_name)
+    return EntitySummary(
+        entity_id=str(row.entity_id),
+        entity_type=EntityType(str(row.entity_type)),
+        canonical_name=canonical_name,
+        display_name=str(row.display_name),
+        status=EntityStatus(str(row.status)),
+    )
 
 
 def _row_to_entity(row: Row[Any]) -> Entity:

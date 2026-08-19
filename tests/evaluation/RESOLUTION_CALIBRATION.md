@@ -25,9 +25,9 @@ should be read as a probability about a real person.
 {
   "calibration_by_outcome_and_basis": {
     "resolved_contextual:canonical_name": {
-      "correct": 1,
+      "correct": 3,
       "observed_precision": 1.0,
-      "resolutions": 1
+      "resolutions": 3
     },
     "resolved_exact:alias": {
       "correct": 5,
@@ -46,8 +46,8 @@ should be read as a probability about a real person.
     }
   },
   "candidate_limit": 10,
-  "case_families": 18,
-  "cases": 27,
+  "case_families": 19,
+  "cases": 31,
   "cross_principal_leakage": 0,
   "disposition": "RESOLUTION_PRECISION_HELD",
   "exact_resolutions_on_a_bare_name": 0,
@@ -55,15 +55,15 @@ should be read as a probability about a real person.
   "false_resolution_rate": 0.0,
   "forbidden_candidate_cases": 0,
   "missing_required_candidate_cases": 0,
-  "must_not_resolve_cases": 15,
-  "must_resolve_cases": 12,
+  "must_not_resolve_cases": 17,
+  "must_resolve_cases": 14,
   "outcome_mismatch_count": 0,
   "outcomes": {
-    "ambiguous": 7,
+    "ambiguous": 9,
     "conflicted_identifier": 3,
     "historical_match": 1,
     "not_found": 4,
-    "resolved_contextual": 1,
+    "resolved_contextual": 3,
     "resolved_exact": 11
   },
   "recall_floor": 0.9,

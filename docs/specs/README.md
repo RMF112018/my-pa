@@ -6,7 +6,9 @@ Owning index for versioned behavioral contracts in `RMF112018/my-pa`. Repository
 |---|---|
 | [`mcv-read-only-vertical-slice.md`](mcv-read-only-vertical-slice.md) | Present — proposed for repository review; amended 2026-08-02 for the promoted scope |
 | [`canonical-product-definition/`](canonical-product-definition/00_README.md) | Mirror — **ratified** canonical product definition, version 2.3 after the 2026-08-04 Apple Mail, Calendar & Contacts revision; implementation not authorized |
-| [`relationship-intelligence-v0.2.md`](relationship-intelligence-v0.2.md) | Mirror — proposed product specification, implementation not authorized |
+| [`relationship-intelligence-v0.3.md`](relationship-intelligence-v0.3.md) | Mirror — **controlling** for this remediation cycle; proposed successor, implementation not authorized |
+| [`relationship-intelligence-v0.2.md`](relationship-intelligence-v0.2.md) | Mirror — superseded lineage evidence, see the notice at the top of the file; implementation not authorized |
+| [`relationship-intelligence-v0.3-acceptance.md`](relationship-intelligence-v0.3-acceptance.md) | Acceptance matrix for `relationship-intelligence-v0.3.md` `RI-AC-001..040`, current as of `AUDIT-MYPA-RELATIONSHIP-INTELLIGENCE-PR135-20260819-001` |
 | [`quick-capture/`](quick-capture/00_README.md) | Mirror — proposed product specification, implementation not authorized |
 
 The MCV abbreviation follows [`AGENTS.md`](/AGENTS.md): Minimum Viable Candidate. The specification's own prose predates that wording and is preserved as authored.

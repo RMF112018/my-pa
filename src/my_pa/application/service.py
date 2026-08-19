@@ -2743,23 +2743,65 @@ class ApplicationService:
     # unenrolled disclosure: an entity belongs to no `src_…` and no `enr_…`, and
     # naming one would be inventing a grant.
 
+    def _entity_plane(self) -> None:
+        """Refuse when this build has not enabled the relationship plane.
+
+        `unsupported` rather than an answer, for the reason `_managed_store`
+        gives: a process without `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` has no
+        relationship plane, which is a fact about the build and not a fault in
+        the request.
+
+        **This is the floor, and it was missing.** `available_capabilities`
+        withholds the five `entities.` names, and two readers consult it —
+        `capabilities.get` and the MCP tool list. The HTTP transport is not one
+        of them: `/v1/{capability}` routes by path segment and `_run` dispatches
+        straight from `_HANDLERS`, so every one of the five executed and
+        answered with entity rows on a build that reported them as
+        `not_implemented`. A manifest describing a different build than the one
+        running is exactly what `_capabilities_get` says it exists to prevent,
+        and `ops/runbooks/relationship-intelligence.md` told the operator that
+        unsetting the variable "withholds all five immediately", which was true
+        of publication and false of execution.
+
+        Every handler that reads the plane calls this first, so the refusal does
+        not depend on which transport asked.
+        """
+        if not self._relationship_intelligence_enabled:
+            raise UnsupportedError()
+
     def _entities_search(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchEntities
     ) -> _Result:
-        """`entities.search`: one bounded page of entities matching a text query."""
+        """`entities.search`: one bounded page of entities matching a text query.
+
+        One row past the page is fetched and dropped, for the reason
+        `_sources_children` does the same: `len(found) == page_size` cannot tell
+        a full page from a full page with more behind it, so it reported a
+        truncation on a corpus of exactly `page_size` entities and no truncation
+        on the last page of a larger one. It also produced neither disclosure,
+        because `Truncation` refuses `is_truncated` without a reason -- so the
+        one arrangement of rows that made the claim true raised instead of
+        answering.
+        """
+        self._entity_plane()
         principal_id = authorization.principal.principal_id
         entity_type = _entity_type_or_refuse(command.entity_type)
         page_size = self._page_size(command.page_size)
         with _translated():
             found = unit_of_work.entities.search(
-                principal_id, command.query, entity_type=entity_type, limit=page_size
+                principal_id, command.query, entity_type=entity_type, limit=page_size + 1
             )
+        truncated = len(found) > page_size
+        page = found[:page_size]
         return _Result(
-            payload={"entities": [_entity_summary_view(summary) for summary in found]},
+            payload={"entities": [_entity_summary_view(summary) for summary in page]},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_ENTITY_TRUST_BASIS,
-                truncation=Truncation(is_truncated=len(found) == page_size),
+                truncation=Truncation(
+                    is_truncated=truncated, reason="page_size_reached" if truncated else None
+                ),
+                extra_limitations=(Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else (),
             ),
         )
 
@@ -2772,6 +2814,7 @@ class ApplicationService:
         for the reason `_tasks_read` states: `principal_id` is part of the lookup
         key, so there is no branch here that could distinguish the two.
         """
+        self._entity_plane()
         with _translated():
             entity = unit_of_work.entities.get(
                 authorization.principal.principal_id, command.entity_id
@@ -2793,6 +2836,7 @@ class ApplicationService:
         into an error would lose the candidates and the warnings a caller needs
         to narrow. Both are `200` with an `outcome` the caller reads first.
         """
+        self._entity_plane()
         request = ResolutionRequest(
             raw_reference=command.reference,
             namespace=_namespace_or_refuse(command.namespace),
@@ -2809,7 +2853,16 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_ENTITY_TRUST_BASIS,
-                truncation=Truncation(is_truncated=answer.candidates_were_truncated),
+                # The reason is not optional decoration: `Truncation` refuses
+                # `is_truncated` without one, so an answer that actually dropped
+                # a candidate raised here instead of disclosing that it had --
+                # the one case the field exists for was the one case it failed.
+                truncation=Truncation(
+                    is_truncated=answer.candidates_were_truncated,
+                    reason=(
+                        "candidate_limit_reached" if answer.candidates_were_truncated else None
+                    ),
+                ),
             ),
         )
 
@@ -2817,6 +2870,7 @@ class ApplicationService:
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetEntityContext
     ) -> _Result:
         """`entities.context`: the bounded context card for one entity."""
+        self._entity_plane()
         with _translated():
             card = EntityContextService(unit_of_work.entities).card(
                 authorization.principal.principal_id,
@@ -2830,7 +2884,16 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_ENTITY_TRUST_BASIS,
-                truncation=Truncation(is_truncated=not card.is_complete),
+                truncation=Truncation(
+                    is_truncated=not card.is_complete,
+                    # `Truncation` refuses `is_truncated` without a reason, so the
+                    # single arrangement of rows that made the claim true -- a card
+                    # that actually dropped something -- was the one arrangement
+                    # that raised instead of answering. The bound here is the
+                    # card's own per-collection ceiling rather than a page size
+                    # the caller chose, and the reason says which.
+                    reason=None if card.is_complete else "card_collection_limit_reached",
+                ),
             ),
         )
 
@@ -2840,23 +2903,56 @@ class ApplicationService:
         authorization: Authorization,
         command: GetEntityRelationships,
     ) -> _Result:
-        """`entities.relationships`: one entity's typed edges, to depth one.
+        """`entities.relationships`: one bounded page of an entity's typed edges.
 
         The entity is read first so an unknown identifier is `not_found` rather
         than an empty edge list -- "this person has no recorded relationships"
         and "there is no such person" are different answers.
+
+        **Depth one was the only bound this handler had.** It returned every row
+        the repository returned, and the repository returned every edge, so a
+        programme with two thousand people on it answered with two thousand
+        edges — against `WP-RI-05`'s "bounded output and pagination" and section
+        14.4's rule that a tool schema is bounded. One row past the page proves
+        the truncation rather than guessing it from a full page, exactly as
+        `_sources_children` and `_entities_search` do.
+
+        **The cursor is issued only when it is real.** `next_cursor` is the last
+        edge of *this* page, so a caller that passes it back gets the rows after
+        it — `after_relationship_id` is a keyset on the same unique column the
+        order is taken on, so nothing shifts between requests. When nothing was
+        truncated there is no cursor, and `Truncation` refuses one anyway; and
+        because a continuation *is* issued here, `LISTING_HAS_NO_CONTINUATION`
+        is not, which would otherwise be the disclosure telling a caller to stop
+        while handing them the means to go on.
         """
+        self._entity_plane()
         principal_id = authorization.principal.principal_id
+        page_size = self._page_size(command.page_size)
         with _translated():
             entity = unit_of_work.entities.get(principal_id, command.entity_id)
             if entity is None:
                 raise NotFoundError(SafeDetail.TARGET_ID)
-            edges = unit_of_work.entities.relationships(
-                principal_id, command.entity_id, direction=command.direction or "any"
+            found = unit_of_work.entities.relationships(
+                principal_id,
+                command.entity_id,
+                direction=command.direction or "any",
+                limit=page_size + 1,
+                after_relationship_id=command.after,
             )
+        truncated = len(found) > page_size
+        page = found[:page_size]
         return _Result(
-            payload={"relationships": [_relationship_view(edge) for edge in edges]},
-            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+            payload={"relationships": [_relationship_view(edge) for edge in page]},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].relationship_id if truncated else None,
+                ),
+            ),
         )
 
     def _tasks_read(

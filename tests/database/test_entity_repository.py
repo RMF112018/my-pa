@@ -586,6 +586,141 @@ def test_a_joined_lookup_cannot_reach_another_principals_entity(
         assert repository.entities_by_canonical_name(PRINCIPAL_A, "bob synthetic") == []
 
 
+def _cross_partition_child(engine: Engine, table: str, columns: str, values: str) -> None:
+    """Write a child row whose partition disagrees with its parent entity's.
+
+    No writer in this repository can produce one -- every write is `_bound` to
+    the acting Principal -- and no constraint forbids one either, because the
+    partition is a column on each table rather than a relationship between them.
+    So it is staged in raw SQL, which is exactly the shape a migration, a
+    backfill or a restore could leave behind.
+    """
+    with engine.begin() as connection:
+        connection.execute(text(f"INSERT INTO {SCHEMA}.{table} ({columns}) VALUES ({values})"))  # noqa: S608
+
+
+def test_an_alias_lookup_applies_the_partition_to_the_alias_row_too(
+    migrated_engine: Engine,
+) -> None:
+    """The *second* side of the join, which the test above does not reach.
+
+    That test stages a Principal-B alias on a Principal-B entity, which the
+    predicate on `entities` alone already excludes -- so deleting the predicate
+    on `entity_aliases` left it green. What isolates the second predicate is a
+    row the two sides disagree about: an alias stamped Principal B hanging off an
+    entity owned by Principal A. Then only the alias-side predicate can keep A's
+    own entity from being reached through a partition it does not own.
+    """
+    with migrated_engine.begin() as connection:
+        SqlEntityRepository(connection).create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+    _cross_partition_child(
+        migrated_engine,
+        "entity_aliases",
+        "alias_id, entity_id, alias_type, normalized_value, display_value, principal_id",
+        f"'eals_cccc0003cccc0003', '{ALICE}', 'nickname', 'ali', 'Ali', '{PRINCIPAL_B}'",
+    )
+    with migrated_engine.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        assert repository.entities_by_alias(PRINCIPAL_A, "ali") == []
+        assert repository.entities_by_alias(PRINCIPAL_B, "ali") == []
+
+
+def test_an_identifier_lookup_applies_the_partition_to_the_identifier_row_too(
+    migrated_engine: Engine,
+) -> None:
+    """The same isolation for `entities_by_identifier`, for the same reason."""
+    with migrated_engine.begin() as connection:
+        SqlEntityRepository(connection).create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+    _cross_partition_child(
+        migrated_engine,
+        "entity_external_identifiers",
+        "identifier_id, entity_id, namespace, normalized_value, display_value, "
+        "verified, principal_id",
+        f"'xid_cccc0003cccc0003', '{ALICE}', 'email', 'ali@example.test', "
+        f"'ali@example.test', true, '{PRINCIPAL_B}'",
+    )
+    with migrated_engine.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        namespace = ExternalIdentifierNamespace.EMAIL
+        assert repository.entities_by_identifier(PRINCIPAL_A, namespace, "ali@example.test") == []
+        assert repository.entities_by_identifier(PRINCIPAL_B, namespace, "ali@example.test") == []
+
+
+def test_an_alias_on_another_principals_entity_writes_nothing(
+    two_principals: Engine,
+) -> None:
+    """`record_alias` refuses a foreign entity, as its three siblings do.
+
+    `bind_identifier`, `record_assignment` and `record_relationship` each had a
+    cross-partition write refusal asserted and `record_alias` did not, which left
+    the plan's "cross-Principal isolation on every read and every write" true of
+    the SQL and unproven for one of the four writes.
+    """
+    alias = EntityAlias(
+        alias_id="eals_dddd0004dddd0004",
+        entity_id=BOB,
+        alias_type=AliasType.NICKNAME,
+        normalized_value="bob",
+        display_value="Bob",
+        principal_id=PRINCIPAL_A,
+    )
+    with pytest.raises(UnknownScopeError), two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_alias(PRINCIPAL_A, alias)
+    assert _row_count(two_principals, "entity_aliases") == 0
+
+
+def test_aliases_of_a_foreign_entity_are_empty_not_populated(two_principals: Engine) -> None:
+    """The enumeration answers emptiness, as the other three enumerations do.
+
+    `test_enumerations_of_a_foreign_entity_are_empty_not_populated` asserts
+    identifiers, assignments and relationships and stops short of aliases, so
+    this read was the one the "every read" claim did not cover.
+    """
+    with two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_alias(
+            PRINCIPAL_B,
+            EntityAlias(
+                alias_id="eals_eeee0005eeee0005",
+                entity_id=BOB,
+                alias_type=AliasType.NICKNAME,
+                normalized_value="bob",
+                display_value="Bob",
+                principal_id=PRINCIPAL_B,
+            ),
+        )
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        assert repository.aliases(PRINCIPAL_A, BOB) == []
+        assert [alias.alias_id for alias in repository.aliases(PRINCIPAL_B, BOB)] == [
+            "eals_eeee0005eeee0005"
+        ]
+
+
+def test_a_relationship_scoped_into_another_partition_writes_nothing(
+    two_principals: Engine,
+) -> None:
+    """The scope is partition-checked, as it is on an assignment.
+
+    `test_a_relationship_reaching_into_another_partition_writes_nothing` covers
+    `to_entity_id` only, so dropping `scope_entity_id` from the check left the
+    suite green -- while the equivalent mutation on `record_assignment` was
+    caught. A row written under it would answer `entities.relationships` with a
+    `scope_entity_id` pointing into a partition the caller cannot read, which is
+    a foreign identifier disclosed in their own answer.
+    """
+    relationship = EntityRelationship(
+        relationship_id="erel_bbbb0002bbbb0002",
+        from_entity_id=ALICE,
+        relationship_type=EntityRelationshipType.AFFILIATED_WITH,
+        to_entity_id=ACME,
+        scope_entity_id=BOB,
+        principal_id=PRINCIPAL_A,
+    )
+    with pytest.raises(UnknownScopeError), two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_relationship(PRINCIPAL_A, relationship)
+    assert _row_count(two_principals, "entity_relationships") == 0
+
+
 def test_a_canonical_name_lookup_is_an_equality_not_a_substring(
     migrated_engine: Engine,
 ) -> None:
@@ -748,6 +883,31 @@ def test_a_redirect_chain_is_refused(migrated_engine: Engine) -> None:
         repository.redirect_entity(PRINCIPAL_A, BOB, ALICE)
         with pytest.raises(ValueError, match="still current"):
             repository.redirect_entity(PRINCIPAL_A, ACME, BOB)
+
+
+def test_a_redirect_chain_is_refused_in_the_other_order_too(migrated_engine: Engine) -> None:
+    """The survivor check closes chains built one way round. This is the other.
+
+    `redirect(BOB, ALICE)` then `redirect(ALICE, CARLA)` passes every guard
+    above: when ALICE is merged away she is still current, and CARLA is current
+    too. What it leaves behind is `BOB -> ALICE -> CARLA`, which is the same
+    unreachable survivor the test above refuses, reached by writing the two
+    merges in the order an operator would actually write them -- deciding about
+    BOB first, and only later discovering that ALICE was CARLA all along.
+
+    Asserted here rather than only in the fake because the fake mirrors this
+    logic, so a unit test could assert the refusal against a fake that shared
+    the same hole and pass.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ACME, PRINCIPAL_A, "Carla Synthetic"))
+        repository.redirect_entity(PRINCIPAL_A, BOB, ALICE)
+        with pytest.raises(ValueError, match="redirect to"):
+            repository.redirect_entity(PRINCIPAL_A, ALICE, ACME)
+        assert repository.get(PRINCIPAL_A, ALICE).status is EntityStatus.ACTIVE
 
 
 def test_a_redirect_at_an_entity_that_does_not_exist_is_refused(

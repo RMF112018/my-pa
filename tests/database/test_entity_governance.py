@@ -22,7 +22,7 @@ from typing import Final
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
@@ -581,3 +581,48 @@ def test_an_observation_read_honours_its_limit_at_the_server(two_principals: Eng
         assert len(repository.observations(PRINCIPAL_A, limit=3)) == 3
         with pytest.raises(ValueError, match="at least one row"):
             repository.observations(PRINCIPAL_A, ALICE, limit=0)
+
+
+def test_an_observation_limit_reaches_the_server_as_a_limit_clause(
+    two_principals: Engine,
+) -> None:
+    """Counting the rows back cannot tell a `LIMIT` from a slice. This can.
+
+    The test above asserts only that two rows come back, which is equally true
+    of an implementation that fetches every observation and truncates in Python
+    -- so replacing `statement.limit(limit)` with `rows[:limit]` left it green,
+    and the guard on the one property it exists to protect was inert. Observations
+    are the collection that grows with every source record that ever mentioned
+    anyone, so "the surplus never leaves the server" is the whole claim.
+
+    The SQL actually issued is captured instead, which is the only place that
+    distinction is visible.
+    """
+    issued: list[str] = []
+
+    def _capture(
+        conn: object,
+        cursor: object,
+        statement: str,
+        parameters: object,
+        context: object,
+        executemany: bool,
+    ) -> None:
+        issued.append(statement)
+
+    with two_principals.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        for index in range(5):
+            repository.record_observation(
+                PRINCIPAL_A, _observation(f"eobs_{index:05d}bbbb0002bbb", ALICE)
+            )
+    event.listen(two_principals, "before_cursor_execute", _capture)
+    try:
+        with two_principals.connect() as connection:
+            SqlEntityRepository(connection).observations(PRINCIPAL_A, ALICE, limit=2)
+    finally:
+        event.remove(two_principals, "before_cursor_execute", _capture)
+
+    selects = [statement for statement in issued if "entity_observations" in statement]
+    assert selects, "the read issued no statement against entity_observations"
+    assert all("LIMIT" in statement.upper() for statement in selects), selects

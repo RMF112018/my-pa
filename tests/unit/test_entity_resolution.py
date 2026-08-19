@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from my_pa.application.entity_resolution import EntityResolutionService, ResolutionRequest
+from my_pa.contracts.ports import EntitiesRepository
 from my_pa.domain.relationship.entity import (
     AliasType,
     Assignment,
@@ -1049,3 +1050,240 @@ def test_a_record_cannot_store_a_value_resolution_would_never_match(
             display_value="Alice@Example.TEST",
             principal_id=PRINCIPAL,
         )
+
+
+# --- a signal has to be current to corroborate ------------------------------
+#
+# Every test below names a way a *stale* connection to the named scope used to
+# lift a bare canonical name into `RESOLVED_CONTEXTUAL` -- a confident answer,
+# carrying an entity identifier, with no warning on it at all. The guards are
+# `_is_in_force` and the `state`/`active_only` filters, and each of them survived
+# deletion against the whole suite before these tests existed.
+
+
+def _scope(entities: EntitiesRepository) -> None:
+    """One person and the project every test in this section names as the scope."""
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Harbour Tower", entity_type=EntityType.PROJECT))
+
+
+def _edge(relationship_id: str, **kwargs: object) -> EntityRelationship:
+    return EntityRelationship(
+        relationship_id=relationship_id,
+        from_entity_id=ALICE,
+        relationship_type=EntityRelationshipType.CONTRACTOR_ON,
+        to_entity_id=TOWER,
+        principal_id=PRINCIPAL,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def _assignment(assignment_id: str, **kwargs: object) -> Assignment:
+    return Assignment(
+        assignment_id=assignment_id,
+        entity_id=ALICE,
+        assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+        principal_id=PRINCIPAL,
+        scope_entity_id=TOWER,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def _by_name(resolving: EntityResolutionService, **kwargs: object) -> EntityResolution:
+    return resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER, **kwargs),  # type: ignore[arg-type]
+    )
+
+
+def test_a_relationship_that_has_ended_does_not_corroborate(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """`relationships()` takes no `active_only`, so this filter is the only one.
+
+    An ended assignment already stopped corroborating and an ended relationship
+    did not, which made a confident answer depend on which of two tables the
+    same fact had been written to.
+    """
+    entities = _Entities(world)
+    _scope(entities)
+    entities.record_relationship(PRINCIPAL, _edge("erel_aaaa0001aaaa0001", state="ended"))
+    answer = _by_name(resolving)
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert answer.candidates[0].signals == ()
+
+
+def test_an_unrecognised_relationship_state_does_not_corroborate(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """`state` is free text on the record, so anything but active reads as not live."""
+    entities = _Entities(world)
+    _scope(entities)
+    entities.record_relationship(PRINCIPAL, _edge("erel_aaaa0001aaaa0001", state="disputed"))
+    assert _by_name(resolving).outcome is ResolutionOutcome.AMBIGUOUS
+
+
+def test_a_relationship_whose_dates_are_over_does_not_corroborate_without_a_moment(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The default request asks no temporal question, and used to get a stale yes.
+
+    `as_of=None` means "do not filter by time" for the evidence the reference
+    matched. It must not mean it for a signal, which claims the candidate *is*
+    on the named project.
+    """
+    entities = _Entities(world)
+    _scope(entities)
+    entities.record_relationship(
+        PRINCIPAL, _edge("erel_aaaa0001aaaa0001", effective_from=BEFORE, effective_to=BEFORE)
+    )
+    answer = _by_name(resolving)
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
+
+
+def test_an_assignment_whose_dates_are_over_does_not_corroborate_without_a_moment(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """`active_only` is not enough: a status nobody updated is the other stale shape."""
+    entities = _Entities(world)
+    _scope(entities)
+    entities.record_assignment(
+        PRINCIPAL, _assignment("asn_aaaa0001aaaa0001", effective_from=BEFORE, effective_to=BEFORE)
+    )
+    answer = _by_name(resolving)
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
+
+
+def test_an_assignment_that_is_not_active_does_not_corroborate(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    entities = _Entities(world)
+    _scope(entities)
+    entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001", status="ended"))
+    assert _by_name(resolving).outcome is ResolutionOutcome.AMBIGUOUS
+
+
+def test_a_relationship_still_running_corroborates(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The other half of the trade: a rule that refused everything is not a fix."""
+    entities = _Entities(world)
+    _scope(entities)
+    entities.record_relationship(
+        PRINCIPAL, _edge("erel_aaaa0001aaaa0001", effective_from=BEFORE, effective_to=None)
+    )
+    answer = _by_name(resolving)
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.resolved_entity_id == ALICE
+
+
+def test_an_ended_relationship_still_corroborates_at_a_moment_it_covered(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A caller who names a moment gets that moment's answer rather than today's."""
+    entities = _Entities(world)
+    _scope(entities)
+    entities.record_relationship(
+        PRINCIPAL, _edge("erel_aaaa0001aaaa0001", effective_from=BEFORE, effective_to=AFTER)
+    )
+    answer = _by_name(resolving, as_of=WHEN)
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.candidates[0].signals == (ContextualSignal.RELATED_TO_THE_NAMED_SCOPE,)
+
+
+def test_only_an_outgoing_edge_corroborates(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """`direction="outgoing"` is a constraint, not a default nobody checked.
+
+    The edge below reaches the scope -- it is *scoped by* the tower project --
+    but it is somebody else's edge, pointing at this candidate. A signal is
+    something recorded about the candidate, and widening the direction would let
+    a claim another entity made be read as one she made about herself.
+    """
+    entities = _Entities(world)
+    _scope(entities)
+    entities.create(PRINCIPAL, an_entity(SECOND_ORG, "Acme", entity_type=EntityType.ORGANIZATION))
+    entities.record_relationship(
+        PRINCIPAL,
+        EntityRelationship(
+            relationship_id="erel_aaaa0001aaaa0001",
+            from_entity_id=SECOND_ORG,
+            relationship_type=EntityRelationshipType.CONTRACTOR_ON,
+            to_entity_id=ALICE,
+            principal_id=PRINCIPAL,
+            scope_entity_id=TOWER,
+        ),
+    )
+    answer = _by_name(resolving)
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.candidates[0].signals == ()
+
+
+def test_a_contextual_resolution_that_rested_on_the_scope_says_so(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The lone-corroborated answer used to carry no warning at all.
+
+    `NARROWED_BY_SUPPLIED_SCOPE` is defined as "the answer would have been
+    `AMBIGUOUS` without it", which is exactly this answer -- and the one outcome
+    that most needs the disclosure was the one that made it silently.
+    """
+    entities = _Entities(world)
+    _scope(entities)
+    entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001"))
+    answer = _by_name(resolving)
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE in answer.warnings
+
+
+def test_an_alias_match_does_not_credit_the_scope_with_the_decision(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The alias resolved it and the scope only agreed; saying otherwise overstates the hint."""
+    entities = _Entities(world)
+    _scope(entities)
+    entities.record_alias(PRINCIPAL, an_alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
+    entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001"))
+    answer = resolving.resolve(
+        PRINCIPAL, ResolutionRequest(raw_reference="Ali", scope_entity_id=TOWER)
+    )
+    assert ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE not in answer.warnings
+
+
+def test_an_identifier_held_by_the_wrong_kind_of_entity_is_not_found(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A matched identifier must not be re-read as a name.
+
+    Falling through here answered `RESOLVED_EXACT` naming a *project* whose alias
+    happened to be spelled the way `normalize_name` spells that address, throwing
+    away identifier evidence that pointed at a person in order to do it. The
+    fall-through above it -- an identifier that matched nothing at all -- is
+    still a fall-through, and the test beside this one holds it.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(
+        PRINCIPAL, an_entity(TOWER, "alice example test", entity_type=EntityType.PROJECT)
+    )
+    entities.bind_identifier(
+        PRINCIPAL,
+        ALICE,
+        an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test", verified=True),
+    )
+    entities.record_alias(PRINCIPAL, an_alias("eals_dddd0004dddd0004", TOWER, "alice example test"))
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="alice@example.test",
+            namespace=ExternalIdentifierNamespace.EMAIL,
+            entity_type=EntityType.PROJECT,
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.NOT_FOUND
+    assert answer.resolved_entity_id is None

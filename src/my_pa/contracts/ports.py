@@ -387,8 +387,24 @@ class EntitiesRepository(ABC):
         """
 
     @abstractmethod
-    def aliases(self, principal_id: str, entity_id: str) -> list[EntityAlias]:
-        """Every alias recorded for an entity in this Principal's partition."""
+    def aliases(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityAlias]:
+        """Aliases recorded for an entity in this Principal's partition.
+
+        `limit` caps how many rows come back as a `LIMIT` on the query rather
+        than a slice of the result, for the reason `observations` states: a
+        caller that fetched every alias and kept twenty-five has already paid
+        for the ones it discarded, and an entity accumulates an alias for every
+        spelling any source ever used for it.
+
+        `None` is genuinely unbounded and is the default, because every existing
+        caller reads this collection whole and changing that silently would turn
+        a complete answer into a partial one nobody was told about. A caller
+        that passes a limit is expected to disclose in its own answer that it
+        did -- `EntityContextService` fetches one row past its ceiling and
+        reports `MORE_ALIASES_THAN_THIS_CARD_CARRIES` from the overflow.
+        """
 
     @abstractmethod
     def entities_by_identifier(
@@ -537,8 +553,17 @@ class EntitiesRepository(ABC):
         """
 
     @abstractmethod
-    def external_identifiers(self, principal_id: str, entity_id: str) -> list[ExternalIdentifier]:
-        """Every external identifier bound to an entity in this Principal's partition."""
+    def external_identifiers(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[ExternalIdentifier]:
+        """External identifiers bound to an entity in this Principal's partition.
+
+        `limit` is a query-time `LIMIT` on the same terms as `aliases`, and
+        defaults to `None` for the same reason: resolution reads this collection
+        whole to decide whether an identifier is conflicted, and a bound applied
+        without its knowledge would let a conflict fall off the end of a page
+        and read as a clean match.
+        """
 
     @abstractmethod
     def record_assignment(self, principal_id: str, assignment: Assignment) -> None:
@@ -558,12 +583,24 @@ class EntitiesRepository(ABC):
 
     @abstractmethod
     def assignments(
-        self, principal_id: str, entity_id: str, active_only: bool = True
+        self,
+        principal_id: str,
+        entity_id: str,
+        active_only: bool = True,
+        *,
+        limit: int | None = None,
     ) -> list[Assignment]:
         """Assignments involving an entity, scoped by `principal_id`.
 
         When `active_only` is true, returns only assignments with status
         `'active'`.
+
+        `limit` is a query-time `LIMIT` on the same terms as `aliases`. It
+        matters more here than the name suggests: `active_only=False` is the
+        *historical* read, and `WP-RI-12`'s own fixture minimum asks for fifty
+        deliberate historical assignment changes on a single programme, so the
+        one collection guaranteed to grow without bound in a synthetic corpus is
+        this one read with the filter off.
         """
 
     @abstractmethod
@@ -580,12 +617,38 @@ class EntitiesRepository(ABC):
 
     @abstractmethod
     def relationships(
-        self, principal_id: str, entity_id: str, direction: str = "any"
+        self,
+        principal_id: str,
+        entity_id: str,
+        direction: str = "any",
+        *,
+        limit: int | None = None,
+        after_relationship_id: str | None = None,
     ) -> list[EntityRelationship]:
         """Entity relationships involving an entity, scoped by `principal_id`.
 
         `direction` is `'any'` (default), `'outgoing'` (from_entity_id matches),
         or `'incoming'` (to_entity_id matches).
+
+        **Depth one was the only bound this read had.** Adjacency is what stops
+        a graph walk; it is not what stops a hub. A programme every person on it
+        is assigned to has an edge per person, so "one hop from this entity" and
+        "a bounded number of rows" are different claims, and only the first was
+        being made. `limit` makes the second, as a `LIMIT` on the query rather
+        than a slice of the result -- the cost the cap exists to avoid is paid
+        the moment the rows leave the server.
+
+        `after_relationship_id` continues a previous page: rows are ordered by
+        `relationship_id` and this excludes every identifier at or before the
+        one named. A keyset rather than an offset, because `relationship_id` is
+        unique and the order is total, so a row inserted between two requests
+        cannot shift a later page backwards and hide an edge -- which is exactly
+        the failure an `OFFSET` has on a table that is still being written to.
+
+        Both default to today's behaviour -- every edge, from the beginning --
+        because resolution and re-enrichment read this collection whole, and a
+        bound introduced beneath them would answer "no such relationship" for an
+        edge that is recorded.
         """
 
 

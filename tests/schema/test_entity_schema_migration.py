@@ -54,12 +54,17 @@ ENTITY_TABLES: Final = frozenset(
 
 NEW_TABLES: Final = ENTITY_TABLES | {"entity_aliases"}
 
-#: WP-RI-06's governance tables, on `d2b8f5c04e71`. Not part of `NEW_TABLES`:
-#: the constraint-parity and CHECK groups below belong to *this* revision, and
-#: `tests/schema/test_entity_governance_migration.py` makes the same claims for
-#: those three. They are named here only because a downgrade to
-#: `PREVIOUS_REVISION` passes through their revision on the way, so they are
-#: part of what that downgrade removes.
+#: WP-RI-06's governance tables, on `d2b8f5c04e71`. Kept separate from
+#: `NEW_TABLES` because the two arrive on different revisions and a downgrade to
+#: `PREVIOUS_REVISION` passes through both, so this names what that downgrade
+#: additionally removes.
+#:
+#: The parity and CHECK groups below *do* reach these three: they parameterize
+#: on `PLANE_TABLES`, which is this set unioned with `NEW_TABLES`. An earlier
+#: version of this comment said they did not and pointed at
+#: `tests/schema/test_entity_governance_migration.py` for them, which has never
+#: existed -- the governance revision has no suite of its own, which is precisely
+#: why the groups here were widened to cover it.
 GOVERNANCE_TABLES: Final = frozenset(
     {"entity_observations", "entity_proposals", "entity_merge_records"}
 )

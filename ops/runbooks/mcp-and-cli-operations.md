@@ -171,7 +171,10 @@ configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same child publishes all fifty-three. An operator who expects `documents.create`
+same child publishes those six, reaching forty-eight of the fifty-three. The
+remaining five are the `entities.` names, which `D-RI-20` gates behind
+`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms; a child
+publishing all fifty-three has both variables set. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -219,7 +222,7 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-12):** the tool list is derived from all
-**forty-eight** current capabilities, and the schema has **sixty-two** revisions
+**fifty-three** current capabilities, and the schema has **sixty-two** revisions
 at head `d2b8f5c04e71`. `capabilities.get` also reports content-free
 `worker_planes`. The dated transcript below remains historical evidence for its
 stated head.

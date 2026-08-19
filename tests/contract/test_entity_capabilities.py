@@ -404,3 +404,48 @@ def test_relationships_refuses_an_unknown_direction() -> None:
     """Refused at the command, before it could be read as "any"."""
     with pytest.raises(InvalidRequestError):
         GetEntityRelationships(entity_id=ALICE, direction="sideways")
+
+
+# ---- the plane is off ------------------------------------------------------
+
+
+def _disabled(scene: Scene, capability: Capability, command: object) -> dict[str, object]:
+    """Invoke against a build that never enabled the relationship plane."""
+    service = build_service(scene.world, scene.providers, relationship_intelligence_enabled=False)
+    envelope = service.invoke(
+        metadata_for(capability, Purpose.ENTITY_READ, scene.principal),
+        command,  # type: ignore[arg-type]
+        principal=scene.principal,
+    )
+    return envelope.to_canonical_dict()
+
+
+@pytest.mark.parametrize(
+    ("capability", "command"),
+    [
+        (Capability.ENTITIES_SEARCH, SearchEntities(query="Alice")),
+        (Capability.ENTITIES_GET, GetEntity(entity_id=ALICE)),
+        (Capability.ENTITIES_RESOLVE, ResolveEntity(reference="Alice Chen")),
+        (Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE)),
+        (Capability.ENTITIES_RELATIONSHIPS, GetEntityRelationships(entity_id=ALICE)),
+    ],
+)
+def test_a_disabled_plane_refuses_every_capability_rather_than_answering(
+    staged: Scene, capability: Capability, command: object
+) -> None:
+    """Withholding the five from the manifest did not stop them executing.
+
+    `available_capabilities` subtracts them, and two readers consult it —
+    `capabilities.get` and the MCP tool list. The HTTP transport is not one of
+    them: `/v1/{capability}` routes by path segment and dispatch goes straight to
+    `_HANDLERS`, so each of the five answered with real rows on a build that
+    reported it as `not_implemented`. Parameterized over all five deliberately:
+    the floor was absent from every one of them, so a test covering a single
+    capability would have gone green while four holes stayed open.
+
+    Staged data is used rather than an empty world so that a missing refusal
+    fails loudly with a payload, instead of passing as an empty answer.
+    """
+    body = _disabled(staged, capability, command)
+    assert body["result"] is None
+    assert body["error"]["code"] == ErrorCode.UNSUPPORTED.value  # type: ignore[index]

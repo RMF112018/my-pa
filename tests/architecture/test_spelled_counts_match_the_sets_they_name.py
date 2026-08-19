@@ -259,8 +259,21 @@ NAMED_NOUNS = ("capabilit(?:y|ies)", "purposes?")
 #: ordinary English about other things, so context decides.
 BORROWED_NOUNS = ("members?", "names?", "strings?", "tools?")
 
+#: What may sit between the number and the noun without breaking the claim:
+#: whitespace, a hyphen, and markdown emphasis markers -- but not a backtick,
+#: which opens a code span and so starts a new token rather than continuing
+#: this one (`the first \`capabilities.get\`` is not a count of anything).
+#:
+#: The emphasis half was missing, and it hid two stale counts. Both runbooks
+#: wrote `**forty-eight** capabilities`, and `[\s-]+` does not match the `**`
+#: between them -- so the sweep found no claim there at all and stayed green
+#: while the documents said forty-eight of a set holding fifty-three. A guard
+#: that reads unformatted prose only is a guard that stops reading exactly where
+#: an author put emphasis, which is where the load-bearing numbers tend to be.
+_GAP = r"[\s\-*_]+"
+
 CLAIM = re.compile(
-    rf"\b(?P<number>{_NUMBER})[\s-]+(?:{_ADJECTIVE})?"
+    rf"\b(?P<number>{_NUMBER}){_GAP}(?:{_ADJECTIVE})?"
     rf"(?P<noun>{'|'.join(NAMED_NOUNS + BORROWED_NOUNS)})\b",
     re.IGNORECASE,
 )
@@ -346,6 +359,20 @@ def stated(number: str) -> int:
 #: distinctive fragment of the block, so an entry excuses one occurrence rather
 #: than every occurrence of the same words in the same file.
 EXCUSED: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "ops/runbooks/gateway-operations.md",
+        "twelve** capabilities",
+        "Re-executed 2026-08-03",
+        "a dated transcript of what one run observed at head `1a4c9e77b2d5`, "
+        "which is evidence of the past rather than a claim about the set now; "
+        "reachable only since the sweep learned to read across emphasis",
+    ),
+    (
+        "ops/runbooks/mcp-and-cli-operations.md",
+        "twelve** capabilities",
+        "Re-executed 2026-08-03",
+        "the same dated transcript in the second runbook",
+    ),
     (
         "ops/runbooks/gateway-operations.md",
         "eight capabilities",

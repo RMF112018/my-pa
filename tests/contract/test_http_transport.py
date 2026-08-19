@@ -636,6 +636,15 @@ class RecordingService(ApplicationService):
             managed_store=world.managed_store,
             task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
             commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
+            # Composed, for the same reason the managed store above is: this
+            # suite quantifies over every `Capability` and asserts each is
+            # reachable, so a service composed *without* the relationship plane
+            # would have it asserting reachability for the `entities.` family
+            # its own build withholds. It did exactly that until `_entity_plane`
+            # gave that family the floor `documents.` already had -- each member
+            # answered `200` here while `capabilities.get` on the same process
+            # reported it `not_implemented`, and this suite asserted the `200`.
+            relationship_intelligence_enabled=True,
         )
         self.envelopes: list[ResponseEnvelope] = []
 

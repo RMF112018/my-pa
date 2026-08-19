@@ -132,7 +132,7 @@ from my_pa.domain.capture.submission import CaptureReceipt
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
-from my_pa.domain.common.identifiers import IdKind, parse_identifier
+from my_pa.domain.common.identifiers import IdKind, parse_identifier, validate_identifier
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.context.preference import (
@@ -180,6 +180,10 @@ from my_pa.domain.relationship.governance import (
     EntityObservation,
     EntityProposal,
     EntityProposalState,
+)
+from my_pa.domain.relationship.normalization import (
+    is_normalized_identifier,
+    is_normalized_name,
 )
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
 from my_pa.domain.situation.continuity import (
@@ -2285,6 +2289,14 @@ class _Entities(EntitiesRepository):
         limit: int = 50,
     ) -> list[EntitySummary]:
         self._world.fail("entities.search")
+        for entity in self._world.entities:
+            if entity.principal_id == principal_id:
+                # Parity with `SqlEntityRepository._row_to_summary`, which
+                # refuses to serve a stored name the resolver's equality
+                # predicate could never match. The fake holds real `Entity`
+                # records, so this can only fire on one assembled around the
+                # constructor -- which is exactly what an adversarial test does.
+                _refuse_unnormalized_name(entity.canonical_name)
         needle = query.casefold()
         matched = [
             entity
@@ -2312,9 +2324,12 @@ class _Entities(EntitiesRepository):
         self._world.fail("entities.get")
         return self._mine(principal_id, entity_id)
 
-    def external_identifiers(self, principal_id: str, entity_id: str) -> list[ExternalIdentifier]:
+    def external_identifiers(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[ExternalIdentifier]:
         self._world.fail("entities.external_identifiers")
-        return sorted(
+        _refuse_empty_limit(limit)
+        found = sorted(
             (
                 identifier
                 for identifier in self._world.entity_identifiers
@@ -2322,10 +2337,14 @@ class _Entities(EntitiesRepository):
             ),
             key=lambda identifier: identifier.identifier_id,
         )
+        return found if limit is None else found[:limit]
 
-    def aliases(self, principal_id: str, entity_id: str) -> list[EntityAlias]:
+    def aliases(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityAlias]:
         self._world.fail("entities.aliases")
-        return sorted(
+        _refuse_empty_limit(limit)
+        found = sorted(
             (
                 alias
                 for alias in self._world.entity_aliases
@@ -2333,6 +2352,7 @@ class _Entities(EntitiesRepository):
             ),
             key=lambda alias: alias.alias_id,
         )
+        return found if limit is None else found[:limit]
 
     def entities_by_identifier(
         self,
@@ -2376,10 +2396,16 @@ class _Entities(EntitiesRepository):
         )
 
     def assignments(
-        self, principal_id: str, entity_id: str, active_only: bool = True
+        self,
+        principal_id: str,
+        entity_id: str,
+        active_only: bool = True,
+        *,
+        limit: int | None = None,
     ) -> list[Assignment]:
         self._world.fail("entities.assignments")
-        return sorted(
+        _refuse_empty_limit(limit)
+        found = sorted(
             (
                 assignment
                 for assignment in self._world.entity_assignments
@@ -2389,22 +2415,41 @@ class _Entities(EntitiesRepository):
             ),
             key=lambda assignment: assignment.assignment_id,
         )
+        return found if limit is None else found[:limit]
 
     def relationships(
-        self, principal_id: str, entity_id: str, direction: str = "any"
+        self,
+        principal_id: str,
+        entity_id: str,
+        direction: str = "any",
+        *,
+        limit: int | None = None,
+        after_relationship_id: str | None = None,
     ) -> list[EntityRelationship]:
         self._world.fail("entities.relationships")
         if direction not in ("any", "outgoing", "incoming"):
             raise ValueError("an entity relationship direction is any, outgoing, or incoming")
-        return sorted(
+        _refuse_empty_limit(limit)
+        if after_relationship_id is not None:
+            validate_identifier(after_relationship_id, IdKind.ENTITY_RELATIONSHIP)
+        found = sorted(
             (
                 relationship
                 for relationship in self._world.entity_relationships
                 if relationship.principal_id == principal_id
                 and _touches(relationship, entity_id, direction)
+                # Strictly after, matching the SQL keyset exactly. `>=` here
+                # would re-serve the last edge of the previous page, and a test
+                # written against this fake would then prove a continuation
+                # semantics the database does not implement.
+                and (
+                    after_relationship_id is None
+                    or relationship.relationship_id > after_relationship_id
+                )
             ),
             key=lambda relationship: relationship.relationship_id,
         )
+        return found if limit is None else found[:limit]
 
     # --- writes ----------------------------------------------------------
 
@@ -2412,6 +2457,7 @@ class _Entities(EntitiesRepository):
         self._world.fail("entities.create")
         if entity.principal_id != principal_id:
             raise ValueError("an entity belongs to the acting Principal")
+        _refuse_unnormalized_name(entity.canonical_name)
         held = self._mine(entity.principal_id, entity.entity_id)
         if held is not None:
             if held != entity:
@@ -2429,6 +2475,8 @@ class _Entities(EntitiesRepository):
             raise ValueError("an external identifier binds to the entity it names")
         if identifier.principal_id != principal_id:
             raise ValueError("an external identifier belongs to the acting Principal")
+        if not is_normalized_identifier(identifier.namespace, identifier.normalized_value):
+            raise ValueError("an external identifier is stored in the form resolution compares in")
         self._require_own(principal_id, entity_id)
         natural_key = (identifier.entity_id, identifier.namespace, identifier.normalized_value)
         for held in self._world.entity_identifiers:
@@ -2440,6 +2488,7 @@ class _Entities(EntitiesRepository):
         self._world.fail("entities.record_alias")
         if alias.principal_id != principal_id:
             raise ValueError("an alias belongs to the acting Principal")
+        _refuse_unnormalized_name(alias.normalized_value)
         self._require_own(principal_id, alias.entity_id)
         natural_key = (alias.entity_id, alias.alias_type, alias.normalized_value)
         for held in self._world.entity_aliases:
@@ -2473,8 +2522,7 @@ class _Entities(EntitiesRepository):
         limit: int | None = None,
     ) -> list[EntityObservation]:
         self._world.fail("entities.observations")
-        if limit is not None and limit < 1:
-            raise ValueError("an observation limit asks for at least one row")
+        _refuse_empty_limit(limit)
         found = sorted(
             (
                 observation
@@ -2580,6 +2628,11 @@ class _Entities(EntitiesRepository):
         survivor = self.get(principal_id, retained_entity_id)
         if survivor is None or survivor.status is EntityStatus.MERGED_REDIRECT:
             raise ValueError("an entity is merged into one that is still current")
+        if any(
+            held.principal_id == principal_id and held.superseded_by_entity_id == merged_entity_id
+            for held in self._world.entities
+        ):
+            raise ValueError("an entity that others redirect to is not merged away")
         for index, held in enumerate(self._world.entities):
             if held.entity_id == merged_entity_id and held.principal_id == principal_id:
                 self._world.entities[index] = replace(
@@ -2617,6 +2670,31 @@ class _Entities(EntitiesRepository):
                     )
                 return
         self._world.entity_relationships.append(rel)
+
+
+def _refuse_unnormalized_name(value: str) -> None:
+    """Refuse a name not in the form resolution compares in, as `persistence.entity` does.
+
+    The SQL repository checks this at its own write boundary rather than
+    trusting the record it was handed (`RI-PR135-MAJOR-002`), so a fake that
+    accepted what the database refuses would let a unit test prove that a
+    backfill can store a row the resolver cannot match.
+    """
+    if not is_normalized_name(value):
+        raise ValueError("an entity name is stored in the form resolution compares in")
+
+
+def _refuse_empty_limit(limit: int | None) -> None:
+    """Refuse a row limit that asks for nothing, as `persistence.entity` does.
+
+    Parity with the SQL repository is the whole point of this fake, and a limit
+    it accepted where the database refuses would let a unit test prove that an
+    empty page is a legitimate answer to a bounded read. It is not: an empty
+    page reads as "nothing is recorded", which is the one thing a bound must
+    never say by accident.
+    """
+    if limit is not None and limit < 1:
+        raise ValueError("an entity row limit asks for at least one row")
 
 
 def _touches(relationship: EntityRelationship, entity_id: str, direction: str) -> bool:

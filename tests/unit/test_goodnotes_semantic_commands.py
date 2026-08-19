@@ -101,6 +101,22 @@ def test_v1_refuses_note_unit_semantic_fields() -> None:
     assert refused.value.safe_details == (SafeDetail.SEGMENTS,)
 
 
+def test_v2_source_context_refuses_note_unit_enrichment_fields() -> None:
+    with pytest.raises(InvalidRequestError) as refused:
+        _proposal(
+            schema_version="note-unit.v2",
+            segments=(
+                {
+                    "kind": "SOURCE_CONTEXT",
+                    "geometry": {"x_min": 0.1, "y_min": 0.1, "width": 0.2, "height": 0.2},
+                    "transcription": "Weekly Coordination Meeting",
+                    "transcription_status": "CLEAR",
+                },
+            ),
+        )
+    assert refused.value.safe_details == (SafeDetail.SEGMENTS,)
+
+
 def test_v2_admits_note_unit_semantic_fields() -> None:
     command = _proposal(
         schema_version="note-unit.v2",

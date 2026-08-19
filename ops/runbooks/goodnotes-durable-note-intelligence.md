@@ -57,11 +57,13 @@ Capability/Command-derived. `goodnotes.content` is a pathless, Principal-bound
 read of the pinned visual PNG used for page identity. It does not return a
 filesystem path or a raw PDF, and it does not route through `knowledge.search`
 or `knowledge.read`. `goodnotes.work` remains metadata-only. `tools/list` for
-`goodnotes.propose` publishes the nested `segments[]` `note-unit.v2` object
-contract (kind, geometry, transcription, primary_class, candidate_tags,
-ranked_candidates, confidence, transcription_status) so a fresh ChatLLM session
-can construct a valid proposal without repository inspection. Runtime validation
-is unchanged. Remote MCP still stamps `idempotency_key`; callers must not send it.
+`goodnotes.propose` publishes discriminated `segments[]` variants so a fresh
+ChatLLM session can construct a valid proposal without repository inspection:
+SOURCE_CONTEXT is the base/v1 region shape under both schema versions; NOTE_UNIT
+under `note-unit.v1` uses that same vocabulary; NOTE_UNIT under `note-unit.v2`
+may add candidate_tags, ranked_candidates, confidence, and
+transcription_status. Runtime validation is unchanged. Remote MCP still stamps
+`idempotency_key`; callers must not send it.
 
 The Task:
 

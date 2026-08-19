@@ -65,6 +65,12 @@ _SCALARS: Mapping[type, str] = MappingProxyType(
     {bool: "boolean", int: "integer", float: "number", str: "string"}
 )
 
+#: Payload-object JSON Schema applicators a command may publish beside field
+#: overlays. They are not properties and must not be copied onto `properties`.
+_PAYLOAD_SCHEMA_APPLICATORS: Final[frozenset[str]] = frozenset(
+    {"allOf", "anyOf", "else", "if", "oneOf", "then"}
+)
+
 
 def _schema_for(annotation: Any) -> dict[str, Any] | None:  # noqa: ANN401 - a type annotation
     """The JSON Schema for one command field, or `None` for a shape not described here.
@@ -137,6 +143,9 @@ def payload_schema_for(command: type) -> dict[str, Any]:
 
     `mcp_payload_properties` overlays nested object contracts the annotation
     `dict[str, object]` cannot describe. The overlay must not invent fields.
+    JSON Schema applicators that are not field names (`if`/`then`/`else`,
+    `oneOf`, `anyOf`, `allOf`) attach to the payload object so a command can
+    discriminate nested variants without this module naming the command.
     """
     hints = get_type_hints(command)
     properties: dict[str, Any] = {}
@@ -146,17 +155,20 @@ def payload_schema_for(command: type) -> dict[str, Any]:
         properties[field.name] = {} if described is None else described
         if field.default is dataclasses.MISSING and field.default_factory is dataclasses.MISSING:
             required.append(field.name)
-    overlays = vars(command).get("mcp_payload_properties")
-    if isinstance(overlays, Mapping):
-        for name, schema in overlays.items():
-            if name in properties and isinstance(schema, Mapping):
-                properties[name] = dict(schema)
-    return {
+    schema: dict[str, Any] = {
         "type": "object",
         "properties": properties,
         "required": required,
         "additionalProperties": False,
     }
+    overlays = vars(command).get("mcp_payload_properties")
+    if isinstance(overlays, Mapping):
+        for name, value in overlays.items():
+            if name in properties and isinstance(value, Mapping):
+                properties[name] = dict(value)
+            elif name in _PAYLOAD_SCHEMA_APPLICATORS:
+                schema[name] = value
+    return schema
 
 
 def _envelope_schema() -> tuple[dict[str, Any], list[str], dict[str, Any]]:

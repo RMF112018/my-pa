@@ -220,6 +220,30 @@ def test_a_command_may_publish_nested_object_item_shape() -> None:
     assert items["items"]["required"] == ["kind"]
 
 
+def test_a_command_may_publish_payload_schema_applicators() -> None:
+    """Variant discrimination lives on the payload object, not as invented fields."""
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class Nested:
+        schema_version: str
+        items: tuple[dict[str, object], ...]
+
+    Nested.mcp_payload_properties = {  # type: ignore[attr-defined]
+        "items": {"type": "array", "items": {"type": "object"}},
+        "if": {
+            "properties": {"schema_version": {"const": "v1"}},
+            "required": ["schema_version"],
+        },
+        "then": {"properties": {"items": {"maxItems": 1}}},
+    }
+    schema = payload_schema_for(Nested)
+    assert schema["if"]["properties"]["schema_version"] == {"const": "v1"}
+    assert schema["then"]["properties"]["items"]["maxItems"] == 1
+    assert "if" not in schema["properties"]
+    assert "then" not in schema["properties"]
+
+
 # ---- tools/call --------------------------------------------------------------
 
 

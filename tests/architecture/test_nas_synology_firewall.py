@@ -132,6 +132,9 @@ case "$*" in
     [ "$chain" != missing ] || [ -f "$chain_file" ] || exit 1
     printf '%s\n' '-N MY_PA_DATA_PLANE'
     emit_chain_lines
+    if [ "${FAKE_EXACT_VERIFY_FAIL:-0}" = 1 ]; then
+      printf '%s\n' '-A MY_PA_DATA_PLANE -j ACCEPT'
+    fi
     ;;
   "-S FORWARD_FIREWALL")
     [ "${FAKE_FW_S_FAIL:-0}" = 1 ] && exit 1
@@ -167,6 +170,7 @@ case "$*" in
     fi
     ;;
   "-D FORWARD -j MY_PA_DATA_PLANE")
+    [ "${FAKE_JUMP_DELETE_FAIL:-0}" = 1 ] && exit 1
     printf '%s\n' legacy > "${state_dir}/forward"
     ;;
   "-C FORWARD_FIREWALL -s {SUBNET} -j RETURN")
@@ -179,10 +183,12 @@ case "$*" in
     printf '%s\n' present > "${state_dir}/broad"
     ;;
   "-F MY_PA_DATA_PLANE")
+    [ "${FAKE_F_FAIL:-0}" = 1 ] && exit 1
     : > "$chain_file"
     printf '%s\n' empty > "${state_dir}/chain"
     ;;
   "-X MY_PA_DATA_PLANE")
+    [ "${FAKE_X_FAIL:-0}" = 1 ] && exit 1
     rm -f "$chain_file"
     printf '%s\n' missing > "${state_dir}/chain"
     ;;
@@ -264,8 +270,12 @@ def _environment(
             "FAKE_FW_STATE": str(state),
             "FAKE_JUMP_FAIL": jump_fail,
             "FAKE_JUMP_VERIFY_FAIL": jump_verify_fail,
+            "FAKE_JUMP_DELETE_FAIL": "0",
             "FAKE_FW_S_FAIL": "0",
             "FAKE_APPEND_FAIL": "",
+            "FAKE_F_FAIL": "0",
+            "FAKE_X_FAIL": "0",
+            "FAKE_EXACT_VERIFY_FAIL": "0",
         },
         state,
         state / "calls",
@@ -293,6 +303,7 @@ def _assert_no_enforcement_mutation(calls: Path) -> None:
     assert "-I FORWARD 1" not in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
     assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
     assert "-X MY_PA_DATA_PLANE" not in recorded
 
 
@@ -497,6 +508,107 @@ def test_empty_chain_population_failure_restores_empty_chain(tmp_path: Path) -> 
     assert _run("check", environment).returncode == 0
 
 
+def test_referenced_empty_chain_is_refused_with_zero_mutation(tmp_path: Path) -> None:
+    environment, state, calls = _environment(
+        tmp_path, forward="effective", chain="empty", broad="absent"
+    )
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    checked = _run("check", environment)
+    assert checked.returncode != 0
+    assert "referenced-empty-chain" in checked.stderr
+    assert "gate passed" not in checked.stdout
+    calls.write_text("", encoding="utf-8")
+    applied = _run("apply", environment)
+    assert applied.returncode != 0
+    assert "referenced-empty-chain" in applied.stderr
+    _assert_no_enforcement_mutation(calls)
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "absent"
+    calls.write_text("", encoding="utf-8")
+    removed = _run("remove", environment)
+    assert removed.returncode != 0
+    assert "referenced-empty-chain" in removed.stderr
+    _assert_no_enforcement_mutation(calls)
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+
+
+def test_referenced_empty_append_failure_is_never_reached(tmp_path: Path) -> None:
+    environment, state, calls = _environment(
+        tmp_path, forward="effective", chain="empty", broad="absent"
+    )
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    environment["FAKE_APPEND_FAIL"] = "p1"
+    applied = _run("apply", environment)
+    assert applied.returncode != 0
+    assert "referenced-empty-chain" in applied.stderr
+    recorded = _recorded(calls)
+    assert "-A MY_PA_DATA_PLANE" not in recorded
+    assert "-N MY_PA_DATA_PLANE" not in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+    assert "-I FORWARD" not in recorded
+    assert "-D FORWARD" not in recorded
+    assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+
+
+def test_jump_deletion_failure_after_verify_failure_is_rollback_failed(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(tmp_path, jump_verify_fail="1")
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    environment["FAKE_JUMP_DELETE_FAIL"] = "1"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "rollback succeeded" not in result.stderr
+    assert "rolled back" not in result.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "after_dsm"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    recorded = _recorded(calls)
+    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
+
+
+def test_cleanup_failure_after_jump_removed_is_rollback_failed(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path, jump_verify_fail="1")
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    environment["FAKE_X_FAIL"] = "1"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "rollback succeeded" not in result.stderr
+    assert "rolled back" not in result.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+    recorded = _recorded(calls)
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-F MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" in recorded
+    assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
+
+
+def test_post_population_cleanup_failure_is_rollback_failed(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path)
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    environment["FAKE_EXACT_VERIFY_FAIL"] = "1"
+    environment["FAKE_X_FAIL"] = "1"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "was removed" not in result.stderr
+    assert "rollback succeeded" not in result.stderr
+    assert "-I FORWARD" not in _recorded(calls)
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+
+
 def test_r1_001_dsm_established_cannot_precede_my_pa(tmp_path: Path) -> None:
     environment, _state, _calls = _environment(
         tmp_path, forward="after_dsm", chain="exact", broad="absent"
@@ -532,17 +644,34 @@ def test_wrong_network_refuses_before_iptables_mutation(tmp_path: Path) -> None:
     assert not calls.exists() or "-I FORWARD" not in calls.read_text(encoding="utf-8")
 
 
+def test_jump_insert_failure_cleans_created_chain(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path, jump_fail="1")
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "failed to insert MY_PA_DATA_PLANE FORWARD jump" in result.stderr
+    assert "ROLLBACK_FAILED" not in result.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    recorded = _recorded(calls)
+    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+
+
 def test_failed_jump_install_rolls_back_owned_chain(tmp_path: Path) -> None:
     environment, state, calls = _environment(tmp_path, jump_verify_fail="1")
     environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
     result = _run("apply", environment)
     assert result.returncode != 0
-    assert "rolled back" in result.stderr
+    assert "rollback succeeded" in result.stderr
+    assert "ROLLBACK_FAILED" not in result.stderr
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
     recorded = calls.read_text(encoding="utf-8")
     assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
     assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
 
 

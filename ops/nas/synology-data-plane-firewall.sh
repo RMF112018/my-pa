@@ -226,6 +226,7 @@ enforcement_state() {
   fi
   case "$chain_state" in
     missing) echo missing-chain ;;
+    empty) echo referenced-empty-chain ;;
     exact)
       if [ "$broad_count" -gt 0 ]; then
         echo broad-return
@@ -238,6 +239,7 @@ enforcement_state() {
 }
 
 populate_enforcement_chain() {
+  assert_no_my_pa_forward_jump || return 1
   "$iptables_bin" -A "$enforcement_chain" \
     -s "$subnet" -d "$subnet" -i "$bridge" -o "$bridge" -j ACCEPT || return 1
   "$iptables_bin" -A "$enforcement_chain" -i "$bridge" -j DROP || return 1
@@ -253,14 +255,59 @@ assert_no_my_pa_forward_jump() {
   }
 }
 
+owned_chain_absent() {
+  save=$(filter_table) || {
+    echo "iptables-save inspection failed; cannot prove MY_PA_DATA_PLANE absence" >&2
+    return 1
+  }
+  printf '%s\n' "$save" | awk -v chain="$enforcement_chain" -v jump="$my_pa_jump" '
+    $0 ~ "^:" chain "( |$)" {found=1}
+    $1 == "-A" && $2 == chain {found=1}
+    $0 == jump {found=1}
+    END {exit found ? 1 : 0}
+  ' || {
+    echo "MY_PA_DATA_PLANE is still present in the filter table" >&2
+    return 1
+  }
+}
+
+prove_legacy_forward() {
+  save=$(filter_table) || return 1
+  forwards=$(forward_appends "$save")
+  first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
+  forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
+  [ "$first" = "$firewall_jump" ] && [ "$forward_count" -eq 1 ]
+}
+
+rollback_failed() {
+  echo "ROLLBACK_FAILED: Synology data-plane firewall admission failed and rollback could not be verified${1:+ ($1)}" >&2
+  return 1
+}
+
 delete_owned_chain() {
   assert_no_my_pa_forward_jump || return 1
   "$iptables_bin" -F "$enforcement_chain" || return 1
   "$iptables_bin" -X "$enforcement_chain" || return 1
-  if "$iptables_bin" -S "$enforcement_chain" >/dev/null 2>&1; then
-    echo "MY_PA_DATA_PLANE chain removal failed" >&2
+  owned_chain_absent
+}
+
+rollback_unverified_forward_jump() {
+  if ! "$iptables_bin" -D FORWARD -j "$enforcement_chain"; then
+    rollback_failed "MY_PA FORWARD jump deletion failed"
     return 1
   fi
+  jump_count=$(my_pa_forward_jump_count) || {
+    rollback_failed "FORWARD inspection failed after jump deletion"
+    return 1
+  }
+  [ "$jump_count" -eq 0 ] || {
+    rollback_failed "MY_PA FORWARD jump remains after deletion"
+    return 1
+  }
+  prove_legacy_forward || {
+    rollback_failed "legacy DSM-first FORWARD restoration could not be verified"
+    return 1
+  }
 }
 
 restore_empty_owned_chain() {
@@ -330,11 +377,12 @@ case "$action" in
     state=$(enforcement_state) || exit 1
     case "$state" in
       effective) ;;
-      legacy|missing-jump|broad-return|empty)
+      legacy|missing-jump|broad-return)
         population_mode=none
         chain_state=$(chain_classification)
         case "$chain_state" in
           missing)
+            assert_no_my_pa_forward_jump || exit 1
             "$iptables_bin" -N "$enforcement_chain" || {
               echo "failed to create MY_PA_DATA_PLANE" >&2
               exit 1
@@ -342,7 +390,7 @@ case "$action" in
             population_mode=created
             if ! populate_enforcement_chain; then
               if ! delete_owned_chain; then
-                echo "Synology data-plane enforcement chain population failed and owned chain cleanup failed" >&2
+                rollback_failed "owned chain cleanup after population failure"
                 exit 1
               fi
               echo "Synology data-plane enforcement chain population failed; owned chain was removed" >&2
@@ -350,10 +398,11 @@ case "$action" in
             fi
             ;;
           empty)
+            assert_no_my_pa_forward_jump || exit 1
             population_mode=emptied
             if ! populate_enforcement_chain; then
               if ! restore_empty_owned_chain; then
-                echo "Synology data-plane enforcement chain population failed and empty-chain restore failed" >&2
+                rollback_failed "empty-chain restore after population failure"
                 exit 1
               fi
               echo "Synology data-plane enforcement chain population failed; empty chain was restored" >&2
@@ -369,10 +418,16 @@ case "$action" in
         if [ "$(chain_classification)" != exact ]; then
           case "$population_mode" in
             created)
-              delete_owned_chain || true
+              if ! delete_owned_chain; then
+                rollback_failed "owned chain cleanup after exact-verification failure"
+                exit 1
+              fi
               ;;
             emptied)
-              restore_empty_owned_chain || true
+              if ! restore_empty_owned_chain; then
+                rollback_failed "empty-chain restore after exact-verification failure"
+                exit 1
+              fi
               ;;
           esac
           echo "Synology data-plane enforcement chain is not exact; FORWARD jump was not installed" >&2
@@ -387,7 +442,24 @@ case "$action" in
             echo "Synology FORWARD chain identity mismatch" >&2
             exit 1
           }
-          "$iptables_bin" -I FORWARD 1 -j "$enforcement_chain"
+          if ! "$iptables_bin" -I FORWARD 1 -j "$enforcement_chain"; then
+            echo "failed to insert MY_PA_DATA_PLANE FORWARD jump" >&2
+            case "$population_mode" in
+              created)
+                if ! delete_owned_chain; then
+                  rollback_failed "jump was not inserted and owned chain cleanup could not be verified"
+                  exit 1
+                fi
+                ;;
+              emptied)
+                if ! restore_empty_owned_chain; then
+                  rollback_failed "jump was not inserted and empty-chain restore could not be verified"
+                  exit 1
+                fi
+                ;;
+            esac
+            exit 1
+          fi
           save=$(filter_table) || exit 1
           forwards=$(forward_appends "$save")
           first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
@@ -395,11 +467,24 @@ case "$action" in
           forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
           if [ "$first" != "$my_pa_jump" ] || [ "$second" != "$firewall_jump" ] || \
              [ "$forward_count" -ne 2 ]; then
-            "$iptables_bin" -D FORWARD -j "$enforcement_chain" || true
-            if [ "$population_mode" = created ]; then
-              delete_owned_chain || true
+            if ! rollback_unverified_forward_jump; then
+              exit 1
             fi
-            echo "Synology data-plane firewall admission failed; inserted jump was rolled back" >&2
+            case "$population_mode" in
+              created)
+                if ! delete_owned_chain; then
+                  rollback_failed "owned chain cleanup after jump rollback"
+                  exit 1
+                fi
+                ;;
+              emptied)
+                if ! restore_empty_owned_chain; then
+                  rollback_failed "empty-chain restore after jump rollback"
+                  exit 1
+                fi
+                ;;
+            esac
+            echo "Synology data-plane firewall admission failed; inserted jump rollback succeeded" >&2
             exit 1
           fi
         fi
@@ -460,7 +545,10 @@ case "$action" in
       echo "MY_PA_DATA_PLANE FORWARD jump identity mismatch" >&2
       exit 1
     }
-    "$iptables_bin" -D FORWARD -j "$enforcement_chain"
+    "$iptables_bin" -D FORWARD -j "$enforcement_chain" || {
+      echo "failed to remove MY_PA_DATA_PLANE FORWARD jump" >&2
+      exit 1
+    }
     save=$(filter_table) || exit 1
     forwards=$(forward_appends "$save")
     first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
@@ -469,11 +557,10 @@ case "$action" in
       echo "legacy DSM-first FORWARD restoration failed" >&2
       exit 1
     }
-    delete_owned_chain
-    if "$iptables_bin" -S "$enforcement_chain" >/dev/null 2>&1; then
+    delete_owned_chain || {
       echo "MY_PA_DATA_PLANE chain removal failed" >&2
       exit 1
-    fi
+    }
     remaining=$(broad_return_count) || exit 1
     [ "$remaining" -eq 1 ] || {
       echo "legacy source-only data-plane RETURN is not present after remove" >&2

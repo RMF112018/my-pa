@@ -1,0 +1,1978 @@
+{
+  "approval_status": "READY_FOR_OPERATOR_REVIEW",
+  "cases": [
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-meeting-clear-r1",
+      "content_sha256": "e32816058a5f158b3f4b28cd0f633631754d1e4bf8f5e040ecdabd28bbe9b7e4",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-meeting-uncertain-r1",
+      "content_sha256": "6d8b1ca76b6572f78bbf4151a7a5faed57f8ac5a2179e0bf7c34fb11778631bb",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-meeting-unreadable-r1",
+      "content_sha256": "6a5a056321c82c303f0c6b4d30a1b886f5cc5aa5eea7c2283985ac8e017e6c53",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-project-clear-r1",
+      "content_sha256": "cde4fe88b5046c6732c7db99e69bbd8421ab008adad6b62b552befbeaefca6f5",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-project-uncertain-r1",
+      "content_sha256": "06e1940610531aabe343470ef3cd2fe038e23ee3544fa578feb204bcc9fc88d0",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-project-unreadable-r1",
+      "content_sha256": "3e2c6d1a7f70d84c9030943f83eebcf064d95ba2d73bb88e36a6c3ecf9c04b9e",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-relationship-clear-r1",
+      "content_sha256": "c83842bee9a510d4dc59819b1c55976bdcb38c81a57d71167ddab9b0323f9749",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-relationship-uncertain-r1",
+      "content_sha256": "ea324a44d2a683e7edfae40d58de949c89bb87f0f4b846e2e0c2d1fa658b3c6d",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-relationship-unreadable-r1",
+      "content_sha256": "b501de02871a05cbe8fd9477c856d2d88695b62949cae1ef20cd5faacdf8bb9d",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-general-clear-r1",
+      "content_sha256": "25289acf5f29ff4417e832ea6dfe666c5d1773475eea610574208128fb46f6bc",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-general-uncertain-r1",
+      "content_sha256": "fdc2bca01bda0f298013d43a495e94a4b925e6becd88add156c062eae9ec2eec",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-general-unreadable-r1",
+      "content_sha256": "a6c25db8abdf947cb173ad18216b9176d6ce9f068dc1bb8ebbb53503e01cc982",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-meeting-clear-r2",
+      "content_sha256": "272bcf12608a1dccf82e10236d5c5bf593488f0c8cebabef241446fd1fbcef66",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-meeting-uncertain-r2",
+      "content_sha256": "c443091adc8f41f535fd9c46a781d16917ee4a17673a2e0ad113dc8588598391",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-meeting-unreadable-r2",
+      "content_sha256": "4e28a7347d5683c1082900293733d461c2544d42435341bb482a5ce300b699cf",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-project-clear-r2",
+      "content_sha256": "acf0857accd901f223b41fd5835131cee6444771ee2578cd8cde01011f509fa4",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-project-uncertain-r2",
+      "content_sha256": "872120014e68de5327eee2853424a76d75122e51defa9ba4e60027f6c7e25f8a",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-project-unreadable-r2",
+      "content_sha256": "a2a36b88ecdca189fdd4cbb10131813838f5f805c8d4bfafa03339b365b114b8",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-relationship-clear-r2",
+      "content_sha256": "29e4f18c0b947f47c8602bb73ec039f36bd3407188fcf772c2e14d37cff1b4ba",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-relationship-uncertain-r2",
+      "content_sha256": "b6568281e150f9f0844878423cea3dca6bff66344add83159fe9ff024dc586a4",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-relationship-unreadable-r2",
+      "content_sha256": "c2308f70283888fc1a2bc419065f918dc06e7e4879c954f44269810a5539c49e",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-general-clear-r2",
+      "content_sha256": "56b731a8aba5e9ae92c2c0338a4563d3f907f2ed433f632a308d7830425304f2",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-general-uncertain-r2",
+      "content_sha256": "e2f002d1c5a705292abf258cded23b0aa5c6b7f43a754a96b56f8c392c8acefb",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-general-unreadable-r2",
+      "content_sha256": "b0d694cbe90a383f4b72dd1ba1bc166036e79bd86a4a745e9f176bda510c2ebf",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-meeting-clear-r3",
+      "content_sha256": "9bd457620ed746c84bb5116d6602a8ac63fc10a2472e9f841bf600d6e5d79d2d",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-meeting-uncertain-r3",
+      "content_sha256": "0ec1e482f87d75cc65d886d900f231fcb50c4c1cedc8c33a241cb5d56deecc5f",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-meeting-unreadable-r3",
+      "content_sha256": "23554af8eca6001808ec94c347349b10e2121e047c2ef7123c338d99db6a9700",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-project-clear-r3",
+      "content_sha256": "3b6ffba7064b4f2d89e67ee6ad0d5d3f27e69526f3f26961e0d2c218014a567a",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-project-uncertain-r3",
+      "content_sha256": "4992d1a75e4e37b61eae107a010c042f2b205119bbce9b9076b481937deafab8",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-project-unreadable-r3",
+      "content_sha256": "a238d91b64fd1096bd20e5151cb47f6cc20abd50b18eaf045175dd0b2789a74c",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-relationship-clear-r3",
+      "content_sha256": "1c1d7039c3e6be98f966aabb640598e8c9977beb197bddde15855be02293c4ab",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-relationship-uncertain-r3",
+      "content_sha256": "5ecb9184f868139afc95b643b42f9292c57ddb7bcd19047cf50bcb36c820fb97",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-relationship-unreadable-r3",
+      "content_sha256": "92f826e40f94fe30176294875b7c64815cf5e2014de1795bbcf03cf1f60ece30",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-general-clear-r3",
+      "content_sha256": "658eef5e413544b13042413901dcd4e1bf00ae1d9e5812e6bc7c41247b24e253",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-general-uncertain-r3",
+      "content_sha256": "63969b03274c387c9f46547ab882b5e66f18ee84b85e7c6722d600e2a68ac4a2",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-single-general-unreadable-r3",
+      "content_sha256": "ac5c2c519f0421c0c4c636173f93abdcaeba84e5ca3486f9eed4db06c0650803",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v1-multi-2-r1",
+      "content_sha256": "5ae4100a365e5f75743daa3a51cac24dbe3045de7f6d39dd738d0ae6a7df407a",
+      "difficulty": [
+        "grouping"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 3,
+      "adversarial": false,
+      "case_id": "v1-multi-3-r1",
+      "content_sha256": "bea21a8c05535ef7041f0e4286214d28611c1a7f9ed50540919aca5cf1e6767f",
+      "difficulty": [
+        "grouping"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v1-multi-2-r2",
+      "content_sha256": "397962cee21a3d8b9ae6f99d0f97d743e4563c1cf821f28e7e24b20e46af68b0",
+      "difficulty": [
+        "grouping"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 3,
+      "adversarial": false,
+      "case_id": "v1-multi-3-r2",
+      "content_sha256": "23aa457ca69c2cb1d48c36ca62091d51df42b6d36afebcde86611d50a71dcf63",
+      "difficulty": [
+        "grouping"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v1-multi-2-r3",
+      "content_sha256": "7a9306c94bd960834b195f306026f3a08b23cfcdaed2afea903e3dc5806cbf47",
+      "difficulty": [
+        "grouping"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 3,
+      "adversarial": false,
+      "case_id": "v1-multi-3-r3",
+      "content_sha256": "87060d79c189c835798b3de9613c9f9668cf3dcdd74dffe4fe4329cfc4ea1c3c",
+      "difficulty": [
+        "grouping"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 0,
+      "adversarial": false,
+      "case_id": "v1-context-only-r1",
+      "content_sha256": "999cdcca4633b93beae16fdc4af0a5a44781cb49395219eac86821ca660b09e6",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [],
+      "review_state": "APPROVED",
+      "scenario": "context-only",
+      "scoreable": true,
+      "transcription_statuses": []
+    },
+    {
+      "NOTE_UNIT_count": 0,
+      "adversarial": false,
+      "case_id": "v1-context-only-r2",
+      "content_sha256": "cacd8ddee2ca5282b4657a9f8541ad6e8b417b15422fbd3672830e7f7d3d67cd",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [],
+      "review_state": "APPROVED",
+      "scenario": "context-only",
+      "scoreable": true,
+      "transcription_statuses": []
+    },
+    {
+      "NOTE_UNIT_count": 0,
+      "adversarial": false,
+      "case_id": "v1-context-only-r3",
+      "content_sha256": "c1307f71306cb049553d613cec370835224bb9f6feb611809b7e5680997e3ae2",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [],
+      "review_state": "APPROVED",
+      "scenario": "context-only",
+      "scoreable": true,
+      "transcription_statuses": []
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-no-tag-r1",
+      "content_sha256": "bb539a76ac34e28f887e78a5cb4fd46505a1ddf4d6169146532f494671d836b2",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-tag",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-follow-up-r1",
+      "content_sha256": "9b5ea85a3b7552ae2b0401482b18a08dd5dc40aeff734c43fd606b998f19ef8c",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "follow-up",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-multi-tag-r1",
+      "content_sha256": "ca9ab4e695fb33912be88e6cb3674bd137d253e06aa4e58b4f1a08965af351ab",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-tag",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-one-candidate-r1",
+      "content_sha256": "3740e41fed119a99b51f73b1a6026e1e8f41b3d00bc12d9d121ce92e520b1a9a",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "one-candidate",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-multi-candidate-r1",
+      "content_sha256": "1e3fa4da0a4fc6127e219a166b5af51ab7e47a31e4d62d7a0c5b04545c76e261",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-candidate",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-no-candidate-r1",
+      "content_sha256": "674781030fd1d23e55e5cd7ab0481fdc4a48238f8a9edfe923539a43a8041571",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-candidate",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-no-tag-r2",
+      "content_sha256": "0e2bc168bf76ee3646e4320d52cbd8779dd5771cd3e370e07f994e7082118ffa",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-tag",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-follow-up-r2",
+      "content_sha256": "8e2f57fcadd7c53ece5dc4fa1471c8fc8deb50b27f6594be7d55e80acbfcc968",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "follow-up",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-multi-tag-r2",
+      "content_sha256": "ea260ce722ee4d900d430839a5145e9b0d62ff49028c0052a8759cc94c5e1e24",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-tag",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-one-candidate-r2",
+      "content_sha256": "3a905664c16d2b1c3cf54142c01cccaa05b99de746d5ffc72d7204989c4ff2c5",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "one-candidate",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-multi-candidate-r2",
+      "content_sha256": "ce5af51655879d38af156c1adaf82e6899c44bab96dd2df1a7100edc8696e888",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-candidate",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-no-candidate-r2",
+      "content_sha256": "c74e564e8b7f7dfbcc8f5cc53fb0e60b3f8dd3f94f837229903f377e7a890901",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-candidate",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-no-tag-r3",
+      "content_sha256": "9bc533893e2d1cc73b116207dcb68d9a1033f1178160c8d337ab350e37e1772b",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-tag",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-follow-up-r3",
+      "content_sha256": "0fd23f90803829a1803fac02a9f62caf6eb28b2911ddc4df8c9ff0805fa1cfa9",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "follow-up",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-multi-tag-r3",
+      "content_sha256": "568ebd30dde1c084efeb2d52096a7219ad02cd54db24b6d77786fccfdae7e0aa",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-tag",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-one-candidate-r3",
+      "content_sha256": "da6e85cf3164f0479a956c7192336b7e004b58723f8ee75f0a27ac95fae99812",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "one-candidate",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-multi-candidate-r3",
+      "content_sha256": "1bd53929708ac0319ab0b9664c2515c0a61c6b3e7951471eb408ac78ff64ff2d",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-candidate",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-no-candidate-r3",
+      "content_sha256": "4a76d35b0668367ba062bae61941ccabe42a6bbb36e8d6ae68f4c78c980000b4",
+      "difficulty": [
+        "nominal"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-candidate",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v1-close-notes-r1",
+      "content_sha256": "e854203834b3d84800d751c096936a6e3d0aa8bbc4f30890f86a635bb2f9e69d",
+      "difficulty": [
+        "visually-close"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "visually-close",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 4,
+      "adversarial": false,
+      "case_id": "v1-dense-r1",
+      "content_sha256": "26c0eca67e5420800701b37c4879432d6a39ca14be2eb9151b102df4733707aa",
+      "difficulty": [
+        "dense"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP",
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "dense",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-near-typed-r1",
+      "content_sha256": "26e4a9f0b65a7ebc3cf652325e5c21c7aad631de2c6ce1581a04b97afb91a3af",
+      "difficulty": [
+        "near-typed"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "near-typed",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-arrow-r1",
+      "content_sha256": "7c8fc4b72b9d4e206bb17007ffa71866eafe01477aaaf95ba7a8fca0d105b30f",
+      "difficulty": [
+        "leader-line"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "arrow-leader",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-crossed-r1",
+      "content_sha256": "b1a4b27ef6bf6804a7e93d8606132538275501beafb8bad2823b5df49dc74615",
+      "difficulty": [
+        "superseded"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "crossed-out",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-agenda-table-r1",
+      "content_sha256": "e1a5e8762bd7fc1dc91d355cd97e58074ecb84d9068516205c168ba54292c204",
+      "difficulty": [
+        "table"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "agenda-table",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-handwriting-style-r1",
+      "content_sha256": "ca58e6fb1163d438765eff23414f7bf32dc989b9969c6b2bc97709cd7a002cd1",
+      "difficulty": [
+        "style-variation"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "handwriting-style",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-low-contrast-r1",
+      "content_sha256": "9fc845e9bee18ce56fee0a73cf4e58e1093a86ec3320e4e0ae1a756637c95414",
+      "difficulty": [
+        "low-contrast"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "low-contrast",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v1-close-notes-r2",
+      "content_sha256": "84cb916b86f2fbba51f954ee206bce5641ecf2c347199ae44919381da3ddfff9",
+      "difficulty": [
+        "visually-close"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "visually-close",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 4,
+      "adversarial": false,
+      "case_id": "v1-dense-r2",
+      "content_sha256": "e0140c41112d5cc6ec1a962a0b6cdaa4a5673b9ef8225962b731357b6c1b2fd0",
+      "difficulty": [
+        "dense"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP",
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "dense",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-near-typed-r2",
+      "content_sha256": "0d789c9c417cf652be741fdf56759ae87579e62568323b1d59e49cb84d5e8f5f",
+      "difficulty": [
+        "near-typed"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "near-typed",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-arrow-r2",
+      "content_sha256": "aaf7ad689b8add221e0921c943c2033dc5ccb13f9c26fd4091bf76d9aa880112",
+      "difficulty": [
+        "leader-line"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "arrow-leader",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-crossed-r2",
+      "content_sha256": "03b816e5e8e34964a71f03bddf47997e580e19a9d3fbce9c4d4afa2a5f258fa0",
+      "difficulty": [
+        "superseded"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "crossed-out",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-agenda-table-r2",
+      "content_sha256": "849a6b3bdb7a566cbe3acae1662ec253ddcce47d50ea0c928c84d069e5360925",
+      "difficulty": [
+        "table"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "agenda-table",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-handwriting-style-r2",
+      "content_sha256": "fab7b6d3ce9cdee467c8790411caa0cbf4d9e3449708fd12f4bd22496ed80f43",
+      "difficulty": [
+        "style-variation"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "handwriting-style",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-low-contrast-r2",
+      "content_sha256": "bd746abd78653d37c76a1a4144df214b2b5aa2b9f5a629a33b8fef3535d1bc0f",
+      "difficulty": [
+        "low-contrast"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "low-contrast",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v1-close-notes-r3",
+      "content_sha256": "f056f3951939ae5fb1b928a98ce7f1566759e9b86b876ed499515baf4f5baf33",
+      "difficulty": [
+        "visually-close"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "visually-close",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 4,
+      "adversarial": false,
+      "case_id": "v1-dense-r3",
+      "content_sha256": "ff0b225044ba1ac47c2af41c875c0efaf5c98dcb264ebd50946a9bf06012ec23",
+      "difficulty": [
+        "dense"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP",
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "dense",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-near-typed-r3",
+      "content_sha256": "cdc8a7c26845da31815802de9ded791e367ace9de36c699394c9c547f733747e",
+      "difficulty": [
+        "near-typed"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "near-typed",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-arrow-r3",
+      "content_sha256": "fd81d71088caf67babaf92dc7c90dfa7cf5de666fd49c44a789365627fc52e3d",
+      "difficulty": [
+        "leader-line"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "arrow-leader",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-crossed-r3",
+      "content_sha256": "582376179127d18a5a19ff74f73928e033389e09192dc9c7e6889b3aa0f0e1cb",
+      "difficulty": [
+        "superseded"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "crossed-out",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-agenda-table-r3",
+      "content_sha256": "eb23b27bc2b85e76964273ee0c4b715ccd26733081cbda7754d7f66fad6937b2",
+      "difficulty": [
+        "table"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "agenda-table",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-handwriting-style-r3",
+      "content_sha256": "823c779cb190b35e5ff2bbdd8bae9f3136ca54e85f1ac0d3278cec42619fd241",
+      "difficulty": [
+        "style-variation"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "handwriting-style",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-low-contrast-r3",
+      "content_sha256": "468fc60b7678123e7967b71b3cf627de77ad34b83b79c63136fcb54ba29e05fb",
+      "difficulty": [
+        "low-contrast"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "low-contrast",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v1-injection-r1",
+      "content_sha256": "a41ac79e18771f7382163bb88a0761d9ce980327e0b002a5cd49f6915e79307f",
+      "difficulty": [
+        "injection"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "prompt-injection",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v1-unreadable-trap-r1",
+      "content_sha256": "c289de6475d43dbd4a836e52aa82edafe65411c160a509a5dfb1a560d0e9ffe2",
+      "difficulty": [
+        "unreadable"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "unreadable-trap",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v1-injection-r2",
+      "content_sha256": "6671f31e1fd1fe59ad780e1f25ab61b52cddae3c4520dfe726c91a970c5ef885",
+      "difficulty": [
+        "injection"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "prompt-injection",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v1-unreadable-trap-r2",
+      "content_sha256": "228f2d0bd89427914ded14e23bb897320a2e122f61ecb80f83dd1423c608abad",
+      "difficulty": [
+        "unreadable"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "unreadable-trap",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v1-injection-r3",
+      "content_sha256": "87a1aef947d1ece4503b767288c1a25e5ed37bfa70e75fdd063b3a95295ec077",
+      "difficulty": [
+        "injection"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "prompt-injection",
+      "scoreable": true,
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v1-unreadable-trap-r3",
+      "content_sha256": "1e22530190be62d4021c05eb0279d42139cb9f5ada32f205ad602232fdc5b07c",
+      "difficulty": [
+        "unreadable"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "unreadable-trap",
+      "scoreable": true,
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-ambiguous-grouping-r1",
+      "content_sha256": "6f336a1b5bdfe3bf2b80527c7e39dbc545cb0957ac321dfc179a6b57ca7182e2",
+      "difficulty": [
+        "ambiguous"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "AMBIGUOUS_EXCLUDE",
+      "scenario": "ambiguous-grouping",
+      "scoreable": false,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-ambiguous-grouping-r2",
+      "content_sha256": "937c2f17b84490c2a66992162ace912e0bcc133e918b44fbf8a6627da70f3df1",
+      "difficulty": [
+        "ambiguous"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "AMBIGUOUS_EXCLUDE",
+      "scenario": "ambiguous-grouping",
+      "scoreable": false,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-ambiguous-grouping-r3",
+      "content_sha256": "895490d41f81d5212daa3940934d099daac4a2408f9cc74da0ff6a80a2c7b1dd",
+      "difficulty": [
+        "ambiguous"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "AMBIGUOUS_EXCLUDE",
+      "scenario": "ambiguous-grouping",
+      "scoreable": false,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v1-ambiguous-grouping-r4",
+      "content_sha256": "ef6fe0d93da191f53e7e25a2b91c83c4216f25a090384847c7e2a2fbe5ff65a6",
+      "difficulty": [
+        "ambiguous"
+      ],
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "AMBIGUOUS_EXCLUDE",
+      "scenario": "ambiguous-grouping",
+      "scoreable": false,
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    }
+  ],
+  "corpus_version": "gsqs-v1",
+  "generator_version": "gsqs-v1-generator-1",
+  "manifest_digest": "971083804db9fc46295db1ea64dcf2288d4aa1feaddd1ac8a26345f3579bb6d3"
+}

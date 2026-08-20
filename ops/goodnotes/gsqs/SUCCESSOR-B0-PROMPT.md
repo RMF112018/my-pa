@@ -12,8 +12,8 @@ Current handwriting identities after GSQS-B-138 remediation:
 - manifest digest: `238c22aa5b51fee3993a8e72e0b2ce9d696fb9f7b164a2853d1ddc3f59eabaed`
 - combined Gate B identity: `bda6e66bbaf5ac068e5b2cf64a52f1e6c06975b5dd86294591de82fe8afdeb8b`
 - evaluator: `goodnotes-gsqs-independent` `1.1`
-- evaluator code identity: `0ed12cb707bc259b2f982bc202523e60f7c899ab38a6c9ed4d58d98fdfbddf65`
-- evaluator implementation digest: `2b55f7de7e5aea4df9dff8f5287aff228f127287b3c10bcfe202775ff1111c04`
+- evaluator code identity: `9e9602eca854dfd475827fd827fcd548cdae04da374c605508178d37e338ec57`
+- evaluator implementation digest: `f07e90d1f3843d21fa993e4b98050c91daad167520fae6a42d0e510b366c5cac`
 - synthetic layer: `gsqs-v2` / `e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd`
 
 `b0_suitable = false`. Admitted labels are `PENDING` /

@@ -26,6 +26,7 @@ from my_pa.application.goodnotes_evaluation import (
     duplicate_active_occurrence_count,
     score_new_note_integrity_loss,
 )
+from my_pa.application.goodnotes_note_unit_contract import admit_v2_segment_list
 from my_pa.domain.goodnotes.models import (
     NOTE_UNIT_SCHEMA_V2,
     GoodNotesNoteClass,
@@ -189,6 +190,7 @@ class PredictedSegment:
     candidate_tags: tuple[str, ...] = ()
     ranked_candidates: tuple[RankedCandidate, ...] = ()
     confidence: Confidence | None = None
+    crop_sha256: str | None = None
     extra: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -203,6 +205,7 @@ class AnalyzerOutput:
     segments: tuple[PredictedSegment, ...]
     extra: Mapping[str, object] = field(default_factory=dict)
     corpus_version: str | None = None
+    content_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +294,8 @@ class MeasurementRecord:
     measurement_valid: bool
     invalid_reason: str | None
     evidence_ref: str
+    repository_commit: str | None = None
+    repository_tree: str | None = None
 
     def canonical_dict(self) -> dict[str, object]:
         return {
@@ -336,29 +341,43 @@ class MeasurementRecord:
             "measurement_valid": self.measurement_valid,
             "invalid_reason": self.invalid_reason,
             "per_case_evidence_reference": self.evidence_ref,
+            "repository_commit": self.repository_commit,
+            "repository_tree": self.repository_tree,
         }
 
 
 def evaluator_implementation_files() -> tuple[Path, ...]:
     here = Path(__file__).resolve()
+    application = here.parent
+    domain_models = here.parents[1] / "domain" / "goodnotes" / "models.py"
     return (
         here,
-        here.with_name("goodnotes_evaluation.py"),
+        application / "goodnotes_gsqs_harness.py",
+        application / "goodnotes_evaluation.py",
+        application / "goodnotes_note_unit_contract.py",
+        domain_models,
     )
 
 
-def evaluator_implementation_digest(parts: Sequence[bytes] | None = None) -> str:
+def evaluator_implementation_keys() -> tuple[str, ...]:
+    root = Path(__file__).resolve().parents[1]
+    return tuple(
+        path.resolve().relative_to(root).as_posix() for path in evaluator_implementation_files()
+    )
+
+
+def evaluator_implementation_digest(
+    file_bytes: Mapping[str, bytes] | None = None,
+) -> str:
     hasher = sha256()
-    if parts is None:
-        blobs: Sequence[bytes] = tuple(
-            path.read_bytes() for path in evaluator_implementation_files()
-        )
-        names = tuple(path.name.encode() for path in evaluator_implementation_files())
+    keys = evaluator_implementation_keys()
+    files = evaluator_implementation_files()
+    if file_bytes is None:
+        blobs = tuple(path.read_bytes() for path in files)
     else:
-        blobs = parts
-        names = tuple(f"part-{index}".encode() for index, _ in enumerate(blobs))
-    for name, blob in zip(names, blobs, strict=True):
-        hasher.update(name)
+        blobs = tuple(file_bytes[key] for key in keys)
+    for name, blob in zip(keys, blobs, strict=True):
+        hasher.update(name.encode())
         hasher.update(b"\0")
         hasher.update(blob)
         hasher.update(b"\0")
@@ -458,6 +477,7 @@ def evaluate_gsqs(
     path_includes_reconciliation: bool = False,
     expected_corpus_version: str | None = None,
     output_corpus_version: str | None = None,
+    expected_content_sha256: Mapping[str, str] | None = None,
 ) -> EvaluationResult:
     if (
         expected_corpus_version is not None
@@ -490,6 +510,38 @@ def evaluate_gsqs(
     case_ids = [case_id for case_id, _ in cases]
     if set(case_ids) != set(by_id):
         raise ValueError("ground truth and analyzer outputs must cover the same cases")
+    if expected_content_sha256 is not None:
+        for case_id, _ in cases:
+            output = by_id[case_id]
+            expected_digest = expected_content_sha256.get(case_id)
+            if (
+                expected_digest is None
+                or output.content_sha256 != expected_digest
+                or output.case_id != case_id
+            ):
+                empty = ComponentScores(0, 0, 0, 0, 0, 0, 0)
+                integrity = _integrity_result(
+                    occurrences,
+                    integrity_labels,
+                    integrity_outcomes,
+                    path_includes_reconciliation,
+                )
+                return EvaluationResult(
+                    scores=empty,
+                    gsqs=0.0,
+                    critical_errors=(),
+                    database_integrity=integrity,
+                    measurement_valid=False,
+                    invalid_reason="analyzer/content digest mismatch",
+                    diagnostics=(),
+                    case_count=len(cases),
+                    note_unit_count=sum(
+                        1
+                        for _, regions in cases
+                        for region in regions
+                        if region.kind is GoodNotesSegmentKind.NOTE_UNIT
+                    ),
+                )
     if abs(sum(GSQS_WEIGHTS.values()) - 1.0) > 1e-12:
         raise ValueError("GSQS weights must sum to 1")
 
@@ -926,95 +978,75 @@ def _levenshtein(left: str, right: str) -> int:
 
 
 def parse_predicted_segment(payload: Mapping[str, Any]) -> PredictedSegment:
-    geometry_raw = payload.get("geometry")
-    if not isinstance(geometry_raw, Mapping):
+    admitted = admit_v2_segment_list((dict(payload),))[0]
+    geometry_raw = admitted["geometry"]
+    if not isinstance(geometry_raw, dict):
         raise ValueError("malformed geometry")
-    extra = {
-        key: value
-        for key, value in payload.items()
-        if key
-        not in {
-            "kind",
-            "geometry",
-            "transcription",
-            "transcription_status",
-            "primary_class",
-            "candidate_tags",
-            "ranked_candidates",
-            "confidence",
-            "crop_sha256",
-        }
-    }
-    status_raw = payload.get("transcription_status")
-    class_raw = payload.get("primary_class")
-    tags_raw = payload.get("candidate_tags") or ()
-    if tags_raw and not isinstance(tags_raw, (list, tuple)):
-        raise ValueError("malformed candidate_tags")
-    ranked_raw = payload.get("ranked_candidates") or ()
-    if ranked_raw and not isinstance(ranked_raw, (list, tuple)):
-        raise ValueError("malformed ranked_candidates")
-    conf_raw = payload.get("confidence")
+    status_raw = admitted.get("transcription_status")
+    class_raw = admitted.get("primary_class")
+    conf_raw = admitted.get("confidence")
     confidence: Confidence | None = None
     if conf_raw is not None:
-        if not isinstance(conf_raw, Mapping):
+        if not isinstance(conf_raw, dict):
             raise ValueError("malformed confidence")
         confidence = Confidence(
-            transcription=_opt_float(conf_raw.get("transcription")),
-            segmentation=_opt_float(conf_raw.get("segmentation")),
-            classification=_opt_float(conf_raw.get("classification")),
-            linking=_opt_float(conf_raw.get("linking")),
-            uncertainty=str(conf_raw["uncertainty"]) if conf_raw.get("uncertainty") else None,
+            transcription=_required_opt_score(conf_raw.get("transcription")),
+            segmentation=_required_opt_score(conf_raw.get("segmentation")),
+            classification=_required_opt_score(conf_raw.get("classification")),
+            linking=_required_opt_score(conf_raw.get("linking")),
+            uncertainty=_required_opt_uncertainty(conf_raw.get("uncertainty")),
         )
-    try:
-        geometry = Geometry(
-            float(geometry_raw["x_min"]),
-            float(geometry_raw["y_min"]),
-            float(geometry_raw["width"]),
-            float(geometry_raw["height"]),
-        )
-    except (TypeError, ValueError, KeyError) as exc:
-        raise ValueError("malformed geometry") from exc
-    try:
-        kind = GoodNotesSegmentKind(str(payload["kind"]))
-    except (TypeError, ValueError, KeyError) as exc:
-        raise ValueError("malformed kind") from exc
-    try:
-        transcription_status = (
-            None if status_raw is None else GoodNotesTranscriptionStatus(str(status_raw))
-        )
-        primary_class = None if class_raw is None else GoodNotesNoteClass(str(class_raw))
-    except ValueError as exc:
-        raise ValueError("malformed enum") from exc
+    geometry = Geometry(
+        float(geometry_raw["x_min"]),
+        float(geometry_raw["y_min"]),
+        float(geometry_raw["width"]),
+        float(geometry_raw["height"]),
+    )
+    kind = GoodNotesSegmentKind(str(admitted["kind"]))
+    transcription_status = (
+        None if status_raw is None else GoodNotesTranscriptionStatus(str(status_raw))
+    )
+    primary_class = None if class_raw is None else GoodNotesNoteClass(str(class_raw))
+    transcription_raw = admitted.get("transcription")
+    transcription = transcription_raw if isinstance(transcription_raw, str) else None
+    tags_raw = admitted.get("candidate_tags")
+    candidate_tags = (
+        tuple(tag for tag in tags_raw if isinstance(tag, str))
+        if isinstance(tags_raw, tuple)
+        else ()
+    )
+    ranked_raw = admitted.get("ranked_candidates")
+    ranked: list[RankedCandidate] = []
+    if isinstance(ranked_raw, tuple):
+        for item in ranked_raw:
+            if not isinstance(item, dict):
+                raise ValueError("malformed ranked_candidates")
+            ranked.append(RankedCandidate(int(item["rank"]), str(item["candidate"])))
+    crop = admitted.get("crop_sha256")
     return PredictedSegment(
         kind=kind,
         geometry=geometry,
-        transcription=None
-        if payload.get("transcription") is None
-        else str(payload["transcription"]),
+        transcription=transcription,
         transcription_status=transcription_status,
         primary_class=primary_class,
-        candidate_tags=tuple(str(item) for item in tags_raw),
-        ranked_candidates=tuple(_parse_ranked_candidate(item) for item in ranked_raw),
+        candidate_tags=candidate_tags,
+        ranked_candidates=tuple(ranked),
         confidence=confidence,
-        extra=extra,
+        crop_sha256=crop if isinstance(crop, str) else None,
     )
 
 
-def _parse_ranked_candidate(item: object) -> RankedCandidate:
-    if not isinstance(item, Mapping):
-        raise ValueError("malformed ranked_candidates item")
-    rank_raw = item.get("rank")
-    if isinstance(rank_raw, bool) or not isinstance(rank_raw, int) or rank_raw < 1:
-        raise ValueError("malformed ranked_candidates rank")
-    candidate = item.get("candidate")
-    if not isinstance(candidate, str):
-        raise ValueError("malformed ranked_candidates candidate")
-    return RankedCandidate(rank_raw, candidate)
-
-
-def _opt_float(value: object) -> float | None:
-    if value is None or isinstance(value, bool):
+def _required_opt_score(value: object) -> float | None:
+    if value is None:
         return None
-    if isinstance(value, int | float):
-        return float(value)
-    return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError("malformed confidence")
+    return float(value)
+
+
+def _required_opt_uncertainty(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("malformed confidence")
+    return value

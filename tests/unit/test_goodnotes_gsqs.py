@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -411,14 +412,38 @@ def test_segmentation_calibration_includes_negative_unmatched_predictions() -> N
 
 
 def test_evaluator_identity_binds_implementation_bytes() -> None:
+    from my_pa.application.goodnotes_gsqs import (
+        evaluator_implementation_files,
+        evaluator_implementation_keys,
+    )
+
     first = evaluator_code_identity()
     second = evaluator_code_identity()
     assert first == second
     impl = evaluator_implementation_digest()
-    mutated = evaluator_implementation_digest((b"alpha", b"beta"))
-    assert impl != mutated
+    keys = evaluator_implementation_keys()
+    names = {Path(key).name for key in keys}
+    assert names == {
+        "goodnotes_gsqs.py",
+        "goodnotes_gsqs_harness.py",
+        "goodnotes_evaluation.py",
+        "goodnotes_note_unit_contract.py",
+        "models.py",
+    }
+    files = evaluator_implementation_files()
+    baseline = {key: path.read_bytes() for key, path in zip(keys, files, strict=True)}
+    for key in keys:
+        mutated_files = dict(baseline)
+        mutated_files[key] = mutated_files[key] + b"\n# identity-probe\n"
+        assert evaluator_implementation_digest(mutated_files) != impl
     constants_only = evaluator_code_identity(implementation_sha256="00" * 32)
     assert constants_only != first
+    mutated = evaluator_implementation_digest(
+        {
+            key: (b"alpha" if index == 0 else blob)
+            for index, (key, blob) in enumerate(baseline.items())
+        }
+    )
     assert evaluator_code_identity(implementation_sha256=mutated) != first
 
 

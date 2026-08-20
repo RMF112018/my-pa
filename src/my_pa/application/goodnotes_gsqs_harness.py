@@ -37,6 +37,12 @@ from my_pa.application.goodnotes_gsqs_corpus import (
     CorpusManifest,
     gold_for_partition,
 )
+from my_pa.application.goodnotes_note_unit_contract import (
+    MAX_GOODNOTES_ANALYZER,
+    MAX_GOODNOTES_SCHEMA,
+    admit_content_sha256,
+    admit_v2_segment_list,
+)
 from my_pa.domain.goodnotes.models import GoodNotesSegmentKind
 
 INCUMBENT_ANALYZER_NAME = "chatllm-goodnotes-semantic"
@@ -127,9 +133,23 @@ def interchange_document(case: CorpusCase, output: AnalyzerOutput) -> dict[str, 
 def parse_interchange(document: dict[str, object]) -> AnalyzerOutput:
     if document.get("schema_version") != INTERCHANGE_SCHEMA_VERSION:
         raise ValueError("unsupported analyzer interchange schema")
+    case_id = _required_interchange_token(document, "case_id", maximum=MAX_GOODNOTES_ANALYZER)
+    corpus_version = _required_interchange_token(
+        document, "corpus_version", maximum=MAX_GOODNOTES_ANALYZER
+    )
+    analyzer_name = _required_interchange_token(
+        document, "analyzer_name", maximum=MAX_GOODNOTES_ANALYZER
+    )
+    analyzer_version = _required_interchange_token(
+        document, "analyzer_version", maximum=MAX_GOODNOTES_ANALYZER
+    )
+    proposal_schema = _required_interchange_token(
+        document, "proposal_schema_version", maximum=MAX_GOODNOTES_SCHEMA
+    )
+    if proposal_schema != NOTE_UNIT_V2:
+        raise ValueError("malformed proposal_schema_version")
+    content_sha256 = admit_content_sha256(document.get("content_sha256"))
     segments_raw = document.get("segments")
-    if not isinstance(segments_raw, list):
-        raise ValueError("interchange segments must be a list")
     extra = {
         key: value
         for key, value in document.items()
@@ -145,27 +165,26 @@ def parse_interchange(document: dict[str, object]) -> AnalyzerOutput:
             "segments",
         }
     }
-    corpus_version = document.get("corpus_version")
+    admitted = admit_v2_segment_list(segments_raw)
     return AnalyzerOutput(
-        case_id=str(document["case_id"]),
-        schema_version=str(document.get("proposal_schema_version") or NOTE_UNIT_V2),
-        analyzer_name=str(document["analyzer_name"]),
-        analyzer_version=str(document["analyzer_version"]),
-        segments=tuple(
-            _parse_interchange_segment(item, index) for index, item in enumerate(segments_raw)
-        ),
+        case_id=case_id,
+        schema_version=proposal_schema,
+        analyzer_name=analyzer_name,
+        analyzer_version=analyzer_version,
+        segments=tuple(parse_predicted_segment(item) for item in admitted),
         extra=extra,
-        corpus_version=str(corpus_version) if corpus_version is not None else None,
+        corpus_version=corpus_version,
+        content_sha256=content_sha256,
     )
 
 
-def _parse_interchange_segment(item: object, index: int) -> PredictedSegment:
-    if not isinstance(item, dict):
-        raise ValueError(f"malformed segments[{index}]: expected object")
-    try:
-        return parse_predicted_segment(item)
-    except (TypeError, ValueError, KeyError) as exc:
-        raise ValueError(f"malformed segments[{index}]: {exc}") from exc
+def _required_interchange_token(document: dict[str, object], key: str, *, maximum: int) -> str:
+    if key not in document:
+        raise ValueError(f"malformed interchange: missing {key}")
+    value = document[key]
+    if not isinstance(value, str) or not 1 <= len(value) <= maximum or "\x00" in value:
+        raise ValueError(f"malformed interchange: {key}")
+    return value
 
 
 def gold_as_output(
@@ -180,7 +199,44 @@ def gold_as_output(
         analyzer_version=analyzer_version,
         segments=segments,
         corpus_version=case.corpus_version,
+        content_sha256=case.content_sha256,
     )
+
+
+def candidate_config_digest(
+    *,
+    analyzer_name: str,
+    analyzer_version: str,
+    model_identity: str | None,
+    prompt_config_identity: str | None,
+    corpus_manifest_digest: str,
+    partition: str,
+    evaluator_behavior_identity: str,
+) -> str:
+    payload = {
+        "analyzer_name": analyzer_name,
+        "analyzer_version": analyzer_version,
+        "model_identity": model_identity,
+        "prompt_config_identity": prompt_config_identity,
+        "corpus_manifest_digest": corpus_manifest_digest,
+        "partition": partition,
+        "evaluator_behavior_identity": evaluator_behavior_identity,
+    }
+    return sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def require_live_b0_identities(
+    *,
+    analyzer_name: str,
+    model_identity: str | None,
+    prompt_config_identity: str | None,
+) -> None:
+    if analyzer_name != INCUMBENT_ANALYZER_NAME:
+        return
+    if not isinstance(model_identity, str) or not model_identity:
+        raise ValueError("live B0 requires explicit model_identity")
+    if not isinstance(prompt_config_identity, str) or not prompt_config_identity:
+        raise ValueError("live B0 requires explicit prompt_config_identity")
 
 
 def score_partition(
@@ -196,28 +252,39 @@ def score_partition(
     model_identity: str | None = None,
     prompt_config_identity: str | None = None,
     path_includes_reconciliation: bool = False,
+    repository_commit: str | None = None,
+    repository_tree: str | None = None,
 ) -> tuple[EvaluationResult, MeasurementRecord]:
+    require_live_b0_identities(
+        analyzer_name=analyzer_name,
+        model_identity=model_identity,
+        prompt_config_identity=prompt_config_identity,
+    )
     selected = tuple(case for case in cases if case.partition is partition and case.scoreable)
     gold = gold_for_partition(cases, partition)
     claimed = {item.corpus_version or "missing" for item in outputs}
     output_version = claimed.pop() if len(claimed) == 1 else "mismatch"
+    expected_content = {case.case_id: case.content_sha256 for case in selected}
     result = evaluate_gsqs(
         gold,
         outputs,
         path_includes_reconciliation=path_includes_reconciliation,
         expected_corpus_version=manifest.corpus_version,
         output_corpus_version=output_version,
+        expected_content_sha256=expected_content,
     )
     if {item.case_id for item in selected} != {item.case_id for item in outputs}:
         raise ValueError("outputs must cover the selected partition exactly")
-    config = {
-        "analyzer_name": analyzer_name,
-        "analyzer_version": analyzer_version,
-        "partition": partition.value,
-        "corpus_manifest_digest": manifest.manifest_digest,
-        "evaluator": evaluator_code_identity(),
-    }
-    digest = sha256(json.dumps(config, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    behavior_identity = evaluator_code_identity()
+    digest = candidate_config_digest(
+        analyzer_name=analyzer_name,
+        analyzer_version=analyzer_version,
+        model_identity=model_identity,
+        prompt_config_identity=prompt_config_identity,
+        corpus_manifest_digest=manifest.manifest_digest,
+        partition=partition.value,
+        evaluator_behavior_identity=behavior_identity,
+    )
     stamp = measured_at or datetime.now(UTC)
     measurement_id = sha256(f"{digest}:{run_repetition}:{stamp.isoformat()}".encode()).hexdigest()[
         :32
@@ -230,7 +297,7 @@ def score_partition(
         partition=partition.value,
         evaluator_name=EVALUATOR_NAME,
         evaluator_version=EVALUATOR_VERSION,
-        evaluator_code_identity=evaluator_code_identity(),
+        evaluator_code_identity=behavior_identity,
         analyzer_name=analyzer_name,
         analyzer_version=analyzer_version,
         candidate_config_digest=digest,
@@ -246,6 +313,8 @@ def score_partition(
         measurement_valid=result.measurement_valid,
         invalid_reason=result.invalid_reason,
         evidence_ref=f"diagnostics:{result.case_count}",
+        repository_commit=repository_commit,
+        repository_tree=repository_tree,
     )
     return result, record
 
@@ -342,23 +411,26 @@ def _segment_dict(segment: PredictedSegment) -> dict[str, object]:
             "width": segment.geometry.width,
             "height": segment.geometry.height,
         },
-        "transcription": segment.transcription,
-        "transcription_status": (
-            None if segment.transcription_status is None else segment.transcription_status.value
-        ),
-        "primary_class": None if segment.primary_class is None else segment.primary_class.value,
-        "candidate_tags": list(segment.candidate_tags),
-        "ranked_candidates": [
-            {"rank": item.rank, "candidate": item.candidate} for item in segment.ranked_candidates
-        ],
     }
-    if segment.confidence is not None:
-        payload["confidence"] = {
-            "transcription": segment.confidence.transcription,
-            "segmentation": segment.confidence.segmentation,
-            "classification": segment.confidence.classification,
-            "linking": segment.confidence.linking,
-            "uncertainty": segment.confidence.uncertainty,
-        }
-    payload.update(dict(segment.extra))
+    if segment.crop_sha256 is not None:
+        payload["crop_sha256"] = segment.crop_sha256
+    if segment.transcription is not None:
+        payload["transcription"] = segment.transcription
+    if segment.primary_class is not None:
+        payload["primary_class"] = segment.primary_class.value
+    if segment.kind is GoodNotesSegmentKind.NOTE_UNIT:
+        payload["candidate_tags"] = list(segment.candidate_tags)
+        payload["ranked_candidates"] = [
+            {"rank": item.rank, "candidate": item.candidate} for item in segment.ranked_candidates
+        ]
+        if segment.transcription_status is not None:
+            payload["transcription_status"] = segment.transcription_status.value
+        if segment.confidence is not None:
+            payload["confidence"] = {
+                "transcription": segment.confidence.transcription,
+                "segmentation": segment.confidence.segmentation,
+                "classification": segment.confidence.classification,
+                "linking": segment.confidence.linking,
+                "uncertainty": segment.confidence.uncertainty,
+            }
     return payload

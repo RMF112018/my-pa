@@ -5,17 +5,25 @@ Evaluator name: `goodnotes-gsqs-independent`
 Evaluator version: `1.1`
 
 Code identity hashes evaluator name/version, weights, IoU threshold,
-ranking k, **and** the SHA-256 of the scoring implementation files
-`goodnotes_gsqs.py` and `goodnotes_evaluation.py`:
+ranking k, **and** the SHA-256 of the complete evaluator behavior source
+set:
 
-`0ed12cb707bc259b2f982bc202523e60f7c899ab38a6c9ed4d58d98fdfbddf65`
+- `application/goodnotes_gsqs.py`
+- `application/goodnotes_gsqs_harness.py`
+- `application/goodnotes_evaluation.py`
+- `application/goodnotes_note_unit_contract.py`
+- `domain/goodnotes/models.py`
 
-Implementation digest (those two modules only):
-`2b55f7de7e5aea4df9dff8f5287aff228f127287b3c10bcfe202775ff1111c04`
+`9e9602eca854dfd475827fd827fcd548cdae04da374c605508178d37e338ec57`
 
-Changing scoring behavior without bumping `EVALUATOR_VERSION` still
-changes the code identity. Measurement records bind this identity into
-`candidate_config_digest`.
+Implementation digest (those five modules):
+`f07e90d1f3843d21fa993e4b98050c91daad167520fae6a42d0e510b366c5cac`
+
+Changing scoring, admission, schema/enums, or interchange parsing without
+bumping `EVALUATOR_VERSION` still changes the code identity. Measurement
+records bind this identity into `candidate_config_digest` and may also
+record exact repository commit/tree from execution context (library code
+does not read `.git`).
 
 The evaluator consumes frozen ground truth and analyzer-produced
 `note-unit.v2` output. It does not call the production worker. The worker
@@ -134,11 +142,14 @@ Any of the following disqualifies the measurement regardless of GSQS:
 - attempting to create canonical entities
 - forbidden tools/actions (`knowledge.search`, `knowledge.read`, `tool`, …)
 - Principal identity leak (`principal_id` in the scored payload)
-- malformed `note-unit.v2` proposal contract. Interchange parsing is
-  fail-closed: non-object `segments[]` items, malformed geometry,
-  malformed `ranked_candidates`, invalid ranks, invalid enums, and
-  malformed confidence objects raise rather than being skipped. A
-  `MALFORMED_PROPOSAL` critical error also sets `measurement_valid = false`.
+- malformed `note-unit.v2` proposal contract. B0 interchange admission is
+  contract-equivalent to production `goodnotes.propose` validation via
+  shared `goodnotes_note_unit_contract` and does not call the proposal
+  write path. Malformed geometry, ranks, tags, confidence, enums,
+  segment counts, CLEAR-with-empty-transcription, crop digests, and
+  forbidden SOURCE_CONTEXT enrichment raise rather than being skipped or
+  coerced. A `MALFORMED_PROPOSAL` critical error also sets
+  `measurement_valid = false`.
 - SOURCE_CONTEXT predicted as a fabricated operator-authored NOTE_UNIT,
   including when the copied text matches the printed context
 - database-integrity floor regression, when that path is actually evaluated
@@ -158,8 +169,14 @@ regression-suite floors unless the caller sets
 ## Measurement validity
 
 A corpus-version mismatch between expected identity and analyzer output
-returns `measurement_valid=False` and GSQS 0.0. Secrets and Principal IDs
-are not stored on the measurement record.
+returns `measurement_valid=False` and GSQS 0.0. Analyzer `content_sha256`
+must match the frozen case page digest (lowercase 64-hex). A missing,
+malformed, uppercase, stale, or swapped digest cannot produce a valid
+measurement. `candidate_config_digest` binds analyzer name/version,
+model identity, prompt-config identity, corpus manifest digest,
+partition, and evaluator behavior identity. Timestamps and repetition
+are excluded. Secrets and Principal IDs are not stored on the
+measurement record.
 
 ## Versioning
 

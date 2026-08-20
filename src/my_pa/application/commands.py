@@ -38,6 +38,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import ClassVar
 
+from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
 from my_pa.domain.capture.review import Disposition
@@ -67,7 +68,6 @@ from my_pa.domain.documents.managed import (
 )
 from my_pa.domain.goodnotes.models import (
     NOTE_UNIT_SCHEMA_V1,
-    NOTE_UNIT_SCHEMA_V2,
     GoodNotesNoteClass,
     GoodNotesSegmentKind,
     GoodNotesTranscriptionStatus,
@@ -235,58 +235,29 @@ def _idempotency_key(value: str) -> str:
     return value
 
 
-_SHA256 = frozenset("0123456789abcdef")
-_MAX_GOODNOTES_SEGMENTS = 50
-_MAX_GOODNOTES_TAGS = 32
-_MAX_GOODNOTES_CANDIDATES = 32
-_MAX_GOODNOTES_TRANSCRIPTION = 20_000
-_MAX_GOODNOTES_TAG = 80
-_MAX_GOODNOTES_CANDIDATE = 200
-_MAX_GOODNOTES_ANALYZER = 100
-_MAX_GOODNOTES_SCHEMA = 40
+_MAX_GOODNOTES_SEGMENTS = _note_unit.MAX_GOODNOTES_SEGMENTS
+_MAX_GOODNOTES_TAGS = _note_unit.MAX_GOODNOTES_TAGS
+_MAX_GOODNOTES_CANDIDATES = _note_unit.MAX_GOODNOTES_CANDIDATES
+_MAX_GOODNOTES_TRANSCRIPTION = _note_unit.MAX_GOODNOTES_TRANSCRIPTION
+_MAX_GOODNOTES_TAG = _note_unit.MAX_GOODNOTES_TAG
+_MAX_GOODNOTES_CANDIDATE = _note_unit.MAX_GOODNOTES_CANDIDATE
+_MAX_GOODNOTES_ANALYZER = _note_unit.MAX_GOODNOTES_ANALYZER
+_MAX_GOODNOTES_SCHEMA = _note_unit.MAX_GOODNOTES_SCHEMA
 _MAX_GOODNOTES_IDEMPOTENCY = 128
-_FORBIDDEN_SEGMENT_KEYS = frozenset(
-    {
-        "change_state",
-        "changestate",
-        "disposition",
-        "note_id",
-        "occurrence_id",
-        "principal_id",
-        "canonical_state",
-        "state",
-    }
-)
-_V1_SEGMENT_KEYS = frozenset(
-    {
-        "kind",
-        "geometry",
-        "crop_sha256",
-        "transcription",
-        "primary_class",
-    }
-)
-_V2_NOTE_UNIT_KEYS = _V1_SEGMENT_KEYS | {
-    "ranked_candidates",
-    "candidate_tags",
-    "confidence",
-    "transcription_status",
-}
-_NOTE_UNIT_SCHEMAS = frozenset({NOTE_UNIT_SCHEMA_V1, NOTE_UNIT_SCHEMA_V2})
+_FORBIDDEN_SEGMENT_KEYS = _note_unit.FORBIDDEN_SEGMENT_KEYS
+_V1_SEGMENT_KEYS = _note_unit.V1_SEGMENT_KEYS
+_V2_NOTE_UNIT_KEYS = _note_unit.V2_NOTE_UNIT_KEYS
+_NOTE_UNIT_SCHEMAS = _note_unit.NOTE_UNIT_SCHEMAS
+_SEGMENT_KEY_ORDER = _note_unit.SEGMENT_KEY_ORDER
+_SHA256 = _note_unit.SHA256_HEX
+_candidate_tags = _note_unit.candidate_tags
+_confidence = _note_unit.confidence
+_ranked_candidates = _note_unit.ranked_candidates
+_segments = _note_unit.segments
+_sha256_digest = _note_unit.sha256_digest
 #: Publication order for shared segment fragments. The set of names is the
 #: runtime v2 NOTE_UNIT vocabulary; tests pin that equality so this tuple cannot
 #: silently grow a field `_segments` does not admit.
-_SEGMENT_KEY_ORDER = (
-    "kind",
-    "geometry",
-    "crop_sha256",
-    "transcription",
-    "primary_class",
-    "candidate_tags",
-    "ranked_candidates",
-    "confidence",
-    "transcription_status",
-)
 
 
 def _kind_const(kind: GoodNotesSegmentKind) -> dict[str, object]:
@@ -558,174 +529,9 @@ def _goodnotes_id(value: object, prefix: str, detail: SafeDetail) -> str:
     return value
 
 
-def _sha256_digest(value: object, detail: SafeDetail) -> str:
-    if not isinstance(value, str) or len(value) != 64 or any(ch not in _SHA256 for ch in value):
-        raise InvalidRequestError(detail)
-    return value
-
-
 def _bounded_token(value: object, detail: SafeDetail, *, maximum: int) -> str:
     if not isinstance(value, str) or not 1 <= len(value) <= maximum or "\x00" in value:
         raise InvalidRequestError(detail)
-    return value
-
-
-def _geometry(box: object) -> None:
-    if not isinstance(box, dict):
-        raise InvalidRequestError(SafeDetail.GEOMETRY)
-    required = ("x_min", "y_min", "width", "height")
-    if set(box) != set(required):
-        raise InvalidRequestError(SafeDetail.GEOMETRY)
-    values: list[float] = []
-    for name in required:
-        raw = box[name]
-        if isinstance(raw, bool) or not isinstance(raw, int | float):
-            raise InvalidRequestError(SafeDetail.GEOMETRY)
-        values.append(float(raw))
-    x_min, y_min, width, height = values
-    if min(x_min, y_min) < 0 or width <= 0 or height <= 0:
-        raise InvalidRequestError(SafeDetail.GEOMETRY)
-    if x_min + width > 1 or y_min + height > 1 or x_min > 1 or y_min > 1:
-        raise InvalidRequestError(SafeDetail.GEOMETRY)
-
-
-def _segments(value: object, *, schema_version: str) -> tuple[dict[str, object], ...]:
-    if not isinstance(value, tuple) or not 1 <= len(value) <= _MAX_GOODNOTES_SEGMENTS:
-        raise InvalidRequestError(SafeDetail.SEGMENTS)
-    cleaned: list[dict[str, object]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            raise InvalidRequestError(SafeDetail.SEGMENTS)
-        keys = {str(key).casefold() for key in item}
-        if keys & _FORBIDDEN_SEGMENT_KEYS:
-            raise InvalidRequestError(SafeDetail.SEGMENTS)
-        kind = item.get("kind")
-        if not isinstance(kind, str):
-            raise InvalidRequestError(SafeDetail.SEGMENTS)
-        try:
-            parsed_kind = GoodNotesSegmentKind(kind)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SEGMENTS) from None
-        allowed = _V1_SEGMENT_KEYS
-        if schema_version == NOTE_UNIT_SCHEMA_V2 and parsed_kind is GoodNotesSegmentKind.NOTE_UNIT:
-            allowed = _V2_NOTE_UNIT_KEYS
-        if set(item) - allowed:
-            raise InvalidRequestError(SafeDetail.SEGMENTS)
-        _geometry(item.get("geometry"))
-        crop = item.get("crop_sha256")
-        if crop is not None:
-            _sha256_digest(crop, SafeDetail.SEGMENTS)
-        transcription = item.get("transcription")
-        if transcription is not None and (
-            not isinstance(transcription, str)
-            or len(transcription) > _MAX_GOODNOTES_TRANSCRIPTION
-            or "\x00" in transcription
-        ):
-            raise InvalidRequestError(SafeDetail.TRANSCRIPTION)
-        primary = item.get("primary_class")
-        if primary is not None:
-            if not isinstance(primary, str):
-                raise InvalidRequestError(SafeDetail.SEGMENTS)
-            try:
-                GoodNotesNoteClass(primary)
-            except ValueError:
-                raise InvalidRequestError(SafeDetail.SEGMENTS) from None
-        admitted = dict(item)
-        if "candidate_tags" in admitted:
-            tags = admitted["candidate_tags"]
-            if isinstance(tags, list):
-                tags = tuple(tags)
-            admitted["candidate_tags"] = _candidate_tags(tags)
-        if "ranked_candidates" in admitted:
-            ranked = admitted["ranked_candidates"]
-            if isinstance(ranked, list):
-                ranked = tuple(ranked)
-            admitted["ranked_candidates"] = _ranked_candidates(ranked)
-        if "confidence" in admitted:
-            admitted["confidence"] = _confidence(admitted["confidence"])
-        status = admitted.get("transcription_status")
-        if status is not None:
-            if not isinstance(status, str):
-                raise InvalidRequestError(SafeDetail.SEGMENTS)
-            try:
-                parsed_status = GoodNotesTranscriptionStatus(status)
-            except ValueError:
-                raise InvalidRequestError(SafeDetail.SEGMENTS) from None
-            if parsed_status is GoodNotesTranscriptionStatus.CLEAR and (
-                not isinstance(transcription, str) or not transcription
-            ):
-                raise InvalidRequestError(SafeDetail.TRANSCRIPTION)
-        cleaned.append(admitted)
-    return tuple(cleaned)
-
-
-def _candidate_tags(value: object) -> tuple[str, ...]:
-    if not isinstance(value, tuple):
-        raise InvalidRequestError(SafeDetail.CANDIDATE_TAGS)
-    if len(value) > _MAX_GOODNOTES_TAGS:
-        raise InvalidRequestError(SafeDetail.CANDIDATE_TAGS)
-    tags: list[str] = []
-    seen: set[str] = set()
-    for item in value:
-        if not isinstance(item, str) or not 1 <= len(item) <= _MAX_GOODNOTES_TAG or "\x00" in item:
-            raise InvalidRequestError(SafeDetail.CANDIDATE_TAGS)
-        if item in seen:
-            raise InvalidRequestError(SafeDetail.CANDIDATE_TAGS)
-        seen.add(item)
-        tags.append(item)
-    return tuple(tags)
-
-
-def _ranked_candidates(value: object) -> tuple[dict[str, object], ...]:
-    if not isinstance(value, tuple):
-        raise InvalidRequestError(SafeDetail.RANKED_CANDIDATES)
-    if len(value) > _MAX_GOODNOTES_CANDIDATES:
-        raise InvalidRequestError(SafeDetail.RANKED_CANDIDATES)
-    ranks: set[int] = set()
-    cleaned: list[dict[str, object]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            raise InvalidRequestError(SafeDetail.RANKED_CANDIDATES)
-        rank = item.get("rank")
-        candidate = item.get("candidate")
-        if type(rank) is not int or rank < 1 or rank in ranks:
-            raise InvalidRequestError(SafeDetail.RANKED_CANDIDATES)
-        if (
-            not isinstance(candidate, str)
-            or not 1 <= len(candidate) <= _MAX_GOODNOTES_CANDIDATE
-            or "\x00" in candidate
-        ):
-            raise InvalidRequestError(SafeDetail.RANKED_CANDIDATES)
-        ranks.add(rank)
-        cleaned.append(item)
-    return tuple(cleaned)
-
-
-def _confidence(value: object) -> dict[str, object] | None:
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise InvalidRequestError(SafeDetail.CONFIDENCE)
-    allowed = {
-        "transcription",
-        "segmentation",
-        "classification",
-        "linking",
-        "uncertainty",
-    }
-    if set(value) - allowed:
-        raise InvalidRequestError(SafeDetail.CONFIDENCE)
-    for name in ("transcription", "segmentation", "classification", "linking"):
-        raw = value.get(name)
-        if raw is None:
-            continue
-        if isinstance(raw, bool) or not isinstance(raw, int | float):
-            raise InvalidRequestError(SafeDetail.CONFIDENCE)
-        if not 0 <= float(raw) <= 1:
-            raise InvalidRequestError(SafeDetail.CONFIDENCE)
-    note = value.get("uncertainty")
-    if note is not None and (not isinstance(note, str) or len(note) > 500 or "\x00" in note):
-        raise InvalidRequestError(SafeDetail.CONFIDENCE)
     return value
 
 

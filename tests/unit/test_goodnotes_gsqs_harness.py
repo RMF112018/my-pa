@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
@@ -20,6 +22,7 @@ from my_pa.application.goodnotes_gsqs import (
 )
 from my_pa.application.goodnotes_gsqs_harness import (
     INCUMBENT_ANALYZER_NAME,
+    candidate_config_digest,
     dry_run_b0,
     gate_b_state_matrix,
     gold_as_output,
@@ -27,6 +30,7 @@ from my_pa.application.goodnotes_gsqs_harness import (
     interchange_document,
     parse_interchange,
     planned_variance,
+    require_live_b0_identities,
     score_partition,
 )
 from my_pa.application.goodnotes_gsqs_v2_freeze import freeze_v2_corpus
@@ -84,6 +88,7 @@ def test_interchange_round_trip_and_gold_replay() -> None:
     assert parsed.case_id == case.case_id
     assert parsed.schema_version == output.schema_version
     assert parsed.corpus_version == case.corpus_version
+    assert parsed.content_sha256 == case.content_sha256
     assert len(parsed.segments) == len(output.segments)
     with pytest.raises(ValueError, match="unsupported"):
         parse_interchange({**document, "schema_version": "other"})
@@ -108,34 +113,100 @@ def test_malformed_interchange_fails_closed() -> None:
         "candidate_tags": [],
         "ranked_candidates": [],
     }
+
+    def parse(overrides: dict[str, object]) -> None:
+        parse_interchange({**document, **overrides})
+
     with pytest.raises(ValueError, match="malformed segments"):
-        parse_interchange({**document, "segments": ["not-an-object"]})
+        parse({"segments": ["not-an-object"]})
+    with pytest.raises(ValueError, match="malformed segments"):
+        parse({"segments": []})
+    with pytest.raises(ValueError, match="malformed segments"):
+        parse({"segments": [note] * 51})
+    with pytest.raises(ValueError, match="malformed interchange: missing case_id"):
+        parse_interchange({k: v for k, v in document.items() if k != "case_id"})
+    with pytest.raises(ValueError, match="malformed interchange: case_id"):
+        parse({"case_id": 1})
+    with pytest.raises(ValueError, match="malformed proposal_schema_version"):
+        parse({"proposal_schema_version": "note-unit.v1"})
     with pytest.raises(ValueError, match="malformed geometry"):
-        parse_interchange({**document, "segments": [{**note, "geometry": {"x_min": "bad"}}]})
-    with pytest.raises(ValueError, match="malformed ranked_candidates"):
-        parse_interchange({**document, "segments": [{**note, "ranked_candidates": ["x"]}]})
-    with pytest.raises(ValueError, match="malformed ranked_candidates rank"):
-        parse_interchange(
+        parse({"segments": [{**note, "geometry": {"x_min": "bad"}}]})
+    with pytest.raises(ValueError, match="malformed geometry"):
+        parse(
             {
-                **document,
-                "segments": [{**note, "ranked_candidates": [{"rank": True, "candidate": "a"}]}],
+                "segments": [
+                    {**note, "geometry": {**geometry, "extra": 0.1}},
+                ]
             }
         )
-    with pytest.raises(ValueError, match="malformed enum"):
-        parse_interchange({**document, "segments": [{**note, "transcription_status": "LOUD"}]})
+    with pytest.raises(ValueError, match="malformed geometry"):
+        parse({"segments": [{**note, "geometry": {**geometry, "width": True}}]})
+    with pytest.raises(ValueError, match="malformed geometry"):
+        parse({"segments": [{**note, "geometry": {**geometry, "width": 0}}]})
+    with pytest.raises(ValueError, match="malformed ranked_candidates"):
+        parse({"segments": [{**note, "ranked_candidates": ["x"]}]})
+    with pytest.raises(ValueError, match="malformed ranked_candidates"):
+        parse({"segments": [{**note, "ranked_candidates": [{"rank": True, "candidate": "a"}]}]})
+    with pytest.raises(ValueError, match="malformed ranked_candidates"):
+        parse(
+            {
+                "segments": [
+                    {
+                        **note,
+                        "ranked_candidates": [
+                            {"rank": 1, "candidate": "a"},
+                            {"rank": 1, "candidate": "b"},
+                        ],
+                    }
+                ]
+            }
+        )
+    with pytest.raises(ValueError, match="malformed candidate_tags"):
+        parse({"segments": [{**note, "candidate_tags": [123]}]})
+    with pytest.raises(ValueError, match="malformed candidate_tags"):
+        parse({"segments": [{**note, "candidate_tags": ["a", "a"]}]})
+    with pytest.raises(ValueError, match="malformed segments"):
+        parse({"segments": [{**note, "transcription_status": "LOUD"}]})
+    with pytest.raises(ValueError, match="malformed transcription"):
+        parse({"segments": [{**note, "transcription": "", "transcription_status": "CLEAR"}]})
+    with pytest.raises(ValueError, match="malformed transcription"):
+        parse({"segments": [{**note, "transcription": 1}]})
     with pytest.raises(ValueError, match="malformed confidence"):
-        parse_interchange({**document, "segments": [{**note, "confidence": "high"}]})
+        parse({"segments": [{**note, "confidence": "high"}]})
+    with pytest.raises(ValueError, match="malformed confidence"):
+        parse({"segments": [{**note, "confidence": {"segmentation": True}}]})
+    with pytest.raises(ValueError, match="malformed confidence"):
+        parse({"segments": [{**note, "confidence": {"segmentation": 1.2}}]})
+    with pytest.raises(ValueError, match="malformed confidence"):
+        parse({"segments": [{**note, "confidence": {"mystery": 0.1}}]})
+    with pytest.raises(ValueError, match="malformed segments"):
+        parse({"segments": [{**note, "crop_sha256": "AB" * 32}]})
+    with pytest.raises(ValueError, match="malformed segments"):
+        parse(
+            {
+                "segments": [
+                    {
+                        "kind": "SOURCE_CONTEXT",
+                        "geometry": geometry,
+                        "transcription": "printed title",
+                        "transcription_status": "CLEAR",
+                    }
+                ]
+            }
+        )
+    with pytest.raises(ValueError, match="malformed segments"):
+        parse({"segments": [{**note, "note_id": "note_hidden"}]})
+
     context = {
         "kind": "SOURCE_CONTEXT",
         "geometry": geometry,
         "transcription": "printed title",
-        "transcription_status": "CLEAR",
     }
     parsed = parse_interchange({**document, "segments": [context]})
-    case_id = str(document["case_id"])
-    result = evaluate_gsqs(((case_id, ()),), (parsed,))
-    assert result.measurement_valid is False
-    assert "malformed" in (result.invalid_reason or "")
+    assert parsed.segments[0].kind.value == "SOURCE_CONTEXT"
+    crop = "ab" * 32
+    cropped = parse_interchange({**document, "segments": [{**note, "crop_sha256": crop}]})
+    assert cropped.segments[0].crop_sha256 == crop
 
 
 def test_harness_invalidates_analyzer_corpus_version_mismatch() -> None:
@@ -165,3 +236,163 @@ def test_harness_invalidates_analyzer_corpus_version_mismatch() -> None:
     )
     assert result.measurement_valid is False
     assert record.measurement_valid is False
+
+
+def test_content_digest_binding_fails_closed() -> None:
+    cases, manifest = freeze_v2_corpus()
+    selected = [item for item in cases if item.partition is CorpusPartition.B and item.scoreable]
+    first, second = selected[0], selected[1]
+    good = gold_as_output(first, analyzer_name="x", analyzer_version="1")
+    document = interchange_document(first, good)
+    parsed = parse_interchange(document)
+    gold = ((first.case_id, first.regions),)
+    expected = {first.case_id: first.content_sha256}
+    ok = evaluate_gsqs(gold, (parsed,), expected_content_sha256=expected)
+    assert ok.measurement_valid is True
+    with pytest.raises(ValueError, match="malformed content_sha256"):
+        parse_interchange({k: v for k, v in document.items() if k != "content_sha256"})
+    with pytest.raises(ValueError, match="malformed content_sha256"):
+        parse_interchange({**document, "content_sha256": first.content_sha256.upper()})
+    with pytest.raises(ValueError, match="malformed content_sha256"):
+        parse_interchange({**document, "content_sha256": "not-a-digest"})
+    wrong_digest = replace(parsed, content_sha256=second.content_sha256)
+    stale = evaluate_gsqs(gold, (wrong_digest,), expected_content_sha256=expected)
+    assert stale.measurement_valid is False
+    assert stale.invalid_reason == "analyzer/content digest mismatch"
+    wrong_case = replace(parsed, case_id=second.case_id)
+    wrong_case_result = evaluate_gsqs(
+        ((second.case_id, second.regions),),
+        (wrong_case,),
+        expected_content_sha256={second.case_id: second.content_sha256},
+    )
+    assert wrong_case_result.measurement_valid is False
+    pair_gold = ((first.case_id, first.regions), (second.case_id, second.regions))
+    swapped = (
+        replace(
+            gold_as_output(first, analyzer_name="x", analyzer_version="1"), case_id=second.case_id
+        ),
+        replace(
+            gold_as_output(second, analyzer_name="x", analyzer_version="1"), case_id=first.case_id
+        ),
+    )
+    swapped_result = evaluate_gsqs(
+        pair_gold,
+        swapped,
+        expected_content_sha256={
+            first.case_id: first.content_sha256,
+            second.case_id: second.content_sha256,
+        },
+    )
+    assert swapped_result.measurement_valid is False
+    mismatched = (
+        replace(
+            gold_as_output(first, analyzer_name="x", analyzer_version="1"),
+            content_sha256=second.content_sha256,
+        ),
+        gold_as_output(second, analyzer_name="x", analyzer_version="1"),
+    )
+    mismatch = evaluate_gsqs(
+        pair_gold,
+        mismatched,
+        expected_content_sha256={
+            first.case_id: first.content_sha256,
+            second.case_id: second.content_sha256,
+        },
+    )
+    assert mismatch.measurement_valid is False
+    outputs = tuple(
+        gold_as_output(item, analyzer_name="x", analyzer_version="1") for item in selected
+    )
+    _, record = score_partition(
+        cases,
+        outputs,
+        partition=CorpusPartition.B,
+        manifest=manifest,
+        analyzer_name="x",
+        analyzer_version="1",
+        run_repetition=1,
+        repository_commit="aa" * 20,
+        repository_tree="bb" * 20,
+    )
+    assert record.measurement_valid is True
+    assert record.repository_commit == "aa" * 20
+    assert record.canonical_dict()["repository_tree"] == "bb" * 20
+
+
+def test_candidate_config_digest_binds_model_and_prompt() -> None:
+    identity = "ee" * 32
+    base = {
+        "analyzer_name": "local",
+        "analyzer_version": "1",
+        "model_identity": "model-a",
+        "prompt_config_identity": "prompt-a",
+        "corpus_manifest_digest": "cc" * 32,
+        "partition": "B",
+        "evaluator_behavior_identity": identity,
+    }
+    first = candidate_config_digest(**base)
+    assert first == candidate_config_digest(**base)
+    assert candidate_config_digest(**{**base, "model_identity": "model-b"}) != first
+    assert candidate_config_digest(**{**base, "prompt_config_identity": "prompt-b"}) != first
+    assert candidate_config_digest(**{**base, "analyzer_version": "2"}) != first
+    assert candidate_config_digest(**{**base, "corpus_manifest_digest": "dd" * 32}) != first
+    assert candidate_config_digest(**{**base, "evaluator_behavior_identity": "ff" * 32}) != first
+    none_id = candidate_config_digest(**{**base, "model_identity": None})
+    assert none_id != first
+    cases, manifest = freeze_v2_corpus()
+    selected = [item for item in cases if item.partition is CorpusPartition.B and item.scoreable]
+    outputs = tuple(
+        gold_as_output(item, analyzer_name="local", analyzer_version="1") for item in selected
+    )
+    stamp = datetime(2026, 8, 20, tzinfo=UTC)
+    _, record_a = score_partition(
+        cases,
+        outputs,
+        partition=CorpusPartition.B,
+        manifest=manifest,
+        analyzer_name="local",
+        analyzer_version="1",
+        run_repetition=1,
+        measured_at=stamp,
+        model_identity="model-a",
+        prompt_config_identity="prompt-a",
+    )
+    _, record_b = score_partition(
+        cases,
+        outputs,
+        partition=CorpusPartition.B,
+        manifest=manifest,
+        analyzer_name="local",
+        analyzer_version="1",
+        run_repetition=2,
+        measured_at=stamp.replace(minute=1),
+        model_identity="model-a",
+        prompt_config_identity="prompt-a",
+    )
+    assert record_a.candidate_config_digest == record_b.candidate_config_digest
+    _, record_c = score_partition(
+        cases,
+        outputs,
+        partition=CorpusPartition.B,
+        manifest=manifest,
+        analyzer_name="local",
+        analyzer_version="1",
+        run_repetition=1,
+        measured_at=stamp,
+        model_identity="model-b",
+        prompt_config_identity="prompt-a",
+    )
+    assert record_c.candidate_config_digest != record_a.candidate_config_digest
+    with pytest.raises(ValueError, match="model_identity"):
+        require_live_b0_identities(
+            analyzer_name=INCUMBENT_ANALYZER_NAME,
+            model_identity=None,
+            prompt_config_identity="prompt-a",
+        )
+    with pytest.raises(ValueError, match="not authorized"):
+        dry_run_b0(
+            cases,
+            manifest,
+            analyzer_name=INCUMBENT_ANALYZER_NAME,
+            analyzer_version="sit-1.0",
+        )

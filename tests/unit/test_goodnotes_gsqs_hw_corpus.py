@@ -449,9 +449,9 @@ def test_committed_combined_catalog_is_repository_safe_and_scoreable() -> None:
     assert catalog["unreadable_real_world_coverage"] == (
         UNREADABLE_REAL_WORLD_COVERAGE_NOT_OBSERVED
     )
-    assert catalog["scoreable_page_count"] == 232
-    assert catalog["admitted_handwriting_pages"] == 232
-    assert catalog["excluded_page_count"] == 2002
+    assert catalog["scoreable_page_count"] == 239
+    assert catalog["admitted_handwriting_pages"] == 239
+    assert catalog["excluded_page_count"] == 1995
     assert catalog["case_count"] == 2234
     assert catalog["pdf_count"] == 86
     assert catalog["total_pages"] == 2234

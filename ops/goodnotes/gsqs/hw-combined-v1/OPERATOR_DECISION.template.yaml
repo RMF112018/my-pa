@@ -7,8 +7,8 @@
 # coordination_request_id: REQ-MYPA-GOODNOTES-GATE-B-HANDWRITING-EXPANSION-20260820-002
 
 corpus_version: gsqs-hw-combined-v1
-manifest_digest: 2f06ee84d5fa1e7ce7168a49a43dcfd1a1f9df9bc78071876b7beb847207fbc2
-combined_identity: 6b77a96575668c0ba2f833050b48699022abef5393a778cc1d2e6507d23ce076
+manifest_digest: af12b8507da9bfae18a2dc5f024de410f144a44f02314289d300b1ad7cb1c547
+combined_identity: d53718b834cd58efa8ad29753efeab237c150e7d7f60f8bda73cf343a9977d98
 historical_moss_corpus_version: gsqs-hw-moss-v1
 historical_moss_manifest_digest: 3bed9cc9bfe4a7cb3d28383232e940268ab3435429312c0977eb82a326158f9d
 

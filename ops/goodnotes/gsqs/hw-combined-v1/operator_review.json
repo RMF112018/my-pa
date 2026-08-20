@@ -6,7 +6,7 @@
   "MEASURED_B0": "NOT_YET_ESTABLISHED",
   "SELF_IMPROVEMENT_EVALUATION": "NOT_YET_ACTIVATED",
   "b0_suitable": true,
-  "combined_identity": "6b77a96575668c0ba2f833050b48699022abef5393a778cc1d2e6507d23ce076",
+  "combined_identity": "d53718b834cd58efa8ad29753efeab237c150e7d7f60f8bda73cf343a9977d98",
   "coordination_request_id": "REQ-MYPA-GOODNOTES-GATE-B-HANDWRITING-EXPANSION-20260820-002",
   "corpus_version": "gsqs-hw-combined-v1",
   "evaluator_code_identity": "4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e",
@@ -16,16 +16,16 @@
   "historical_moss_manifest_digest": "3bed9cc9bfe4a7cb3d28383232e940268ab3435429312c0977eb82a326158f9d",
   "label_provenance": "OPERATOR_ADJUDICATED",
   "leakage_group_intersections_empty": true,
-  "manifest_digest": "2f06ee84d5fa1e7ce7168a49a43dcfd1a1f9df9bc78071876b7beb847207fbc2",
+  "manifest_digest": "af12b8507da9bfae18a2dc5f024de410f144a44f02314289d300b1ad7cb1c547",
   "operator_review_disposition": "READY_FOR_OPERATOR_REVIEW",
   "personal_page_bytes_in_git": false,
-  "scoreable_page_count": 232,
+  "scoreable_page_count": 239,
   "source_cohort_counts": {
     "Altman": {
-      "admitted": 140,
-      "excluded": 1950,
+      "admitted": 147,
+      "excluded": 1943,
       "pages": 2090,
-      "scoreable": 140
+      "scoreable": 147
     },
     "Kast": {
       "admitted": 65,
